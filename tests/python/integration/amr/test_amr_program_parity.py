@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""ADC-508: the per-level AmrProgramContext driver -- a compiled time Program over the AMR hierarchy.
+"""ADC-508: the per-level ProgramExecutionServices driver -- a compiled time Program over the AMR hierarchy.
 
 A compiled time Program lowers its macro-step body referencing ONLY the variable ``ctx`` (never the
-type ``ProgramContext``). The SAME generated body therefore compiles against ``AmrProgramContext``, a
+type ``ProgramExecutionServices``). The SAME generated body therefore compiles against ``ProgramExecutionServices``, a
 duck-typed structural mirror that drives the body recursively over the AMR hierarchy. The
 ``{amr_install}`` codegen slot passes the identical body to ``advance_hierarchy``.
 
@@ -13,14 +13,14 @@ lifecycle coverage.
 This test asserts:
 
   1) (host-side, no compiler) the codegen emits a recursive install wrapper for ``target='amr_system'``
-     (the fail-loud is gone): ``pops_install_program_amr`` builds an ``AmrProgramContext`` and runs the
+     (the fail-loud is gone): ``pops_install_program`` builds an ``ProgramExecutionServices`` and runs the
      body through ``ctx.advance_hierarchy(dt, body)``;
 
   2) (Kokkos-gated, the must-pass GATE 4.1a) BIT-IDENTICAL parity -- the SAME SSPRK2 Program installed
-     on a single-level ``System`` (``ProgramContext``) and on a single-level ``AmrSystem``
-     (``AmrProgramContext``, the coarse-only Program layout) produces the BYTE-IDENTICAL coarse density
-     over several steps (0 ulp). This proves the AmrProgramContext seam methods are byte-faithful
-     mirrors of ProgramContext's -- the whole duck-typing claim.  Each independently refreshed
+     on a single-level ``System`` (``ProgramExecutionServices``) and on a single-level ``AmrSystem``
+     (``ProgramExecutionServices``, the coarse-only Program layout) produces the BYTE-IDENTICAL coarse density
+     over several steps (0 ulp). This proves the ProgramExecutionServices seam methods are byte-faithful
+     mirrors of ProgramExecutionServices's -- the whole duck-typing claim.  Each independently refreshed
      potential must satisfy the same discrete Poisson equation;
 
   3) (Kokkos-gated) a CUSTOM 2-stage Program (midpoint RK2) installed on a nonlinear scalar Burgers
@@ -201,11 +201,11 @@ def test_codegen_emits_amr_install_wrapper():
         target="amr_system",
         field_plans=plan.field_plans,
     )
-    chk("pops_install_program_amr" in src, "the AMR .so exports pops_install_program_amr")
-    body = src.split("pops_install_program_amr", 1)[1]
-    chk("make_program_execution_provider(sys)" in body,
-        "the AMR install selects its execution provider from the typed AmrSystem facade")
-    chk("AmrProgramContext& ctx" not in body,
+    chk("pops_install_program" in src, "the AMR .so exports pops_install_program")
+    body = src.split("pops_install_program", 1)[1]
+    chk("make_program_execution_provider<pops::kNativeDimension>(host->preparation)" in body,
+        "the AMR candidate obtains its execution services from the sealed host image")
+    chk("ProgramExecutionServices& ctx" not in body,
         "generated code does not select the concrete AMR context")
     chk("ctx.advance_hierarchy(dt, _advance_level)" in body,
         "the wrapper delegates to the explicit parent/child clock driver")
@@ -220,7 +220,8 @@ def test_codegen_emits_amr_install_wrapper():
     chk("the per-level AMR macro-step driver" not in body
         and "is not yet available" not in body,
         "the fail-loud throw is gone (the real driver is emitted)")
-    # The System target still emits NO AMR entry.
+    # Uniform and AMR artifacts expose the same sole v5 entry; the descriptor selects the runtime
+    # kind before candidate creation, so there is no backend-specific ABI symbol.
     system_model = _euler_model("adc508_wrapper_system")
     system_plan = _ssprk2_program(system_model, target="system")
     src_sys = emit_cpp_program(
@@ -228,7 +229,14 @@ def test_codegen_emits_amr_install_wrapper():
         compiler_model(system_model),
         field_plans=system_plan.field_plans,
     )
-    chk("pops_install_program_amr" not in src_sys, "the System .so does NOT export the AMR entry")
+    chk("pops_install_program" in src_sys, "the System .so exports the sole Program entry")
+    system_body = src_sys.split("pops_install_program", 1)[1]
+    chk("ProgramRuntimeKind::uniform" in system_body,
+        "the common entry authenticates the Uniform runtime kind")
+    chk("make_program_execution_provider<pops::kNativeDimension>(host->preparation)" in system_body,
+        "the Uniform candidate obtains the same sealed execution-services authority")
+    chk("ctx.advance_hierarchy(dt, _advance_level)" not in system_body,
+        "the Uniform candidate does not acquire a hierarchy driver")
 
 
 def _system_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
@@ -307,14 +315,14 @@ def _amr_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
 
 
 def test_single_level_bit_identical_parity():
-    """(2) GATE 4.1a: the SAME SSPRK2 Program on a single-level System (ProgramContext) and a
-    single-level AmrSystem (AmrProgramContext, coarse-only) must be BIT-IDENTICAL on the evolved coarse
-    DENSITY (0 ulp) -- the AmrProgramContext seam methods (state / rhs_into / axpy / lincomb /
-    solve_fields / scratch) are byte-faithful ProgramContext mirrors, so the SAME lowered body produces
+    """(2) GATE 4.1a: the SAME SSPRK2 Program on a single-level System (ProgramExecutionServices) and a
+    single-level AmrSystem (ProgramExecutionServices, coarse-only) must be BIT-IDENTICAL on the evolved coarse
+    DENSITY (0 ulp) -- the ProgramExecutionServices seam methods (state / rhs_into / axpy / lincomb /
+    solve_fields / scratch) are byte-faithful ProgramExecutionServices mirrors, so the SAME lowered body produces
     the SAME arithmetic. The periodic potential is non-unique and each runtime owns an independent MG
     history, so both are refreshed on the committed state and checked against the same discrete
     Poisson equation rather than compared iterate-to-iterate."""
-    print("== single-level SSPRK2 parity: AmrProgramContext == ProgramContext (bit-identical) ==")
+    print("== single-level SSPRK2 parity: ProgramExecutionServices == ProgramExecutionServices (bit-identical) ==")
     model = _euler_model("adc508_parity_ssprk2")
     u0 = _init_density()
 

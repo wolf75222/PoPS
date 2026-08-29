@@ -67,12 +67,14 @@ def test_after_synchronization_emits_after_hierarchy_advance() -> None:
     emit_model, source_module = lower_and_validate(model, facade=model)
     assert source_module is model.module
     source = program_codegen.emit_cpp_program(program, model=emit_model, target="amr_system")
-    assert "pops_register_program_provider_routes_amr" in source
-    install = source.split('extern "C" void pops_install_program_amr', 1)[1]
-    assert "ctx.advance_hierarchy(dt, _advance_level);" in install
-    assert ".post_synchronization(dt);" in install
-    assert install.index("ctx.advance_hierarchy") < install.index(".post_synchronization(dt);")
-    post_sync_lambda = install.split("[=](double dt) {", 2)[2]
+    assert "pops_register_program_provider_routes" not in source
+    prepare = source.split("bool program_candidate_prepare", 1)[1].split(
+        'extern "C" bool pops_install_program', 1
+    )[0]
+    assert "ctx.advance_hierarchy(dt, _advance_level);" in prepare
+    assert ".post_synchronization(dt);" in prepare
+    assert prepare.index("ctx.advance_hierarchy") < prepare.index(".post_synchronization(dt);")
+    post_sync_lambda = prepare.split("[=](double dt) {", 2)[2]
     assert "ctx.begin_step(dt);" in post_sync_lambda
     assert "ctx.set_stage_time(1, 1);" in post_sync_lambda
     assert post_sync_lambda.index("ctx.begin_step(dt);") < post_sync_lambda.index("ctx.state(")

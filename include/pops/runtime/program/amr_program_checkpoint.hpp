@@ -113,7 +113,7 @@ struct AmrProgramAcceptedState {
   std::vector<AmrProgramHistoryDescriptor> histories;
   std::vector<AmrProgramHistorySlotProvenance> history_slots;
   std::vector<AmrProgramPendingHistoryRemap> pending_history_remaps;
-  /// Opaque at the facade boundary but structured by AmrProgramContext: every level-qualified
+  /// Opaque at the facade boundary but structured by ProgramExecutionServices: every level-qualified
   /// history slot's exact FluxBasis samples and rational coefficients.  This deliberately lives
   /// beside (not inside) the numerical history image, whose MPI rematerialization is independent.
   std::vector<std::uint8_t> history_flux_payload;
@@ -130,7 +130,7 @@ struct AmrProgramAcceptedState {
 
 namespace checkpoint_detail {
 
-inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '4'};
+inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '5'};
 
 class Writer {
  public:
@@ -173,7 +173,7 @@ class Writer {
 
 /// Allocation-free twin of Writer used by the artifact checkpoint-capacity preflight.  Keeping the
 /// primitive surface identical lets the binary encoder itself remain the only wire-schema
-/// authority: a field added to POPSAND4 changes both serialization and capacity accounting in the
+/// authority: a field added to POPSAND5 changes both serialization and capacity accounting in the
 /// same function.
 class CountingWriter {
  public:
@@ -618,6 +618,15 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
   }
   if (slot_index != state.history_slots.size())
     throw std::invalid_argument("exact AMR Program checkpoint has foreign history-slot provenance");
+  struct PendingRemapEdge {
+    int parent_level = -1;
+    int child_level = -1;
+    std::uint64_t prior_topology_epoch = 0;
+    std::uint64_t prior_materialization_generation = 0;
+    std::uint64_t published_topology_epoch = 0;
+    std::uint64_t published_materialization_generation = 0;
+  };
+  std::map<int, PendingRemapEdge> pending_edges;
   std::string previous_pending;
   for (const auto& pending : state.pending_history_remaps) {
     constexpr std::string_view history_prefix = "pops.amr.level-history.v1/";
@@ -680,8 +689,6 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
         pending.prior_topology_epoch + 1 != pending.published_topology_epoch ||
         pending.prior_materialization_generation + 1 !=
             pending.published_materialization_generation ||
-        pending.published_topology_epoch != state.topology_epoch ||
-        pending.published_materialization_generation != state.materialization_generation ||
         pending.accepted_macro_step < 0 || pending.temporal_denominator != 1 ||
         (pending.temporal_numerator != 1 && pending.temporal_numerator != 2) ||
         !std::isfinite(pending.source_dt) || !std::isfinite(pending.target_dt) ||
@@ -689,8 +696,41 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
         pending.target_dt != pending.source_dt / static_cast<double>(pending.temporal_numerator))
       throw std::invalid_argument(
           "exact AMR Program checkpoint has an invalid pending history remap");
+    const PendingRemapEdge edge{pending.parent_level,
+                                pending.child_level,
+                                pending.prior_topology_epoch,
+                                pending.prior_materialization_generation,
+                                pending.published_topology_epoch,
+                                pending.published_materialization_generation};
+    const auto [position, inserted] = pending_edges.emplace(edge.child_level, edge);
+    if (!inserted && (position->second.parent_level != edge.parent_level ||
+                      position->second.prior_topology_epoch != edge.prior_topology_epoch ||
+                      position->second.prior_materialization_generation !=
+                          edge.prior_materialization_generation ||
+                      position->second.published_topology_epoch != edge.published_topology_epoch ||
+                      position->second.published_materialization_generation !=
+                          edge.published_materialization_generation))
+      throw std::invalid_argument(
+          "exact AMR Program checkpoint pending history remaps branch across one child level");
     previous_pending = pending.key;
   }
+  std::optional<PendingRemapEdge> previous_edge;
+  for (const auto& [child_level, edge] : pending_edges) {
+    (void)child_level;
+    if (previous_edge && (edge.parent_level != previous_edge->child_level ||
+                          edge.prior_topology_epoch != previous_edge->published_topology_epoch ||
+                          edge.prior_materialization_generation !=
+                              previous_edge->published_materialization_generation))
+      throw std::invalid_argument(
+          "exact AMR Program checkpoint pending history remaps have a discontinuous authority "
+          "chain");
+    previous_edge = edge;
+  }
+  if (previous_edge &&
+      (previous_edge->published_topology_epoch != state.topology_epoch ||
+       previous_edge->published_materialization_generation != state.materialization_generation))
+    throw std::invalid_argument(
+        "exact AMR Program checkpoint pending history remaps do not reach the accepted authority");
   if (!state.history_flux_payload.empty() &&
       state.history_flux_payload.size() < sizeof(std::uint64_t))
     throw std::invalid_argument(
@@ -863,7 +903,7 @@ std::size_t serialized_amr_program_accepted_state_size(const AmrProgramAcceptedS
   return out.count();
 }
 
-/// Artifact-derived maximum POPSAND4 shape.  It carries character and term counts only: computing a
+/// Artifact-derived maximum POPSAND5 shape.  It carries character and term counts only: computing a
 /// resource ceiling must never first allocate the potentially large scientific vectors it is meant
 /// to bound.
 template <int Dim>

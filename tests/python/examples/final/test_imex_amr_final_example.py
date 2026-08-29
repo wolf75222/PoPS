@@ -175,8 +175,8 @@ def test_normative_example_uses_only_the_final_root_lifecycle() -> None:
     assert "BindInputs" not in source
     assert "simulation.program_accepted_state()" in source
     for forbidden in (
-        "ProgramContext",
-        "AmrProgramContext",
+        "ProgramExecutionServices",
+        "ProgramExecutionServices",
         "SystemStepper",
         "_executor",
         "_begin_step_transaction",

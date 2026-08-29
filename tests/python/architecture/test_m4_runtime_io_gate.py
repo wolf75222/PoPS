@@ -156,7 +156,7 @@ def test_m4_open_gate_refuses_to_list_targets_as_closed():
         "test_mpi_hdf5_collective",
         "test_native_loader_param_overflow",
         "test_platform_manifest",
-        "test_program_context_contract",
+        "test_program_execution_services_contract",
         "test_program_runtime",
     )
     assert runner._required_ctest_targets(data["check"]) == expected

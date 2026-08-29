@@ -55,10 +55,13 @@ System<Dim>& System<Dim>::operator=(System&& other) noexcept {
 template <int Dim>
 void System<Dim>::step(double dt) {
   p_->program_.require_step_installed("System::step");
-  runtime::program::ProfileScope scope(p_->program_.profiler_, "step");
-  p_->program_.profiler_.count("steps");
-  p_->execute_step_transaction(
-      [&] { p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, dt, "System"); });
+  p_->execute_step_transaction([&] {
+    // Profiling is candidate state as well: enter it only after the visibility writer has
+    // blocked readers, so a rejected attempt cannot leak a counter or an open scope.
+    runtime::program::ProfileScope scope(p_->program_.profiler_, "step");
+    p_->program_.profiler_.count("steps");
+    p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, dt, "System");
+  });
 }
 
 template <int Dim>
@@ -72,26 +75,65 @@ void System<Dim>::advance(double dt, int nsteps) {
 
 template <int Dim>
 void System<Dim>::begin_step_transaction() {
-  if (p_->external_step_transaction_)
+  if (p_->external_program_transaction_)
     throw std::runtime_error("System::begin_step_transaction: transaction already active");
-  p_->external_step_transaction_ = std::make_unique<typename Impl::AcceptedSnapshot>(*p_);
-  p_->external_step_transaction_committed_ = false;
+  try {
+    // Registry::begin captures the bind-primed carrier, then begin_candidate acquires and retains
+    // the visibility writer for the complete outer envelope. This is the one authoritative
+    // snapshot used by candidate rollback and by step-change diagnostics.
+    p_->external_program_transaction_.emplace(p_->step_transaction_registry_.begin());
+    if (!p_->external_program_transaction_->begin_candidate())
+      throw std::runtime_error("System transaction candidate phase rejected collectively");
+    p_->external_step_transaction_committed_ = false;
+  } catch (...) {
+    if (p_->external_program_transaction_)
+      p_->external_program_transaction_->rollback();
+    p_->external_program_transaction_.reset();
+    throw;
+  }
 }
 
 template <int Dim>
 void System<Dim>::commit_step_transaction() {
-  if (!p_->external_step_transaction_)
+  if (!p_->external_program_transaction_)
     throw std::runtime_error("System::commit_step_transaction: no active transaction");
   if (p_->external_step_transaction_committed_)
     throw std::runtime_error("System::commit_step_transaction: transaction already committed");
-  p_->external_step_transaction_committed_ = true;
+  if (p_->external_program_transaction_->phase() !=
+      runtime::program::ProgramTransactionPhase::kCandidate)
+    throw std::runtime_error(
+        "System::commit_step_transaction requires one completed candidate step");
+  try {
+    if (!p_->external_program_transaction_->begin_solve_guard_effect_prepare())
+      throw std::runtime_error(
+          "System transaction solve/guard/effect preparation rejected collectively");
+    if (!p_->external_program_transaction_->hidden_publish())
+      throw std::runtime_error("System transaction hidden publication failed collectively");
+    p_->external_step_transaction_committed_ = true;
+  } catch (...) {
+    p_->external_program_transaction_->rollback();
+    p_->external_program_transaction_.reset();
+    p_->external_step_transaction_committed_ = false;
+    throw;
+  }
 }
 
 template <int Dim>
-std::map<std::string, double> System<Dim>::step_change_l2() const {
-  if (!p_->external_step_transaction_)
+double System<Dim>::step_change_l2_for_block(std::string_view name) const {
+  p_->step_transaction_carrier_.step_change_last_dispatches = 0;
+  if (!p_->external_program_transaction_)
     throw std::runtime_error("System::step_change_l2 requires an active external step transaction");
-  const std::vector<MultiFab<Dim>>& previous = p_->external_step_transaction_->states;
+  // The external transaction deliberately retains the visibility writer from begin through
+  // finalize/rollback.  This diagnostic is part of that writer-owned window: taking a shared
+  // lease here would self-deadlock, while releasing the writer would expose the provisional
+  // candidate to other readers.  The active external snapshot is the authority proving that the
+  // caller is inside the protected window, so an explicit provisional scope must authenticate the
+  // resident candidate.  `acquire_accepted_read_lease()` recognizes that scope; without it the
+  // writer thread is rejected and a foreign reader blocks on the visibility writer.
+  [[maybe_unused]] auto provisional_read = p_->acquire_accepted_read_lease();
+  if (!p_->step_transaction_carrier_.accepted || !p_->step_transaction_carrier_.snapshot_active)
+    throw std::logic_error("System::step_change_l2 external transaction image is not active");
+  const std::vector<MultiFab<Dim>>& previous = p_->step_transaction_carrier_.accepted->states;
   if (previous.size() != p_->sp.size())
     throw std::runtime_error("System::step_change_l2 snapshot composition mismatch");
 
@@ -99,29 +141,144 @@ std::map<std::string, double> System<Dim>::step_change_l2() const {
   for (int axis = 0; axis < Dim; ++axis)
     cell_measure *= static_cast<double>(p_->geom.spacing(axis));
 
-  std::map<std::string, double> result;
   for (std::size_t block = 0; block < p_->sp.size(); ++block) {
-    const double sum_sq =
-        static_cast<double>(difference_sum_sq_all(p_->sp[block].U, previous[block]));
-    result.emplace(p_->sp[block].name, std::sqrt(cell_measure * sum_sq));
+    if (p_->sp[block].name != name)
+      continue;
+    const MultiFab<Dim>& current = p_->sp[block].U;
+    const MultiFab<Dim>& prior = previous[block];
+    mf_arith_detail::require_same_layout(current, prior, "System::step_change_l2_for_block");
+    // This is the internal Program-writer accessor: the public lane observer takes an accepted
+    // read lease and is therefore intentionally unavailable while the candidate writer is held.
+    const ExecutionLane& lane = program_prepared_boundary_execution_lane_();
+    // A Program may execute on a prepared subcommunicator, so validate the exact lane rather
+    // than the process-wide communicator used by the generic MultiFab helper.  A malformed rank
+    // space would otherwise silently overcount replicated storage or reduce different fields.
+    if (!lane.active() || current.rank_space().size() != static_cast<std::size_t>(lane.size()) ||
+        current.rank_space().linear_rank(current.local_rank()) !=
+            static_cast<std::size_t>(lane.rank()) ||
+        (current.distribution().replicated() && lane.size() != 1))
+      throw std::logic_error(
+          "System::step_change_l2_for_block ND rank space does not match its prepared lane");
+    auto& terms = p_->step_transaction_carrier_.step_change_terms;
+    auto& invalid = p_->step_transaction_carrier_.step_change_invalid;
+    const std::size_t capacity = p_->step_transaction_carrier_.step_change_term_capacity;
+    if (terms.data() == nullptr || invalid.data() == nullptr || capacity == 0)
+      throw std::logic_error("System::step_change_l2_for_block reduction workspace is not primed");
+    // This workspace is exclusively owned by the candidate reader and each prior invocation
+    // fences its asynchronous work before returning. Every term below is overwritten exactly
+    // once, so the term buffer itself needs no hot reset or pre-launch fence.
+    invalid() = 0;
+    std::size_t term_offset = 0;
+    bool launched_asynchronous_work = false;
+    for (std::size_t local = 0; local < current.local_size(); ++local) {
+      const auto current_view = current.fab(local).view();
+      const auto previous_view = prior.fab(local).view();
+      const Box<Dim> box = current.box(local);
+      const std::int64_t signed_cells = box.numPts();
+      if (signed_cells <= 0)
+        throw std::logic_error("System::step_change_l2_for_block encountered an empty valid patch");
+      const std::size_t cells = static_cast<std::size_t>(signed_cells);
+      if constexpr (!std::is_same_v<Kokkos::DefaultExecutionSpace,
+                                    Kokkos::DefaultHostExecutionSpace>) {
+        launched_asynchronous_work = true;
+      } else if (signed_cells >= detail::foreach_serial_threshold()) {
+        launched_asynchronous_work = true;
+      }
+      for (int component = 0; component < current.ncomp(); ++component) {
+        if (term_offset > capacity || cells > capacity - term_offset)
+          throw std::logic_error(
+              "System::step_change_l2_for_block exceeded its cold-primed reduction workspace");
+        const std::size_t component_offset = term_offset;
+        term_offset += cells;
+        for_each_cell(
+            box, KOKKOS_LAMBDA(const Index<Dim>& index) {
+              std::size_t linear = 0;
+              std::size_t stride = 1;
+              for (int axis = 0; axis < Dim; ++axis) {
+                linear += static_cast<std::size_t>(index[axis] - box.lo[axis]) * stride;
+                stride *= static_cast<std::size_t>(box.length(axis));
+              }
+              const Real difference =
+                  current_view(index, component) - previous_view(index, component);
+              const Real squared = difference * difference;
+              if (!Kokkos::isfinite(difference) || !Kokkos::isfinite(squared)) {
+                terms(component_offset + linear) = Real(0);
+                Kokkos::atomic_exchange(&invalid(), 1);
+              } else {
+                terms(component_offset + linear) = squared;
+              }
+            });
+        ++p_->step_transaction_carrier_.step_change_last_dispatches;
+      }
+    }
+    if (term_offset > capacity)
+      throw std::logic_error(
+          "System::step_change_l2_for_block reduction workspace accounting drift");
+    // SharedSpace host reads follow a fence whenever `for_each_cell` launched a Kokkos kernel.
+    // The small-host-box path is an inline synchronous loop and requires no Kokkos fence (whose
+    // OpenMP bookkeeping allocates on this otherwise allocation-free diagnostic). Sum the
+    // canonical slot order on the host, then reject non-finite terms collectively before
+    // reducing a scientific scalar over the prepared lane.
+    if (launched_asynchronous_work)
+      Kokkos::fence();
+    Real local_sum = Real(0);
+    for (std::size_t slot = 0; slot < term_offset; ++slot)
+      local_sum += terms(slot);
+    const bool local_invalid = invalid() != 0 || !std::isfinite(local_sum);
+    if (all_reduce_sum(local_invalid ? 1L : 0L, lane) != 0)
+      throw std::runtime_error("System::step_change_l2_for_block encountered a non-finite state");
+    const double global_sum = static_cast<double>(all_reduce_sum(local_sum, lane));
+    const double result = std::sqrt(cell_measure * global_sum);
+    if (all_reduce_sum(std::isfinite(global_sum) && std::isfinite(result) ? 0L : 1L, lane) != 0)
+      throw std::runtime_error("System::step_change_l2_for_block produced a non-finite result");
+    return result;
   }
+  throw std::out_of_range("System::step_change_l2_for_block unknown block");
+}
+
+template <int Dim>
+std::uint64_t System<Dim>::_step_change_l2_last_dispatches() const noexcept {
+  return p_->step_transaction_carrier_.step_change_last_dispatches;
+}
+
+template <int Dim>
+std::map<std::string, double> System<Dim>::step_change_l2() const {
+  std::map<std::string, double> result;
+  for (const typename Impl::Species& block : p_->sp)
+    result.emplace(block.name, step_change_l2_for_block(block.name));
   return result;
 }
 
 template <int Dim>
 void System<Dim>::finalize_step_transaction() {
-  if (!p_->external_step_transaction_ || !p_->external_step_transaction_committed_)
+  if (!p_->external_program_transaction_ || !p_->external_step_transaction_committed_)
     throw std::runtime_error("System::finalize_step_transaction: no committed transaction");
-  p_->external_step_transaction_.reset();
+  runtime::program::ProgramFinalizeReceipt finalized;
+  try {
+    const auto sealed = p_->external_program_transaction_->atomic_seal();
+    if (!sealed)
+      throw std::runtime_error("System transaction atomic seal failed collectively");
+    finalized = p_->external_program_transaction_->irreversible_finalize();
+  } catch (...) {
+    // A failed seal rolls back inside the transaction. Finalizer failures are represented by the
+    // fail-stop receipt and do not roll back the accepted scientific generation.
+    p_->external_program_transaction_.reset();
+    p_->external_step_transaction_committed_ = false;
+    throw;
+  }
+  p_->step_transaction_carrier_.discard_snapshot();
+  p_->external_program_transaction_.reset();
   p_->external_step_transaction_committed_ = false;
+  if (!finalized)
+    throw std::runtime_error("System transaction entered fail-stop during finalization");
 }
 
 template <int Dim>
 void System<Dim>::rollback_step_transaction() {
-  if (!p_->external_step_transaction_)
+  if (!p_->external_program_transaction_)
     throw std::runtime_error("System::rollback_step_transaction: no active transaction");
-  p_->external_step_transaction_->restore(*p_);
-  p_->external_step_transaction_.reset();
+  p_->external_program_transaction_->rollback();
+  p_->external_program_transaction_.reset();
   p_->external_step_transaction_committed_ = false;
 }
 
@@ -137,13 +294,41 @@ void System<Dim>::commit_restart_transaction() {
 
 template <int Dim>
 void System<Dim>::finalize_restart_transaction() noexcept {
-  p_->external_step_transaction_.reset();
-  p_->external_step_transaction_committed_ = false;
+  if (p_->external_program_transaction_) {
+    const auto sealed = p_->external_program_transaction_->atomic_seal();
+    if (!sealed) {
+      p_->external_program_transaction_->rollback();
+      std::terminate();
+    }
+    const auto finalized = p_->external_program_transaction_->irreversible_finalize();
+    p_->step_transaction_carrier_.discard_snapshot();
+    p_->external_program_transaction_.reset();
+    p_->external_step_transaction_committed_ = false;
+    if (!finalized)
+      std::terminate();
+  } else {
+    p_->external_step_transaction_committed_ = false;
+  }
 }
 
 template <int Dim>
 void System<Dim>::rollback_restart_transaction() {
   rollback_step_transaction();
+}
+
+template <int Dim>
+std::uint64_t System<Dim>::accepted_transaction_generation_() const noexcept {
+  return static_cast<std::uint64_t>(p_->step_transaction_registry_.accepted_generation());
+}
+
+template <int Dim>
+bool System<Dim>::accepted_transaction_fail_stop_() const noexcept {
+  return p_->step_transaction_registry_.fail_stop();
+}
+
+template <int Dim>
+runtime::program::ProvisionalReadLease System<Dim>::_provisional_read_scope() const {
+  return p_->step_transaction_registry_.acquire_provisional_read();
 }
 
 template <int Dim>
@@ -211,166 +396,172 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
     throw std::invalid_argument(
         "System::step_cfl inputs or prepared scalar authorities differ between MPI ranks");
 
-  SolveOutcome field_outcome = solve_fields();
-  const SolveConsumption field_consumption =
-      field_outcome.report().solved_value_available()
-          ? SolveConsumption::kAccept
-          : (field_outcome.report().action == SolveAction::kRejectAttempt
-                 ? SolveConsumption::kRejectAttempt
-                 : SolveConsumption::kFailRun);
-  const SolveReport field_report = field_outcome.consume(field_consumption);
-  if (!field_report.solved_value_available()) {
-    if (field_consumption == SolveConsumption::kRejectAttempt)
-      throw runtime::program::StepAttemptRejected(field_report.status, "CFL field evaluation",
-                                                  field_report.reason);
-    throw std::runtime_error(std::string("System::step_cfl field evaluation failed: status=") +
-                             field_report.status_name() + " action=" + field_report.action_name() +
-                             " reason=" + field_report.reason);
-  }
-
-  Real minimum_spacing = p_->geom.spacing(0);
-  for (int axis = 1; axis < Dim; ++axis)
-    minimum_spacing = std::min(minimum_spacing, p_->geom.spacing(axis));
-
-  double selected = std::numeric_limits<double>::infinity();
-  std::string reason = "degenerate";
-  for (std::size_t block_index = 0; block_index < p_->sp.size(); ++block_index) {
-    typename Impl::Species& block = p_->sp[block_index];
-    if (!block.evolve)
-      continue;
-    const Real speed =
-        std::max(block_max_speed_prepared_(static_cast<int>(block_index), block.U, lane),
-                 static_cast<Real>(speed_floor));
-    double block_dt = cfl * static_cast<double>(minimum_spacing) * block.substeps /
-                      (static_cast<double>(block.stride) * static_cast<double>(speed));
-    const char* block_reason = "transport";
-    if (block.parabolic_frequency) {
-      const Real parabolic = *block.parabolic_frequency;
-      if (parabolic > Real(0)) {
-        // Explicit advection--diffusion uses CFL / (speed / h + 2 nu sum_a h_a^-2), rather
-        // than min(CFL h / speed, 1 / q): the two spectral radii act in the same stage.
-        block_dt = cfl * block.substeps /
-                   (static_cast<double>(block.stride) *
-                    (static_cast<double>(speed) / static_cast<double>(minimum_spacing) +
-                     static_cast<double>(parabolic)));
-        block_reason = "parabolic_frequency";
-      }
+  // The field solve participates in the same accepted-state attempt as the CFL decision and
+  // Program dispatch.  In particular, an unavailable value is consumed before any candidate
+  // can be made visible, and a reject/failure restores every field, clock and auxiliary image
+  // captured by execute_step_transaction().
+  return p_->execute_step_transaction([&]() -> double {
+    SolveOutcome field_outcome = program_solve_fields_();
+    const SolveConsumption field_consumption =
+        field_outcome.report().solved_value_available()
+            ? SolveConsumption::kAccept
+            : (field_outcome.report().action == SolveAction::kRejectAttempt
+                   ? SolveConsumption::kRejectAttempt
+                   : SolveConsumption::kFailRun);
+    const SolveReport field_report = field_outcome.consume(field_consumption);
+    if (!field_report.solved_value_available()) {
+      if (field_consumption == SolveConsumption::kRejectAttempt)
+        throw runtime::program::StepAttemptRejected(field_report.status, "CFL field evaluation",
+                                                    field_report.reason);
+      throw std::runtime_error(std::string("System::step_cfl field evaluation failed: status=") +
+                               field_report.status_name() + " action=" +
+                               field_report.action_name() + " reason=" + field_report.reason);
     }
-    if (block.source_frequency) {
-      const Real frequency = block.source_frequency(block.U);
-      if (frequency > Real(0)) {
-        const double source_dt =
-            cfl * block.substeps /
-            (static_cast<double>(block.stride) * static_cast<double>(frequency));
-        if (source_dt < block_dt) {
-          block_dt = source_dt;
-          block_reason = "source_frequency";
+
+    Real minimum_spacing = p_->geom.spacing(0);
+    for (int axis = 1; axis < Dim; ++axis)
+      minimum_spacing = std::min(minimum_spacing, p_->geom.spacing(axis));
+
+    double selected = std::numeric_limits<double>::infinity();
+    std::string reason = "degenerate";
+    for (std::size_t block_index = 0; block_index < p_->sp.size(); ++block_index) {
+      typename Impl::Species& block = p_->sp[block_index];
+      if (!block.evolve)
+        continue;
+      const Real speed =
+          std::max(block_max_speed_prepared_(static_cast<int>(block_index), block.U, lane),
+                   static_cast<Real>(speed_floor));
+      double block_dt = cfl * static_cast<double>(minimum_spacing) * block.substeps /
+                        (static_cast<double>(block.stride) * static_cast<double>(speed));
+      const char* block_reason = "transport";
+      if (block.parabolic_frequency) {
+        const Real parabolic = *block.parabolic_frequency;
+        if (parabolic > Real(0)) {
+          // Explicit advection--diffusion uses CFL / (speed / h + 2 nu sum_a h_a^-2), rather
+          // than min(CFL h / speed, 1 / q): the two spectral radii act in the same stage.
+          block_dt = cfl * block.substeps /
+                     (static_cast<double>(block.stride) *
+                      (static_cast<double>(speed) / static_cast<double>(minimum_spacing) +
+                       static_cast<double>(parabolic)));
+          block_reason = "parabolic_frequency";
         }
       }
-    }
-    if (block.stability_dt) {
-      const Real admissible = block.stability_dt(block.U);
-      if (admissible > Real(0)) {
-        const double admissible_dt =
-            static_cast<double>(admissible) * block.substeps / static_cast<double>(block.stride);
-        if (admissible_dt < block_dt) {
-          block_dt = admissible_dt;
-          block_reason = "stability_dt";
+      if (block.source_frequency) {
+        const Real frequency = block.source_frequency(block.U);
+        if (frequency > Real(0)) {
+          const double source_dt =
+              cfl * block.substeps /
+              (static_cast<double>(block.stride) * static_cast<double>(frequency));
+          if (source_dt < block_dt) {
+            block_dt = source_dt;
+            block_reason = "source_frequency";
+          }
         }
       }
+      if (block.stability_dt) {
+        const Real admissible = block.stability_dt(block.U);
+        if (admissible > Real(0)) {
+          const double admissible_dt =
+              static_cast<double>(admissible) * block.substeps / static_cast<double>(block.stride);
+          if (admissible_dt < block_dt) {
+            block_dt = admissible_dt;
+            block_reason = "stability_dt";
+          }
+        }
+      }
+      if (block_dt < selected) {
+        selected = block_dt;
+        reason = std::string(block_reason) + ":" + block.name;
+      }
     }
-    if (block_dt < selected) {
-      selected = block_dt;
-      reason = std::string(block_reason) + ":" + block.name;
-    }
-  }
 
-  for (const runtime::system::CoupledFreq& frequency : p_->coupling_.coupled_freqs) {
-    if (!(frequency.mu > 0.0))
-      continue;
-    const double candidate = cfl / frequency.mu;
-    if (candidate < selected) {
-      selected = candidate;
-      reason = "coupled_source:" + frequency.label;
+    for (const runtime::system::CoupledFreq& frequency : p_->coupling_.coupled_freqs) {
+      if (!(frequency.mu > 0.0))
+        continue;
+      const double candidate = cfl / frequency.mu;
+      if (candidate < selected) {
+        selected = candidate;
+        reason = "coupled_source:" + frequency.label;
+      }
     }
-  }
-  for (const runtime::system::PreparedCoupledFrequency& frequency :
-       p_->coupling_.coupled_frequencies) {
-    if (!frequency.maximum_frequency)
-      continue;
-    const double maximum_frequency = static_cast<double>(frequency.maximum_frequency());
-    if (!std::isfinite(maximum_frequency))
-      throw std::runtime_error(
-          "System coupled-source frequency provider returned a non-finite "
-          "maximum for '" +
-          frequency.label + "'");
-    if (!(maximum_frequency > 0.0))
-      continue;
-    const double candidate = cfl / maximum_frequency;
-    if (candidate < selected) {
-      selected = candidate;
-      reason = "coupled_source:" + frequency.label;
+    for (const runtime::system::PreparedCoupledFrequency& frequency :
+         p_->coupling_.coupled_frequencies) {
+      if (!frequency.maximum_frequency)
+        continue;
+      const double maximum_frequency = static_cast<double>(frequency.maximum_frequency());
+      if (!std::isfinite(maximum_frequency))
+        throw std::runtime_error(
+            "System coupled-source frequency provider returned a non-finite "
+            "maximum for '" +
+            frequency.label + "'");
+      if (!(maximum_frequency > 0.0))
+        continue;
+      const double candidate = cfl / maximum_frequency;
+      if (candidate < selected) {
+        selected = candidate;
+        reason = "coupled_source:" + frequency.label;
+      }
     }
-  }
-  for (const runtime::system::GlobalDtBound& bound : p_->coupling_.dt_bounds) {
-    if (!bound.fn)
-      continue;
-    double candidate = bound.fn();
-    if (!(candidate > 0.0) || !std::isfinite(candidate))
-      candidate = std::numeric_limits<double>::infinity();
-    candidate = all_reduce_min(candidate, lane);
-    if (candidate < selected) {
-      selected = candidate;
-      reason = "global:" + bound.label;
+    for (const runtime::system::GlobalDtBound& bound : p_->coupling_.dt_bounds) {
+      if (!bound.fn)
+        continue;
+      double candidate = bound.fn();
+      if (!(candidate > 0.0) || !std::isfinite(candidate))
+        candidate = std::numeric_limits<double>::infinity();
+      candidate = all_reduce_min(candidate, lane);
+      if (candidate < selected) {
+        selected = candidate;
+        reason = "global:" + bound.label;
+      }
     }
-  }
 
-  if (p_->program_.dt_bound_) {
-    const double program_dt = static_cast<double>(p_->program_.dt_bound_(static_cast<Real>(cfl)));
-    if (std::isfinite(program_dt) && program_dt > 0.0 && program_dt < selected) {
-      selected = program_dt;
-      reason = "program:dt_bound";
+    if (p_->program_.dt_bound_) {
+      const double program_dt = static_cast<double>(p_->program_.dt_bound_(static_cast<Real>(cfl)));
+      if (std::isfinite(program_dt) && program_dt > 0.0 && program_dt < selected) {
+        selected = program_dt;
+        reason = "program:dt_bound";
+      }
     }
-  }
-  if (!std::isfinite(selected))
-    selected = cfl * static_cast<double>(minimum_spacing) / speed_floor;
-  if (max_dt < selected) {
-    selected = max_dt;
-    reason = "strategy:max_dt";
-  }
-  if (all_reduce_max(selected < min_dt ? 1L : 0L, lane) != 0)
-    throw std::runtime_error("System::step_cfl stability bound is below declared min_dt");
+    if (!std::isfinite(selected))
+      selected = cfl * static_cast<double>(minimum_spacing) / speed_floor;
+    if (max_dt < selected) {
+      selected = max_dt;
+      reason = "strategy:max_dt";
+    }
+    if (all_reduce_max(selected < min_dt ? 1L : 0L, lane) != 0)
+      throw std::runtime_error("System::step_cfl stability bound is below declared min_dt");
 
-  std::string decision_contract;
-  std::exception_ptr decision_error;
-  try {
-    ExactContractBuilder contract;
-    contract.text("pops.system.step-cfl-decision")
-        .scalar(std::uint32_t{1})
-        .scalar(selected)
-        .text(reason);
-    decision_contract = std::move(contract).release();
-  } catch (...) {
-    decision_error = std::current_exception();
-  }
-  if (all_reduce_max(decision_error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && decision_error)
-      std::rethrow_exception(decision_error);
-    throw std::runtime_error("System::step_cfl decision preparation failed collectively");
-  }
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("system-step-cfl-decision"), std::string_view(decision_contract)}},
-          lane))
-    throw std::runtime_error("System::step_cfl selected different bounds across MPI ranks");
+    std::string decision_contract;
+    std::exception_ptr decision_error;
+    try {
+      ExactContractBuilder contract;
+      contract.text("pops.system.step-cfl-decision")
+          .scalar(std::uint32_t{1})
+          .scalar(selected)
+          .text(reason);
+      decision_contract = std::move(contract).release();
+    } catch (...) {
+      decision_error = std::current_exception();
+    }
+    if (all_reduce_max(decision_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && decision_error)
+        std::rethrow_exception(decision_error);
+      throw std::runtime_error("System::step_cfl decision preparation failed collectively");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("system-step-cfl-decision"), std::string_view(decision_contract)}},
+            lane))
+      throw std::runtime_error("System::step_cfl selected different bounds across MPI ranks");
 
-  p_->last_dt_reason_ = std::move(reason);
-  p_->execute_step_transaction(
-      [&] { p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, selected, "System"); });
-  return selected;
+    p_->last_dt_reason_ = std::move(reason);
+    p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, selected, "System");
+    return selected;
+  });
 }
 
 template <int Dim>
 int System<Dim>::macro_step() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->macro_step_;
 }
 
@@ -420,41 +611,67 @@ void System<Dim>::mark_bound() {
                                  name + "'");
     p_->publish_boundary_to_block(name);
   }
+  // Freeze the complete Uniform composition before entering the first transaction. The carrier
+  // captures all resident fields, provider storage, and Program state once here; subsequent steps
+  // recycle this image instead of constructing MultiFabs/maps from the hot path.
+  p_->prime_step_transaction_image();
   p_->lifecycle_.to_bound();
 }
 
 template <int Dim>
+int System<Dim>::program_macro_step_() const {
+  return p_->macro_step_;
+}
+
+template <int Dim>
+double System<Dim>::program_time_() const {
+  return p_->t;
+}
+
+template <int Dim>
 std::string System<Dim>::lifecycle_state() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->lifecycle_.state(p_->macro_step_);
 }
 
 template <int Dim>
-runtime::program::CacheManager<Dim>& System<Dim>::program_cache() {
+AcceptedCacheReadView<Dim> System<Dim>::program_cache() {
+  auto accepted_read = p_->acquire_accepted_read_lease();
+  return AcceptedCacheReadView<Dim>(std::move(accepted_read), &p_->program_.cache_);
+}
+
+template <int Dim>
+runtime::program::CacheManager<Dim>& System<Dim>::program_cache_() {
   return p_->program_.cache_;
 }
 
 template <int Dim>
 Extent<Dim> System<Dim>::spatial_shape() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->cfg.shape;
 }
 
 template <int Dim>
 double System<Dim>::time() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->t;
 }
 
 template <int Dim>
 int System<Dim>::n_species() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->blocks_.size();
 }
 
 template <int Dim>
 std::vector<std::string> System<Dim>::block_names() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->blocks_.names();
 }
 
 template <int Dim>
 EffectiveOptionsReport System<Dim>::effective_options_report() const {
+  auto accepted_read = p_->acquire_accepted_read_lease();
   EffectiveOptionsReport report;
   report.runtime = "system";
   report.topology.dimension = Dim;
@@ -513,6 +730,8 @@ template void System<kNativeDimension>::step(double);
 template void System<kNativeDimension>::advance(double, int);
 template void System<kNativeDimension>::begin_step_transaction();
 template void System<kNativeDimension>::commit_step_transaction();
+template double System<kNativeDimension>::step_change_l2_for_block(std::string_view) const;
+template std::uint64_t System<kNativeDimension>::_step_change_l2_last_dispatches() const noexcept;
 template std::map<std::string, double> System<kNativeDimension>::step_change_l2() const;
 template void System<kNativeDimension>::finalize_step_transaction();
 template void System<kNativeDimension>::rollback_step_transaction();
@@ -520,12 +739,19 @@ template void System<kNativeDimension>::begin_restart_transaction();
 template void System<kNativeDimension>::commit_restart_transaction();
 template void System<kNativeDimension>::finalize_restart_transaction() noexcept;
 template void System<kNativeDimension>::rollback_restart_transaction();
+template std::uint64_t System<kNativeDimension>::accepted_transaction_generation_() const noexcept;
+template bool System<kNativeDimension>::accepted_transaction_fail_stop_() const noexcept;
+template runtime::program::ProvisionalReadLease System<kNativeDimension>::_provisional_read_scope()
+    const;
 template double System<kNativeDimension>::step_cfl(double, double, double, double);
 template int System<kNativeDimension>::macro_step() const;
 template void System<kNativeDimension>::mark_bound();
+template int System<kNativeDimension>::program_macro_step_() const;
+template double System<kNativeDimension>::program_time_() const;
 template std::string System<kNativeDimension>::lifecycle_state() const;
+template AcceptedCacheReadView<kNativeDimension> System<kNativeDimension>::program_cache();
 template runtime::program::CacheManager<kNativeDimension>&
-System<kNativeDimension>::program_cache();
+System<kNativeDimension>::program_cache_();
 template Extent<kNativeDimension> System<kNativeDimension>::spatial_shape() const;
 template double System<kNativeDimension>::time() const;
 template int System<kNativeDimension>::n_species() const;

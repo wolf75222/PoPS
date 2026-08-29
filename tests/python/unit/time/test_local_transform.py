@@ -84,7 +84,9 @@ def test_local_transform_program_emits_one_collective_fail_closed_kernel() -> No
     source = emit_cpp_program(program, model=emit_model)
     assert source.count("transform_failed_") >= 1
     assert "ctx.scratch_state_like(" in source
-    install_prelude, step_body = source.split("ctx.install([=](double dt)", 1)
+    install_prelude, step_body = source.split(
+        "state->step = [ctx_owner = state->ctx_owner](double dt)", 1
+    )
     assert "transform_state_resource_" in install_prelude
     assert "transform_status_resource_" in install_prelude
     assert "ctx.scalar_scratch(" in install_prelude

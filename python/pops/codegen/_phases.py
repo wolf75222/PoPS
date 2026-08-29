@@ -303,7 +303,7 @@ def resolve(
         problem, resolved_time, layout=layout_plan, libraries=())
     from pops.codegen._resolution import resolve_capability_evidence
 
-    amr_program_context = None
+    program_execution_services_amr = None
     if target == "amr_system":
         from pops.mesh._amr import FrozenHierarchy
         from pops.runtime.amr_program_support import AMRProgramSupportContext
@@ -311,7 +311,7 @@ def resolve(
         if resolved_hierarchy is None:
             raise TypeError("resolved AMR hierarchy evidence is missing")
         hierarchy = resolved_hierarchy.plan
-        amr_program_context = AMRProgramSupportContext(
+        program_execution_services_amr = AMRProgramSupportContext(
             hierarchy_level_count=hierarchy.level_count,
             frozen_hierarchy=type(hierarchy.regrid) is FrozenHierarchy,
             shared_block_interfaces=has_shared_interfaces,
@@ -322,7 +322,7 @@ def resolve(
 
     evidence = resolve_capability_evidence(
         problem, layout=layout_plan, libraries=(), time=resolved_time,
-        module_abi_key=None, amr_program_context=amr_program_context)
+        module_abi_key=None, program_execution_services_amr=program_execution_services_amr)
     amr_requirements = None
     amr_capabilities = None
     if bootstrap_plan is not None:

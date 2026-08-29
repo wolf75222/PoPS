@@ -262,7 +262,7 @@ def _accepted_image(runtime):
         ),
         "program_state": bytes(native.program_accepted_state()),
         # The public manifest exposes the exact outgoing-dt bit patterns, fill counters and
-        # level/slot ownership independently of the opaque POPSAND4 image.
+        # level/slot ownership independently of the opaque POPSAND5 image.
         "history_manifest": tuple(
             tuple(map(str, row)) for row in native.program_accepted_state_manifest()
         ),
@@ -332,7 +332,7 @@ def _accepted_tagging_hysteresis(payload):
         cursor += size
         assert cursor <= len(encoded), "accepted-state string is truncated"
 
-    assert encoded[:8] == b"POPSAND4"
+    assert encoded[:8] == b"POPSAND5"
     cursor = 8
     cursor += 8  # native dimension
     skip_string()  # exact spatial contract

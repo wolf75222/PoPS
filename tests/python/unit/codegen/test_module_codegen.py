@@ -1,14 +1,8 @@
-"""Spec 2 (S2-6): the GeneratedModule metadata block emitted into the problem.so source.
-
-A combined model+program .so carries GeneratedProgram (pops_install_program, the step) AND a
-GeneratedModule descriptor: extern "C" pops_module_* accessors exposing the typed operator registry
-by integer OperatorId. The descriptor is read once at install (introspection + requirement
-validation, module_metadata.hpp); it must NOT appear in the step body, so operators stay inlined and
-there is no string lookup in a hot kernel. Pure-Python codegen-text check; skips if pops is absent.
-"""
+"""v5 candidate-table module records emitted into the single Program artifact."""
 from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.module_lowering import lower_and_validate
 from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen.program_metadata import program_module_records
 from types import SimpleNamespace
 
 try:
@@ -75,35 +69,31 @@ def _emit(program, model):
         program, model=_lowered_emit_model(model), field_plans={field.local_id: plan})
 
 
-def test_metadata_block_emitted():
+def test_module_records_are_emitted_in_the_candidate_table():
     m = _model()
     state, fields = _program_inputs(m)
     P = libtime.PredictorCorrector(
         state, fields=fields,
         explicit=_op(m, "explicit_rhs"), implicit=_op(m, "lorentz"))
     src = _emit(P, m)
-    # GeneratedModule descriptor + GeneratedProgram coexist in the one .so.
+    # Module records and the install entry coexist in the one artifact.
     assert "pops_install_program" in src
-    assert "pops_module_operator_count() { return" in src
-    assert "pops_module_operator_kind(int i)" in src
-    assert "pops_module_operator_signature(int i)" in src
-    assert "pops_module_operator_requirements(int i)" in src
-    assert "pops_module_state_space_name(int i)" in src
-    assert "pops_module_field_space_name(int i)" in src
-    # The count equals the registry size (flux_default, electric, lorentz, fields,
-    # explicit_rhs) and every operator name + its kind is emitted.
+    assert "kProgramCandidateModuleOperators" in src
+    assert "kProgramCandidateModuleStateSpaces" in src
+    assert "kProgramCandidateModuleFieldSpaces" in src
+    # The candidate records include the registry names and kinds.
     reg = m.operator_registry()
-    assert "pops_module_operator_count() { return %d; }" % len(reg) in src
+    assert len(reg) > 0
     for op in ("flux_default", "electric", "lorentz", "fields", "explicit_rhs"):
         assert '"%s"' % op in src, "operator %r missing from the module metadata" % op
     for kind in ("grid_operator", "local_source", "local_linear_operator", "field_operator",
                  "local_rate"):
         assert '"%s"' % kind in src, "operator kind %r missing from the module metadata" % kind
     assert '"U"' in src and '"fields"' in src
-    print("OK  GeneratedModule metadata block emitted alongside the program")
+    print("OK  v5 candidate module records emitted alongside the program")
 
 
-def test_metadata_not_in_step_body():
+def test_module_records_are_not_referenced_by_the_step_body():
     m = _model()
     state, fields = _program_inputs(m)
     P = libtime.PredictorCorrector(
@@ -111,12 +101,12 @@ def test_metadata_not_in_step_body():
         explicit=_op(m, "explicit_rhs"), implicit=_op(m, "lorentz"))
     src = _emit(P, m)
     body = src.split("pops_install_program", 1)[1]
-    assert "pops_module_" not in body, \
-        "the GeneratedModule metadata must not be referenced in the step body (no hot-path lookup)"
-    print("OK  module metadata is install-time only (no hot-path string lookup)")
+    assert "kProgramCandidateModule" not in body, \
+        "candidate module records must not be referenced in the hot step body"
+    print("OK  candidate module records are install-time only")
 
 
-def test_no_model_empty_module():
+def test_no_model_emits_empty_candidate_module_tables():
     P = adctime.Program("fe")
     u = typed_state(P, "plasma")
     target = typed_state(P, "plasma", state_name="U")
@@ -129,12 +119,11 @@ def test_no_model_empty_module():
         ),
     )
     src = emit_cpp_program(P, model=None)
-    assert "pops_module_operator_count() { return 0; }" in src
-    print("OK  model=None emits an empty GeneratedModule (count 0)")
+    assert "kProgramCandidateModuleOperators[] = {}" in src
+    print("OK  model=None emits empty v5 candidate module tables")
 
 
-def test_metadata_includes_every_declared_space_for_one_owner():
-    from pops.codegen.program_codegen import _emit_module_metadata
+def test_module_records_include_every_declared_space_for_one_owner():
     from pops.codegen.program_models import ProgramModelGraph
     from pops.model import Module
 
@@ -160,19 +149,18 @@ def test_metadata_includes_every_declared_space_for_one_owner():
         owners_by_block={"fluid": owner},
         authorities_by_owner={owner: module.owner_path},
     )
-    src = _emit_module_metadata(adctime.Program("metadata_only"), graph)
+    operators, states, fields = program_module_records(adctime.Program("metadata_only"), graph)
 
-    assert "pops_module_state_space_count() { return 2; }" in src
-    assert "pops_module_field_space_count() { return 2; }" in src
-    for name in ("fluid", "tracer", "electrostatic", "magnetic"):
-        assert 'return "%s";' % name in src
+    assert len(operators) == 0
+    assert {row[0] for row in states} == {"fluid", "tracer"}
+    assert {row[0] for row in fields} == {"electrostatic", "magnetic"}
 
 
 def main():
-    test_metadata_block_emitted()
-    test_metadata_not_in_step_body()
-    test_no_model_empty_module()
-    test_metadata_includes_every_declared_space_for_one_owner()
+    test_module_records_are_emitted_in_the_candidate_table()
+    test_module_records_are_not_referenced_by_the_step_body()
+    test_no_model_emits_empty_candidate_module_tables()
+    test_module_records_include_every_declared_space_for_one_owner()
     print("OK  test_module_codegen")
 
 

@@ -90,8 +90,8 @@ def test_release_contract_versions_every_protocol_and_declares_exact_matrix():
         "amr_checkpoint_payload_version",
     ):
         assert source[name] >= 1
-    assert source["uniform_checkpoint_payload_version"] == 8
-    assert source["amr_checkpoint_payload_version"] == 11
+    assert source["uniform_checkpoint_payload_version"] == 9
+    assert source["amr_checkpoint_payload_version"] == 12
     assert source["checkpoint_spatial_schema_version"] == 1
     assert source["capability_vocabulary_version"] == 4
     assert generated.SUPPORTED_MATRIX["wheels"] == (

@@ -148,6 +148,10 @@ class AmrSystem(
         """Return the transaction-free compiled target for runtime controllers."""
         return self._s
 
+    def _accepted_transaction_generation_(self) -> Any:
+        """Expose the native accepted-transaction generation to aggregate readers."""
+        return self._s.accepted_transaction_generation_()
+
     def step(self, dt: Any) -> None:
         """Advance one fixed step and synchronize exactly one temporal envelope."""
         from pops.runtime._native_step_target import native_step_target

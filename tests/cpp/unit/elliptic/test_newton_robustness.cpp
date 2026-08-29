@@ -27,6 +27,7 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -45,6 +46,27 @@ struct NoProviders {
 };
 
 inline constexpr NoProviders no_providers{};
+
+struct SolveOutcomeHookTrace {
+  int accepted = 0;
+  int rejected = 0;
+  int released = 0;
+  pops::SolveConsumption failure = pops::SolveConsumption::kAccept;
+};
+
+void record_solve_accept(void* context) noexcept {
+  ++static_cast<SolveOutcomeHookTrace*>(context)->accepted;
+}
+
+void record_solve_reject(void* context, pops::SolveConsumption action) {
+  auto& trace = *static_cast<SolveOutcomeHookTrace*>(context);
+  ++trace.rejected;
+  trace.failure = action;
+}
+
+void record_solve_release(void* context) noexcept {
+  ++static_cast<SolveOutcomeHookTrace*>(context)->released;
+}
 
 pops::ExecutionLane test_execution_lane() {
   return pops::ExecutionLane::world("pops.test.newton-robustness");
@@ -416,6 +438,80 @@ TEST(SolveOutcomeContract, direct_consumer_cannot_continue_after_failed_solve) {
 
   EXPECT_THROW((void)pops::consume_solve_outcome(pops::SolveOutcome::serial(std::move(solve))),
                std::runtime_error);
+}
+
+TEST(SolveOutcomeContract, exhaustive_statuses_are_move_only_exact_once_and_never_publish_early) {
+  static_assert(!std::is_copy_constructible_v<pops::SolveOutcome>);
+  static_assert(!std::is_copy_assignable_v<pops::SolveOutcome>);
+  static_assert(std::is_move_constructible_v<pops::SolveOutcome>);
+  static_assert(!std::is_move_assignable_v<pops::SolveOutcome>);
+
+  struct FailureCase {
+    pops::SolveStatus status;
+    pops::SolveAction authored_action;
+    pops::SolveConsumption consumed_action;
+  };
+  // This table intentionally enumerates every non-success SolveStatus.  The action is authored
+  // by the solver, while the consumer may only escalate RejectAttempt to FailRun.
+  const std::array<FailureCase, 9> failures{{
+      {pops::SolveStatus::kSingular, pops::SolveAction::kFailRun,
+       pops::SolveConsumption::kFailRun},
+      {pops::SolveStatus::kBreakdown, pops::SolveAction::kFailRun,
+       pops::SolveConsumption::kFailRun},
+      {pops::SolveStatus::kIterationLimit, pops::SolveAction::kRejectAttempt,
+       pops::SolveConsumption::kRejectAttempt},
+      {pops::SolveStatus::kInvalidEvaluation, pops::SolveAction::kFailRun,
+       pops::SolveConsumption::kFailRun},
+      {pops::SolveStatus::kCapabilityFailure, pops::SolveAction::kFailRun,
+       pops::SolveConsumption::kFailRun},
+      {pops::SolveStatus::kInvalidInput, pops::SolveAction::kFailRun,
+       pops::SolveConsumption::kFailRun},
+      {pops::SolveStatus::kIncompatibleRhs, pops::SolveAction::kRejectAttempt,
+       pops::SolveConsumption::kRejectAttempt},
+      {pops::SolveStatus::kInadmissibleCandidate, pops::SolveAction::kRejectAttempt,
+       pops::SolveConsumption::kRejectAttempt},
+      {pops::SolveStatus::kSafeguardFailure, pops::SolveAction::kRejectAttempt,
+       pops::SolveConsumption::kFailRun},
+  }};
+
+  for (const FailureCase& test : failures) {
+    SolveOutcomeHookTrace trace;
+    pops::SolveReport report;
+    report.mark_failed(test.status, test.authored_action, pops::solve_status_name(test.status));
+    auto outcome = pops::SolveOutcome::serial(
+        std::move(report), {&trace, record_solve_accept, nullptr, record_solve_release, {},
+                            nullptr, record_solve_reject});
+    EXPECT_EQ(trace.accepted, 0) << pops::solve_status_name(test.status);
+    EXPECT_EQ(trace.rejected, 0) << pops::solve_status_name(test.status);
+    EXPECT_EQ(trace.released, 0) << pops::solve_status_name(test.status);
+
+    const pops::SolveReport consumed = outcome.consume(test.consumed_action);
+    EXPECT_EQ(consumed.status, test.status);
+    EXPECT_EQ(consumed.action,
+              test.consumed_action == pops::SolveConsumption::kRejectAttempt
+                  ? pops::SolveAction::kRejectAttempt
+                  : pops::SolveAction::kFailRun);
+    EXPECT_EQ(trace.accepted, 0);
+    EXPECT_EQ(trace.rejected, 1);
+    EXPECT_EQ(trace.released, 1);
+    EXPECT_EQ(trace.failure, test.consumed_action);
+    EXPECT_THROW(outcome.consume(test.consumed_action), std::logic_error);
+  }
+
+  SolveOutcomeHookTrace trace;
+  pops::SolveReport report;
+  report.mark_solved("candidate is private until consume");
+  auto source = pops::SolveOutcome::serial(
+      std::move(report), {&trace, record_solve_accept, nullptr, record_solve_release, {}, nullptr,
+                          record_solve_reject});
+  EXPECT_EQ(trace.accepted, 0);
+  auto moved = std::move(source);
+  EXPECT_EQ(trace.accepted, 0);
+  EXPECT_TRUE(moved.consume(pops::SolveConsumption::kAccept).solved_value_available());
+  EXPECT_EQ(trace.accepted, 1);
+  EXPECT_EQ(trace.rejected, 0);
+  EXPECT_EQ(trace.released, 1);
+  EXPECT_THROW(moved.consume(pops::SolveConsumption::kAccept), std::logic_error);
 }
 
 // (1) NON-EULER MULTI-VARIABLES : converge sous tolerance ; W verifie l'equation BE au residu pres.

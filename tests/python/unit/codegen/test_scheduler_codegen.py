@@ -28,8 +28,8 @@ from pops.codegen.program_codegen import _check_schedules_lowerable
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen._resolution import CapabilityResolutionError, _resolve_amr_program
 import pytest
+import re
 import sys
-from types import SimpleNamespace
 
 from tests.python.support.requirements import require_native_or_skip
 
@@ -40,7 +40,8 @@ def _skip(msg):
 
 try:
     from pops import time as adctime
-    from pops.codegen.program_emit_schedule import _emit_schedule_wrap
+    from pops.codegen.program_emit_ops import _append_resource_preparation
+    from pops.codegen.program_emit_schedule import _emit_schedule_wrap, _prepare_cache_slot
     from pops.numerics.terms import DefaultSource, Flux
     from pops.runtime.amr_program_support import (
         AMRProgramSupportContext,
@@ -84,18 +85,20 @@ def _scratch_program(schedule):
 
 
 def _emit_field(schedule):
-    clock = adctime.Clock("macro")
-    schedule = schedule(clock) if callable(schedule) else schedule
-    value = SimpleNamespace(
-        id=17,
-        name="fields_from_state",
-        op="solve_fields",
-        clock=clock,
-        point=None,
-        attrs={} if schedule is None else {"schedule": schedule},
-    )
+    program = adctime.Program("sched_field_emit")
+    state = typed_state(program, "ions")
+    field = typed_field(program, "potential")
+    # Build the real field-solve ProgramValue first, then attach the schedule at the immutable
+    # replacement boundary.  This keeps the direct schedule-shape assertions on the exact
+    # ProgramResourcePlan occurrence instead of using a detached test double or a node-id slot.
+    value = field(state)._token
+    schedule = schedule(program.clock) if callable(schedule) else schedule
+    if schedule is not None:
+        value = program._replace_value(value, attrs={**value.attrs, "schedule": schedule})
     lines = ["ctx.solve_fields_from_state();"]
-    _emit_schedule_wrap(None, value, {}, lines, 0)
+    block_index = program._block_indices()[value.block]
+    _emit_schedule_wrap(
+        program, value, {}, lines, 0, prelude=[], program_block=block_index)
     return "\n".join(lines)
 
 
@@ -337,16 +340,25 @@ def test_clock_tick_on_scratch_node_emits_guard_without_cache_cadence():
 
 
 def test_stage_domain_refuses_a_different_node_stage_before_emission():
-    clock = adctime.Clock("macro")
+    program = adctime.Program("stage_mismatch")
+    state = typed_state(program, "ions", state_name="U")
+    clock = program.clock
     stage_a = adctime.StagePoint("a", {"main": adctime.TimePoint(clock, 0.25)})
     stage_b = adctime.StagePoint("b", {"main": adctime.TimePoint(clock, 0.5)})
-    schedule = adctime.Schedule(adctime.Always(adctime.Stage(clock, stage_a)))
-    value = SimpleNamespace(
-        id=18, name="crossed_stage", op="solve_fields", clock=clock, point=stage_b,
-        attrs={"schedule": schedule})
+    stage = state.stage("b", point=stage_b)
+    stage_state = program.value(stage, state.n)
+    field = typed_field(program, "potential")
+    value = field(stage_state)._token
+    value = program._replace_value(
+        value,
+        attrs={"field": value.attrs["field"],
+               "schedule": adctime.Schedule(adctime.Always(adctime.Stage(clock, stage_a)))},
+    )
     lines = ["ctx.solve_fields_from_state();"]
     try:
-        _emit_schedule_wrap(None, value, {}, lines, 0)
+        _emit_schedule_wrap(
+            program, value, {}, lines, 0, prelude=[],
+            program_block=program._block_indices()[value.block])
     except ValueError as exc:
         assert "point does not match" in str(exc)
     else:
@@ -354,19 +366,23 @@ def test_stage_domain_refuses_a_different_node_stage_before_emission():
 
 
 def test_stage_domain_lowers_at_the_exact_node_stage():
-    clock = adctime.Clock("macro")
+    program = adctime.Program("stage_exact")
+    state = typed_state(program, "ions", state_name="U")
+    clock = program.clock
     point = adctime.StagePoint("rhs", {"main": adctime.TimePoint(clock, 0.5)})
-    schedule = adctime.Schedule(adctime.Always(adctime.Stage(clock, point)))
-    value = SimpleNamespace(
-        id=19,
-        name="exact_stage",
-        op="solve_fields",
-        clock=clock,
-        point=point,
-        attrs={"schedule": schedule},
+    stage = state.stage("rhs", point=point)
+    stage_state = program.value(stage, state.n)
+    field = typed_field(program, "potential")
+    value = field(stage_state)._token
+    value = program._replace_value(
+        value,
+        attrs={"field": value.attrs["field"],
+               "schedule": adctime.Schedule(adctime.Always(adctime.Stage(clock, point)))},
     )
     lines = ["ctx.solve_fields_from_state();"]
-    _emit_schedule_wrap(None, value, {}, lines, 0)
+    _emit_schedule_wrap(
+        program, value, {}, lines, 0, prelude=[],
+        program_block=program._block_indices()[value.block])
     cpp = "\n".join(lines)
     assert "ctx.schedule_domain_occurs(" in cpp
     assert "ScheduleDomainKind::kStage" in cpp
@@ -395,7 +411,7 @@ def test_amr_flux_weight_is_proved_before_artifact_creation():
 # --- policies on a FIELD-SOLVE node (output = aux) --------------------------
 def test_field_hold_refuses_raw_provider_storage_cache():
     cpp = _emit_field(lambda clock: _every(clock, 10, adctime.Hold()))
-    assert "ctx.schedule_decision(17," in cpp and ", false))" in cpp
+    assert re.search(r"ctx\.schedule_decision\(\d+,", cpp) and ", false))" in cpp
     assert "cache_store_aux" not in cpp
     assert "cache_restore_aux" not in cpp
     with pytest.raises(ValueError, match=r"not cacheable; cannot use schedule Hold"):
@@ -414,7 +430,7 @@ def test_field_accumulate_dt_refuses_raw_provider_storage_cache():
 
 def test_field_skip_runs_only_when_due():
     cpp = _emit_field(lambda clock: _every(clock, 5, adctime.Skip()))
-    assert "ctx.schedule_decision(17," in cpp and ", false))" in cpp
+    assert re.search(r"ctx\.schedule_decision\(\d+,", cpp) and ", false))" in cpp
     assert "skip: stale aux off-cadence" in cpp
     assert "ctx.cache_restore_aux" not in cpp   # skip does not cache (stale, no restore)
     assert "} else {" not in cpp.split("skip: stale aux off-cadence")[1].split("\n", 1)[0]
@@ -487,12 +503,12 @@ def test_field_error_emits_scheduler_error_else():
     assert "policy=error" in cpp
 
 
-def test_field_recompute_runs_only_when_due():
-    cpp = _emit_field(lambda clock: _every(clock, 2))
-    assert "if (ctx.schedule_decision(17, ctx.schedule_is_due(" in cpp
-    assert ", false))" in cpp
-    assert "cache_store_aux" not in cpp  # recompute does not cache
-    assert "cache_restore_aux" not in cpp
+def test_field_recompute_requires_an_explicit_off_policy_before_artifact():
+    # A non-trivial scheduled Program resource cannot enter a sealed plan with an implicit off
+    # policy.  The old detached helper interpreted this as recompute; the real plan must refuse it
+    # before any candidate fragment exists.
+    with pytest.raises(ValueError, match="no explicit OffPolicy"):
+        _emit_field(lambda clock: _every(clock, 2))
 
 
 # --- policies on a SCRATCH node (output = a named MultiFab) ------------------
@@ -501,10 +517,9 @@ def test_scratch_hold_caches_named_scratch():
     # fill + cache_store_scratch run when due, cache_restore_scratch off-cadence.
     program = _scratch_program(lambda clock: _every(clock, 10, adctime.Hold()))
     assert amr_program_op_support(program, context=_amr_context()) == {
-        "schedule_cache": "pending:checkpointed_hierarchy_cache",
+        "schedule_cache": "green",
     }
-    with pytest.raises(CapabilityResolutionError, match="checkpointed_hierarchy_cache"):
-        _resolve_amr_program("amr", program, context=_amr_context())
+    assert _resolve_amr_program("amr", program, context=_amr_context())["status"] == "proven"
     cpp = emit_cpp_program(program, model=None)
     assert "ctx.cache_store_scratch(" in cpp
     assert "ctx.cache_restore_scratch(" in cpp
@@ -512,6 +527,83 @@ def test_scratch_hold_caches_named_scratch():
     decl_idx = cpp.index("MultiFab<pops::kNativeDimension>& r")
     guard_idx = cpp.index("if (ctx.schedule_decision(")
     assert decl_idx < guard_idx
+
+
+def test_scratch_hold_primes_dense_resource_and_cache_before_step():
+    cpp = emit_cpp_program(
+        _scratch_program(lambda clock: _every(clock, 10, adctime.Hold())),
+        model=None,
+    )
+    state_prepare = cpp.index("ctx.prepare_rhs_scratch(")
+    cache_prepare = cpp.index("ctx.prepare_cache_slot(")
+    step = cpp.index("ctx.begin_step(")
+    assert state_prepare < step
+    assert cache_prepare < step
+    assert cpp.count("ctx.prepare_rhs_scratch(") == 1
+    assert cpp.count("ctx.prepare_cache_slot(") == 1
+    assert "__POPS_PERSISTENT_SLOT_" not in cpp
+
+
+def test_resource_priming_refuses_unprimed_step_local_and_late_shape_drift():
+    prelude = []
+    emitted = {}
+    _append_resource_preparation(
+        prelude,
+        emitted,
+        kind="scalar",
+        slot="3",
+        subslot=0,
+        program_block=1,
+        ncomp=1,
+        ghost_depth=1,
+    )
+    _append_resource_preparation(
+        prelude,
+        emitted,
+        kind="scalar",
+        slot="3",
+        subslot=0,
+        program_block=1,
+        ncomp=1,
+        ghost_depth=1,
+    )
+    assert prelude == ["ctx.prepare_scalar_scratch(3, 0, 1, 1, 1);"]
+    with pytest.raises(ValueError, match="conflicting preparation contracts"):
+        _append_resource_preparation(
+            prelude,
+            emitted,
+            kind="scalar",
+            slot="3",
+            subslot=0,
+            program_block=1,
+            ncomp=2,
+            ghost_depth=1,
+        )
+    with pytest.raises(NotImplementedError, match="refusing step-local scratch allocation"):
+        _append_resource_preparation(
+            None,
+            {},
+            kind="rhs",
+            slot="4",
+            subslot=0,
+            program_block=0,
+        )
+    with pytest.raises(NotImplementedError, match="refusing step-local cache allocation"):
+        _prepare_cache_slot(None, {}, slot="5", program_block=0)
+    with pytest.raises(ValueError, match="owner block"):
+        _prepare_cache_slot([], {}, slot="6", program_block=None)
+
+
+def test_ownerless_live_scalar_field_refuses_before_candidate_artifact():
+    program = adctime.Program("ownerless_scalar_resource")
+    state = typed_state(program, "ions")
+    scratch = program.scalar_field("unowned")
+    program.fill_boundary(scratch)
+    endpoint = typed_state(program, "ions", state_name="U").next
+    program.commit(endpoint, program.value("U1", 1 * state, at=endpoint.point))
+
+    with pytest.raises(ValueError, match="no unique authenticated owner block"):
+        emit_cpp_program(program, model=None)
 
 
 def test_scratch_zero_sets_the_scratch_to_zero():
@@ -523,10 +615,9 @@ def test_scratch_zero_sets_the_scratch_to_zero():
 def test_scratch_accumulate_dt_uses_scratch_cache():
     program = _scratch_program(lambda clock: _every(clock, 7, adctime.AccumulateDt()))
     assert amr_program_op_support(program, context=_amr_context()) == {
-        "schedule_cache": "pending:checkpointed_hierarchy_cache",
+        "schedule_cache": "green",
     }
-    with pytest.raises(CapabilityResolutionError, match="checkpointed_hierarchy_cache"):
-        _resolve_amr_program("amr", program, context=_amr_context())
+    assert _resolve_amr_program("amr", program, context=_amr_context())["status"] == "proven"
     cpp = emit_cpp_program(program, model=None)
     assert "ctx.cache_effective_dt(" in cpp
     assert "ctx.cache_accumulate_dt(" in cpp

@@ -198,11 +198,12 @@ def test_manual_preset_ssprk2_and_imex_execute_through_same_program_graph_pipeli
         assert value.detached._compiled_detached is True
         assert not value.detached._operator_registries
         assert type(value.graph) is ProgramGraph
-        assert value.source.count("ctx.install([=](double dt)") == 1
+        assert value.source.count("state->step = [ctx_owner = state->ctx_owner](double dt)") == 1
+        assert "ctx.install(" not in value.source
         assert value.source.count("ctx.begin_step(dt)") == 1
         assert value.source.count("ctx.commit_many(") == 1
         assert (
-            value.source.index("ctx.install([=](double dt)")
+            value.source.index("state->step = [ctx_owner = state->ctx_owner](double dt)")
             < value.source.index("ctx.begin_step(dt)")
             < value.source.index("ctx.commit_many(")
         )

@@ -16,6 +16,7 @@ from typing import Any
 
 import json
 from pops.codegen._rhs_coherence import plan_rhs_coherence
+from pops.codegen.program_persistent_plan import persistent_slot_token
 from pops.time.references import block_name
 
 
@@ -147,22 +148,96 @@ def _stage_fraction(value: Any) -> Fraction:
     return Fraction(point.step) + Fraction(point.offset.to_python())
 
 
+def _prime_control_resource(
+        program: Any, value: Any, var: dict[Any, Any], prelude: Any,
+        block_idx: Mapping[Any, int], *, kind: str, subslot: int = 0,
+        ncomp: int | None = None, ghost_depth: int | None = None,
+        target: str, where: str) -> str:
+    """Prime one control-owned resource before emitting its step-body access.
+
+    Control emitters are also called for structured sub-blocks.  They must therefore resolve the
+    sealed plan themselves instead of passing an authoring id (or silently treating block zero as a
+    default).  The shared preparation helper owns duplicate/conflict detection; keeping this small
+    wrapper here makes the ordering requirement explicit at every control resource site.
+    """
+    from pops.codegen.program_emit_ops import (
+        _append_resource_preparation,
+        _required_block_index,
+    )
+
+    if program is None:
+        raise NotImplementedError(
+            "%s requires an authenticated Program resource plan; refusing unprimed step-local "
+            "scratch allocation" % where
+        )
+    owner = getattr(value, "block", None)
+    if owner is None:
+        raise ValueError("%s requires an explicit owner block" % where)
+    program_block = _required_block_index(block_idx, owner, where)
+    slot = persistent_slot_token(program, value, target=target)
+    _append_resource_preparation(
+        prelude,
+        var,
+        kind=kind,
+        slot=slot,
+        subslot=subslot,
+        program_block=program_block,
+        ncomp=ncomp,
+        ghost_depth=ghost_depth,
+    )
+    return slot
+
+
+def _merge_resource_preparations(parent: dict[Any, Any], child: Mapping[Any, Any]) -> None:
+    """Propagate preparation bindings out of a copied structured-region var map.
+
+    Nested control walkers intentionally copy the C++ token map so local aliases cannot leak.  The
+    preparation ledger is different: it is install-wide and must be shared across sibling regions,
+    otherwise the same ``(kind, slot, subslot)`` would be primed repeatedly.  Merge only that
+    reserved namespace and reject an impossible contract drift deterministically.
+    """
+    prefix = "program_resource_preparation"
+    for key, contract in child.items():
+        if not (isinstance(key, tuple) and key and key[0] == prefix):
+            continue
+        prior = parent.get(key)
+        if prior is not None and prior != contract:
+            raise ValueError("conflicting nested Program resource preparation contract %r" % (key,))
+        parent[key] = contract
+
+
 def _emit_contiguous_rhs_group(
         values: Sequence[Any], block_idx: Mapping[Any, int], var: dict[Any, str],
-        lines: list[str], group_identity: int) -> None:
+        lines: list[str], group_identity: int, *, program: Any = None,
+        prelude: Any = None, target: str = "system") -> None:
     """Emit one complete same-StagePoint residual group before any result is consumable."""
     from pops.codegen.program_emit_ops import _required_block_index
 
+    prepared = []
+    # Resolve and prime every member before appending even the stage marker.  A missing prelude or
+    # an unauthenticated occurrence must leave no partial C++ artifact behind.
+    for value in values:
+        state = value.inputs[0]
+        slot = _prime_control_resource(
+            program,
+            value,
+            var,
+            prelude,
+            block_idx,
+            kind="rhs",
+            target=target,
+            where="emit simultaneous rhs %r" % value.name,
+        )
+        index = _required_block_index(
+            block_idx, value.block, "emit simultaneous rhs %r" % value.name)
+        prepared.append((value, state, slot, index))
     stage = _stage_fraction(values[0])
     lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
     requests = []
-    for value in values:
-        state = value.inputs[0]
+    for value, state, slot, index in prepared:
         var[value.id] = "r%d" % value.id
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
-                     % (var[value.id], int(value.id), var[state.id]))
-        index = _required_block_index(
-            block_idx, value.block, "emit simultaneous rhs %r" % value.name)
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%s, 0, %s);"
+                     % (var[value.id], slot, var[state.id]))
         requested = value.attrs.get("sources")
         default_source = requested is None or "default" in requested
         requests.append("{%d, &%s, &%s, %d, %d}" % (
@@ -179,10 +254,11 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     the Phase-4b source / apply / solve_local_linear ops. Returns
     ``(prelude, body, post_synchronization, authorities)``:
 
-      - ``prelude``: INSTALL-TIME C++ (before ``ctx.install``) -- persistent scratch fields (held
-        via ``std::shared_ptr`` so they outlive the install call and are reused across every step
-        and every Krylov iteration) and the matrix-free apply lambdas. Captured by value into the
-        step closure (shared_ptr / lambda / ctx all copy cheaply).
+      - ``prelude``: INSTALL-TIME C++ executed by the common v5 candidate preparation callback --
+        persistent scratch fields (held via ``std::shared_ptr`` so they outlive preparation and are
+        reused across every step and every Krylov iteration) and the matrix-free apply lambdas.
+        Captured by value into the candidate step closure (shared_ptr / lambda / ctx all copy
+        cheaply).
       - ``body``: the STEP closure body (one macro-step over dt).
 
     Multi-block (ADC-426): the SSA walk allocates a per-block base (``ctx.state(idx)`` for each
@@ -198,7 +274,13 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
             bases[v.block] = v
     # IR value id -> C++ token: a MultiFab variable name (states / RHS scratches), a scalar variable
     # name (reductions, ``s{id}``) or a parenthesized boolean expression (compares).
-    var = {}
+    # Structured-region token maps are shallow copies.  Keep the declaration registry as one shared
+    # mutable value so diagnostics/routes/projection identities are emitted once for the complete
+    # candidate prelude even when the same authority appears in sibling branches.
+    var = {
+        ("program",): program,
+        ("program_transaction_authority_declarations",): set(),
+    }
     if provider_plans is not None:
         var[("program_provider_plans",)] = provider_plans
     prelude = []
@@ -260,7 +342,17 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         var,
         lines,
     )
-    values = list(program._values)
+    # Resource-plan lowering deliberately excludes an unconsumed matrix-free declaration and the
+    # residual values captured only by its apply closure.  Keep the executable walk in the same
+    # reverse-reachable set: otherwise a dead RHS would still reach the control emitter and ask for
+    # a slot that the sealed plan correctly does not contain.  This is an identity-based filter;
+    # it never guesses from a node name or substitutes a global/block-zero owner.
+    from pops.codegen.program_persistent_plan import _reachable_program_occurrences
+
+    reachable_ids = frozenset(
+        id(value) for value, _path in _reachable_program_occurrences(program)
+    )
+    values = [value for value in program._values if id(value) in reachable_ids]
     index = 0
     # Group identities occupy compiler-reserved slots after the authored SSA namespace.  They are
     # deterministic, cannot alias a rate node, and keep BoundaryEvaluationPoint.stage faithful to
@@ -279,7 +371,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                     "RHS coherence barrier lacks materialized state value ids %s"
                     % unavailable)
             _emit_contiguous_rhs_group(
-                group, block_idx, var, lines, next_group_identity)
+                group, block_idx, var, lines, next_group_identity,
+                program=program, prelude=prelude, target=target)
             next_group_identity += 1
         v = values[index]
         if v.id in rhs_grouped or v.op == "post_synchronization":
@@ -391,6 +484,7 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
     """
     from pops.codegen.program_emit_ops import _emit_op
     from pops.codegen.program_lowerability import all_ops
+    from pops.codegen.program_persistent_plan import _reachable_program_occurrences
 
     if type(has_shared_interface_implicit_jacvec) is not bool:
         raise TypeError(
@@ -427,14 +521,22 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
     # wider than one per-level loop iteration.  This is the load-bearing refusal that prevents a local
     # C++ temporary from being referenced after the loop that declared it.  Alias ops are admitted only
     # when their storage input is itself portable.
+    reachable_ids = frozenset(
+        id(value) for value, _path in _reachable_program_occurrences(program)
+    )
     portable_ops = {"state", "history", "scalar_field", "matrix_free_operator", "condensed_coeffs"}
-    portable = {v.id for v in program._values[:split] if v.op in portable_ops}
+    portable = {
+        v.id for v in program._values[:split]
+        if id(v) in reachable_ids and v.op in portable_ops
+    }
     changed = True
     aliases = {"solve_fields": 0, "condensed_rhs": 0, "laplacian": 0,
                "gradient": 0, "divergence": 0, "fill_boundary": 0}
     while changed:
         changed = False
         for value in program._values[:split]:
+            if id(value) not in reachable_ids:
+                continue
             source_index = aliases.get(value.op)
             if (source_index is not None and len(value.inputs) > source_index
                     and value.inputs[source_index].id in portable and value.id not in portable):
@@ -449,6 +551,8 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
     available = set(portable)
     available.add(solve.id)
     for value in program._values[split + 1:]:
+        if id(value) not in reachable_ids:
+            continue
         missing = [item.id for item in value.inputs if item.id not in available]
         if missing:
             raise NotImplementedError(
@@ -491,7 +595,7 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
         return lines
 
     def emit_phase(phase: str) -> str:
-        var = {}
+        var = {("program",): program}
         if provider_plans is not None:
             # Hierarchy phases are still Program nodes.  Reuse the package-wide
             # plan authority so their requirements are registered before the
@@ -503,6 +607,8 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
             var[("direct_hierarchy_solve", solve.id)] = True
         lines = registrations() if phase == "gather" else []
         for index, value in enumerate(program._values):
+            if id(value) not in reachable_ids:
+                continue
             emitted = []
             ignored_prelude = []
             _emit_op(program, value, bases.get(value.block), committed_ids, var, model, emitted,
@@ -558,8 +664,18 @@ def _emit_while(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
     x = "x%d" % v.id
     var[v.id] = x
     # Hoist + initialize the loop variable from the entry state (x <- loop_in).
-    lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
-                 % (x, int(v.id), var[base.id]))
+    slot = _prime_control_resource(
+        program,
+        v,
+        var,
+        prelude,
+        block_idx,
+        kind="state",
+        target=target,
+        where="emit while %r" % v.name,
+    )
+    lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%s, 0, %s);"
+                 % (x, slot, var[base.id]))
     lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
                  % (x, x, var[loop_in.id]))
     lines.append("for (;;) {")
@@ -573,12 +689,14 @@ def _emit_while(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
         _emit_op(
             program, w, base, frozenset(), sub, model, body_lines,
             prelude=prelude, block_idx=block_idx, field_plans=field_plans, target=target)
+        _merge_resource_preparations(var, sub)
     cond_expr = sub[v.attrs["cond"].id]
     body_lines.append("if (!(%s)) break;" % cond_expr)
     for w in v.attrs["body_block"]:
         _emit_op(
             program, w, base, frozenset(), sub, model, body_lines,
             prelude=prelude, block_idx=block_idx, field_plans=field_plans, target=target)
+        _merge_resource_preparations(var, sub)
     # Write the next state into the loop variable in place (x <- body result).
     body_lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
                       % (x, x, sub[v.attrs["body"].id]))
@@ -596,8 +714,18 @@ def _emit_range(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
     x = "x%d" % v.id
     i = "i%d" % v.id
     var[v.id] = x
-    lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
-                 % (x, int(v.id), var[base.id]))
+    slot = _prime_control_resource(
+        program,
+        v,
+        var,
+        prelude,
+        block_idx,
+        kind="state",
+        target=target,
+        where="emit range %r" % v.name,
+    )
+    lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%s, 0, %s);"
+                 % (x, slot, var[base.id]))
     lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
                  % (x, x, var[loop_in.id]))
     lines.append("for (int %s = 0; %s < %d; ++%s) {" % (i, i, int(v.attrs["count"]), i))
@@ -608,6 +736,7 @@ def _emit_range(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
         _emit_op(
             program, w, base, frozenset(), sub, model, body_lines,
             prelude=prelude, block_idx=block_idx, field_plans=field_plans, target=target)
+        _merge_resource_preparations(var, sub)
     body_lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
                       % (x, x, sub[v.attrs["body"].id]))
     lines += ["  " + ln for ln in body_lines]
@@ -637,8 +766,18 @@ def _emit_subcycle(program: Any, v: Any, base: Any, var: Any, model: Any, lines:
     scope = "subcycle_scope_%d" % v.id
     evaluation_scope = "logical_evaluation_scope_%d" % v.id
     var[v.id] = x
-    lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
-                 % (x, int(v.id), var[base.id]))
+    slot = _prime_control_resource(
+        program,
+        v,
+        var,
+        prelude,
+        block_idx,
+        kind="state",
+        target=target,
+        where="emit subcycle %r" % v.name,
+    )
+    lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%s, 0, %s);"
+                 % (x, slot, var[base.id]))
     lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, "
                  "static_cast<pops::Real>(1), %s);" % (x, x, var[loop_in.id]))
     lines.append("{")
@@ -674,6 +813,7 @@ def _emit_subcycle(program: Any, v: Any, base: Any, var: Any, model: Any, lines:
         _emit_op(
             program, w, base, frozenset(), sub, model, body_lines,
             prelude=prelude, block_idx=block_idx, field_plans=field_plans, target=target)
+        _merge_resource_preparations(var, sub)
     body_lines.append(
         "ctx.lincomb(%s, static_cast<pops::Real>(0), %s, "
         "static_cast<pops::Real>(1), %s);" % (x, x, sub[v.attrs["body"].id]))
@@ -697,8 +837,18 @@ def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: A
             raise NotImplementedError(
                 "branch codegen for a block-free scalar_field result requires an explicit "
                 "layout template")
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
-                     % (x, int(v.id), var[base.id]))
+        slot = _prime_control_resource(
+            program,
+            v,
+            var,
+            prelude,
+            block_idx,
+            kind="state",
+            target=target,
+            where="emit branch %r" % v.name,
+        )
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%s, 0, %s);"
+                     % (x, slot, var[base.id]))
     else:
         cpp_type = "bool" if v.vtype == "bool" else "pops::Real"
         lines.append("%s %s;" % (cpp_type, x))
@@ -732,4 +882,5 @@ def _emit_branch_arm(program: Any, block: Any, result: Any, output: str, is_fiel
             "static_cast<pops::Real>(1), %s);" % (output, output, token))
     else:
         arm_lines.append("%s = %s;" % (output, token))
+    _merge_resource_preparations(outer_var, sub)
     return arm_lines

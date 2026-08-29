@@ -140,15 +140,18 @@ def _registered_gtest_cases(source: str) -> set[str]:
 
 def _registered_ctest_cases(target: str, suite: dict) -> set[str]:
     """Recover the exact configure-time CTest names owned by one manifest suite."""
+    mpi_counts = tuple(suite.get("mpi_nproc", ())) + tuple(suite.get("mpi_variants", ()))
+    is_no_discover_mpi = bool(suite.get("mpi_nproc")) or bool(suite.get("mpi_rank_parity"))
     cases: set[str] = set()
-    for relative in suite.get("sources", ()):
-        source = ROOT / relative
-        if not source.is_file():
-            continue
-        cases.update(_registered_gtest_cases(source.read_text(encoding="utf-8")))
+    if not is_no_discover_mpi:
+        for relative in suite.get("sources", ()):
+            source = ROOT / relative
+            if not source.is_file():
+                continue
+            cases.update(_registered_gtest_cases(source.read_text(encoding="utf-8")))
     cases.update(
         "%s_np%d" % (target, nproc)
-        for nproc in suite.get("mpi_nproc", ())
+        for nproc in mpi_counts
         if not isinstance(nproc, bool) and isinstance(nproc, int) and nproc > 0
     )
     if suite.get("mpi_rank_parity"):

@@ -22,7 +22,7 @@
 
 namespace pops::runtime::system {
 
-inline constexpr int kNativeSystemPackageAbiVersion = 4;
+inline constexpr int kNativeSystemPackageAbiVersion = 5;
 inline constexpr const char* kNativeSystemPackageAbiVersionSymbol =
     "pops_native_system_package_abi_version";
 

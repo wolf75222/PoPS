@@ -13,6 +13,7 @@
 #include <Kokkos_Core.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -97,6 +98,7 @@ class PreparedMultiBlockAmrHierarchy {
 
    private:
     friend class PreparedMultiBlockAmrHierarchy;
+    friend class PreparedRegridTransactionStack;
 
     PreparedRestore() = default;
 
@@ -112,6 +114,322 @@ class PreparedMultiBlockAmrHierarchy {
     std::optional<interface_scheduler_type> interface_scheduler;
     std::string restore_contract;
     bool collectively_authenticated = false;
+  };
+
+  /// One-shot two-direction topology authority for an accepted-step candidate.
+  ///
+  /// Both directions are materialized and collectively authenticated before the forward swap.
+  /// In particular, `publish_inverse_noexcept()` never reconstructs a hierarchy, a secondary
+  /// carrier, an interface scheduler, or an exact contract after a failed candidate.
+  class PreparedRegridTransaction {
+   public:
+    PreparedRegridTransaction(const PreparedRegridTransaction&) = delete;
+    PreparedRegridTransaction& operator=(const PreparedRegridTransaction&) = delete;
+    PreparedRegridTransaction(PreparedRegridTransaction&&) noexcept = default;
+    PreparedRegridTransaction& operator=(PreparedRegridTransaction&&) noexcept = default;
+
+    bool changes_topology() const noexcept { return changes_topology_; }
+    bool candidate_published() const noexcept { return candidate_published_; }
+    bool inverse_consumed() const noexcept { return inverse_consumed_; }
+
+    /// Read-only topology projected by this transaction before its forward publication.  This is
+    /// deliberately a view, rather than a second hierarchy owner: callers may cold-prepare
+    /// provider/history/field carriers against the exact forward layout without exposing a live
+    /// topology mutation to a candidate transaction.
+    class ForwardTopologyView {
+     public:
+      [[nodiscard]] const auto& hierarchy() const {
+        return require_().forward_primary_->hierarchy();
+      }
+      [[nodiscard]] std::string_view spatial_contract() const {
+        return require_().forward_primary_->spatial_contract();
+      }
+      [[nodiscard]] std::uint64_t topology_epoch() const {
+        return require_().forward_topology_epoch_;
+      }
+      [[nodiscard]] std::uint64_t materialization_generation() const {
+        return require_().forward_materialization_generation_;
+      }
+      [[nodiscard]] const ExecutionLane& lane() const { return require_().owner_->lane_; }
+      [[nodiscard]] std::size_t block_count() const {
+        return require_().forward_additional_.size() + 1U;
+      }
+      [[nodiscard]] const field_type& state(std::size_t block, std::size_t level) const {
+        const auto& transaction = require_();
+        if (block == 0)
+          return transaction.forward_primary_->hierarchy().state(level);
+        return transaction.forward_additional_.at(block - 1).levels.at(level);
+      }
+      /// Mutable access is intentionally limited to the cold forward-builder scope.  The target
+      /// Fabs remain owned by the staged transaction and are never reachable by accepted readers
+      /// before `publish_candidate_noexcept()`.
+      [[nodiscard]] field_type& mutable_state(std::size_t block, std::size_t level) const {
+        auto& transaction = require_mutable_();
+        if (block == 0)
+          return transaction.forward_primary_->mutable_hierarchy_for_preparation().state(level);
+        return transaction.forward_additional_.at(block - 1).levels.at(level);
+      }
+      [[nodiscard]] std::string_view collective_contract() const {
+        return require_().forward_collective_contract_;
+      }
+      /// The interface provider is structural and immutable across the forward transaction.
+      /// Exposing its frozen declaration here keeps candidate-only consumers from reaching back
+      /// into the accepted multiblock carrier after staging has begun.
+      [[nodiscard]] std::string_view interface_flux_provider_contract() const {
+        return require_().owner_->interface_flux_provider_contract();
+      }
+      [[nodiscard]] std::size_t coupling_count() const noexcept {
+        return require_().owner_->coupling_count();
+      }
+      /// Detached rollback image of the exact forward carrier.  This is intentionally built from
+      /// the transaction-owned primary/additional publications, never from the accepted owner;
+      /// AcceptedSnapshot::from_forward uses it while Candidate is still private.
+      [[nodiscard]] Snapshot snapshot() const {
+        const auto& transaction = require_();
+        return Snapshot{
+            {transaction.forward_primary_->hierarchy(), transaction.forward_topology_epoch_,
+             transaction.forward_materialization_generation_,
+             std::string(transaction.forward_primary_->spatial_contract())},
+            transaction.forward_additional_,
+            transaction.target_accepted_revision_,
+            transaction.forward_collective_contract_};
+      }
+      [[nodiscard]] const interface_scheduler_type* interface_scheduler() const {
+        const auto& transaction = require_();
+        // A topology-neutral transition retains the immutable scheduler declaration from its
+        // source.  A topology-changing one owns the rematerialized scheduler that must seed the
+        // next forward transition.
+        if (transaction.forward_interface_scheduler_)
+          return &*transaction.forward_interface_scheduler_;
+        return transaction.owner_->interface_scheduler_.get();
+      }
+      /// Rebuild the finite Program block map against the forward hierarchy contract.  Block
+      /// identities are structural and therefore borrowed from the accepted registry; the
+      /// topology witness is deliberately the staged forward contract.
+      [[nodiscard]] ProgramBlockMap prepare_program_block_map(
+          std::span<const std::string> ordered_blocks) const {
+        const auto& transaction = require_();
+        const auto& owner = *transaction.owner_;
+        if (ordered_blocks.size() != block_count())
+          throw std::invalid_argument(
+              "AMR Program block map must name every staged carrier exactly once");
+        ProgramBlockMap result;
+        result.canonical_indices.reserve(ordered_blocks.size());
+        std::vector<bool> seen(block_count(), false);
+        for (const std::string& identity : ordered_blocks) {
+          const std::size_t canonical = owner.block_index(identity);
+          if (seen[canonical])
+            throw std::invalid_argument("AMR Program block map contains a duplicate block");
+          seen[canonical] = true;
+          result.canonical_indices.push_back(canonical);
+        }
+        result.hierarchy_contract = transaction.forward_collective_contract_;
+        ExactContractBuilder exact;
+        exact.text("pops.prepared-multiblock-amr.program-map")
+            .scalar(std::uint32_t{1})
+            .scalar(std::int32_t{Dim})
+            .bytes(result.hierarchy_contract)
+            .scalar(static_cast<std::uint64_t>(result.canonical_indices.size()));
+        for (const std::size_t canonical : result.canonical_indices)
+          exact.text(owner.block_identity(canonical)).scalar(static_cast<std::uint64_t>(canonical));
+        result.exact_contract = std::move(exact).release();
+        if (!all_ranks_agree_exact_ordered_byte_pairs(
+                {{std::string_view("prepared-multiblock-amr-program-map"), result.exact_contract}},
+                owner.lane_))
+          throw std::invalid_argument("AMR staged Program block map differs between MPI ranks");
+        return result;
+      }
+
+     private:
+      friend class PreparedRegridTransaction;
+      explicit ForwardTopologyView(PreparedRegridTransaction& transaction)
+          : transaction_(&transaction) {}
+      [[nodiscard]] const PreparedRegridTransaction& require_() const {
+        if (transaction_ == nullptr || transaction_->owner_ == nullptr ||
+            !transaction_->forward_primary_ || !transaction_->collectively_authenticated_ ||
+            transaction_->candidate_published_ || transaction_->inverse_consumed_)
+          throw std::logic_error("prepared AMR forward topology view is not live");
+        return *transaction_;
+      }
+      [[nodiscard]] PreparedRegridTransaction& require_mutable_() const {
+        (void)require_();
+        return *transaction_;
+      }
+      PreparedRegridTransaction* transaction_ = nullptr;
+    };
+
+    [[nodiscard]] ForwardTopologyView forward_topology() { return ForwardTopologyView(*this); }
+
+    /// Reach collective agreement for both the forward and inverse publication.
+    void execute();
+    /// Publish the candidate through only no-throw moves/swaps. Misuse is fail-stop.
+    void publish_candidate_noexcept() noexcept;
+    /// Restore the accepted topology through the prebuilt inverse. One-shot and fail-stop.
+    void publish_inverse_noexcept() noexcept;
+
+   private:
+    friend class PreparedMultiBlockAmrHierarchy;
+
+    PreparedRegridTransaction() = default;
+
+    PreparedMultiBlockAmrHierarchy* owner_ = nullptr;
+    std::optional<typename engine_type::PreparedRegridPublication> forward_primary_;
+    std::vector<AdditionalBlock> forward_additional_;
+    std::uint64_t source_accepted_revision_ = 0;
+    std::uint64_t target_accepted_revision_ = 0;
+    std::uint64_t forward_topology_epoch_ = 0;
+    std::uint64_t forward_materialization_generation_ = 0;
+    std::string source_collective_contract_;
+    std::string candidate_collective_contract_;
+    std::string forward_collective_contract_;
+    std::string forward_canonical_program_contract_;
+    std::string forward_coupling_registry_contract_;
+    std::optional<interface_scheduler_type> forward_interface_scheduler_;
+    std::optional<PreparedRestore> inverse_;
+    /// Present only for a successor prepared from an earlier unpublished forward authority.
+    /// `execute()` authenticates against this exact source; HiddenPublish still checks the live
+    /// owner, which by then has received every preceding stack transition.
+    std::optional<Snapshot> forward_source_snapshot_;
+    std::string exact_transaction_contract_;
+    bool changes_topology_ = false;
+    bool collectively_authenticated_ = false;
+    bool candidate_published_ = false;
+    bool inverse_consumed_ = false;
+  };
+
+  /// Fixed-capacity LIFO authority for the finite set of topology transitions in one AMR step.
+  ///
+  /// The vector capacity is reserved during cold transaction binding.  Adding a transition after
+  /// that boundary cannot grow the registry; an over-budget candidate is rejected before its
+  /// forward publication.  Accepted-step rollback consumes inverses in reverse publication order.
+  class PreparedRegridTransactionStack {
+   public:
+    explicit PreparedRegridTransactionStack(std::size_t maximum_transitions)
+        : maximum_transitions_(maximum_transitions) {
+      if (maximum_transitions_ == 0)
+        throw std::invalid_argument("AMR regrid transaction stack requires a positive budget");
+      transitions_.reserve(maximum_transitions_);
+    }
+
+    PreparedRegridTransactionStack(const PreparedRegridTransactionStack&) = delete;
+    PreparedRegridTransactionStack& operator=(const PreparedRegridTransactionStack&) = delete;
+    PreparedRegridTransactionStack(PreparedRegridTransactionStack&&) noexcept = default;
+    PreparedRegridTransactionStack& operator=(PreparedRegridTransactionStack&&) noexcept = default;
+
+    std::size_t maximum_transitions() const noexcept { return maximum_transitions_; }
+    std::size_t published_transitions() const noexcept { return transitions_.size(); }
+    [[nodiscard]] bool has_published_transitions() const noexcept {
+      return std::any_of(transitions_.begin(), transitions_.end(),
+                         [](const PreparedRegridTransaction& transaction) {
+                           return transaction.candidate_published();
+                         });
+    }
+    const PreparedRegridTransaction& transaction(std::size_t index) const {
+      return transitions_.at(index);
+    }
+    PreparedRegridTransaction& transaction(std::size_t index) { return transitions_.at(index); }
+
+    /// Return the exact, unpublished forward topology of the most recently staged transition.
+    /// The returned view is intentionally short-lived: callers must finish all fallible graph
+    /// preparation before staging another transition, because the fixed-capacity vector may move
+    /// its entries while it remains within its cold-reserved budget.
+    [[nodiscard]] typename PreparedRegridTransaction::ForwardTopologyView
+    latest_forward_topology() {
+      if (transitions_.empty())
+        throw std::logic_error("AMR regrid stack has no staged forward topology");
+      return transitions_.back().forward_topology();
+    }
+
+    /// Authenticate and retain one transition without publishing its forward topology.  The
+    /// transaction writer can now cold-prepare the remaining candidate authority against the
+    /// exact forward view while accepted readers still see the old hierarchy.
+    void execute_and_stage(PreparedRegridTransaction transaction) {
+      if (transitions_.size() == maximum_transitions_)
+        throw std::logic_error("AMR regrid transaction budget is exhausted");
+      transaction.execute();
+      transitions_.push_back(std::move(transaction));
+    }
+
+    /// Materialize transition N+1 from the exact forward view of transition N.  This is the only
+    /// stack entry point for a cumulative AMR sweep; callers cannot accidentally fall back to the
+    /// still-accepted multi-block carrier between two staged parents.
+    void prepare_and_stage_successor(std::size_t parent_level,
+                                     ::pops::amr::regridding::PreparedRegrid<Dim> prepared,
+                                     std::vector<std::optional<field_type>> child_states) {
+      if (transitions_.empty())
+        throw std::logic_error("AMR regrid successor requires one staged forward transition");
+      if (transitions_.size() == maximum_transitions_)
+        throw std::logic_error("AMR regrid transaction budget is exhausted");
+      PreparedRegridTransaction& prior = transitions_.back();
+      if (prior.owner_ == nullptr || prior.candidate_published_ || prior.inverse_consumed_)
+        throw std::logic_error("AMR regrid successor has no unpublished forward authority");
+      auto forward = prior.forward_topology();
+      PreparedRegridTransaction successor = prior.owner_->prepare_regrid_successor_transaction(
+          forward, parent_level, std::move(prepared), std::move(child_states));
+      execute_and_stage(std::move(successor));
+    }
+
+    /// Perform the no-throw forward swaps only after hidden memory publication.  All allocations
+    /// and collective authentication happened in `execute_and_stage`.
+    void publish_staged_noexcept() noexcept {
+      for (PreparedRegridTransaction& transaction : transitions_) {
+        if (transaction.candidate_published() || transaction.inverse_consumed())
+          std::terminate();
+        transaction.publish_candidate_noexcept();
+      }
+    }
+
+    /// Bootstrap/restart convenience: accepted-step Program execution must use the split path.
+    void execute_and_publish(PreparedRegridTransaction transaction) {
+      execute_and_stage(std::move(transaction));
+      publish_staged_noexcept();
+    }
+
+    /// Restore every topology candidate in reverse publication order.  This is deliberately
+    /// no-throw: a stale or double-consumed inverse is an authority violation and fail-stops.
+    void publish_inverse_lifo_noexcept() noexcept {
+      bool has_topology_authority = false;
+      for (const PreparedRegridTransaction& transaction : transitions_) {
+        if (!transaction.candidate_published())
+          std::terminate();
+        if (!transaction.changes_topology())
+          continue;
+        has_topology_authority = true;
+        if (transaction.inverse_consumed())
+          std::terminate();
+      }
+      if (!has_topology_authority)
+        return;
+      for (auto cursor = transitions_.rbegin(); cursor != transitions_.rend(); ++cursor) {
+        if (cursor->changes_topology())
+          cursor->publish_inverse_noexcept();
+      }
+    }
+
+    /// Seal a successful candidate generation without returning retained rollback authority to a
+    /// later step. `clear()` keeps the cold-reserved capacity intact.
+    void discard_after_accept_noexcept() noexcept {
+      for (const PreparedRegridTransaction& transaction : transitions_) {
+        if (!transaction.candidate_published() || transaction.inverse_consumed())
+          std::terminate();
+      }
+      transitions_.clear();
+    }
+
+    /// Reset after a rejected candidate. It is valid only once every retained inverse has been
+    /// consumed, and retains the exact cold binding capacity for the retry.
+    void reset_for_next_candidate_noexcept() noexcept {
+      for (const PreparedRegridTransaction& transaction : transitions_) {
+        if (transaction.candidate_published_ && transaction.changes_topology_ &&
+            !transaction.inverse_consumed_)
+          std::terminate();
+      }
+      transitions_.clear();
+    }
+
+   private:
+    std::size_t maximum_transitions_ = 0;
+    std::vector<PreparedRegridTransaction> transitions_;
   };
 
   PreparedMultiBlockAmrHierarchy(const PreparedMultiBlockAmrHierarchy&) = delete;
@@ -198,6 +516,17 @@ class PreparedMultiBlockAmrHierarchy {
   std::size_t level_count() const noexcept { return primary_->hierarchy().num_levels(); }
   std::uint64_t accepted_revision() const noexcept { return accepted_revision_; }
   std::string_view collective_contract() const noexcept { return collective_contract_; }
+
+  /// The accepted-step carrier copies state Fabs in place.  Its rollback image also retains the
+  /// scalar publication revision, which is not encoded in a Fab and must be restored with the
+  /// same topology contract.  This is intentionally a no-throw final-half operation: all
+  /// topology checks occurred before the candidate acquired its writer lease.
+  void restore_accepted_revision_noexcept(std::uint64_t revision,
+                                          std::string_view collective_contract) noexcept {
+    if (collective_contract != collective_contract_)
+      std::terminate();
+    accepted_revision_ = revision;
+  }
   const ExecutionLane& lane() const noexcept { return lane_; }
   engine_type& topology_runtime() noexcept { return *primary_; }
   const engine_type& topology_runtime() const noexcept { return *primary_; }
@@ -634,19 +963,23 @@ class PreparedMultiBlockAmrHierarchy {
         destination_region, mapping, components);
   }
 
-  /// Publish one prepared topology mutation with one transferred child carrier per block.  Secondary
-  /// carrier vectors are fully materialized first; after the canonical engine commits, their swap is
-  /// no-throw.  Removal likewise truncates every block to the same depth in one transaction.
-  void publish_regrid(std::size_t parent_level,
-                      ::pops::amr::regridding::PreparedRegrid<Dim> prepared,
-                      std::vector<std::optional<field_type>> child_states) {
+  /// Materialize both directions of one topology mutation without writing the accepted hierarchy.
+  ///
+  /// The caller must execute the returned authority collectively before either no-throw publish.
+  /// This intentionally keeps a complete old carrier/topology aggregate alive while the candidate
+  /// is visible to the transaction writer, so rollback cannot require a fresh hierarchy rebuild.
+  PreparedRegridTransaction prepare_regrid_transaction(
+      std::size_t parent_level, ::pops::amr::regridding::PreparedRegrid<Dim> prepared,
+      std::vector<std::optional<field_type>> child_states) {
     std::exception_ptr local_error;
+    std::optional<Snapshot> accepted_snapshot;
     std::vector<AdditionalBlock> candidate_additional;
     std::optional<typename engine_type::PreparedRegridPublication> primary_publication;
     std::string next_collective_contract;
     std::string next_program_contract;
     std::string next_coupling_registry_contract;
     std::optional<interface_scheduler_type> next_interface_scheduler;
+    std::optional<PreparedRestore> inverse;
     try {
       if (parent_level >= level_count() ||
           prepared.source_level() != primary_->hierarchy().layout(parent_level).exact_identity())
@@ -655,6 +988,7 @@ class PreparedMultiBlockAmrHierarchy {
         throw std::invalid_argument("multi-block AMR regrid requires one child slot per block");
       if (accepted_revision_ == std::numeric_limits<std::uint64_t>::max())
         throw std::overflow_error("multi-block AMR accepted revision overflow");
+      accepted_snapshot.emplace(snapshot());
       if (prepared.removes_fine_level()) {
         if (std::any_of(child_states.begin(), child_states.end(),
                         [](const auto& child) { return child.has_value(); }))
@@ -687,8 +1021,8 @@ class PreparedMultiBlockAmrHierarchy {
       if (interface_scheduler_ && primary_publication->changes_topology()) {
         const auto state_provider = [&](std::size_t block, int level) -> field_type& {
           if (block == 0)
-            return const_cast<field_type&>(
-                primary_publication->hierarchy().state(static_cast<std::size_t>(level)));
+            return primary_publication->mutable_hierarchy_for_preparation().state(
+                static_cast<std::size_t>(level));
           return candidate_additional.at(block - 1).levels.at(static_cast<std::size_t>(level));
         };
         const auto geometry_provider = [&](int level) {
@@ -709,30 +1043,385 @@ class PreparedMultiBlockAmrHierarchy {
       if (couplings_sealed_)
         next_coupling_registry_contract =
             exact_coupling_registry_contract_(next_collective_contract);
+      if (primary_publication->changes_topology()) {
+        inverse.emplace(prepare_restore(*accepted_snapshot));
+        inverse->primary_publication.emplace(primary_->prepare_inverse_restore_publication(
+            accepted_snapshot->primary, *primary_publication));
+        inverse->source_accepted_revision = accepted_revision_ + 1U;
+        inverse->source_collective_contract = next_collective_contract;
+        ExactContractBuilder inverse_contract;
+        inverse_contract.text("pops.prepared-multiblock-amr.regrid-inverse")
+            .scalar(std::uint32_t{1})
+            .scalar(std::int32_t{Dim})
+            .bytes(next_collective_contract)
+            .bytes(accepted_snapshot->exact_collective_contract)
+            .scalar(accepted_revision_)
+            .scalar(accepted_revision_ + 1U);
+        inverse->restore_contract = std::move(inverse_contract).release();
+      }
     } catch (...) {
       local_error = std::current_exception();
     }
     collectively_rethrow_(local_error, "multi-block AMR regrid preflight failed collectively");
-    if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("prepared-multiblock-amr-regrid"), prepared.exact_contract()},
-             {std::string_view("prepared-multiblock-amr-next"), next_collective_contract},
-             {std::string_view("prepared-multiblock-amr-next-coupling"),
-              next_coupling_registry_contract}},
-            lane_))
-      throw std::invalid_argument("prepared multi-block AMR regrid differs between MPI ranks");
+    // No allocation may follow the final collective preflight.  Building the transaction itself
+    // owns vectors and exact-contract strings, so aggregate it under a second collective guard.
+    PreparedRegridTransaction transaction;
+    std::exception_ptr assembly_error;
+    try {
+      transaction.owner_ = this;
+      transaction.forward_primary_ = std::move(primary_publication);
+      if (!transaction.forward_primary_)
+        throw std::logic_error("multi-block AMR regrid lost its primary publication");
+      transaction.forward_additional_ = std::move(candidate_additional);
+      transaction.source_accepted_revision_ = accepted_revision_;
+      transaction.target_accepted_revision_ = transaction.forward_primary_->changes_topology()
+                                                  ? accepted_revision_ + 1U
+                                                  : accepted_revision_;
+      if (transaction.forward_primary_->changes_topology()) {
+        if (primary_->topology_epoch() == std::numeric_limits<std::uint64_t>::max() ||
+            primary_->materialization_generation() == std::numeric_limits<std::uint64_t>::max())
+          throw std::overflow_error("prepared multi-block AMR forward generation overflows");
+        transaction.forward_topology_epoch_ = primary_->topology_epoch() + 1U;
+        transaction.forward_materialization_generation_ =
+            primary_->materialization_generation() + 1U;
+      } else {
+        transaction.forward_topology_epoch_ = primary_->topology_epoch();
+        transaction.forward_materialization_generation_ = primary_->materialization_generation();
+      }
+      transaction.source_collective_contract_ = collective_contract_;
+      transaction.candidate_collective_contract_ = next_collective_contract;
+      transaction.forward_collective_contract_ = std::move(next_collective_contract);
+      transaction.forward_canonical_program_contract_ = std::move(next_program_contract);
+      transaction.forward_coupling_registry_contract_ = std::move(next_coupling_registry_contract);
+      transaction.forward_interface_scheduler_ = std::move(next_interface_scheduler);
+      transaction.inverse_ = std::move(inverse);
+      transaction.changes_topology_ = transaction.forward_primary_->changes_topology();
+      ExactContractBuilder contract;
+      contract.text("pops.prepared-multiblock-amr.regrid-transaction")
+          .scalar(std::uint32_t{1})
+          .scalar(std::int32_t{Dim})
+          .bytes(prepared.exact_contract())
+          .bytes(transaction.source_collective_contract_)
+          .bytes(transaction.forward_collective_contract_)
+          .bytes(transaction.forward_coupling_registry_contract_)
+          .scalar(transaction.source_accepted_revision_)
+          .scalar(transaction.target_accepted_revision_)
+          .scalar(transaction.forward_topology_epoch_)
+          .scalar(transaction.forward_materialization_generation_)
+          .scalar(static_cast<std::uint8_t>(transaction.changes_topology_));
+      if (transaction.inverse_)
+        contract.bytes(transaction.inverse_->restore_contract);
+      transaction.exact_transaction_contract_ = std::move(contract).release();
+    } catch (...) {
+      assembly_error = std::current_exception();
+    }
+    collectively_rethrow_(assembly_error,
+                          "multi-block AMR regrid transaction assembly failed collectively");
+    static_assert(std::is_nothrow_move_constructible_v<PreparedRegridTransaction>);
+    return std::move(transaction);
+  }
 
-    const bool changes = primary_publication->changes_topology();
-    primary_->publish_prepared_regrid(std::move(*primary_publication));
-    if (!changes)
-      return;
-    additional_.swap(candidate_additional);
-    ++accepted_revision_;
-    collective_contract_.swap(next_collective_contract);
-    canonical_program_contract_.swap(next_program_contract);
-    if (couplings_sealed_)
-      coupling_registry_contract_.swap(next_coupling_registry_contract);
-    if (next_interface_scheduler)
-      interface_scheduler_->swap(*next_interface_scheduler);
+  /// Build a successor transaction from the last unpublished forward authority.  The source is
+  /// retained in the transaction itself, so execution can authenticate a finite stack before the
+  /// first HiddenPublish swap.  In particular this method must not read `primary_`, `additional_`
+  /// or `accepted_revision_` as topology sources after `source` has been obtained.
+  PreparedRegridTransaction prepare_regrid_successor_transaction(
+      const typename PreparedRegridTransaction::ForwardTopologyView& source,
+      std::size_t parent_level, ::pops::amr::regridding::PreparedRegrid<Dim> prepared,
+      std::vector<std::optional<field_type>> child_states) {
+    std::exception_ptr local_error;
+    std::optional<Snapshot> source_snapshot;
+    std::vector<AdditionalBlock> candidate_additional;
+    std::optional<typename engine_type::PreparedRegridPublication> primary_publication;
+    std::string next_collective_contract;
+    std::string next_program_contract;
+    std::string next_coupling_registry_contract;
+    std::optional<interface_scheduler_type> next_interface_scheduler;
+    std::optional<PreparedRestore> inverse;
+    try {
+      source_snapshot.emplace(source.snapshot());
+      if (parent_level >= source_snapshot->primary.hierarchy.num_levels() ||
+          prepared.source_level() !=
+              source_snapshot->primary.hierarchy.layout(parent_level).exact_identity())
+        throw std::invalid_argument("multi-block AMR forward regrid source is stale");
+      if (child_states.size() != source_snapshot->additional.size() + 1U)
+        throw std::invalid_argument("multi-block AMR forward regrid requires one child per block");
+      if (source_snapshot->accepted_revision == std::numeric_limits<std::uint64_t>::max())
+        throw std::overflow_error("multi-block AMR forward accepted revision overflow");
+      if (prepared.removes_fine_level()) {
+        if (std::any_of(child_states.begin(), child_states.end(),
+                        [](const auto& child) { return child.has_value(); }))
+          throw std::invalid_argument("removing an AMR level cannot publish child carriers");
+      } else if (!prepared.fine_layout() || !prepared.ownership()) {
+        throw std::invalid_argument("multi-block AMR forward regrid lost its child layout");
+      }
+
+      candidate_additional.reserve(source_snapshot->additional.size());
+      for (std::size_t index = 0; index < source_snapshot->additional.size(); ++index) {
+        const AdditionalBlock& prior = source_snapshot->additional[index];
+        AdditionalBlock candidate;
+        candidate.identity = prior.identity;
+        const std::size_t retained = std::min(parent_level + 1U, prior.levels.size());
+        candidate.levels.reserve(parent_level + 2U);
+        for (std::size_t level = 0; level < retained; ++level)
+          candidate.levels.push_back(prior.levels[level]);
+        if (!prepared.removes_fine_level()) {
+          if (!child_states[index + 1U])
+            throw std::invalid_argument("multi-block AMR forward regrid is missing child storage");
+          require_child_contract_(index + 1U, parent_level, *prepared.fine_layout(),
+                                  *child_states[index + 1U]);
+          candidate.levels.push_back(std::move(*child_states[index + 1U]));
+        }
+        candidate_additional.push_back(std::move(candidate));
+      }
+      if (!prepared.removes_fine_level() && !child_states[0])
+        throw std::invalid_argument("multi-block AMR forward regrid is missing primary child");
+      primary_publication.emplace(primary_->prepare_regrid_publication_from_snapshot(
+          source_snapshot->primary, parent_level, prepared, std::move(child_states[0])));
+      if (source.interface_scheduler() && primary_publication->changes_topology()) {
+        const auto state_provider = [&](std::size_t block, int level) -> field_type& {
+          if (block == 0)
+            return primary_publication->mutable_hierarchy_for_preparation().state(
+                static_cast<std::size_t>(level));
+          return candidate_additional.at(block - 1U).levels.at(static_cast<std::size_t>(level));
+        };
+        const auto geometry_provider = [&](int level) {
+          return Geometry<Dim>::from_bounds(
+              primary_publication->hierarchy().layout(static_cast<std::size_t>(level)).domain(),
+              interface_lower_, interface_upper_);
+        };
+        next_interface_scheduler.emplace(source.interface_scheduler()->rematerialized(
+            static_cast<int>(primary_publication->hierarchy().num_levels()), state_provider,
+            geometry_provider,
+            runtime::multiblock::InterfaceRematerializationAuthority::BindBootstrap));
+      }
+      next_collective_contract = exact_hierarchy_contract_(
+          primary_publication->hierarchy(), primary_publication->spatial_contract(),
+          primary_identity_, candidate_additional, lane_contract_identity_);
+      next_program_contract = exact_canonical_program_contract_(
+          next_collective_contract, primary_identity_, candidate_additional);
+      if (couplings_sealed_)
+        next_coupling_registry_contract =
+            exact_coupling_registry_contract_(next_collective_contract);
+      if (primary_publication->changes_topology()) {
+        PreparedRestore restore;
+        restore.owner = this;
+        restore.additional = source_snapshot->additional;
+        restore.primary_publication.emplace(
+            primary_->prepare_inverse_restore_publication_from_snapshot(source_snapshot->primary,
+                                                                        *primary_publication));
+        restore.collective_contract = source_snapshot->exact_collective_contract;
+        restore.canonical_program_contract = exact_canonical_program_contract_(
+            restore.collective_contract, primary_identity_, restore.additional);
+        if (couplings_sealed_)
+          restore.coupling_registry_contract =
+              exact_coupling_registry_contract_(restore.collective_contract);
+        if (source.interface_scheduler())
+          restore.interface_scheduler.emplace(*source.interface_scheduler());
+        restore.accepted_revision = source_snapshot->accepted_revision;
+        restore.source_accepted_revision = source_snapshot->accepted_revision + 1U;
+        restore.source_collective_contract = next_collective_contract;
+        ExactContractBuilder inverse_contract;
+        inverse_contract.text("pops.prepared-multiblock-amr.regrid-inverse")
+            .scalar(std::uint32_t{1})
+            .scalar(std::int32_t{Dim})
+            .bytes(next_collective_contract)
+            .bytes(source_snapshot->exact_collective_contract)
+            .scalar(source_snapshot->accepted_revision)
+            .scalar(source_snapshot->accepted_revision + 1U);
+        restore.restore_contract = std::move(inverse_contract).release();
+        inverse.emplace(std::move(restore));
+      }
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    collectively_rethrow_(local_error,
+                          "multi-block AMR forward regrid preflight failed collectively");
+
+    PreparedRegridTransaction transaction;
+    std::exception_ptr assembly_error;
+    try {
+      if (!source_snapshot || !primary_publication)
+        throw std::logic_error("multi-block AMR forward regrid lost its source authority");
+      transaction.owner_ = this;
+      transaction.forward_source_snapshot_ = std::move(*source_snapshot);
+      transaction.forward_primary_ = std::move(primary_publication);
+      transaction.forward_additional_ = std::move(candidate_additional);
+      transaction.source_accepted_revision_ =
+          transaction.forward_source_snapshot_->accepted_revision;
+      transaction.target_accepted_revision_ = transaction.forward_primary_->changes_topology()
+                                                  ? transaction.source_accepted_revision_ + 1U
+                                                  : transaction.source_accepted_revision_;
+      transaction.forward_topology_epoch_ =
+          transaction.forward_primary_->changes_topology()
+              ? transaction.forward_source_snapshot_->primary.topology_epoch + 1U
+              : transaction.forward_source_snapshot_->primary.topology_epoch;
+      transaction.forward_materialization_generation_ =
+          transaction.forward_primary_->changes_topology()
+              ? transaction.forward_source_snapshot_->primary.materialization_generation + 1U
+              : transaction.forward_source_snapshot_->primary.materialization_generation;
+      transaction.source_collective_contract_ =
+          transaction.forward_source_snapshot_->exact_collective_contract;
+      transaction.candidate_collective_contract_ = next_collective_contract;
+      transaction.forward_collective_contract_ = std::move(next_collective_contract);
+      transaction.forward_canonical_program_contract_ = std::move(next_program_contract);
+      transaction.forward_coupling_registry_contract_ = std::move(next_coupling_registry_contract);
+      transaction.forward_interface_scheduler_ = std::move(next_interface_scheduler);
+      transaction.inverse_ = std::move(inverse);
+      transaction.changes_topology_ = transaction.forward_primary_->changes_topology();
+      ExactContractBuilder contract;
+      contract.text("pops.prepared-multiblock-amr.regrid-transaction")
+          .scalar(std::uint32_t{1})
+          .scalar(std::int32_t{Dim})
+          .bytes(prepared.exact_contract())
+          .bytes(transaction.source_collective_contract_)
+          .bytes(transaction.forward_collective_contract_)
+          .bytes(transaction.forward_coupling_registry_contract_)
+          .scalar(transaction.source_accepted_revision_)
+          .scalar(transaction.target_accepted_revision_)
+          .scalar(transaction.forward_topology_epoch_)
+          .scalar(transaction.forward_materialization_generation_)
+          .scalar(static_cast<std::uint8_t>(transaction.changes_topology_));
+      if (transaction.inverse_)
+        contract.bytes(transaction.inverse_->restore_contract);
+      transaction.exact_transaction_contract_ = std::move(contract).release();
+    } catch (...) {
+      assembly_error = std::current_exception();
+    }
+    collectively_rethrow_(
+        assembly_error, "multi-block AMR forward regrid transaction assembly failed collectively");
+    return transaction;
+  }
+
+  /// Legacy convenience for a caller that does not need the inverse after successful publication.
+  /// Candidate/inverse materialization and collective authentication remain identical to the
+  /// transaction path above.
+  void publish_regrid(std::size_t parent_level,
+                      ::pops::amr::regridding::PreparedRegrid<Dim> prepared,
+                      std::vector<std::optional<field_type>> child_states) {
+    PreparedRegridTransaction transaction =
+        prepare_regrid_transaction(parent_level, std::move(prepared), std::move(child_states));
+    transaction.execute();
+    transaction.publish_candidate_noexcept();
+  }
+
+  /// Authenticate the two move-only publications before the first accepted write.
+  void execute_prepared_regrid_transaction(PreparedRegridTransaction& transaction) const {
+    std::exception_ptr local_error;
+    try {
+      const bool successor = transaction.forward_source_snapshot_.has_value();
+      const std::uint64_t expected_revision =
+          successor ? transaction.forward_source_snapshot_->accepted_revision : accepted_revision_;
+      const std::string_view expected_contract =
+          successor
+              ? std::string_view(transaction.forward_source_snapshot_->exact_collective_contract)
+              : std::string_view(collective_contract_);
+      if (transaction.owner_ != this || !transaction.forward_primary_ ||
+          transaction.collectively_authenticated_ || transaction.candidate_published_ ||
+          transaction.inverse_consumed_ ||
+          transaction.source_accepted_revision_ != expected_revision ||
+          transaction.source_collective_contract_ != expected_contract)
+        throw std::invalid_argument("prepared multi-block AMR regrid transaction is stale");
+      if (successor) {
+        primary_->authenticate_prepared_regrid_publication_from_snapshot(
+            transaction.forward_source_snapshot_->primary, *transaction.forward_primary_);
+      } else {
+        primary_->authenticate_prepared_regrid_publication(*transaction.forward_primary_);
+      }
+      if (transaction.changes_topology_) {
+        if (!transaction.inverse_ ||
+            transaction.target_accepted_revision_ != expected_revision + 1U)
+          throw std::invalid_argument(
+              "prepared multi-block AMR topology transaction lost its inverse authority");
+        if (successor) {
+          primary_->authenticate_inverse_restore_publication_from_snapshot(
+              transaction.forward_source_snapshot_->primary,
+              *transaction.inverse_->primary_publication, *transaction.forward_primary_);
+        } else {
+          primary_->authenticate_inverse_restore_publication(
+              *transaction.inverse_->primary_publication, *transaction.forward_primary_);
+        }
+        if (transaction.inverse_->source_accepted_revision !=
+                transaction.target_accepted_revision_ ||
+            transaction.inverse_->source_collective_contract !=
+                transaction.forward_collective_contract_)
+          throw std::invalid_argument(
+              "prepared multi-block AMR inverse revision authority is not authentic");
+      } else if (transaction.inverse_ ||
+                 transaction.target_accepted_revision_ != accepted_revision_) {
+        throw std::invalid_argument(
+            "topology-neutral prepared multi-block regrid carries an inverse authority");
+      }
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    collectively_rethrow_(
+        local_error, "prepared multi-block AMR regrid transaction execution failed collectively");
+    // The transaction's exact strings were assembled before the candidate writer entered this
+    // path.  Keep the collective witness fixed-size as well: regrid execution is hot and must
+    // not allocate merely to enumerate its two or three already-owned contracts.
+    const std::array<std::pair<std::string_view, std::string_view>, 3> contracts{{
+        {"prepared-multiblock-amr-regrid-transaction", transaction.exact_transaction_contract_},
+        {"prepared-multiblock-amr-regrid-forward", transaction.forward_collective_contract_},
+        {"prepared-multiblock-amr-regrid-inverse",
+         transaction.inverse_ ? std::string_view(transaction.inverse_->restore_contract)
+                              : std::string_view{}},
+    }};
+    const std::span<const std::pair<std::string_view, std::string_view>> active_contracts(
+        contracts.data(), transaction.inverse_ ? 3U : 2U);
+    if (!all_ranks_agree_exact_ordered_byte_pairs(active_contracts, lane_))
+      throw std::invalid_argument(
+          "prepared multi-block AMR regrid transaction differs between MPI ranks");
+    transaction.collectively_authenticated_ = true;
+  }
+
+  void publish_prepared_regrid_candidate_noexcept(PreparedRegridTransaction& transaction) noexcept {
+    if (transaction.owner_ != this || !transaction.forward_primary_ ||
+        !transaction.collectively_authenticated_ || transaction.candidate_published_ ||
+        transaction.inverse_consumed_ ||
+        transaction.source_accepted_revision_ != accepted_revision_ ||
+        transaction.source_collective_contract_ != collective_contract_)
+      std::terminate();
+    try {
+      primary_->publish_authenticated_regrid_noexcept(std::move(*transaction.forward_primary_));
+      if (transaction.changes_topology_) {
+        additional_.swap(transaction.forward_additional_);
+        accepted_revision_ = transaction.target_accepted_revision_;
+        collective_contract_.swap(transaction.forward_collective_contract_);
+        canonical_program_contract_.swap(transaction.forward_canonical_program_contract_);
+        if (couplings_sealed_)
+          coupling_registry_contract_.swap(transaction.forward_coupling_registry_contract_);
+        if (transaction.forward_interface_scheduler_)
+          interface_scheduler_->swap(*transaction.forward_interface_scheduler_);
+      }
+      transaction.candidate_published_ = true;
+    } catch (...) {
+      std::terminate();
+    }
+  }
+
+  void publish_prepared_regrid_inverse_noexcept(PreparedRegridTransaction& transaction) noexcept {
+    if (transaction.owner_ != this || !transaction.collectively_authenticated_ ||
+        !transaction.candidate_published_ || transaction.inverse_consumed_ ||
+        !transaction.changes_topology_ || !transaction.inverse_ ||
+        transaction.target_accepted_revision_ != accepted_revision_ ||
+        transaction.candidate_collective_contract_ != collective_contract_)
+      std::terminate();
+    try {
+      primary_->publish_authenticated_restore_noexcept(
+          std::move(*transaction.inverse_->primary_publication));
+      additional_.swap(transaction.inverse_->additional);
+      accepted_revision_ = transaction.inverse_->accepted_revision;
+      collective_contract_.swap(transaction.inverse_->collective_contract);
+      canonical_program_contract_.swap(transaction.inverse_->canonical_program_contract);
+      if (couplings_sealed_)
+        coupling_registry_contract_.swap(transaction.inverse_->coupling_registry_contract);
+      if (transaction.inverse_->interface_scheduler)
+        interface_scheduler_->swap(*transaction.inverse_->interface_scheduler);
+      transaction.inverse_consumed_ = true;
+    } catch (...) {
+      std::terminate();
+    }
   }
 
   Snapshot snapshot() const {
@@ -749,8 +1438,8 @@ class PreparedMultiBlockAmrHierarchy {
     if (interface_scheduler_) {
       const auto state_provider = [&](std::size_t block, int level) -> field_type& {
         if (block == 0)
-          return const_cast<field_type&>(
-              prepared.primary_publication->hierarchy().state(static_cast<std::size_t>(level)));
+          return prepared.primary_publication->mutable_hierarchy_for_preparation().state(
+              static_cast<std::size_t>(level));
         return prepared.additional.at(block - 1).levels.at(static_cast<std::size_t>(level));
       };
       const auto geometry_provider = [&](int level) {
@@ -809,6 +1498,12 @@ class PreparedMultiBlockAmrHierarchy {
     }
     collectively_rethrow_(local_error,
                           "prepared multi-block AMR restore execution failed collectively");
+    try {
+      primary_->authenticate_prepared_restore_publication(*prepared.primary_publication);
+    } catch (...) {
+      collectively_rethrow_(std::current_exception(),
+                            "prepared multi-block AMR restore authentication failed collectively");
+    }
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("prepared-multiblock-amr-restore"), prepared.restore_contract}},
             lane_))
@@ -822,7 +1517,7 @@ class PreparedMultiBlockAmrHierarchy {
         !prepared.primary_publication || prepared.source_accepted_revision != accepted_revision_ ||
         prepared.source_collective_contract != collective_contract_)
       std::terminate();
-    primary_->publish_prepared_restore(std::move(*prepared.primary_publication));
+    primary_->publish_authenticated_restore_noexcept(std::move(*prepared.primary_publication));
     additional_.swap(prepared.additional);
     accepted_revision_ = prepared.accepted_revision;
     collective_contract_.swap(prepared.collective_contract);
@@ -1255,5 +1950,28 @@ class PreparedMultiBlockAmrHierarchy {
   std::string collective_contract_;
   std::string canonical_program_contract_;
 };
+
+template <int Dim, class MemorySpace>
+void PreparedMultiBlockAmrHierarchy<Dim, MemorySpace>::PreparedRegridTransaction::execute() {
+  if (owner_ == nullptr)
+    throw std::logic_error("prepared multi-block AMR regrid transaction has no owner");
+  owner_->execute_prepared_regrid_transaction(*this);
+}
+
+template <int Dim, class MemorySpace>
+void PreparedMultiBlockAmrHierarchy<
+    Dim, MemorySpace>::PreparedRegridTransaction::publish_candidate_noexcept() noexcept {
+  if (owner_ == nullptr)
+    std::terminate();
+  owner_->publish_prepared_regrid_candidate_noexcept(*this);
+}
+
+template <int Dim, class MemorySpace>
+void PreparedMultiBlockAmrHierarchy<
+    Dim, MemorySpace>::PreparedRegridTransaction::publish_inverse_noexcept() noexcept {
+  if (owner_ == nullptr)
+    std::terminate();
+  owner_->publish_prepared_regrid_inverse_noexcept(*this);
+}
 
 }  // namespace pops::runtime::amr

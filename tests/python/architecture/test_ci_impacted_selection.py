@@ -305,7 +305,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_geometric_mg": (2,),
         "test_krylov_workspace_reentrancy": (2,),
         "test_prepared_embedded_boundary_nd": (2,),
-        "test_program_context_contract": (2,),
+        "test_program_execution_services_contract": (2,),
         "test_program_runtime": (2,),
         "test_pure_field_algebra_extreme_dot": (2,),
         "test_world_communicator": (1, 2),
@@ -324,7 +324,8 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 95
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 98
+    assert ctest_plan["test_mpi_amr_program_3d_corner_authority_np8"] == 8
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
@@ -1102,7 +1103,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "            ccache_maxsize: 2G"
     ) in openmp_block
     assert openmp_block.count("if: matrix.kind == 'cpp'") == 6
-    assert openmp_block.count("if: matrix.kind == 'python'") == 7
+    assert openmp_block.count("if: matrix.kind == 'python'") == 8
     assert "CCACHE_MAXSIZE: ${{ matrix.ccache_maxsize }}" in openmp_block
     assert "uses: actions/cache/restore@v6" in openmp_block
     assert "uses: actions/cache/save@v6" in openmp_block
@@ -1318,7 +1319,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "Save prewarm ccache" not in python_prewarm_block
     assert "CCACHE_CACHE_KEY" not in python_prewarm_block
     assert "timeout-minutes: 50" in python_shards_block
-    assert "shard: [0, 1, 2, 3, 4, 5, 6]" in python_shards_block
+    assert "shard: [0, 1, 2, 3, 4, 5, 6, 7]" in python_shards_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_shards_block
     assert "timeout-minutes: 30" in python_cache_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_cache_block

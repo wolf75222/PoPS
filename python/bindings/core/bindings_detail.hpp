@@ -544,6 +544,7 @@ inline py::dict numerical_defaults_report_to_dict() {
   klass("kPhysicalDefaultGravitySign", "public_knob");
   klass("kPhysicalDefaultFourPiG", "public_knob");
   klass("kPhysicalDefaultGravityRho0", "public_knob");
+  klass("kRealIsBinary64", "diagnostic_only");
   klass("kCflSpeedFloor", "public_knob");  // ADC-645: step_cfl(speed_floor=) is wired end to end
   klass("kMaxRuntimeParams", "hard_limit");
 

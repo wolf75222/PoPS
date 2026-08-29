@@ -84,7 +84,7 @@ def test_pure_module_program_emits():
     src = emit_cpp_program(P, model=mod.to_dsl())
     assert "pops_install_program" in src
     # the GeneratedModule descriptor reflects the pure Module's operators
-    assert "pops_module_operator_count() { return" in src
+    assert "kProgramCandidateModuleOperators" in src
     for op in (
         "electric", "lorentz", "fields_from_state", "explicit_rhs", "transport_rhs"
     ):

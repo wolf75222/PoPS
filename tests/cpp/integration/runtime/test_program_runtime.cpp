@@ -1,5 +1,5 @@
 // Compiled time-program runtime seam (epic ADC-399 / ADC-401 Phase 2b): a Forward-Euler Program,
-// installed as a macro-step closure via pops::runtime::program::ProgramContext, runs C++-side during
+// installed as a macro-step closure via pops::runtime::program::ProgramExecutionServices, runs C++-side during
 // sim.step(dt). This test proves the seam end-to-end WITHOUT codegen or a .so: it builds the closure
 // in C++ (the role the generated problem.so will later fill) and checks bit-parity against a reference
 // Forward-Euler step computed from the SAME existing primitives (solve_fields + eval_rhs + U + dt*R).
@@ -10,6 +10,8 @@
 
 #include <gtest/gtest.h>
 
+#include "native_dso_compiler.hpp"
+#include "program_v5_fixture.hpp"
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/physics/bricks/source.hpp>                // NoSource
 #include <pops/physics/composition/composite.hpp>        // CompositeModel
@@ -17,7 +19,9 @@
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/config/model_spec.hpp>
-#include <pops/runtime/program/program_context.hpp>  // ProgramContext (the seam under test)
+#include <pops/runtime/program/program_execution_services.hpp>  // ProgramExecutionServices (the seam under test)
+#include <pops/runtime/program/owned_program_installation.hpp>
+#include <pops/runtime/program/program_preparation_image.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/system.hpp>
@@ -28,8 +32,13 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <fstream>
 #include <limits>
+#include <memory>
+#include <sstream>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -416,6 +425,326 @@ static void add_scalar(System<kNativeDimension>& system) {
                      "conservative", "explicit");
 }
 
+static void install_v5_authority_program(System<kNativeDimension>& system, std::string_view mode,
+                                         std::string_view identity,
+                                         const std::vector<std::string>& blocks = {"tracer"},
+                                         std::string_view marker = {},
+                                         std::string_view release = {}) {
+#if !defined(POPS_TEST_TMPDIR)
+  throw std::runtime_error("ABI-v5 authority fixture requires POPS_TEST_TMPDIR");
+#else
+  static std::size_t fixture_index = 0;
+  const std::string prefix = std::string(POPS_TEST_TMPDIR) + "/program_runtime_authority_" +
+                             std::to_string(++fixture_index);
+  const std::string source_path = prefix + ".cpp";
+  const std::string library_path = prefix + ".so";
+  {
+    std::ofstream source(source_path);
+    if (!source)
+      throw std::runtime_error("cannot create ABI-v5 runtime authority fixture source");
+    source << pops::test::program_v5::authority_program_source(mode, identity, blocks, marker,
+                                                               release);
+  }
+  const auto compiled = pops::test::native_dso::compile_shared(source_path, library_path);
+  if (!compiled.ok) {
+    pops::test::native_dso::report_compile_failure("test_program_runtime", compiled);
+    throw std::runtime_error("ABI-v5 runtime authority fixture compilation failed");
+  }
+  system.install_program(library_path);
+#endif
+}
+
+// The public System installer is the only lifecycle authority.  These tests still need to
+// exercise a broad set of low-level ProgramExecutionServices operations, so the v5 fixture DSO
+// dispatches its ordinary step to a host-owned test callback.  The callback receives the detached
+// provider created by the DSO; it is not an installation/facade shortcut and is reachable only
+// after a validated pops_install_program candidate has been published.
+using RuntimeProgramServices = runtime::program::ProgramExecutionServices<kNativeDimension>;
+using RuntimeProgramCallback = std::function<void(RuntimeProgramServices&, double)>;
+
+static std::vector<RuntimeProgramCallback>& runtime_program_callbacks() {
+  static std::vector<RuntimeProgramCallback> callbacks;
+  return callbacks;
+}
+
+static std::vector<std::uint64_t>& runtime_program_prepare_markers() {
+  static std::vector<std::uint64_t> markers;
+  return markers;
+}
+
+static std::uint64_t register_runtime_program_callback(RuntimeProgramCallback callback) {
+  auto& callbacks = runtime_program_callbacks();
+  const auto identifier = static_cast<std::uint64_t>(callbacks.size());
+  callbacks.push_back(std::move(callback));
+  return identifier;
+}
+
+extern "C" void pops_test_program_runtime_callback(std::uint64_t identifier, void* opaque,
+                                                   double dt) {
+  auto& callbacks = runtime_program_callbacks();
+  if (opaque == nullptr || identifier >= callbacks.size())
+    throw std::logic_error("ABI-v5 runtime callback received an invalid dispatch token");
+  callbacks[static_cast<std::size_t>(identifier)](*static_cast<RuntimeProgramServices*>(opaque),
+                                                  dt);
+}
+
+extern "C" void pops_test_program_runtime_prepare_marker(std::uint64_t identifier) noexcept {
+  runtime_program_prepare_markers().push_back(identifier);
+}
+
+static void inject_runtime_prepare_marker(std::string& source, std::uint64_t identifier) {
+  constexpr std::string_view callback_declaration =
+      "extern \"C\" void pops_test_program_runtime_callback(std::uint64_t, void*, double);\n";
+  const std::size_t declaration = source.find(callback_declaration);
+  if (declaration == std::string::npos)
+    throw std::logic_error("ABI-v5 runtime callback fixture has no callback declaration");
+  source.insert(declaration + callback_declaration.size(),
+                "extern \"C\" void pops_test_program_runtime_prepare_marker(std::uint64_t) noexcept;\n");
+  constexpr std::string_view prepare_begin =
+      "  try {\n    state.context = pops::runtime::program::make_program_execution_provider";
+  const std::size_t prepare = source.find(prepare_begin);
+  if (prepare == std::string::npos)
+    throw std::logic_error("ABI-v5 runtime callback fixture has no candidate prepare body");
+  source.replace(prepare, prepare_begin.size(),
+                 "  try {\n    pops_test_program_runtime_prepare_marker(" +
+                     std::to_string(identifier) +
+                     ");\n    state.context = pops::runtime::program::make_program_execution_provider");
+}
+
+static std::string runtime_callback_program_source(std::uint64_t callback_identifier,
+                                                   std::string_view identity,
+                                                   std::string_view clock,
+                                                   const std::vector<std::string>& blocks) {
+  return pops::test::program_v5::callback_program_source(
+      callback_identifier, identity, clock, blocks,
+      std::vector<pops::test::program_v5::CallbackProgramResource>{},
+      "pops_test_program_runtime_callback", "uniform");
+}
+
+static std::string runtime_callback_program_source(
+    std::uint64_t callback_identifier, std::string_view identity, std::string_view clock,
+    const std::vector<std::string>& blocks,
+    const std::vector<pops::test::program_v5::CallbackProgramResource>& resources,
+    const pops::test::program_v5::CallbackProgramTransactionAuthorities& authorities = {}) {
+  return pops::test::program_v5::callback_program_source(
+      callback_identifier, identity, clock, blocks, resources, "pops_test_program_runtime_callback",
+      "uniform", {}, authorities);
+}
+
+static void install_v5_callback_program(
+    System<kNativeDimension>& system, std::string_view identity, std::string_view clock,
+    const std::vector<std::string>& blocks,
+    const std::vector<pops::test::program_v5::CallbackProgramResource>& resources,
+    RuntimeProgramCallback callback,
+    const pops::test::program_v5::CallbackProgramTransactionAuthorities& authorities = {},
+    bool mark_candidate_prepare = false) {
+#if !defined(POPS_TEST_TMPDIR)
+  (void)system;
+  (void)identity;
+  (void)clock;
+  (void)blocks;
+  (void)callback;
+  throw std::runtime_error("ABI-v5 runtime callback fixture requires POPS_TEST_TMPDIR");
+#else
+  static std::size_t fixture_index = 0;
+  const std::uint64_t callback_identifier = register_runtime_program_callback(std::move(callback));
+  const std::string prefix = std::string(POPS_TEST_TMPDIR) + "/program_runtime_callback_" +
+                             std::to_string(++fixture_index);
+  const std::string source_path = prefix + ".cpp";
+  const std::string library_path = prefix + ".so";
+  {
+    std::ofstream source(source_path);
+    if (!source)
+      throw std::runtime_error("cannot create ABI-v5 runtime callback fixture source");
+    auto generated = runtime_callback_program_source(callback_identifier, identity, clock, blocks,
+                                                     resources, authorities);
+    if (mark_candidate_prepare)
+      inject_runtime_prepare_marker(generated, callback_identifier);
+    source << generated;
+  }
+  const auto compiled = pops::test::native_dso::compile_shared(source_path, library_path);
+  if (!compiled.ok) {
+    pops::test::native_dso::report_compile_failure("test_program_runtime callback", compiled);
+    throw std::runtime_error("ABI-v5 runtime callback fixture compilation failed");
+  }
+  system.install_program(library_path);
+#endif
+}
+
+static void install_v5_callback_program(System<kNativeDimension>& system, std::string_view identity,
+                                        std::string_view clock,
+                                        const std::vector<std::string>& blocks,
+                                        RuntimeProgramCallback callback,
+                                        const pops::test::program_v5::
+                                            CallbackProgramTransactionAuthorities& authorities = {}) {
+  install_v5_callback_program(system, identity, clock, blocks,
+                              std::vector<pops::test::program_v5::CallbackProgramResource>{},
+                              std::move(callback), authorities);
+}
+
+namespace {
+
+struct RuntimeSyntheticCandidate final {
+  int step_calls = 0;
+  int dt_bound_calls = 0;
+  int hierarchy_refresh_calls = 0;
+  int history_remap_calls = 0;
+  int restart_preflight_calls = 0;
+  int restart_regrid_calls = 0;
+  int restart_resync_calls = 0;
+  int snapshot_create_calls = 0;
+  int snapshot_destroy_calls = 0;
+  int prepare_calls = 0;
+  int destroy_calls = 0;
+  double last_dt = 0.0;
+};
+
+class RuntimeSyntheticPreparationImage final
+    : public runtime::program::ProgramPreparationImage {
+ public:
+  RuntimeSyntheticPreparationImage(std::uint32_t dimension, std::uint64_t generation,
+                                   runtime::program::ProgramExecutionServicesRef services)
+      : ProgramPreparationImage(dimension, runtime::program::ProgramRuntimeKind::uniform, services,
+                                 generation) {
+    bind_image_services(services);
+  }
+};
+
+void runtime_synthetic_step(void* opaque, double dt) {
+  auto& candidate = *static_cast<RuntimeSyntheticCandidate*>(opaque);
+  ++candidate.step_calls;
+  candidate.last_dt = dt;
+}
+
+bool runtime_synthetic_prepare(
+    void* opaque, const runtime::program::ProgramHostDescriptor*,
+    runtime::program::ProgramInstallDiagnostic*) noexcept {
+  ++static_cast<RuntimeSyntheticCandidate*>(opaque)->prepare_calls;
+  return true;
+}
+
+double runtime_synthetic_dt_bound(void* opaque, double cfl) {
+  auto& candidate = *static_cast<RuntimeSyntheticCandidate*>(opaque);
+  ++candidate.dt_bound_calls;
+  return 0.5 * cfl;
+}
+
+void runtime_synthetic_destroy(void* opaque) noexcept {
+  ++static_cast<RuntimeSyntheticCandidate*>(opaque)->destroy_calls;
+}
+
+void runtime_synthetic_hierarchy_refresh(void* opaque) {
+  ++static_cast<RuntimeSyntheticCandidate*>(opaque)->hierarchy_refresh_calls;
+}
+
+void runtime_synthetic_history_remap(void* opaque, const void* descriptor) {
+  if (descriptor == nullptr)
+    throw std::invalid_argument("runtime synthetic history remap requires a descriptor");
+  ++static_cast<RuntimeSyntheticCandidate*>(opaque)->history_remap_calls;
+}
+
+void runtime_synthetic_restart_preflight(void* opaque) {
+  ++static_cast<RuntimeSyntheticCandidate*>(opaque)->restart_preflight_calls;
+}
+
+void runtime_synthetic_restart_regrid(void* opaque) {
+  ++static_cast<RuntimeSyntheticCandidate*>(opaque)->restart_regrid_calls;
+}
+
+void runtime_synthetic_restart_resync(void* opaque) {
+  ++static_cast<RuntimeSyntheticCandidate*>(opaque)->restart_resync_calls;
+}
+
+class RuntimeSyntheticAcceptedSnapshot final
+    : public runtime::program::AcceptedProgramExecutionServicesSnapshot {
+ public:
+  explicit RuntimeSyntheticAcceptedSnapshot(RuntimeSyntheticCandidate& candidate)
+      : candidate_(&candidate) {}
+  ~RuntimeSyntheticAcceptedSnapshot() override { ++candidate_->snapshot_destroy_calls; }
+
+  std::unique_ptr<runtime::program::AcceptedProgramExecutionServicesSnapshot> prepare_restore()
+      const override {
+    return std::make_unique<RuntimeSyntheticAcceptedSnapshot>(*candidate_);
+  }
+  void publish_restore() noexcept override {}
+
+ private:
+  RuntimeSyntheticCandidate* candidate_ = nullptr;
+};
+
+runtime::program::AcceptedProgramExecutionServicesSnapshot* runtime_synthetic_snapshot_create(
+    void* opaque) {
+  auto& candidate = *static_cast<RuntimeSyntheticCandidate*>(opaque);
+  ++candidate.snapshot_create_calls;
+  return new RuntimeSyntheticAcceptedSnapshot(candidate);
+}
+
+template <int Dim>
+runtime::program::ProgramCandidateDescriptor runtime_synthetic_descriptor(
+    RuntimeSyntheticCandidate& candidate, bool with_dt_bound, bool with_lifecycle,
+    bool with_block_table = false) {
+  using namespace runtime::program;
+  static constexpr char metadata[] = "synthetic-runtime";
+  static constexpr char block_name[] = "synthetic";
+  static constexpr ProgramBlockRecord blocks[] = {{{block_name, sizeof(block_name) - 1}}};
+  ProgramCandidateDescriptor descriptor{};
+  descriptor.struct_size = sizeof(ProgramCandidateDescriptor);
+  descriptor.abi_version = kProgramInstallAbiVersion;
+  descriptor.native_dimension = Dim;
+  descriptor.runtime_kind = with_lifecycle ? ProgramRuntimeKind::amr : ProgramRuntimeKind::uniform;
+  descriptor.provided_capability_bits = kKnownProgramCapabilityBits;
+  descriptor.program_name = {metadata, sizeof(metadata) - 1};
+  descriptor.artifact_identity = {metadata, sizeof(metadata) - 1};
+  descriptor.abi_key = {metadata, sizeof(metadata) - 1};
+  descriptor.route_manifest = {metadata, sizeof(metadata) - 1};
+  descriptor.boundary_manifest = {metadata, sizeof(metadata) - 1};
+  descriptor.persistent_resource_manifest = {metadata, sizeof(metadata) - 1};
+  descriptor.checkpoint_identity = {metadata, sizeof(metadata) - 1};
+  if (with_block_table)
+    descriptor.blocks = {blocks, 1, sizeof(ProgramBlockRecord)};
+  descriptor.maximum_bytes = 0;
+  descriptor.context = &candidate;
+  descriptor.prepare = &runtime_synthetic_prepare;
+  descriptor.step = &runtime_synthetic_step;
+  descriptor.dt_bound = with_dt_bound ? &runtime_synthetic_dt_bound : nullptr;
+  descriptor.destroy = &runtime_synthetic_destroy;
+  if (with_lifecycle) {
+    descriptor.hierarchy_refresh = &runtime_synthetic_hierarchy_refresh;
+    descriptor.history_remap_accepted = &runtime_synthetic_history_remap;
+    descriptor.restart_regrid_preflight = &runtime_synthetic_restart_preflight;
+    descriptor.restart_regrid = &runtime_synthetic_restart_regrid;
+    descriptor.restart_resync = &runtime_synthetic_restart_resync;
+    descriptor.create_accepted_snapshot = &runtime_synthetic_snapshot_create;
+  }
+  return descriptor;
+}
+
+template <int Dim>
+runtime::program::PreparedProgramInstallation runtime_prepared_artifact(
+    RuntimeSyntheticCandidate& candidate, std::uint64_t generation, bool with_dt_bound = true,
+    bool with_lifecycle = false, bool with_block_table = false) {
+  using namespace runtime::program;
+  ProgramExecutionServicesRef services{&candidate, &candidate, &candidate, &candidate, &candidate,
+                                       &candidate, &candidate, &candidate, &candidate};
+  ProgramHostDescriptor host{};
+  host.native_dimension = Dim;
+  host.runtime_kind = ProgramRuntimeKind::uniform;
+  host.capability_bits = kKnownProgramCapabilityBits;
+  host.services = services;
+  auto image = std::make_shared<RuntimeSyntheticPreparationImage>(Dim, generation, services);
+  bind_program_preparation_image(host, image);
+  OwnedProgramInstallation owner(
+      pops::dynlib::UniqueHandle{nullptr},
+      runtime_synthetic_descriptor<Dim>(candidate, with_dt_bound, with_lifecycle, with_block_table),
+      ProgramInstallationMetadata{"synthetic-runtime", "abi", "route", "boundary", "persistent",
+                                  "checkpoint"});
+  owner.set_preparation_image(image);
+  owner.prepare(host);
+  return PreparedProgramInstallation(std::move(owner));
+}
+
+}  // namespace
+
 TEST(ProgramRuntime, BalanceDueWindowUsesTheOuterAcceptedStepAndCleansUpOnFailure) {
   runtime::program::ProgramRuntimeState<kNativeDimension> state;
   const std::string contract = "pops.balance-due-contract.v1:sha256:" + std::string(64, '1');
@@ -466,6 +795,11 @@ TEST(ProgramRuntime, AutomaticBalanceDueMarkerIsAttemptLocalMonotoneAndReplaySaf
 TEST(ProgramRuntime, SelectedAutomaticBalanceTermsRequireCompleteQualifiedEvidence) {
   runtime::program::ProgramRuntimeState<kNativeDimension> state;
   const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '5');
+  state.declare_balance_route(route);
+  state.declare_automatic_balance_term(2, 0, 1, "projection");
+  state.declare_automatic_balance_term(2, 1, 1, "projection");
+  state.declare_automatic_balance_term(2, 0, 1, "reflux");
+  state.bind_transaction_authorities();
   state.begin_step_projection_report();
   state.run_balance_due_window(0, "test", [&] {
     state.note_automatic_balance_capture_due(true, "test");
@@ -536,7 +870,9 @@ TEST(ProgramRuntime, ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair) {
   EXPECT_FALSE(state.authorizes_history_replay("gas.previous", 2));
   EXPECT_FALSE(state.authorizes_history_replay("other.previous", 3));
 
-  state.install_unverified_step([](double) {});
+  RuntimeSyntheticCandidate replacement;
+  state.install_prepared_artifact(runtime_prepared_artifact<kNativeDimension>(
+      replacement, state.step_install_generation_ + 1, false));
   EXPECT_FALSE(state.artifact_backed_);
   EXPECT_TRUE(state.operator_authorities_.empty());
   EXPECT_TRUE(state.history_replay_authorities_.empty());
@@ -551,24 +887,12 @@ TEST(ProgramRuntime, ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair) {
       << "a direct native step must revoke every earlier artifact authority";
 }
 
-TEST(ProgramRuntime, ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly) {
-  struct AcceptedContextSnapshot final : runtime::program::AcceptedProgramContextSnapshot {
-    std::unique_ptr<runtime::program::AcceptedProgramContextSnapshot> prepare_restore()
-        const override {
-      return std::make_unique<AcceptedContextSnapshot>();
-    }
-    void publish_restore() noexcept override {}
-  };
+TEST(ProgramRuntime, PreparedArtifactPublicationRejectsStaleGenerationAndPublishesExactlyOnce) {
   runtime::program::ProgramRuntimeState<kNativeDimension> state;
-  int old_steps = 0;
-  int new_steps = 0;
-  int restart_preflights = 0;
-  int restart_regrids = 0;
-  int restart_resyncs = 0;
-  state.install_unverified_step([&](double) { ++old_steps; });
-  state.install_restart_hooks([&] { ++restart_preflights; }, [&] { ++restart_regrids; },
-                              [&] { ++restart_resyncs; },
-                              [] { return std::make_unique<AcceptedContextSnapshot>(); }, "test");
+  RuntimeSyntheticCandidate old_candidate;
+  RuntimeSyntheticCandidate new_candidate;
+  state.install_prepared_artifact(runtime_prepared_artifact<kNativeDimension>(
+      old_candidate, state.step_install_generation_ + 1, true, true));
   state.operator_authorities_ = {{{1, 2, 3, 4}}};
   state.history_replay_authorities_ = {{"gas.previous", 3}};
   state.installed_hash_ = "accepted-artifact";
@@ -578,14 +902,18 @@ TEST(ProgramRuntime, ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly) {
   state.artifact_backed_ = true;
   const auto accepted_generation = state.step_install_generation_;
 
-  auto interrupted = state.capture_artifact_step_install();
-  state.operator_authorities_ = {{{9, 8, 7, 6}}};
-  state.install_unverified_step([&](double) { ++new_steps; });
-  state.rollback_artifact_step_install(std::move(interrupted));
-  state.step_(0.1);
-  EXPECT_EQ(old_steps, 1);
-  EXPECT_EQ(new_steps, 0);
+  // A stale prepared image is rejected before publication; the accepted owner and all of its
+  // authority remain untouched.  This is the v5 generation contract, not an install-step snapshot.
+  RuntimeSyntheticCandidate stale_candidate;
+  auto stale =
+      runtime_prepared_artifact<kNativeDimension>(stale_candidate, accepted_generation, true, true);
+  EXPECT_THROW((void)runtime::program::ProgramRuntimeState<
+                   kNativeDimension>::PreparedArtifactPublication::prepare(std::move(stale),
+                                                                           accepted_generation + 1),
+               std::invalid_argument);
   EXPECT_EQ(state.step_install_generation_, accepted_generation);
+  state.step_(0.1);
+  EXPECT_EQ(old_candidate.step_calls, 1);
   EXPECT_EQ(state.operator_authorities_,
             (std::vector<std::array<std::uint64_t, 4>>{{{1, 2, 3, 4}}}));
   EXPECT_EQ(state.installed_hash_, "accepted-artifact");
@@ -597,30 +925,48 @@ TEST(ProgramRuntime, ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly) {
   EXPECT_NO_THROW(state.preflight_regrid_on_restart("test"));
   EXPECT_NO_THROW(state.regrid_on_restart("test"));
   EXPECT_NO_THROW(state.resync_after_restart("test"));
-  EXPECT_EQ(restart_preflights, 1);
-  EXPECT_EQ(restart_regrids, 1);
-  EXPECT_EQ(restart_resyncs, 1);
+  EXPECT_EQ(old_candidate.restart_preflight_calls, 1);
+  EXPECT_EQ(old_candidate.restart_regrid_calls, 1);
+  EXPECT_EQ(old_candidate.restart_resync_calls, 1);
 
-  const auto no_op = state.capture_artifact_step_install();
-  EXPECT_THROW(state.require_exact_artifact_step_install(no_op, "test"), std::runtime_error);
+  // Publication consumes one fully prepared artifact exactly once.  It is the sole API that can
+  // replace the owner; the old DSO-backed closures are released only after the exchange returns.
+  auto replacement = runtime_prepared_artifact<kNativeDimension>(
+      new_candidate, state.step_install_generation_ + 1, true, true);
+  auto publication =
+      runtime::program::ProgramRuntimeState<kNativeDimension>::PreparedArtifactPublication::prepare(
+          std::move(replacement), state.step_install_generation_ + 1);
+  state.publish_prepared_artifact(std::move(publication));
+  EXPECT_EQ(state.step_install_generation_, accepted_generation + 1);
+  state.step_(0.2);
+  EXPECT_EQ(old_candidate.step_calls, 1);
+  EXPECT_EQ(new_candidate.step_calls, 1);
+  EXPECT_EQ(new_candidate.last_dt, 0.2);
+}
 
-  auto exact = state.capture_artifact_step_install();
-  state.install_unverified_step([&](double) { ++new_steps; });
-  EXPECT_NO_THROW(state.require_exact_artifact_step_install(exact, "test"));
-  state.rollback_artifact_step_install(std::move(exact));
-  EXPECT_TRUE(state.authorizes_history_replay("gas.previous", 3));
+TEST(ProgramRuntime, PreparedArtifactPublicationAuthenticatesStateFreeFlagAgainstTables) {
+  using State = runtime::program::ProgramRuntimeState<kNativeDimension>;
+  const runtime::program::ProgramCheckpointMetadata empty_checkpoint{};
 
-  auto duplicate = state.capture_artifact_step_install();
-  state.install_unverified_step([&](double) { ++new_steps; });
-  state.install_unverified_step([&](double) { ++new_steps; });
-  EXPECT_THROW(state.require_exact_artifact_step_install(duplicate, "test"), std::runtime_error);
-  state.rollback_artifact_step_install(std::move(duplicate));
-  EXPECT_TRUE(state.authorizes_history_replay("gas.previous", 3));
+  RuntimeSyntheticCandidate state_free_candidate;
+  auto state_free = State::PreparedArtifactPublication::prepare(
+      runtime_prepared_artifact<kNativeDimension>(state_free_candidate, 1), 1);
+  EXPECT_NO_THROW(state_free.set_resolved_authority("state-free", {}, {}, empty_checkpoint, {}, {},
+                                                    true));
 
-  const auto generation_before_empty = state.step_install_generation_;
-  EXPECT_THROW(state.install_unverified_step({}), std::invalid_argument);
-  EXPECT_EQ(state.step_install_generation_, generation_before_empty);
-  EXPECT_TRUE(state.authorizes_history_replay("gas.previous", 3));
+  RuntimeSyntheticCandidate empty_table_candidate;
+  auto empty_table = State::PreparedArtifactPublication::prepare(
+      runtime_prepared_artifact<kNativeDimension>(empty_table_candidate, 1), 1);
+  EXPECT_THROW(empty_table.set_resolved_authority("empty-table", {}, {}, empty_checkpoint, {}, {},
+                                                  false),
+               std::invalid_argument);
+
+  RuntimeSyntheticCandidate block_table_candidate;
+  auto block_table = State::PreparedArtifactPublication::prepare(
+      runtime_prepared_artifact<kNativeDimension>(block_table_candidate, 1, true, false, true), 1);
+  EXPECT_THROW(block_table.set_resolved_authority("block-table", {}, {}, empty_checkpoint, {0}, {},
+                                                  true),
+               std::invalid_argument);
 }
 
 TEST(ProgramRuntime, FacadeTemporalOperationsRequireProgramBeforeMutation) {
@@ -660,14 +1006,16 @@ TEST(ProgramRuntime, GlobalCadencePublishesExactSubstepAndStrideWindowTimes) {
   auto config = unit_domain_config<kNativeDimension>(4);
 
   System<kNativeDimension> subcycled(config);
+  install_execution_lane(subcycled, "pops.test.program-runtime.cadence-subcycled");
   subcycled.set_clock(1.0, 10);
-  runtime::program::ProgramContext subcycled_context(&subcycled);
   std::vector<double> subcycled_times;
   std::vector<int> subcycled_macro_steps;
-  subcycled_context.install([&](double) {
-    subcycled_times.push_back(static_cast<double>(subcycled_context.physical_time()));
-    subcycled_macro_steps.push_back(subcycled.macro_step());
-  });
+  install_v5_callback_program(
+      subcycled, "test.program-runtime.cadence-subcycled.v5", "macro", {},
+      [&](RuntimeProgramServices& context, double) {
+        subcycled_times.push_back(static_cast<double>(context.physical_time()));
+        subcycled_macro_steps.push_back(context.macro_step());
+      });
   subcycled.set_program_cadence(/*substeps=*/2, /*stride=*/1);
   subcycled.step(0.2);
 
@@ -679,19 +1027,20 @@ TEST(ProgramRuntime, GlobalCadencePublishesExactSubstepAndStrideWindowTimes) {
   EXPECT_EQ(subcycled.macro_step(), 11);
 
   System<kNativeDimension> catchup(config);
-  runtime::program::ProgramContext catchup_context(&catchup);
-  catchup_context.configure_primary_clock("macro");
+  install_execution_lane(catchup, "pops.test.program-runtime.cadence-catchup");
   std::vector<double> catchup_times;
   std::vector<double> catchup_steps;
   std::vector<int> catchup_macro_steps;
   std::vector<bool> catchup_every_one_due;
-  catchup_context.install([&](double h) {
-    catchup_times.push_back(static_cast<double>(catchup_context.physical_time()));
+  install_v5_callback_program(
+      catchup, "test.program-runtime.cadence-catchup.v5", "macro", {},
+      [&](RuntimeProgramServices& context, double h) {
+    catchup_times.push_back(static_cast<double>(context.physical_time()));
     catchup_steps.push_back(h);
-    catchup_macro_steps.push_back(catchup.macro_step());
-    catchup_every_one_due.push_back(catchup_context.schedule_is_due(
+    catchup_macro_steps.push_back(context.macro_step());
+    catchup_every_one_due.push_back(context.schedule_is_due(
         41, 1, runtime::program::ScheduleDomainKind::kAcceptedStep, "macro", "", -1));
-  });
+      });
   catchup.set_program_cadence(/*substeps=*/3, /*stride=*/2);
 
   catchup.step(0.1);
@@ -720,6 +1069,127 @@ TEST(ProgramRuntime, GlobalCadencePublishesExactSubstepAndStrideWindowTimes) {
   EXPECT_DOUBLE_EQ(catchup.program_cadence_window_start_time(), 0.0);
 }
 
+TEST(ProgramRuntime, StateFreeV5ProgramRunsCadenceAndRejectsBlockAccess) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  System<kNativeDimension> system(unit_domain_config<kNativeDimension>(4));
+  install_execution_lane(system, "pops.test.program-runtime.state-free");
+
+  std::vector<int> observed_block_counts;
+  std::vector<double> observed_times;
+  std::vector<bool> rejected_block_access;
+  install_v5_callback_program(
+      system, "test.program-runtime.state-free.v5", "macro", {},
+      [&](RuntimeProgramServices& context, double) {
+        observed_block_counts.push_back(context.n_blocks());
+        observed_times.push_back(static_cast<double>(context.physical_time()));
+        try {
+          (void)context.sys_block(0);
+          rejected_block_access.push_back(false);
+        } catch (const std::runtime_error&) {
+          rejected_block_access.push_back(true);
+        }
+        context.record_scalar("state-free.cadence", static_cast<Real>(context.n_blocks()));
+      },
+      {.diagnostics = {"state-free.cadence"}});
+
+  system.set_program_cadence(/*substeps=*/2, /*stride=*/1);
+  system.step(0.2);
+
+  EXPECT_EQ(observed_block_counts, (std::vector<int>{0, 0}));
+  EXPECT_EQ(rejected_block_access, (std::vector<bool>{true, true}));
+  ASSERT_EQ(observed_times.size(), 2u);
+  EXPECT_NEAR(observed_times[0], 0.0, 1.0e-14);
+  EXPECT_NEAR(observed_times[1], 0.1, 1.0e-14);
+  EXPECT_DOUBLE_EQ(system.program_diagnostic("state-free.cadence"), 0.0);
+  EXPECT_NEAR(system.time(), 0.2, 1.0e-14);
+  EXPECT_EQ(system.macro_step(), 1);
+}
+
+TEST(ProgramRuntime, StateFreeV5ProgramIsRefusedBeforePrepareOnNonemptySystem) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  System<kNativeDimension> system(unit_domain_config<kNativeDimension>(4));
+  install_execution_lane(system, "pops.test.program-runtime.state-free-refusal");
+  add_gas(system, 1.4);
+  runtime_program_prepare_markers().clear();
+
+  try {
+    install_v5_callback_program(
+        system, "test.program-runtime.state-free-refusal.v5", "macro", {},
+        std::vector<pops::test::program_v5::CallbackProgramResource>{},
+        [](RuntimeProgramServices&, double) { ADD_FAILURE() << "state-free callback ran"; },
+        {}, true);
+    ADD_FAILURE() << "state-free Program installed on a System with accepted blocks";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("state-free Program"), std::string::npos);
+    EXPECT_NE(std::string(error.what()).find("accepted blocks"), std::string::npos);
+  }
+  EXPECT_TRUE(runtime_program_prepare_markers().empty())
+      << "state-free refusal must precede the DSO candidate_prepare callback";
+}
+
+TEST(ProgramRuntime, StateFreePreparationBindsOnlyExactGlobalResources) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  System<kNativeDimension> system(unit_domain_config<kNativeDimension>(4));
+  install_execution_lane(system, "pops.test.program-runtime.state-free-resource-plan");
+
+  runtime::program::ProgramInstallationTables::ResourcePlan global;
+  global.slot = 0;
+  global.value_id = 0x51;
+  global.occurrence_path_id = 0x52;
+  global.level = -1;
+  global.components = 1;
+  global.ghosts = 0;
+  global.bytes = sizeof(Real);
+  global.maximum_bytes = sizeof(Real);
+  global.cells = 1;
+  global.itemsize = sizeof(Real);
+  global.resource_type = runtime::program::ProgramResourcePlanType::exact;
+  global.schema = "program-resource-plan:v1";
+  global.plan_digest = std::string(64, 'a');
+  global.identity = "test.program-runtime/state-free-global";
+  global.occurrence_path = global.identity;
+  global.owner = "global";
+  global.space = "global";
+  global.clock = "macro";
+  global.lifetime = "persistent";
+  global.centering = "none";
+  global.off_policy = "hold";
+  global.communication = "none";
+  global.transfer_provider = "none";
+  global.restart_provider = "none";
+  global.component_names = "[\"value\"]";
+  global.shape = "[]";
+
+  const auto make_image = [&] {
+    return runtime::program::make_program_preparation_image<kNativeDimension>(&system, 1);
+  };
+  EXPECT_NO_THROW(runtime::program::bind_staged_uniform_program_resource_declaration<
+                  kNativeDimension>(make_image(), {global}, {}));
+
+  auto runtime_sized = global;
+  runtime_sized.flags = runtime::program::kProgramResourceRuntimeSized;
+  runtime_sized.resource_type = runtime::program::ProgramResourcePlanType::runtime_sized;
+  runtime_sized.bytes.reset();
+  runtime_sized.maximum_bytes.reset();
+  runtime_sized.cells.reset();
+  runtime_sized.itemsize.reset();
+  EXPECT_THROW(runtime::program::bind_staged_uniform_program_resource_declaration<
+                   kNativeDimension>(make_image(), {runtime_sized}, {}),
+               std::invalid_argument);
+
+  auto block_owned = global;
+  block_owned.owner = "gas";
+  EXPECT_THROW(runtime::program::bind_staged_uniform_program_resource_declaration<
+                   kNativeDimension>(make_image(), {block_owned}, {}),
+               std::invalid_argument);
+}
+
 TEST(ProgramRuntime, StrideHeldStepsPublishTheExactZeroBalance) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
@@ -727,7 +1197,7 @@ TEST(ProgramRuntime, StrideHeldStepsPublishTheExactZeroBalance) {
   auto config = unit_domain_config<kNativeDimension>(4);
 
   System<kNativeDimension> system(config);
-  runtime::program::ProgramContext context(&system);
+  install_execution_lane(system, "pops.test.program-runtime.balance-ledger");
   const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '7');
   const std::array<std::pair<const char*, double>, 5> records{{
       {"storage_change", 1.0},
@@ -736,16 +1206,23 @@ TEST(ProgramRuntime, StrideHeldStepsPublishTheExactZeroBalance) {
       {"reflux", 4.0},
       {"projection", 5.0},
   }};
-  context.install([&](double) {
-    for (const auto& [name, value] : records)
-      context.record_balance_term(route, name, value);
-  });
+  install_v5_callback_program(
+      system, "test.program-runtime.balance-ledger.v5", "macro", {},
+      [&](RuntimeProgramServices& context, double) {
+        for (const auto& [name, value] : records)
+          context.record_balance_term(route, name, value);
+      },
+      {.balance_routes = {route}});
   system.set_program_cadence(/*substeps=*/1, /*stride=*/3);
 
   const auto step_and_read = [&]() {
     system.begin_step_transaction();
     system.step(0.1);
-    const auto balance = system.accepted_balance_terms(route);
+    std::map<std::string, double> balance;
+    {
+      auto scope = system._provisional_read_scope();
+      balance = system.accepted_balance_terms(route);
+    }
     system.commit_step_transaction();
     system.finalize_step_transaction();
     return balance;
@@ -760,12 +1237,20 @@ TEST(ProgramRuntime, StrideHeldStepsPublishTheExactZeroBalance) {
 
   system.begin_step_transaction();
   system.step(0.1);
-  const auto rejected_due = system.accepted_balance_terms(route);
+  std::map<std::string, double> rejected_due;
+  {
+    auto scope = system._provisional_read_scope();
+    rejected_due = system.accepted_balance_terms(route);
+  }
   for (const auto& [name, value] : records)
     EXPECT_DOUBLE_EQ(rejected_due.at(name), value);
   system.rollback_step_transaction();
   system.begin_step_transaction();
-  const auto restored_held = system.accepted_balance_terms(route);
+  std::map<std::string, double> restored_held;
+  {
+    auto scope = system._provisional_read_scope();
+    restored_held = system.accepted_balance_terms(route);
+  }
   for (const auto& [name, _value] : records)
     EXPECT_DOUBLE_EQ(restored_held.at(name), 0.0);
   system.rollback_step_transaction();
@@ -784,14 +1269,16 @@ TEST(ProgramRuntime,
   auto config = unit_domain_config<kNativeDimension>(4);
 
   System<kNativeDimension> system(config);
+  install_execution_lane(system, "pops.test.program-runtime.cadence-nonassociative");
   system.set_clock(0.1, 0);
-  runtime::program::ProgramContext context(&system);
   std::vector<double> starts;
   std::vector<double> steps;
-  context.install([&](double h) {
-    starts.push_back(static_cast<double>(context.physical_time()));
-    steps.push_back(h);
-  });
+  install_v5_callback_program(
+      system, "test.program-runtime.cadence-nonassociative.v5", "macro", {},
+      [&](RuntimeProgramServices& context, double h) {
+        starts.push_back(static_cast<double>(context.physical_time()));
+        steps.push_back(h);
+      });
   system.set_program_cadence(/*substeps=*/3, /*stride=*/3);
 
   const double after_first = 0.1 + 0.1;
@@ -835,14 +1322,9 @@ TEST(ProgramRuntime, CadenceWindowRestartAndRejectedDueStepAreTransactional) {
   auto config = unit_domain_config<kNativeDimension>(4);
 
   System<kNativeDimension> system(config);
-  std::vector<double> accepted_steps;
-  bool reject = true;
-  system.install_program_step([&](double h) {
-    if (reject)
-      throw runtime::program::StepAttemptRejected(SolveStatus::kIterationLimit, "cadence",
-                                                  "fault injection in due stride window");
-    accepted_steps.push_back(h);
-  });
+  add_scalar(system);
+  install_v5_authority_program(system, "reject_first_dt",
+                               "test.program-runtime.cadence-retry.v5");
   system.set_program_cadence(/*substeps=*/1, /*stride=*/2);
   system.step(0.1);
 
@@ -853,16 +1335,19 @@ TEST(ProgramRuntime, CadenceWindowRestartAndRejectedDueStepAreTransactional) {
   EXPECT_EQ(system.program_cadence_window_steps(), 1);
   EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
 
-  reject = false;
   system.step(0.2);
-  ASSERT_EQ(accepted_steps.size(), 1u);
-  EXPECT_NEAR(accepted_steps[0], 0.3, 1.0e-14);
+  EXPECT_NEAR(system.program_diagnostic("test.program.v5.authority.last_dt"), 0.3, 1.0e-14);
   EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
   EXPECT_EQ(system.program_cadence_window_steps(), 0);
 
   System<kNativeDimension> restarted(config);
+  install_execution_lane(restarted, "pops.test.program-runtime.cadence-restarted");
   std::vector<double> restarted_times;
-  restarted.install_program_step([&](double) { restarted_times.push_back(restarted.time()); });
+  install_v5_callback_program(
+      restarted, "test.program-runtime.cadence-restarted.v5", "macro", {},
+      [&](RuntimeProgramServices& context, double) {
+        restarted_times.push_back(static_cast<double>(context.physical_time()));
+      });
   restarted.set_program_cadence(/*substeps=*/1, /*stride=*/2);
   restarted.restore_program_cadence_window(/*accumulated_dt=*/0.1, /*held_steps=*/1,
                                            /*window_start_time=*/0.0, /*accepted_last_dt=*/0.07,
@@ -883,7 +1368,8 @@ TEST(ProgramRuntime, CadenceRestoreCommitsOnlyForTheExactAcceptedClockPair) {
   auto config = unit_domain_config<kNativeDimension>(4);
 
   System<kNativeDimension> system(config);
-  system.install_program_step([](double) {});
+  add_scalar(system);
+  install_v5_authority_program(system, "noop", "test.program-runtime.cadence-restore.v5");
   system.set_program_cadence(/*substeps=*/1, /*stride=*/2);
 
   // The accepted time is part of the native restore preflight. A malformed image cannot touch the
@@ -958,14 +1444,14 @@ TEST(ProgramRuntime, CadenceRejectsDtAbsorbedByThePhysicalClock) {
   auto config = unit_domain_config<kNativeDimension>(4);
 
   System<kNativeDimension> system(config);
-  int calls = 0;
-  system.install_program_step([&](double) { ++calls; });
+  add_scalar(system);
+  install_v5_authority_program(system, "noop", "test.program-runtime.cadence-overflow.v5");
   system.set_clock(1.0e16, 0);
 
   EXPECT_THROW(system.step(0.5), std::overflow_error);
   EXPECT_DOUBLE_EQ(system.time(), 1.0e16);
   EXPECT_EQ(system.macro_step(), 0);
-  EXPECT_EQ(calls, 0);
+  EXPECT_TRUE(system.program_diagnostics().empty());
 }
 
 TEST(ProgramRuntime, CadenceFailsBeforeMutationWhenSubstepsCollapseTheRepresentableInterval) {
@@ -975,8 +1461,8 @@ TEST(ProgramRuntime, CadenceFailsBeforeMutationWhenSubstepsCollapseTheRepresenta
   auto config = unit_domain_config<kNativeDimension>(4);
 
   System<kNativeDimension> system(config);
-  int calls = 0;
-  system.install_program_step([&](double) { ++calls; });
+  add_scalar(system);
+  install_v5_authority_program(system, "noop", "test.program-runtime.cadence-collapse.v5");
   system.set_program_cadence(/*substeps=*/3, /*stride=*/1);
   system.set_clock(1.0, 0);
   const double one_ulp = std::nextafter(1.0, 2.0) - 1.0;
@@ -984,10 +1470,10 @@ TEST(ProgramRuntime, CadenceFailsBeforeMutationWhenSubstepsCollapseTheRepresenta
   EXPECT_THROW(system.step(one_ulp), std::overflow_error);
   EXPECT_DOUBLE_EQ(system.time(), 1.0);
   EXPECT_EQ(system.macro_step(), 0);
-  EXPECT_EQ(calls, 0);
+  EXPECT_TRUE(system.program_diagnostics().empty());
 }
 
-TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsKernels) {
+TEST(ProgramRuntime, ForwardEulerProgramExecutionServicesMatchesEvalRhsReferenceAndCountsKernels) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
@@ -1011,16 +1497,16 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
   for (std::size_t k = 0; k < Uref.size(); ++k)
     Uref[k] = U0[k] + dt * R0[k];
 
-  // Program: the SAME step expressed as a ProgramContext closure and driven by sim.step(dt).
+  // Program: the SAME step expressed as a ProgramExecutionServices closure and driven by sim.step(dt).
   System<kNativeDimension> sim(cfg);
   install_execution_lane(sim, "pops.test.program-runtime.forward-euler");
   add_gas(sim, gamma);
   sim.set_state("gas", U0);
   sim.set_program_block_map({0});
 
-  runtime::program::ProgramContext ctx(&sim);
-  ctx.configure_primary_clock("macro");
-  ctx.install([ctx](double h) {
+  install_v5_callback_program(
+      sim, "test.program-runtime.forward-euler.v5", "macro", {"gas"},
+      [](RuntimeProgramServices& ctx, double h) {
     ctx.begin_step(h);
     ctx.set_stage_time(0, 1);
     auto field_outcome = ctx.solve_fields();
@@ -1031,10 +1517,9 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
       ctx.rhs_into(b, U, R, 0);
       ctx.axpy(U, Real(h), R);  // U <- U + h * R  (Forward Euler)
     }
-  });
-  sim.set_program_block_map({0});
+      });
 
-  // Profiling counters (ADC-459, Spec 3 section 29): the ProgramContext owns the two explicit
+  // Profiling counters (ADC-459, Spec 3 section 29): the ProgramExecutionServices owns the two explicit
   // device algebra dispatches below (rhs_into + axpy). The field SolveOutcome owns its backend
   // diagnostics separately, and an ephemeral value scratch is deliberately absent from the
   // persistent scratch registry.
@@ -1055,13 +1540,13 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
 
   // Pin exact ownership: no double-counting of the independently reported field solve, and no
   // persistent allocation is attributed to rhs_scratch_like.
-  const runtime::program::Profiler& prof = sim.profiler();
+  const auto prof = sim.profiler();
   EXPECT_TRUE(prof.counter("kernels") == 2)
       << "kernels counter = " << static_cast<long long>(prof.counter("kernels"))
       << ", expected 2 (rhs_into + axpy; solve backend owns its diagnostics)";
   EXPECT_EQ(prof.counter("scratch_allocs"), 0);
   EXPECT_EQ(prof.counter("scratch_peak_bytes"), 0);
-  // The cache hit/skip counters never fire on this native ProgramContext step (no held schedule); they
+  // The cache hit/skip counters never fire on this native ProgramExecutionServices step (no held schedule); they
   // exist as counters only after the compiled scheduler emits cache_should_update. Assert they read 0.
   EXPECT_TRUE(prof.counter("cache_hits") == 0 && prof.counter("cache_misses") == 0)
       << "cache counters moved on the native path (hits="
@@ -1074,7 +1559,7 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
   }
 }
 
-TEST(ProgramRuntime, ForwardEulerProgramContextHonorsEmbeddedBoundaryResidualMetrics) {
+TEST(ProgramRuntime, ForwardEulerProgramExecutionServicesHonorsEmbeddedBoundaryResidualMetrics) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
@@ -1089,17 +1574,16 @@ TEST(ProgramRuntime, ForwardEulerProgramContextHonorsEmbeddedBoundaryResidualMet
 
   const auto install_forward_euler = [](System<kNativeDimension>& system) {
     system.set_program_block_map({0});
-    runtime::program::ProgramContext context(&system);
-    context.configure_primary_clock("macro");
-    context.install([context](double step) {
-      context.begin_step(step);
-      context.set_stage_time(0, 1);
-      MultiFab<kNativeDimension>& state = context.state(0);
-      MultiFab<kNativeDimension> residual = context.rhs_scratch_like(state);
-      context.rhs_into(0, state, residual, 0);
-      context.axpy(state, Real(step), residual);
-    });
-    system.set_program_block_map({0});
+    install_v5_callback_program(
+        system, "test.program-runtime.embedded-forward-euler.v5", "macro", {"gas"},
+        [](RuntimeProgramServices& context, double step) {
+          context.begin_step(step);
+          context.set_stage_time(0, 1);
+          MultiFab<kNativeDimension>& state = context.state(0);
+          MultiFab<kNativeDimension> residual = context.rhs_scratch_like(state);
+          context.rhs_into(0, state, residual, 0);
+          context.axpy(state, Real(step), residual);
+        });
   };
 
   System<kNativeDimension> cartesian(cfg);
@@ -1193,16 +1677,15 @@ TEST(ProgramRuntime, SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCell
 
   const auto install_source_step = [](System<kNativeDimension>& system) {
     system.set_program_block_map({0});
-    runtime::program::ProgramContext context(&system);
-    context.configure_primary_clock("macro");
-    context.install([context](double step) {
-      context.begin_step(step);
-      MultiFab<kNativeDimension>& state = context.state(0);
-      MultiFab<kNativeDimension> source = context.rhs_scratch_like(state);
-      context.source_default_into(0, state, source);
-      context.axpy(state, Real(step), source);
-    });
-    system.set_program_block_map({0});
+    install_v5_callback_program(
+        system, "test.program-runtime.embedded-source-step.v5", "macro", {"gas"},
+        [](RuntimeProgramServices& context, double step) {
+          context.begin_step(step);
+          MultiFab<kNativeDimension>& state = context.state(0);
+          MultiFab<kNativeDimension> source = context.rhs_scratch_like(state);
+          context.source_default_into(0, state, source);
+          context.axpy(state, Real(step), source);
+        });
   };
 
   System<kNativeDimension> cartesian(cfg);
@@ -1300,19 +1783,18 @@ TEST(ProgramRuntime, TerminalSourcePublicationAcceptsPreparedRecoveryCandidate) 
   fill_ic(initial, n, gamma);
   system.set_state("gas", initial);
   system.set_program_block_map({0});
-  runtime::program::ProgramContext context(&system);
-  context.configure_primary_clock("test.clock.source-recovery");
-  context.install([context](double step) {
-    context.begin_step(step);
-    MultiFab<kNativeDimension>& live = context.state(0);
-    MultiFab<kNativeDimension>& source = context.rhs_scratch(920001, 0, live);
-    MultiFab<kNativeDimension>& candidate = context.scratch_state(920002, 0, live);
-    context.source_default_into(0, live, source);
-    context.lincomb(candidate, Real(1), live, Real(0), live);
-    context.axpy(candidate, Real(step), source);
-    context.commit_many({{&live, &candidate}});
-  });
-  system.set_program_block_map({0});
+  install_v5_callback_program(
+      system, "test.program-runtime.source-recovery.v5", "test.clock.source-recovery", {"gas"},
+      [](RuntimeProgramServices& context, double step) {
+        context.begin_step(step);
+        MultiFab<kNativeDimension>& live = context.state(0);
+        MultiFab<kNativeDimension>& source = context.rhs_scratch(920001, 0, live);
+        MultiFab<kNativeDimension>& candidate = context.scratch_state(920002, 0, live);
+        context.source_default_into(0, live, source);
+        context.lincomb(candidate, Real(1), live, Real(0), live);
+        context.axpy(candidate, Real(step), source);
+        context.commit_many({{&live, &candidate}});
+      });
 
   system.step(0.25);
   const std::vector<double> accepted = system.get_state("gas");
@@ -1340,25 +1822,25 @@ TEST(ProgramRuntime, TerminalSourceRecoveryRefusalPreventsPartialMultiBlockCommi
   system.set_state("first", initial);
   system.set_state("second", initial);
   system.set_program_block_map({0, 1});
-  runtime::program::ProgramContext context(&system);
-  context.configure_primary_clock("test.clock.source-recovery-multiblock");
-  context.install([context](double step) {
-    context.begin_step(step);
-    MultiFab<kNativeDimension>& first = context.state(0);
-    MultiFab<kNativeDimension>& second = context.state(1);
-    MultiFab<kNativeDimension>& first_source = context.rhs_scratch(920011, 0, first);
-    MultiFab<kNativeDimension>& second_source = context.rhs_scratch(920012, 1, second);
-    MultiFab<kNativeDimension>& first_candidate = context.scratch_state(920013, 0, first);
-    MultiFab<kNativeDimension>& second_candidate = context.scratch_state(920014, 1, second);
-    context.source_default_into(0, first, first_source);
-    context.source_default_into(1, second, second_source);
-    context.lincomb(first_candidate, Real(1), first, Real(0), first);
-    context.lincomb(second_candidate, Real(1), second, Real(0), second);
-    context.axpy(first_candidate, Real(step), first_source);
-    context.axpy(second_candidate, Real(2) * Real(step), second_source);
-    context.commit_many({{&first, &first_candidate}, {&second, &second_candidate}});
-  });
-  system.set_program_block_map({0, 1});
+  install_v5_callback_program(
+      system, "test.program-runtime.source-recovery-multiblock.v5",
+      "test.clock.source-recovery-multiblock", {"first", "second"},
+      [](RuntimeProgramServices& context, double step) {
+        context.begin_step(step);
+        MultiFab<kNativeDimension>& first = context.state(0);
+        MultiFab<kNativeDimension>& second = context.state(1);
+        MultiFab<kNativeDimension>& first_source = context.rhs_scratch(920011, 0, first);
+        MultiFab<kNativeDimension>& second_source = context.rhs_scratch(920012, 1, second);
+        MultiFab<kNativeDimension>& first_candidate = context.scratch_state(920013, 0, first);
+        MultiFab<kNativeDimension>& second_candidate = context.scratch_state(920014, 1, second);
+        context.source_default_into(0, first, first_source);
+        context.source_default_into(1, second, second_source);
+        context.lincomb(first_candidate, Real(1), first, Real(0), first);
+        context.lincomb(second_candidate, Real(1), second, Real(0), second);
+        context.axpy(first_candidate, Real(step), first_source);
+        context.axpy(second_candidate, Real(2) * Real(step), second_source);
+        context.commit_many({{&first, &first_candidate}, {&second, &second_candidate}});
+      });
 
   // The first block reaches rho=0.5 and is valid, while the second reaches rho=0.  If commit_many
   // copied as it iterated, the first live state would leak before the second recovery refusal.
@@ -1394,16 +1876,15 @@ TEST(ProgramRuntime, ExplicitSourceProgramPreservesEmbeddedBoundaryInactiveCells
   install_centered_ball(system, 0.31, "staircase");
   const auto mask = system.embedded_boundary_mask();
   system.set_program_block_map({0});
-  runtime::program::ProgramContext context(&system);
-  context.configure_primary_clock("macro");
-  context.install([context](double step) {
-    context.begin_step(step);
-    MultiFab<kNativeDimension>& state = context.state(0);
-    MultiFab<kNativeDimension> source = context.rhs_scratch_like(state);
-    context.source_default_into(0, state, source);
-    context.axpy(state, Real(step), source);
-  });
-  system.set_program_block_map({0});
+  install_v5_callback_program(
+      system, "test.program-runtime.inactive-source.v5", "macro", {"gas"},
+      [](RuntimeProgramServices& context, double step) {
+        context.begin_step(step);
+        MultiFab<kNativeDimension>& state = context.state(0);
+        MultiFab<kNativeDimension> source = context.rhs_scratch_like(state);
+        context.source_default_into(0, state, source);
+        context.axpy(state, Real(step), source);
+      });
   system.step(dt);
   const auto result = system.get_state("gas");
 
@@ -1445,9 +1926,23 @@ TEST(ProgramRuntime, PreparedMaximumSpeedProviderIsGeometryIndependent) {
       state[static_cast<std::size_t>(kNativeDimension + 1) * cells + cell] = 1.0e12;
   system.set_state("gas", state);
 
-  const double embedded_speed = system.block_max_speed(0, system.block_state(0));
+  double embedded_speed = 0.0;
+  {
+    const MultiFab<kNativeDimension> state = [&] {
+      const auto state_view = system.block_state(0);
+      return MultiFab<kNativeDimension>(*state_view.get());
+    }();
+    embedded_speed = system.block_max_speed(0, state);
+  }
   system.set_geometry_mode("none");
-  const double cartesian_speed = system.block_max_speed(0, system.block_state(0));
+  double cartesian_speed = 0.0;
+  {
+    const MultiFab<kNativeDimension> state = [&] {
+      const auto state_view = system.block_state(0);
+      return MultiFab<kNativeDimension>(*state_view.get());
+    }();
+    cartesian_speed = system.block_max_speed(0, state);
+  }
   EXPECT_GT(embedded_speed, 0.0);
   EXPECT_DOUBLE_EQ(cartesian_speed, embedded_speed)
       << "geometry mode selected a hidden maximum-speed implementation";
@@ -1473,7 +1968,7 @@ TEST(ProgramRuntime, DiffusiveCflAddsPreparedParabolicFrequencyToTransport) {
     state[static_cast<std::size_t>(kNativeDimension + 1) * cells + cell] = 2.5;
   }
   system.set_state("gas", state);
-  system.install_program_step([](double) {});
+  install_v5_authority_program(system, "noop", "test.program-runtime.diffusive-cfl.v5", {"gas"});
 
   const double transport_frequency = std::sqrt(gamma) * n;
   const double parabolic_frequency =
@@ -1502,14 +1997,28 @@ TEST(ProgramRuntime, CutCellPreparesFractionalMeasureAndSharesTheModelSpeedProvi
   add_gas(staircase, gamma, "none");
   staircase.set_state("gas", uniform);
   install_centered_ball(staircase, 0.34, "staircase", 0.1);
-  const double staircase_speed = staircase.block_max_speed(0, staircase.block_state(0));
+  double staircase_speed = 0.0;
+  {
+    const MultiFab<kNativeDimension> state = [&] {
+      const auto state_view = staircase.block_state(0);
+      return MultiFab<kNativeDimension>(*state_view.get());
+    }();
+    staircase_speed = staircase.block_max_speed(0, state);
+  }
 
   System<kNativeDimension> cutcell(cfg);
   install_execution_lane(cutcell, "pops.test.program-runtime.fractional-speed.cutcell");
   add_gas(cutcell, gamma, "none");
   cutcell.set_state("gas", uniform);
   install_centered_ball(cutcell, 0.34, "cutcell", 0.1);
-  const double cutcell_speed = cutcell.block_max_speed(0, cutcell.block_state(0));
+  double cutcell_speed = 0.0;
+  {
+    const MultiFab<kNativeDimension> state = [&] {
+      const auto state_view = cutcell.block_state(0);
+      return MultiFab<kNativeDimension>(*state_view.get());
+    }();
+    cutcell_speed = cutcell.block_max_speed(0, state);
+  }
   const auto kappa_pieces = cutcell.output_embedded_boundary_local_pieces("pops_kappa", 0);
   int fractional_cells = 0;
   for (const auto& piece : kappa_pieces)
@@ -1550,8 +2059,6 @@ TEST(ProgramRuntime, PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure) {
   ASSERT_LT(staircase_active, static_cast<int>(cells));
   staircase.set_state("gas", staircase_state);
   staircase.set_program_block_map({0});
-  runtime::program::ProgramContext staircase_context(&staircase);
-  MultiFab<kNativeDimension>& staircase_field = staircase_context.state(0);
   const int staircase_inactive = static_cast<int>(cells) - staircase_active;
   const Real staircase_raw_sum =
       Real(2) * Real(staircase_active) + Real(1000) * Real(staircase_inactive);
@@ -1559,54 +2066,65 @@ TEST(ProgramRuntime, PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure) {
       Real(4) * Real(staircase_active) + Real(1000000) * Real(staircase_inactive);
   const Real staircase_active_sum = Real(2 * staircase_active);
   const Real staircase_active_dot = Real(4 * staircase_active);
-  // Ownerless ProgramContext overloads remain raw scratch-field algebra, including inactive
-  // sentinels. Owner-qualified overloads exclude inactive cells; System alone applies kappa.
-  EXPECT_EQ(staircase_context.sum_component(staircase_field, 0), staircase_raw_sum);
-  EXPECT_EQ(staircase_context.abs_sum_component(staircase_field, 0), staircase_raw_sum);
-  EXPECT_EQ(pops::reduce_abs_sum(staircase_field, 0), staircase_raw_sum);
-  EXPECT_EQ(pops::dot(staircase_field, staircase_field, 0), staircase_raw_dot);
-  EXPECT_EQ(staircase_context.max_component(staircase_field, 0), Real(1000));
-  EXPECT_EQ(staircase_context.min_component(staircase_field, 1), Real(-1000));
-  EXPECT_EQ(staircase_context.sum_component(0, staircase_field, 0), staircase_active_sum);
-  EXPECT_EQ(staircase_context.abs_sum_component(0, staircase_field, 0), staircase_active_sum);
-  EXPECT_EQ(staircase_context.dot(0, staircase_field, staircase_field), staircase_active_dot);
-  EXPECT_EQ(staircase_context.max_component(0, staircase_field, 0), Real(2));
-  EXPECT_EQ(staircase_context.min_component(0, staircase_field, 1), Real(3));
-  EXPECT_EQ(staircase_context.norm2(0, staircase_field), std::sqrt(staircase_active_dot));
-  EXPECT_EQ(staircase_context.norm_inf(0, staircase_field), Real(2));
+  const std::vector<pops::test::program_v5::CallbackProgramResource> reduction_resources{
+      {pops::test::program_v5::CallbackProgramResource::Kind::scalar, 0, 0, 0, -1, 1, 0}};
+  install_v5_callback_program(
+      staircase, "pops.test.program-runtime.staircase-reductions.v5", "macro", {"gas"},
+      reduction_resources, [&](RuntimeProgramServices& context, double step) {
+        context.begin_step(step);
+        MultiFab<kNativeDimension>& staircase_field = context.state(0);
+        // Ownerless ProgramExecutionServices overloads remain raw scratch-field algebra, including
+        // inactive sentinels. Owner-qualified overloads exclude inactive cells; System alone applies
+        // kappa.
+        EXPECT_EQ(context.sum_component(staircase_field, 0), staircase_raw_sum);
+        EXPECT_EQ(context.abs_sum_component(staircase_field, 0), staircase_raw_sum);
+        EXPECT_EQ(pops::reduce_abs_sum(staircase_field, 0), staircase_raw_sum);
+        EXPECT_EQ(pops::dot(staircase_field, staircase_field, 0), staircase_raw_dot);
+        EXPECT_EQ(context.max_component(staircase_field, 0), Real(1000));
+        EXPECT_EQ(context.min_component(staircase_field, 1), Real(-1000));
+        EXPECT_EQ(context.sum_component(0, staircase_field, 0), staircase_active_sum);
+        EXPECT_EQ(context.abs_sum_component(0, staircase_field, 0), staircase_active_sum);
+        EXPECT_EQ(context.dot(0, staircase_field, staircase_field), staircase_active_dot);
+        EXPECT_EQ(context.max_component(0, staircase_field, 0), Real(2));
+        EXPECT_EQ(context.min_component(0, staircase_field, 1), Real(3));
+        EXPECT_EQ(context.norm2(0, staircase_field), std::sqrt(staircase_active_dot));
+        EXPECT_EQ(context.norm_inf(0, staircase_field), Real(2));
+        const int invalid_component = staircase_field.ncomp();
+        const auto expect_original_component_error = [&](auto&& reduce, const char* helper) {
+          try {
+            (void)reduce();
+            FAIL() << helper << " must rethrow the original rank-local component error in serial";
+          } catch (const std::out_of_range& error) {
+            EXPECT_NE(std::string(error.what()).find(helper), std::string::npos);
+          }
+        };
+        expect_original_component_error(
+            [&] { return context.sum_component(0, staircase_field, invalid_component); },
+            "pops::reduce_active_sum_local");
+        expect_original_component_error(
+            [&] { return context.abs_sum_component(0, staircase_field, invalid_component); },
+            "pops::reduce_active_abs_sum_local");
+        expect_original_component_error(
+            [&] { return context.max_component(0, staircase_field, invalid_component); },
+            "pops::reduce_active_max_local");
+        expect_original_component_error(
+            [&] { return context.min_component(0, staircase_field, invalid_component); },
+            "pops::reduce_active_min_local");
+        MultiFab<kNativeDimension>& staircase_status =
+            context.scalar_scratch(0, 0, staircase_field, 1, 0);
+        try {
+          (void)context.dot(0, staircase_field, staircase_status);
+          FAIL() << "owner-qualified dot must rethrow the original layout error in serial";
+        } catch (const std::invalid_argument& error) {
+          EXPECT_NE(std::string(error.what()).find("ProgramExecutionServices dot"),
+                    std::string::npos);
+        }
+      });
+  staircase.step(1.0e-3);
   EXPECT_EQ(staircase.mass("gas"), static_cast<double>(staircase_active_sum));
   EXPECT_EQ(staircase.reduce_component("gas", "sum", 0), static_cast<double>(staircase_active_sum));
   EXPECT_EQ(staircase.reduce_component("gas", "sum_sq", 0),
             static_cast<double>(Real(2) * staircase_active_sum));
-  const int invalid_component = staircase_field.ncomp();
-  const auto expect_original_component_error = [&](auto&& reduce, const char* helper) {
-    try {
-      (void)reduce();
-      FAIL() << helper << " must rethrow the original rank-local component error in serial";
-    } catch (const std::out_of_range& error) {
-      EXPECT_NE(std::string(error.what()).find(helper), std::string::npos);
-    }
-  };
-  expect_original_component_error(
-      [&] { return staircase_context.sum_component(0, staircase_field, invalid_component); },
-      "pops::reduce_active_sum_local");
-  expect_original_component_error(
-      [&] { return staircase_context.abs_sum_component(0, staircase_field, invalid_component); },
-      "pops::reduce_active_abs_sum_local");
-  expect_original_component_error(
-      [&] { return staircase_context.max_component(0, staircase_field, invalid_component); },
-      "pops::reduce_active_max_local");
-  expect_original_component_error(
-      [&] { return staircase_context.min_component(0, staircase_field, invalid_component); },
-      "pops::reduce_active_min_local");
-  MultiFab<kNativeDimension>& staircase_status =
-      staircase_context.scalar_scratch(911, 0, staircase_field, 1, 0);
-  try {
-    (void)staircase_context.dot(0, staircase_field, staircase_status);
-    FAIL() << "owner-qualified dot must rethrow the original layout error in serial";
-  } catch (const std::invalid_argument& error) {
-    EXPECT_NE(std::string(error.what()).find("ProgramContext dot"), std::string::npos);
-  }
   EXPECT_EQ(staircase.reduce_component("gas", "max", 0), 2.0);
   EXPECT_EQ(staircase.reduce_component("gas", "min", 1), 3.0);
   EXPECT_EQ(staircase.reduce_component("gas", "abs_max", 0), 2.0);
@@ -1633,29 +2151,33 @@ TEST(ProgramRuntime, PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure) {
       cutcell_kappa_sum += kappa;
   cutcell.set_state("gas", cutcell_state);
   cutcell.set_program_block_map({0});
-  runtime::program::ProgramContext cutcell_context(&cutcell);
-  MultiFab<kNativeDimension>& cutcell_field = cutcell_context.state(0);
   const int cutcell_inactive = static_cast<int>(cells) - cutcell_active;
-  const Real cutcell_raw_sum =
-      Real(2) * Real(cutcell_active) + Real(1000) * Real(cutcell_inactive);
+  const Real cutcell_raw_sum = Real(2) * Real(cutcell_active) + Real(1000) * Real(cutcell_inactive);
   const Real cutcell_raw_dot =
       Real(4) * Real(cutcell_active) + Real(1000000) * Real(cutcell_inactive);
   const Real cutcell_active_sum = Real(2 * cutcell_active);
   const Real cutcell_active_dot = Real(4 * cutcell_active);
   const double cutcell_physical_sum = 2.0 * cutcell_kappa_sum;
-  EXPECT_EQ(cutcell_context.sum_component(cutcell_field, 0), cutcell_raw_sum);
-  EXPECT_EQ(cutcell_context.abs_sum_component(cutcell_field, 0), cutcell_raw_sum);
-  EXPECT_EQ(pops::reduce_abs_sum(cutcell_field, 0), cutcell_raw_sum);
-  EXPECT_EQ(pops::dot(cutcell_field, cutcell_field, 0), cutcell_raw_dot);
-  EXPECT_EQ(cutcell_context.max_component(cutcell_field, 0), Real(1000));
-  EXPECT_EQ(cutcell_context.min_component(cutcell_field, 1), Real(-1000));
-  EXPECT_EQ(cutcell_context.sum_component(0, cutcell_field, 0), cutcell_active_sum);
-  EXPECT_EQ(cutcell_context.abs_sum_component(0, cutcell_field, 0), cutcell_active_sum);
-  EXPECT_EQ(cutcell_context.dot(0, cutcell_field, cutcell_field), cutcell_active_dot);
-  EXPECT_EQ(cutcell_context.max_component(0, cutcell_field, 0), Real(2));
-  EXPECT_EQ(cutcell_context.min_component(0, cutcell_field, 1), Real(3));
-  EXPECT_EQ(cutcell_context.norm2(0, cutcell_field), std::sqrt(cutcell_active_dot));
-  EXPECT_EQ(cutcell_context.norm_inf(0, cutcell_field), Real(2));
+  install_v5_callback_program(
+      cutcell, "pops.test.program-runtime.cutcell-reductions.v5", "macro", {"gas"},
+      reduction_resources, [&](RuntimeProgramServices& context, double step) {
+        context.begin_step(step);
+        MultiFab<kNativeDimension>& cutcell_field = context.state(0);
+        EXPECT_EQ(context.sum_component(cutcell_field, 0), cutcell_raw_sum);
+        EXPECT_EQ(context.abs_sum_component(cutcell_field, 0), cutcell_raw_sum);
+        EXPECT_EQ(pops::reduce_abs_sum(cutcell_field, 0), cutcell_raw_sum);
+        EXPECT_EQ(pops::dot(cutcell_field, cutcell_field, 0), cutcell_raw_dot);
+        EXPECT_EQ(context.max_component(cutcell_field, 0), Real(1000));
+        EXPECT_EQ(context.min_component(cutcell_field, 1), Real(-1000));
+        EXPECT_EQ(context.sum_component(0, cutcell_field, 0), cutcell_active_sum);
+        EXPECT_EQ(context.abs_sum_component(0, cutcell_field, 0), cutcell_active_sum);
+        EXPECT_EQ(context.dot(0, cutcell_field, cutcell_field), cutcell_active_dot);
+        EXPECT_EQ(context.max_component(0, cutcell_field, 0), Real(2));
+        EXPECT_EQ(context.min_component(0, cutcell_field, 1), Real(3));
+        EXPECT_EQ(context.norm2(0, cutcell_field), std::sqrt(cutcell_active_dot));
+        EXPECT_EQ(context.norm_inf(0, cutcell_field), Real(2));
+      });
+  cutcell.step(1.0e-3);
   EXPECT_GT(cutcell_physical_sum, 0.0);
   EXPECT_LT(cutcell_physical_sum, static_cast<double>(staircase_active_sum))
       << "the cut-cell integral ignored the prepared relative volume fraction";
@@ -1717,45 +2239,56 @@ TEST(ProgramRuntime, PointwiseStatusUsesPreparedEmbeddedBoundaryMask) {
       return value < 0.5;
     })) << mode;
     system.set_program_block_map({0});
-    runtime::program::ProgramContext context(&system);
-    MultiFab<kNativeDimension>& state = context.state(0);
-    const MultiFab<kNativeDimension>* const active = context.pointwise_active_mask(0, state);
-    ASSERT_NE(active, nullptr) << mode;
-    EXPECT_EQ(active, context.pointwise_active_mask(0, state)) << mode;
+    const std::vector<pops::test::program_v5::CallbackProgramResource> status_resources{
+        {pops::test::program_v5::CallbackProgramResource::Kind::scalar, 0, 0, 0, -1, 1, 0}};
+    install_v5_callback_program(
+        system, "pops.test.program-runtime.pointwise-status." + mode + ".v5", "macro", {"gas"},
+        status_resources, [&, mode](RuntimeProgramServices& context, double step) {
+          context.begin_step(step);
+          MultiFab<kNativeDimension>& state = context.state(0);
+          const MultiFab<kNativeDimension>* const active = context.pointwise_active_mask(0, state);
+          ASSERT_NE(active, nullptr) << mode;
+          EXPECT_EQ(active, context.pointwise_active_mask(0, state)) << mode;
 
-    MultiFab<kNativeDimension>& status = context.scalar_scratch(910, 0, state, 1, 0);
-    const auto write_status = [&](Real active_value, Real inactive_value) {
-      for (std::size_t local = 0; local < status.local_size(); ++local) {
-        const FieldView<Real, kNativeDimension> output = status.fab(local).view();
-        const FieldView<const Real, kNativeDimension> mask =
-            std::as_const(active->fab(local)).view();
-        for_each_cell(status.box(local), [=] POPS_HD(const Index<kNativeDimension>& cell) {
-          output(cell, 0) = mask(cell, 0) >= Real{0.5} ? active_value : inactive_value;
-        });
-      }
-      device_fence();
-    };
+          MultiFab<kNativeDimension>& status = context.scalar_scratch(0, 0, state, 1, 0);
+          const auto write_status = [&](Real active_value, Real inactive_value) {
+            for (std::size_t local = 0; local < status.local_size(); ++local) {
+              const FieldView<Real, kNativeDimension> output = status.fab(local).view();
+              const FieldView<const Real, kNativeDimension> mask =
+                  std::as_const(active->fab(local)).view();
+              for_each_cell(status.box(local), [=] POPS_HD(const Index<kNativeDimension>& cell) {
+                output(cell, 0) = mask(cell, 0) >= Real{0.5} ? active_value : inactive_value;
+              });
+            }
+            device_fence();
+          };
 
-    write_status(Real{0}, Real{2});
-    EXPECT_EQ(context.pointwise_status_max(0, status, active, context.prepared_execution_lane()),
+          write_status(Real{0}, Real{2});
+          EXPECT_EQ(
+              context.pointwise_status_max(0, status, active, context.prepared_execution_lane()),
               Real{0})
-        << mode;
-    write_status(Real{0}, std::numeric_limits<Real>::quiet_NaN());
-    EXPECT_EQ(context.pointwise_status_max(0, status, active, context.prepared_execution_lane()),
+              << mode;
+          write_status(Real{0}, std::numeric_limits<Real>::quiet_NaN());
+          EXPECT_EQ(
+              context.pointwise_status_max(0, status, active, context.prepared_execution_lane()),
               Real{0})
-        << mode;
-    write_status(Real{2}, Real{0});
-    EXPECT_EQ(context.pointwise_status_max(0, status, active, context.prepared_execution_lane()),
+              << mode;
+          write_status(Real{2}, Real{0});
+          EXPECT_EQ(
+              context.pointwise_status_max(0, status, active, context.prepared_execution_lane()),
               Real{2})
-        << mode;
-    write_status(std::numeric_limits<Real>::quiet_NaN(), Real{0});
-    EXPECT_EQ(context.pointwise_status_max(0, status, active, context.prepared_execution_lane()),
+              << mode;
+          write_status(std::numeric_limits<Real>::quiet_NaN(), Real{0});
+          EXPECT_EQ(
+              context.pointwise_status_max(0, status, active, context.prepared_execution_lane()),
               Real{3})
-        << mode;
-    EXPECT_THROW(
-        context.pointwise_status_max(0, status, &status, context.prepared_execution_lane()),
-        std::invalid_argument)
-        << mode;
+              << mode;
+          EXPECT_THROW(
+              context.pointwise_status_max(0, status, &status, context.prepared_execution_lane()),
+              std::invalid_argument)
+              << mode;
+        });
+    system.step(1.0e-3);
   }
 }
 
@@ -1782,9 +2315,9 @@ TEST(ProgramRuntime, Ssprk3ProgramAlgebraPreservesInactiveBits) {
         initial[static_cast<std::size_t>(component) * cells + cell] = inactive_value;
   program.set_state("gas", initial);
   program.set_program_block_map({0});
-  runtime::program::ProgramContext context(&program);
-  context.configure_primary_clock("macro");
-  context.install([context](double step) {
+  install_v5_callback_program(
+      program, "test.program-runtime.ssprk3.v5", "macro", {"gas"},
+      [](RuntimeProgramServices& context, double step) {
     context.begin_step(step);
     MultiFab<kNativeDimension>& state = context.state(0);
     MultiFab<kNativeDimension> initial_state = state;
@@ -1807,8 +2340,7 @@ TEST(ProgramRuntime, Ssprk3ProgramAlgebraPreservesInactiveBits) {
     context.axpy(stage, Real(step), residual);
     context.lincomb(stage, Real(1) / Real(3), initial_state, Real(2) / Real(3), stage);
     context.commit_many({{&state, &stage}});
-  });
-  program.set_program_block_map({0});
+      });
   program.step(1.0e-4);
   const auto program_result = program.get_state("gas");
 
@@ -1871,13 +2403,12 @@ TEST(ProgramRuntime, PointwiseProjectionPreservesEmbeddedBoundaryInactiveCells) 
 
   const auto install_projection_step = [](System<kNativeDimension>& system) {
     system.set_program_block_map({0});
-    runtime::program::ProgramContext context(&system);
-    context.configure_primary_clock("macro");
-    context.install([context](double step) {
+    install_v5_callback_program(
+        system, "test.program-runtime.projection-step.v5", "macro", {"gas"},
+        [](RuntimeProgramServices& context, double step) {
       context.begin_step(step);
       context.apply_projection(0, context.state(0));
-    });
-    system.set_program_block_map({0});
+        });
   };
 
   System<kNativeDimension> cartesian(cfg);
@@ -1934,8 +2465,9 @@ TEST(ProgramRuntime, ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate)
   sim.set_program_block_map({0});
 
   int consumed_solves = 0;
-  runtime::program::ProgramContext ctx(&sim);
-  ctx.install([ctx, &consumed_solves](double dt) {
+  install_v5_callback_program(
+      sim, "test.program-runtime.project-recheck-accept.v5", "macro", {"gas"},
+      [&consumed_solves](RuntimeProgramServices& ctx, double dt) {
     ctx.begin_step(dt);
     MultiFab<kNativeDimension>& state = ctx.state(0);
     MultiFab<kNativeDimension>& candidate = ctx.scratch_state(666001, 0, state);
@@ -1955,8 +2487,7 @@ TEST(ProgramRuntime, ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate)
             "ProjectAndRecheck projection did not repair the candidate");
     }
     ctx.commit_many({{&state, &candidate}});
-  });
-  sim.set_program_block_map({0});
+      });
 
   sim.step(1e-3);
 
@@ -1994,11 +2525,12 @@ TEST(ProgramRuntime, ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPub
   sim.set_program_block_map({0});
 
   int consumed_solves = 0;
-  runtime::program::ProgramContext ctx(&sim);
-  ctx.install([ctx, &consumed_solves](double dt) {
+  install_v5_callback_program(
+      sim, "test.program-runtime.project-recheck-reject.v5", "macro", {"gas"},
+      [&consumed_solves](RuntimeProgramServices& ctx, double dt) {
     ctx.begin_step(dt);
     MultiFab<kNativeDimension>& state = ctx.state(0);
-    MultiFab<kNativeDimension>& candidate = ctx.scratch_state(666002, 0, state);
+    MultiFab<kNativeDimension> candidate = ctx.scratch_state_like(state);
     candidate.set_val(Real(-1));
 
     auto field_outcome = ctx.solve_fields();
@@ -2011,7 +2543,6 @@ TEST(ProgramRuntime, ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPub
       ctx.apply_projection(0, candidate);
       ctx.store_history("gas.guard_candidate", candidate);
       ctx.rotate_histories();
-      ctx.cache_store_scratch(666002, candidate);
       ctx.record_scalar("project_and_recheck.provisional", Real(1));
       if (ctx.min_component(candidate, 0) < Real(3))
         throw runtime::program::StepAttemptRejected(
@@ -2019,8 +2550,8 @@ TEST(ProgramRuntime, ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPub
             "ProjectAndRecheck candidate remained inadmissible");
     }
     ctx.commit_many({{&state, &candidate}});
-  });
-  sim.set_program_block_map({0});
+      },
+      {.diagnostics = {"project_and_recheck.provisional"}});
 
   EXPECT_THROW(sim.step(1e-3), runtime::program::StepAttemptRejected);
 
@@ -2029,7 +2560,7 @@ TEST(ProgramRuntime, ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPub
   EXPECT_DOUBLE_EQ(sim.time(), 0.0);
   EXPECT_EQ(sim.get_state("gas"), initial);
   EXPECT_FALSE(sim.history_initialized("gas.guard_candidate"));
-  EXPECT_FALSE(sim.program_cache().has(666002));
+  EXPECT_TRUE(sim.program_cache_slots().empty());
   EXPECT_TRUE(sim.program_diagnostics().empty());
 }
 
@@ -2078,13 +2609,12 @@ TEST(ProgramRuntime, GeneratedUniformProjectionPreservesEmbeddedBoundaryInactive
 
   const auto install_projection_step = [](System<kNativeDimension>& system) {
     system.set_program_block_map({0});
-    runtime::program::ProgramContext context(&system);
-    context.configure_primary_clock("macro");
-    context.install([context](double step) {
+    install_v5_callback_program(
+        system, "test.program-runtime.generated-projection.v5", "macro", {"gas"},
+        [](RuntimeProgramServices& context, double step) {
       context.begin_step(step);
       context.apply_projection(0, context.state(0));
-    });
-    system.set_program_block_map({0});
+        });
   };
 
   System<kNativeDimension> cartesian(unit_domain_config<kNativeDimension>(n));
@@ -2132,8 +2662,7 @@ TEST(ProgramRuntime, GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTr
   constexpr double gamma = 1.4;
   auto config = distributed_boundary_domain_config<kNativeDimension>(n);
   System<kNativeDimension> system(config);
-  install_execution_lane(system,
-                         "pops.test.program-runtime.generated-projection.nonfinite");
+  install_execution_lane(system, "pops.test.program-runtime.generated-projection.nonfinite");
   add_generated_conditional_projecting_gas(system, gamma);
   std::vector<double> initial;
   fill_ic(initial, n, gamma);
@@ -2141,12 +2670,13 @@ TEST(ProgramRuntime, GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTr
   system.set_state("gas", initial);
   const std::vector<double> accepted = system.get_state("gas");
   system.set_program_block_map({0});
-
-  runtime::program::ProgramContext context(&system);
-  context.configure_primary_clock("macro");
-  context.begin_step(1.0e-3);
-  MultiFab<kNativeDimension>& candidate = context.state(0);
-  EXPECT_THROW(context.apply_projection(0, candidate), std::runtime_error);
+  install_v5_callback_program(system, "pops.test.program-runtime.generated-projection.nonfinite.v5",
+                              "macro", {"gas"}, [](RuntimeProgramServices& context, double step) {
+                                context.begin_step(step);
+                                MultiFab<kNativeDimension>& candidate = context.state(0);
+                                context.apply_projection(0, candidate);
+                              });
+  EXPECT_THROW(system.step(1.0e-3), std::runtime_error);
   EXPECT_EQ(system.get_state("gas"), accepted);
 }
 
@@ -2164,10 +2694,13 @@ TEST(ProgramRuntime, SystemProjectionRefusesForeignFieldContractsBeforeProviderI
   fill_ic(initial, n, gamma);
   system.set_state("gas", initial);
 
-  MultiFab<kNativeDimension>& accepted = system.block_state(0);
-  MultiFab<kNativeDimension> wrong_ncomp(accepted.layout(), accepted.distribution(),
-                                         accepted.local_rank(), accepted.ncomp() - 1,
-                                         accepted.ghosts());
+  MultiFab<kNativeDimension> wrong_ncomp = [&] {
+    const auto accepted_view = system.block_state(0);
+    const MultiFab<kNativeDimension>& accepted = *accepted_view.get();
+    return MultiFab<kNativeDimension>(accepted.layout(), accepted.distribution(),
+                                      accepted.local_rank(), accepted.ncomp() - 1,
+                                      accepted.ghosts());
+  }();
   EXPECT_THROW(system.block_project(0, wrong_ncomp), std::invalid_argument);
   EXPECT_EQ(projection_calls, 0);
 
@@ -2175,7 +2708,11 @@ TEST(ProgramRuntime, SystemProjectionRefusesForeignFieldContractsBeforeProviderI
   install_execution_lane(foreign_system,
                          "pops.test.program-runtime.projection-field-preflight.foreign");
   add_projecting_gas(foreign_system, gamma);
-  EXPECT_THROW(system.block_project(0, foreign_system.block_state(0)), std::invalid_argument);
+  MultiFab<kNativeDimension> foreign_state = [&] {
+    const auto foreign_view = foreign_system.block_state(0);
+    return MultiFab<kNativeDimension>(*foreign_view.get());
+  }();
+  EXPECT_THROW(system.block_project(0, foreign_state), std::invalid_argument);
   EXPECT_EQ(projection_calls, 0);
   EXPECT_EQ(system.get_state("gas"), initial);
 }
@@ -2184,7 +2721,7 @@ TEST(ProgramRuntime, EmbeddedBoundaryRejectsUnqualifiedBoundaryLinearizationEntr
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
-  using Context = runtime::program::ProgramContext<kNativeDimension>;
+  using Context = runtime::program::ProgramExecutionServices<kNativeDimension>;
   using Field = MultiFab<kNativeDimension>;
   EXPECT_FALSE((HasUnqualifiedBoundaryLinearization<Context, Field>));
 }
@@ -2206,119 +2743,133 @@ TEST(ProgramRuntime, PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTran
   fill_boundary_euler_ic<kNativeDimension>(initial, n, gamma);
   system.set_state("gas", initial);
   system.set_program_block_map({0});
-
-  runtime::program::ProgramContext<kNativeDimension> context(&system);
-  context.configure_primary_clock("test.prepared-boundary");
-  context.begin_step(1.0e-3);
-  const auto point = context.boundary_evaluation_point(17);
   const ExecutionLane& lane = system.prepared_boundary_execution_lane();
-  MultiFab<kNativeDimension>& state = context.state(0);
-  const auto session = context.prepare_block_boundary_session(0, state, point, lane);
-  ASSERT_TRUE(context.has_boundary_linearization(0));
-
-  MultiFab<kNativeDimension> residual = context.rhs_scratch_like(state);
-  residual.set_val(Real(0));
-  ASSERT_NO_THROW(context.boundary_residual_into_at(point, 0, state, residual, *session));
-  EXPECT_GT(norm_inf_all_components(residual), Real(0));
-
-  MultiFab<kNativeDimension> direction = context.rhs_scratch_like(state);
-  set_boundary_jvp_direction(direction);
-  MultiFab<kNativeDimension> jvp = context.rhs_scratch_like(state);
-  jvp.set_val(Real(0));
-  ASSERT_NO_THROW(context.boundary_jvp_into_at(point, 0, state, direction, jvp, *session));
-  EXPECT_GT(norm_inf_all_components(jvp), Real(0));
-
-  MultiFab<kNativeDimension> scaled_direction = context.rhs_scratch_like(state);
-  lincomb(scaled_direction, Real(3), direction, Real(0), direction);
-  MultiFab<kNativeDimension> scaled_jvp = context.rhs_scratch_like(state);
-  scaled_jvp.set_val(Real(0));
-  ASSERT_NO_THROW(
-      context.boundary_jvp_into_at(point, 0, state, scaled_direction, scaled_jvp, *session));
-  MultiFab<kNativeDimension> scaling_error = context.rhs_scratch_like(state);
-  lincomb(scaling_error, Real(1), scaled_jvp, Real(-3), jvp);
-  EXPECT_LT(norm_inf_all_components(scaling_error),
-            Real(5.0e-5) * (Real(1) + norm_inf_all_components(scaled_jvp)));
-
   const std::vector<double> accepted = system.get_state("gas");
-  MultiFab<kNativeDimension> non_finite_state = context.rhs_scratch_like(state);
-  non_finite_state.set_val(std::numeric_limits<Real>::quiet_NaN());
-  residual.set_val(Real(-7));
-  EXPECT_THROW(context.boundary_residual_into_at(point, 0, non_finite_state, residual, *session),
-               std::runtime_error);
-  EXPECT_EQ(system.get_state("gas"), accepted);
-  EXPECT_EQ(context.norm_inf(0, residual), Real(7));
-
-  MultiFab<kNativeDimension> non_finite_direction = context.rhs_scratch_like(state);
-  non_finite_direction.set_val(std::numeric_limits<Real>::quiet_NaN());
-  jvp.set_val(Real(-8));
-  EXPECT_THROW(context.boundary_jvp_into_at(point, 0, state, non_finite_direction, jvp, *session),
-               std::runtime_error);
-  EXPECT_EQ(system.get_state("gas"), accepted);
-  EXPECT_EQ(context.norm_inf(0, jvp), Real(8));
-
-  residual.set_val(Real(-3));
-  auto mismatched_point = point;
-  if (lane.rank() != 0)
-    ++mismatched_point.stage;
-  if (lane.size() == 1)
-    ++mismatched_point.stage;
-  if (lane.size() == 1) {
-    EXPECT_THROW(context.boundary_residual_into_at(mismatched_point, 0, state, residual, *session),
-                 std::invalid_argument);
-  } else {
-    EXPECT_THROW(context.boundary_residual_into_at(mismatched_point, 0, state, residual, *session),
-                 std::runtime_error);
-  }
-  EXPECT_EQ(system.get_state("gas"), accepted);
-  EXPECT_EQ(context.norm_inf(0, residual), Real(3));
-
-  residual.set_val(Real(-4));
-  if (lane.size() == 1) {
-    EXPECT_THROW(context.rhs_core_into_at(mismatched_point, 0, state, residual, false, *session),
-                 std::invalid_argument);
-  } else {
-    EXPECT_THROW(context.rhs_core_into_at(mismatched_point, 0, state, residual, false, *session),
-                 std::runtime_error);
-  }
-  EXPECT_EQ(system.get_state("gas"), accepted);
-  EXPECT_EQ(context.norm_inf(0, residual), Real(4));
-  EXPECT_NO_THROW(context.rhs_core_into_at(point, 0, state, residual, false, *session));
-  EXPECT_GT(norm_inf_all_components(residual), Real(0));
-
-  residual.set_val(Real(-3));
 
   System<kNativeDimension> foreign_system(config);
   install_execution_lane(foreign_system, "pops.test.program-runtime.foreign-prepared-boundary");
   add_boundary_gas(foreign_system, gamma);
   foreign_system.set_state("gas", initial);
   foreign_system.set_program_block_map({0});
-  runtime::program::ProgramContext<kNativeDimension> foreign_context(&foreign_system);
-  foreign_context.configure_primary_clock("test.prepared-boundary");
-  foreign_context.begin_step(1.0e-3);
-  MultiFab<kNativeDimension>& foreign_state = foreign_context.state(0);
-  const auto foreign_session = foreign_context.prepare_block_boundary_session(
-      0, foreign_state, point, foreign_system.prepared_boundary_execution_lane());
-  if (lane.size() == 1) {
-    EXPECT_THROW(context.boundary_residual_into_at(point, 0, state, residual, *foreign_session),
-                 std::invalid_argument);
-  } else {
-    EXPECT_THROW(context.boundary_residual_into_at(point, 0, state, residual, *foreign_session),
-                 std::runtime_error);
-  }
+  const ExecutionLane& foreign_lane = foreign_system.prepared_boundary_execution_lane();
+  using BoundarySession = RuntimeProgramServices::block_boundary_session_type;
+  std::shared_ptr<BoundarySession> foreign_session;
+  install_v5_callback_program(
+      foreign_system, "pops.test.program-runtime.foreign-prepared-boundary.v5",
+      "test.prepared-boundary", {"gas"}, [&](RuntimeProgramServices& context, double step) {
+        context.begin_step(step);
+        MultiFab<kNativeDimension>& foreign_state = context.state(0);
+        const auto foreign_point = context.boundary_evaluation_point(17);
+        foreign_session =
+            context.prepare_block_boundary_session(0, foreign_state, foreign_point, foreign_lane);
+      });
+  foreign_system.step(1.0e-3);
+  ASSERT_NE(foreign_session, nullptr);
+
+  install_v5_callback_program(
+      system, "pops.test.program-runtime.prepared-boundary.v5", "test.prepared-boundary", {"gas"},
+      [&](RuntimeProgramServices& context, double step) {
+        context.begin_step(step);
+        const auto point = context.boundary_evaluation_point(17);
+        MultiFab<kNativeDimension>& state = context.state(0);
+        const auto session = context.prepare_block_boundary_session(0, state, point, lane);
+        ASSERT_TRUE(context.has_boundary_linearization(0));
+
+        MultiFab<kNativeDimension> residual = context.rhs_scratch_like(state);
+        residual.set_val(Real(0));
+        ASSERT_NO_THROW(context.boundary_residual_into_at(point, 0, state, residual, *session));
+        EXPECT_GT(norm_inf_all_components(residual), Real(0));
+
+        MultiFab<kNativeDimension> direction = context.rhs_scratch_like(state);
+        set_boundary_jvp_direction(direction);
+        MultiFab<kNativeDimension> jvp = context.rhs_scratch_like(state);
+        jvp.set_val(Real(0));
+        ASSERT_NO_THROW(context.boundary_jvp_into_at(point, 0, state, direction, jvp, *session));
+        EXPECT_GT(norm_inf_all_components(jvp), Real(0));
+
+        MultiFab<kNativeDimension> scaled_direction = context.rhs_scratch_like(state);
+        lincomb(scaled_direction, Real(3), direction, Real(0), direction);
+        MultiFab<kNativeDimension> scaled_jvp = context.rhs_scratch_like(state);
+        scaled_jvp.set_val(Real(0));
+        ASSERT_NO_THROW(
+            context.boundary_jvp_into_at(point, 0, state, scaled_direction, scaled_jvp, *session));
+        MultiFab<kNativeDimension> scaling_error = context.rhs_scratch_like(state);
+        lincomb(scaling_error, Real(1), scaled_jvp, Real(-3), jvp);
+        EXPECT_LT(norm_inf_all_components(scaling_error),
+                  Real(5.0e-5) * (Real(1) + norm_inf_all_components(scaled_jvp)));
+
+        MultiFab<kNativeDimension> non_finite_state = context.rhs_scratch_like(state);
+        non_finite_state.set_val(std::numeric_limits<Real>::quiet_NaN());
+        residual.set_val(Real(-7));
+        EXPECT_THROW(
+            context.boundary_residual_into_at(point, 0, non_finite_state, residual, *session),
+            std::runtime_error);
+        EXPECT_EQ(context.norm_inf(0, residual), Real(7));
+
+        MultiFab<kNativeDimension> non_finite_direction = context.rhs_scratch_like(state);
+        non_finite_direction.set_val(std::numeric_limits<Real>::quiet_NaN());
+        jvp.set_val(Real(-8));
+        EXPECT_THROW(
+            context.boundary_jvp_into_at(point, 0, state, non_finite_direction, jvp, *session),
+            std::runtime_error);
+        EXPECT_EQ(context.norm_inf(0, jvp), Real(8));
+
+        residual.set_val(Real(-3));
+        auto mismatched_point = point;
+        if (lane.rank() != 0)
+          ++mismatched_point.stage;
+        if (lane.size() == 1)
+          ++mismatched_point.stage;
+        if (lane.size() == 1) {
+          EXPECT_THROW(
+              context.boundary_residual_into_at(mismatched_point, 0, state, residual, *session),
+              std::invalid_argument);
+        } else {
+          EXPECT_THROW(
+              context.boundary_residual_into_at(mismatched_point, 0, state, residual, *session),
+              std::runtime_error);
+        }
+        EXPECT_EQ(context.norm_inf(0, residual), Real(3));
+
+        residual.set_val(Real(-4));
+        if (lane.size() == 1) {
+          EXPECT_THROW(
+              context.rhs_core_into_at(mismatched_point, 0, state, residual, false, *session),
+              std::invalid_argument);
+        } else {
+          EXPECT_THROW(
+              context.rhs_core_into_at(mismatched_point, 0, state, residual, false, *session),
+              std::runtime_error);
+        }
+        EXPECT_EQ(context.norm_inf(0, residual), Real(4));
+        EXPECT_NO_THROW(context.rhs_core_into_at(point, 0, state, residual, false, *session));
+        EXPECT_GT(norm_inf_all_components(residual), Real(0));
+
+        residual.set_val(Real(-3));
+        if (lane.size() == 1) {
+          EXPECT_THROW(
+              context.boundary_residual_into_at(point, 0, state, residual, *foreign_session),
+              std::invalid_argument);
+        } else {
+          EXPECT_THROW(
+              context.boundary_residual_into_at(point, 0, state, residual, *foreign_session),
+              std::runtime_error);
+        }
+        EXPECT_EQ(context.norm_inf(0, residual), Real(3));
+
+        if (lane.size() > 1) {
+          const int divergent_block = lane.rank() == 0 ? 0 : 1;
+          EXPECT_THROW(
+              context.boundary_residual_into_at(point, divergent_block, state, residual, *session),
+              std::runtime_error);
+          EXPECT_EQ(context.norm_inf(0, residual), Real(3));
+        }
+
+        EXPECT_NO_THROW(context.boundary_residual_into_at(point, 0, state, residual, *session));
+        EXPECT_GT(norm_inf_all_components(residual), Real(0));
+      });
+  system.step(1.0e-3);
   EXPECT_EQ(system.get_state("gas"), accepted);
-  EXPECT_EQ(context.norm_inf(0, residual), Real(3));
-
-  if (lane.size() > 1) {
-    const int divergent_block = lane.rank() == 0 ? 0 : 1;
-    EXPECT_THROW(
-        context.boundary_residual_into_at(point, divergent_block, state, residual, *session),
-        std::runtime_error);
-    EXPECT_EQ(system.get_state("gas"), accepted);
-    EXPECT_EQ(context.norm_inf(0, residual), Real(3));
-  }
-
-  EXPECT_NO_THROW(context.boundary_residual_into_at(point, 0, state, residual, *session));
-  EXPECT_GT(norm_inf_all_components(residual), Real(0));
 }
 
 TEST(ProgramRuntime, AnalyticMappedInitialFailureDoesNotPublishTheCandidate) {
@@ -2378,9 +2929,10 @@ TEST(ProgramRuntime, RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
   sim.set_state("gas", initial);
   sim.set_program_block_map({0});
 
-  runtime::program::ProgramContext ctx(&sim);
-  ctx.register_history("gas.U", 2, kGasComponents);
-  ctx.install([ctx](double dt) {
+  sim.register_history("gas.U", 2, kGasComponents);
+  install_v5_callback_program(
+      sim, "test.program-runtime.rejected-attempt-rollback.v5", "macro", {"gas"},
+      [](RuntimeProgramServices& ctx, double dt) {
     ctx.begin_step(dt);
     MultiFab<kNativeDimension>& state = ctx.state(0);
     MultiFab<kNativeDimension> bump = state;
@@ -2388,18 +2940,17 @@ TEST(ProgramRuntime, RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
     ctx.axpy(state, Real(1), bump);
     ctx.store_history("gas.U", state);
     ctx.rotate_histories();
-    ctx.cache_store_scratch(17, state);
     ctx.record_scalar("provisional", Real(42));
     throw runtime::program::StepAttemptRejected(SolveStatus::kIterationLimit, "solve",
                                                 "fault injection after provisional publications");
-  });
-  sim.set_program_block_map({0});
+      },
+      {.diagnostics = {"provisional"}});
 
   EXPECT_THROW(sim.step(1e-3), runtime::program::StepAttemptRejected);
   EXPECT_EQ(sim.macro_step(), 0);
   EXPECT_DOUBLE_EQ(sim.time(), 0.0);
   EXPECT_EQ(sim.get_state("gas"), initial);
   EXPECT_FALSE(sim.history_initialized("gas.U"));
-  EXPECT_FALSE(sim.program_cache().has(17));
+  EXPECT_TRUE(sim.program_cache_slots().empty());
   EXPECT_TRUE(sim.program_diagnostics().empty());
 }

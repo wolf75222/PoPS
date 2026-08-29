@@ -55,7 +55,7 @@ def test_runtime_parameter_is_a_program_slot_while_const_parameter_is_inlined() 
 
     assert "ctx.program_params(0)" in runtime_source
     assert "params.get(0)" in runtime_source
-    assert "pops_program_param_count() { return 1; }" in runtime_source
+    assert "kProgramCandidateParametersRows" in runtime_source
     assert program_param_entries(
         runtime_program, compiler_model(runtime_model)
     ) == [(0, "k", 0, 2.0)]
@@ -66,7 +66,7 @@ def test_runtime_parameter_is_a_program_slot_while_const_parameter_is_inlined() 
         const_program, model=compiler_model(const_model))
     assert "params.get(" not in const_source
     assert "ctx.program_params(" not in const_source
-    assert "pops_program_param_count() { return 0; }" in const_source
+    assert "kProgramCandidateParameters{}" in const_source
 
 
 def test_bind_schema_routes_only_owner_qualified_parameter_handles() -> None:

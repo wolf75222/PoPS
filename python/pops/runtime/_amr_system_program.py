@@ -30,7 +30,7 @@ class _AmrSystemProgram(_AmrSystem):
           - (5) install the compiled time Program on the AMR hierarchy (binds blocks by name,
             materializes the hierarchy, then
             runs the section-24 .so requirement validation: block instance / solver). The .so must
-            export pops_install_program_amr (target='amr_system'); a target='system' .so is rejected
+            export pops_install_program (target='amr_system'); a target='system' .so is rejected
             at the C++ loader with an actionable message. NATIVE mode (so_path is None) installs only
             spatial blocks: it has no temporal authority and stepping fails closed until an explicit
             Program is installed. Package parameters were fixed before their closures were constructed;
@@ -63,8 +63,10 @@ class _AmrSystemProgram(_AmrSystem):
             self._step_transaction_plan = (
                 authored.transaction_plan() if authored is not None else None)
             if authored is not None:
+                from pops.codegen.temporal_manifest import build_temporal_manifest
+
                 self._temporal_restart_state.configure_program(
-                    authored.temporal_manifest(),
+                    build_temporal_manifest(authored, target="amr_system"),
                     time=self._s.time(), macro_step=self._s.macro_step())
 
     def _install_program_params(self, compiled: Any, schema: Any, params: Any) -> None:

@@ -14,11 +14,18 @@ LOADERS = (
 @pytest.mark.parametrize("path", LOADERS, ids=("system", "amr_system"))
 def test_program_loader_requires_the_complete_block_identity_table(path):
     source = path.read_text(encoding="utf-8")
-    assert "if (!block_count || !block_name)" in source
-    assert "does not export the required block identity table" in source
-    assert "pops_program_block_count + pops_program_block_name" in source
-    assert "Positional Program-to-" in source
-    assert "regenerate the Program library" in source
+    assert "candidate_tables.blocks" in source
+    assert "program_block_map.assign" in source
+    assert "Program requires block instance" in source
+    if path.name == "system_io.cpp":
+        # Uniform admits a genuinely state-free Program only when both sides have no block-owned
+        # authority. It must still reject using an empty table as the historical positional map.
+        assert "state-free Program declares block-owned authority" in source
+        assert "state-free Program has an empty block identity table" in source
+        assert "positional Program-to-System binding is not supported" in source
+    else:
+        # AMR always owns hierarchy block state, so its v5 table can never be empty.
+        assert "compiled Program has no explicit v5 block identity table" in source
 
 
 @pytest.mark.parametrize("path", LOADERS, ids=("system", "amr_system"))

@@ -34,6 +34,41 @@ from typing import Any
 
 from pops.codegen.program_emit_kernels import _cell_locals, _coeff_cpp, _deref, _model_impl
 from pops.codegen.program_emit_model_kernels import _linear_source_rows, _provider_binding
+from pops.codegen.program_persistent_plan import persistent_slot_token
+
+
+def _condensed_program(var: Any, where: str) -> Any:
+    """Return the immutable Program authority carried by the enclosing emission walk."""
+    program = var.get(("program",))
+    if program is None:
+        raise NotImplementedError(
+            "%s requires an authenticated Program resource plan; refusing unprimed step-local "
+            "scratch allocation" % where
+        )
+    return program
+
+
+def _prime_condensed_scalar(
+        var: Any, prelude: Any, value: Any, *, subslot: int, ncomp: int,
+        ghost_depth: int, program_block: int, target: str, where: str) -> str:
+    """Register one condensed scalar scratch occurrence in the install-time prelude."""
+    from pops.codegen.program_emit_ops import _append_resource_preparation
+
+    program = _condensed_program(var, where)
+    if isinstance(program_block, bool) or not isinstance(program_block, int) or program_block < 0:
+        raise ValueError("%s requires an exact non-negative Program block index" % where)
+    slot = persistent_slot_token(program, value, target=target)
+    _append_resource_preparation(
+        prelude,
+        var,
+        kind="scalar",
+        slot=slot,
+        subslot=subslot,
+        program_block=program_block,
+        ncomp=ncomp,
+        ghost_depth=ghost_depth,
+    )
+    return slot
 
 
 def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
@@ -51,9 +86,21 @@ def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
         (state_in,) = v.inputs
         dimension = len(v.attrs["subset"])
         tensor = "cond_tensor%d" % v.id
+        slot = _prime_condensed_scalar(
+            var,
+            prelude,
+            v,
+            subslot=0,
+            ncomp=dimension * dimension,
+            ghost_depth=1,
+            program_block=program_block,
+            target=target,
+            where="condensed_coeffs %r" % v.name,
+        )
         prelude.append(
             "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-            "ctx.alloc_scalar_field(%d, 1));" % (tensor, dimension * dimension)
+            "ctx.scalar_scratch(%s, 0, ctx.state(%d), %d, 1));"
+            % (tensor, slot, program_block, dimension * dimension)
         )
         var[v.id] = tensor
         lines += _emit_condensed_coeffs_kernel(
@@ -84,10 +131,44 @@ def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
             lines.append("}")
     elif v.op == "condensed_rhs":
         out_in, phi_in, state_in = v.inputs
+        resource_slot = _prime_condensed_scalar(
+            var,
+            prelude,
+            v,
+            subslot=0,
+            ncomp=1,
+            ghost_depth=0,
+            program_block=program_block,
+            target=target,
+            where="condensed_rhs laplacian scratch %r" % v.name,
+        )
+        _prime_condensed_scalar(
+            var,
+            prelude,
+            v,
+            subslot=1,
+            ncomp=1,
+            ghost_depth=0,
+            program_block=program_block,
+            target=target,
+            where="condensed_rhs negated-laplacian scratch %r" % v.name,
+        )
+        _prime_condensed_scalar(
+            var,
+            prelude,
+            v,
+            subslot=2,
+            ncomp=len(v.attrs["subset"]),
+            ghost_depth=1,
+            program_block=program_block,
+            target=target,
+            where="condensed_rhs flux scratch %r" % v.name,
+        )
         lines += _emit_condensed_rhs_kernel(
             v.id, model, v.attrs["linear_operator"], v.attrs["subset"], v.attrs["th_dt"],
             v.attrs["g"], var[out_in.id], var[phi_in.id], var[state_in.id],
-            provider_plans=provider_plans, consumer_qid=consumer_qid, program_block=program_block)
+            provider_plans=provider_plans, consumer_qid=consumer_qid, program_block=program_block,
+            resource_slot=resource_slot)
         var[v.id] = var[out_in.id]
     elif v.op == "condensed_reconstruct":
         state_in, phi_in = v.inputs
@@ -275,7 +356,8 @@ def _emit_condensed_flux_kernel(body: Any, uid: Any, impl: Any, jblock: Any, th_
 
 def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any, th_dt: Any,
                                g_coeff: Any, rhs_var: Any, phi_n_var: Any, state_var: Any,
-                               *, provider_plans: Any, consumer_qid: str, program_block: int) -> list:
+                               *, provider_plans: Any, consumer_qid: str, program_block: int,
+                               resource_slot: str) -> list:
     """Emit ``rhs = -Lap(phi_n) - g*div(M^{-1} momentum)`` for the exact native rank."""
     impl = _model_impl(model)
     jblock = _subset_block_rows(impl, jblock_op, subset)
@@ -292,10 +374,10 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
     dimension = len(subset)
     body = [
         "pops::MultiFab<pops::kNativeDimension>& %s = "
-        "ctx.scalar_scratch(%d, 0, %s, 1, 0);" % (lap, uid, _deref(phi_n_var)),
+        "ctx.scalar_scratch(%s, 0, %s, 1, 0);" % (lap, resource_slot, _deref(phi_n_var)),
         "ctx.laplacian(%s, %s);" % (lap, _deref(phi_n_var)),
         "pops::MultiFab<pops::kNativeDimension>& %s = "
-        "ctx.scalar_scratch(%d, 1, %s, 1, 0);" % (negl, uid, _deref(phi_n_var)),
+        "ctx.scalar_scratch(%s, 1, %s, 1, 0);" % (negl, resource_slot, _deref(phi_n_var)),
         "for (int li = 0; li < %s.local_size(); ++li) {" % negl,
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> nlA = "
         "%s.fab(li).view();" % negl,
@@ -307,7 +389,8 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
         "  });",
         "}",
         "pops::MultiFab<pops::kNativeDimension>& %s = "
-        "ctx.scalar_scratch(%d, 2, %s, %d, 1);" % (fx, uid, _deref(phi_n_var), dimension),
+        "ctx.scalar_scratch(%s, 2, %s, %d, 1);"
+        % (fx, resource_slot, _deref(phi_n_var), dimension),
         "pops::MultiFab<pops::kNativeDimension>& %s = "
         'ctx.assembly_target(%s, "pops.tensor-elliptic.flux");'
         % (flux_write, fx),

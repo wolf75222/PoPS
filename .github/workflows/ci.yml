@@ -33,7 +33,7 @@ name: CI
 #        key across up to 8 real native compiles).
 #      - generated-program compile + bind SMOKE -> gate-python-compile-cache (the 8 real DSL native
 #        compiles ARE the compile/bind smoke: emit -> .so -> load).
-#      - bind-RUN / ProgramContext execution SMOKE -> kokkos-openmp (the add_native_block route:
+#      - bind-RUN / Program execution-services SMOKE -> kokkos-openmp (the add_native_block route:
 #        test_native_abi_std / test_dsl_production / test_dsl_production_amr actually RUN a compiled
 #        Program). Fast lane carries the compile-BIND proof; the full lane carries the bind-RUN proof.
 #  (b) DEBUG ARTIFACTS ON CODEGEN FAILURE: the codegen-running jobs (gate-python-compile-cache and the
@@ -175,6 +175,12 @@ jobs:
               - 'tests/cpp/build_durations.json'
               - 'tests/cpp/test_durations.json'
               - 'tests/test_manifest.toml'
+              - 'tests/gates/m2_temporal_execution.toml'
+              - 'tests/gates/m3_amr_multilayout.toml'
+              - 'tests/gates/runtime_authority.toml'
+              - 'scripts/run_m2_gate.py'
+              - 'scripts/run_m3_gate.py'
+              - 'scripts/run_runtime_authority_gate.py'
               - 'scripts/generate_component_catalog.py'
               - 'scripts/generate_release_contract.py'
               - 'scripts/final_release_contract.py'
@@ -231,6 +237,29 @@ jobs:
               - 'tests/gates/m4_runtime_io.toml'
               - 'tests/python/architecture/test_m4_runtime_io_gate.py'
               - 'scripts/run_m4_gate.py'
+              # M2/M3 are composed into the final runtime authority and both own real MPI rows.
+              - 'tests/gates/m2_temporal_execution.toml'
+              - 'tests/gates/m3_amr_multilayout.toml'
+              - 'tests/python/architecture/test_m2_temporal_execution_gate.py'
+              - 'tests/python/architecture/test_m3_amr_multilayout_gate.py'
+              - 'scripts/run_m2_gate.py'
+              - 'scripts/run_m3_gate.py'
+              # Runtime authority is a closed ADC-700/702/720 ledger. Changes to its rows,
+              # source barriers, or launcher must exercise the real MPI lane on the same push.
+              - 'tests/gates/runtime_authority.toml'
+              - 'tests/python/architecture/test_runtime_authority_gate.py'
+              - 'scripts/run_runtime_authority_gate.py'
+              - 'tests/cpp/unit/runtime/test_program_execution_services_contract.cpp'
+              - 'tests/cpp/unit/runtime/test_program_execution_services_schur_free.cpp'
+              - 'tests/cpp/unit/runtime/test_program_transaction.cpp'
+              - 'tests/cpp/unit/runtime/test_program_host_descriptor.cpp'
+              - 'tests/cpp/integration/native_loader/test_program_abi_symbols.cpp'
+              - 'tests/cpp/integration/runtime/test_checkpoint_cache.cpp'
+              - 'tests/cpp/integration/amr/test_temporal_partition_restart.cpp'
+              - 'tests/cpp/integration/amr/test_program_reflux_ledger.cpp'
+              - 'tests/cpp/integration/amr/test_cell_temporal_program_route.cpp'
+              - 'tests/python/integration/io/test_scheduler_cache_checkpoint.py'
+              - 'tests/python/unit/runtime/test_amr_checkpoint_contract.py'
               - '.github/workflows/ci.yml'
               - 'cmake/**'
               - 'CMakeLists.txt'
@@ -740,6 +769,12 @@ jobs:
       - name: M4 native runtime and scientific I/O gate manifest
         run: python3 scripts/run_m4_gate.py --check-only
 
+      - name: Runtime authority gate manifest
+        run: |
+          for dim in 1 2 3; do
+            python3 scripts/run_runtime_authority_gate.py --check-only --dim "$dim"
+          done
+
       - name: Generated component catalog
         env:
           PYTHONPATH: ${{ github.workspace }}/python
@@ -1119,7 +1154,7 @@ jobs:
     name: ubuntu-latest / Kokkos Serial (Python) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     # Shards are independent (`fail-fast: false`) and must all report a result.  Native-loader
-    # tests can legitimately run for tens of minutes on a cold public runner.  Six measured-duration
+    # tests can legitimately run for tens of minutes on a cold public runner. Eight measured-duration
     # shards keep the test critical path below the watchdog; the remaining margin covers setup and
     # transient runner variance without turning a stalled test into an unbounded job.
     timeout-minutes: 50
@@ -1132,11 +1167,11 @@ jobs:
         # SHARD_TOTAL=strategy.job-total. ADC-623: files are packed by MEASURED DURATION
         # (scripts/ci_shard_binpack.py, greedy LPT over tests/python/test_durations.json), not by a
         # modulo of the file list, so the slowest shard -- the gate critical path -- is minimized.
-        # 7 shards: the measured 417-file universe packs to a 32.2-minute maximum test load, leaving
+        # 8 shards: the measured 430-file universe packs to a 30.9-minute maximum test load, leaving
         # setup and runner variance inside the unchanged 50-minute watchdog. To rebalance,
         # change the COUNT here only (job names stay "... shard N"; the required `gate` aggregates
         # them via a single matrix entry in its `needs`).
-        shard: [0, 1, 2, 3, 4, 5, 6]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
 
     env:
       POPS_NATIVE_DIM: "2"
@@ -1836,6 +1871,11 @@ jobs:
             /usr/bin/python3 scripts/run_m4_gate.py --list-ctest-targets
           )
           test "${#m4_targets[@]}" -gt 0
+          mapfile -t runtime_authority_targets < <(
+            /usr/bin/python3 scripts/run_runtime_authority_gate.py \
+              --list-ctest-targets --backend mpi --dim "$POPS_NATIVE_DIM"
+          )
+          test "${#runtime_authority_targets[@]}" -gt 0
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           # The monolithic Python module link is memory-heavy. Keep it isolated
           # from test compilation/linking so a small hosted runner cannot evict
@@ -1846,6 +1886,8 @@ jobs:
             cmake --build --preset ci-mpi --parallel 4 --target "${mpi_targets[@]}"
           run_with_heartbeat "M4 native test build" 10m \
             cmake --build --preset ci-mpi --parallel 4 --target "${m4_targets[@]}"
+          run_with_heartbeat "Runtime authority native test build" 10m \
+            cmake --build --preset ci-mpi --parallel 4 --target "${runtime_authority_targets[@]}"
 
       - name: Installed package smoke (MPI-only + collective HDF5)
         run: |
@@ -2055,6 +2097,25 @@ jobs:
           /usr/bin/python3 scripts/run_m4_gate.py \
             --build-dir build-mpi \
             --mpi-exec mpiexec
+
+      - name: Runtime authority complete ADC-700/702/720 gate
+        timeout-minutes: 45
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build-mpi/python-package:${{ github.workspace }}
+          POPS_NATIVE_DIM: "2"
+          POPS_INCLUDE: ${{ github.workspace }}/include
+          POPS_KOKKOS_ROOT: ${{ github.workspace }}/.kokkos-install
+          Kokkos_ROOT: ${{ github.workspace }}/.kokkos-install
+          POPS_REQUIRE_MPI_TESTS: "1"
+          POPS_REQUIRE_NATIVE_TESTS: "1"
+          POPS_RUNTIME_AUTHORITY_ALLOCATION: "1"
+          OMPI_MCA_io: "^ompio"
+        run: |
+          /usr/bin/python3 scripts/run_runtime_authority_gate.py \
+            --backend mpi \
+            --build-dir build-mpi \
+            --mpi-exec mpiexec \
+            --dim "$POPS_NATIVE_DIM"
 
       - name: ccache stats (MPI)
         if: always()
@@ -2628,7 +2689,7 @@ jobs:
           python3 scripts/verify_installed_native.py
           --expect-dim "$POPS_NATIVE_DIM" --expect-serial
 
-      # ADC-548 (a): this add_native_block section is the bind-RUN / ProgramContext EXECUTION smoke --
+      # ADC-548 (a): this add_native_block section is the bind-RUN / Program execution-services smoke --
       # it compiles a production model at runtime and actually RUNS it (System + AMR) via
       # add_native_block, the counterpart to the compile/bind smoke carried on the fast gate
       # (gate-python-compile-cache). The full lane carries the bind-RUN proof; the gate lane the compile-BIND.
@@ -2668,6 +2729,22 @@ jobs:
             python3 -m pytest -q "${test_path}"
             echo "::endgroup::"
           done
+
+      - name: Runtime authority OpenMP/allocation gate
+        if: matrix.kind == 'python'
+        timeout-minutes: 20
+        env:
+          OMP_NUM_THREADS: "2"
+          OMP_PROC_BIND: "false"
+          POPS_REQUIRE_NATIVE_TESTS: "1"
+          POPS_RUNTIME_AUTHORITY_OPENMP: "1"
+          POPS_RUNTIME_AUTHORITY_ALLOCATION: "1"
+          POPS_KOKKOS_ROOT: ${{ env.KOKKOS_PREFIX }}
+          Kokkos_ROOT: ${{ env.KOKKOS_PREFIX }}
+        run: |
+          export PYTHONPATH="$PWD/build-kokkos-py/python:$PWD"
+          python3 scripts/run_runtime_authority_gate.py \
+            --openmp --python-only --dim "$POPS_NATIVE_DIM"
 
       - name: ccache stats (Kokkos OpenMP, ${{ matrix.lane }})
         if: ${{ always() && (matrix.kind != 'python' || steps.openmp-python-module-cache.outputs.cache-hit != 'true') }}

@@ -17,7 +17,7 @@ _BACKEND_CAPS = {
 
 # Must match pops::runtime::system::kNativeSystemPackageAbiVersion.  Host
 # add_native_block looks up NATIVE_SYSTEM_PACKAGE_ABI_EXPORT on every package.
-NATIVE_SYSTEM_PACKAGE_ABI_VERSION = 4
+NATIVE_SYSTEM_PACKAGE_ABI_VERSION = 5
 NATIVE_SYSTEM_PACKAGE_ABI_EXPORT = "pops_native_system_package_abi_version"
 
 

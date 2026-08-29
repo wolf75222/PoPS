@@ -43,6 +43,7 @@ class _PreparedAMRRestart:
     field_payload: tuple[Any, ...]
     hierarchy_mode: str
     hierarchy_identity: str | None
+    program_persistent_restore: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -378,6 +379,9 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     from pops.runtime._engine_descriptors import abi_key
     from pops.runtime._program_cadence_checkpoint import capture_program_cadence
     from pops.runtime._system_io_history import prepare_history_capture
+    from pops.output._checkpoint_contract import (
+        require_program_persistent_value_checkpoint_capture,
+    )
 
     if int(sim.n_blocks()) == 0:
         raise ValueError(
@@ -469,6 +473,14 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
         raise TypeError("checkpoint AMR engine lacks capture accessors %r" % missing_collectives)
     if not callable(getattr(sim, "capture_auxiliary_checkpoint_accepted_state", None)):
         raise TypeError("checkpoint AMR engine lacks exact auxiliary checkpoint capture")
+    program_hash = (
+        str(sim.installed_program_hash())
+        if hasattr(sim, "installed_program_hash")
+        else ""
+    )
+    if program_hash:
+        # Probe only; the actual binding may be collective and is invoked in _capture_v3.
+        require_program_persistent_value_checkpoint_capture(sim)
     out = {
         "pops_amr_checkpoint_version": _VERSION,
         "t": time,
@@ -488,9 +500,7 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
         "regrid_count": int(sim.checkpoint_regrid_count()),
         "topology_epoch": int(sim.checkpoint_topology_epoch()),
         "amr_accepted_contract": accepted_contract,
-        "program_hash": str(sim.installed_program_hash())
-        if hasattr(sim, "installed_program_hash")
-        else "",
+        "program_hash": program_hash,
         "field_provider_slots": np.asarray(field_slots, dtype=str),
         "field_provider_manifest": np.asarray(
             json.dumps(field_manifest, separators=(",", ":"), ensure_ascii=True)
@@ -568,6 +578,15 @@ def _capture_v3(owner, sim, prepared):
         raise TypeError("AMR checkpoint capture requires its exact prepared plan")
     import numpy as np
     from pops._native_collectives import allgather_bytes
+    from pops.output._checkpoint_contract import (
+        PROGRAM_PERSISTENT_CHECKPOINT_KEY,
+        PROGRAM_PERSISTENT_CHECKPOINT_SCHEMA_KEY,
+        PROGRAM_PERSISTENT_PLAN_DIGEST_KEY,
+        PROGRAM_PERSISTENT_PLAN_MAXIMUM_BYTES_KEY,
+        PROGRAM_PERSISTENT_PLAN_SCHEMA_KEY,
+        PROGRAM_PERSISTENT_SLOT_COUNT_KEY,
+        capture_program_persistent_value_checkpoint,
+    )
     from pops.output._checkpoint_collective import consensus
     from pops.runtime._checkpoint_manifest import seal_checkpoint_payload
     from pops.runtime._system_io_history import capture_histories
@@ -645,6 +664,21 @@ def _capture_v3(owner, sim, prepared):
             source_authority, dtype=np.uint8
         ).copy()
     out["program_accepted_state"] = np.frombuffer(canonical_program_state, dtype=np.uint8).copy()
+    persistent = capture_program_persistent_value_checkpoint(sim)
+    if persistent is not None:
+        persistent_bytes, persistent_image = persistent
+        out[PROGRAM_PERSISTENT_CHECKPOINT_KEY] = np.frombuffer(
+            persistent_bytes, dtype=np.uint8
+        ).copy()
+        out[PROGRAM_PERSISTENT_CHECKPOINT_SCHEMA_KEY] = np.asarray(persistent_image.schema)
+        out[PROGRAM_PERSISTENT_PLAN_SCHEMA_KEY] = np.asarray(persistent_image.plan_schema)
+        out[PROGRAM_PERSISTENT_PLAN_DIGEST_KEY] = np.asarray(persistent_image.plan_digest)
+        out[PROGRAM_PERSISTENT_PLAN_MAXIMUM_BYTES_KEY] = np.asarray(
+            persistent_image.maximum_bytes, dtype=np.uint64
+        )
+        out[PROGRAM_PERSISTENT_SLOT_COUNT_KEY] = np.asarray(
+            persistent_image.slot_count, dtype=np.uint32
+        )
     for level, (mode, ranks) in enumerate(zip(rank_modes, canonical_dmaps, strict=True)):
         out["distribution_mode_%d" % level] = np.asarray(mode)
         out["dmap_%d" % level] = np.asarray(ranks, dtype=np.int64)
@@ -766,7 +800,7 @@ def prepare_v3(
     hierarchy_mode="restore_recorded_hierarchy",
     hierarchy_identity=None,
 ):
-    """Validate an accepted-state v11 AMR payload without mutating the native engine.
+    """Validate an accepted-state v12 AMR payload without mutating the native engine.
 
     This is the all-rank preflight boundary used before ``begin_restart_transaction``.
     """
@@ -779,6 +813,13 @@ def prepare_v3(
     from pops.runtime._checkpoint_spatial import authenticate_checkpoint_spatial_contract
     from pops.runtime._program_cadence_checkpoint import prepare_program_cadence
     from pops.runtime._temporal_restart import TemporalRestartState
+    from pops.output._checkpoint_contract import (
+        PROGRAM_PERSISTENT_CHECKPOINT_KEY,
+        program_persistent_checkpoint_from_payload,
+        prepare_program_persistent_value_restore,
+        require_program_persistent_checkpoint_plan,
+    )
+    from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
 
     topology = checkpoint_topology(owner)
     spatial = authenticate_checkpoint_spatial_contract(owner, d)
@@ -877,13 +918,37 @@ def prepare_v3(
             "(replay the SAME composition before restart)" % (chk_blocks, cur_blocks)
         )
     nlev = checkpoint_levels
-    # Program-hash guard: an accepted-state v11 checkpoint refuses a different compiled Program.
+    # Program-hash guard: an accepted-state v12 checkpoint refuses a different compiled Program.
     chk_hash = str(d["program_hash"])
     cur_hash = sim.installed_program_hash() if hasattr(sim, "installed_program_hash") else ""
     if chk_hash != cur_hash:
         raise ValueError(
             "restart : checkpoint program hash %r != installed program hash %r (a different compiled "
             "AMR Program cannot restart this checkpoint)" % (chk_hash, cur_hash)
+        )
+    persistent_restore = None
+    if cur_hash:
+        if PROGRAM_PERSISTENT_CHECKPOINT_KEY not in d:
+            raise ValueError(
+                "restart: checkpoint lacks the lossless ProgramPersistentValueCheckpoint image; "
+                "historical/incomplete archives require offline migration"
+            )
+        persistent_bytes, persistent_image = program_persistent_checkpoint_from_payload(d)
+        if hierarchy_mode == "regrid_on_restart":
+            persistent_mode = "regrid_on_restart"
+        elif checkpoint_ranks != current_ranks:
+            persistent_mode = "rank_change"
+        else:
+            persistent_mode = "restore_recorded_hierarchy"
+        require_program_persistent_checkpoint_plan(
+            persistent_image,
+            require_checkpoint_resource_budget(owner),
+            mode=persistent_mode,
+        )
+        persistent_restore = prepare_program_persistent_value_restore(
+            sim,
+            persistent_bytes,
+            mode=persistent_mode,
         )
     # Route on the ENGINE (see write_v3): a compiled Program forces the runtime engine for ONE block too,
     # where only the per-block accessors + rebuild_hierarchy work.
@@ -1109,6 +1174,7 @@ def prepare_v3(
         field_payload=tuple((slot, tuple(levels)) for slot, levels in field_payload),
         hierarchy_mode=hierarchy_mode,
         hierarchy_identity=hierarchy_identity,
+        program_persistent_restore=persistent_restore,
     )
 
 
@@ -1514,6 +1580,12 @@ def apply_v3(owner, sim, prepared):
             validate_transformed_state,
         )
         owner._last_restart_regrid_receipt = receipt
+    if prepared.program_persistent_restore is not None:
+        from pops.output._checkpoint_contract import publish_program_persistent_value_restore
+
+        # Publish only after hierarchy, fields, histories and qualified regrid witnesses have
+        # completed.  The native callback is a noexcept swap of the detached prepared store.
+        publish_program_persistent_value_restore(prepared.program_persistent_restore)
     owner._temporal_restart_state = prepared.temporal_state
     owner._step_controller = None
     return report
@@ -1650,7 +1722,7 @@ def _preflight_histories_v3(sim, d, current_ranks, spatial):
 
 
 def _restore_histories_v3(sim, d, cur_ranks):
-    """Restore accepted-state v11 rings and replay only policy-omitted slots on a stable hierarchy.
+    """Restore accepted-state v12 rings and replay only policy-omitted slots on a stable hierarchy.
 
     Capture resolves any selective ring whose replay window contains a scheduled regrid, cold slot,
     or non-default whole-Program cadence to explicit dense safety storage. Therefore this function

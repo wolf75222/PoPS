@@ -227,8 +227,24 @@ runtime::program::ProgramRuntimeState<Dim>& System<Dim>::program_runtime_state_(
 }
 
 template <int Dim>
-void System<Dim>::install_program_step(std::function<void(double)> step) {
-  p_->program_.install_unverified_step(std::move(step));
+runtime::program::ProgramHostDescriptor System<Dim>::program_host_descriptor() {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return program_host_descriptor_();
+}
+
+template <int Dim>
+runtime::program::ProgramHostDescriptor System<Dim>::program_host_descriptor_() {
+  using namespace runtime::program;
+  return {sizeof(ProgramHostDescriptor),
+          kProgramInstallAbiVersion,
+          static_cast<std::uint32_t>(Dim),
+          ProgramRuntimeKind::uniform,
+          ProgramExecutionLane::host,
+          kProgramCapabilitySchedules | kProgramCapabilityPersistentValues |
+              kProgramCapabilityTransactions,
+          {},
+          {this, this, this, p_->program_.one_level_hierarchy_identity(), this, this, this, this,
+           &p_->program_.persistent_values()}};
 }
 
 template <int Dim>
@@ -239,31 +255,37 @@ void System<Dim>::set_program_cadence(int substeps, int stride) {
 
 template <int Dim>
 int System<Dim>::program_substeps() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->program_.substeps_;
 }
 
 template <int Dim>
 int System<Dim>::program_stride() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->program_.stride_;
 }
 
 template <int Dim>
 double System<Dim>::program_cadence_window_dt() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->program_.cadence_window_dt_;
 }
 
 template <int Dim>
 int System<Dim>::program_cadence_window_steps() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->program_.cadence_window_steps_;
 }
 
 template <int Dim>
 double System<Dim>::program_cadence_window_start_time() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->program_.cadence_window_start_time_;
 }
 
 template <int Dim>
 double System<Dim>::program_last_dt() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return static_cast<double>(p_->program_.last_dt_);
 }
 
@@ -277,6 +299,12 @@ void System<Dim>::restore_program_cadence_window(double accumulated_dt, int held
 
 template <int Dim>
 int System<Dim>::n_blocks() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return p_->blocks_.size();
+}
+
+template <int Dim>
+int System<Dim>::program_n_blocks_() const {
   return p_->blocks_.size();
 }
 
@@ -387,16 +415,34 @@ std::size_t System<Dim>::apply_coupling_operators(
 }
 
 template <int Dim>
-MultiFab<Dim>& System<Dim>::block_state(int block) {
+AcceptedMultiFabReadView<Dim> System<Dim>::block_state(int block) {
+  auto accepted_read = p_->acquire_accepted_read_lease();
   if (block < 0 || block >= p_->blocks_.size())
     throw std::out_of_range("System::block_state block index is out of range");
+  return AcceptedMultiFabReadView<Dim>(std::move(accepted_read),
+                                       &p_->sp[static_cast<std::size_t>(block)].U);
+}
+
+template <int Dim>
+MultiFab<Dim>& System<Dim>::program_block_state_(int block) {
+  if (block < 0 || block >= p_->blocks_.size())
+    throw std::out_of_range("System::program_block_state block index is out of range");
   return p_->sp[static_cast<std::size_t>(block)].U;
 }
 
 template <int Dim>
-const MultiFab<Dim>& System<Dim>::block_state(int block) const {
+AcceptedMultiFabReadView<Dim> System<Dim>::block_state(int block) const {
+  auto accepted_read = p_->acquire_accepted_read_lease();
   if (block < 0 || block >= p_->blocks_.size())
     throw std::out_of_range("System::block_state block index is out of range");
+  return AcceptedMultiFabReadView<Dim>(std::move(accepted_read),
+                                       &p_->sp[static_cast<std::size_t>(block)].U);
+}
+
+template <int Dim>
+const MultiFab<Dim>& System<Dim>::program_block_state_(int block) const {
+  if (block < 0 || block >= p_->blocks_.size())
+    throw std::out_of_range("System::program_block_state block index is out of range");
   return p_->sp[static_cast<std::size_t>(block)].U;
 }
 
@@ -589,6 +635,16 @@ void System<Dim>::block_rhs_into_at_prepared(
 
 template <int Dim>
 const ExecutionLane& System<Dim>::prepared_boundary_execution_lane() const {
+  if (!p_)
+    throw std::logic_error("System moved-from instance has no prepared boundary execution lane");
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  if (!prepared_boundary_execution_lane_)
+    throw std::logic_error("System has no RuntimeInstance-prepared boundary execution lane");
+  return *prepared_boundary_execution_lane_;
+}
+
+template <int Dim>
+const ExecutionLane& System<Dim>::program_prepared_boundary_execution_lane_() const {
   if (!prepared_boundary_execution_lane_)
     throw std::logic_error("System has no RuntimeInstance-prepared boundary execution lane");
   return *prepared_boundary_execution_lane_;
@@ -596,27 +652,14 @@ const ExecutionLane& System<Dim>::prepared_boundary_execution_lane() const {
 
 template <int Dim>
 bool System<Dim>::requires_block_boundary_session(int block) const {
-  if (block < 0 || block >= p_->blocks_.size())
-    return false;
-  const typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
-  return selected.boundary != nullptr && !p_->blocks_.has_interfaces(block) &&
-         !(p_->embedded_boundary_ && p_->embedded_boundary_->mode() !=
-                                         runtime::system::PreparedEmbeddedBoundaryMode::inactive);
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return program_requires_block_boundary_session_(block);
 }
 
 template <int Dim>
 bool System<Dim>::has_block_boundary_linearization(int block) const {
-  if (block < 0 || block >= p_->blocks_.size())
-    return false;
-  const typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
-  return selected.boundary != nullptr &&
-         static_cast<bool>(selected.boundary_core_at_point_prepared) &&
-         static_cast<bool>(selected.boundary_residual_at_point_prepared) &&
-         static_cast<bool>(selected.boundary_full_at_point_prepared) &&
-         static_cast<bool>(selected.boundary_jvp_at_point_prepared) &&
-         !p_->blocks_.has_interfaces(block) &&
-         !(p_->embedded_boundary_ && p_->embedded_boundary_->mode() !=
-                                         runtime::system::PreparedEmbeddedBoundaryMode::inactive);
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return program_has_block_boundary_linearization_(block);
 }
 
 template <int Dim>
@@ -784,11 +827,20 @@ SolveOutcome System<Dim>::solve_block_source(int block, MultiFab<Dim>& state, Re
     throw std::runtime_error("System block '" + selected.name +
                              "' lacks a prepared implicit-source Newton provider");
   validate_newton_options(options, "System::solve_block_source");
-  return selected.solve_implicit_source(state, dt, options, prepared_boundary_execution_lane());
+  return selected.solve_implicit_source(state, dt, options,
+                                        program_prepared_boundary_execution_lane_());
 }
 
 template <int Dim>
 NewtonOptions System<Dim>::block_newton_options(int block) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  if (block < 0 || block >= p_->blocks_.size())
+    throw std::out_of_range("System Newton-options block index is out of range");
+  return p_->sp[static_cast<std::size_t>(block)].newton;
+}
+
+template <int Dim>
+NewtonOptions System<Dim>::program_block_newton_options_(int block) const {
   if (block < 0 || block >= p_->blocks_.size())
     throw std::out_of_range("System Newton-options block index is out of range");
   return p_->sp[static_cast<std::size_t>(block)].newton;
@@ -796,14 +848,47 @@ NewtonOptions System<Dim>::block_newton_options(int block) const {
 
 template <int Dim>
 bool System<Dim>::block_newton_diagnostics(int block) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  if (block < 0 || block >= p_->blocks_.size())
+    throw std::out_of_range("System Newton-diagnostics block index is out of range");
+  return program_block_newton_diagnostics_(block);
+}
+
+template <int Dim>
+bool System<Dim>::program_block_newton_diagnostics_(int block) const {
   if (block < 0 || block >= p_->blocks_.size())
     throw std::out_of_range("System Newton-diagnostics block index is out of range");
   return p_->sp[static_cast<std::size_t>(block)].newton_diagnostics;
 }
 
 template <int Dim>
+bool System<Dim>::program_requires_block_boundary_session_(int block) const {
+  if (block < 0 || block >= p_->blocks_.size())
+    return false;
+  const typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  return selected.boundary != nullptr && !p_->blocks_.has_interfaces(block) &&
+         !(p_->embedded_boundary_ && p_->embedded_boundary_->mode() !=
+                                         runtime::system::PreparedEmbeddedBoundaryMode::inactive);
+}
+
+template <int Dim>
+bool System<Dim>::program_has_block_boundary_linearization_(int block) const {
+  if (block < 0 || block >= p_->blocks_.size())
+    return false;
+  const typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  return selected.boundary != nullptr &&
+         static_cast<bool>(selected.boundary_core_at_point_prepared) &&
+         static_cast<bool>(selected.boundary_residual_at_point_prepared) &&
+         static_cast<bool>(selected.boundary_full_at_point_prepared) &&
+         static_cast<bool>(selected.boundary_jvp_at_point_prepared) &&
+         !p_->blocks_.has_interfaces(block) &&
+         !(p_->embedded_boundary_ && p_->embedded_boundary_->mode() !=
+                                         runtime::system::PreparedEmbeddedBoundaryMode::inactive);
+}
+
+template <int Dim>
 void System<Dim>::publish_newton_report(int block, const SolveReport& solve) {
-  if (!block_newton_diagnostics(block))
+  if (!program_block_newton_diagnostics_(block))
     return;
   NewtonReport report;
   report.enabled = true;
@@ -817,7 +902,13 @@ void System<Dim>::publish_newton_report(int block, const SolveReport& solve) {
 }
 
 template <int Dim>
-const NewtonReport& System<Dim>::last_newton_report() const {
+NewtonReport System<Dim>::last_newton_report() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return p_->last_newton_report_;
+}
+
+template <int Dim>
+const NewtonReport& System<Dim>::program_last_newton_report_() const {
   return p_->last_newton_report_;
 }
 
@@ -841,13 +932,14 @@ void System<Dim>::require_cartesian_generated_operator(int block,
 
 template <int Dim>
 Real System<Dim>::block_max_speed(int block, const MultiFab<Dim>& state) const {
-  return block_max_speed_prepared_(block, state, prepared_boundary_execution_lane());
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return block_max_speed_prepared_(block, state, program_prepared_boundary_execution_lane_());
 }
 
 template <int Dim>
 Real System<Dim>::block_max_speed_prepared_(int block, const MultiFab<Dim>& state,
                                             const ExecutionLane& lane) const {
-  const ExecutionLane& prepared = prepared_boundary_execution_lane();
+  const ExecutionLane& prepared = program_prepared_boundary_execution_lane_();
   if (all_reduce_max(&lane == &prepared ? 0L : 1L, prepared) != 0)
     throw std::invalid_argument("System maximum speed requires its authenticated execution lane");
 
@@ -873,6 +965,15 @@ Real System<Dim>::block_max_speed_prepared_(int block, const MultiFab<Dim>& stat
 
 template <int Dim>
 Real System<Dim>::cfl_min_dx() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  Real result = p_->geom.spacing(0);
+  for (int axis = 1; axis < Dim; ++axis)
+    result = std::min(result, p_->geom.spacing(axis));
+  return result;
+}
+
+template <int Dim>
+Real System<Dim>::program_cfl_min_dx_() const {
   Real result = p_->geom.spacing(0);
   for (int axis = 1; axis < Dim; ++axis)
     result = std::min(result, p_->geom.spacing(axis));
@@ -881,11 +982,13 @@ Real System<Dim>::cfl_min_dx() const {
 
 template <int Dim>
 std::string System<Dim>::installed_program_hash() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->program_.installed_hash_;
 }
 
 template <int Dim>
 std::string System<Dim>::poisson_solver() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->poisson_solver_;
 }
 
@@ -903,7 +1006,13 @@ void System<Dim>::set_program_block_map(const std::vector<int>& program_to_syste
 }
 
 template <int Dim>
-const std::vector<int>& System<Dim>::program_block_map() const {
+std::vector<int> System<Dim>::program_block_map() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return p_->program_.block_map_;
+}
+
+template <int Dim>
+const std::vector<int>& System<Dim>::program_block_map_() const {
   return p_->program_.block_map_;
 }
 
@@ -917,7 +1026,7 @@ bool System<Dim>::program_owns_operator_authority(
 
 template <int Dim>
 void System<Dim>::block_project(int block, MultiFab<Dim>& state) {
-  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  const ExecutionLane& lane = program_prepared_boundary_execution_lane_();
   typename Impl::Species* selected = nullptr;
   typename SystemBlockStore<Dim>::EmbeddedResidualFamily* family = nullptr;
   std::exception_ptr local_error;
@@ -984,19 +1093,25 @@ bool System<Dim>::program_balance_consumer_is_due(const std::string& contract,
 
 template <int Dim>
 Real System<Dim>::program_diagnostic(const std::string& name) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->program_.diagnostic(name, "System");
 }
 
 template <int Dim>
 std::map<std::string, Real> System<Dim>::program_diagnostics() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->program_.diagnostics();
 }
 
 template <int Dim>
 std::map<std::string, Real> System<Dim>::accepted_balance_terms(const std::string& route) const {
-  if (!p_->external_step_transaction_ || p_->external_step_transaction_committed_)
+  if (!p_->external_program_transaction_ || p_->external_step_transaction_committed_)
     throw std::runtime_error(
         "System::_accepted_balance_terms requires an active uncommitted external step transaction");
+  // Candidate balance evidence is not accepted state.  The sole legal read is a writer-owned
+  // explicit provisional scope; `acquire_accepted_read_lease()` refuses same-thread bypass and
+  // blocks foreign readers behind the candidate visibility writer.
+  [[maybe_unused]] auto provisional_read = p_->acquire_accepted_read_lease();
   return p_->program_.accepted_balance_terms(route, "System");
 }
 
@@ -1004,10 +1119,11 @@ template <int Dim>
 std::map<std::string, Real> System<Dim>::selected_accepted_balance_terms(
     const std::string& route, const std::string& block, int component,
     const std::vector<int>& levels, const std::vector<std::string>& automatic_terms) const {
-  if (!p_->external_step_transaction_ || p_->external_step_transaction_committed_)
+  if (!p_->external_program_transaction_ || p_->external_step_transaction_committed_)
     throw std::runtime_error(
         "System::_selected_accepted_balance_terms requires an active uncommitted external step "
         "transaction");
+  [[maybe_unused]] auto provisional_read = p_->acquire_accepted_read_lease();
   const int runtime_block = p_->index(block);
   if (component < 0 || component >= p_->find(block).ncomp)
     throw std::out_of_range("System balance component is out of range");
@@ -1029,6 +1145,7 @@ void System<Dim>::note_step_projection(const std::string& name) {
 
 template <int Dim>
 std::vector<std::string> System<Dim>::consume_step_projections() {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->program_.consume_step_projections();
 }
 
@@ -1044,12 +1161,21 @@ void System<Dim>::set_program_params(int program_block, const std::vector<double
 
 template <int Dim>
 RuntimeParams System<Dim>::program_params(int program_block) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return p_->program_.params(program_block);
+}
+
+template <int Dim>
+RuntimeParams System<Dim>::program_params_(int program_block) const {
   return p_->program_.params(program_block);
 }
 
 template runtime::program::ProgramRuntimeState<kNativeDimension>&
 System<kNativeDimension>::program_runtime_state_();
-template void System<kNativeDimension>::install_program_step(std::function<void(double)>);
+template runtime::program::ProgramHostDescriptor
+System<kNativeDimension>::program_host_descriptor();
+template runtime::program::ProgramHostDescriptor
+System<kNativeDimension>::program_host_descriptor_();
 template void System<kNativeDimension>::set_program_cadence(int, int);
 template int System<kNativeDimension>::program_substeps() const;
 template int System<kNativeDimension>::program_stride() const;
@@ -1060,10 +1186,15 @@ template double System<kNativeDimension>::program_last_dt() const;
 template void System<kNativeDimension>::restore_program_cadence_window(double, int, double, double,
                                                                        double, int);
 template int System<kNativeDimension>::n_blocks() const;
+template int System<kNativeDimension>::program_n_blocks_() const;
 template std::size_t System<kNativeDimension>::apply_coupling_operators(
     Real, const std::vector<MultiFab<kNativeDimension>*>&);
-template MultiFab<kNativeDimension>& System<kNativeDimension>::block_state(int);
-template const MultiFab<kNativeDimension>& System<kNativeDimension>::block_state(int) const;
+template AcceptedMultiFabReadView<kNativeDimension> System<kNativeDimension>::block_state(int);
+template AcceptedMultiFabReadView<kNativeDimension> System<kNativeDimension>::block_state(
+    int) const;
+template MultiFab<kNativeDimension>& System<kNativeDimension>::program_block_state_(int);
+template const MultiFab<kNativeDimension>& System<kNativeDimension>::program_block_state_(
+    int) const;
 template void System<kNativeDimension>::block_rhs_into(int, MultiFab<kNativeDimension>&,
                                                        MultiFab<kNativeDimension>&);
 template void System<kNativeDimension>::block_rhs_into_at(
@@ -1084,8 +1215,12 @@ template void System<kNativeDimension>::block_rhs_into_at_prepared(
     const runtime::multiblock::BoundaryEvaluationPoint&, const ExecutionLane&,
     const runtime::program::PreparedScalarBoundarySession<kNativeDimension>&);
 template const ExecutionLane& System<kNativeDimension>::prepared_boundary_execution_lane() const;
+template const ExecutionLane& System<kNativeDimension>::program_prepared_boundary_execution_lane_()
+    const;
 template bool System<kNativeDimension>::requires_block_boundary_session(int) const;
 template bool System<kNativeDimension>::has_block_boundary_linearization(int) const;
+template bool System<kNativeDimension>::program_requires_block_boundary_session_(int) const;
+template bool System<kNativeDimension>::program_has_block_boundary_linearization_(int) const;
 template void System<kNativeDimension>::block_boundary_residual_into_at(
     const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
     MultiFab<kNativeDimension>&, const System<kNativeDimension>*, int,
@@ -1108,9 +1243,12 @@ template void System<kNativeDimension>::block_source_into(int, MultiFab<kNativeD
 template SolveOutcome System<kNativeDimension>::solve_block_source(int, MultiFab<kNativeDimension>&,
                                                                    Real, const NewtonOptions&);
 template NewtonOptions System<kNativeDimension>::block_newton_options(int) const;
+template NewtonOptions System<kNativeDimension>::program_block_newton_options_(int) const;
 template bool System<kNativeDimension>::block_newton_diagnostics(int) const;
+template bool System<kNativeDimension>::program_block_newton_diagnostics_(int) const;
 template void System<kNativeDimension>::publish_newton_report(int, const SolveReport&);
-template const NewtonReport& System<kNativeDimension>::last_newton_report() const;
+template NewtonReport System<kNativeDimension>::last_newton_report() const;
+template const NewtonReport& System<kNativeDimension>::program_last_newton_report_() const;
 template void System<kNativeDimension>::require_cartesian_generated_operator(
     int, const std::string&) const;
 template Real System<kNativeDimension>::block_max_speed(int,
@@ -1119,10 +1257,12 @@ template Real System<kNativeDimension>::block_max_speed_prepared_(int,
                                                                   const MultiFab<kNativeDimension>&,
                                                                   const ExecutionLane&) const;
 template Real System<kNativeDimension>::cfl_min_dx() const;
+template Real System<kNativeDimension>::program_cfl_min_dx_() const;
 template std::string System<kNativeDimension>::installed_program_hash() const;
 template std::string System<kNativeDimension>::poisson_solver() const;
 template void System<kNativeDimension>::set_program_block_map(const std::vector<int>&);
-template const std::vector<int>& System<kNativeDimension>::program_block_map() const;
+template std::vector<int> System<kNativeDimension>::program_block_map() const;
+template const std::vector<int>& System<kNativeDimension>::program_block_map_() const;
 template bool System<kNativeDimension>::program_owns_operator_authority(
     const std::array<std::uint64_t, 4>&) const noexcept;
 template void System<kNativeDimension>::block_project(int, MultiFab<kNativeDimension>&);
@@ -1145,5 +1285,6 @@ template std::vector<std::string> System<kNativeDimension>::consume_step_project
 template void System<kNativeDimension>::seed_program_params(int, const std::vector<double>&);
 template void System<kNativeDimension>::set_program_params(int, const std::vector<double>&);
 template RuntimeParams System<kNativeDimension>::program_params(int) const;
+template RuntimeParams System<kNativeDimension>::program_params_(int) const;
 
 }  // namespace pops

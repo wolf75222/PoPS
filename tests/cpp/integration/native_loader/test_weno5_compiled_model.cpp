@@ -192,11 +192,16 @@ CompiledRun run_compiled(int n, double L, const std::vector<double>& rho, double
                                  add_model_elliptic_rhs(model, state, rhs);
                                });
   sys.set_state("gas", hydrostatic_initial_state(rho));
-  (void)pops::consume_solve_outcome(
-      sys.solve_fields_from_state(kGravityField, 0, sys.block_state(0)));
+  // Materialize the diagnostic input before invoking the public field publication route.  The
+  // latter is a writer transaction and must not run while an accepted read view is held.
+  const MultiFab<Dim> state = [&] {
+    const auto state_view = sys.block_state(0);
+    return MultiFab<Dim>(*state_view.get());
+  }();
+  (void)pops::consume_solve_outcome(sys.solve_fields_from_state(kGravityField, 0, state));
 
   CompiledRun result;
-  result.ghosts = sys.block_state(0).ghosts();
+  result.ghosts = state.ghosts();
   result.residual = sys.eval_rhs("gas");
   result.potential = sys.field_potential_global(kGravityFieldSlot);
   result.gradients.reserve(static_cast<std::size_t>(Dim));

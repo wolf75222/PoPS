@@ -156,6 +156,18 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [2]
 
 [[cpp.suite]]
+name = "test_mpi_amr_program_3d_corner_authority"
+sources = ["tests/cpp/integration/mpi/test_mpi_amr_program_3d_corner_authority.cpp"]
+labels = ["backend", "mpi", "amr", "nd", "authority", "corner", "medium"]
+mpi_nproc = [8]
+
+[[cpp.suite]]
+name = "test_mpi_program_transaction_effect_consensus"
+sources = ["tests/cpp/integration/mpi/test_mpi_program_transaction_effect_consensus.cpp"]
+labels = ["backend", "mpi", "transaction", "authority", "medium"]
+mpi_nproc = [2]
+
+[[cpp.suite]]
 name = "test_mpi_amr_program_reflux"
 sources = ["tests/cpp/integration/mpi/test_mpi_amr_program_reflux.cpp"]
 labels = ["backend", "mpi", "amr", "nd", "checkpoint", "medium"]
@@ -445,7 +457,7 @@ labels = ["integration", "runtime", "medium"]
 [[cpp.suite]]
 name = "test_checkpoint_history_policy"
 sources = ["tests/cpp/integration/runtime/test_checkpoint_history_policy.cpp"]
-labels = ["integration", "runtime", "medium"]
+labels = ["integration", "runtime", "native_loader", "compiler", "medium"]
 
 [[cpp.suite]]
 name = "test_config_model_validation"
@@ -473,10 +485,35 @@ sources = ["tests/cpp/integration/runtime/test_external_brick_isolation.cpp"]
 labels = ["integration", "runtime", "medium"]
 
 [[cpp.suite]]
-name = "test_program_context_contract"
-sources = ["tests/cpp/unit/runtime/test_program_context_contract.cpp"]
+name = "test_program_execution_services_contract"
+sources = ["tests/cpp/unit/runtime/test_program_execution_services_contract.cpp"]
 labels = ["unit", "runtime", "small"]
 mpi_variants = [2]
+
+[[cpp.suite]]
+name = "test_program_host_descriptor"
+sources = ["tests/cpp/unit/runtime/test_program_host_descriptor.cpp"]
+labels = ["unit", "runtime", "small"]
+
+[[cpp.suite]]
+name = "test_program_transaction"
+sources = ["tests/cpp/unit/runtime/test_program_transaction.cpp"]
+labels = ["unit", "runtime", "small"]
+
+[[cpp.suite]]
+name = "test_system_transaction_authority"
+sources = ["tests/cpp/unit/runtime/test_system_transaction_authority.cpp"]
+labels = ["unit", "runtime", "native_loader", "compiler", "small"]
+
+[[cpp.suite]]
+name = "test_step_change_l2_uniform_allocation"
+sources = ["tests/cpp/unit/runtime/test_step_change_l2_uniform_allocation.cpp"]
+labels = ["unit", "runtime", "allocation", "native_loader", "compiler", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_transaction_authority"
+sources = ["tests/cpp/unit/runtime/test_amr_transaction_authority.cpp"]
+labels = ["unit", "runtime", "amr", "small"]
 
 [[cpp.suite]]
 name = "test_facade_routing"
@@ -496,7 +533,7 @@ labels = ["integration", "runtime", "medium"]
 [[cpp.suite]]
 name = "test_program_runtime"
 sources = ["tests/cpp/integration/runtime/test_program_runtime.cpp"]
-labels = ["integration", "runtime", "medium"]
+labels = ["integration", "runtime", "native_loader", "compiler", "medium"]
 mpi_variants = [2]
 
 [[cpp.suite]]
@@ -1061,8 +1098,8 @@ sources = ["tests/cpp/unit/runtime/test_exact_aux_registry_nd.cpp"]
 labels = ["unit", "runtime", "fast", "nd"]
 
 [[cpp.suite]]
-name = "test_program_context_schur_free"
-sources = ["tests/cpp/unit/runtime/test_program_context_schur_free.cpp"]
+name = "test_program_execution_services_schur_free"
+sources = ["tests/cpp/unit/runtime/test_program_execution_services_schur_free.cpp"]
 labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]

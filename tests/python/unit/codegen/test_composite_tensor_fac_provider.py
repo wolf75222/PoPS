@@ -984,7 +984,7 @@ def test_header_only_hierarchy_extension_compiles_its_own_generic_provider_ident
     header.write_text(
         """#pragma once
 #include <pops/core/foundation/native_dimension.hpp>
-#include <pops/runtime/program/amr_program_context.hpp>
+#include <pops/runtime/program/program_execution_services.hpp>
 #include <pops/runtime/amr/amr_tensor_elliptic.hpp>
 #include <pops/runtime/export.hpp>
 
@@ -992,7 +992,7 @@ def test_header_only_hierarchy_extension_compiles_its_own_generic_provider_ident
 namespace pops_test_hierarchy {
 namespace {
 inline constexpr int kDim = pops::kNativeDimension;
-using Context = pops::runtime::program::AmrProgramContext<kDim>;
+using Context = pops::runtime::program::ProgramExecutionServices<kDim>;
 using Field = pops::MultiFab<kDim>;
 using TensorRequest = pops::runtime::program::HierarchyTensorSolverBuildRequest<kDim>;
 using PreparedTensorSolver = pops::runtime::program::PreparedHierarchyTensorSolver<kDim>;
@@ -1267,7 +1267,7 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
     assert "pops_test_hierarchy::solve(ctx," in source
     assert "pops_test_hierarchy::register_provider(ctx);" in source
     assert '"tests.hierarchy.header-only"' in source
-    amr = source.split('extern "C" void pops_install_program_amr', 1)[1]
+    amr = source.split('extern "C" bool pops_install_program', 1)[1]
     assert "ctx.prepared_execution_communicator()" in amr
     assert '"pops.program.amr.prepared-problem.' in amr
     assert '"pops.program.amr.krylov-workspace.' in amr

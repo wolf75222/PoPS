@@ -29,8 +29,32 @@ add_subdirectory("${POPS_ROOT}" pops EXCLUDE_FROM_ALL)
 set(POPS_CXX_STD 20)
 add_subdirectory("${POPS_ROOT}/src" pops-runtime EXCLUDE_FROM_ALL)
 
+function(add_amr_v5_program_fixture name block)
+  add_library(${name} MODULE amrmpi_integrated.cpp)
+  target_compile_features(${name} PRIVATE cxx_std_20)
+  target_compile_definitions(${name} PRIVATE
+    POPS_RUNTIME_SHARED_EXCEPTION_ABI
+    POPS_TEST_AMR_V5_ARTIFACT=1
+    POPS_TEST_AMR_V5_BLOCK0="${block}"
+    POPS_TEST_AMR_V5_IDENTITY="${name}"
+    POPS_TEST_AMR_V5_NUMERICAL=1)
+  target_link_libraries(${name} PRIVATE pops::pops)
+  if(APPLE)
+    target_link_options(${name} PRIVATE -undefined dynamic_lookup)
+  endif()
+  set_target_properties(${name} PROPERTIES PREFIX "" POSITION_INDEPENDENT_CODE ON)
+endfunction()
+
+add_amr_v5_program_fixture(amrmpi_program_gas gas)
+add_amr_v5_program_fixture(amrmpi_program_magnetic magnetic)
+
 add_executable(amrmpi_integrated amrmpi_integrated.cpp)
 target_compile_features(amrmpi_integrated PRIVATE cxx_std_20)
+target_compile_definitions(amrmpi_integrated PRIVATE
+  POPS_TEST_AMR_V5_GAS_PROGRAM="$<TARGET_FILE:amrmpi_program_gas>"
+  POPS_TEST_AMR_V5_MAGNETIC_PROGRAM="$<TARGET_FILE:amrmpi_program_magnetic>")
+set_target_properties(amrmpi_integrated PROPERTIES ENABLE_EXPORTS ON)
+add_dependencies(amrmpi_integrated amrmpi_program_gas amrmpi_program_magnetic)
 # Linking the canonical OBJECT target embeds the exact-ranked AMR runtime while preserving the
 # Kokkos/MPI/shared-exception usage requirements owned by PoPS.
 target_link_libraries(amrmpi_integrated PRIVATE pops_runtime_amr)

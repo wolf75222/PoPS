@@ -1,0 +1,590 @@
+schema_version = 1
+gate = "runtime-authority"
+issues = ["ADC-700", "ADC-702", "ADC-720"]
+deferred = []
+
+# This is the closed runtime-authority ledger.  Every row names one exact source-owned proof;
+# `backend` selects the authenticated lane and `allocation = "required"` requires the lane to
+# publish its allocator-free hot-path authentication marker before execution.
+
+[[check]]
+issue = "ADC-700"
+requirement = "abi_identity"
+polarity = "positive"
+kind = "ctest"
+target = "abi_identity@test_program_host_descriptor"
+backend = "serial"
+allocation = "none"
+test_regex = "^ProgramHostDescriptor\\.UniformRequiresTaggedPreparationImageBeforeProviderMaterialization$"
+
+[[check]]
+issue = "ADC-700"
+requirement = "abi_identity"
+polarity = "refusal"
+kind = "ctest"
+target = "abi_identity@test_program_execution_services_schur_free"
+backend = "serial"
+allocation = "none"
+test_regex = "^ProgramInstallationTables\\.RejectsMalformedAbiTableShapesAndContents$"
+
+[[check]]
+issue = "ADC-700"
+requirement = "abi_identity"
+polarity = "positive"
+kind = "ctest"
+target = "abi_identity@test_program_abi_symbols"
+backend = "serial"
+allocation = "none"
+test_regex = "^test_program_abi_symbols\\.Runs$"
+
+[[check]]
+issue = "ADC-700"
+requirement = "abi_identity"
+polarity = "positive"
+kind = "ctest"
+target = "abi_identity@test_program_loader"
+backend = "serial"
+allocation = "none"
+test_regex = "^test_program_loader\\.Runs$"
+
+[[check]]
+issue = "ADC-700"
+requirement = "abi_identity"
+polarity = "positive"
+kind = "ctest"
+target = "abi_identity@test_program_execution_services_schur_free"
+backend = "serial"
+allocation = "none"
+test_regex = "^ProgramInstallationTables\\.MaterializesEveryDsoViewBeforePreparation$"
+
+[[check]]
+issue = "ADC-700"
+requirement = "solve_outcome"
+polarity = "positive"
+kind = "ctest"
+target = "solve_outcome@test_newton_robustness"
+backend = "serial"
+allocation = "none"
+test_regex = "^SolveOutcomeContract\\.exhaustive_statuses_are_move_only_exact_once_and_never_publish_early$"
+
+[[check]]
+issue = "ADC-700"
+requirement = "solve_outcome"
+polarity = "refusal"
+kind = "ctest"
+target = "solve_outcome@test_newton_robustness"
+backend = "serial"
+allocation = "none"
+test_regex = "^NewtonRobustnessTest\\.publication_layout_failure_does_not_consume_the_outcome$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "common_services"
+polarity = "positive"
+kind = "ctest"
+target = "common_services@test_program_host_descriptor"
+backend = "serial"
+allocation = "none"
+test_regex = "^ProgramHostDescriptor\\.AmrInspectionImageIsTaggedAndNeverProvidesExecutionServices$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "common_services"
+polarity = "refusal"
+kind = "ctest"
+target = "common_services@test_program_execution_services_schur_free"
+backend = "serial"
+allocation = "none"
+test_regex = "^ProgramExecutionServicesSchurFree\\.ExactRankedHeaderRequiresTaggedPreparationImage$"
+
+[[check]]
+issue = "ADC-700"
+requirement = "schedule_parity"
+polarity = "positive"
+kind = "ctest"
+target = "schedule_parity@test_program_execution_services_contract"
+backend = "serial"
+allocation = "none"
+test_regex = "^ProgramExecutionServicesContract\\.SsprkTwoStageViaContextMatchesReference$"
+
+[[check]]
+issue = "ADC-700"
+requirement = "schedule_parity"
+polarity = "refusal"
+kind = "ctest"
+target = "schedule_parity@test_program_execution_services_schur_free"
+backend = "serial"
+allocation = "none"
+test_regex = "^ProgramRuntimeStateCadence\\.DispatchFailureRestoresCursorAndReentrancyLease$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "schedule_parity"
+polarity = "positive"
+kind = "pytest"
+target = "schedule_parity"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_ssprk_semantics_have_only_typed_python_program_authority"
+
+[[check]]
+issue = "ADC-702"
+requirement = "schedule_parity"
+polarity = "positive"
+kind = "pytest"
+target = "schedule_parity"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/integration/io/test_scheduler_cache_checkpoint.py::test_cache_v9_preflight_accepts_complete_payload_and_rejects_truncation"
+
+[[check]]
+issue = "ADC-702"
+requirement = "schedule_parity"
+polarity = "refusal"
+kind = "pytest"
+target = "schedule_parity"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_amr_runtime_and_builders_do_not_decode_a_second_time_method"
+
+[[check]]
+issue = "ADC-720"
+requirement = "cell_local_ordinary"
+polarity = "positive"
+kind = "ctest"
+target = "cell_local_ordinary@test_cell_temporal_program_route"
+backend = "serial"
+allocation = "none"
+test_regex = "^test_cell_temporal_program_route\\.direct_prepared_subengine_executes_one_exact_algorithm_in_every_dimension$"
+
+[[check]]
+issue = "ADC-720"
+requirement = "cell_local_ordinary"
+polarity = "refusal"
+kind = "ctest"
+target = "cell_local_ordinary@test_mpi_cell_temporal_program_refusal"
+backend = "mpi"
+allocation = "none"
+test_regex = "^test_mpi_cell_temporal_program_refusal_np2$"
+
+[[check]]
+issue = "ADC-720"
+requirement = "cell_local_ordinary"
+polarity = "positive"
+kind = "mpi_python"
+target = "cell_local_ordinary"
+backend = "mpi"
+allocation = "none"
+nproc = 2
+nodeid = "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py::test_public_mpi_generated_cell_local_multiblock_regrids_and_matches_forward_euler"
+
+[[check]]
+issue = "ADC-720"
+requirement = "cell_local_ordinary"
+polarity = "refusal"
+kind = "pytest"
+target = "cell_local_ordinary"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_amr_spatial_runtime_owns_no_cfl_or_temporal_advance_authority"
+
+[[check]]
+issue = "ADC-702"
+requirement = "strict_restart"
+polarity = "positive"
+kind = "ctest"
+target = "strict_restart@test_temporal_partition_restart"
+backend = "serial"
+allocation = "none"
+test_regex = "^test_temporal_partition_restart\\.AcceptedImageIsCanonicalInOneTwoAndThreeDimensions$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "strict_restart"
+polarity = "refusal"
+kind = "ctest"
+target = "strict_restart@test_temporal_partition_restart"
+backend = "serial"
+allocation = "none"
+test_regex = "^test_temporal_partition_restart\\.LegacyAndTruncatedImagesAreRefused$"
+
+[[check]]
+issue = "ADC-720"
+requirement = "strict_restart"
+polarity = "positive"
+kind = "ctest"
+target = "strict_restart@test_program_reflux_ledger"
+backend = "serial"
+allocation = "none"
+test_regex = "^test_program_reflux_ledger\\.CanonicalMetricLedgerAndAcceptedCheckpointAreExactInOneTwoAndThreeDimensions$"
+
+[[check]]
+issue = "ADC-720"
+requirement = "strict_restart"
+polarity = "refusal"
+kind = "pytest"
+target = "strict_restart"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/architecture/test_amr_program_support_parity.py::test_complete_query_requires_resolved_context"
+
+[[check]]
+issue = "ADC-702"
+requirement = "strict_restart"
+polarity = "positive"
+kind = "pytest"
+target = "strict_restart"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_uniform_and_amr_payload_versions_are_exact_current_integer_scalars"
+
+[[check]]
+issue = "ADC-702"
+requirement = "strict_restart"
+polarity = "refusal"
+kind = "pytest"
+target = "strict_restart"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_historical_version_refusal_happens_before_restart_transaction"
+
+[[check]]
+issue = "ADC-702"
+requirement = "hot_path_allocation"
+polarity = "positive"
+kind = "ctest"
+target = "hot_path_allocation@test_program_execution_services_contract"
+backend = "serial"
+allocation = "required"
+test_regex = "^ProgramExecutionServicesContract\\.GeneratedScratchIsPersistentExactAndNonAliasing$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "hot_path_allocation"
+polarity = "refusal"
+kind = "pytest"
+target = "hot_path_allocation"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/architecture/test_no_duplicate_core_systems.py::test_bind_path_consumes_field_plans_never_constructs_them"
+
+[[check]]
+issue = "ADC-720"
+requirement = "hot_path_allocation"
+polarity = "positive"
+kind = "pytest"
+target = "hot_path_allocation"
+backend = "openmp"
+allocation = "required"
+nodeid = "tests/python/architecture/test_runtime_source_layout.py::test_central_targets_preserve_consumer_specific_compile_contracts"
+
+[[check]]
+issue = "ADC-720"
+requirement = "hot_path_allocation"
+polarity = "refusal"
+kind = "pytest"
+target = "hot_path_allocation"
+backend = "openmp"
+allocation = "required"
+nodeid = "tests/python/architecture/test_no_schur_header_leak.py::test_program_execution_services_has_no_schur_tokens"
+
+[[check]]
+issue = "ADC-720"
+requirement = "hot_path_allocation"
+polarity = "positive"
+kind = "ctest"
+target = "hot_path_allocation@test_step_change_l2_uniform_allocation"
+backend = "serial"
+allocation = "none"
+test_regex = "^StepChangeL2GlobalAllocationProbe\\.PreparedUniformSingleAndMultiBlockCallsAllocateNothing$"
+
+[[check]]
+issue = "ADC-720"
+requirement = "hot_path_allocation"
+polarity = "positive"
+kind = "ctest"
+target = "hot_path_allocation@test_step_change_l2_uniform_allocation"
+backend = "serial"
+allocation = "none"
+test_regex = "^StepChangeL2GlobalAllocationProbe\\.PreparedTwoLevelAmrSingleAndMultiBlockCallsAllocateNothing$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "transaction_authority"
+polarity = "positive"
+kind = "ctest"
+target = "transaction_authority@test_program_transaction"
+backend = "serial"
+allocation = "none"
+test_regex = "^ProgramTransaction\\.SuccessfulEffectsAndReceiptsAreExactOnce$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "transaction_authority"
+polarity = "refusal"
+kind = "ctest"
+target = "transaction_authority@test_program_transaction"
+backend = "serial"
+allocation = "none"
+test_regex = "^ProgramTransaction\\.SolveGuardAndAtomicSealConsensusFaultsRollback$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "transaction_authority"
+polarity = "refusal"
+kind = "ctest"
+target = "transaction_authority@test_program_transaction"
+backend = "serial"
+allocation = "none"
+test_regex = "^ProgramTransaction\\.FrozenEffectSlotsRefuseOutOfOrderAndMissingSubmissionsCollectively$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "transaction_authority"
+polarity = "refusal"
+kind = "ctest"
+target = "transaction_authority@test_mpi_program_transaction_effect_consensus"
+backend = "mpi"
+allocation = "none"
+test_regex = "^test_mpi_program_transaction_effect_consensus_np2$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "transaction_authority"
+polarity = "positive"
+kind = "ctest"
+target = "transaction_authority@test_program_transaction"
+backend = "serial"
+allocation = "none"
+test_regex = "^ProgramTransaction\\.ForeignAcceptedReaderRejectsWriterWithoutBlockingCollectiveProgress$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "transaction_authority"
+polarity = "positive"
+kind = "ctest"
+target = "transaction_authority@test_system_transaction_authority"
+backend = "serial"
+allocation = "none"
+test_regex = "^SystemTransactionAuthority\\.ConcurrentAcceptedReaderBlocksDuringCandidate$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "transaction_authority"
+polarity = "positive"
+kind = "ctest"
+target = "transaction_authority@test_amr_transaction_authority"
+backend = "serial"
+allocation = "none"
+test_regex = "^AmrTransactionAuthority\\.FieldCandidateSavepointRestoresAcceptedImagesWithoutHotAllocation$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "transaction_authority"
+polarity = "positive"
+kind = "ctest"
+target = "transaction_authority@test_amr_transaction_authority"
+backend = "serial"
+allocation = "none"
+test_regex = "^AmrTransactionAuthority\\.FieldCandidateSavepointAdoptsForwardTopologyWithoutPostSealAllocation$"
+
+[[check]]
+issue = "ADC-700"
+requirement = "prepared_installation"
+polarity = "positive"
+kind = "ctest"
+target = "prepared_installation@test_program_host_descriptor"
+backend = "serial"
+allocation = "none"
+test_regex = "^PreparedProgramInstallation\\.RetainsOneImmutableDescriptionAndPreparationWitness$"
+
+[[check]]
+issue = "ADC-700"
+requirement = "prepared_installation"
+polarity = "refusal"
+kind = "ctest"
+target = "prepared_installation@test_program_host_descriptor"
+backend = "serial"
+allocation = "none"
+test_regex = "^PreparedProgramInstallation\\.RefusesAnOwnerThatWasNotPrepared$"
+
+[[check]]
+issue = "ADC-700"
+requirement = "lowering_refusal"
+polarity = "refusal"
+kind = "pytest"
+target = "lowering_refusal"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/unit/codegen/test_scheduler_codegen.py::test_scratch_skip_refuses_unprepared_stale_state"
+
+[[check]]
+issue = "ADC-700"
+requirement = "lowering_refusal"
+polarity = "refusal"
+kind = "pytest"
+target = "lowering_refusal"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/unit/codegen/test_scheduler_codegen.py::test_on_end_refuses_to_lower"
+
+[[check]]
+issue = "ADC-700"
+requirement = "legacy_context_barrier"
+polarity = "positive"
+kind = "pytest"
+target = "legacy_context_barrier"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_system_temporal_facades_dispatch_only_through_an_installed_program"
+
+[[check]]
+issue = "ADC-700"
+requirement = "legacy_context_barrier"
+polarity = "refusal"
+kind = "pytest"
+target = "legacy_context_barrier"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_historical_block_scheduler_is_not_an_installed_temporal_authority"
+
+[[check]]
+issue = "ADC-700"
+requirement = "legacy_symbol_barrier"
+polarity = "positive"
+kind = "pytest"
+target = "legacy_symbol_barrier"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/architecture/test_no_legacy_runtime_routes.py::test_program_has_one_runtime_branch_spelling"
+
+[[check]]
+issue = "ADC-700"
+requirement = "legacy_symbol_barrier"
+polarity = "refusal"
+kind = "pytest"
+target = "legacy_symbol_barrier"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_production_has_no_second_amr_time_engine"
+
+[[check]]
+issue = "ADC-702"
+requirement = "legacy_fragment_barrier"
+polarity = "positive"
+kind = "pytest"
+target = "legacy_fragment_barrier"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/architecture/test_amr_program_support_parity.py::test_context_include_parser_authenticates_both_delimiters_and_hidden_fragments"
+
+[[check]]
+issue = "ADC-702"
+requirement = "legacy_fragment_barrier"
+polarity = "refusal"
+kind = "pytest"
+target = "legacy_fragment_barrier"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_static_system_assembler_is_retired_from_the_final_runtime_surface"
+
+[[check]]
+issue = "ADC-702"
+requirement = "pending_marker_barrier"
+polarity = "positive"
+kind = "pytest"
+target = "pending_marker_barrier"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/architecture/test_amr_program_support_parity.py::test_parser_finds_only_explicit_known_deferrals"
+
+[[check]]
+issue = "ADC-702"
+requirement = "pending_marker_barrier"
+polarity = "refusal"
+kind = "pytest"
+target = "pending_marker_barrier"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/architecture/test_amr_program_support_parity.py::test_context_sensitive_routes_report_green_or_pending_from_resolved_hierarchy"
+
+[[check]]
+issue = "ADC-700"
+requirement = "gate_execution"
+polarity = "positive"
+kind = "pytest"
+target = "gate_execution"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/architecture/test_runtime_source_layout.py::test_src_cmake_is_the_single_runtime_source_authority"
+
+[[check]]
+issue = "ADC-700"
+requirement = "gate_execution"
+polarity = "refusal"
+kind = "pytest"
+target = "gate_execution"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/architecture/test_no_legacy_runtime_routes.py::test_removed_public_modules_do_not_exist"
+
+[[check]]
+issue = "ADC-702"
+requirement = "gate_execution"
+polarity = "positive"
+kind = "mpi_python"
+target = "gate_execution"
+backend = "mpi"
+allocation = "none"
+nproc = 2
+nodeid = "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py::test_public_mpi_explicit_and_preset_ssprk2_are_bit_identical"
+
+[[check]]
+issue = "ADC-702"
+requirement = "gate_execution"
+polarity = "refusal"
+kind = "pytest"
+target = "gate_execution"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/architecture/test_runtime_source_layout.py::test_python_and_tests_consume_the_central_targets"
+
+[[check]]
+issue = "ADC-720"
+requirement = "gate_execution"
+polarity = "positive"
+kind = "ctest"
+target = "gate_execution@test_mpi_amr_program_3d_corner_authority"
+backend = "mpi"
+allocation = "none"
+test_regex = "^test_mpi_amr_program_3d_corner_authority_np8$"
+
+[[check]]
+issue = "ADC-720"
+requirement = "gate_execution"
+polarity = "positive"
+kind = "ctest"
+target = "gate_execution@test_program_execution_services_contract"
+backend = "mpi"
+allocation = "none"
+test_regex = "^test_program_execution_services_contract_np2$"
+
+[[check]]
+issue = "ADC-720"
+requirement = "gate_execution"
+polarity = "refusal"
+kind = "ctest"
+target = "gate_execution@test_program_execution_services_schur_free"
+backend = "serial"
+allocation = "none"
+test_regex = "^OwnedProgramInstallation\\.RefusesDispatchBeforeAndPreparationTwice$"
+
+[[check]]
+issue = "ADC-720"
+requirement = "strict_restart"
+polarity = "positive"
+kind = "mpi_orchestrator"
+target = "strict_restart"
+backend = "mpi"
+allocation = "none"
+nodeid = "tests/python/integration/mpi/test_amr_rank_change_restart.py::test_amr_checkpoint_restart_rematerializes_two_ranks_onto_one"

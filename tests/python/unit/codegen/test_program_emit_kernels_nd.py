@@ -44,3 +44,14 @@ def test_program_template_and_apply_input_have_no_unranked_storage_route() -> No
     assert _apply_in_arg({7: "in"}, type("Value", (), {"id": 7})()) == (
         "const_cast<pops::MultiFab<pops::kNativeDimension>&>(in)"
     )
+
+
+def test_program_template_has_a_private_nonthrowing_install_diagnostic_writer() -> None:
+    assert "#include <pops/runtime/program/program_abi.hpp>" in _PROGRAM_CPP_TEMPLATE
+    assert "namespace {{" in _PROGRAM_CPP_TEMPLATE
+    assert "void write_program_install_diagnostic(" in _PROGRAM_CPP_TEMPLATE
+    assert "ProgramInstallDiagnostic* diagnostic" in _PROGRAM_CPP_TEMPLATE
+    assert "ProgramInstallErrorCode code" in _PROGRAM_CPP_TEMPLATE
+    assert ") noexcept {{" in _PROGRAM_CPP_TEMPLATE
+    assert "size + 1 < sizeof(diagnostic->message)" in _PROGRAM_CPP_TEMPLATE
+    assert "diagnostic->message[size] = '\\0';" in _PROGRAM_CPP_TEMPLATE

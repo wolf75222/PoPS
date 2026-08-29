@@ -13,6 +13,7 @@ import json
 from typing import Any
 
 from pops.codegen.program_emit_kernels import _AUX_OUTPUT_OPS, ProgramValue
+from pops.codegen.program_persistent_plan import persistent_slot_token
 from pops.time._schedule.api import (
     Schedule,
     ScheduleAction,
@@ -86,14 +87,16 @@ def _schedule_domain_args(domain: Any) -> str:
     )
 
 
-def _schedule_due_expression(v: Any, lowering: Any, var: Any = None) -> str:
+def _schedule_due_expression(v: Any, lowering: Any, var: Any = None, program: Any = None,
+                             target: str | None = None) -> str:
     """Render one validated due-test IR without inspecting its concrete Trigger class."""
     due = lowering.due
     domain = _schedule_domain_args(lowering.domain)
     if due.kind is ScheduleDueKind.ALWAYS:
         return "ctx.schedule_domain_occurs(%s)" % domain
     if due.kind is ScheduleDueKind.CACHE_PERIOD:
-        return "ctx.schedule_is_due(%d, %d, %s)" % (v.id, due.period, domain)
+        return "ctx.schedule_is_due(%s, %d, %s)" % (
+            persistent_slot_token(program, v, target=target), due.period, domain)
     if due.kind is ScheduleDueKind.MACRO_STEP_ZERO:
         return "ctx.schedule_at_start(%s)" % domain
     if due.kind is ScheduleDueKind.PROGRAM_PREDICATE:
@@ -113,19 +116,22 @@ def _schedule_due_expression(v: Any, lowering: Any, var: Any = None) -> str:
     )
 
 
-def _schedule_due_test(program: Any, v: Any, sched: Any, var: Any = None) -> str:
+def _schedule_due_test(program: Any, v: Any, sched: Any, var: Any = None,
+                       *, target: str | None = None) -> str:
     """The C++ boolean 'is this node due this step' for a native schedule."""
-    del program
-    return _schedule_due_expression(v, _lower_schedule_ir(v, sched), var)
+    return _schedule_due_expression(
+        v, _lower_schedule_ir(v, sched), var, program, target)
 
 
-def _schedule_action_line(action: ScheduleAction, *, v: Any, out: Any, is_aux: bool) -> str:
+def _schedule_action_line(action: ScheduleAction, *, v: Any, out: Any, is_aux: bool,
+                          program: Any = None, target: str | None = None) -> str:
     """Render one validated schedule action; concrete policies never inject C++ text."""
+    slot = persistent_slot_token(program, v, target=target)
     if action is ScheduleAction.EFFECTIVE_DT:
         effective_dt = "_effdt%d" % v.id
-        return "const pops::Real %s = ctx.cache_effective_dt(%d, dt); (void)%s;" % (
+        return "const pops::Real %s = ctx.cache_effective_dt(%s, dt); (void)%s;" % (
             effective_dt,
-            v.id,
+            slot,
             effective_dt,
         )
     if action is ScheduleAction.STORE:
@@ -133,15 +139,15 @@ def _schedule_action_line(action: ScheduleAction, *, v: Any, out: Any, is_aux: b
             # Provider publication remains the single source of truth.  A held
             # field simply keeps the registry's last accepted generation.
             return ""
-        return "ctx.cache_store_scratch(%d, %s);" % (v.id, out)
+        return "ctx.cache_store_scratch(%s, %s);" % (slot, out)
     if action is ScheduleAction.ZERO:
         return "%s.set_val(static_cast<pops::Real>(0));" % out
     if action is ScheduleAction.ACCUMULATE_DT:
-        return "ctx.cache_accumulate_dt(%d, dt);" % v.id
+        return "ctx.cache_accumulate_dt(%s, dt);" % slot
     if action is ScheduleAction.RESTORE:
         if is_aux:
             return ""
-        return "ctx.cache_restore_scratch(%d, %s);" % (v.id, out)
+        return "ctx.cache_restore_scratch(%s, %s);" % (slot, out)
     if action is ScheduleAction.ERROR:
         return "ctx.scheduler_error(%s);" % json.dumps(
             "node '%s' (op '%s') read off its schedule cadence (policy=error)" % (v.name, v.op)
@@ -151,7 +157,32 @@ def _schedule_action_line(action: ScheduleAction, *, v: Any, out: Any, is_aux: b
     )
 
 
-def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) -> None:
+def _prepare_cache_slot(prelude: Any, var: Any, *, slot: str, program_block: int) -> None:
+    """Emit one install-time preparation call for a cache-backed schedule slot."""
+    if isinstance(program_block, bool) or not isinstance(program_block, int) or program_block < 0:
+        raise ValueError(
+            "Program cache slot %s requires an exact non-negative owner block" % slot
+        )
+    key = ("program_resource_preparation", "cache", slot, 0)
+    contract = int(program_block)
+    if key in var:
+        if var[key] != contract:
+            raise ValueError(
+                "Program cache slot %s has conflicting preparation blocks" % slot
+            )
+        return
+    if prelude is None:
+        raise NotImplementedError(
+            "scheduled Program cache preparation requires an install-time prelude; refusing "
+            "step-local cache allocation"
+        )
+    var[key] = contract
+    prelude.append("ctx.prepare_cache_slot(%s, %d);" % (slot, int(program_block)))
+
+
+def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any,
+                        *, target: str | None = None, prelude: Any = None,
+                        program_block: int | None = None) -> None:
     """Wrap the C++ statements node @p v emitted (``lines[start:]``) in its schedule's due-test guard
     + policy branch (ADC-458, Spec 3 sections 17-18). Scratch nodes may cache their named output;
     field output freshness belongs to the typed ProviderPack transaction and cannot be raw-cached.
@@ -174,14 +205,25 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
         )
     body = lines[start:]
     del lines[start:]
-    due = _schedule_due_expression(v, lowering, var)
+    due = _schedule_due_expression(v, lowering, var, program, target)
     cache_backed = (not is_aux and ScheduleAction.STORE in policy.after_due
                     and ScheduleAction.RESTORE in policy.off_cadence)
+    if cache_backed:
+        if program_block is None:
+            raise ValueError(
+                "scheduled cache resource %r has no authenticated owner block" % v.name
+            )
+        _prepare_cache_slot(
+            prelude,
+            var,
+            slot=persistent_slot_token(program, v, target=target),
+            program_block=program_block,
+        )
     # One decision seam surrounds every non-trivial due primitive (period, start, predicate,
     # logical clock, stage, AMR level). The profiler counts all due/skipped nodes, but only labels a
     # real STORE+RESTORE policy as a cache hit/miss; Skip/Zero/Error never fabricate cache traffic.
-    due = "ctx.schedule_decision(%d, %s, %s)" % (
-        v.id, due, "true" if cache_backed else "false")
+    due = "ctx.schedule_decision(%s, %s, %s)" % (
+        persistent_slot_token(program, v, target=target), due, "true" if cache_backed else "false")
     if is_aux and any(
         action in {ScheduleAction.ZERO, ScheduleAction.ACCUMULATE_DT}
         for action in (*policy.after_due, *policy.off_cadence)
@@ -203,18 +245,21 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
         comment = "  // skip: stale %s off-cadence" % ("aux" if is_aux else "value")
     lines.append("if (%s) {%s" % (due, comment))
     for action in policy.before_due:
-        statement = _schedule_action_line(action, v=v, out=out, is_aux=is_aux)
+        statement = _schedule_action_line(
+            action, v=v, out=out, is_aux=is_aux, program=program, target=target)
         if statement:
             lines.append("  " + statement)
     lines += ["  " + line for line in guarded_body]
     for action in policy.after_due:
-        statement = _schedule_action_line(action, v=v, out=out, is_aux=is_aux)
+        statement = _schedule_action_line(
+            action, v=v, out=out, is_aux=is_aux, program=program, target=target)
         if statement:
             lines.append("  " + statement)
     if policy.off_cadence:
         lines.append("} else {")
         for action in policy.off_cadence:
-            statement = _schedule_action_line(action, v=v, out=out, is_aux=is_aux)
+            statement = _schedule_action_line(
+                action, v=v, out=out, is_aux=is_aux, program=program, target=target)
             if statement:
                 lines.append("  " + statement)
     lines.append("}")

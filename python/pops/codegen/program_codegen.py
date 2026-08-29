@@ -19,10 +19,9 @@ below so the public surface of ``pops.codegen.program_codegen`` is unchanged:
   - ``program_emit_control``       -- the body walk + control-flow (while/range/if) emitters;
   - ``program_emit_ops``           -- the per-op ``_emit_op`` dispatcher;
   - ``program_emit_amr``           -- the AMR install-entry emitter (target='amr_system', ADC-508).
-  - ``program_metadata``           -- complete owner-qualified GeneratedModule metadata.
+  - ``program_metadata``           -- candidate-table module records.
 
-The orchestration (``emit_cpp_program`` + the block-name / dt-bound emitters + the lowerability
-checks) stays here.
+The orchestration (``emit_cpp_program`` + candidate-table lowering checks) stays here.
 
 The emission-only tables (_MODEL_OPS / _ALLOWED_OPS / _PROFILE_SKIP_OPS / _AUX_OUTPUT_OPS)
 are module-level constants in ``program_emit_kernels``, re-exported here.
@@ -92,12 +91,17 @@ from pops.codegen.program_emit_control import (  # noqa: F401
     _walk_expr,
 )
 from pops.codegen.program_emit_ops import _emit_op  # noqa: F401
-from pops.codegen.program_emit_params import (  # noqa: F401
-    emit_program_params as _emit_program_params,
-    program_param_entries as _program_param_entries,
+from pops.codegen.program_emit_params import program_param_entries as _program_param_entries
+from pops.codegen.program_emit_amr import (  # noqa: F401
+    _emit_amr_install,
+    _validate_hierarchy_scoped_solve_barrier,
 )
-from pops.codegen.program_emit_amr import _emit_amr_install  # noqa: F401
-from pops.codegen.program_metadata import emit_module_metadata as _emit_module_metadata
+from pops.codegen.program_metadata import program_module_records as _program_module_records
+from pops.codegen.program_persistent_plan import (
+    ProgramResourcePlan,
+    get_program_resource_plan,
+)
+from pops.codegen.temporal_manifest import render_temporal_manifest
 from pops.codegen._compile_emit import _emit_route_manifest  # noqa: F401 (ADC-599 embedded manifest)
 from pops.codegen.program_lowerability import (
     all_ops as _all_ops,
@@ -161,6 +165,57 @@ def _emit_resolved_cpp_program(
     )
 
 
+def _validate_resource_slot_calls(source: str, plan: ProgramResourcePlan) -> None:
+    """Validate that every generated resource call already contains a dense slot.
+
+    Resource slots are resolved by each emitter through ``persistent_slot_token``.  Keeping a
+    source-level guard is useful for shared/control emitters: an accidentally retained placeholder,
+    a value-id spelling, or an arbitrary expression must fail before an artifact is returned rather
+    than being repaired by a lossy post-lowering map.
+    """
+
+    if not source:
+        return
+    import re
+
+    api = (
+        "prepare_rhs_scratch|prepare_state_scratch|prepare_scalar_scratch|prepare_cache_slot|"
+        "rhs_scratch|scratch_state|scalar_scratch|"
+        "cache_effective_dt|cache_store_scratch|cache_accumulate_dt|"
+        "cache_restore_scratch|schedule_is_due|schedule_decision"
+    )
+    allowed_slots = {row.slot for row in plan.entries}
+    def validate_token(token: str, *, operation: str) -> None:
+        if "__POPS_PERSISTENT_SLOT_" in token:
+            raise ValueError(
+                "unresolved Program resource slot placeholder remains in generated source"
+            )
+        if not token.isdigit():
+            raise ValueError(
+                "Program resource %s must contain a compile-time dense slot, got %r"
+                % (operation, token)
+            )
+        slot = int(token)
+        if slot not in allowed_slots:
+            raise ValueError(
+                "Program resource %s uses an absent/legacy resource value id %d"
+                % (operation, slot)
+            )
+
+    pattern = re.compile(r"ctx\.(?:%s)\(\s*([^,\s\)]+)" % api)
+    for match in pattern.finditer(source):
+        validate_token(match.group(1), operation="call")
+
+    # The field-route solve keeps its point as the first argument.  Its second
+    # argument is the same dense resource slot validated above; inspect it
+    # separately so an SSA/value-id spelling cannot survive in this hot path.
+    field_route_pattern = re.compile(
+        r"ctx\.solve_fields_from_blocks_at\(\s*[^,\s\)]+\s*,\s*([^,\s\)]+)"
+    )
+    for match in field_route_pattern.finditer(source):
+        validate_token(match.group(1), operation="field-route solve")
+
+
 def _emit_cpp_program_impl(
     program: Any,
     model: Any = None,
@@ -173,18 +228,17 @@ def _emit_cpp_program_impl(
 ) -> str:
     """Generate the C++ source of a problem.so implementing this Program (codegen).
 
-    Exports the stable .so ABI -- ``pops_program_abi_key`` (the ``POPS_ABI_KEY_LITERAL``
-    preprocessor literal, NOT the interposable inline), ``pops_program_name``, ``pops_program_hash``,
-    one target-specific install entry -- and installs the macro step as a closure built from the
-    matching facade-selected provider (no MultiFab / flux / solver reimplementation).
+    Exports the stable v5 install entry, its candidate descriptor and immutable tables, then prepares
+    the macro step as a closure over the provider retained by the host-owned preparation image (no
+    facade pointer and no MultiFab / flux / solver reimplementation).
 
     @p target selects the install entry the .so exports. ``"system"`` (default) emits only
     ``pops_install_program`` (the single-level ``System`` macro-step closure). ``"amr_system"``
-    (epic ADC-511 / ADC-508, Spec 6) emits only ``pops_install_program_amr``, the entry
-    ``AmrSystem::install_program`` resolves: the shared factory selects the ``AmrSystem`` provider
-    and the wrapper installs the real per-level synchronized macro-step. A mismatched runtime
-    therefore rejects the artifact by its missing mandatory entry instead of compiling a dead
-    closure against the wrong topology provider.
+    (epic ADC-511 / ADC-508, Spec 6) emits only ``pops_install_program``, the entry
+    ``AmrSystem::install_program`` resolves: the shared preparation-image factory selects the AMR
+    storage/topology adapter and the candidate owns the real per-level synchronized macro-step. A
+    mismatched runtime is refused by the descriptor before preparation; no dead closure is compiled
+    against a facade.
 
     Lowers the Program by a topological walk of the SSA IR: each block's current state is its base
     (``ctx.state(idx)``); each field node runs its exact point/provider-qualified solve; each RHS
@@ -194,9 +248,9 @@ def _emit_cpp_program_impl(
 
     Multi-block (ADC-426): N typed ``T.state(block[U])`` declarations + N ``T.commit``
     are lowered -- each op routes to its own block's runtime index (``_block_indices``, in the order
-    the blocks are first declared via ``T.state``). The .so also exports its block NAMES in that
-    order (``pops_program_block_count`` / ``pops_program_block_name``); ``System::install_program``
-    binds them to the instantiated System blocks BY NAME (Spec 3 criterion 23, ADC-457), so the
+    the blocks are first declared via ``T.state``). The candidate descriptor carries block NAMES in
+    that order; ``System::install_program`` binds them to the instantiated System blocks BY NAME
+    (Spec 3 criterion 23, ADC-457), so the
     System blocks (through the private ``sim.add_equation`` install seam) may be added in ANY
     order -- a Program
     block whose name has no instantiated System block fails loud (``Program requires block instance
@@ -230,7 +284,8 @@ def _emit_cpp_program_impl(
     (``_block_indices``, in T.state declaration order) and control flow (while/range/if) inside a
     block lowers per block; a SIMULTANEOUS multi-target coupled field solve
     (``solve_fields_from_blocks([Ua, Ub])``) lowers to
-    ``ctx.solve_fields_from_blocks_at(point, field, <pack>)`` (see below).
+    ``ctx.solve_fields_from_blocks_at(point, resource_slot, <pack>)`` (see below), after an
+    install-time ``ctx.prepare_generated_field_route(resource_slot, field, {program_blocks})``.
 
     Each ``solve_fields(state=...)`` op lowers to the owner-qualified
     ``ctx.solve_fields_from_state_at(point, field, idx, <stage state>)`` route (ADC-409/ADC-759):
@@ -244,7 +299,7 @@ def _emit_cpp_program_impl(
     ``idx`` reads its stage state while every OTHER block contributes its LIVE state into the one
     shared phi/aux. A per-block callable field operator therefore sees all blocks' charge. A
     SIMULTANEOUS multi-target override (several blocks at their stage states in ONE solve) lowers to
-    ``ctx.solve_fields_from_blocks_at(point, field, <pack>)`` (Spec 3 criterion 24,
+    ``ctx.solve_fields_from_blocks_at(point, resource_slot, <pack>)`` (Spec 3 criterion 24,
     ADC-457/ADC-759): the RHS is
     ``Sum_s elliptic_rhs_s(U_s)`` reading EVERY listed block's stage state at once
     (``assemble_poisson_rhs_from_blocks``), each slotted at its block index (nullptr = the block's
@@ -268,6 +323,19 @@ def _emit_cpp_program_impl(
             "emit_cpp_program balance_due_contract must be an exact BalanceDueContract"
         )
     program.validate()
+    # The region boundary is a structural lowering contract, not a resource-shape diagnostic. A
+    # nested hierarchy solve must be refused before persistent-plan lowering can inspect its opaque
+    # state and report a secondary component-count error.
+    _validate_hierarchy_scoped_solve_barrier(program, target)
+    # Seal the complete persistent-resource table before any lowering emits
+    # source. This is also where schedule policy, transfer-provider, exact byte
+    # and memory-bound refusals happen, so invalid plans cannot leave an artifact.
+    resource_plan = get_program_resource_plan(program, target=target)
+    # The dedicated AMR install emitter validates this contract too, but it
+    # must be rejected for a uniform target before ordinary body materialization.
+    from pops.codegen.program_emit_amr import _require_bounded_cell_local_program
+
+    _require_bounded_cell_local_program(program, target, None)
     _check_lowerable(program, authority, field_plans or {}, target=target)
     from pops.codegen.program_emit_kernels import ProgramProviderPlans
 
@@ -281,90 +349,273 @@ def _emit_cpp_program_impl(
         has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
         provider_plans=provider_plans,
     )
-    # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
-    # (true iff a bound was set) and one target-qualified entry accepting the authenticated runtime
-    # facade. The entry obtains its provider from the shared factory; codegen never selects a concrete
-    # context. Without a bound, the function returns a +inf sentinel and remains unreachable.
-    has_dt_bound, dt_bound_body, dt_bound_value = _emit_dt_bound(program, authority)
+    _validate_resource_slot_calls(prelude, resource_plan)
+    _validate_resource_slot_calls(body, resource_plan)
+    persistent_manifest = render_temporal_manifest(
+        program, target=target, plan=resource_plan)
     from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
 
-    field_boundaries = emit_field_boundaries(program, authority, field_plans or {}, target)
+    field_boundary_helpers = emit_field_boundaries(
+        program, authority, field_plans or {}, target)
+    if field_boundary_helpers:
+        prelude = "  program_candidate_prepare_field_boundaries(ctx);\n" + prelude
+    from pops.runtime.routes import route_registry_signature
+
+    amr_body = (
+        _emit_amr_hierarchy_bodies(
+            program,
+            authority,
+            field_plans or {},
+            has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
+            provider_plans=provider_plans,
+        )
+        if target == "amr_system"
+        else None
+    )
+    if amr_body:
+        # Hierarchy lowering returns one source fragment per gather/solve/publish
+        # phase. Validate every phase before the AMR install template combines
+        # them; treating the tuple as one string would defer the refusal to
+        # template formatting and leave a legacy value id in one phase.
+        for fragment in amr_body:
+            _validate_resource_slot_calls(fragment, resource_plan)
+    amr_install = _emit_amr_install(
+        program,
+        target,
+        prelude,
+        body,
+        amr_body,
+        provider_plans.cpp_install(target),
+        post_synchronization,
+        artifact_identity=program._ir_hash(),
+        route_manifest=route_registry_signature(),
+        program_name=program.name,
+        maximum_bytes=resource_plan.maximum_bytes,
+    )
+    # Keep AMR's dedicated install emitter as the source of its lifecycle hooks,
+    # while replacing its fixed marker with the authenticated manifest payload.
+    if amr_install:
+        amr_install = amr_install.replace(
+            '"pops.persistent-resource.manifest.v1"',
+            json.dumps(persistent_manifest),
+        )
     return _PROGRAM_CPP_TEMPLATE.format(
         name=json.dumps(program.name),
         hash=program._ir_hash(),
+        candidate_tables=_emit_candidate_tables(
+            program,
+            authority,
+            operator_authorities,
+            route_registry_signature(),
+            target,
+            plan=resource_plan,
+        ),
         prelude=prelude,
         body=body,
-        history_replay_authorities=_emit_history_replay_authorities(program),
-        operator_authorities=_emit_operator_authorities(operator_authorities),
-        has_dt_bound=has_dt_bound,
-        dt_bound=_emit_dt_bound_entry(target, dt_bound_body, dt_bound_value),
-        module_metadata=_emit_module_metadata(program, authority),
-        program_params=_emit_program_params(program, authority),
-        field_boundaries=field_boundaries,
-        model_helpers=_emit_program_model_helpers(program, authority),
-        block_names=_emit_block_names(program),
-        route_manifest=_emit_route_manifest("pops_program_route_manifest"),
+        model_helpers=_emit_program_model_helpers(program, authority) + field_boundary_helpers,
         system_install=_emit_system_install(
-            target, prelude, body, provider_plans.cpp_install(target)),
-        prepared_native_component_includes=_prepared_native_component_includes(program),
-        block_inverse_include=_block_inverse_include(program),
-        amr_install=_emit_amr_install(
-            program,
             target,
             prelude,
             body,
-            _emit_amr_hierarchy_bodies(
-                program,
-                authority,
-                field_plans or {},
-                has_shared_interface_implicit_jacvec=(
-                    has_shared_interface_implicit_jacvec
-                ),
-                provider_plans=provider_plans,
-            )
-            if target == "amr_system"
-            else None,
             provider_plans.cpp_install(target),
-            post_synchronization,
+            artifact_identity=program._ir_hash(),
+            route_manifest=route_registry_signature(),
+            program_name=program.name,
+            persistent_manifest=persistent_manifest,
+            maximum_bytes=resource_plan.maximum_bytes,
         ),
+        prepared_native_component_includes=_prepared_native_component_includes(program),
+        block_inverse_include=_block_inverse_include(program),
+        amr_install=amr_install,
     )
 
 
-def _emit_history_replay_authorities(program: Any) -> str:
-    """Export the exact rings whose selective replay passed Program validation.
+def _emit_candidate_tables(
+    program: Any,
+    authority: Any,
+    operator_authorities: tuple[tuple[int, ...], ...],
+    route_manifest: str,
+    target: str,
+    *,
+    plan: ProgramResourcePlan | None = None,
+) -> str:
+    """Emit the complete v5 POD metadata carried by ``ProgramCandidateDescriptor``.
 
-    The native loader treats absence of this table as no authority.  Keeping the allow-list in the
-    compiled artifact prevents a Python checkpoint adapter or a direct binding caller from changing
-    a Dense policy after compilation and thereby bypassing the owner-affine/context-free proof.
+    This replaces the fan-out of metadata ``dlsym`` calls.  Tables are intentionally immutable
+    arrays of ABI PODs: the host copies them while the DSO remains resident, validates every
+    string and only then invokes the candidate prepare callback.
     """
-    authorities = []
-    for name, (depth, policy) in sorted(
-        (getattr(program, "_history_persistence", None) or {}).items()
-    ):
-        if not policy.degenerate_to_dense(depth):
-            authorities.append((str(name), int(depth)))
-    name_cases = "".join(
-        "    case %d: return %s;\n" % (index, json.dumps(name))
-        for index, (name, _depth) in enumerate(authorities)
+    if plan is None:
+        plan = get_program_resource_plan(program, target=target)
+    if type(plan) is not ProgramResourcePlan:
+        raise TypeError("candidate tables require an exact ProgramResourcePlan")
+    block_indices = program._block_indices()
+    blocks = [block_name(block) for block in sorted(block_indices, key=block_indices.get)]
+    params = _program_param_entries(program, authority)
+    histories = [
+        (str(name), int(depth))
+        for name, (depth, policy) in sorted((getattr(program, "_history_persistence", None) or {}).items())
+        if not policy.degenerate_to_dense(depth)
+    ]
+    checkpoints = []
+    for name, lag in sorted(getattr(program, "_histories", {}).items()):
+        owner = getattr(program, "_history_blocks", {}).get(name)
+        owner_index = block_indices.get(owner, -1)
+        space = getattr(program, "_history_spaces", {}).get(name)
+        space_identity = (
+            json.dumps(space.to_data(), sort_keys=True, separators=(",", ":"))
+            if space is not None
+            else "scalar-field"
+        )
+        checkpoints.append((
+            "history:" + str(name), str(owner or "global"), str(space_identity), "clock.macro",
+            "declared-transfer", int(owner_index), -1, int(lag) + 1,
+        ))
+    # A fixed row per block makes zero an explicit bound.  AMR carries the exact frozen-IR basis
+    # and coefficient limits in the candidate, rather than exposing one accessor per bound.
+    if target == "amr_system":
+        from pops.codegen.program_emit_amr import _flux_expression_budgets
+        flux = [(int(rhs), int(coefficients), 0, 0)
+                for rhs, coefficients in _flux_expression_budgets(program)]
+    else:
+        flux = [(0, 0, 0, 0) for _ in blocks]
+    resource = plan.abi_rows()
+    boundary_routes = [(route_manifest, "boundary-manifest", 0)]
+    provider_routes = [(route_manifest, "provider-manifest", 0)]
+    module_operators, module_states, module_fields = _program_module_records(program, authority)
+
+    lines = ["namespace {", "// v5 Program candidate POD metadata; no auxiliary Program export."]
+    lines.append(
+        "static constexpr char kProgramCandidateResourcePlanSchema[] = %s;"
+        % json.dumps(plan.schema)
     )
-    depth_cases = "".join(
-        "    case %d: return %d;\n" % (index, depth)
-        for index, (_name, depth) in enumerate(authorities)
+    lines.append(
+        "static constexpr char kProgramCandidateResourcePlanDigest[] = %s;"
+        % json.dumps(plan.digest)
     )
-    return (
-        "// Selective-history replay authorities (fail-closed native allow-list).\n"
-        'extern "C" int pops_program_history_replay_authority_count() { return %d; }\n'
-        'extern "C" const char* pops_program_history_replay_authority_name(int i) {\n'
-        "  switch (i) {\n%s"
-        '    default: return "";\n'
-        "  }\n"
-        "}\n"
-        'extern "C" int pops_program_history_replay_authority_depth(int i) {\n'
-        "  switch (i) {\n%s"
-        "    default: return 0;\n"
-        "  }\n"
-        "}\n"
-    ) % (len(authorities), name_cases, depth_cases)
+    # Keep a lossless, deterministic copy beside the native POD table.  The
+    # native record is intentionally compact, while this authenticated payload
+    # preserves the complete key/path and typed policy contract for hosts that
+    # materialize the richer ProgramResourcePlanRecord version.
+    lines.append(
+        "static constexpr char kProgramCandidateResourcePlanJson[] = %s;"
+        % json.dumps(json.dumps(plan.abi_data(), sort_keys=True, separators=(",", ":")))
+    )
+    if resource:
+        lines.append(
+            "static constexpr std::uint32_t kProgramCandidateResourcePlanSlots[] = {%s};"
+            % ", ".join(str(row.slot) for row in resource)
+        )
+    else:
+        lines.append(
+            "static constexpr std::uint32_t kProgramCandidateResourcePlanSlots[] = {0};"
+        )
+    lines.append(
+        "static constexpr std::uint64_t kProgramCandidateResourcePlanCount = %d;"
+        % len(resource)
+    )
+    def u64(value: int | None) -> str:
+        # ``None`` is a declaration-time unknown, not a byte count.  Keep it
+        # explicit in the v5 POD image so the host can seal the exact ceiling
+        # only after prepare_* has exposed all layouts.
+        if value is None:
+            return "pops::runtime::program::kProgramResourcePlanUnknownExtent"
+        return "UINT64_C(%d)" % int(value)
+
+    lines.append(
+        "static constexpr std::uint64_t kProgramCandidateResourcePlanMaximumBytes = %s;"
+        % u64(plan.maximum_bytes)
+    )
+    serial = 0
+
+    def literal(value: str) -> str:
+        nonlocal serial
+        name = f"kProgramCandidateString{serial}"
+        serial += 1
+        lines.append(f"static constexpr char {name}[] = {json.dumps(value)};")
+        return "{" + name + ", static_cast<std::uint64_t>(sizeof(" + name + ") - 1)}"
+
+    def table(name: str, record_type: str, rows: list[str]) -> None:
+        if not rows:
+            lines.append(f"static constexpr pops::runtime::program::ProgramAbiTable {name}{{}};")
+            return
+        values = ",\n    ".join(rows)
+        array = name + "Rows"
+        lines.append(f"static constexpr pops::runtime::program::{record_type} {array}[] = {{\n    {values}\n}};")
+        lines.append(
+            f"static constexpr pops::runtime::program::ProgramAbiTable {name}{{{array}, "
+            f"static_cast<std::uint64_t>(sizeof({array}) / sizeof({array}[0])), "
+            f"static_cast<std::uint64_t>(sizeof({array}[0]))}};"
+        )
+
+    table("kProgramCandidateBlocks", "ProgramBlockRecord", ["{" + literal(name) + "}" for name in blocks])
+    table(
+        "kProgramCandidateParameters", "ProgramParameterRecord",
+        ["{%d, %d, %.17g, %s}" % (block, index, default, literal(str(name)))
+         for block, name, index, default in params],
+    )
+    table(
+        "kProgramCandidateOperatorAuthorities", "ProgramAuthorityRecord",
+        ["{{" + ", ".join("UINT64_C(%d)" % int(word) for word in words) + "}}"
+         for words in operator_authorities],
+    )
+    table(
+        "kProgramCandidateHistoryAuthorities", "ProgramHistoryAuthorityRecord",
+        ["{%s, %d, 0}" % (literal(identity), depth) for identity, depth in histories],
+    )
+    table(
+        "kProgramCandidateCheckpointShape", "ProgramCheckpointRecord",
+        ["{%s, %s, %s, %s, %s, %d, %d, UINT64_C(%d)}" % (
+            literal(identity), literal(owner), literal(space), literal(clock), literal(transfer),
+            block, components, retained,
+        ) for identity, owner, space, clock, transfer, block, components, retained in checkpoints],
+    )
+    table(
+        "kProgramCandidateFluxBudgets", "ProgramFluxBudgetRecord",
+        ["{UINT64_C(%d), UINT64_C(%d), UINT64_C(%d), UINT64_C(%d)}" % row for row in flux],
+    )
+    table(
+        "kProgramCandidateResourcePlan", "ProgramResourcePlanRecord",
+        ["{static_cast<std::uint32_t>(sizeof(pops::runtime::program::ProgramResourcePlanRecord)), "
+         "pops::runtime::program::kProgramResourcePlanSchemaVersion, %d, %d, UINT64_C(%d), UINT64_C(%d), %d, "
+         "%d, %d, 0, %s, %s, %s, %s, "
+         "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s}" % (
+            row.slot,
+            (1 if row.lifetime in {"persistent", "persistent_schedule"} else 0)
+            | (2 if row.communicates or row.communication != "none" else 0)
+            | (4 if row.restart_required else 0)
+            | (8 if row.cells is not None else 0)
+            | (16 if row.itemsize is not None else 0)
+            | (32 if row.runtime_sized else 0),
+            row.key.value_id, row.key.occurrence_path_id,
+            -1 if row.key.level is None else row.key.level,
+            row.components, row.ghosts,
+            u64(row.bytes), u64(row.maximum_bytes),
+            u64(row.cells), u64(row.itemsize),
+            literal(row.schema), literal(row.plan_digest), literal(row.identity),
+            literal(row.key.occurrence_path), literal(row.key.owner), literal(row.key.space),
+            literal(row.key.clock), literal(row.lifetime), literal(row.centering),
+            literal(row.off_policy), literal(row.communication), literal(row.transfer_provider),
+            literal(row.restart_provider),
+            literal(json.dumps(list(row.component_names), separators=(",", ":"))),
+            literal(json.dumps(list(row.shape), separators=(",", ":"))),
+            "pops::runtime::program::ProgramResourcePlanType::runtime_sized"
+            if row.runtime_sized
+            else "pops::runtime::program::ProgramResourcePlanType::exact",
+        ) for row in resource],
+    )
+    for name, rows in (("kProgramCandidateBoundaryRoutes", boundary_routes),
+                       ("kProgramCandidateProviderRoutes", provider_routes)):
+        table(name, "ProgramRouteRecord", ["{%s, %s, UINT64_C(%d)}" % (
+            literal(identity), literal(kind), capabilities) for identity, kind, capabilities in rows])
+    for name, rows in (("kProgramCandidateModuleOperators", module_operators),
+                       ("kProgramCandidateModuleStateSpaces", module_states),
+                       ("kProgramCandidateModuleFieldSpaces", module_fields)):
+        table(name, "ProgramModuleRecord", ["{%s, %s, %s, %s, %s}" % (
+            literal(identity), literal(kind), literal(signature), literal(requirements), literal(owner))
+            for identity, kind, signature, requirements, owner in rows])
+    lines.append("}  // namespace")
+    return "\n".join(lines) + "\n"
 
 
 def _emit_program_model_helpers(program: Any, authority: Any) -> str:
@@ -391,7 +642,18 @@ def _emit_program_model_helpers(program: Any, authority: Any) -> str:
     return ("\n".join(lines) + "\n") if lines else ""
 
 
-def _emit_system_install(target: str, prelude: str, body: str, provider_plan_install: str) -> str:
+def _emit_system_install(
+    target: str,
+    prelude: str,
+    body: str,
+    provider_plan_install: str,
+    *,
+    artifact_identity: str,
+    route_manifest: str,
+    program_name: str,
+    persistent_manifest: str | None = None,
+    maximum_bytes: int | None = None,
+) -> str:
     """Emit only the install entry matching the artifact's declared runtime target.
 
     An AMR artifact may contain hierarchy-only providers. Emitting the uniform entry as well would
@@ -402,128 +664,174 @@ def _emit_system_install(target: str, prelude: str, body: str, provider_plan_ins
     """
     if target != "system":
         return ""
+    artifact = json.dumps(artifact_identity)
+    name = json.dumps(program_name)
+    route = json.dumps(route_manifest)
+    if persistent_manifest is None:
+        persistent_manifest = "pops.persistent-resource.manifest.v1"
+    persistent = json.dumps(persistent_manifest)
+    max_bytes = (
+        "pops::runtime::program::kProgramResourcePlanUnknownExtent"
+        if maximum_bytes is None else "UINT64_C(%d)" % int(maximum_bytes)
+    )
     return (
-        'extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* sys) {\n'
-        + provider_plan_install + ("\n" if provider_plan_install else "") +
-        "  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n"
-        "  auto& ctx = *ctx_owner;\n" + prelude + "\n"
-        "  ctx.install([=](double dt) {\n"
-        "    auto& ctx = *ctx_owner;\n"
-        "    (void)dt;\n"
-        "    ctx.begin_step(dt);\n" + body + "\n"
-        "  });\n"
+        "namespace {\n"
+        "\n"
+        "struct ProgramCandidateState final {\n"
+        "  std::shared_ptr<pops::runtime::program::ProgramExecutionServices<"
+        "pops::kNativeDimension>> ctx_owner;\n"
+        "  std::function<void(double)> step;\n"
+        "};\n"
+        "\n"
+        "void program_candidate_step(void* opaque, double dt) {\n"
+        "  auto* state = static_cast<ProgramCandidateState*>(opaque);\n"
+        "  state->step(dt);\n"
+        "}\n"
+        "\n"
+        "void program_candidate_destroy(void* opaque) noexcept {\n"
+        "  delete static_cast<ProgramCandidateState*>(opaque);\n"
+        "}\n"
+        "\n"
+        "static constexpr char kProgramCandidateArtifactIdentity[] = " + artifact + ";\n"
+        "static constexpr char kProgramCandidateName[] = " + name + ";\n"
+        "static constexpr char kProgramCandidateAbiKey[] = POPS_ABI_KEY_LITERAL;\n"
+        "static constexpr char kProgramCandidateRouteManifest[] = " + route + ";\n"
+        "static constexpr char kProgramCandidateBoundaryManifest[] = \"pops.boundary.manifest.v1\";\n"
+        "static constexpr char kProgramCandidatePersistentResourceManifest[] = " + persistent + ";\n"
+        "static constexpr char kProgramCandidateCheckpointIdentity[] = \"pops.checkpoint.identity.v1\";\n"
+        "\n"
+        "constexpr std::uint64_t kProgramCandidateCapabilities =\n"
+        "    pops::runtime::program::kProgramCapabilitySchedules |\n"
+        "    pops::runtime::program::kProgramCapabilityPersistentValues |\n"
+        "    pops::runtime::program::kProgramCapabilityTransactions;\n"
+        "constexpr std::uint64_t kProgramCandidateRequiredServices =\n"
+        "    pops::runtime::program::kProgramServiceState |\n"
+        "    pops::runtime::program::kProgramServiceFields |\n"
+        "    pops::runtime::program::kProgramServiceSpatial |\n"
+        "    pops::runtime::program::kProgramServiceHistory |\n"
+        "    pops::runtime::program::kProgramServiceClock |\n"
+        "    pops::runtime::program::kProgramServiceReduction |\n"
+        "    pops::runtime::program::kProgramServiceTransaction |\n"
+        "    pops::runtime::program::kProgramServicePersistentValues;\n"
+        "\n"
+        "}  // namespace\n"
+        "\n"
+        "bool program_candidate_prepare(void* opaque,\n"
+        "    const pops::runtime::program::ProgramHostDescriptor* host,\n"
+        "    pops::runtime::program::ProgramInstallDiagnostic* diagnostic) noexcept {\n"
+        "  using namespace pops::runtime::program;\n"
+        "  if (opaque == nullptr || host == nullptr || diagnostic == nullptr) {\n"
+        "    write_program_install_diagnostic(diagnostic, ProgramInstallErrorCode::invalid_host_descriptor,\n"
+        "                                     \"Program prepare requires state and host descriptors\");\n"
+        "    return false;\n"
+        "  }\n"
+        "  if (!valid_program_host_descriptor(*host)) {\n"
+        "    write_program_install_diagnostic(diagnostic, ProgramInstallErrorCode::invalid_host_descriptor,\n"
+        "                                     \"Program install received an invalid host descriptor\");\n"
+        "    return false;\n"
+        "  }\n"
+        "  if (host->native_dimension != static_cast<std::uint32_t>(pops::kNativeDimension) ||\n"
+        "      host->runtime_kind != ProgramRuntimeKind::uniform ||\n"
+        "      host->execution_lane != ProgramExecutionLane::host) {\n"
+        "    write_program_install_diagnostic(diagnostic, ProgramInstallErrorCode::unsupported_runtime,\n"
+        "                                     \"Program artifact requires the native Uniform host runtime\");\n"
+        "    return false;\n"
+        "  }\n"
+        "  auto* state = static_cast<ProgramCandidateState*>(opaque);\n"
+        "  if (state->ctx_owner || state->step) {\n"
+        "    write_program_install_diagnostic(diagnostic, ProgramInstallErrorCode::artifact_rejected,\n"
+        "                                     \"Program candidate was prepared twice\");\n"
+        "    return false;\n"
+        "  }\n"
+        "  try {\n"
+        "    state->ctx_owner = pops::runtime::program::make_program_execution_provider<pops::kNativeDimension>(host->preparation);\n"
+        "    auto& ctx = *state->ctx_owner;\n"
+        + provider_plan_install + ("\n" if provider_plan_install else "")
+        + prelude + "\n"
+        "    state->step = [ctx_owner = state->ctx_owner](double dt) {\n"
+        "      auto& ctx = *ctx_owner;\n"
+        "      (void)dt;\n"
+        "      ctx.begin_step(dt);\n" + body + "\n"
+        "    };\n"
+        "    return true;\n"
+        "  } catch (...) {\n"
+        "    write_program_install_diagnostic(diagnostic, ProgramInstallErrorCode::artifact_rejected,\n"
+        "                                     \"Program candidate preparation failed\");\n"
+        "    return false;\n"
+        "  }\n"
+        "}\n\n"
+        'extern "C" bool pops_install_program(\n'
+        "    const pops::runtime::program::ProgramHostDescriptor* host,\n"
+        "    pops::runtime::program::ProgramCandidateDescriptor* candidate,\n"
+        "    pops::runtime::program::ProgramInstallDiagnostic* diagnostic) noexcept {\n"
+        "  using namespace pops::runtime::program;\n"
+        "  if (host == nullptr || candidate == nullptr || diagnostic == nullptr ||\n"
+        "      !valid_program_host_descriptor(*host) ||\n"
+        "      host->native_dimension != static_cast<std::uint32_t>(pops::kNativeDimension) ||\n"
+        "      host->runtime_kind != ProgramRuntimeKind::uniform ||\n"
+        "      host->execution_lane != ProgramExecutionLane::host) {\n"
+        "    write_program_install_diagnostic(diagnostic, ProgramInstallErrorCode::invalid_host_descriptor,\n"
+        "                                     \"Program install received an invalid host descriptor\");\n"
+        "    return false;\n"
+        "  }\n"
+        "  *candidate = {};\n"
+        "  try {\n"
+        "    auto state = std::make_unique<ProgramCandidateState>();\n"
+        "    ProgramCandidateDescriptor descriptor{};\n"
+        "    descriptor.struct_size = static_cast<std::uint32_t>(sizeof(ProgramCandidateDescriptor));\n"
+        "    descriptor.abi_version = kProgramInstallAbiVersion;\n"
+        "    descriptor.native_dimension = static_cast<std::uint32_t>(pops::kNativeDimension);\n"
+        "    descriptor.runtime_kind = ProgramRuntimeKind::uniform;\n"
+        "    descriptor.provided_capability_bits = kProgramCandidateCapabilities;\n"
+        "    descriptor.required_capability_bits = kProgramCandidateCapabilities;\n"
+        "    descriptor.required_service_bits = kProgramCandidateRequiredServices;\n"
+        "    descriptor.program_name = {kProgramCandidateName,\n"
+        "        static_cast<std::uint64_t>(sizeof(kProgramCandidateName) - 1)};\n"
+        "    descriptor.artifact_identity = {kProgramCandidateArtifactIdentity,\n"
+        "        static_cast<std::uint64_t>(sizeof(kProgramCandidateArtifactIdentity) - 1)};\n"
+        "    descriptor.abi_key = {kProgramCandidateAbiKey,\n"
+        "        static_cast<std::uint64_t>(sizeof(kProgramCandidateAbiKey) - 1)};\n"
+        "    descriptor.route_manifest = {kProgramCandidateRouteManifest,\n"
+        "        static_cast<std::uint64_t>(sizeof(kProgramCandidateRouteManifest) - 1)};\n"
+        "    descriptor.boundary_manifest = {kProgramCandidateBoundaryManifest,\n"
+        "        static_cast<std::uint64_t>(sizeof(kProgramCandidateBoundaryManifest) - 1)};\n"
+        "    descriptor.persistent_resource_manifest = {kProgramCandidatePersistentResourceManifest,\n"
+        "        static_cast<std::uint64_t>(sizeof(kProgramCandidatePersistentResourceManifest) - 1)};\n"
+        "    descriptor.checkpoint_identity = {kProgramCandidateCheckpointIdentity,\n"
+        "        static_cast<std::uint64_t>(sizeof(kProgramCandidateCheckpointIdentity) - 1)};\n"
+        "    descriptor.blocks = kProgramCandidateBlocks;\n"
+        "    descriptor.parameters = kProgramCandidateParameters;\n"
+        "    descriptor.operator_authorities = kProgramCandidateOperatorAuthorities;\n"
+        "    descriptor.history_authorities = kProgramCandidateHistoryAuthorities;\n"
+        "    descriptor.checkpoint_shape = kProgramCandidateCheckpointShape;\n"
+        "    descriptor.flux_budgets = kProgramCandidateFluxBudgets;\n"
+        "    descriptor.resource_plan = kProgramCandidateResourcePlan;\n"
+        "    descriptor.boundary_routes = kProgramCandidateBoundaryRoutes;\n"
+        "    descriptor.provider_routes = kProgramCandidateProviderRoutes;\n"
+        "    descriptor.module_operators = kProgramCandidateModuleOperators;\n"
+        "    descriptor.module_state_spaces = kProgramCandidateModuleStateSpaces;\n"
+        "    descriptor.module_field_spaces = kProgramCandidateModuleFieldSpaces;\n"
+        "    descriptor.maximum_bytes = " + max_bytes + ";\n"
+        "    descriptor.context = state.get();\n"
+        "    descriptor.prepare = &program_candidate_prepare;\n"
+        "    descriptor.step = &program_candidate_step;\n"
+        "    descriptor.dt_bound = nullptr;\n"
+        "    descriptor.destroy = &program_candidate_destroy;\n"
+        "    if (!valid_program_candidate_descriptor(descriptor)) {\n"
+        "      write_program_install_diagnostic(diagnostic, ProgramInstallErrorCode::invalid_candidate,\n"
+        "                                       \"Program artifact produced an invalid candidate descriptor\");\n"
+        "      return false;\n"
+        "    }\n"
+        "    *candidate = descriptor;\n"
+        "    (void)state.release();\n"
+        "    return true;\n"
+        "  } catch (...) {\n"
+        "    write_program_install_diagnostic(diagnostic, ProgramInstallErrorCode::artifact_rejected,\n"
+        "                                     \"Program artifact installation failed\");\n"
+        "    return false;\n"
+        "  }\n"
         "}\n"
     )
-
-
-def _emit_dt_bound_entry(target: str, body: str, value_name: str | None = None) -> str:
-    """Emit one allocation-free facade-typed dt-bound ABI."""
-    if target == "amr_system":
-        symbol = "pops_program_dt_bound_amr"
-        facade = "pops::AmrSystem<pops::kNativeDimension>"
-    else:
-        symbol = "pops_program_dt_bound"
-        facade = "pops::System<pops::kNativeDimension>"
-    header = (
-        f'extern "C" pops::Real {symbol}({facade}* sys, pops::Real cfl) {{\n'
-        "  auto ctx = pops::runtime::program::make_program_execution_view(sys);\n"
-        "  (void)ctx; (void)cfl;\n"
-    )
-    if not value_name:
-        return header + f"{body}\n}}\n"
-    if target == "amr_system":
-        return (
-            header
-            + "  pops::Real pops_program_dt_bound_result = "
-            "std::numeric_limits<pops::Real>::infinity();\n"
-            "  ctx.for_each_program_resource_level([&](int) {\n"
-            f"{body}\n"
-            f"    pops_program_dt_bound_result = std::min("
-            f"pops_program_dt_bound_result, {value_name});\n"
-            "  });\n"
-            "  return pops_program_dt_bound_result;\n"
-            "}\n"
-        )
-    return header + f"{body}\n  return {value_name};\n}}\n"
-
-
-def _emit_operator_authorities(authorities: tuple[tuple[int, ...], ...]) -> str:
-    """Exact loader-authenticated authority table for compiled prepared operators."""
-    rows = []
-    for authority in authorities:
-        if len(authority) != 4 or not any(authority):
-            raise ValueError("compiled Program operator authority must contain four non-zero words")
-        rows.append("  {%s}" % ", ".join("UINT64_C(%d)" % word for word in authority))
-    if rows:
-        table = "static constexpr std::uint64_t values[][4] = {\n%s\n  };" % ",\n".join(rows)
-        lookup = "return values[operator_index][word_index];"
-    else:
-        table = ""
-        lookup = "return UINT64_C(0);"
-    return (
-        'extern "C" int pops_program_operator_authority_count() { return %d; }\n'
-        'extern "C" std::uint64_t pops_program_operator_authority_word('
-        "int operator_index, int word_index) {\n"
-        "  if (operator_index < 0 || operator_index >= %d || word_index < 0 || word_index >= 4)\n"
-        "    return UINT64_C(0);\n"
-        "  %s\n"
-        "  %s\n"
-        "}\n" % (len(rows), len(rows), table, lookup)
-    )
-
-
-def _emit_block_names(program: Any) -> str:
-    """C++ source of the NAME-based block-binding ABI the .so exports (Spec 3 criterion 23, ADC-457):
-    ``pops_program_block_count()`` and ``pops_program_block_name(int)`` -- the Program's block names in
-    ``_block_indices`` order (T.state declaration order, the order the step body's ``ctx.state(idx)``
-    addresses). System::install_program reads them, matches each to the instantiated System block of
-    that name, and stores the program-index -> system-index map (read by the execution provider), so the
-    System blocks may be added in ANY order vs the Program's T.state declarations -- a Program block
-    whose name has no System block fails loud. The block names are also part of the IR identity (the
-    block_order field of _serialize feeds the IR hash), so reordering T.state changes the hash."""
-    order = program._block_indices()  # name -> index, declaration order
-    names = sorted(order, key=order.get)
-    cases = "".join(
-        "    case %d: return %s;\n" % (order[block], json.dumps(block_name(block)))
-        for block in names
-    )
-    return (
-        "// NAME-based block binding (Spec 3 criterion 23, ADC-457): the Program's block names in\n"
-        "// T.state declaration order. install_program matches each to a System block BY NAME (not\n"
-        "// add-order) and builds the program-index -> system-index map the provider resolves.\n"
-        'extern "C" int pops_program_block_count() { return %d; }\n'
-        % len(names)
-        + 'extern "C" const char* pops_program_block_name(int i) {\n'
-        '  switch (i) {\n%s    default: return "";\n  }\n}\n' % cases
-    )
-
-
-def _emit_dt_bound(program: Any, model: Any = None) -> tuple:
-    """Lower the optional dt bound (spec s18 / ADC-417) to ``(has, body, value)``.
-
-    ``has`` is the bool literal ``pops_program_has_dt_bound`` returns. ``body`` is the
-    allocation-free scalar evaluation. ``value`` names the computed bound, or ``None``
-    when the function only returns the +inf sentinel. On ``amr_system`` the entry
-    evaluates that scalar on every live level and keeps the minimum. ADC-426: a
-    multi-block dt bound may read several blocks' states, so each op resolves its
-    own block index. No commit lives in a dt bound (empty committed_ids).
-    """
-    if program._dt_bound is None:
-        return "false", "    return std::numeric_limits<pops::Real>::infinity();", None
-    sub, result = program._dt_bound
-    block_idx = program._block_indices()
-    bases = {}
-    for v in sub:
-        if v.op == "state" and v.block not in bases:
-            bases[v.block] = v
-    var = {}
-    lines = []
-    for v in sub:
-        _emit_op(program, v, bases.get(v.block), frozenset(), var, model, lines, None, block_idx)
-    value_name = "pops_program_dt_bound_value"
-    lines.append("const pops::Real %s = %s;" % (value_name, var[result.id]))
-    body = "\n".join("    " + ln for ln in lines)
-    return "true", body, value_name
 
 
 def _check_lowerable(

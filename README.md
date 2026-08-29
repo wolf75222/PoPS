@@ -33,8 +33,8 @@ loop.
 Named applications such as diocotron, Euler-Poisson, two-fluid, and validation setups live
 in [`adc_cases`](https://github.com/wolf75222/adc_cases). This repository owns the reusable
 solver core, the Python DSL that builds compiled artifacts, and the C++ runtime that
-executes them. The repo-local scientific campaign lives under
-[`verification/`](verification/README.md).
+executes them. Its executable conformance inventory is [`tests/test_manifest.toml`](tests/test_manifest.toml),
+while performance campaigns are catalogued by [`benchmarks/manifest.toml`](benchmarks/manifest.toml).
 
 At the mathematical level, a case usually couples conservative states `U` to one or more
 elliptic fields through an owner-qualified provider pack `P`:
@@ -193,28 +193,12 @@ Shorter introductions live in [`docs/tuto`](docs/tuto/README.md).
 
 ## Verification
 
-[`verification/`](verification/README.md) is the repo-local scientific campaign. It is not
-installed in the `pops` wheel. It is distinct from the fast-test catalogue
-(`tests/test_manifest.toml`) and the performance harness (`benchmarks/manifest.toml`).
-
-`verification/manifest.toml` is the source of truth (schema `pops.verification.manifest.v1`).
-Catalogued families include infrastructure (`PH`), transport (`TR`), Euler (`EU`), Poisson
-(`PO`), time (`TM`), Euler-Poisson (`CP`), AMR (`AM`), and robustness (`RB`). One native
-artifact compiles exactly one spatial dimension (`POPS_NATIVE_DIM` is `1`, `2`, or `3`).
-
-Validate the manifest and plan a suite without executing cases:
-
-```bash
-python scripts/check_verification_manifest.py
-python scripts/run_verification.py \
-  --suite pr \
-  --dimensions 1 \
-  --max-nodes 2 \
-  --output build/verification/plan
-```
-
-`--suite` is one of `pr`, `nightly`, `weekly`, `release`, `two_node`. `--max-nodes > 2` is
-refused. The planner writes `plan.json`; it does not compile, bind, or launch jobs.
+[`tests/test_manifest.toml`](tests/test_manifest.toml) is the source-owned executable test
+inventory. Closed ticket gates live in [`tests/gates`](tests/gates), and the release workflow
+executes them across the declared native dimensions and backends. Scientific application
+campaigns remain in [`adc_cases`](https://github.com/wolf75222/adc_cases); benchmark protocols and
+their retained evidence contracts live under [`benchmarks/`](benchmarks/README.md). None of these
+campaign assets is installed in the `pops` wheel.
 
 ## Documentation
 
@@ -223,7 +207,8 @@ refused. The planner writes `plan.json`; it does not compile, bind, or launch jo
   normative Python/C++ contract and acceptance matrix.
 - [Algorithms](docs/ALGORITHMS.md): numerical methods and implementation notes.
 - [Tutorials](docs/tuto/README.md): linear introductions built with the public API.
-- [Verification](verification/README.md): scientific campaign layout, manifest, and case contract.
+- [Executable test inventory](tests/test_manifest.toml): source-owned unit, integration, MPI, and gate coverage.
+- [Benchmarks](benchmarks/README.md): performance protocols and evidence contracts.
 - [Versioning](docs/VERSIONING.md): public API scope and release process.
 - [Documentation quality](docs/DOC_QUALITY.md): maintained corpus and conformance rules.
 - [Contributing](CONTRIBUTING.md): build, test, review, and PR workflow.

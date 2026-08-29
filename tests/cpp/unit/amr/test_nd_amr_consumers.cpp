@@ -2,7 +2,7 @@
 
 #include <pops/coupling/amr/amr_coupler_mp.hpp>
 #include <pops/coupling/system/amr_system_coupler.hpp>
-#include <pops/runtime/program/amr_program_context.hpp>
+#include <pops/runtime/program/program_execution_services.hpp>
 
 #include <array>
 #include <type_traits>
@@ -16,7 +16,7 @@ constexpr pops::mesh::BoxArrayValidationBudget kLayoutBudget{8, 28};
 
 static_assert(pops::coupling::amr::AmrCouplerMP<1>::dimension == 1);
 static_assert(pops::coupling::system::AmrSystemCoupler<3>::dimension == 3);
-static_assert(pops::runtime::program::AmrProgramContext<3>::dimension == 3);
+static_assert(pops::runtime::program::ProgramExecutionServices<3>::dimension == 3);
 
 TEST(test_nd_amr_consumers, parent_footprints_keep_one_and_three_dimensional_ratios) {
   const amr_time::PatchRange<1> line(pops::Box<1>{pops::Index<1>{-8}, pops::Index<1>{-1}},

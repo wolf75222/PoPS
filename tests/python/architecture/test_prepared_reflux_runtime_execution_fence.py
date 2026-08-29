@@ -16,7 +16,9 @@ PATCH_RANGE = (
 LEDGER = ROOT / "include" / "pops" / "amr" / "reflux" / "face_flux_ledger.hpp"
 METRIC_REFLUX = LEDGER.with_name("metric_reflux.hpp")
 AMR_RUNTIME = ROOT / "include" / "pops" / "runtime" / "amr" / "amr_runtime.hpp"
-PROGRAM_CONTEXT = ROOT / "include" / "pops" / "runtime" / "program" / "amr_program_context.hpp"
+PROGRAM_EXECUTION_SERVICES = (
+    ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
+)
 RETIRED_PROGRAM_REFLUX = ROOT / "include" / "pops" / "runtime" / "amr" / "amr_program_reflux.hpp"
 HEADERS_MANIFEST = ROOT / "include" / "pops_headers.manifest"
 
@@ -74,11 +76,13 @@ def test_metric_reflux_authenticates_exact_time_and_tangential_faces() -> None:
     assert "metric_reflux(" in source
 
 
-def test_program_context_and_runtime_share_the_same_prepared_authority() -> None:
-    context_root = PROGRAM_CONTEXT.read_text(encoding="utf-8")
+def test_program_execution_services_and_runtime_share_the_same_prepared_authority() -> None:
+    assert PROGRAM_EXECUTION_SERVICES.is_file()
     context = _amr_semantic_source(_amr_semantic_closure(AMR_CONSUMER_ROOTS["program"]))
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
-    assert "PreparedAmrSubcyclePlan<Dim" in context_root
+    # The public root delegates the AMR implementation to its authenticated private backend; the
+    # semantic closure is the source-of-truth for the prepared hierarchy type.
+    assert "PreparedAmrSubcyclePlan<Dim" in context
     assert "prepare_subcycling(" in context
     assert "runtime_->reconcile_reflux(" in context
     assert "TransactionalFaceFluxLedger<Dim, Payload>" in context

@@ -9,7 +9,6 @@
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/program/amr_program_context.hpp>
 #include <pops/runtime/program/same_level_cell_temporal_provider.hpp>
 
 #include <algorithm>
@@ -100,151 +99,6 @@ Real copied_host_value(const Fab<Dim, MemorySpace>& fab, const Index<Dim>& index
   }
   return host(static_cast<std::size_t>(component) * stride + offset);
 }
-
-template <int Dim>
-struct SetFirstCell {
-  FieldView<Real, Dim> values{};
-  Index<Dim> cell{};
-  Real value = Real(0);
-  int components = 0;
-
-  POPS_HD void operator()(const Index<Dim>& index) const {
-    if (index == cell)
-      for (int component = 0; component < components; ++component)
-        values(index, component) = value;
-  }
-};
-
-template <int Dim>
-struct SetLinearCellState {
-  FieldView<Real, Dim> values{};
-  int varying_axis = 0;
-  int components = 0;
-
-  POPS_HD void operator()(const Index<Dim>& index) const {
-    for (int component = 0; component < components; ++component)
-      values(index, component) = Real(index[varying_axis]) + Real(100 * component);
-  }
-};
-
-template <int Dim>
-class DirectPreparedCellTemporalRuntime {
- public:
-  // This fixture remains the focused prepared-subengine proof for rank-local failure injection and
-  // remote-neighbour halo flux. The generated AmrProgramContext/DSO route is proved separately by
-  // test_public_mpi_generated_cell_local_multiblock_regrids_and_matches_forward_euler.
-  static constexpr int dimension = Dim;
-  using context_type = runtime::program::AmrProgramContext<Dim>;
-  using runtime_type = typename context_type::runtime_type;
-  using field_type = MultiFab<Dim>;
-
-  DirectPreparedCellTemporalRuntime(context_type& context, runtime_type& runtime, int varying_axis,
-                                    const ExecutionLane& lane)
-      : runtime_(&runtime),
-        geometry_(context.geometry()),
-        lane_(&lane),
-        varying_axis_(varying_axis) {
-    periodicity_.fill(true);
-    boundary_ = std::make_unique<runtime::program::PreparedScalarBoundarySession<Dim>>(
-        geometry_, BoundaryTopology<Dim>::axis_periodic(periodicity_),
-        runtime_->hierarchy().state(0), lane, 1);
-  }
-
-  [[nodiscard]] std::uint64_t topology_epoch() const noexcept { return runtime_->topology_epoch(); }
-  [[nodiscard]] std::uint64_t materialization_generation() const noexcept {
-    return runtime_->materialization_generation();
-  }
-  [[nodiscard]] std::size_t same_level_cell_block_count() const noexcept { return 1; }
-  [[nodiscard]] int same_level_cell_level_count() const noexcept { return 1; }
-  [[nodiscard]] field_type& same_level_cell_state() noexcept {
-    return runtime_->hierarchy().state(0);
-  }
-  [[nodiscard]] const Geometry<Dim>& same_level_cell_geometry() const noexcept { return geometry_; }
-  [[nodiscard]] const std::array<bool, Dim>& same_level_cell_periodicity() const noexcept {
-    return periodicity_;
-  }
-  [[nodiscard]] std::string_view same_level_cell_state_identity() const noexcept {
-    return "test://mpi/direct-prepared-cell-temporal/state";
-  }
-  [[nodiscard]] std::string_view same_level_cell_flux_provider_identity() const noexcept {
-    return "test://mpi/direct-prepared-cell-temporal/central-neighbour-flux";
-  }
-  [[nodiscard]] std::string_view same_level_cell_flux_parameter_contract() const noexcept {
-    return "test.mpi.direct-cell-temporal.central-neighbour-flux.v1";
-  }
-  [[nodiscard]] std::string_view same_level_cell_stage_snapshot_contract() const noexcept {
-    return "test.mpi.direct-cell-temporal.amr-halo-snapshot.v1";
-  }
-
-  void prepare_same_level_cell_stage_snapshot(const runtime::multiblock::BoundaryEvaluationPoint&,
-                                              field_type& snapshot, const ExecutionLane& lane) {
-    if (lane.identity() != lane_->identity() || !lane.congruent_with(*lane_))
-      throw std::invalid_argument("direct temporal snapshot received another execution lane");
-    boundary_->fill(snapshot);
-  }
-
-  void capture_same_level_negative_flux_divergence(
-      const runtime::multiblock::BoundaryEvaluationPoint&, const field_type& snapshot,
-      field_type& residual, const std::array<field_type*, Dim>& fluxes) {
-    const int components = snapshot.ncomp();
-    for (int axis = 0; axis < Dim; ++axis) {
-      fluxes[axis]->set_val(Real(0));
-      for (std::size_t local = 0; local < fluxes[axis]->local_size(); ++local) {
-        const auto state = snapshot.fab(local).view();
-        const auto flux = fluxes[axis]->fab(local).view();
-        for_each_cell(fluxes[axis]->box(local), [=] POPS_HD(const Index<Dim>& face) {
-          Index<Dim> left = face;
-          --left[axis];
-          for (int component = 0; component < components; ++component)
-            flux(face, component) = Real(0.5) * (state(left, component) + state(face, component));
-        });
-      }
-    }
-    device_fence();
-    residual.set_val(Real(0));
-    for (std::size_t local = 0; local < residual.local_size(); ++local) {
-      const auto output = residual.fab(local).view();
-      std::array<FieldView<const Real, Dim>, Dim> prepared_fluxes{};
-      for (int axis = 0; axis < Dim; ++axis)
-        prepared_fluxes[axis] = std::as_const(*fluxes[axis]).fab(local).view();
-      for_each_cell(residual.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-        for (int component = 0; component < components; ++component) {
-          Real value = Real(0);
-          for (int axis = 0; axis < Dim; ++axis) {
-            Index<Dim> high = cell;
-            ++high[axis];
-            value -=
-                prepared_fluxes[axis](high, component) - prepared_fluxes[axis](cell, component);
-          }
-          output(cell, component) = value;
-        }
-      });
-    }
-    device_fence();
-    ++capture_count_;
-  }
-
-  [[nodiscard]] int varying_axis() const noexcept { return varying_axis_; }
-  [[nodiscard]] int capture_count() const noexcept { return capture_count_; }
-
- private:
-  runtime_type* runtime_ = nullptr;
-  Geometry<Dim> geometry_;
-  std::array<bool, Dim> periodicity_{};
-  const ExecutionLane* lane_ = nullptr;
-  std::unique_ptr<runtime::program::PreparedScalarBoundarySession<Dim>> boundary_;
-  int varying_axis_ = 0;
-  int capture_count_ = 0;
-};
-
-using DirectPreparedNativeRuntime = DirectPreparedCellTemporalRuntime<kNativeDimension>;
-using DirectPreparedNativeProvider =
-    runtime::program::PreparedSameLevelTransportEulerStageFluxProvider<kNativeDimension,
-                                                                       DirectPreparedNativeRuntime>;
-static_assert(
-    runtime::program::SameLevelCellTemporalRuntime<kNativeDimension, DirectPreparedNativeRuntime>);
-static_assert(
-    runtime::program::DistributedCellTemporalStageFluxProvider<DirectPreparedNativeProvider>);
 
 struct CollectiveRungFailureState {
   std::vector<std::uint32_t, fab_allocator<std::uint32_t>> accepted{11u, 22u};
@@ -507,62 +361,56 @@ int run_collective_program_route(int split_axis, bool prove_collective_rollback)
                           "rusanov", "conservative", "explicit", 1.4, 1, 1, {}, {}, 0.0,
                           static_cast<double>(kWenoEpsilon), false,
                           "test.mpi.cell-temporal-program/physical-flux");
-  auto* const engine = system.engine();
-  if (!system.uses_runtime_engine() || engine == nullptr)
+  if (!system.uses_runtime_engine())
     return 1;
+
+  std::size_t cells = 1;
+  std::size_t varying_stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    cells *= static_cast<std::size_t>(config.shape[axis]);
+    if (axis < split_axis)
+      varying_stride *= static_cast<std::size_t>(config.shape[axis]);
+  }
+  std::vector<double> initial_state(cells, 0.0);
+  for (std::size_t cell = 0; cell < cells; ++cell)
+    initial_state[cell] = static_cast<double>((cell / varying_stride) %
+                                              static_cast<std::size_t>(config.shape[split_axis]));
+  system.set_conservative_state("tracer", initial_state);
   system.set_program_block_map({0});
-  auto context = std::make_shared<runtime::program::AmrProgramContext<Dim>>(engine, &system);
   const std::string clock = "test.clock.cell-local-mpi-program.axis" + std::to_string(split_axis);
-  context->configure_primary_clock(clock);
-  const ExecutionLane& lane = context->prepared_execution_lane();
-  const MultiFab<Dim>& initial = engine->hierarchy().state(0);
-  const long local_boxes = static_cast<long>(initial.local_size());
-  if (initial.layout().size() < 2)
+  std::vector<Box<Dim>> initial_boxes;
+  std::vector<Index<Dim>> initial_owners;
+  long local_boxes = 0;
+  std::uint32_t state_components = 0;
+  std::uint32_t state_ghosts = 0;
+  {
+    const auto initial_view = system.prepared_amr_block_state(0, 0);
+    if (!initial_view)
+      return 20;
+    initial_boxes = initial_view->layout().boxes();
+    initial_owners.reserve(initial_boxes.size());
+    for (std::size_t index = 0; index < initial_boxes.size(); ++index)
+      initial_owners.push_back(initial_view->distribution().owner(index));
+    local_boxes = static_cast<long>(initial_view->local_size());
+    state_components = static_cast<std::uint32_t>(initial_view->ncomp());
+    state_ghosts = static_cast<std::uint32_t>(initial_view->ghosts()[0]);
+  }
+  if (initial_boxes.size() < 2)
     return 21;
+  const ExecutionLane lane = ExecutionLane::world("test.mpi.cell-temporal-program/lane");
   if (all_reduce_min(local_boxes, lane) == all_reduce_max(local_boxes, lane))
     return 22;
-  if (all_reduce_sum(local_boxes, lane) != static_cast<long>(initial.layout().size()))
+  if (all_reduce_sum(local_boxes, lane) != static_cast<long>(initial_boxes.size()))
     return 23;
-  if (prove_collective_rollback && split_axis == 0) {
-    const int phase_regression = run_rank_local_begin_rung_failure_regression(lane);
-    if (phase_regression != 0)
-      return phase_regression;
-  }
-  MultiFab<Dim>& live = engine->hierarchy().state(0);
-  for (std::size_t local = 0; local < live.local_size(); ++local)
-    for_each_cell(live.box(local),
-                  SetLinearCellState<Dim>{live.fab(local).view(), split_axis, live.ncomp()});
-  device_fence();
 
-  DirectPreparedCellTemporalRuntime<Dim> direct_runtime(*context, *engine, split_axis, lane);
-  using DirectProvider = runtime::program::PreparedSameLevelTransportEulerStageFluxProvider<
-      Dim, DirectPreparedCellTemporalRuntime<Dim>>;
-  const runtime::program::CellTemporalPartitionAcceptedState partition =
-      runtime::program::prepare_same_level_transport_euler_partition<Dim>(direct_runtime, 0, 100, 0,
-                                                                          lane);
-  std::size_t local_cells = 0;
-  for (std::size_t local = 0; local < live.local_size(); ++local)
-    local_cells += static_cast<std::size_t>(live.box(local).numPts());
-  auto ledger = std::make_shared<runtime::program::SameLevelCellIntegratedFluxLedger<Dim>>(
-      direct_runtime.topology_epoch(), direct_runtime.materialization_generation(), 0, 0,
-      local_cells, live.ncomp());
-  DirectProvider provider(direct_runtime, partition, ledger, clock, lane);
-  runtime::program::PreparedBatchedCellTemporalExecutor executor(partition, std::move(provider),
-                                                                 lane);
-  if (executor.provider_identity() != runtime::program::kSameLevelTransportEulerStageFluxProvider ||
-      executor.execution_lane().identity() != lane.identity() ||
-      !executor.execution_lane().congruent_with(lane))
-    return 24;
-
-  std::size_t interface_patch = initial.layout().size();
+  std::size_t interface_patch = initial_boxes.size();
   Index<Dim> interface_cell{};
-  for (std::size_t left = 0; left < initial.layout().size(); ++left) {
-    for (std::size_t right = 0; right < initial.layout().size(); ++right) {
-      if (left == right ||
-          initial.distribution().owner(left) == initial.distribution().owner(right))
+  for (std::size_t left = 0; left < initial_boxes.size(); ++left) {
+    for (std::size_t right = 0; right < initial_boxes.size(); ++right) {
+      if (left == right || initial_owners[left] == initial_owners[right])
         continue;
-      const Box<Dim>& left_box = initial.layout()[left];
-      const Box<Dim>& right_box = initial.layout()[right];
+      const Box<Dim>& left_box = initial_boxes[left];
+      const Box<Dim>& right_box = initial_boxes[right];
       bool same_transverse_extent = true;
       for (int axis = 0; axis < Dim; ++axis)
         if (axis != split_axis &&
@@ -574,102 +422,96 @@ int run_collective_program_route(int split_axis, bool prove_collective_rollback)
         break;
       }
     }
-    if (interface_patch != initial.layout().size())
+    if (interface_patch != initial_boxes.size())
       break;
   }
-  if (interface_patch == initial.layout().size())
+  if (interface_patch == initial_boxes.size())
     return 25;
 
+  using Resource = test::program_v5::CallbackProgramResource;
+  const std::vector<Resource> resources{
+      {Resource::Kind::rhs, 0, 0, 0, 0, state_components, state_ghosts}};
+  struct CallbackState {
+    bool prepared = false;
+    bool inject_failure = false;
+    bool failure_consumed = false;
+    int dispatches = 0;
+    int regression_result = 0;
+  };
+  const auto callback_state = std::make_shared<CallbackState>();
+  const std::array route{runtime::program::SameLevelCellTemporalForwardEulerRoute{0, 0, 0}};
+  test::install_explicit_amr_callback_program<Dim>(
+      system, "test.mpi.cell-temporal-program/program@1", clock, resources, {},
+      [callback_state, clock, route, prove_collective_rollback, split_axis](auto& context,
+                                                                            double dt) mutable {
+        context.begin_step(dt);
+        if (!callback_state->prepared) {
+          context.prepare_same_level_cell_temporal_execution(clock, 100, 0, route);
+          callback_state->prepared = true;
+          if (prove_collective_rollback && split_axis == 0)
+            callback_state->regression_result =
+                run_rank_local_begin_rung_failure_regression(context.prepared_execution_lane());
+          if (callback_state->regression_result != 0)
+            throw std::runtime_error("cell-local MPI collective rollback regression failed");
+        }
+        context.advance_same_level_cell_temporal(dt);
+        if (callback_state->inject_failure && !callback_state->failure_consumed) {
+          callback_state->failure_consumed = true;
+          throw runtime::program::StepAttemptRejected(
+              SolveStatus::kIterationLimit, runtime::program::StepAttemptDisposition::kRetry,
+              0x43454C4Cu, "cell-local-mpi-candidate", "injected-cell-local-retry");
+        }
+        ++callback_state->dispatches;
+      });
+  if (system.accepted_transaction_generation_() != 0)
+    return 27;
   try {
-    executor.begin_attempt(1);
-    executor.advance_to_barrier();
-    executor.commit();
+    system.step(0.01);
   } catch (...) {
     return 3;
   }
-  const auto first_checkpoint = executor.checkpoint();
-  long remote_neighbour_proof_failed = first_checkpoint.synchronization_tick != 1 ||
-                                               direct_runtime.capture_count() != 1 ||
-                                               ledger->publication_generation() != 1
-                                           ? 1L
-                                           : 0L;
-  if (live.contains_local(interface_patch)) {
-    const std::size_t local = live.local_index_of(interface_patch);
-    const Real expected = Real(interface_cell[split_axis]) - Real(0.01);
-    if (copied_host_value(std::as_const(live).fab(local), interface_cell, 0) != expected)
-      remote_neighbour_proof_failed = 1;
+  if (callback_state->dispatches != 1 || !callback_state->prepared)
+    return 24;
+  long remote_neighbour_proof_failed = 0;
+  {
+    const auto live = system.prepared_amr_block_state(0, 0);
+    remote_neighbour_proof_failed = live ? 0L : 1L;
+    if (live && live->contains_local(interface_patch)) {
+      const std::size_t local = live->local_index_of(interface_patch);
+      const Real expected = Real(interface_cell[split_axis]) - Real(0.01);
+      if (copied_host_value(std::as_const(live->fab(local)), interface_cell, 0) != expected)
+        remote_neighbour_proof_failed = 1;
+    }
   }
   if (all_reduce_max(remote_neighbour_proof_failed, lane) != 0)
     return 4;
   if (!prove_collective_rollback)
     return 0;
 
-  bool injection_failed = false;
-  try {
-    if (lane.rank() == 0) {
-      if (live.local_size() == 0)
-        throw std::logic_error("rank zero lost its local coarse patch");
-      const Index<Dim> first = live.box(0).lo;
-      for_each_cell(live.box(0),
-                    SetFirstCell<Dim>{live.fab(0).view(), first,
-                                      std::numeric_limits<Real>::quiet_NaN(), live.ncomp()});
-      device_fence();
-    }
-  } catch (const std::exception&) {
-    injection_failed = true;
-  }
-  if (all_reduce_max(injection_failed ? 1L : 0L, lane) != 0)
-    return 5;
-
+  const auto accepted_before_reject = system.block_level_state_global("tracer", 0);
+  callback_state->inject_failure = true;
   bool rejected = false;
   try {
-    executor.begin_attempt(2);
-    executor.advance_to_barrier();
-    executor.commit();
-  } catch (const std::exception&) {
+    system.step(0.01);
+  } catch (const runtime::program::StepAttemptRejected&) {
     rejected = true;
   }
-  if (all_reduce_min(rejected ? 1L : 0L, lane) != 1 || executor.attempt_active() ||
-      executor.checkpoint().synchronization_tick != 1 || ledger->publication_generation() != 1)
+  callback_state->inject_failure = false;
+  const auto accepted_after_reject = system.block_level_state_global("tracer", 0);
+  if (all_reduce_min(rejected ? 1L : 0L, lane) != 1 ||
+      accepted_after_reject != accepted_before_reject || system.macro_step() != 1 ||
+      system.accepted_transaction_generation_() != 1)
     return 6;
 
-  if (lane.rank() == 0) {
-    const Index<Dim> first = live.box(0).lo;
-    for_each_cell(live.box(0), SetFirstCell<Dim>{live.fab(0).view(), first, Real(1), live.ncomp()});
-    device_fence();
-  }
   try {
-    executor.begin_attempt(2);
-    executor.advance_to_barrier();
-    executor.commit();
+    system.step(0.01);
   } catch (...) {
     return 8;
   }
-  if (executor.checkpoint().synchronization_tick != 2 || ledger->publication_generation() != 2)
+  if (callback_state->dispatches != 2 || system.macro_step() != 2 ||
+      system.accepted_transaction_generation_() != 2)
     return 9;
-
-  const runtime::program::CellTemporalPartitionAcceptedState off_grid_partition =
-      runtime::program::prepare_same_level_transport_euler_partition<Dim>(direct_runtime, 2, 100, 1,
-                                                                          lane);
-  auto off_grid_ledger = std::make_shared<runtime::program::SameLevelCellIntegratedFluxLedger<Dim>>(
-      direct_runtime.topology_epoch(), direct_runtime.materialization_generation(), 0, 0,
-      local_cells, live.ncomp());
-  DirectProvider off_grid_provider(direct_runtime, off_grid_partition, off_grid_ledger, clock,
-                                   lane);
-  runtime::program::PreparedBatchedCellTemporalExecutor off_grid_executor(
-      off_grid_partition, std::move(off_grid_provider), lane);
-  bool off_grid_tick_refused = false;
-  try {
-    off_grid_executor.begin_attempt(3);
-  } catch (const std::invalid_argument&) {
-    off_grid_tick_refused = true;
-  }
-  const long off_grid_failure = !off_grid_tick_refused || off_grid_executor.attempt_active() ||
-                                        off_grid_executor.checkpoint() != off_grid_partition ||
-                                        off_grid_ledger->publication_generation() != 0
-                                    ? 1L
-                                    : 0L;
-  return all_reduce_max(off_grid_failure, lane) == 0 ? 0 : 10;
+  return 0;
 }
 
 int pops_run_test_mpi_cell_temporal_program(int argc, char** argv) {

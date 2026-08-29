@@ -161,7 +161,15 @@ TEST(test_coupled_fieldsolve, simultaneous_stage_rhs_uses_every_qualified_block)
   const std::vector<double> all_live = system.potential();
   ASSERT_EQ(all_live.size(), cell_count(cells));
 
-  std::vector<const NativeField*> live_stages{&system.block_state(0), &system.block_state(1)};
+  const NativeField live_first = [&] {
+    const auto state_view = system.block_state(0);
+    return NativeField(*state_view.get());
+  }();
+  const NativeField live_second = [&] {
+    const auto state_view = system.block_state(1);
+    return NativeField(*state_view.get());
+  }();
+  std::vector<const NativeField*> live_stages{&live_first, &live_second};
   const pops::SolveReport simultaneous_report =
       pops::consume_solve_outcome(system.solve_fields_from_blocks(live_stages));
   ASSERT_TRUE(simultaneous_report.solved()) << simultaneous_report.reason;
@@ -172,9 +180,9 @@ TEST(test_coupled_fieldsolve, simultaneous_stage_rhs_uses_every_qualified_block)
   EXPECT_LE(max_difference(simultaneous, all_live), 1e-11 * std::max(1.0, scale));
   EXPECT_GT(scale, 0.0);
 
-  NativeField second_stage = system.block_state(1);
+  NativeField second_stage = live_second;
   second_stage.set_val(pops::Real(0));
-  std::vector<const NativeField*> override_stages{&system.block_state(0), &second_stage};
+  std::vector<const NativeField*> override_stages{&live_first, &second_stage};
   const pops::SolveReport override_report =
       pops::consume_solve_outcome(system.solve_fields_from_blocks(override_stages));
   ASSERT_TRUE(override_report.solved()) << override_report.reason;
@@ -191,12 +199,12 @@ TEST(test_coupled_fieldsolve, simultaneous_stage_rhs_uses_every_qualified_block)
   EXPECT_EQ(system.density("first"), first);
   EXPECT_EQ(system.density("second"), second);
 
-  std::vector<const NativeField*> invalid{&system.block_state(0)};
+  std::vector<const NativeField*> invalid{&live_first};
   EXPECT_THROW((void)system.solve_fields_from_blocks(invalid), std::invalid_argument);
 }
 
 TEST(test_coupled_fieldsolve,
-     named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs) {
+     named_solve_honors_every_qualified_stage_without_live_mutation) {
   constexpr int cells = 24;
   const auto first = charge_density(cells, 1.0, 0.0);
   const auto second = charge_density(cells, 0.6, 0.25);
@@ -236,7 +244,15 @@ TEST(test_coupled_fieldsolve,
   system.set_density("first", first);
   system.set_density("second", second);
 
-  std::vector<const NativeField*> live_stages{&system.block_state(0), &system.block_state(1)};
+  const NativeField live_first = [&] {
+    const auto state_view = system.block_state(0);
+    return NativeField(*state_view.get());
+  }();
+  const NativeField live_second = [&] {
+    const auto state_view = system.block_state(1);
+    return NativeField(*state_view.get());
+  }();
+  std::vector<const NativeField*> live_stages{&live_first, &live_second};
   const pops::SolveReport live_report =
       pops::consume_solve_outcome(system.solve_fields_from_blocks(slot, live_stages));
   ASSERT_TRUE(live_report.solved()) << live_report.reason;
@@ -270,9 +286,9 @@ TEST(test_coupled_fieldsolve,
     EXPECT_LE(error, 16.0 * std::numeric_limits<pops::Real>::epsilon() * std::max(1.0, reference));
   }
 
-  NativeField second_stage = system.block_state(1);
+  NativeField second_stage = live_second;
   second_stage.set_val(pops::Real(0));
-  std::vector<const NativeField*> override_stages{&system.block_state(0), &second_stage};
+  std::vector<const NativeField*> override_stages{&live_first, &second_stage};
   const pops::SolveReport override_report =
       pops::consume_solve_outcome(system.solve_fields_from_blocks(slot, override_stages));
   ASSERT_TRUE(override_report.solved()) << override_report.reason;

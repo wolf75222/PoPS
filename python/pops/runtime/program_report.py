@@ -23,6 +23,84 @@ import json
 from typing import Any
 
 
+# An aggregate report/clock read is optimistic: a child publication is allowed to race the
+# metadata reads, but it must be detected and retried.  Keeping the bound here makes the
+# fail-closed behaviour explicit and testable without introducing a lock or thread-local state.
+_MAX_OPTIMISTIC_SNAPSHOT_ATTEMPTS = 3
+
+
+def _generation_vector(children: Any, *, where: str) -> tuple[int, ...]:
+    """Read the authenticated accepted-transaction generation of every child in order."""
+    vector = []
+    for index, child in enumerate(tuple(children)):
+        witness = getattr(child, "_accepted_transaction_generation_", None)
+        if not callable(witness):
+            raise RuntimeError(
+                "%s child %d lacks _accepted_transaction_generation_()" % (where, index)
+            )
+        try:
+            generation = witness()
+        except Exception as error:
+            raise RuntimeError(
+                "%s child %d generation witness failed" % (where, index)
+            ) from error
+        if type(generation) is not int or generation < 0:
+            raise RuntimeError(
+                "%s child %d generation witness must return a non-negative integer" % (
+                    where,
+                    index,
+                )
+            )
+        vector.append(generation)
+    if not vector:
+        raise RuntimeError("%s requires at least one child generation witness" % where)
+    return tuple(vector)
+
+
+def _optimistic_multi_layout_read(children: Any, compose: Any, *, where: str) -> Any:
+    """Compose one all-child value only from a stable monotone generation vector.
+
+    ``compose`` is deliberately rerun from scratch after an interleaved publication.  Generation
+    values are authenticated by the child engines and are monotone, so an equal before/after
+    vector cannot hide an ABA publication.  A missing/invalid witness and generation regression
+    fail closed instead of returning a mixed result.
+    """
+    ordered_children = tuple(children)
+    previous_after = None
+    for _attempt in range(_MAX_OPTIMISTIC_SNAPSHOT_ATTEMPTS):
+        before = _generation_vector(ordered_children, where=where)
+        if previous_after is not None and any(
+            current < previous
+            for current, previous in zip(before, previous_after, strict=True)
+        ):
+            raise RuntimeError("%s generation vector regressed" % where)
+        compose_error = None
+        try:
+            result = compose()
+        except BaseException as error:
+            # A mixed child image can fail an otherwise valid aggregate invariant (for example,
+            # equal clocks or one common temporal partition).  Authenticate the generation vector
+            # before deciding whether that exception belongs to a stable accepted image.  Only a
+            # witnessed publication authorizes a retry; a stable-vector exception is the real
+            # result and must propagate unchanged.
+            compose_error = error
+            result = None
+        after = _generation_vector(ordered_children, where=where)
+        if any(
+            current < previous for current, previous in zip(after, before, strict=True)
+        ):
+            raise RuntimeError("%s generation vector regressed during read" % where)
+        if before == after:
+            if compose_error is not None:
+                raise compose_error
+            return result
+        previous_after = after
+    raise RuntimeError(
+        "%s changed during optimistic snapshot after %d attempts"
+        % (where, _MAX_OPTIMISTIC_SNAPSHOT_ATTEMPTS)
+    )
+
+
 def _call(obj: Any, name: Any, default: Any = None, *args: Any) -> Any:
     """Call ``obj.name(*args)`` if present + callable, else return @p default (never raises)."""
     fn = getattr(obj, name, None)
@@ -194,13 +272,19 @@ def _histories(sim: Any) -> Any:
 
 def _cache(sim: Any) -> Any:
     rows = []
-    for node_id in _call(sim, "program_cache_nodes", []) or []:
+    # The native cache is a bind-sealed dense table.  Reports enumerate every
+    # slot, including invalid/cold slots whose accumulated window must survive
+    # a restart; no graph node id or path lookup belongs in this metadata path.
+    for slot in _call(sim, "program_cache_slots", []) or []:
+        slot = int(slot)
         rows.append(
             {
-                "node_id": int(node_id),
-                "name": _call(sim, "program_cache_name", "", node_id),
-                "last_update_step": _call(sim, "program_cache_last_update_step", None, node_id),
-                "accumulated_dt": _call(sim, "program_cache_accumulated_dt", None, node_id),
+                "slot": slot,
+                "valid": bool(_call(sim, "program_cache_valid", False, slot)),
+                "cold": bool(_call(sim, "program_cache_cold", False, slot)),
+                "name": _call(sim, "program_cache_name", "", slot),
+                "last_update_step": _call(sim, "program_cache_last_update_step", None, slot),
+                "accumulated_dt": _call(sim, "program_cache_accumulated_dt", None, slot),
             }
         )
     return rows

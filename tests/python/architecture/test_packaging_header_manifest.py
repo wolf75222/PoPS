@@ -13,6 +13,12 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[3]
+PROGRAM_ROOT = PurePosixPath("pops/runtime/program/program_execution_services.hpp")
+PROGRAM_AMR_BACKEND = PurePosixPath(
+    "pops/runtime/program/detail/program_execution_services_amr_backend.hpp"
+)
+PROGRAM_AMR_DETAIL_PREFIX = "pops/runtime/program/detail/program_execution_services_amr_"
+RETIRED_AMR_PROGRAM_ROOT = PurePosixPath("pops/runtime/program/amr_program_context.hpp")
 
 
 def _load(relative: str, name: str):
@@ -61,6 +67,29 @@ def test_manifest_exactly_classifies_all_tracked_headers_and_include_fragments()
     assert PurePosixPath("pops/parallel/load_balance.hpp") in manifest.api
     assert PurePosixPath("pops/parallel/ownership_plan.hpp") in manifest.api
     assert PurePosixPath("pops/parallel/prepared_load_balance.hpp") in manifest.api
+
+
+def test_manifest_authenticates_the_unified_program_amr_closure():
+    """The installed contract carries one public root and exactly 24 private AMR details."""
+    manifest = packaging.read_manifest(ROOT)
+    details = {
+        path
+        for path in manifest.all_headers
+        if path.as_posix().startswith(PROGRAM_AMR_DETAIL_PREFIX)
+        and path.suffix == ".hpp"
+        and path != PROGRAM_AMR_BACKEND
+    }
+    physical_details = {
+        PurePosixPath(path.relative_to(ROOT / "include").as_posix())
+        for path in (ROOT / "include" / "pops" / "runtime" / "program" / "detail").glob(
+            "program_execution_services_amr_*.hpp"
+        )
+    }
+    assert PROGRAM_ROOT in manifest.sdk_root
+    assert PROGRAM_AMR_BACKEND in manifest.sdk_support
+    assert len(details) == 24
+    assert details | {PROGRAM_AMR_BACKEND} == physical_details
+    assert RETIRED_AMR_PROGRAM_ROOT not in manifest.all_headers
 
 
 def test_amr_layout_paths_require_one_prepared_load_balance_authority():
@@ -376,7 +405,7 @@ def test_wheel_style_staged_headers_compile_system_and_amr_generated_roots(tmp_p
         name="system_generated_loader",
         roots=(
             "pops/runtime/builders/compiled/dsl_block.hpp",
-            "pops/runtime/program/program_context.hpp",
+            "pops/runtime/program/program_execution_services.hpp",
         ),
     )
     _compile_staged_root(
@@ -387,7 +416,7 @@ def test_wheel_style_staged_headers_compile_system_and_amr_generated_roots(tmp_p
         name="amr_generated_loader",
         roots=(
             "pops/runtime/builders/compiled/amr_dsl_block.hpp",
-            "pops/runtime/program/amr_program_context.hpp",
+            "pops/runtime/program/program_execution_services.hpp",
         ),
     )
     _compile_staged_root(

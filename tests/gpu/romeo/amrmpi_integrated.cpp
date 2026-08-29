@@ -1,3 +1,368 @@
+#if defined(POPS_TEST_AMR_V5_ARTIFACT)
+
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/runtime/config/route_ids.hpp>
+#include <pops/runtime/dynamic/abi_key.hpp>
+#include <pops/runtime/program/program_abi.hpp>
+#include <pops/runtime/program/program_execution_services.hpp>
+#include <pops/runtime/program/step_transaction.hpp>
+
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <iterator>
+#include <memory>
+#include <stdexcept>
+
+#if !defined(POPS_TEST_AMR_V5_BLOCK0) || !defined(POPS_TEST_AMR_V5_IDENTITY)
+#error "AMR ABI-v5 fixture requires one block and an artifact identity"
+#endif
+
+#if !defined(POPS_TEST_AMR_V5_NUMERICAL)
+#define POPS_TEST_AMR_V5_NUMERICAL 0
+#endif
+
+#if !defined(POPS_TEST_AMR_V5_HISTORY)
+#define POPS_TEST_AMR_V5_HISTORY 0
+#endif
+
+#if !defined(POPS_TEST_AMR_V5_HISTORY_CLOCK)
+#define POPS_TEST_AMR_V5_HISTORY_CLOCK "tests.history-remap-refusal/clock@1"
+#endif
+
+#if !defined(POPS_TEST_AMR_V5_HISTORY_NCOMP)
+#define POPS_TEST_AMR_V5_HISTORY_NCOMP -1
+#endif
+
+#if !defined(POPS_TEST_AMR_V5_CLOCK_RATIO)
+#define POPS_TEST_AMR_V5_CLOCK_RATIO 0
+#endif
+
+#if !defined(POPS_TEST_AMR_V5_ADVANCE_HIERARCHY)
+#define POPS_TEST_AMR_V5_ADVANCE_HIERARCHY 0
+#endif
+
+namespace {
+
+using ExecutionServices = pops::runtime::program::ProgramExecutionServices<pops::kNativeDimension>;
+
+template <std::size_t N>
+constexpr pops::runtime::program::ProgramAbiView abi_view(const char (&value)[N]) noexcept {
+  return {value, N - 1};
+}
+
+struct ProgramCandidateState final {
+  std::shared_ptr<ExecutionServices> context;
+  std::function<void(double)> step;
+};
+
+ProgramCandidateState* active_candidate = nullptr;
+
+void write_error(pops::runtime::program::ProgramInstallDiagnostic* diagnostic,
+                 pops::runtime::program::ProgramInstallErrorCode code,
+                 const char* message) noexcept {
+  if (diagnostic == nullptr)
+    return;
+  diagnostic->code = code;
+  std::size_t index = 0;
+  while (index + 1 < sizeof(diagnostic->message) && message[index] != '\0') {
+    diagnostic->message[index] = message[index];
+    ++index;
+  }
+  diagnostic->message[index] = '\0';
+}
+
+void candidate_step(void* opaque, double dt) {
+  static_cast<ProgramCandidateState*>(opaque)->step(dt);
+}
+
+void candidate_hierarchy_refresh(void* opaque) {
+  static_cast<ProgramCandidateState*>(opaque)->context->refresh_accepted_hierarchy();
+}
+
+void candidate_history_remap(void* opaque, const void* descriptor) {
+  if (descriptor == nullptr)
+    throw std::invalid_argument("AMR ABI-v5 fixture received a null history remap");
+  static_cast<ProgramCandidateState*>(opaque)->context->accept_history_remap(
+      *static_cast<const pops::runtime::program::AmrProgramHistoryRemapDescriptor*>(descriptor));
+}
+
+void candidate_restart_preflight(void* opaque) {
+  static_cast<ProgramCandidateState*>(opaque)->context->preflight_restart_regrid();
+}
+
+void candidate_restart_regrid(void* opaque) {
+  static_cast<ProgramCandidateState*>(opaque)->context->restart_regrid();
+}
+
+void candidate_restart_resync(void* opaque) {
+  static_cast<ProgramCandidateState*>(opaque)->context->resync_after_restart();
+}
+
+pops::runtime::program::AcceptedProgramExecutionServicesSnapshot* candidate_accepted_snapshot(
+    void* opaque) {
+  return static_cast<ProgramCandidateState*>(opaque)
+      ->context->create_accepted_context_snapshot()
+      .release();
+}
+
+void candidate_destroy(void* opaque) noexcept {
+  auto* state = static_cast<ProgramCandidateState*>(opaque);
+  if (active_candidate == state)
+    active_candidate = nullptr;
+  delete state;
+}
+
+bool candidate_prepare(void* opaque, const pops::runtime::program::ProgramHostDescriptor* host,
+                       pops::runtime::program::ProgramInstallDiagnostic* diagnostic) noexcept {
+  if (opaque == nullptr || host == nullptr || !host->preparation.image) {
+    write_error(diagnostic,
+                pops::runtime::program::ProgramInstallErrorCode::invalid_host_descriptor,
+                "AMR ABI-v5 fixture received an invalid preparation image");
+    return false;
+  }
+  auto* state = static_cast<ProgramCandidateState*>(opaque);
+  if (state->context || state->step) {
+    write_error(diagnostic, pops::runtime::program::ProgramInstallErrorCode::artifact_rejected,
+                "AMR ABI-v5 fixture preparation was entered twice");
+    return false;
+  }
+  try {
+    state->context =
+        pops::runtime::program::make_program_execution_provider<pops::kNativeDimension>(
+            host->preparation);
+    auto context = state->context;
+#if POPS_TEST_AMR_V5_HISTORY
+    context->configure_primary_clock(POPS_TEST_AMR_V5_HISTORY_CLOCK);
+#if POPS_TEST_AMR_V5_CLOCK_RATIO > 0
+    context->declare_clock_relation(POPS_TEST_AMR_V5_HISTORY_CLOCK, "clock.level.1",
+                                    POPS_TEST_AMR_V5_CLOCK_RATIO);
+#endif
+    context->for_each_program_resource_level([&](int) {
+      context->register_history("tracer.rate", 1, POPS_TEST_AMR_V5_HISTORY_NCOMP, 0, "tracer.U",
+                                "cell.conservative", POPS_TEST_AMR_V5_HISTORY_CLOCK,
+                                "dense.linear");
+    });
+#elif POPS_TEST_AMR_V5_NUMERICAL
+    context->configure_primary_clock("romeo.amrmpi.macro");
+    context->prepare_rhs_scratch(0, 0, 0);
+#else
+    context->configure_primary_clock("tests.amr-v5.noop.clock");
+#endif
+
+#if POPS_TEST_AMR_V5_NUMERICAL
+    state->step = [context](double macro_dt) {
+      context->advance_hierarchy(macro_dt, [context](double level_dt) {
+        context->set_stage_time(0, 1);
+        if (context->level() == 0)
+          (void)pops::consume_solve_outcome(context->solve_default_field_on_coarse_level());
+        auto& accepted = context->state(0);
+        auto& residual = context->rhs_scratch(0, 0, accepted);
+        context->rhs_into(0, accepted, residual, 3000);
+        context->axpy(accepted, pops::Real(level_dt), residual, pops::Real(level_dt), {{1, 1, 1}});
+      });
+    };
+#elif POPS_TEST_AMR_V5_ADVANCE_HIERARCHY
+    state->step = [context](double macro_dt) {
+      context->advance_hierarchy(macro_dt, [](double) {});
+    };
+#else
+    state->step = [context](double dt) { context->begin_step(dt); };
+#endif
+    active_candidate = state;
+    return true;
+  } catch (const std::exception& error) {
+    write_error(diagnostic, pops::runtime::program::ProgramInstallErrorCode::artifact_rejected,
+                error.what());
+    return false;
+  } catch (...) {
+    write_error(diagnostic, pops::runtime::program::ProgramInstallErrorCode::artifact_rejected,
+                "AMR ABI-v5 fixture preparation failed");
+    return false;
+  }
+}
+
+constexpr char kProgramName[] = POPS_TEST_AMR_V5_IDENTITY;
+constexpr char kArtifactIdentity[] = POPS_TEST_AMR_V5_IDENTITY;
+constexpr char kAbiKey[] = POPS_ABI_KEY_LITERAL;
+constexpr char kBoundaryManifest[] = "tests.amr-v5.boundary.empty@1";
+constexpr char kCheckpointIdentity[] = "tests.amr-v5.checkpoint.empty@1";
+constexpr char kBlock0[] = POPS_TEST_AMR_V5_BLOCK0;
+#if defined(POPS_TEST_AMR_V5_BLOCK1)
+constexpr char kBlock1[] = POPS_TEST_AMR_V5_BLOCK1;
+constexpr pops::runtime::program::ProgramBlockRecord kBlocks[] = {{abi_view(kBlock0)},
+                                                                  {abi_view(kBlock1)}};
+constexpr pops::runtime::program::ProgramFluxBudgetRecord kFluxBudgets[] = {
+    {UINT64_C(16), UINT64_C(16), UINT64_C(0), UINT64_C(0)},
+    {UINT64_C(16), UINT64_C(16), UINT64_C(0), UINT64_C(0)}};
+#else
+constexpr pops::runtime::program::ProgramBlockRecord kBlocks[] = {{abi_view(kBlock0)}};
+constexpr pops::runtime::program::ProgramFluxBudgetRecord kFluxBudgets[] = {
+    {UINT64_C(16), UINT64_C(16), UINT64_C(0), UINT64_C(0)}};
+#endif
+
+#if POPS_TEST_AMR_V5_NUMERICAL
+constexpr char kResourceSchema[] = "program-resource-plan:v1";
+constexpr char kResourcePath[] = "root/gpu-forward-euler/rhs";
+constexpr char kResourceOwner[] = "block:0";
+constexpr char kResourceSpace[] = "cell.conservative";
+constexpr char kResourceClock[] = "romeo.amrmpi.macro";
+constexpr char kResourceLifetime[] = "transient";
+constexpr char kResourceCentering[] = "cell";
+constexpr char kResourceNone[] = "none";
+constexpr char kResourceComponentNames[] = "[]";
+constexpr char kResourceShape[] = "[]";
+#if POPS_NATIVE_DIM == 1
+constexpr char kResourceDigest[] =
+    "0a3856b89d995d7528413fa2e57bdb8ec638218f72cf40568e833108e162ea0c";
+constexpr char kResourceIdentity[] =
+    "program-resource:v1:0a3856b89d995d7528413fa2e57bdb8ec638218f72cf40568e833108e162ea0c:"
+    "{\"clock\":\"romeo.amrmpi.macro\",\"level\":null,\"occurrence_path\":"
+    "\"root/gpu-forward-euler/rhs\",\"owner\":\"block:0\",\"space\":"
+    "\"cell.conservative\",\"value_id\":1}:components=3:bytes=unknown:maximum_bytes=unknown";
+constexpr char kResourceManifest[] =
+    R"JSON({"resource_plan":{"digest":"0a3856b89d995d7528413fa2e57bdb8ec638218f72cf40568e833108e162ea0c","entries":[{"bytes":null,"cells":null,"centering":"cell","communicates":false,"communication":"none","component_names":[],"components":3,"ghosts":0,"itemsize":null,"key":{"clock":"romeo.amrmpi.macro","level":null,"occurrence_path":"root/gpu-forward-euler/rhs","occurrence_path_id":11365238431884968542,"owner":"block:0","space":"cell.conservative","value_id":1},"lifetime":"transient","maximum_bytes":null,"off_policy":"none","resource_type":"runtime_sized","restart_provider":"none","restart_required":false,"runtime_sized":true,"shape":[],"slot":0,"transfer_provider":"none"}],"maximum_bytes":null,"schema":"program-resource-plan:v1","schema_version":1},"resource_plan_digest":"0a3856b89d995d7528413fa2e57bdb8ec638218f72cf40568e833108e162ea0c"})JSON";
+#elif POPS_NATIVE_DIM == 2
+constexpr char kResourceDigest[] =
+    "2022bd6e6cbb2fbce1e7abc59eb244b1d1b0121ffd15a83a24f6ed2d1cfac758";
+constexpr char kResourceIdentity[] =
+    "program-resource:v1:2022bd6e6cbb2fbce1e7abc59eb244b1d1b0121ffd15a83a24f6ed2d1cfac758:"
+    "{\"clock\":\"romeo.amrmpi.macro\",\"level\":null,\"occurrence_path\":"
+    "\"root/gpu-forward-euler/rhs\",\"owner\":\"block:0\",\"space\":"
+    "\"cell.conservative\",\"value_id\":1}:components=4:bytes=unknown:maximum_bytes=unknown";
+constexpr char kResourceManifest[] =
+    R"JSON({"resource_plan":{"digest":"2022bd6e6cbb2fbce1e7abc59eb244b1d1b0121ffd15a83a24f6ed2d1cfac758","entries":[{"bytes":null,"cells":null,"centering":"cell","communicates":false,"communication":"none","component_names":[],"components":4,"ghosts":0,"itemsize":null,"key":{"clock":"romeo.amrmpi.macro","level":null,"occurrence_path":"root/gpu-forward-euler/rhs","occurrence_path_id":11365238431884968542,"owner":"block:0","space":"cell.conservative","value_id":1},"lifetime":"transient","maximum_bytes":null,"off_policy":"none","resource_type":"runtime_sized","restart_provider":"none","restart_required":false,"runtime_sized":true,"shape":[],"slot":0,"transfer_provider":"none"}],"maximum_bytes":null,"schema":"program-resource-plan:v1","schema_version":1},"resource_plan_digest":"2022bd6e6cbb2fbce1e7abc59eb244b1d1b0121ffd15a83a24f6ed2d1cfac758"})JSON";
+#elif POPS_NATIVE_DIM == 3
+constexpr char kResourceDigest[] =
+    "88a606af7ab8bde46e2b1b51054316568e454faad05ebf001182b0bb666cc217";
+constexpr char kResourceIdentity[] =
+    "program-resource:v1:88a606af7ab8bde46e2b1b51054316568e454faad05ebf001182b0bb666cc217:"
+    "{\"clock\":\"romeo.amrmpi.macro\",\"level\":null,\"occurrence_path\":"
+    "\"root/gpu-forward-euler/rhs\",\"owner\":\"block:0\",\"space\":"
+    "\"cell.conservative\",\"value_id\":1}:components=5:bytes=unknown:maximum_bytes=unknown";
+constexpr char kResourceManifest[] =
+    R"JSON({"resource_plan":{"digest":"88a606af7ab8bde46e2b1b51054316568e454faad05ebf001182b0bb666cc217","entries":[{"bytes":null,"cells":null,"centering":"cell","communicates":false,"communication":"none","component_names":[],"components":5,"ghosts":0,"itemsize":null,"key":{"clock":"romeo.amrmpi.macro","level":null,"occurrence_path":"root/gpu-forward-euler/rhs","occurrence_path_id":11365238431884968542,"owner":"block:0","space":"cell.conservative","value_id":1},"lifetime":"transient","maximum_bytes":null,"off_policy":"none","resource_type":"runtime_sized","restart_provider":"none","restart_required":false,"runtime_sized":true,"shape":[],"slot":0,"transfer_provider":"none"}],"maximum_bytes":null,"schema":"program-resource-plan:v1","schema_version":1},"resource_plan_digest":"88a606af7ab8bde46e2b1b51054316568e454faad05ebf001182b0bb666cc217"})JSON";
+#else
+#error "unsupported POPS_NATIVE_DIM for AMR ABI-v5 resource fixture"
+#endif
+constexpr pops::runtime::program::ProgramResourcePlanRecord kResources[] = {
+    {static_cast<std::uint32_t>(sizeof(pops::runtime::program::ProgramResourcePlanRecord)),
+     pops::runtime::program::kProgramResourcePlanSchemaVersion,
+     0,
+     pops::runtime::program::kProgramResourceRuntimeSizedFlag,
+     UINT64_C(1),
+     UINT64_C(11365238431884968542),
+     -1,
+     static_cast<std::uint32_t>(pops::kNativeDimension + 2),
+     0,
+     0,
+     pops::runtime::program::kProgramResourcePlanUnknownExtent,
+     pops::runtime::program::kProgramResourcePlanUnknownExtent,
+     pops::runtime::program::kProgramResourcePlanUnknownExtent,
+     pops::runtime::program::kProgramResourcePlanUnknownExtent,
+     abi_view(kResourceSchema),
+     abi_view(kResourceDigest),
+     abi_view(kResourceIdentity),
+     abi_view(kResourcePath),
+     abi_view(kResourceOwner),
+     abi_view(kResourceSpace),
+     abi_view(kResourceClock),
+     abi_view(kResourceLifetime),
+     abi_view(kResourceCentering),
+     abi_view(kResourceNone),
+     abi_view(kResourceNone),
+     abi_view(kResourceNone),
+     abi_view(kResourceNone),
+     abi_view(kResourceComponentNames),
+     abi_view(kResourceShape),
+     pops::runtime::program::ProgramResourcePlanType::runtime_sized}};
+#else
+constexpr char kResourceManifest[] =
+    R"JSON({"resource_plan":{"digest":"4ca46764b074a0c691ab69f5853aad7492d5a0ed2bb899f8ceb1ed94e3f477df","entries":[],"maximum_bytes":0,"schema":"program-resource-plan:v1","schema_version":1},"resource_plan_digest":"4ca46764b074a0c691ab69f5853aad7492d5a0ed2bb899f8ceb1ed94e3f477df"})JSON";
+#endif
+
+}  // namespace
+
+extern "C" void* pops_test_amr_v5_execution_services() noexcept {
+  return active_candidate == nullptr ? nullptr : active_candidate->context.get();
+}
+
+extern "C" bool pops_install_program(
+    const pops::runtime::program::ProgramHostDescriptor* host,
+    pops::runtime::program::ProgramCandidateDescriptor* candidate,
+    pops::runtime::program::ProgramInstallDiagnostic* diagnostic) noexcept {
+  using namespace pops::runtime::program;
+  if (host == nullptr || candidate == nullptr || diagnostic == nullptr ||
+      !valid_program_host_descriptor(*host) ||
+      host->native_dimension != static_cast<std::uint32_t>(pops::kNativeDimension) ||
+      host->runtime_kind != ProgramRuntimeKind::amr ||
+      host->execution_lane != ProgramExecutionLane::host || host->services.state_store == nullptr) {
+    write_error(diagnostic, ProgramInstallErrorCode::invalid_host_descriptor,
+                "AMR ABI-v5 fixture received an invalid host descriptor");
+    return false;
+  }
+  *candidate = {};
+  try {
+    auto state = std::make_unique<ProgramCandidateState>();
+    ProgramCandidateDescriptor descriptor{};
+    descriptor.struct_size = static_cast<std::uint32_t>(sizeof(ProgramCandidateDescriptor));
+    descriptor.abi_version = kProgramInstallAbiVersion;
+    descriptor.native_dimension = static_cast<std::uint32_t>(pops::kNativeDimension);
+    descriptor.runtime_kind = ProgramRuntimeKind::amr;
+    descriptor.provided_capability_bits = host->capability_bits;
+    descriptor.required_capability_bits =
+        kProgramCapabilityHierarchy | kProgramCapabilityTransactions;
+    descriptor.required_service_bits =
+        kProgramServiceState | kProgramServiceFields | kProgramServiceSpatial |
+        kProgramServiceHierarchy | kProgramServiceHistory | kProgramServiceClock |
+        kProgramServiceReduction | kProgramServiceTransaction | kProgramServicePersistentValues;
+    descriptor.program_name = abi_view(kProgramName);
+    descriptor.artifact_identity = abi_view(kArtifactIdentity);
+    descriptor.abi_key = abi_view(kAbiKey);
+    descriptor.route_manifest = {
+        pops::kRouteRegistrySignature,
+        static_cast<std::uint64_t>(std::strlen(pops::kRouteRegistrySignature))};
+    descriptor.boundary_manifest = abi_view(kBoundaryManifest);
+    descriptor.persistent_resource_manifest = abi_view(kResourceManifest);
+    descriptor.checkpoint_identity = abi_view(kCheckpointIdentity);
+    descriptor.blocks = {kBlocks, std::size(kBlocks), sizeof(kBlocks[0])};
+    descriptor.flux_budgets = {kFluxBudgets, std::size(kFluxBudgets), sizeof(kFluxBudgets[0])};
+#if POPS_TEST_AMR_V5_NUMERICAL
+    descriptor.resource_plan = {kResources, std::size(kResources), sizeof(kResources[0])};
+    descriptor.maximum_bytes = kProgramResourcePlanUnknownExtent;
+#else
+    descriptor.maximum_bytes = 0;
+#endif
+    descriptor.context = state.get();
+    descriptor.prepare = &candidate_prepare;
+    descriptor.step = &candidate_step;
+    descriptor.hierarchy_refresh = &candidate_hierarchy_refresh;
+    descriptor.history_remap_accepted = &candidate_history_remap;
+    descriptor.restart_regrid_preflight = &candidate_restart_preflight;
+    descriptor.restart_regrid = &candidate_restart_regrid;
+    descriptor.restart_resync = &candidate_restart_resync;
+    descriptor.create_accepted_snapshot = &candidate_accepted_snapshot;
+    descriptor.destroy = &candidate_destroy;
+    if (!valid_program_candidate_descriptor(descriptor)) {
+      write_error(diagnostic, ProgramInstallErrorCode::invalid_candidate,
+                  "AMR ABI-v5 fixture produced an invalid candidate descriptor");
+      return false;
+    }
+    *candidate = descriptor;
+    (void)state.release();
+    return true;
+  } catch (const std::exception& error) {
+    write_error(diagnostic, ProgramInstallErrorCode::artifact_rejected, error.what());
+    return false;
+  } catch (...) {
+    write_error(diagnostic, ProgramInstallErrorCode::artifact_rejected,
+                "AMR ABI-v5 fixture construction failed");
+    return false;
+  }
+}
+
+#else
+
 // Harness Kokkos de la VALIDATION INTEGREE AmrSystem + MPI (Cuda sur ROMEO, OpenMP pour la preuve
 // hote) + MESURE DE STRONG-SCALING. Superset du test de regression
 // tests/cpp/integration/mpi/test_mpi_amr_compiled_parity.cpp : meme cas
@@ -20,7 +385,7 @@
 #include <pops/physics/fluids/euler.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
-#include <pops/runtime/program/amr_program_context.hpp>
+#include <pops/runtime/program/program_execution_services.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
 
 #include "amr_tagging_test_authority.hpp"
@@ -65,38 +430,13 @@ static void configure_domain(AmrSystemConfig<kDim>& cfg, int n) {
 }
 
 static void install_forward_euler_program(NativeAmrSystem& system) {
-  std::vector<int> block_map(static_cast<std::size_t>(system.n_blocks()));
-  std::iota(block_map.begin(), block_map.end(), 0);
-  system.set_program_block_map(block_map);
-  system.install_program_step([](double) {});
-  if (!system.uses_runtime_engine() || system.engine() == nullptr)
-    throw std::runtime_error("AMR MPI Kokkos harness requires the materialized runtime engine");
-
-  auto context =
-      std::make_shared<runtime::program::AmrProgramContext<kDim>>(system.engine(), &system);
-  context->configure_primary_clock("romeo.amrmpi.macro");
-  context->install([context](double macro_dt) {
-    context->advance_hierarchy(macro_dt, [context](double level_dt) {
-      context->set_stage_time(0, 1);
-      if (context->level() == 0)
-        (void)consume_solve_outcome(context->solve_default_field_on_coarse_level());
-
-      std::vector<NativeMultiFab*> states;
-      std::vector<NativeMultiFab*> residuals;
-      states.reserve(static_cast<std::size_t>(context->n_blocks()));
-      residuals.reserve(static_cast<std::size_t>(context->n_blocks()));
-      for (int block = 0; block < context->n_blocks(); ++block) {
-        NativeMultiFab& state = context->state(block);
-        NativeMultiFab& residual = context->rhs_scratch(1000 + block, 0, state);
-        context->rhs_into(block, state, residual, 3000 + block);
-        states.push_back(&state);
-        residuals.push_back(&residual);
-      }
-      for (std::size_t block = 0; block < states.size(); ++block)
-        context->axpy(*states[block], Real(level_dt), *residuals[block], Real(level_dt),
-                      {{1, 1, 1}});
-    });
-  });
+  const auto blocks = system.block_names();
+  if (blocks == std::vector<std::string>{"gas"})
+    system.install_program(POPS_TEST_AMR_V5_GAS_PROGRAM);
+  else if (blocks == std::vector<std::string>{"magnetic"})
+    system.install_program(POPS_TEST_AMR_V5_MAGNETIC_PROGRAM);
+  else
+    throw std::runtime_error("AMR MPI Kokkos harness has no qualified ABI-v5 Program artifact");
 }
 
 static std::vector<double> gaussian_lattice(int n) {
@@ -432,3 +772,5 @@ int main(int argc, char** argv) {
   comm_finalize();
   return fails ? 1 : 0;
 }
+
+#endif

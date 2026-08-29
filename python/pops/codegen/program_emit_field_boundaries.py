@@ -460,7 +460,12 @@ static void prepare_field_boundary_jvp_{symbol}(
 
 
 def emit_field_boundaries(program: Any, authority: Any, field_plans: Any, target: str) -> str:
-    """Emit optional exact-ranked boundary launchers and the target install entry."""
+    """Emit exact-ranked launchers plus one preparation-image registration helper.
+
+    The helper accepts the already image-owned ``ProgramExecutionServices`` selected by the sole
+    ABI-v5 candidate prepare callback.  It never receives a ``System``/``AmrSystem`` facade and
+    never constructs a second provider or installer.
+    """
     del program, authority
     dynamic = [
         (name, plan)
@@ -577,19 +582,13 @@ static void prepare_field_boundary_jvp_route_{ordinal}(
             )
         )
     chunks += ["}  // namespace"]
-    facade = "pops::AmrSystem" if target == "amr_system" else "pops::System"
-    facade_type = "%s<pops::kNativeDimension>" % facade
-    entry = (
-        "pops_install_field_boundaries_amr"
-        if target == "amr_system"
-        else "pops_install_field_boundaries"
-    )
-    if target == "amr_system":
-        chunks.append("#include <pops/runtime/program/amr_program_context.hpp>")
+    if target not in {"system", "amr_system"}:
+        raise ValueError("dynamic field boundaries require one exact runtime target")
+    entry = "program_candidate_prepare_field_boundaries"
+    chunks.append("#include <pops/runtime/program/program_execution_services.hpp>")
     chunks += [
-        'extern "C" void %s(%s* sys) {' % (entry, facade_type),
-        "  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);",
-        "  auto& ctx = *ctx_owner;",
+        "static void %s(" % entry,
+        "    pops::runtime::program::ProgramExecutionServices<pops::kNativeDimension>& ctx) {",
         *installs,
         "}",
     ]

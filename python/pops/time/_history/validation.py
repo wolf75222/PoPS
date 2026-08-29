@@ -202,7 +202,7 @@ def _owner_affine_refusal(program, state):
     return visit(committed)
 
 
-def _program_context_refusal(program):
+def _program_execution_services_refusal(program):
     """Reject any Program work outside the proven affine replay vocabulary."""
     for value in _walk_ops(getattr(program, "_values", ()) or ()):
         op = getattr(value, "op", None)
@@ -253,7 +253,7 @@ def validate_history_persistence(program, report: ReportTree) -> ReportTree:
         if reason is not None:
             nondet_reason = reason
             break
-    context_reason = _program_context_refusal(program)
+    context_reason = _program_execution_services_refusal(program)
     from pops.time._history.persistence import HistoryPersistence
 
     # Selective native replay seeds the owner block with an exact older state sample and re-executes

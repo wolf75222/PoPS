@@ -399,12 +399,14 @@ void System<Dim>::refresh_auxiliary(const AuxiliaryEvaluationPoint& point) {
 template <int Dim>
 runtime::system::AuxiliaryStorageAddress<Dim> System<Dim>::auxiliary_address(
     const AuxiliaryComponentKey& key) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->auxiliary_registry_.address_of(key);
 }
 
 template <int Dim>
 std::vector<double> System<Dim>::auxiliary_component(const AuxiliaryComponentKey& key) const {
-  const auto address = auxiliary_address(key);
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  const auto address = p_->auxiliary_registry_.address_of(key);
   if (!p_->provider_carrier_)
     throw std::out_of_range("System auxiliary component belongs to an empty carrier");
   const auto* group = p_->provider_carrier_->find(address.group);
@@ -415,19 +417,28 @@ std::vector<double> System<Dim>::auxiliary_component(const AuxiliaryComponentKey
 
 template <int Dim>
 std::string System<Dim>::auxiliary_registry_contract() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return std::string(p_->auxiliary_registry_.collective_contract());
 }
 
 template <int Dim>
 const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
 System<Dim>::prepared_auxiliary_consumer_plan(const std::string& consumer_qid) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->auxiliary_registry_.consumer_plan(consumer_qid);
+}
+
+template <int Dim>
+const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>*
+System<Dim>::program_prepared_auxiliary_consumer_plan_(const std::string& consumer_qid) const {
+  return &p_->auxiliary_registry_.consumer_plan(consumer_qid);
 }
 
 template <int Dim>
 runtime::system::AuxiliaryCheckpointAcceptedState<Dim>
 System<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
-  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  const ExecutionLane& lane = program_prepared_boundary_execution_lane_();
   runtime::system::AuxiliaryCheckpointAcceptedState<Dim> result;
   std::vector<const MultiFab<Dim>*> carriers;
   std::string layout_contract;
@@ -540,6 +551,7 @@ System<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
 
 template <int Dim>
 std::pair<std::size_t, std::size_t> System<Dim>::checkpoint_auxiliary_capacity() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   const auto state = runtime::system::capture_auxiliary_checkpoint_state(p_->auxiliary_registry_);
   std::size_t components = 0;
   for (const auto& group : state.groups) {
@@ -687,6 +699,12 @@ void System<Dim>::restore_auxiliary_checkpoint_accepted_state_bytes(
 
 template <int Dim>
 const MultiFab<Dim>* System<Dim>::prepared_block_auxiliary_storage() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return program_prepared_block_auxiliary_storage_();
+}
+
+template <int Dim>
+const MultiFab<Dim>* System<Dim>::program_prepared_block_auxiliary_storage_() const {
   if (!p_->auxiliary_registry_.sealed())
     throw std::logic_error("System auxiliary storage is unavailable before registry seal");
   if (!p_->provider_carrier_)
@@ -699,6 +717,13 @@ const MultiFab<Dim>* System<Dim>::prepared_block_auxiliary_storage() const {
 template <int Dim>
 std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<Dim>>
 System<Dim>::prepared_block_provider_storage_owner() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return program_prepared_block_provider_storage_owner_();
+}
+
+template <int Dim>
+std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<Dim>>
+System<Dim>::program_prepared_block_provider_storage_owner_() const {
   if (!p_->auxiliary_registry_.sealed())
     throw std::logic_error("System provider storage owner is unavailable before registry seal");
   return p_->provider_carrier_;
@@ -707,9 +732,21 @@ System<Dim>::prepared_block_provider_storage_owner() const {
 template <int Dim>
 const runtime::system::AuxiliaryStorageGroups<Dim>*
 System<Dim>::prepared_block_provider_storage_groups() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return program_prepared_block_provider_storage_groups_();
+}
+
+template <int Dim>
+const runtime::system::AuxiliaryStorageGroups<Dim>*
+System<Dim>::program_prepared_block_provider_storage_groups_() const {
   if (!p_->auxiliary_registry_.sealed())
     throw std::logic_error("System provider storage groups are unavailable before registry seal");
   return p_->provider_carrier_ ? &*p_->provider_carrier_ : nullptr;
+}
+
+template <int Dim>
+bool System<Dim>::program_auxiliary_registry_sealed_() const noexcept {
+  return p_->auxiliary_registry_.sealed();
 }
 
 template <int Dim>
@@ -736,6 +773,8 @@ template std::vector<double> System<kNativeDimension>::auxiliary_component(
 template std::string System<kNativeDimension>::auxiliary_registry_contract() const;
 template const runtime::system::ResolvedAuxiliaryConsumerPlan<kNativeDimension>&
 System<kNativeDimension>::prepared_auxiliary_consumer_plan(const std::string&) const;
+template const runtime::system::ResolvedAuxiliaryConsumerPlan<kNativeDimension>*
+System<kNativeDimension>::program_prepared_auxiliary_consumer_plan_(const std::string&) const;
 template runtime::system::AuxiliaryCheckpointAcceptedState<kNativeDimension>
 System<kNativeDimension>::capture_auxiliary_checkpoint_accepted_state() const;
 template std::pair<std::size_t, std::size_t>
@@ -746,10 +785,17 @@ template void System<kNativeDimension>::restore_auxiliary_checkpoint_accepted_st
     const System<kNativeDimension>::AuxiliaryCheckpointByteViewProvider&);
 template const MultiFab<kNativeDimension>*
 System<kNativeDimension>::prepared_block_auxiliary_storage() const;
+template const MultiFab<kNativeDimension>*
+System<kNativeDimension>::program_prepared_block_auxiliary_storage_() const;
 template std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<kNativeDimension>>
 System<kNativeDimension>::prepared_block_provider_storage_owner() const;
+template std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<kNativeDimension>>
+System<kNativeDimension>::program_prepared_block_provider_storage_owner_() const;
 template const runtime::system::AuxiliaryStorageGroups<kNativeDimension>*
 System<kNativeDimension>::prepared_block_provider_storage_groups() const;
+template const runtime::system::AuxiliaryStorageGroups<kNativeDimension>*
+System<kNativeDimension>::program_prepared_block_provider_storage_groups_() const;
+template bool System<kNativeDimension>::program_auxiliary_registry_sealed_() const noexcept;
 template runtime::system::AuxiliaryStorageGroups<kNativeDimension>*
 System<kNativeDimension>::prepared_amr_provider_storage_groups();
 

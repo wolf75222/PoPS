@@ -163,8 +163,120 @@ issue = "ADC-677"
 requirement = "clocks_reflux"
 polarity = "positive"
 kind = "ctest"
+target = "test_mpi_amr_program_3d_corner_authority"
+test_regex = "^test_mpi_amr_program_3d_corner_authority_np8$"
+
+[[check]]
+issue = "ADC-677"
+requirement = "clocks_reflux"
+polarity = "positive"
+kind = "ctest"
 target = "test_mpi_amr_program_reflux"
 test_regex = "^test_mpi_amr_program_reflux_np2$"
+
+[[check]]
+issue = "ADC-677"
+requirement = "clocks_reflux"
+polarity = "positive"
+kind = "ctest"
+target = "test_mpi_amr_program_reflux"
+test_regex = "^test_mpi_amr_program_reflux_np4$"
+
+[[check]]
+issue = "ADC-677"
+requirement = "clocks_reflux"
+polarity = "positive"
+kind = "ctest"
+target = "test_nd_flux_ledger"
+test_regex = "^test_nd_flux_ledger\\.composite_reflux_conserves_accepted_transport_in_1d_2d_3d$"
+
+[[check]]
+issue = "ADC-677"
+requirement = "clocks_reflux"
+polarity = "positive"
+kind = "ctest"
+target = "test_nd_flux_ledger"
+test_regex = "^test_nd_flux_ledger\\.exact_stage_weights_are_applied_before_metric_reflux$"
+
+[[check]]
+issue = "ADC-677"
+requirement = "clocks_reflux"
+polarity = "positive"
+kind = "ctest"
+target = "test_nd_flux_ledger"
+test_regex = "^test_nd_flux_ledger\\.coarse_window_matches_two_exact_fine_substeps$"
+
+[[check]]
+issue = "ADC-677"
+requirement = "clocks_reflux"
+polarity = "refusal"
+kind = "ctest"
+target = "test_nd_flux_ledger"
+test_regex = "^test_nd_flux_ledger\\.rejected_attempt_never_publishes_pending_faces$"
+
+[[check]]
+issue = "ADC-677"
+requirement = "clocks_reflux"
+polarity = "refusal"
+kind = "ctest"
+target = "test_nd_flux_ledger"
+test_regex = "^test_nd_flux_ledger\\.failed_commit_preserves_accepted_and_pending_transactions$"
+
+[[check]]
+issue = "ADC-677"
+requirement = "clocks_reflux"
+polarity = "positive"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/unit/time/test_time_codegen.py::test_canonical_ssprk_amr_codegen_preserves_exact_distinct_ledger_weights"
+
+[[check]]
+issue = "ADC-677"
+requirement = "clocks_reflux"
+polarity = "positive"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/integration/amr/test_amr_program_reflux.py::test_multilevel_ssprk2_conserves_to_roundoff"
+
+[[check]]
+issue = "ADC-677"
+requirement = "clocks_reflux"
+polarity = "positive"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/integration/amr/test_amr_program_reflux.py::test_multilevel_midpoint_conserves_and_differs"
+
+[[check]]
+issue = "ADC-677"
+requirement = "clocks_reflux"
+polarity = "positive"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/integration/amr/test_amr_rational_hierarchy_program.py::test_public_generated_rational_three_level_two_block_program"
+
+[[check]]
+issue = "ADC-677"
+requirement = "clocks_reflux"
+polarity = "refusal"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/integration/amr/test_amr_rational_hierarchy_program.py::test_public_rational_hierarchy_rejects_implicit_fractional_remainder_before_mutation"
+
+[[check]]
+issue = "ADC-677"
+requirement = "clocks_reflux"
+polarity = "positive"
+kind = "pytest"
+target = "restart_hierarchy_policy"
+nodeid = "tests/python/integration/io/test_amr_history_reflux_restart.py::test_strict_restart_preserves_ab2_history_flux_and_reflux_continuation"
+
+[[check]]
+issue = "ADC-677"
+requirement = "clocks_reflux"
+polarity = "refusal"
+kind = "pytest"
+target = "restart_hierarchy_policy"
+nodeid = "tests/python/integration/io/test_amr_history_regrid_replay.py::test_d_corrupted_fingerprint_refused"
 
 [[check]]
 issue = "ADC-678"
@@ -236,7 +348,7 @@ requirement = "accepted_state"
 polarity = "positive"
 kind = "ctest"
 target = "test_amr_history_ring"
-test_regex = "^test_amr_history_ring\\.FacadeTransactionRestoresAcceptedHistoryImage$"
+test_regex = "^test_amr_history_ring\\.RejectedFacadeAttemptRestoresTopologyStateHistoryAndClock$"
 
 [[check]]
 issue = "ADC-678"

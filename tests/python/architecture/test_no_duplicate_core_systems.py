@@ -10,7 +10,7 @@ the boundary):
 
   * ADC-598 ``test_no_legacy_runtime_routes.py`` -- no ``System`` / ``AmrSystem`` front door in the
     target surface, ``target=`` blocked on compile/bind, string selectors on an explicit allowlist,
-    callable Case field handles lower to ``ProgramContext``, AMR layout manifest + ``sim.amr``
+    callable Case field handles lower to ``ProgramExecutionServices``, AMR layout manifest + ``sim.amr``
     runtime view. This file does NOT re-check the compile/bind signature (see Q2 in the plan).
   * ADC-532 ``test_lib_time_no_string_selectors.py`` -- lib.time macros select operators by handle.
   * ADC-529 facade-lowering-parity / ``_ir_hash`` equality -- the technique reused in gate 1b.
@@ -374,21 +374,32 @@ def test_field_handle_is_the_sole_public_field_solve_route():
 
 def test_native_named_field_solve_uses_exact_block_slots_not_a_representative():
     """The ranked context fails closed instead of consulting a parallel service."""
-    context = _read(REPO_ROOT / "include" / "pops" / "runtime" / "program" / "program_context.hpp")
+    context = _read(
+        REPO_ROOT
+        / "include"
+        / "pops"
+        / "runtime"
+        / "program"
+        / "program_execution_services.hpp"
+    )
+    system_header = _read(REPO_ROOT / "include" / "pops" / "runtime" / "system.hpp")
+    system_fields = _read(REPO_ROOT / "src" / "runtime" / "system" / "system_fields.cpp")
     retired = (
-        REPO_ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
+        REPO_ROOT / "include" / "pops" / "runtime" / "program" / "program_context.hpp"
     )
     assert not retired.exists()
     assert "representative" not in context
     assert "template <int Dim>" in context
     assert "SolveOutcome solve_fields_from_blocks_at(" in context
-    for exact_route_seam in (
-        "require_program_block_map_",
+    assert "require_program_block_map_" in context
+    assert "system_->program_solve_fields_from_blocks_at_(" in context
+    for exact_publication_seam in (
         "prepare_named_field_publication_storage_",
         "run_field_publication_outcome_",
         "solve_fields_from_blocks_at_in_place_",
     ):
-        assert exact_route_seam in context
+        assert exact_publication_seam in system_header
+        assert exact_publication_seam in system_fields
     assert "solve_fields_from_state(field, representative" not in context
 
 

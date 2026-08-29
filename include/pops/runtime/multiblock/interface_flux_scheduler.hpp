@@ -1478,37 +1478,31 @@ class InterfaceFluxScheduler {
   static typename InterfaceFluxFragmentLedger::PreparedAccumulation prepare_fragment_publication_(
       const PreparedInterface& prepared, const BoundaryEvaluationPoint& point,
       const InterfaceFluxFragmentPublication& publication) {
-    using entry_type = typename InterfaceFluxFragmentLedger::Entry;
+    using input_type = typename InterfaceFluxFragmentLedger::FragmentInput;
+    using key_view_type = typename InterfaceFluxFragmentLedger::FragmentKeyView;
     const ::pops::amr::InterfaceFluxFragmentMeasure measure{publication.stage_weight,
                                                             prepared.face_measure, point.dt,
                                                             publication.stage_weight_resolved};
-    std::vector<entry_type> entries;
-    entries.reserve(2);
+    std::array<input_type, 2> entries{};
+    std::size_t count = 0;
     const auto accumulate = [&](int coarse_level, int fine_level,
                                 ::pops::amr::InterfaceFluxOrientation orientation) {
-      ::pops::amr::InterfaceFluxFragmentKey key{prepared.route.identity,
-                                                publication.topology_epoch,
-                                                coarse_level,
-                                                fine_level,
-                                                publication.clock,
-                                                publication.stage_identity,
-                                                point.graph_identity,
-                                                point.rate_identity,
-                                                point.application_identity,
-                                                publication.interval,
-                                                orientation,
-                                                prepared.route.left_block,
-                                                prepared.route.right_block};
-      InterfaceFluxFragmentPayload payload(
-          prepared.host_flux.data(), prepared.host_flux.data() + prepared.host_flux.extent(0));
-      entries.push_back({std::move(key), measure, std::move(payload)});
+      entries[count++] = {
+          key_view_type{prepared.route.identity, publication.topology_epoch, coarse_level,
+                        fine_level, publication.clock, publication.stage_identity,
+                        point.graph_identity, point.rate_identity, point.application_identity,
+                        publication.interval, orientation, prepared.route.left_block,
+                        prepared.route.right_block},
+          measure,
+          {prepared.host_flux.data(), prepared.host_flux.extent(0)}};
     };
     if (point.level > 0)
       accumulate(point.level - 1, point.level, ::pops::amr::InterfaceFluxOrientation::FineOutward);
     if (point.level + 1 < publication.active_level_count)
       accumulate(point.level, point.level + 1,
                  ::pops::amr::InterfaceFluxOrientation::CoarseOutward);
-    return publication.ledger->prepare_accumulation(std::move(entries));
+    return publication.ledger->prepare_accumulation(
+        std::span<const input_type>(entries.data(), count));
   }
 
   void require_complete_active_level_registry_(int active_level_count) const {

@@ -6,7 +6,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/program/amr_program_context.hpp>
+#include <pops/runtime/program/program_execution_services.hpp>
 
 #include <array>
 #include <algorithm>
@@ -148,8 +148,12 @@ BlockLevelSnapshot<Dim> snapshot_block_levels(pops::AmrSystem<Dim>& system) {
   for (int runtime_block = 0; runtime_block < 2; ++runtime_block) {
     auto& levels = result[static_cast<std::size_t>(runtime_block)];
     levels.reserve(static_cast<std::size_t>(system.n_levels()));
-    for (int level = 0; level < system.n_levels(); ++level)
-      levels.emplace_back(system.prepared_amr_block_state(runtime_block, level));
+    for (int level = 0; level < system.n_levels(); ++level) {
+      auto view = system.prepared_amr_block_state(runtime_block, level);
+      if (!view)
+        throw std::logic_error("AMR accepted block view is invalid");
+      levels.emplace_back(*view);
+    }
   }
   return result;
 }
@@ -159,11 +163,15 @@ bool byte_exact_block_levels(const BlockLevelSnapshot<Dim>& expected,
                              pops::AmrSystem<Dim>& actual) {
   bool same = true;
   for (int runtime_block = 0; runtime_block < 2; ++runtime_block)
-    for (int level = 0; level < actual.n_levels(); ++level)
+    for (int level = 0; level < actual.n_levels(); ++level) {
+      auto view = actual.prepared_amr_block_state(runtime_block, level);
+      if (!view)
+        return false;
       same = same &&
              byte_exact_equal(
                  expected[static_cast<std::size_t>(runtime_block)][static_cast<std::size_t>(level)],
-                 actual.prepared_amr_block_state(runtime_block, level));
+                 *view);
+    }
   return same;
 }
 
@@ -172,7 +180,6 @@ struct CoupledFixture {
   static constexpr pops::Real kExchangeStrength = pops::Real(0.25);
 
   pops::AmrSystem<Dim> system;
-  std::shared_ptr<pops::runtime::program::AmrProgramContext<Dim>> context;
   std::shared_ptr<bool> fail_on_rank_zero = std::make_shared<bool>(false);
   std::shared_ptr<bool> violate_conservation_on_rank_zero = std::make_shared<bool>(false);
   std::shared_ptr<bool> cross_owner_projection_scratch = std::make_shared<bool>(false);
@@ -242,72 +249,76 @@ struct CoupledFixture {
     system.set_block_level_state("donor", 1, smooth_state(fine_shape, 2.0, 0.2));
     system.set_block_level_state("receiver", 1, smooth_state(fine_shape, 5.0, 0.1));
 
-    context = pops::runtime::program::make_program_execution_provider(&system);
-    context->configure_primary_clock("test.clock.macro");
-    context->install(
-        [context = context,
-         cross_owner_projection_scratch = cross_owner_projection_scratch](double macro_dt) {
-          context->advance_hierarchy(macro_dt, [context,
-                                                cross_owner_projection_scratch](double level_dt) {
+    // Program order is intentionally the reverse of canonical runtime ownership.  The detached
+    // v5 plan routes every dense resource by block identity; no accepted facade escapes dispatch.
+    using Resource = pops::test::program_v5::CallbackProgramResource;
+    std::vector<Resource> resources;
+    resources.reserve(static_cast<std::size_t>(system.n_levels() * 2 * 4));
+    for (int level = 0; level < system.n_levels(); ++level) {
+      for (int program_block = 0; program_block < 2; ++program_block) {
+        const int runtime_block = program_block == 0 ? 1 : 0;
+        const auto state = system.prepared_amr_block_state(runtime_block, level);
+        if (!state)
+          throw std::logic_error("coupled-source Program resource has no accepted block state");
+        const auto append_resource = [&](Resource::Kind kind) {
+          resources.push_back({kind, resources.size(), 0, program_block, level,
+                               static_cast<std::uint32_t>(state->ncomp()),
+                               static_cast<std::uint32_t>(state->ghosts()[0])});
+        };
+        append_resource(Resource::Kind::state);
+        append_resource(Resource::Kind::rhs);
+        append_resource(Resource::Kind::rhs);
+        append_resource(Resource::Kind::state);
+      }
+    }
+    pops::test::install_explicit_amr_callback_program<Dim>(
+        system, "test.amr.multiblock-coupled-source/program-ssprk2-imex-v1", "test.clock.macro",
+        std::vector<std::string>{"receiver", "donor"}, resources, {},
+        [cross_owner_projection_scratch](auto& context, double macro_dt) {
+          context.advance_hierarchy(macro_dt, [&context,
+                                               cross_owner_projection_scratch](double level_dt) {
             std::array<pops::MultiFab<Dim>*, 2> accepted{};
             std::array<pops::MultiFab<Dim>*, 2> candidates{};
             for (int program_block = 0; program_block < 2; ++program_block) {
-              accepted[static_cast<std::size_t>(program_block)] = &context->state(program_block);
-              auto& stage =
-                  context->scratch_state(1000 + program_block, 0, *accepted[program_block]);
-              auto& rate_zero =
-                  context->rhs_scratch(2000 + program_block, 0, *accepted[program_block]);
-              auto& rate_one =
-                  context->rhs_scratch(3000 + program_block, 0, *accepted[program_block]);
-              auto& candidate =
-                  context->scratch_state(4000 + program_block, 0, *accepted[program_block]);
+              accepted[static_cast<std::size_t>(program_block)] = &context.state(program_block);
+              const auto base = static_cast<pops::runtime::program::ProgramCacheSlot>(
+                  (context.level() * 2 + program_block) * 4);
+              auto& stage = context.scratch_state(base, 0, *accepted[program_block]);
+              auto& rate_zero = context.rhs_scratch(base + 1, 0, *accepted[program_block]);
+              auto& rate_one = context.rhs_scratch(base + 2, 0, *accepted[program_block]);
+              auto& candidate = context.scratch_state(base + 3, 0, *accepted[program_block]);
 
-              context->set_stage_time(0, 1);
-              context->neg_div_flux_default_into(program_block, *accepted[program_block], rate_zero,
-                                                 5000 + 2 * program_block);
-              context->lincomb(stage, pops::Real(1), *accepted[program_block], pops::Real(0),
-                               *accepted[program_block], pops::Real(level_dt), {{0, 1, 1}},
-                               {{0, 0, 1}});
-              context->axpy(stage, pops::Real(level_dt), rate_zero, pops::Real(level_dt),
-                            {{1, 1, 1}});
+              context.set_stage_time(0, 1);
+              context.neg_div_flux_default_into(program_block, *accepted[program_block], rate_zero,
+                                                5000 + 2 * program_block);
+              context.lincomb(stage, pops::Real(1), *accepted[program_block], pops::Real(0),
+                              *accepted[program_block], pops::Real(level_dt), {{0, 1, 1}},
+                              {{0, 0, 1}});
+              context.axpy(stage, pops::Real(level_dt), rate_zero, pops::Real(level_dt),
+                           {{1, 1, 1}});
 
-              context->set_stage_time(1, 1);
-              context->neg_div_flux_default_into(program_block, stage, rate_one,
-                                                 5001 + 2 * program_block);
-              context->lincomb(candidate, pops::Real(0.5), *accepted[program_block],
-                               pops::Real(0.5), stage, pops::Real(level_dt), {{0, 1, 2}},
-                               {{0, 1, 2}});
-              context->axpy(candidate, pops::Real(0.5 * level_dt), rate_one, pops::Real(level_dt),
-                            {{1, 1, 2}});
-
+              context.set_stage_time(1, 1);
+              context.neg_div_flux_default_into(program_block, stage, rate_one,
+                                                5001 + 2 * program_block);
+              context.lincomb(candidate, pops::Real(0.5), *accepted[program_block], pops::Real(0.5),
+                              stage, pops::Real(level_dt), {{0, 1, 2}}, {{0, 1, 2}});
+              context.axpy(candidate, pops::Real(0.5 * level_dt), rate_one, pops::Real(level_dt),
+                           {{1, 1, 2}});
               candidates[static_cast<std::size_t>(program_block)] = &candidate;
             }
             if (*cross_owner_projection_scratch)
-              context->apply_projection(1, *candidates[0]);
+              context.apply_projection(1, *candidates[0]);
             for (int program_block = 0; program_block < 2; ++program_block)
-              context->apply_projection(program_block,
-                                        *candidates[static_cast<std::size_t>(program_block)]);
-            context->apply_coupling_operators(
+              context.apply_projection(program_block,
+                                       *candidates[static_cast<std::size_t>(program_block)]);
+            context.apply_coupling_operators(
                 "test.amr.multiblock-coupled-source/program-ssprk2-imex-v1",
                 "test.amr.multiblock-coupled-source/rate-final",
                 "test.amr.multiblock-coupled-source/application-final", pops::Real(level_dt),
                 {{0, candidates[0]}, {1, candidates[1]}});
-            context->commit_many({{accepted[0], candidates[0]}, {accepted[1], candidates[1]}});
+            context.commit_many({{accepted[0], candidates[0]}, {accepted[1], candidates[1]}});
           });
-        },
-        context);
-    // Program order is intentionally the reverse of canonical runtime ownership.  The prepared
-    // ProgramBlockMap must route candidates by block identity; the provider never sees this order.
-    system.set_program_block_map({1, 0});
-    using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
-    constexpr std::string_view graph_identity =
-        "test.amr.multiblock-coupled-source/program-ssprk2-imex-v1";
-    constexpr std::string_view rate_identity = "test.amr.multiblock-coupled-source/rate-final";
-    constexpr std::string_view application_identity =
-        "test.amr.multiblock-coupled-source/application-final";
-    system.install_prepared_amr_program_flux_expression_budget(
-        std::string(graph_identity), std::vector<FluxBudget>{{2, 1}, {2, 1}}, 1,
-        graph_identity.size() + rate_identity.size() + application_identity.size());
+        });
   }
 
   static pops::AmrSystemConfig<Dim> config() {
@@ -343,17 +354,22 @@ void prove_conservative_execution_rollback_and_retry() {
   // The rank-zero request intentionally offers the other block's accepted carrier.  The facade
   // must converge that rank-local preflight failure before any rank enters the projection closure;
   // both accepted blocks remain byte-exact and a clean detached retry is still executable.
-  const pops::MultiFab<Dim>& selected_live = fixture.system.prepared_amr_block_state(0, 0);
+  auto selected_live_view = fixture.system.prepared_amr_block_state(0, 0);
+  ASSERT_TRUE(selected_live_view);
+  const pops::MultiFab<Dim>& selected_live = *selected_live_view;
   pops::MultiFab<Dim> detached(selected_live.layout(), selected_live.distribution(),
                                selected_live.local_rank(), selected_live.ncomp(),
                                selected_live.ghosts());
   detached.set_val(pops::Real(0));
   const auto cross_owner_live_projection = [&] {
-    if (pops::my_rank() == 0)
-      fixture.system.project_prepared_amr_block_level_state(
-          0, 0, 0, fixture.system.prepared_amr_block_state(1, 0));
-    else
+    if (pops::my_rank() == 0) {
+      auto cross_owner_view = fixture.system.prepared_amr_block_state(1, 0);
+      if (!cross_owner_view)
+        throw std::logic_error("AMR accepted block view is invalid");
+      fixture.system.project_prepared_amr_block_level_state(0, 0, 0, *cross_owner_view);
+    } else {
       fixture.system.project_prepared_amr_block_level_state(0, 0, 0, detached);
+    }
   };
   if (pops::n_ranks() == 1)
     EXPECT_THROW(cross_owner_live_projection(), std::invalid_argument);

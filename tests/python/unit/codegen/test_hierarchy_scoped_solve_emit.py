@@ -309,7 +309,9 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
     )
     program, source = _build(solver)
 
-    amr = source.split('extern "C" void pops_install_program_amr', 1)[1]
+    # ABI-v5 puts candidate preparation (including hierarchy phase closures) before the single C
+    # entry point. Inspect the complete artifact so ordering is independent of entry placement.
+    amr = source
     configure = amr.index("ctx.configure_hierarchy_tensor_solver(")
     flat_phase = amr.index("ctx.solve_prepared_linear(")
     direct_phase = amr.index("ctx.solve_hierarchy_tensor(")
@@ -379,14 +381,20 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
     assert "hierarchy_solver" not in solve.attrs
 
 
-def test_resolved_interface_pair_proof_reaches_every_hierarchy_phase():
+def test_unconsumed_interface_pair_is_not_emitted_but_hierarchy_route_survives():
     _, source = _build(
         CompositeTensorFAC(),
         _with_interface_pair=True,
     )
 
-    amr = source.split('extern "C" void pops_install_program_amr', 1)[1]
-    assert source.count("ctx.rhs_jacvec_pair_into_at(") == 1
+    # The hierarchy fragments are emitted before the C ABI install entry in the complete source;
+    # inspect the full artifact so this witness remains independent of install-entry placement.
+    amr = source
+    # The auxiliary interface operator is intentionally never consumed by a solve in this fixture.
+    # Dead authoring declarations must not trigger owner inference, an ApplyFn, or plan-backed
+    # scratch preparation. The actual tensor solve route remains present in every hierarchy phase.
+    assert source.count("ctx.rhs_jacvec_pair_into_at(") == 0
+    assert "coupled_interface_jacobian" not in source
     assert "pops::kNativeDimension" in source
     assert "static_assert(pops::kNativeDimension == 2)" not in source
     assert "Box2D" not in source
@@ -441,7 +449,8 @@ def test_omitted_fac_controls_emit_native_default_sentinels_only():
 def test_refined_solution_publishes_atomically_before_synchronized_advance():
     """Lock the complete refined-stage ordering without a wall-clock or legacy oracle."""
     _, source = _build(CompositeTensorFAC(max_iter=13, rel_tol=4.0e-8))
-    amr = source.split('extern "C" void pops_install_program_amr', 1)[1]
+    # The v5 candidate prepares hierarchy closures before the sole install entry.
+    amr = source
     hierarchy_advance = amr.index("auto _advance_hierarchy")
     branch = amr.index("if (ctx.uses_prepared_krylov_fallback())", hierarchy_advance)
     assert "if (ctx.level() != 0)" in amr[hierarchy_advance:branch]

@@ -15,7 +15,7 @@ validation error #19.
   - validation #19: install_program with an ABI-mismatched module fails loud with the explicit message.
 
 (A) Pure Python (IR + codegen), always runs: the builders produce typed IR and emit_cpp_program lowers
-    each to the right ProgramContext / pops:: call. No compile, no engine.
+    each to the right ProgramExecutionServices / pops:: call. No compile, no engine.
 (B) End-to-end through the public Case lifecycle: a 1-variable model whose sum / max / min /
     sum_component of a known field match the analytic values; record_scalar stores the values in the
     public Program report after ``Case -> resolve -> compile -> bind -> run``.
@@ -876,13 +876,22 @@ def test_install_program_rejects_mismatched_abi(
     n = 4
     sim = System(n=n, L=1.0, periodicity=(True, True))
 
-    # A hand-written shared module whose ABI function returns a deliberately wrong key. Compiler and
+    # A hand-written v5 candidate whose descriptor carries a deliberately wrong key. Compiler and
     # loader errors are real test failures; only the session fixtures may report absent prerequisites.
     src = (
-        'extern "C" const char* pops_program_abi_key() { return "deliberately-wrong-abi-key"; }\n'
-        'extern "C" const char* pops_program_name() { return "bad"; }\n'
-        'extern "C" const char* pops_program_hash() { return "0"; }\n'
-        'extern "C" void pops_install_program(void*) {}\n'
+        '#include <pops/runtime/program/program_abi.hpp>\n'
+        'using namespace pops::runtime::program;\n'
+        'static bool prepare(void*, const ProgramHostDescriptor*, ProgramInstallDiagnostic*) noexcept { return true; }\n'
+        'static void step(void*, double) {}\n'
+        'extern "C" bool pops_install_program(const ProgramHostDescriptor*, ProgramCandidateDescriptor* c, ProgramInstallDiagnostic*) noexcept {\n'
+        '  static constexpr char name[] = "bad"; static constexpr char key[] = "deliberately-wrong-abi-key";\n'
+        '  static constexpr char manifest[] = "manifest"; static constexpr char resource[] = "resource";\n'
+        '  if (c == nullptr) return false; *c = {}; c->struct_size = sizeof(*c); c->abi_version = kProgramInstallAbiVersion;\n'
+        '  c->native_dimension = 2; c->runtime_kind = ProgramRuntimeKind::uniform;\n'
+        '  c->program_name = {name, sizeof(name) - 1}; c->artifact_identity = {name, sizeof(name) - 1};\n'
+        '  c->abi_key = {key, sizeof(key) - 1}; c->route_manifest = {manifest, sizeof(manifest) - 1};\n'
+        '  c->boundary_manifest = {manifest, sizeof(manifest) - 1}; c->persistent_resource_manifest = {resource, sizeof(resource) - 1};\n'
+        '  c->checkpoint_identity = {resource, sizeof(resource) - 1}; c->prepare = &prepare; c->step = &step; return true; }\n'
     )
     cpp = tmp_path / "bad_abi.cpp"
     cpp.write_text(src, encoding="utf-8")
@@ -896,12 +905,16 @@ def test_install_program_rejects_mismatched_abi(
                 "/nologo",
                 "/std:c++17",
                 "/LD",
+                f"/I{ROOT / 'include'}",
                 str(cpp),
                 "/link",
                 f"/OUT:{module}",
             ]
         else:
-            command = [native_cxx, "-shared", "-std=c++17", "-o", str(module), str(cpp)]
+            command = [
+                native_cxx, "-shared", "-std=c++17", "-I", str(ROOT / "include"),
+                "-o", str(module), str(cpp),
+            ]
     else:
         suffix = ".dylib" if sys.platform == "darwin" else ".so"
         module = tmp_path / f"bad_abi{suffix}"
@@ -910,6 +923,8 @@ def test_install_program_rejects_mismatched_abi(
             "-shared",
             "-fPIC",
             "-std=c++17",
+            "-I",
+            str(ROOT / "include"),
             "-o",
             str(module),
             str(cpp),

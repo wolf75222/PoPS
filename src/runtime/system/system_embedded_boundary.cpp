@@ -89,6 +89,7 @@ void System<Dim>::set_geometry_mode(const std::string& mode) {
 
 template <int Dim>
 std::vector<double> System<Dim>::embedded_boundary_mask() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   if (p_->embedded_boundary_)
     return p_->blocks_.copy_comp0(p_->embedded_boundary_->active_mask());
   MultiFab<Dim> active(p_->ba, p_->dm, p_->local_rank, 1, Extent<Dim>{});
@@ -99,7 +100,7 @@ std::vector<double> System<Dim>::embedded_boundary_mask() const {
 template <int Dim>
 const MultiFab<Dim>* System<Dim>::prepared_program_block_active_mask_(
     int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const {
-  const ExecutionLane& prepared = prepared_boundary_execution_lane();
+  const ExecutionLane& prepared = program_prepared_boundary_execution_lane_();
   if (all_reduce_max(&lane == &prepared ? 0L : 1L, prepared) != 0)
     throw std::invalid_argument(
         "System pointwise active-mask provider requires its authenticated execution lane");

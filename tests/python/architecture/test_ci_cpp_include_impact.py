@@ -124,6 +124,22 @@ def test_global_includer_closure_contains_the_heavy_system_header():
     assert "pops/runtime/system.hpp" in graph.global_includer_closure()
 
 
+def test_unified_program_amr_closure_has_global_include_impact():
+    """The public root, backend and every private AMR detail share the global impact contract."""
+    detail_dir = REPO_ROOT / "include" / "pops" / "runtime" / "program" / "detail"
+    details = sorted(
+        path.relative_to(REPO_ROOT / "include").as_posix()
+        for path in detail_dir.glob("program_execution_services_amr_*.hpp")
+    )
+    assert len(details) == 25  # authenticated backend + 24 AMR definition details
+    headers = {
+        "pops/runtime/program/program_execution_services.hpp",
+        *details,
+    }
+    assert all(graph.header_exists(header) for header in headers)
+    assert headers <= graph.global_includer_closure()
+
+
 def test_leaf_header_hits_exactly_its_one_suite_and_is_not_global():
     """Hand-anchored pruning: ``splitting.hpp`` is included by exactly ``test_splitting``.
 
@@ -404,11 +420,11 @@ def test_cpp_duration_catalog_inventory_authenticates_metadata(
         sel.validate_cpp_duration_catalogs(["test_alpha"])
 
 
-def test_amr_program_header_plan_covers_both_analytic_targets_exactly_once(tmp_path):
+def test_unified_program_header_plan_covers_both_analytic_targets_exactly_once(tmp_path):
     """The ADC-760 reproducer must produce one authenticated, exact one-shard plan."""
     output = _run_plan_cpp_shard(
         tmp_path,
-        ["include/pops/runtime/program/amr_program_context.hpp"],
+        ["include/pops/runtime/program/program_execution_services.hpp"],
         shard_index=0,
         shard_total=1,
     )
@@ -676,14 +692,14 @@ def test_compositional_union_prunes_a_mixed_change(tmp_path):
 def test_global_header_in_a_mixed_change_still_forces_all(tmp_path):
     """A global-includer header anywhere in the change escalates the union to FULL (soundness).
 
-    This is the literal ADC-427 shape: ``system.hpp`` / the program-context headers are global
+    This is the literal ADC-427 shape: ``system.hpp`` / the unified program execution-services
+    header is a global
     includers (compiled into every target via the runtime TUs and the emitter), so the sound
     selection is ALL -- the plan spells out the per-file reason for each.
     """
     changed = [
         "CHANGELOG.md",
-        "include/pops/runtime/program/amr_program_context.hpp",
-        "include/pops/runtime/program/program_context.hpp",
+        "include/pops/runtime/program/program_execution_services.hpp",
         "include/pops/runtime/system.hpp",
         "src/runtime/system/system_fields.cpp",
         "python/pops/codegen/program_emit_control.py",
@@ -695,8 +711,7 @@ def test_global_header_in_a_mixed_change_still_forces_all(tmp_path):
     assert outputs["cpp_count"] == outputs["cpp_total"]
     for header in (
         "include/pops/runtime/system.hpp",
-        "include/pops/runtime/program/program_context.hpp",
-        "include/pops/runtime/program/amr_program_context.hpp",
+        "include/pops/runtime/program/program_execution_services.hpp",
     ):
         assert plan["impact"][header]["kind"] == "all"
         assert plan["impact"][header]["reason"] == "header-in-global-includer-closure"

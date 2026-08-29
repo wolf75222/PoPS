@@ -328,6 +328,12 @@ def test_shared_interface_rejects_default_flux_rhs_nested_in_loop() -> None:
 
 
 def test_group_codegen_keeps_atomic_and_per_rate_identities_distinct() -> None:
+    from pops.codegen.program_persistent_plan import (
+        ProgramPersistentValueKey,
+        ProgramResourcePlan,
+        ProgramResourcePlanEntry,
+    )
+
     program = Program("group_identity")
     left_block = object()
     right_block = object()
@@ -352,6 +358,26 @@ def test_group_codegen_keeps_atomic_and_per_rate_identities_distinct() -> None:
     )
     variables = {3: "u3", 4: "u4"}
     lines: list[str] = []
+    keys = tuple(
+        ProgramPersistentValueKey(
+            value_id=value.id,
+            occurrence_path="root/%d" % index,
+            owner="group_identity",
+            space="state",
+            clock="clock",
+        )
+        for index, value in enumerate((left_rate, right_rate))
+    )
+    authority = SimpleNamespace(
+        resource_plan=ProgramResourcePlan(
+            tuple(
+                ProgramResourcePlanEntry(key=key, bytes=8)
+                for key in keys
+            ),
+            occurrence_values={id(left_rate): keys[0], id(right_rate): keys[1]},
+        )
+    )
+    prelude: list[str] = []
 
     _emit_contiguous_rhs_group(
         [left_rate, right_rate],
@@ -359,9 +385,28 @@ def test_group_codegen_keeps_atomic_and_per_rate_identities_distinct() -> None:
         variables,
         lines,
         group_identity=29,
+        program=authority,
+        prelude=prelude,
     )
 
+    assert prelude == [
+        "ctx.prepare_rhs_scratch(__POPS_PERSISTENT_SLOT_0__, 0, 0);",
+        "ctx.prepare_rhs_scratch(__POPS_PERSISTENT_SLOT_1__, 0, 1);",
+    ]
     assert lines[-1] == ("ctx.rhs_group(29, {{0, &u3, &r11, 11, 0}, {1, &u4, &r12, 12, 1}});")
+    assert any("ctx.rhs_scratch(__POPS_PERSISTENT_SLOT_0__, 0, u3);" in line for line in lines)
+    assert any("ctx.rhs_scratch(__POPS_PERSISTENT_SLOT_1__, 0, u4);" in line for line in lines)
+
+    with pytest.raises(NotImplementedError, match="refusing step-local scratch allocation"):
+        _emit_contiguous_rhs_group(
+            [left_rate, right_rate],
+            {left_block: 0, right_block: 1},
+            {3: "u3", 4: "u4"},
+            [],
+            group_identity=30,
+            program=authority,
+            prelude=None,
+        )
 
 
 def test_validation_and_codegen_share_noncontiguous_stage_coherence_plan() -> None:

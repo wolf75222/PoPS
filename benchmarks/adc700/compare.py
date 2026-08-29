@@ -19,6 +19,11 @@ BASELINE_ROUTE = "pre_cutover_native"
 CANDIDATE_ROUTE = "program_only"
 DEVICE_TOKENS = ("cuda", "hip", "sycl")
 SIGNATURE_FIELDS = ("mass", "checksum", "checksum_square", "maximum")
+BASELINE_REVISION = "db3d390f43dfb14f12e88db31a9b3e631ff50488"
+MINIMUM_RATIO = 0.98
+MINIMUM_ABBA_BLOCKS = 5
+SIGNATURE_RTOL = 1.0e-11
+SIGNATURE_ATOL = 1.0e-12
 
 
 class CampaignError(ValueError):
@@ -74,7 +79,8 @@ def _read_device_assignments(path: Path, mpi_ranks: int) -> list[dict[str, Any]]
                 f"{path}:{line_number}: device rank must be an integer"
             ) from error
         device_uuid = columns[1].strip()
-        if not device_uuid:
+        if rank < 0 or rank >= mpi_ranks or not device_uuid \
+                or any(char in device_uuid for char in "\r\n\t"):
             raise CampaignError(f"{path}:{line_number}: device UUID is empty")
         assignments.append({"rank": rank, "uuid": device_uuid})
 
@@ -96,8 +102,12 @@ def _validate_common(
     candidate_revision: str,
 ) -> tuple[str, int]:
     expected_sequence = [BASELINE_ROUTE, CANDIDATE_ROUTE, CANDIDATE_ROUTE, BASELINE_ROUTE]
-    if len(rows) < 4 or len(rows) % 4 != 0:
-        raise CampaignError("campaign requires one or more complete ABBA blocks")
+    if any(not isinstance(row, dict) or row.get("schema") != SCHEMA for row in rows):
+        raise CampaignError("measurements contain an unexpected schema")
+    if len(rows) < MINIMUM_ABBA_BLOCKS * 4 or len(rows) % 4 != 0:
+        raise CampaignError(
+            "campaign requires at least %d complete ABBA blocks" % MINIMUM_ABBA_BLOCKS
+        )
     for block in range(len(rows) // 4):
         observed = [row.get("route") for row in rows[4 * block : 4 * block + 4]]
         if observed != expected_sequence:
@@ -121,10 +131,17 @@ def _validate_common(
     if len(mpi_ranks) != 1:
         raise CampaignError("MPI rank count differs across measurements")
     rank_count = int(next(iter(mpi_ranks)))
-    if rank_count < 1:
-        raise CampaignError("MPI rank count must be positive")
+    if rank_count != 4:
+        raise CampaignError("ADC-700 requires exactly four MPI ranks")
 
-    comparable = ("execution_concurrency", "real_bytes", "parameters", "topology")
+    communicators = {str(row.get("mpi_communicator", "")) for row in rows}
+    if communicators != {"MPI_COMM_WORLD"}:
+        raise CampaignError("ADC-700 requires MPI_COMM_WORLD in every measurement")
+
+    comparable = (
+        "execution_concurrency", "real_bytes", "parameters", "topology", "mpi_communicator",
+        "toolchain_build_attested", "toolchain", "toolchain_receipt",
+    )
     reference = rows[0]
     for index, row in enumerate(rows):
         expected_revision = (
@@ -134,6 +151,76 @@ def _validate_common(
             raise CampaignError(
                 f"measurement {index} revision {row.get('revision')!r} != {expected_revision!r}"
             )
+        if row.get("toolchain_build_attested") is not True:
+            raise CampaignError(
+                f"measurement {index} lacks the baseline CMake toolchain attestation"
+            )
+        parameters = row.get("parameters")
+        topology = row.get("topology")
+        if not isinstance(parameters, dict) or type(parameters.get("n")) is not int \
+                or parameters["n"] < 16 or parameters["n"] % 4:
+            raise CampaignError(f"measurement {index} has invalid domain parameters")
+        if not isinstance(topology, dict) \
+                or topology.get("distribute_coarse") is not True \
+                or topology.get("coarse_max_grid") != parameters["n"] // 2:
+            raise CampaignError(
+                f"measurement {index} does not authenticate distribute_coarse/coarse_max_grid"
+            )
+        for field in ("coarse_local_boxes", "coarse_total_boxes"):
+            if type(topology.get(field)) is not int or topology[field] <= 0:
+                raise CampaignError(f"measurement {index} lacks authenticated {field}")
+        if not isinstance(topology.get("boxes"), str):
+            raise CampaignError(f"measurement {index} has no authenticated fine-box census")
+        toolchain = row.get("toolchain")
+        if not isinstance(toolchain, dict) or not toolchain:
+            raise CampaignError(f"measurement {index} lacks the complete toolchain receipt object")
+        if set(toolchain) != {"nvcc_wrapper", "mpi", "kokkos", "native_loader", "requested"}:
+            raise CampaignError(f"measurement {index} has an incomplete toolchain receipt object")
+        if not isinstance(toolchain["nvcc_wrapper"], dict) \
+                or set(toolchain["nvcc_wrapper"]) != {"path", "sha256", "version"}:
+            raise CampaignError(f"measurement {index} has incomplete NVCC wrapper provenance")
+        if not isinstance(toolchain["mpi"], dict) or set(toolchain["mpi"]) != {
+            "schema_version", "compiler", "compiler_version", "compiler_sha256", "abi_sha256",
+            "standard", "compile_options", "compile_definitions", "link_options", "link_libraries",
+            "include_dirs", "headers", "libraries",
+        }:
+            raise CampaignError(f"measurement {index} has incomplete MPI provenance")
+        if not isinstance(toolchain["kokkos"], dict) or set(toolchain["kokkos"]) != {
+            "schema_version", "abi_sha256", "include_dirs", "headers", "compile_options",
+            "compile_definitions", "link_options", "link_libraries",
+        }:
+            raise CampaignError(f"measurement {index} has incomplete Kokkos provenance")
+        for field in ("compile_options", "compile_definitions", "link_options", "link_libraries"):
+            values = toolchain["kokkos"].get(field)
+            if not isinstance(values, list) or any(
+                not isinstance(value, str) or not value for value in values
+            ) or len(set(values)) != len(values):
+                raise CampaignError(f"measurement {index} has incomplete Kokkos target {field}")
+        if not isinstance(toolchain["native_loader"], dict) \
+                or set(toolchain["native_loader"]) != {"schema_version", "compile_definitions"} \
+                or not isinstance(toolchain["requested"], dict) \
+                or set(toolchain["requested"]) != {
+                    "cxx", "include", "std", "compile_flags", "link_flags"
+                }:
+            raise CampaignError(f"measurement {index} has incomplete compiler request provenance")
+        if toolchain["requested"].get("std") != "c++20":
+            raise CampaignError(f"measurement {index} does not authenticate exact C++20")
+        for field in ("compile_flags", "link_flags"):
+            values = toolchain["requested"].get(field)
+            if not isinstance(values, list) or not values or any(
+                not isinstance(value, str) or not value for value in values
+            ):
+                raise CampaignError(
+                    f"measurement {index} has incomplete production {field} provenance"
+                )
+        receipt = row.get("toolchain_receipt")
+        if not isinstance(receipt, dict) or set(receipt) != {"path", "sha256", "revision"}:
+            raise CampaignError(f"measurement {index} lacks toolchain receipt metadata")
+        if not isinstance(receipt["path"], str) or not receipt["path"].startswith("/") \
+                or not isinstance(receipt["sha256"], str) or len(receipt["sha256"]) != 64 \
+                or any(char not in "0123456789abcdefABCDEF" for char in receipt["sha256"]) \
+                or receipt["revision"] != candidate_revision:
+            raise CampaignError(f"measurement {index} has invalid toolchain receipt metadata")
         for field in comparable:
             if row.get(field) != reference.get(field):
                 raise CampaignError(f"measurement {index} differs in comparable field '{field}'")
@@ -153,6 +240,43 @@ def _validate_common(
         for field in SIGNATURE_FIELDS:
             _finite_number(signature.get(field), f"measurement {index} signature.{field}")
     return execution_space, rank_count
+
+
+def _validate_run_gpu_assignments(
+    rows: list[dict[str, Any]], assignments: list[dict[str, Any]]
+) -> None:
+    """Require every ABBA row to carry the UUID map observed for that run."""
+    expected = sorted(assignments, key=lambda row: int(row["rank"]))
+    for index, row in enumerate(rows):
+        observed = row.get("gpu_assignments")
+        if not isinstance(observed, list):
+            raise CampaignError("measurement %d lacks per-run GPU UUID assignments" % index)
+        if len(observed) != len(expected):
+            raise CampaignError("measurement %d has incomplete per-run GPU assignments" % index)
+        normalized = []
+        for assignment_index, item in enumerate(observed):
+            if not isinstance(item, dict) or set(item) != {"rank", "uuid"}:
+                raise CampaignError(
+                    "measurement %d GPU assignment %d has an invalid schema"
+                    % (index, assignment_index)
+                )
+            if type(item["rank"]) is not int or not isinstance(item["uuid"], str) \
+                    or not item["uuid"].strip():
+                raise CampaignError("measurement %d has malformed per-run GPU assignments" % index)
+            normalized.append({"rank": item["rank"], "uuid": item["uuid"]})
+        if sorted(normalized, key=lambda item: item["rank"]) != expected:
+            raise CampaignError("measurement %d GPU UUID map differs from inventory" % index)
+        local = row.get("gpu")
+        if not isinstance(local, dict) or set(local) != {"rank", "uuid"} \
+                or type(local.get("rank")) is not int \
+                or local.get("rank") not in range(4) \
+                or not isinstance(local.get("uuid"), str) \
+                or local.get("uuid") != row.get("gpu_uuid"):
+            raise CampaignError("measurement %d lacks a rank-local GPU UUID witness" % index)
+        if expected[int(local["rank"])] != {
+            "rank": int(local["rank"]), "uuid": str(local["uuid"])
+        }:
+            raise CampaignError("measurement %d rank-local GPU UUID disagrees with inventory" % index)
 
 
 def _performance(rows: list[dict[str, Any]], threshold: float) -> dict[str, Any]:
@@ -222,16 +346,21 @@ def _numerical_parity(
 
 
 def compare(args: argparse.Namespace) -> dict[str, Any]:
-    if not (0.0 < args.threshold <= 1.0):
-        raise CampaignError("--threshold must be in (0, 1]")
-    if args.signature_rtol < 0.0 or args.signature_atol < 0.0:
-        raise CampaignError("signature tolerances must be non-negative")
+    if args.baseline_revision != BASELINE_REVISION:
+        raise CampaignError("ADC-700 baseline revision is pinned to %s" % BASELINE_REVISION)
+    if not args.candidate_revision or args.candidate_revision == args.baseline_revision:
+        raise CampaignError("candidate revision must be non-empty and differ from baseline")
+    if args.threshold != MINIMUM_RATIO:
+        raise CampaignError("ADC-700 throughput threshold is pinned to %.2f" % MINIMUM_RATIO)
+    if args.signature_rtol != SIGNATURE_RTOL or args.signature_atol != SIGNATURE_ATOL:
+        raise CampaignError("ADC-700 numerical tolerances are pinned to the campaign contract")
 
     rows = _read_measurements(args.input)
     execution_space, mpi_ranks = _validate_common(
         rows, args.baseline_revision, args.candidate_revision
     )
     assignments = _read_device_assignments(args.device_inventory, mpi_ranks)
+    _validate_run_gpu_assignments(rows, assignments)
 
     performance = _performance(rows, args.threshold)
     numerical = _numerical_parity(rows, args.signature_rtol, args.signature_atol)
@@ -252,6 +381,9 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
             "candidate_revision": args.candidate_revision,
             "raw_measurements": str(args.input),
             "ordering": "ABBA",
+            "toolchain": rows[0]["toolchain"],
+            "toolchain_receipt": rows[0]["toolchain_receipt"],
+            "topology": rows[0]["topology"],
             "hostname": platform.node(),
             "slurm_job_id": os.environ.get("SLURM_JOB_ID", ""),
         },

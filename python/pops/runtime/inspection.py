@@ -286,14 +286,20 @@ def _history(sim: Any) -> Any:
 
 def _cache(sim: Any) -> Any:
     rows = []
-    for node_id in _call(sim, "program_cache_nodes", []) or []:
+    # Cache identity is the finite resource-plan slot, not a graph node id.
+    # Keep invalid/cold slots visible: their pending accumulated dt is part of
+    # accepted continuation state even when no field payload exists yet.
+    for slot in _call(sim, "program_cache_slots", []) or []:
+        slot = int(slot)
         rows.append({
-            "node_id": int(node_id),
-            "name": _call(sim, "program_cache_name", "", node_id),
-            "last_update_step": _call(sim, "program_cache_last_update_step", None, node_id),
-            "accumulated_dt": _call(sim, "program_cache_accumulated_dt", None, node_id),
-            "ncomp": _call(sim, "program_cache_ncomp", None, node_id),
-            "ngrow": _call(sim, "program_cache_ngrow", None, node_id),
+            "slot": slot,
+            "valid": bool(_call(sim, "program_cache_valid", False, slot)),
+            "cold": bool(_call(sim, "program_cache_cold", False, slot)),
+            "name": _call(sim, "program_cache_name", "", slot),
+            "last_update_step": _call(sim, "program_cache_last_update_step", None, slot),
+            "accumulated_dt": _call(sim, "program_cache_accumulated_dt", None, slot),
+            "ncomp": _call(sim, "program_cache_ncomp", None, slot),
+            "ngrow": _call(sim, "program_cache_ngrow", None, slot),
         })
     return rows
 

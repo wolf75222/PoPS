@@ -16,6 +16,7 @@
 #include <pops/runtime/system/system_lifecycle.hpp>
 #include <pops/runtime/system/native_package_capability.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
+#include <pops/runtime/program/program_transaction.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_builtins.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_prepare.hpp>
 #include <pops/parallel/comm.hpp>
@@ -661,6 +662,79 @@ struct System<Dim>::Impl {
     return std::string(field);
   }
 
+  /// Copy one already-materialized field image without constructing a temporary Fab.  A Fab's
+  /// ordinary copy assignment is intentionally value-semantic and allocates a fresh Kokkos view;
+  /// that is correct for assembly, but it is not a valid operation while the accepted-step
+  /// transaction is hot.  The transaction image is dimensioned once at bind and only this
+  /// validated deep-copy path is used afterwards.
+  static void copy_field_into_preallocated(field_type& destination, const field_type& source) {
+    if (destination.layout() != source.layout() ||
+        destination.distribution() != source.distribution() ||
+        destination.local_rank() != source.local_rank() || destination.ncomp() != source.ncomp() ||
+        destination.ghosts() != source.ghosts() || destination.local_size() != source.local_size())
+      throw std::logic_error("System accepted transaction field layout changed after bind");
+    for (std::size_t local = 0; local < destination.local_size(); ++local) {
+      if (destination.global_index(local) != source.global_index(local) ||
+          destination.fab(local).size() != source.fab(local).size())
+        throw std::logic_error("System accepted transaction field ownership changed after bind");
+      Kokkos::deep_copy(destination.fab(local).storage(), source.fab(local).storage());
+    }
+  }
+
+  static void copy_string_into_preallocated(std::string& destination, std::string_view source) {
+    if (source.size() > destination.capacity())
+      throw std::logic_error("System accepted transaction string capacity was not preallocated");
+    destination.assign(source.data(), source.size());
+  }
+
+  template <class T>
+  static void copy_vector_into_preallocated(std::vector<T>& destination,
+                                            const std::vector<T>& source) {
+    if (source.size() > destination.capacity())
+      throw std::logic_error("System accepted transaction vector capacity was not preallocated");
+    destination.assign(source.begin(), source.end());
+  }
+
+  static void copy_staged_inputs_into_preallocated(
+      std::map<std::string, std::vector<double>>& destination,
+      const std::map<std::string, std::vector<double>>& source) {
+    if (destination.size() != source.size())
+      throw std::logic_error("System accepted transaction auxiliary composition changed");
+    for (const auto& [identity, values] : source) {
+      const auto found = destination.find(identity);
+      if (found == destination.end() || values.size() > found->second.capacity())
+        throw std::logic_error(
+            "System accepted transaction auxiliary input capacity was not preallocated");
+      found->second.assign(values.begin(), values.end());
+    }
+  }
+
+  static void copy_provider_groups_into_preallocated(
+      runtime::system::AuxiliaryStorageGroups<Dim>& destination,
+      const runtime::system::AuxiliaryStorageGroups<Dim>& source) {
+    if (destination.groups.size() != source.groups.size())
+      throw std::logic_error("System accepted transaction provider composition changed");
+    for (const auto& [identity, group] : source.groups) {
+      const auto found = destination.groups.find(identity);
+      if (found == destination.groups.end())
+        throw std::logic_error("System accepted transaction provider group changed after bind");
+      copy_field_into_preallocated(found->second, group);
+    }
+  }
+
+  static void copy_string_vector_into_preallocated(std::vector<std::string>& destination,
+                                                   const std::vector<std::string>& source) {
+    if (source.size() > destination.capacity())
+      throw std::logic_error("System accepted transaction string-vector capacity was not primed");
+    if (destination.size() != source.size()) {
+      if (source.size() > destination.capacity())
+        throw std::logic_error("System accepted transaction string-vector capacity was not primed");
+      destination.resize(source.size());
+    }
+    for (std::size_t index = 0; index < source.size(); ++index)
+      copy_string_into_preallocated(destination[index], source[index]);
+  }
+
   struct AcceptedSnapshot {
     std::vector<field_type> states;
     auxiliary_registry_type auxiliary_registry;
@@ -672,42 +746,135 @@ struct System<Dim>::Impl {
     std::map<std::string, typename exact_field_type::AcceptedState> named_field_states;
     double time = 0.0;
     int macro_step = 0;
+    std::string last_dt_reason;
+    NewtonReport last_newton_report{};
+    bool initialized = false;
+    bool program_image_warm = false;
+    std::uint64_t program_install_generation = 0;
 
-    explicit AcceptedSnapshot(const Impl& owner)
-        : auxiliary_registry(owner.auxiliary_registry_),
-          provider_carrier(owner.provider_carrier_
-                               ? std::optional<runtime::system::AuxiliaryStorageGroups<Dim>>(
-                                     *owner.provider_carrier_)
-                               : std::nullopt),
-          staged_auxiliary_inputs(owner.staged_auxiliary_inputs_),
-          dirty_auxiliary_providers(owner.dirty_auxiliary_providers_),
-          program(owner.program_),
-          time(owner.t),
-          macro_step(owner.macro_step_) {
+    AcceptedSnapshot() = default;
+
+    explicit AcceptedSnapshot(const Impl& owner) { capture_from(owner); }
+
+    void capture_from(const Impl& owner) {
       if (owner.active_field_ || owner.active_field_provider_candidate_ ||
           owner.active_field_auxiliary_publication_ ||
           !owner.active_field_stale_auxiliary_providers_.empty())
         throw std::logic_error(
             "System cannot snapshot an unconsumed exact field publication candidate");
-      states.reserve(owner.sp.size());
-      for (const Species& block : owner.sp)
-        states.push_back(block.U);
-      if (owner.default_field_)
-        default_field_state = owner.default_field_->accepted_state();
-      for (const auto& [slot, field] : owner.named_fields_) {
-        if (!field)
-          throw std::logic_error("System materialized named field is null");
-        named_field_states.emplace(slot, field->accepted_state());
+
+      if (!initialized) {
+        states.clear();
+        auxiliary_registry = {};
+        provider_carrier.reset();
+        staged_auxiliary_inputs.clear();
+        dirty_auxiliary_providers.clear();
+        program = {};
+        default_field_state.reset();
+        named_field_states.clear();
+        states.reserve(owner.sp.size());
+        for (const Species& block : owner.sp)
+          states.push_back(block.U);
+        auxiliary_registry = owner.auxiliary_registry_;
+        if (owner.provider_carrier_)
+          provider_carrier.emplace(*owner.provider_carrier_);
+        staged_auxiliary_inputs = owner.staged_auxiliary_inputs_;
+        dirty_auxiliary_providers = owner.dirty_auxiliary_providers_;
+        program = owner.program_;
+        program_image_warm = true;
+        program_install_generation = owner.program_.step_install_generation_;
+        if (owner.default_field_)
+          default_field_state = owner.default_field_->accepted_state();
+        for (const auto& [slot, field] : owner.named_fields_) {
+          if (!field)
+            throw std::logic_error("System materialized named field is null");
+          named_field_states.emplace(slot, field->accepted_state());
+        }
+        // Reasons are assembled from fixed prefixes and bind-frozen user identities. Reserve the
+        // exact maximum before entering the first candidate so adaptive-CFL bookkeeping cannot
+        // grow its string during a hot rollback image refresh.
+        std::size_t max_reason = std::string("degenerate").size();
+        for (const Species& block : owner.sp) {
+          max_reason = std::max(max_reason, std::string("transport:").size() + block.name.size());
+          max_reason =
+              std::max(max_reason, std::string("parabolic_frequency:").size() + block.name.size());
+          max_reason =
+              std::max(max_reason, std::string("source_frequency:").size() + block.name.size());
+          max_reason =
+              std::max(max_reason, std::string("stability_dt:").size() + block.name.size());
+        }
+        for (const auto& frequency : owner.coupling_.coupled_freqs)
+          max_reason =
+              std::max(max_reason, std::string("coupled_source:").size() + frequency.label.size());
+        for (const auto& frequency : owner.coupling_.coupled_frequencies)
+          max_reason =
+              std::max(max_reason, std::string("coupled_source:").size() + frequency.label.size());
+        for (const auto& bound : owner.coupling_.dt_bounds)
+          max_reason = std::max(max_reason, std::string("global:").size() + bound.label.size());
+        max_reason = std::max(max_reason, std::string("program:dt_bound").size());
+        max_reason = std::max(max_reason, std::string("strategy:max_dt").size());
+        last_dt_reason.reserve(max_reason);
+      } else {
+        if (states.size() != owner.sp.size() ||
+            named_field_states.size() != owner.named_fields_.size())
+          throw std::logic_error("System transaction snapshot composition changed");
+        for (std::size_t block = 0; block < states.size(); ++block)
+          copy_field_into_preallocated(states[block], owner.sp[block].U);
+        if (provider_carrier.has_value() != static_cast<bool>(owner.provider_carrier_))
+          throw std::logic_error("System accepted transaction provider ownership changed");
+        if (provider_carrier)
+          copy_provider_groups_into_preallocated(*provider_carrier, *owner.provider_carrier_);
+        copy_staged_inputs_into_preallocated(staged_auxiliary_inputs,
+                                             owner.staged_auxiliary_inputs_);
+        copy_vector_into_preallocated(dirty_auxiliary_providers, owner.dirty_auxiliary_providers_);
+        if (program_install_generation != owner.program_.step_install_generation_)
+          throw std::logic_error("System accepted transaction Program composition changed");
+        // Diagnostics, history/cache slots, profiler scopes and persistent values are all expected
+        // to have been materialized by the bind-time Program prelude.  Refresh the resident image
+        // strictly in place; a late identity/shape change is a deterministic refusal rather than a
+        // hidden allocation in the accepted-step callback.
+        if (!program_image_warm)
+          throw std::logic_error("System accepted transaction Program image was not primed");
+        // ProgramRuntimeState owns the complete bind-sealed transaction composition, including
+        // balance mailboxes, due-window flags, and projection activity.  Keep this single
+        // exhaustive copy authority instead of silently letting the Uniform carrier drift when a
+        // new Program candidate field is introduced.
+        program.copy_from_preallocated(owner.program_);
+        if (default_field_state.has_value() != static_cast<bool>(owner.default_field_))
+          throw std::logic_error("System accepted transaction default-field ownership changed");
+        if (default_field_state) {
+          copy_field_into_preallocated(default_field_state->potential,
+                                       owner.default_field_->accepted_potential());
+          copy_field_into_preallocated(default_field_state->outputs,
+                                       owner.default_field_->accepted_outputs());
+        }
+        for (const auto& [slot, field] : owner.named_fields_) {
+          if (!field)
+            throw std::logic_error("System materialized named field is null");
+          const auto image = named_field_states.find(slot);
+          if (image == named_field_states.end())
+            throw std::logic_error("System accepted transaction named-field composition changed");
+          copy_field_into_preallocated(image->second.potential, field->accepted_potential());
+          copy_field_into_preallocated(image->second.outputs, field->accepted_outputs());
+        }
       }
+
+      time = owner.t;
+      macro_step = owner.macro_step_;
+      copy_string_into_preallocated(last_dt_reason, owner.last_dt_reason_);
+      last_newton_report = owner.last_newton_report_;
+      initialized = true;
     }
 
     void restore(Impl& owner) {
       if (states.size() != owner.sp.size())
         throw std::logic_error("System transaction snapshot composition changed");
-      auto prepared_program_restore = owner.program_.prepare_accepted_restore(program);
+      static_assert(std::is_nothrow_swappable_v<field_type>);
       for (std::size_t block = 0; block < states.size(); ++block)
-        owner.sp[block].U = states[block];
-      owner.auxiliary_registry_ = auxiliary_registry;
+        std::swap(owner.sp[block].U, states[block]);
+      // The auxiliary registry is a complete accepted carrier.  Exchange it instead of assigning
+      // so rollback remains a closed, allocation-free operation after the transaction has bound.
+      owner.auxiliary_registry_.swap_complete(auxiliary_registry);
       if (provider_carrier) {
         if (!owner.provider_carrier_)
           throw std::logic_error("System carrier owner vanished during accepted rollback");
@@ -721,15 +888,20 @@ struct System<Dim>::Impl {
       owner.active_field_provider_candidate_.reset();
       owner.active_field_auxiliary_publication_.reset();
       owner.active_field_stale_auxiliary_providers_.clear();
-      owner.staged_auxiliary_inputs_ = staged_auxiliary_inputs;
-      owner.dirty_auxiliary_providers_ = dirty_auxiliary_providers;
-      owner.program_.publish_prepared_accepted_restore(std::move(prepared_program_restore));
+      owner.staged_auxiliary_inputs_.swap(staged_auxiliary_inputs);
+      owner.dirty_auxiliary_providers_.swap(dirty_auxiliary_providers);
+      static_assert(std::is_nothrow_swappable_v<runtime::program::ProgramRuntimeState<Dim>>);
+      std::swap(owner.program_, program);
       if (!default_field_state) {
-        owner.default_field_.reset();
+        if (owner.default_field_)
+          throw std::logic_error("System transaction default-field ownership changed");
       } else {
         if (!owner.default_field_)
           throw std::logic_error("System transaction snapshot default-field presence vanished");
-        owner.default_field_->restore_accepted_state(*default_field_state);
+        copy_field_into_preallocated(owner.default_field_->accepted_potential_for_restore(),
+                                     default_field_state->potential);
+        copy_field_into_preallocated(owner.default_field_->accepted_outputs_for_restore(),
+                                     default_field_state->outputs);
       }
       if (named_field_states.size() != owner.named_fields_.size())
         throw std::logic_error("System transaction snapshot named-field composition changed");
@@ -737,22 +909,215 @@ struct System<Dim>::Impl {
         const auto field = owner.named_fields_.find(slot);
         if (field == owner.named_fields_.end() || !field->second)
           throw std::logic_error("System transaction snapshot field ownership changed");
-        field->second->restore_accepted_state(values);
+        copy_field_into_preallocated(field->second->accepted_potential_for_restore(),
+                                     values.potential);
+        copy_field_into_preallocated(field->second->accepted_outputs_for_restore(), values.outputs);
       }
       owner.t = time;
       owner.macro_step_ = macro_step;
+      owner.last_dt_reason_.swap(last_dt_reason);
+      using std::swap;
+      swap(owner.last_newton_report_, last_newton_report);
     }
   };
 
-  std::unique_ptr<AcceptedSnapshot> external_step_transaction_;
+  // External savepoints keep the same ProgramTransaction (and its visibility writer) from begin
+  // through finalize/rollback. The registered carrier is the sole restore image; retaining a second
+  // AcceptedSnapshot here would create a second transaction authority and duplicate state.
+  std::optional<runtime::program::ProgramTransaction> external_program_transaction_;
   bool external_step_transaction_committed_ = false;
+
+  /// The System driver owns one frozen transaction registry for its whole lifetime.  The
+  /// participant is an aggregate carrier around the existing accepted image; this keeps the
+  /// registry as the sole phase/visibility authority without introducing a second state engine.
+  /// Its callback image is deliberately one byte: the typed carrier preallocates and owns the
+  /// actual restore image, while the registry still freezes an explicit participant budget/order.
+  struct StepTransactionCarrier final {
+    Impl* owner = nullptr;
+    std::uint64_t step_change_last_dispatches = 0;
+    /// One canonical term per valid cell/component.  SharedSpace is the project's portable
+    /// unified residency: the hot diagnostic writes it from Kokkos and sums it on the host after
+    /// a fence, without a scalar deep-copy, a temporary reduction object, or reduction atomics.
+    Kokkos::View<Real*, Kokkos::SharedSpace> step_change_terms;
+    Kokkos::View<int, Kokkos::SharedSpace> step_change_invalid;
+    /// Exact maximum valid-cell/component term count of one currently bound block.  A block
+    /// diagnostic consumes that block's complete canonical prefix, so reusing the one workspace
+    /// for another block never needs a hot resize.
+    std::size_t step_change_term_capacity = 0;
+    std::optional<AcceptedSnapshot> accepted;
+    bool snapshot_active = false;
+
+    explicit StepTransactionCarrier(Impl& value) noexcept : owner(&value) {}
+
+    bool capture(void*, std::size_t bytes) noexcept {
+      if (owner == nullptr || bytes != 1 || snapshot_active)
+        return false;
+      try {
+        if (!accepted)
+          accepted.emplace();
+        accepted->capture_from(*owner);
+        snapshot_active = true;
+        return true;
+      } catch (...) {
+        snapshot_active = false;
+        return false;
+      }
+    }
+
+    void restore(const void*, std::size_t bytes) noexcept {
+      if (owner == nullptr || bytes != 1 || !accepted || !snapshot_active)
+        std::terminate();
+      try {
+        accepted->restore(*owner);
+      } catch (...) {
+        std::terminate();
+      }
+      snapshot_active = false;
+    }
+
+    /// Materialize the reusable rollback image after composition and Program installation have
+    /// settled. This is the bind-time cold path; every subsequent transaction only refreshes the
+    /// already-owned buffers.
+    void prime() {
+      if (owner == nullptr || snapshot_active)
+        throw std::logic_error("System transaction carrier cannot be primed while active");
+      if (!accepted)
+        accepted.emplace();
+      std::size_t required_terms = 0;
+      for (const Species& block : owner->sp) {
+        if (block.U.ncomp() <= 0)
+          throw std::logic_error("System transaction carrier block has no state components");
+        std::size_t block_terms = 0;
+        for (std::size_t local = 0; local < block.U.local_size(); ++local) {
+          const std::int64_t signed_cells = block.U.box(local).numPts();
+          if (signed_cells <= 0)
+            throw std::logic_error("System transaction carrier block has an empty valid patch");
+          const std::size_t cells = static_cast<std::size_t>(signed_cells);
+          const std::size_t components = static_cast<std::size_t>(block.U.ncomp());
+          if (cells > std::numeric_limits<std::size_t>::max() / components ||
+              block_terms > std::numeric_limits<std::size_t>::max() - cells * components)
+            throw std::overflow_error("System transaction carrier step-change workspace overflow");
+          block_terms += cells * components;
+        }
+        required_terms = std::max(required_terms, block_terms);
+      }
+      if (required_terms == 0)
+        throw std::logic_error("System transaction carrier step-change workspace is empty");
+      if (step_change_terms.data() == nullptr || step_change_term_capacity != required_terms) {
+        step_change_terms =
+            decltype(step_change_terms)("pops_step_change_l2_terms", required_terms);
+        step_change_invalid = decltype(step_change_invalid)("pops_step_change_l2_invalid");
+        step_change_term_capacity = required_terms;
+      }
+      step_change_invalid() = 0;
+      accepted->capture_from(*owner);
+      snapshot_active = false;
+    }
+
+    bool publish() noexcept { return owner != nullptr; }
+
+    static bool snapshot_callback(void* object, void* image, std::size_t bytes) noexcept {
+      return static_cast<StepTransactionCarrier*>(object)->capture(image, bytes);
+    }
+    static void restore_callback(void* object, const void* image, std::size_t bytes) noexcept {
+      static_cast<StepTransactionCarrier*>(object)->restore(image, bytes);
+    }
+    static bool publish_callback(void* object) noexcept {
+      return static_cast<StepTransactionCarrier*>(object)->publish();
+    }
+    static void rollback_callback(void* object, const void* image, std::size_t bytes) noexcept {
+      static_cast<StepTransactionCarrier*>(object)->restore(image, bytes);
+    }
+
+    /// Keep the fully dimensioned image resident for the next step. Resetting the optional here
+    /// would destroy every Fab/map node and turn the following capture into a hot-path allocation.
+    void discard_snapshot() noexcept { snapshot_active = false; }
+  };
+
+  static bool step_transaction_consensus(void* context, std::uint32_t phase,
+                                         std::uint32_t status) noexcept {
+    try {
+      auto* owner = static_cast<Impl*>(context);
+      if (owner == nullptr)
+        return false;
+      // The registry status is a bounded protocol code. Compare the exact code, rather than a
+      // success/failure bit, so two distinct local fault classifications cannot be mistaken for
+      // a collective agreement.
+      const long status_word = static_cast<long>(status);
+      const std::uint64_t generation =
+          static_cast<std::uint64_t>(owner->step_transaction_registry_.accepted_generation());
+      // Keep every collective word representable even on platforms whose `long` is 32-bit.
+      const long generation_low = static_cast<long>(generation & UINT64_C(0x1fffff));
+      const long generation_middle = static_cast<long>((generation >> 21U) & UINT64_C(0x1fffff));
+      const long generation_high = static_cast<long>(generation >> 42U);
+      const long phase_word = static_cast<long>(phase);
+      // Execute every word unconditionally.  A rank that disagrees on status or phase must still
+      // participate in all 21/21/22 generation reductions, otherwise the next collective would
+      // become rank-skewed after a local rejection.
+      const long status_max = all_reduce_max(status_word);
+      const long status_min = all_reduce_min(status_word);
+      const long phase_max = all_reduce_max(phase_word);
+      const long phase_min = all_reduce_min(phase_word);
+      const long generation_low_max = all_reduce_max(generation_low);
+      const long generation_low_min = all_reduce_min(generation_low);
+      const long generation_middle_max = all_reduce_max(generation_middle);
+      const long generation_middle_min = all_reduce_min(generation_middle);
+      const long generation_high_max = all_reduce_max(generation_high);
+      const long generation_high_min = all_reduce_min(generation_high);
+      return status_max == status_min && phase_max == phase_min &&
+             generation_low_max == generation_low_min &&
+             generation_middle_max == generation_middle_min &&
+             generation_high_max == generation_high_min;
+    } catch (...) {
+      return false;
+    }
+  }
+
+  runtime::program::ProgramTransactionRegistry step_transaction_registry_;
+  StepTransactionCarrier step_transaction_carrier_;
+  runtime::program::ParticipantHandle<StepTransactionCarrier> step_transaction_participant_{};
+
+  [[nodiscard]] runtime::program::AcceptedReadLease acquire_accepted_read_lease() const {
+    return step_transaction_registry_.acquire_read();
+  }
+
+  [[nodiscard]] runtime::program::AcceptedWriteLease acquire_accepted_write_lease() const {
+    return step_transaction_registry_.acquire_write();
+  }
+
+  void prime_step_transaction_image() { step_transaction_carrier_.prime(); }
 
   explicit Impl(const SystemConfig<Dim>& config)
       : domain_(config),
-        field_nullspace_providers_(make_default_field_nullspace_provider_registry<Dim>()) {
+        field_nullspace_providers_(make_default_field_nullspace_provider_registry<Dim>()),
+        step_transaction_registry_(
+            runtime::program::ProgramTransactionBudget{1, 1, 0, 0},
+            runtime::program::ProgramTransactionConsensus{&Impl::step_transaction_consensus, this}),
+        step_transaction_carrier_(*this) {
+    // Candidate execution still uses the resident Uniform carriers. Freeze public readers before
+    // entering that phase; detached participants can opt into the historical publish-time lock.
+    step_transaction_registry_.set_candidate_visibility_lock(true);
     const FieldNullspaceProviderSelection selection = operator_topology_zero_mean_nullspace();
     default_nullspace_provider_identity_ = selection.provider_identity;
     default_nullspace_options_ = selection.options;
+
+    runtime::program::ProgramParticipantOps ops;
+    ops.snapshot = &StepTransactionCarrier::snapshot_callback;
+    ops.restore = &StepTransactionCarrier::restore_callback;
+    ops.publish = &StepTransactionCarrier::publish_callback;
+    ops.rollback = &StepTransactionCarrier::rollback_callback;
+    ops.candidate = [](void* object) noexcept -> void* { return object; };
+    step_transaction_participant_ = step_transaction_registry_.register_participant(
+        step_transaction_carrier_, ops, runtime::program::ProgramParticipantBudget{1, 0});
+    step_transaction_registry_.bind();
+  }
+
+  ~Impl() noexcept {
+    // external_program_transaction_ is declared before the registry (and therefore would
+    // otherwise be destroyed after it). Close the active transaction while its registry and
+    // carrier are still alive; this preserves the same rollback-before-authority-destruction order
+    // as an explicit external rollback.
+    external_program_transaction_.reset();
   }
 
   FieldNullspaceProviderRequest<Dim> prepare_uniform_field_nullspace_request(
@@ -846,13 +1211,101 @@ struct System<Dim>::Impl {
       block.state_identity = installed->state_identity;
   }
 
+  /// Execute a candidate body after the transaction has entered its candidate phase. The outer
+  /// RuntimeInstance envelope owns solve/guard/effect preparation, hidden publication, seal, and
+  /// irreversible finalization. A candidate exception intentionally leaves the transaction live
+  /// so the outer controller can consume the failure and invoke its single rollback path.
+  template <class Function>
+  void execute_candidate_body(runtime::program::ProgramTransaction& transaction,
+                              Function&& function) {
+    std::exception_ptr function_error;
+    try {
+      std::forward<Function>(function)();
+    } catch (...) {
+      function_error = std::current_exception();
+    }
+    bool any_function_error = false;
+    try {
+      any_function_error = all_reduce_max(function_error ? 1L : 0L) != 0;
+    } catch (...) {
+      any_function_error = true;
+    }
+    if (any_function_error) {
+      if (function_error)
+        std::rethrow_exception(function_error);
+      throw std::runtime_error("System transaction candidate execution failed collectively");
+    }
+  }
+
+  template <class Function>
+  void execute_candidate_phase(runtime::program::ProgramTransaction& transaction,
+                               Function&& function) {
+    if (!transaction.begin_candidate())
+      throw std::runtime_error("System transaction candidate phase rejected collectively");
+    execute_candidate_body(transaction, std::forward<Function>(function));
+  }
+
   template <class Function>
   decltype(auto) execute_step_transaction(Function&& function) {
-    AcceptedSnapshot snapshot(*this);
+    // RuntimeInstance's external envelope already owns the transaction and visibility writer.
+    // Borrow it here: re-entering begin()/seal() would publish a generation before Python effects
+    // have been prepared and would make a later outer rollback non-atomic.
+    if (external_program_transaction_) {
+      if (external_step_transaction_committed_ ||
+          external_program_transaction_->phase() !=
+              runtime::program::ProgramTransactionPhase::kCandidate)
+        throw std::logic_error("System transaction candidate is already committed or consumed");
+      if constexpr (std::is_void_v<std::invoke_result_t<Function&>>) {
+        execute_candidate_body(*external_program_transaction_, std::forward<Function>(function));
+        return;
+      } else {
+        using result_type = std::invoke_result_t<Function&>;
+        static_assert(!std::is_reference_v<result_type>,
+                      "System transaction functions must return a value");
+        std::optional<std::remove_cv_t<result_type>> result;
+        execute_candidate_body(*external_program_transaction_,
+                               [&] { result.emplace(std::forward<Function>(function)()); });
+        return result_type(std::move(*result));
+      }
+    }
+
+    auto transaction = step_transaction_registry_.begin();
     try {
-      return std::forward<Function>(function)();
+      if constexpr (std::is_void_v<std::invoke_result_t<Function&>>) {
+        execute_candidate_phase(transaction, std::forward<Function>(function));
+        if (!transaction.begin_solve_guard_effect_prepare())
+          throw std::runtime_error(
+              "System transaction solve/guard/effect preparation rejected collectively");
+        if (!transaction.hidden_publish())
+          throw std::runtime_error("System transaction hidden publication failed collectively");
+        if (!transaction.atomic_seal())
+          throw std::runtime_error("System transaction atomic seal failed collectively");
+        const auto finalized = transaction.irreversible_finalize();
+        step_transaction_carrier_.discard_snapshot();
+        if (!finalized)
+          throw std::runtime_error("System transaction entered fail-stop during finalization");
+      } else {
+        using result_type = std::invoke_result_t<Function&>;
+        static_assert(!std::is_reference_v<result_type>,
+                      "System transaction functions must return a value");
+        std::optional<std::remove_cv_t<result_type>> result;
+        execute_candidate_phase(transaction,
+                                [&] { result.emplace(std::forward<Function>(function)()); });
+        if (!transaction.begin_solve_guard_effect_prepare())
+          throw std::runtime_error(
+              "System transaction solve/guard/effect preparation rejected collectively");
+        if (!transaction.hidden_publish())
+          throw std::runtime_error("System transaction hidden publication failed collectively");
+        if (!transaction.atomic_seal())
+          throw std::runtime_error("System transaction atomic seal failed collectively");
+        const auto finalized = transaction.irreversible_finalize();
+        step_transaction_carrier_.discard_snapshot();
+        if (!finalized)
+          throw std::runtime_error("System transaction entered fail-stop during finalization");
+        return result_type(std::move(*result));
+      }
     } catch (...) {
-      snapshot.restore(*this);
+      transaction.rollback();
       throw;
     }
   }

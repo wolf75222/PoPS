@@ -1,6 +1,6 @@
 """Source-only parity between explicit AMR Program deferrals and their Python mirror.
 
-``AmrProgramContext`` marks an unsupported capability only by calling
+``ProgramExecutionServices`` marks an unsupported capability only by calling
 ``deferred_op("<unambiguous-id>", ...)``. Ordinary runtime, validation, history-integrity and
 error-policy exceptions are not capability declarations. This gate locks the explicit identifiers
 against ``DEFERRED_GROUPS`` without importing ``pops`` or the compiled extension.
@@ -18,40 +18,48 @@ import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 SUPPORT_PY = REPO_ROOT / "python" / "pops" / "runtime" / "amr_program_support.py"
-CONTEXT_HPP = REPO_ROOT / "include" / "pops" / "runtime" / "program" / "amr_program_context.hpp"
-UNIFORM_CONTEXT_HPP = REPO_ROOT / "include" / "pops" / "runtime" / "program" / "program_context.hpp"
+CONTEXT_HPP = REPO_ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
 PRODUCTION_CODEGEN = (
     REPO_ROOT / "python" / "pops" / "codegen" / "program_codegen.py",
     REPO_ROOT / "python" / "pops" / "codegen" / "program_emit_ops.py",
     REPO_ROOT / "python" / "pops" / "codegen" / "program_emit_amr.py",
 )
-CONTEXT_ROOT = "pops/runtime/program/amr_program_context.hpp"
+CONTEXT_ROOT = "pops/runtime/program/program_execution_services.hpp"
 CONTEXT_FRAGMENT_PATHS = frozenset(
     {
-        "pops/runtime/program/amr_program_context_spatial.inc",
-        "pops/runtime/program/amr_program_context_field_runtime_public.inc",
-        "pops/runtime/program/amr_program_context_flux_expression_public.inc",
-        "pops/runtime/program/amr_program_context_spatial_operations.inc",
-        "pops/runtime/program/amr_program_context_history_checkpoint_public.inc",
-        "pops/runtime/program/amr_program_context_field_runtime_solver.inc",
-        "pops/runtime/program/amr_program_context_field_runtime_private.inc",
-        "pops/runtime/program/amr_program_context_flux_expression_polynomial.inc",
-        "pops/runtime/program/amr_program_context_cell_temporal_configuration.inc",
-        "pops/runtime/program/amr_program_context_history_checkpoint_definitions.inc",
-        "pops/runtime/program/amr_program_context_flux_basis_definitions.inc",
-        "pops/runtime/program/amr_program_context_flux_expression_definitions.inc",
-        "pops/runtime/program/amr_program_context_cell_temporal_level_runtime.inc",
-        "pops/runtime/program/amr_program_context_field_runtime_definitions.inc",
-        "pops/runtime/program/amr_program_context_flux_expression_services.inc",
-        "pops/runtime/program/amr_program_context_cell_temporal_runtime.inc",
-        "pops/runtime/program/amr_program_context_subcycling_runtime.inc",
-        "pops/runtime/program/amr_program_context_flux_basis.inc",
-        "pops/runtime/program/amr_program_context_flux_expression_runtime.inc",
-        "pops/runtime/program/amr_program_context_history_checkpoint_runtime.inc",
-        "pops/runtime/program/amr_program_context_field_runtime_services.inc",
-        "pops/runtime/program/amr_program_context_history_checkpoint_services.inc",
-        "pops/runtime/program/amr_program_context_spatial_operations_services.inc",
+        "pops/runtime/program/detail/program_execution_services_amr_backend.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_spatial.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_field_runtime_public.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_flux_expression_public.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_spatial_operations.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_public.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_field_runtime_solver.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_field_runtime_private.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_flux_expression_polynomial.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_cell_temporal_configuration.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_definitions.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_capacity.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_flux_basis_definitions.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_flux_expression_definitions.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_cell_temporal_level_runtime.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_field_runtime_definitions.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_flux_expression_services.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_cell_temporal_runtime.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_subcycling_runtime.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_flux_basis.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_flux_expression_runtime.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_runtime.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_field_runtime_services.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_services.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_spatial_operations_services.hpp",
     }
+)
+CONTEXT_DETAIL_PATHS = frozenset(
+    path for path in CONTEXT_FRAGMENT_PATHS
+    if path != "pops/runtime/program/detail/program_execution_services_amr_backend.hpp"
+)
+RETIRED_CONTEXT_ROOT = (
+    REPO_ROOT / "include" / "pops" / "runtime" / "program" / "amr_program_context.hpp"
 )
 _LOCAL_INCLUDE_RE = re.compile(
     r'^\s*#include\s*(?:<(pops/[^>]+)>|"(pops/[^"]+)")', re.MULTILINE
@@ -63,8 +71,10 @@ def _local_includes(source: str) -> tuple[str, ...]:
 
 
 def _require_classified_context_include(include: str, known: frozenset[str]) -> None:
-    if include not in known and include.startswith("pops/runtime/program/amr_program_context_"):
-        raise AssertionError(f"unclassified AmrProgramContext definition authority: {include}")
+    if include not in known and include.startswith(
+        "pops/runtime/program/detail/program_execution_services_amr_"
+    ):
+        raise AssertionError(f"unclassified ProgramExecutionServices definition authority: {include}")
 
 
 def _context_semantic_source() -> str:
@@ -75,7 +85,7 @@ def _context_semantic_source() -> str:
     sources: list[str] = []
 
     def visit(relative: str) -> None:
-        assert relative not in visiting, f"AmrProgramContext semantic include cycle: {relative}"
+        assert relative not in visiting, f"ProgramExecutionServices semantic include cycle: {relative}"
         if relative in visited:
             return
         visiting.add(relative)
@@ -92,8 +102,22 @@ def _context_semantic_source() -> str:
 
     visit(CONTEXT_ROOT)
     assert visited == known, (
-        "AmrProgramContext semantic closure differs from its classified authorities: "
+        "ProgramExecutionServices semantic closure differs from its classified authorities: "
         f"missing={sorted(known - visited)} extra={sorted(visited - known)}"
+    )
+    detail_dir = REPO_ROOT / "include" / "pops" / "runtime" / "program" / "detail"
+    physical_details = frozenset(
+        path.relative_to(REPO_ROOT / "include").as_posix()
+        for path in detail_dir.glob("program_execution_services_amr_*.hpp")
+    )
+    assert len(CONTEXT_DETAIL_PATHS) == 24
+    assert physical_details == CONTEXT_FRAGMENT_PATHS, (
+        "ProgramExecutionServices AMR detail inventory differs from its authenticated closure: "
+        f"missing={sorted(CONTEXT_FRAGMENT_PATHS - physical_details)} "
+        f"extra={sorted(physical_details - CONTEXT_FRAGMENT_PATHS)}"
+    )
+    assert not RETIRED_CONTEXT_ROOT.exists(), (
+        "the retired public AMR Program context header must not be recreated"
     )
     return "\n".join(sources)
 
@@ -103,11 +127,13 @@ def test_context_include_parser_authenticates_both_delimiters_and_hidden_fragmen
         "pops/a.hpp",
         "pops/b.hpp",
     )
-    hidden = _local_includes('#include "pops/runtime/program/amr_program_context_hidden.inc"')
+    hidden = _local_includes(
+        '#include "pops/runtime/program/detail/program_execution_services_amr_hidden.hpp"'
+    )
     try:
         _require_classified_context_include(hidden[0], CONTEXT_FRAGMENT_PATHS)
     except AssertionError as error:
-        assert "unclassified AmrProgramContext definition authority" in str(error)
+        assert "unclassified ProgramExecutionServices definition authority" in str(error)
     else:
         raise AssertionError("quoted hidden fragment bypassed AMR Program classification")
 
@@ -232,7 +258,13 @@ def test_parser_finds_only_explicit_known_deferrals():
     assert header == set()
     assert module.header_deferred_methods() == frozenset()
     assert "unqualified_coupled_solve" not in module.DEFERRED_GROUPS
-    assert module.deferred_groups()["schedule_cache"] == ("pending:checkpointed_hierarchy_cache")
+    assert module.deferred_groups()["schedule_cache"] == "green"
+    cache_manager = (
+        REPO_ROOT / "include" / "pops" / "runtime" / "program" / "cache_manager.hpp"
+    ).read_text(encoding="utf-8")
+    assert "using ProgramCacheSlot = std::size_t;" in cache_manager
+    assert "std::vector<CacheSlot<Dim>> slots_;" in cache_manager
+    assert "checkpoint_slot_indices()" in cache_manager
     context_source = _context_semantic_source()
     for provider_method in (
         "cache_should_update",
@@ -242,7 +274,24 @@ def test_parser_finds_only_explicit_known_deferrals():
         "cache_effective_dt",
     ):
         assert provider_method in context_source
-    assert 'unavailable_("checkpointed AMR scheduler cache provider")' in context_source
+    cache_provider_source = (
+        REPO_ROOT
+        / "include"
+        / "pops"
+        / "runtime"
+        / "program"
+        / "detail"
+        / "program_execution_services_amr_history_checkpoint_public.hpp"
+    ).read_text(encoding="utf-8")
+    for cache_operation in (
+        "runtime_state().cache_.is_due(slot, macro_step(), every_n)",
+        "runtime_state().cache_.store(slot, scratch, macro_step())",
+        "runtime_state().cache_.restore_into(slot, scratch)",
+        "runtime_state().cache_.accumulate_dt(slot, dt)",
+        "runtime_state().cache_.effective_dt(slot, dt)",
+    ):
+        assert cache_operation in cache_provider_source
+    assert 'unavailable_("checkpointed AMR scheduler cache provider")' not in cache_provider_source
     assert "neg_div_flux_into" not in header
     assert "solve_fields_from_state_at_fine_level" not in header
     assert "solve_fields_from_state_default" not in header
@@ -253,22 +302,27 @@ def test_parser_finds_only_explicit_known_deferrals():
         _context_semantic_source()
     )
     context_header = context_source
-    assert context_header.count("SolveOutcome solve_fields_from_blocks_at(") == 1
-    multi_block_route = context_header.split("SolveOutcome solve_fields_from_blocks_at(", 1)[
+    assert context_header.count("SolveOutcome solve_fields_from_blocks_at(") == 3
+    multi_block_route = context_header.rsplit("SolveOutcome solve_fields_from_blocks_at(", 1)[
         1
     ].split("SolveOutcome solve_default_field_on_coarse_level() const", 1)[0]
-    assert "all_reduce_max(local_error ? 1L : 0L, lane)" in multi_block_route
-    assert "all_ranks_agree_exact_ordered_byte_pairs" in multi_block_route
-    assert 'request.text("pops.amr-program.simultaneous-field-route")' in multi_block_route
-    assert ".scalar(value_id)" in multi_block_route
-    assert ".presence(override_value.state != nullptr)" in multi_block_route
-    assert "field_layout_contract(*override_value.state)" in multi_block_route
-    multi_local_consensus = multi_block_route.index("all_reduce_max(local_error ? 1L : 0L, lane)")
-    multi_byte_consensus = multi_block_route.index("all_ranks_agree_exact_ordered_byte_pairs")
+    assert 'require_boundary_point_(point, "AMR Program simultaneous field solve")' in (
+        multi_block_route
+    )
+    assert "overrides.size() != route.program_blocks.size()" in multi_block_route
+    assert "std::fill(route.runtime_stages.begin(), route.runtime_stages.end(), nullptr)" in (
+        multi_block_route
+    )
+    assert "std::find(route.unique_stages.begin(), route.unique_stages.end(), override_value.state)" in (
+        multi_block_route
+    )
+    assert "require_same_field_contract_(" in multi_block_route
     multi_facade = multi_block_route.index("facade_->solve_program_field_from_blocks_at(")
-    multi_cache = multi_block_route.index("generated_field_routes_.insert(")
-    assert multi_local_consensus < multi_byte_consensus < multi_facade < multi_cache
-    scalar_candidate_route = context_header.split("void evaluate_with_field_state_at(", 1)[1].split(
+    assert multi_block_route.index("overrides.size() != route.program_blocks.size()") < multi_facade
+    assert multi_block_route.index("std::fill(route.runtime_stages.begin()") < multi_facade
+    assert multi_block_route.index("std::find(route.unique_stages.begin()") < multi_facade
+    assert multi_block_route.index("require_same_field_contract_(") < multi_facade
+    scalar_candidate_route = context_header.rsplit("void evaluate_with_field_state_at(", 1)[1].split(
         "[[nodiscard]] SolveOutcome solve_fields_from_state_at(", 1
     )[0]
     assert 'request.text("pops.amr-program.scalar-field-candidate-route")' in (
@@ -282,7 +336,7 @@ def test_parser_finds_only_explicit_known_deferrals():
         < scalar_candidate_route.index("facade_->with_program_field_candidate_at(")
     )
 
-    single_state_route = context_header.split("SolveOutcome solve_fields_from_state_at(", 1)[
+    single_state_route = context_header.rsplit("SolveOutcome solve_fields_from_state_at(", 1)[
         1
     ].split("SolveOutcome solve_fields_from_blocks_at(", 1)[0]
     assert 'request.text("pops.amr-program.single-field-route")' in single_state_route
@@ -293,7 +347,7 @@ def test_parser_finds_only_explicit_known_deferrals():
         < single_state_route.index("all_ranks_agree_exact_ordered_byte_pairs")
         < single_state_route.index("facade_->solve_program_field_from_blocks_at(")
     )
-    assert "solve_fields_from_blocks_at" in UNIFORM_CONTEXT_HPP.read_text(encoding="utf-8")
+    assert "solve_fields_from_blocks_at" in CONTEXT_HPP.read_text(encoding="utf-8")
     assert "program_execution_solve_generated_field_from_blocks_outcome_" not in context_header
     assert "facade_->solve_program_field_from_blocks_at(" in context_header
     assert "named_solve_reports_" not in context_header
@@ -312,7 +366,7 @@ def test_projection_is_green_after_the_real_amr_implementation_landed():
 def test_named_flux_support_matches_the_resolved_interface_envelope():
     module = _load_support_module()
     context_header = _context_semantic_source()
-    named_route = context_header.split("void neg_div_named_flux_into(", 1)[1].split(
+    named_route = context_header.rsplit("void neg_div_named_flux_into(", 1)[1].split(
         "void apply_projection(", 1
     )[0]
     named_envelope = context_header.split("void require_named_flux_execution_envelope_(", 1)[
@@ -340,7 +394,9 @@ def test_named_flux_support_matches_the_resolved_interface_envelope():
 
 def test_generated_programs_cannot_use_coarse_injection_as_a_fine_solve():
     header = _context_semantic_source()
-    assert "SolveOutcome solve_fields() const" not in header
+    # The unified authority deliberately retains the Uniform no-argument route.  The AMR
+    # generated path must nevertheless use the exact-ranked state-at seam below.
+    assert header.count("SolveOutcome solve_fields() const") == 1
     assert header.count("SolveOutcome solve_default_field_on_coarse_level() const") == 1
     coarse_route = _extract_method_body(
         header, "SolveOutcome solve_default_field_on_coarse_level() const"

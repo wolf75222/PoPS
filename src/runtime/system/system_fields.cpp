@@ -474,7 +474,7 @@ template <int Dim>
 void System<Dim>::validate_program_state_publication_candidate(
     int block, const MultiFab<Dim>& candidate) const {
   (void)validate_program_state_publication_candidate_(block, candidate,
-                                                      prepared_boundary_execution_lane());
+                                                      program_prepared_boundary_execution_lane_());
 }
 
 template <int Dim>
@@ -553,6 +553,7 @@ void System<Dim>::set_primitive_state(const std::string& name,
 
 template <int Dim>
 std::vector<double> System<Dim>::get_primitive_state(const std::string& name) {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   typename Impl::Species& block = p_->find(name);
   if (!block.batch_cons_to_prim)
     throw std::runtime_error(
@@ -601,7 +602,7 @@ void System<Dim>::set_poisson(const std::string& rhs, const std::string& solver,
 
 template <int Dim>
 SolveReport System<Dim>::solve_fields_in_place_() {
-  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  const ExecutionLane& lane = program_prepared_boundary_execution_lane_();
   const auto field = prepare_default_field<Dim>(*p_, lane);
   p_->active_field_ = field;
   return solve_field_candidate<Dim>(*p_, field->identity(), field, select_states<Dim>(p_->sp, {}),
@@ -615,7 +616,7 @@ SolveReport System<Dim>::solve_fields_from_state_in_place_(int block_index,
     throw std::out_of_range("System field stage block index is outside the registry");
   std::vector<const MultiFab<Dim>*> overrides(p_->sp.size(), nullptr);
   overrides[static_cast<std::size_t>(block_index)] = &stage;
-  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  const ExecutionLane& lane = program_prepared_boundary_execution_lane_();
   const auto field = prepare_default_field<Dim>(*p_, lane);
   p_->active_field_ = field;
   return solve_field_candidate<Dim>(*p_, field->identity(), field,
@@ -627,7 +628,7 @@ SolveReport System<Dim>::solve_fields_from_state_at_in_place_(
     const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
     int block_index, const MultiFab<Dim>& stage) {
   require_exact_field_evaluation_request<Dim>(point, provider_slot, "single-stage",
-                                              prepared_boundary_execution_lane());
+                                              program_prepared_boundary_execution_lane_());
   if (provider_slot == "pops.system.default-field")
     return solve_fields_from_state_in_place_(block_index, stage);
   return solve_fields_from_state_in_place_(provider_slot, block_index, stage);
@@ -636,7 +637,7 @@ SolveReport System<Dim>::solve_fields_from_state_at_in_place_(
 template <int Dim>
 SolveReport System<Dim>::solve_fields_from_blocks_in_place_(
     const std::vector<const MultiFab<Dim>*>& stages) {
-  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  const ExecutionLane& lane = program_prepared_boundary_execution_lane_();
   const auto field = prepare_default_field<Dim>(*p_, lane);
   p_->active_field_ = field;
   return solve_field_candidate<Dim>(*p_, field->identity(), field,
@@ -662,7 +663,7 @@ SolveReport System<Dim>::solve_fields_from_blocks_in_place_(
   if (found == p_->named_fields_.end())
     throw std::out_of_range("System named elliptic field is not registered: " + field);
   p_->active_field_ = found->second;
-  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  const ExecutionLane& lane = program_prepared_boundary_execution_lane_();
   return solve_field_candidate<Dim>(*p_, provider_slot, found->second,
                                     select_states<Dim>(p_->sp, stages), lane);
 }
@@ -672,14 +673,14 @@ SolveReport System<Dim>::solve_fields_from_blocks_at_in_place_(
     const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
     const std::vector<const MultiFab<Dim>*>& stages) {
   require_exact_field_evaluation_request<Dim>(point, field, "simultaneous-stages",
-                                              prepared_boundary_execution_lane());
+                                              program_prepared_boundary_execution_lane_());
   return solve_fields_from_blocks_in_place_(field, stages);
 }
 
 template <int Dim>
 SolveOutcome System<Dim>::run_field_publication_outcome_(
     const std::function<SolveReport()>& solve) {
-  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  const ExecutionLane& lane = program_prepared_boundary_execution_lane_();
   begin_field_publication_outcome_();
   SolveReport report;
   std::exception_ptr local_error;
@@ -699,7 +700,7 @@ SolveOutcome System<Dim>::run_field_publication_outcome_(
 
 template <int Dim>
 void System<Dim>::begin_field_publication_outcome_() {
-  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  const ExecutionLane& lane = program_prepared_boundary_execution_lane_();
   const bool active = p_->active_field_ || p_->active_field_provider_candidate_ ||
                       p_->active_field_auxiliary_publication_ ||
                       !p_->active_field_stale_auxiliary_providers_.empty();
@@ -710,7 +711,7 @@ void System<Dim>::begin_field_publication_outcome_() {
 
 template <int Dim>
 SolveOutcome System<Dim>::stage_field_publication_outcome_(SolveReport report) {
-  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  const ExecutionLane& lane = program_prepared_boundary_execution_lane_();
   if (!solve_report_is_publishable(report, p_->active_field_
                                                ? p_->active_field_->maximum_iterations()
                                                : std::numeric_limits<int>::max())) {
@@ -755,13 +756,13 @@ SolveOutcome System<Dim>::stage_field_publication_outcome_(SolveReport report) {
 
 template <int Dim>
 void System<Dim>::prepare_default_field_publication_storage_() {
-  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  const ExecutionLane& lane = program_prepared_boundary_execution_lane_();
   (void)prepare_default_field<Dim>(*p_, lane);
 }
 
 template <int Dim>
 void System<Dim>::prepare_named_field_publication_storage_(const std::string& field) {
-  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  const ExecutionLane& lane = program_prepared_boundary_execution_lane_();
   if (!all_ranks_agree_exact_ordered_byte_pairs({{"system-named-field-publication", field}}, lane))
     throw std::invalid_argument("System named field request differs between MPI ranks");
   if (p_->named_fields_.find(p_->resolve_named_field_slot(field)) == p_->named_fields_.end())
@@ -770,12 +771,14 @@ void System<Dim>::prepare_named_field_publication_storage_(const std::string& fi
 
 template <int Dim>
 SolveOutcome System<Dim>::solve_fields() {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   prepare_default_field_publication_storage_();
   return run_field_publication_outcome_([this] { return solve_fields_in_place_(); });
 }
 
 template <int Dim>
 SolveOutcome System<Dim>::solve_fields_from_state(int block_index, const MultiFab<Dim>& stage) {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   prepare_default_field_publication_storage_();
   return run_field_publication_outcome_([this, block_index, &stage] {
     return solve_fields_from_state_in_place_(block_index, stage);
@@ -786,6 +789,7 @@ template <int Dim>
 SolveOutcome System<Dim>::solve_fields_from_state_at(
     const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
     int block_index, const MultiFab<Dim>& stage) {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return run_field_publication_outcome_([this, &point, &provider_slot, block_index, &stage] {
     return solve_fields_from_state_at_in_place_(point, provider_slot, block_index, stage);
   });
@@ -794,6 +798,7 @@ SolveOutcome System<Dim>::solve_fields_from_state_at(
 template <int Dim>
 SolveOutcome System<Dim>::solve_fields_from_blocks(
     const std::vector<const MultiFab<Dim>*>& stages) {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   prepare_default_field_publication_storage_();
   return run_field_publication_outcome_(
       [this, &stages] { return solve_fields_from_blocks_in_place_(stages); });
@@ -802,6 +807,7 @@ SolveOutcome System<Dim>::solve_fields_from_blocks(
 template <int Dim>
 SolveOutcome System<Dim>::solve_fields_from_state(const std::string& field, int block_index,
                                                   const MultiFab<Dim>& stage) {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   prepare_named_field_publication_storage_(field);
   return run_field_publication_outcome_([this, &field, block_index, &stage] {
     return solve_fields_from_state_in_place_(field, block_index, stage);
@@ -811,9 +817,69 @@ SolveOutcome System<Dim>::solve_fields_from_state(const std::string& field, int 
 template <int Dim>
 SolveOutcome System<Dim>::solve_fields_from_blocks(
     const std::string& field, const std::vector<const MultiFab<Dim>*>& stages) {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   prepare_named_field_publication_storage_(field);
   return run_field_publication_outcome_(
       [this, &field, &stages] { return solve_fields_from_blocks_in_place_(field, stages); });
+}
+
+template <int Dim>
+SolveOutcome System<Dim>::program_solve_fields_() {
+  prepare_default_field_publication_storage_();
+  return run_field_publication_outcome_([this] { return solve_fields_in_place_(); });
+}
+
+template <int Dim>
+SolveOutcome System<Dim>::program_solve_fields_from_state_(int block_index,
+                                                           const MultiFab<Dim>& stage) {
+  prepare_default_field_publication_storage_();
+  return run_field_publication_outcome_([this, block_index, &stage] {
+    return solve_fields_from_state_in_place_(block_index, stage);
+  });
+}
+
+template <int Dim>
+SolveOutcome System<Dim>::program_solve_fields_from_state_at_(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+    int block_index, const MultiFab<Dim>& stage) {
+  return run_field_publication_outcome_([this, &point, &provider_slot, block_index, &stage] {
+    return solve_fields_from_state_at_in_place_(point, provider_slot, block_index, stage);
+  });
+}
+
+template <int Dim>
+SolveOutcome System<Dim>::program_solve_fields_from_blocks_(
+    const std::vector<const MultiFab<Dim>*>& stages) {
+  prepare_default_field_publication_storage_();
+  return run_field_publication_outcome_(
+      [this, &stages] { return solve_fields_from_blocks_in_place_(stages); });
+}
+
+template <int Dim>
+SolveOutcome System<Dim>::program_solve_fields_from_state_(const std::string& field,
+                                                           int block_index,
+                                                           const MultiFab<Dim>& stage) {
+  prepare_named_field_publication_storage_(field);
+  return run_field_publication_outcome_([this, &field, block_index, &stage] {
+    return solve_fields_from_state_in_place_(field, block_index, stage);
+  });
+}
+
+template <int Dim>
+SolveOutcome System<Dim>::program_solve_fields_from_blocks_(
+    const std::string& field, const std::vector<const MultiFab<Dim>*>& stages) {
+  prepare_named_field_publication_storage_(field);
+  return run_field_publication_outcome_(
+      [this, &field, &stages] { return solve_fields_from_blocks_in_place_(field, stages); });
+}
+
+template <int Dim>
+SolveOutcome System<Dim>::program_solve_fields_from_blocks_at_(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
+    const std::vector<const MultiFab<Dim>*>& stages) {
+  return run_field_publication_outcome_([this, &point, &field, &stages] {
+    return solve_fields_from_blocks_at_in_place_(point, field, stages);
+  });
 }
 
 template <int Dim>
@@ -826,7 +892,7 @@ void System<Dim>::begin_field_publication_transaction() {
 
 template <int Dim>
 void System<Dim>::stage_field_publication_candidate() {
-  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  const ExecutionLane& lane = program_prepared_boundary_execution_lane_();
   std::vector<runtime::system::AuxiliaryComponentKey> output_keys;
   std::string output_contract;
   std::exception_ptr preflight_error;
@@ -998,12 +1064,13 @@ bool System<Dim>::field_publication_transaction_active_() const noexcept {
 
 template <int Dim>
 void System<Dim>::set_potential(const std::vector<double>& potential_values) {
-  auto field = prepare_default_field<Dim>(*p_, prepared_boundary_execution_lane());
+  auto field = prepare_default_field<Dim>(*p_, program_prepared_boundary_execution_lane_());
   write_global(field->accepted_potential_for_restore(), p_->dom, potential_values, 1);
 }
 
 template <int Dim>
 std::vector<std::string> System<Dim>::field_provider_slots() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   std::vector<std::string> result;
   if (p_->default_field_)
     result.push_back("pops.system.default-field");
@@ -1013,6 +1080,7 @@ std::vector<std::string> System<Dim>::field_provider_slots() const {
 
 template <int Dim>
 std::vector<std::string> System<Dim>::configured_field_provider_slots() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   std::vector<std::string> result;
   if (p_->default_field_ || default_field_has_prepared_rhs(*p_))
     result.push_back("pops.system.default-field");
@@ -1025,7 +1093,7 @@ void System<Dim>::set_field_potential(const std::string& provider_slot,
                                       const std::vector<double>& potential_values) {
   std::shared_ptr<runtime::system::ExactNamedField<Dim>> field;
   if (provider_slot == "pops.system.default-field")
-    field = prepare_default_field<Dim>(*p_, prepared_boundary_execution_lane());
+    field = prepare_default_field<Dim>(*p_, program_prepared_boundary_execution_lane_());
   else {
     const auto found = p_->named_fields_.find(provider_slot);
     if (found == p_->named_fields_.end())
@@ -1037,6 +1105,7 @@ void System<Dim>::set_field_potential(const std::string& provider_slot,
 
 template <int Dim>
 std::vector<double> System<Dim>::eval_rhs(const std::string& name) {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   typename Impl::Species& block = p_->find(name);
   MultiFab<Dim> residual(p_->ba, p_->dm, p_->local_rank, block.ncomp, Extent<Dim>{});
   block_rhs_into(p_->index(name), block.U, residual);
@@ -1046,6 +1115,7 @@ std::vector<double> System<Dim>::eval_rhs(const std::string& name) {
 template <int Dim>
 double System<Dim>::reduce_component(const std::string& block_name, const std::string& kind,
                                      int component) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   const typename Impl::Species& block = p_->find(block_name);
   if (component < 0 || component >= block.ncomp)
     throw std::out_of_range("System reduction component is outside the block state");
@@ -1095,6 +1165,16 @@ MultiFab<Dim>& System<Dim>::register_history(const std::string& name, int lag, i
                                              const std::string& space_identity,
                                              const std::string& clock_identity,
                                              const std::string& interpolation_identity) {
+  [[maybe_unused]] auto accepted_write = p_->acquire_accepted_write_lease();
+  return program_register_history_(name, lag, ncomp, owner, state_identity, space_identity,
+                                   clock_identity, interpolation_identity);
+}
+
+template <int Dim>
+MultiFab<Dim>& System<Dim>::program_register_history_(
+    const std::string& name, int lag, int ncomp, int owner, const std::string& state_identity,
+    const std::string& space_identity, const std::string& clock_identity,
+    const std::string& interpolation_identity) {
   if (lag < 1 || p_->sp.empty())
     throw std::invalid_argument("System history requires a block and lag >= 1");
   const bool qualified = owner >= 0;
@@ -1150,7 +1230,13 @@ MultiFab<Dim>& System<Dim>::register_history(const std::string& name, int lag, i
 }
 
 template <int Dim>
-MultiFab<Dim>& System<Dim>::read_history(const std::string& name, int lag) {
+AcceptedMultiFabReadView<Dim> System<Dim>::read_history(const std::string& name, int lag) {
+  auto accepted_read = p_->acquire_accepted_read_lease();
+  return AcceptedMultiFabReadView<Dim>(std::move(accepted_read), &program_read_history_(name, lag));
+}
+
+template <int Dim>
+MultiFab<Dim>& System<Dim>::program_read_history_(const std::string& name, int lag) {
   auto& histories = p_->program_.hist_;
   const auto found = histories.histories.find(name);
   if (found == histories.histories.end() || lag < 0 || lag >= histories.depth[name])
@@ -1162,6 +1248,7 @@ MultiFab<Dim>& System<Dim>::read_history(const std::string& name, int lag) {
 
 template <int Dim>
 std::vector<double> System<Dim>::get_state(const std::string& name) {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   const typename Impl::Species& block = p_->find(name);
   return gather_local_compact(block.U, block.ncomp);
 }
@@ -1355,7 +1442,7 @@ std::int64_t System<Dim>::set_analytic_mapped_state(
   const std::int64_t count =
       analytic::materialize_discrete_mapped_state(candidate, p_->geom, programs, resolved_inputs);
   publish_recovered_candidate<Dim>(*block, candidate, "System::set_analytic_mapped_state",
-                                   prepared_boundary_execution_lane());
+                                   program_prepared_boundary_execution_lane_());
   return count;
 }
 
@@ -1374,18 +1461,20 @@ std::int64_t System<Dim>::set_analytic_gaussian_state(const std::string& name,
       candidate, p_->geom, center, static_cast<Real>(background), static_cast<Real>(amplitude),
       static_cast<Real>(inverse_width));
   publish_recovered_candidate<Dim>(block, candidate, "System::set_analytic_gaussian_state",
-                                   prepared_boundary_execution_lane());
+                                   program_prepared_boundary_execution_lane_());
   return count;
 }
 
 template <int Dim>
 int System<Dim>::n_vars(const std::string& name) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->find(name).ncomp;
 }
 
 template <int Dim>
 std::vector<std::string> System<Dim>::variable_names(const std::string& name,
                                                      const std::string& kind) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   const typename Impl::Species& block = p_->find(name);
   if (kind == "conservative")
     return block.cons_vars.names;
@@ -1397,6 +1486,7 @@ std::vector<std::string> System<Dim>::variable_names(const std::string& name,
 template <int Dim>
 std::vector<std::string> System<Dim>::variable_roles(const std::string& name,
                                                      const std::string& kind) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   const typename Impl::Species& block = p_->find(name);
   const VariableSet* variables = kind == "conservative" ? &block.cons_vars
                                  : kind == "primitive"  ? &block.prim_vars
@@ -1412,48 +1502,62 @@ std::vector<std::string> System<Dim>::variable_roles(const std::string& name,
 
 template <int Dim>
 double System<Dim>::block_gamma(const std::string& name) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->find(name).gamma;
 }
 
 template <int Dim>
 double System<Dim>::mass(const std::string& name) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return static_cast<double>(
       reduce_sum(p_->find(name).U, 0, embedded_cell_measure<Dim>(p_->embedded_boundary_)));
 }
 
 template <int Dim>
 std::vector<double> System<Dim>::density(const std::string& name) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return gather_local_compact(p_->find(name).U, 1);
 }
 
 template <int Dim>
 std::vector<double> System<Dim>::potential() {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return gather_local_compact(
-      prepare_default_field<Dim>(*p_, prepared_boundary_execution_lane())->accepted_potential(), 1);
+      prepare_default_field<Dim>(*p_, program_prepared_boundary_execution_lane_())
+          ->accepted_potential(),
+      1);
 }
 
 template <int Dim>
 std::vector<double> System<Dim>::density_global(const std::string& name) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return gather_global(p_->find(name).U, p_->dom, 1);
 }
 
 template <int Dim>
 std::vector<double> System<Dim>::state_global(const std::string& name) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   const typename Impl::Species& block = p_->find(name);
   return gather_global(block.U, p_->dom, block.ncomp);
 }
 
 template <int Dim>
 std::vector<double> System<Dim>::potential_global() {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return gather_global(
-      prepare_default_field<Dim>(*p_, prepared_boundary_execution_lane())->accepted_potential(),
+      prepare_default_field<Dim>(*p_, program_prepared_boundary_execution_lane_())
+          ->accepted_potential(),
       p_->dom, 1);
 }
 
 template <int Dim>
 std::vector<double> System<Dim>::field_potential_global(const std::string& provider_slot) {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   if (provider_slot == "pops.system.default-field")
-    return potential_global();
+    return gather_global(
+        prepare_default_field<Dim>(*p_, program_prepared_boundary_execution_lane_())
+            ->accepted_potential(),
+        p_->dom, 1);
   const auto found = p_->named_fields_.find(provider_slot);
   if (found == p_->named_fields_.end())
     throw std::out_of_range("System field provider slot is unknown: " + provider_slot);
@@ -1463,6 +1567,7 @@ std::vector<double> System<Dim>::field_potential_global(const std::string& provi
 template <int Dim>
 std::vector<OutputPiece<Dim>> System<Dim>::output_state_local_pieces(const std::string& name,
                                                                      int level) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   if (level != 0)
     throw std::out_of_range("Uniform System output has only level zero");
   return output_local_pieces(p_->find(name).U, 0, false);
@@ -1471,11 +1576,13 @@ std::vector<OutputPiece<Dim>> System<Dim>::output_state_local_pieces(const std::
 template <int Dim>
 std::vector<OutputPiece<Dim>> System<Dim>::output_field_local_pieces(
     const std::string& provider_slot, int level) {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   if (level != 0)
     throw std::out_of_range("Uniform System output has only level zero");
   if (provider_slot == "pops.system.default-field")
     return output_local_pieces(
-        prepare_default_field<Dim>(*p_, prepared_boundary_execution_lane())->accepted_potential(),
+        prepare_default_field<Dim>(*p_, program_prepared_boundary_execution_lane_())
+            ->accepted_potential(),
         0, false);
   const auto found = p_->named_fields_.find(provider_slot);
   if (found == p_->named_fields_.end())
@@ -1486,6 +1593,7 @@ std::vector<OutputPiece<Dim>> System<Dim>::output_field_local_pieces(
 template <int Dim>
 std::vector<OutputPiece<Dim>> System<Dim>::output_embedded_boundary_local_pieces(
     const std::string& name, int level) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   if (level != 0)
     throw std::out_of_range("Uniform System output has only level zero");
   return output_local_pieces(embedded_boundary_output_field<Dim>(*p_, name), 0, false);
@@ -1495,29 +1603,53 @@ template <int Dim>
 std::vector<OutputPiece<Dim>> System<Dim>::output_state_root_pieces(const ObserverMpiLane& lane,
                                                                     const std::string& name,
                                                                     int level) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return output_pieces_to_root(lane,
                                detail::output_collective_identity("System", "state", name, level),
-                               [&] { return output_state_local_pieces(name, level); });
+                               [&] {
+                                 if (level != 0)
+                                   throw std::out_of_range("Uniform System output has only level zero");
+                                 return output_local_pieces(p_->find(name).U, 0, false);
+                               });
 }
 
 template <int Dim>
 std::vector<OutputPiece<Dim>> System<Dim>::output_field_root_pieces(
     const ObserverMpiLane& lane, const std::string& provider_slot, int level) {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return output_pieces_to_root(
       lane, detail::output_collective_identity("System", "field", provider_slot, level),
-      [&] { return output_field_local_pieces(provider_slot, level); });
+      [&] {
+        if (level != 0)
+          throw std::out_of_range("Uniform System output has only level zero");
+        if (provider_slot == "pops.system.default-field")
+          return output_local_pieces(
+              prepare_default_field<Dim>(*p_, program_prepared_boundary_execution_lane_())
+                  ->accepted_potential(),
+              0, false);
+        const auto found = p_->named_fields_.find(provider_slot);
+        if (found == p_->named_fields_.end())
+          throw std::out_of_range("System field provider slot is unknown: " + provider_slot);
+        return output_local_pieces(found->second->accepted_potential(), 0, false);
+      });
 }
 
 template <int Dim>
 std::vector<OutputPiece<Dim>> System<Dim>::output_embedded_boundary_root_pieces(
     const ObserverMpiLane& lane, const std::string& name, int level) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return output_pieces_to_root(
       lane, detail::output_collective_identity("System", "embedded-boundary", name, level),
-      [&] { return output_embedded_boundary_local_pieces(name, level); });
+      [&] {
+        if (level != 0)
+          throw std::out_of_range("Uniform System output has only level zero");
+        return output_local_pieces(embedded_boundary_output_field<Dim>(*p_, name), 0, false);
+      });
 }
 
 template <int Dim>
 std::vector<Box<Dim>> System<Dim>::local_boxes(const std::string& name) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   const MultiFab<Dim>& state = p_->find(name).U;
   std::vector<Box<Dim>> result;
   result.reserve(state.local_size());
@@ -1528,6 +1660,7 @@ std::vector<Box<Dim>> System<Dim>::local_boxes(const std::string& name) const {
 
 template <int Dim>
 std::vector<double> System<Dim>::local_state(const std::string& name, int local_index) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   const typename Impl::Species& block = p_->find(name);
   if (local_index < 0 || static_cast<std::size_t>(local_index) >= block.U.local_size())
     throw std::out_of_range("System local state index is outside the owned patch list");
@@ -1570,6 +1703,21 @@ template SolveReport System<kNativeDimension>::solve_fields_from_blocks_in_place
 template SolveReport System<kNativeDimension>::solve_fields_from_blocks_at_in_place_(
     const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&,
     const std::vector<const MultiFab<kNativeDimension>*>&);
+template SolveOutcome System<kNativeDimension>::program_solve_fields_();
+template SolveOutcome System<kNativeDimension>::program_solve_fields_from_state_(
+    int, const MultiFab<kNativeDimension>&);
+template SolveOutcome System<kNativeDimension>::program_solve_fields_from_state_at_(
+    const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&, int,
+    const MultiFab<kNativeDimension>&);
+template SolveOutcome System<kNativeDimension>::program_solve_fields_from_blocks_(
+    const std::vector<const MultiFab<kNativeDimension>*>&);
+template SolveOutcome System<kNativeDimension>::program_solve_fields_from_state_(
+    const std::string&, int, const MultiFab<kNativeDimension>&);
+template SolveOutcome System<kNativeDimension>::program_solve_fields_from_blocks_(
+    const std::string&, const std::vector<const MultiFab<kNativeDimension>*>&);
+template SolveOutcome System<kNativeDimension>::program_solve_fields_from_blocks_at_(
+    const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&,
+    const std::vector<const MultiFab<kNativeDimension>*>&);
 template SolveOutcome System<kNativeDimension>::solve_fields();
 template SolveOutcome System<kNativeDimension>::solve_fields_from_state(
     int, const MultiFab<kNativeDimension>&);
@@ -1607,8 +1755,13 @@ template MultiFab<kNativeDimension> System<kNativeDimension>::alloc_scalar_field
 template MultiFab<kNativeDimension>& System<kNativeDimension>::register_history(
     const std::string&, int, int, int, const std::string&, const std::string&, const std::string&,
     const std::string&);
-template MultiFab<kNativeDimension>& System<kNativeDimension>::read_history(const std::string&,
-                                                                            int);
+template MultiFab<kNativeDimension>& System<kNativeDimension>::program_register_history_(
+    const std::string&, int, int, int, const std::string&, const std::string&, const std::string&,
+    const std::string&);
+template AcceptedMultiFabReadView<kNativeDimension>
+System<kNativeDimension>::read_history(const std::string&, int);
+template MultiFab<kNativeDimension>& System<kNativeDimension>::program_read_history_(
+    const std::string&, int);
 template std::vector<double> System<kNativeDimension>::get_state(const std::string&);
 template void System<kNativeDimension>::set_state(const std::string&, const std::vector<double>&);
 template std::int64_t System<kNativeDimension>::set_analytic_expression_state(

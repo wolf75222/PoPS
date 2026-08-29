@@ -49,7 +49,7 @@ class _ProgramDump(_ProgramBase):
         )
 
     def dump_cpp_plan(self) -> str:
-        """Return a readable ProgramContext call plan, not generated C++."""
+        """Return a readable ProgramExecutionServices call plan, not generated C++."""
         lines = ["// C++ plan for GeneratedProgram step of %s" % self.name]
         for value in self._values:
             inputs = ", ".join(self._canonical_value(item).name for item in value.inputs)

@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -63,6 +64,26 @@ def _skip_or_xfail_markers(node: ast.AST) -> list[str]:
 def _ctest_suites() -> dict[str, dict]:
     data = tomllib.loads(TEST_MANIFEST.read_text(encoding="utf-8"))
     return {str(row["name"]): row for row in data.get("cpp", {}).get("suite", ())}
+
+
+def _registered_ctest_cases(suite: dict) -> set[str]:
+    """Return the CTest names CMake registers for one declared C++ suite.
+
+    MPI-only entries are manually registered wrapper tests. Ordinary suites with `mpi_variants`
+    retain their discovered serial GoogleTest cases and add wrapper names for the MPI launches.
+    """
+    name = str(suite["name"])
+    if "mpi_rank_parity" in suite:
+        return {name + "_rank_parity"}
+    if "mpi_nproc" in suite:
+        return {"%s_np%d" % (name, int(rank)) for rank in suite["mpi_nproc"]}
+    cases: set[str] = set()
+    for relative in suite.get("sources", ()):
+        source = (ROOT / relative).read_text(encoding="utf-8")
+        for match in re.finditer(r"\bTEST(?:_F)?\s*\(\s*([^,]+)\s*,\s*([^)]+)\s*\)", source):
+            cases.add("%s.%s" % (match.group(1).strip(), match.group(2).strip()))
+    cases.update("%s_np%d" % (name, int(rank)) for rank in suite.get("mpi_variants", ()))
+    return cases
 
 
 def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
@@ -153,6 +174,17 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
             if target not in cpp_suites:
                 errors.append("%s references unknown CTest target %r" % (where, target))
                 continue
+            try:
+                selected = [
+                    case for case in _registered_ctest_cases(cpp_suites[target])
+                    if re.fullmatch(selector, case)
+                ]
+            except re.error as exc:
+                errors.append("%s has invalid CTest regex %r: %s" % (where, selector, exc))
+                continue
+            if len(selected) != 1:
+                errors.append("%s CTest selector %r resolves %d registered case(s): %s" %
+                              (where, selector, len(selected), sorted(selected)))
             for relative in cpp_suites[target].get("sources", ()):
                 source = ROOT / relative
                 if not source.is_file():
@@ -229,9 +261,14 @@ def _run_ctest(build_dir: Path, target: str, selector: str) -> None:
     listed = subprocess.run(
         ["ctest", "--test-dir", str(build_dir), "-N", "-R", selector],
         cwd=ROOT, check=True, text=True, capture_output=True)
-    if "Total Tests: 0" in listed.stdout or "Test #" not in listed.stdout:
-        raise RuntimeError("M2 CTest target %r (%s) is not built in %s"
-                           % (target, selector, build_dir))
+    match = re.search(r"^Total Tests: (\d+)$", listed.stdout, flags=re.MULTILINE)
+    if match is None:
+        raise RuntimeError("M2 CTest discovery did not report a test total for %r (%s)"
+                           % (target, selector))
+    selected_count = int(match.group(1))
+    if selected_count != 1:
+        raise RuntimeError("M2 CTest selector %r for target %r resolved %d tests, expected exactly 1"
+                           % (selector, target, selected_count))
     _run(["ctest", "--test-dir", str(build_dir), "--output-on-failure", "-R", selector])
 
 

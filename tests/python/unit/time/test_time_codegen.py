@@ -1,9 +1,8 @@
 """Temporal codegen (epic ADC-399 / ADC-401, ADC-407): compiler-owned emit_cpp_program.
 
 `emit_cpp_program` lowers the Program IR to the C++ source of a problem.so by a topological SSA walk.
-This test pins the generated source: the stable .so ABI (pops_program_abi_key via the
-POPS_ABI_KEY_LITERAL preprocessor literal -- never the interposable inline -- plus pops_program_name /
-pops_program_hash / pops_install_program), the Forward-Euler body, and that a multi-stage scheme
+This test pins the generated source: the stable v5 candidate entry, the Forward-Euler body, and that
+a multi-stage scheme
 (SSPRK2) now lowers (a scratch state + a second rhs + a lincomb commit). Multi-block (ADC-426) now
 lowers too -- N P.state / N P.commit, each op routed to its block index; the SIMULTANEOUS multi-target
 solve_fields_from_blocks lowers to ctx.solve_fields_from_blocks_at (Spec 3 crit 24, ADC-457/ADC-759).
@@ -96,12 +95,29 @@ def test_forward_euler_abi(t):
     P = _forward_euler(t)
     src = _emit(P)
     for tok in ('extern "C"', "POPS_RUNTIME_SHARED_EXCEPTION_ABI", "POPS_ABI_KEY_LITERAL",
-                "pops_program_abi_key", "pops_program_name",
-                "pops_program_hash", "pops_install_program",
-                "make_program_execution_provider(sys)"):
+                "pops_install_program", "program_candidate_prepare",
+                "kProgramCandidateBlocks", "kProgramCandidateParameters",
+                "kProgramCandidateOperatorAuthorities", "kProgramCandidateResourcePlan",
+                "descriptor.boundary_routes = kProgramCandidateBoundaryRoutes"):
         assert tok in src, "generated source missing %r" % tok
+    prepare = src.split("bool program_candidate_prepare", 1)[1].split(
+        'extern "C" bool pops_install_program', 1
+    )[0]
+    inspect = src.split('extern "C" bool pops_install_program', 1)[1]
+    assert (
+        "make_program_execution_provider<pops::kNativeDimension>(host->preparation)"
+        in prepare
+    )
+    assert "make_program_execution_provider" not in inspect
     assert '"forward_euler_program"' in src, "program name not embedded"
     assert P._ir_hash() in src, "IR hash not embedded (cache/restart key)"
+    # Explicit negative assertions: retired dynamic Program names may not reappear in v5 codegen.
+    for retired in (
+        "pops_program_abi_key", "pops_program_name", "pops_program_hash",
+        "pops_program_block_count", "pops_program_param_count",
+        "pops_program_operator_authority_count", "pops_program_history_replay_authority_count",
+    ):
+        assert retired not in src, "v5 descriptor must replace auxiliary export %r" % retired
 
 
 def test_forward_euler_algorithm(t):
@@ -157,7 +173,7 @@ def test_canonical_ssprk_amr_codegen_preserves_exact_distinct_ledger_weights(t):
 
 def test_includes_present(t):
     src = _emit(_forward_euler(t))
-    for inc in ("pops/runtime/program/program_context.hpp",
+    for inc in ("pops/runtime/program/program_execution_services.hpp",
                 "pops/runtime/dynamic/abi_key.hpp",
                 "pops/mesh/storage/multifab.hpp"):
         assert ("#include <%s>" % inc) in src, "missing #include <%s>" % inc

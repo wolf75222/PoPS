@@ -162,7 +162,7 @@ def test_history_ring_is_materialized_before_program_install():
 
     source = emit_cpp_program(program)
     registration = source.index("ctx.register_history(")
-    install = source.index("ctx.install(")
+    install = source.index("state->step = [ctx_owner = state->ctx_owner](double dt)")
     assert registration < install
 
 

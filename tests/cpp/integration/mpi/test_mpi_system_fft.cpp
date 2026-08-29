@@ -324,8 +324,12 @@ bool verify_system_fft_materialization() {
     state[static_cast<std::size_t>(Dim + 1) * cells + cell] = 2.5;
   }
   system.set_state("gas", state);
-  const pops::SolveReport report =
-      pops::consume_solve_outcome(system.solve_fields_from_state(field, 0, system.block_state(0)));
+  const pops::MultiFab<Dim> accepted_state = [&] {
+    const auto accepted_view = system.block_state(0);
+    return pops::MultiFab<Dim>(*accepted_view.get());
+  }();
+  const pops::SolveReport report = pops::consume_solve_outcome(
+      system.solve_fields_from_state(field, 0, accepted_state));
   const std::vector<double> potential = system.auxiliary_component(output_key);
   bool finite_nonzero = !potential.empty();
   double maximum = 0.0;

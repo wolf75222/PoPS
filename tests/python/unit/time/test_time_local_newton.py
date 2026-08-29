@@ -598,15 +598,34 @@ def section_b(t):
             )
             for name in native.history_names()
         )
-        caches = tuple(
-            (
-                node,
-                native.program_cache_name(node),
-                native.program_cache_last_update_step(node),
-                native.program_cache_accumulated_dt(node),
-                array_fingerprint(native.program_cache_global(node)),
+        cache_slots = tuple(int(slot) for slot in native.program_cache_slots())
+        cache_rows = []
+        for slot in cache_slots:
+            valid = bool(native.program_cache_valid(slot))
+            cold = bool(native.program_cache_cold(slot))
+            payload = None
+            if valid:
+                payload = (
+                    int(native.program_cache_ncomp(slot)),
+                    int(native.program_cache_ngrow(slot)),
+                    array_fingerprint(native.program_cache_global(slot)),
+                )
+            cache_rows.append(
+                (
+                    slot,
+                    str(native.program_cache_name(slot)),
+                    valid,
+                    cold,
+                    int(native.program_cache_last_update_step(slot)),
+                    float(native.program_cache_accumulated_dt(slot)),
+                    payload,
+                )
             )
-            for node in native.program_cache_nodes()
+        caches = (
+            cache_slots,
+            str(native.program_cache_plan_schema()),
+            str(native.program_cache_plan_digest()),
+            tuple(cache_rows),
         )
         temporal = sim._temporal_restart_state
         return {

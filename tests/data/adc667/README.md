@@ -19,10 +19,10 @@ qualified field-provider state. Tests decode the base64 without altering the
 archive bytes and must never regenerate it from a current payload. A complete
 offline migration therefore needs an explicit, version-reviewed mapping for
 those absent facts. `test_checkpoint_migration.py` supplies that schema-4 mapping together
-with a separately authenticated current-v8 authority and proves the resulting artifact passes
+with a separately authenticated current-v9 authority and proves the resulting artifact passes
 strict restart. The authority natively attests its empty POPSAUX2 image and binary registry
 contract; the mapping pins SHA-256 digests of the exact bytes of both. The v2 artifact carries no
-auxiliary authority; the v2-to-v8 migration copies only that empty POPSAUX2 image byte-identically
+auxiliary authority; the v2-to-v9 migration copies only that empty POPSAUX2 image byte-identically
 from the current authority, never fabricating it from v2. Its `checkpoint_migration` provenance member is reserved
 by the live Uniform budget in a fixed 16 Ki-character envelope. The current runtime must continue
 to refuse this v2 file directly.

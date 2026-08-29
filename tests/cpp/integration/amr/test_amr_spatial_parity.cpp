@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstddef>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -213,9 +214,11 @@ SpatialPair evaluate_pair(const std::string& riemann, const std::string& reconst
                                 {}, 0.0, static_cast<double>(pops::kWenoEpsilon), false,
                                 "tests.amr-spatial-parity/physical_flux");
   adaptive.set_conservative_state("gas", state);
-  const auto& evaluation = adaptive.evaluate_prepared_amr_level(
+  const auto evaluation = adaptive.evaluate_prepared_amr_level(
       {.clock = "test.amr-spatial-parity", .level = 0, .stage_fraction = {0, 1}});
-  return {uniform.eval_rhs("gas"), flatten(evaluation.residual)};
+  if (!evaluation)
+    throw std::runtime_error("AMR spatial parity produced no accepted level evaluation");
+  return {uniform.eval_rhs("gas"), flatten(evaluation->residual)};
 }
 
 }  // namespace

@@ -140,6 +140,10 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         """Return the transaction-free compiled target for runtime controllers."""
         return self._s
 
+    def _accepted_transaction_generation_(self) -> Any:
+        """Expose the native accepted-transaction generation to aggregate readers."""
+        return self._s.accepted_transaction_generation_()
+
     def step(self, dt: Any) -> None:
         """Advance once through the installed Program's prepared temporal authority."""
         from pops.runtime._step_strategy import prepare_program_run

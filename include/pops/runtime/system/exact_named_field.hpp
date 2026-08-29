@@ -113,6 +113,10 @@ class ExactNamedField final {
     accepted_outputs_ = state.outputs;
   }
   field_type& accepted_potential_for_restore() { return accepted_; }
+  /// Restore authority for the accepted output image. The owning System transaction has already
+  /// authenticated the exact field layout; exposing this resident buffer lets it deep-copy into
+  /// preallocated storage without invoking value assignment (which would allocate a fresh Fab).
+  field_type& accepted_outputs_for_restore() { return accepted_outputs_; }
   int maximum_iterations() const noexcept { return solver_->maximum_iterations(); }
   std::string_view solver_provider_identity() const noexcept {
     return solver_->provider_identity();

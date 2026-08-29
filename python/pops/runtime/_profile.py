@@ -30,7 +30,7 @@ import os
 from typing import Any
 
 
-# Native scope-name conventions the C++ Profiler emits (program_context.hpp / system.cpp):
+# Native scope-name conventions the C++ Profiler emits (program_execution_services.hpp / system.cpp):
 # coarse System phases, per-Program-node scopes ("node:<name>"), and the integer counters.
 _COARSE_PHASES = ("step", "field_solve")
 _NODE_PREFIX = "node:"
@@ -38,7 +38,7 @@ _NODE_PREFIX = "node:"
 # native path; the coarse "field_solve" phase is the System-level elliptic solve.
 _SOLVER_SCOPES = ("field_solve",)
 _SOLVER_NODE_HINT = "solve_fields"
-# Memory counters (program_context.hpp count_scratch): allocation count + the largest single
+# Memory counters (program_execution_services.hpp count_scratch): allocation count + the largest single
 # scratch buffer in bytes. A live-bytes total is deliberately NOT tracked by the native runtime.
 _MEMORY_COUNTERS = ("scratch_allocs", "scratch_peak_bytes")
 # Scheduler / cache counters that only move under a compiled .so step body (Kokkos/ROMEO); absent

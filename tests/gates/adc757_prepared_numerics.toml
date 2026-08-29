@@ -426,7 +426,7 @@ test_regex = "^test_spatial_provider_matrix\\.native_runtime_dimension_refuses_u
 requirement = "metric_spatial_provider_geometry_matrix"
 polarity = "positive"
 target = "test_program_runtime"
-test_regex = "^ProgramRuntime\\.ForwardEulerProgramContextHonorsEmbeddedBoundaryResidualMetrics$"
+test_regex = "^ProgramRuntime\\.ForwardEulerProgramExecutionServicesHonorsEmbeddedBoundaryResidualMetrics$"
 
 [[check]]
 requirement = "metric_spatial_provider_geometry_matrix"
@@ -501,7 +501,7 @@ polarity = "refusal"
 target = "test_program_reflux_ledger"
 test_regex = "^test_program_reflux_ledger\\.InvalidCheckpointAndDuplicateFacesRejectBeforeMutation$"
 
-# Standalone exact-ranked provider and installed AmrProgramContext route.
+# Standalone exact-ranked provider and installed ProgramExecutionServices route.
 [[check]]
 requirement = "standalone_exact_ranked_cell_temporal_provider"
 polarity = "positive"

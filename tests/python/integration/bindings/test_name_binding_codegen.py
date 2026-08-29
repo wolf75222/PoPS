@@ -4,9 +4,9 @@
 A compiled multi-block Program now binds its blocks to the System blocks BY NAME, not by add-order.
 This pure-Python test (no .so compile, no engine) checks the two halves the codegen owns:
 
-(A) ABI export -- ``emit_cpp_program`` emits ``pops_program_block_count()`` returning N and an
-    ``pops_program_block_name(int)`` switch returning each block's name in ``_block_indices`` order
-    (P.state declaration order, the order the step body's ctx.state(idx) addresses).
+(A) POD table -- ``emit_cpp_program`` emits ``kProgramCandidateBlocks`` with every block name in
+    ``_block_indices`` order (P.state declaration order, the order the step body's ctx.state(idx)
+    addresses).
 
 (B) IR identity -- the block names are part of ``_ir_hash``: two Programs that differ ONLY by the
     order of their ``P.state`` declarations produce DIFFERENT IR hashes (so they get distinct .so
@@ -65,24 +65,23 @@ def _flux_program(t, name, blocks):
 
 
 def section_a(t):
-    print("== (A) the .so exports pops_program_block_name per block, declaration order ==")
+    print("== (A) the v5 candidate carries block names in declaration order ==")
     P = _flux_program(t, "plasma_electrons", ["plasma", "electrons", "dust"])
     src = emit_cpp_program(P)
 
-    chk("pops_program_block_count() { return 3; }" in src,
-        "pops_program_block_count returns the block count (3)")
-    # Each block name appears at its declaration-order index in the pops_program_block_name switch.
-    chk('case 0: return "plasma";' in src, "block 0 -> \"plasma\" (first P.state)")
-    chk('case 1: return "electrons";' in src, "block 1 -> \"electrons\" (second P.state)")
-    chk('case 2: return "dust";' in src, "block 2 -> \"dust\" (third P.state)")
-    chk('extern "C" const char* pops_program_block_name(int i)' in src,
-        "the block-name accessor is a stable extern \"C\" ABI export")
+    chk("kProgramCandidateBlocksRows" in src,
+        "candidate block table is emitted")
+    # Each block name appears in declaration order in the immutable candidate table.
+    chk(src.index('"plasma"') < src.index('"electrons"') < src.index('"dust"'),
+        "candidate block table preserves P.state declaration order")
+    chk("ProgramBlockRecord" in src,
+        "block identities use the fixed-layout ProgramBlockRecord table")
 
     # A single-block Program still carries the table (count 1), so the loader binds it by name too.
     P1 = _flux_program(t, "single", ["gas"])
     src1 = emit_cpp_program(P1)
-    chk("pops_program_block_count() { return 1; }" in src1, "single-block count is 1")
-    chk('case 0: return "gas";' in src1, "single block 0 -> \"gas\"")
+    chk("kProgramCandidateBlocksRows" in src1, "single-block candidate carries one table row")
+    chk('"gas"' in src1, "single block identity is carried by the candidate table")
 
 
 def section_b(t):

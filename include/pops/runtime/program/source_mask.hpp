@@ -3,7 +3,7 @@
 /// Zero every source-residual component that is not in the authored keep set.
 ///
 /// This is the executable Program primitive behind a partial IMEX mask. Both the uniform
-/// ``ProgramContext`` and the AMR program context call it after ``source_default_into``. The keep
+/// ``ProgramExecutionServices`` and the AMR program context call it after ``source_default_into``. The keep
 /// set is resolved in Python against the block StateSpace; C++ only applies the integer mask.
 
 #include <pops/core/foundation/types.hpp>

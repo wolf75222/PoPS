@@ -191,11 +191,21 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
   src.register_history("fill_age", /*lag=*/3);
   EXPECT_EQ(src.history_fill_count("fill_age"), 0);
   for (int accepted_store = 1; accepted_store <= 4; ++accepted_store) {
-    src.store_history("fill_age", src.block_state(0));
+    const NativeField state = [&] {
+      const auto state_view = src.block_state(0);
+      return NativeField(*state_view.get());
+    }();
+    src.store_history("fill_age", state);
     src.rotate_histories();
     EXPECT_EQ(src.history_fill_count("fill_age"), accepted_store);
   }
-  src.store_history("fill_age", src.block_state(0));
+  {
+    const NativeField state = [&] {
+      const auto state_view = src.block_state(0);
+      return NativeField(*state_view.get());
+    }();
+    src.store_history("fill_age", state);
+  }
   src.rotate_histories();
   EXPECT_EQ(src.history_fill_count("fill_age"), 4) << "fill count saturates at ring depth";
 
@@ -221,7 +231,10 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
   src.register_history("scratch_b", /*lag=*/1);
   src.restore_history("scratch_b", 0, B);
   src.set_history_initialized("scratch_b", true);
-  NativeField& b_val = src.read_history("scratch_b", 0);
+  const NativeField b_val = [&] {
+    const auto b_view = src.read_history("scratch_b", 0);
+    return NativeField(*b_view.get());
+  }();
   src.store_history("rhs_prev",
                     b_val);  // current slot [0] <- B (already initialized: no re-broadcast)
 
@@ -265,10 +278,11 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
   // history): lag 1 == A. read_history is the accessor the generated step body calls; history_global
   // of the same slot proves the read handle points at the restored data.
   {
-    const NativeField& r1 = dst.read_history("rhs_prev", 1);
-    (void)r1;  // the handle exists (no throw on an initialized ring); its data checked via slot 1
-    EXPECT_TRUE(max_abs_diff(dst.history_global("rhs_prev", 1), A) < 1e-15) << "restored_lag1_is_A";
+    const auto r1 = dst.read_history("rhs_prev", 1);
+    (void)r1;  // the handle exists (no throw on an initialized ring); its data is checked below.
   }
+  EXPECT_TRUE(max_abs_diff(dst.history_global("rhs_prev", 1), A) < 1e-15)
+      << "restored_lag1_is_A";
 
   // NO phantom cold-start after restore: the restored ring is already initialized, so the NEXT store
   // writes ONLY the current slot and leaves the deeper (restored) lags untouched. A naive
@@ -279,7 +293,10 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
   const std::vector<double> C = ramp(nn, 42.0);
   dst.restore_history("scratch_c", 0, C);
   dst.set_history_initialized("scratch_c", true);
-  NativeField& c_val = dst.read_history("scratch_c", 0);
+  const NativeField c_val = [&] {
+    const auto c_view = dst.read_history("scratch_c", 0);
+    return NativeField(*c_view.get());
+  }();
   dst.store_history("rhs_prev",
                     c_val);  // current slot [0] <- C; already-initialized -> no broadcast
   EXPECT_TRUE(max_abs_diff(dst.history_global("rhs_prev", 0), C) < 1e-15)

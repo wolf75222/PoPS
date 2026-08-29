@@ -237,6 +237,7 @@ void System<Dim>::set_field_topology_authority(const std::string& provider_slot,
 template <int Dim>
 std::vector<runtime::field::FieldTopologyReportRow> System<Dim>::field_topology_report(
     const std::string& provider_slot) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   const auto field = p_->named_fields_.find(provider_slot);
   if (field != p_->named_fields_.end())
     return field->second->topology_report();

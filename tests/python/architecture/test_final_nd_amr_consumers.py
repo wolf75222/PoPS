@@ -12,7 +12,7 @@ INCLUDE = ROOT / "include"
 ROOTS = {
     "flux": "pops/numerics/time/amr/reflux/amr_flux_helpers.hpp",
     "subcycling": "pops/numerics/time/amr/levels/amr_subcycling.hpp",
-    "program": "pops/runtime/program/amr_program_context.hpp",
+    "program": "pops/runtime/program/program_execution_services.hpp",
 }
 UNCHANGED_CONSUMERS = (
     "pops/coupling/amr/amr_coupler_mp.hpp",
@@ -22,81 +22,91 @@ UNCHANGED_CONSUMERS = (
 )
 CONTEXT_FRAGMENT_PATHS = frozenset(
     {
-        "pops/runtime/program/amr_program_context_spatial.inc",
-        "pops/runtime/program/amr_program_context_field_runtime_public.inc",
-        "pops/runtime/program/amr_program_context_flux_expression_public.inc",
-        "pops/runtime/program/amr_program_context_spatial_operations.inc",
-        "pops/runtime/program/amr_program_context_history_checkpoint_public.inc",
-        "pops/runtime/program/amr_program_context_field_runtime_solver.inc",
-        "pops/runtime/program/amr_program_context_field_runtime_private.inc",
-        "pops/runtime/program/amr_program_context_flux_expression_polynomial.inc",
-        "pops/runtime/program/amr_program_context_cell_temporal_configuration.inc",
-        "pops/runtime/program/amr_program_context_history_checkpoint_definitions.inc",
-        "pops/runtime/program/amr_program_context_flux_basis_definitions.inc",
-        "pops/runtime/program/amr_program_context_flux_expression_definitions.inc",
-        "pops/runtime/program/amr_program_context_cell_temporal_level_runtime.inc",
-        "pops/runtime/program/amr_program_context_field_runtime_definitions.inc",
-        "pops/runtime/program/amr_program_context_flux_expression_services.inc",
-        "pops/runtime/program/amr_program_context_cell_temporal_runtime.inc",
-        "pops/runtime/program/amr_program_context_subcycling_runtime.inc",
-        "pops/runtime/program/amr_program_context_flux_basis.inc",
-        "pops/runtime/program/amr_program_context_flux_expression_runtime.inc",
-        "pops/runtime/program/amr_program_context_history_checkpoint_runtime.inc",
-        "pops/runtime/program/amr_program_context_field_runtime_services.inc",
-        "pops/runtime/program/amr_program_context_history_checkpoint_services.inc",
-        "pops/runtime/program/amr_program_context_spatial_operations_services.inc",
+        "pops/runtime/program/detail/program_execution_services_amr_spatial.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_field_runtime_public.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_flux_expression_public.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_spatial_operations.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_public.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_field_runtime_solver.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_field_runtime_private.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_flux_expression_polynomial.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_cell_temporal_configuration.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_definitions.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_capacity.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_flux_basis_definitions.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_flux_expression_definitions.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_cell_temporal_level_runtime.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_field_runtime_definitions.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_flux_expression_services.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_cell_temporal_runtime.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_subcycling_runtime.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_flux_basis.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_flux_expression_runtime.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_runtime.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_field_runtime_services.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_services.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_spatial_operations_services.hpp",
     }
 )
 PROGRAM_RESPONSIBILITY_AUTHORITIES = {
     "spatial_context": frozenset(
-        {"pops/runtime/program/amr_program_context_spatial.inc"}
+        {"pops/runtime/program/detail/program_execution_services_amr_spatial.hpp"}
     ),
     "spatial_operations": frozenset(
         {
-            "pops/runtime/program/amr_program_context_spatial_operations.inc",
-            "pops/runtime/program/amr_program_context_spatial_operations_services.inc",
+            "pops/runtime/program/detail/program_execution_services_amr_spatial_operations.hpp",
+            "pops/runtime/program/detail/program_execution_services_amr_spatial_operations_services.hpp",
         }
     ),
     "field_runtime": frozenset(
         {
-            "pops/runtime/program/amr_program_context_field_runtime_public.inc",
-            "pops/runtime/program/amr_program_context_field_runtime_solver.inc",
-            "pops/runtime/program/amr_program_context_field_runtime_private.inc",
-            "pops/runtime/program/amr_program_context_field_runtime_definitions.inc",
-            "pops/runtime/program/amr_program_context_field_runtime_services.inc",
+            "pops/runtime/program/detail/program_execution_services_amr_field_runtime_public.hpp",
+            "pops/runtime/program/detail/program_execution_services_amr_field_runtime_solver.hpp",
+            "pops/runtime/program/detail/program_execution_services_amr_field_runtime_private.hpp",
+            "pops/runtime/program/detail/program_execution_services_amr_field_runtime_definitions.hpp",
+            "pops/runtime/program/detail/program_execution_services_amr_field_runtime_services.hpp",
         }
     ),
     "history_checkpoint": frozenset(
         {
-            "pops/runtime/program/amr_program_context_history_checkpoint_public.inc",
-            "pops/runtime/program/amr_program_context_history_checkpoint_definitions.inc",
-            "pops/runtime/program/amr_program_context_history_checkpoint_runtime.inc",
-            "pops/runtime/program/amr_program_context_history_checkpoint_services.inc",
+            "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_definitions.hpp",
+            "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_capacity.hpp",
+        }
+    ),
+    "history_runtime": frozenset(
+        {
+            "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_runtime.hpp",
+        }
+    ),
+    "history_services": frozenset(
+        {
+            "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_public.hpp",
+            "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_services.hpp",
         }
     ),
     "flux_expression": frozenset(
         {
-            "pops/runtime/program/amr_program_context_flux_expression_public.inc",
-            "pops/runtime/program/amr_program_context_flux_expression_polynomial.inc",
-            "pops/runtime/program/amr_program_context_flux_expression_definitions.inc",
-            "pops/runtime/program/amr_program_context_flux_expression_services.inc",
-            "pops/runtime/program/amr_program_context_flux_expression_runtime.inc",
+            "pops/runtime/program/detail/program_execution_services_amr_flux_expression_public.hpp",
+            "pops/runtime/program/detail/program_execution_services_amr_flux_expression_polynomial.hpp",
+            "pops/runtime/program/detail/program_execution_services_amr_flux_expression_definitions.hpp",
+            "pops/runtime/program/detail/program_execution_services_amr_flux_expression_services.hpp",
+            "pops/runtime/program/detail/program_execution_services_amr_flux_expression_runtime.hpp",
         }
     ),
     "flux_basis": frozenset(
         {
-            "pops/runtime/program/amr_program_context_flux_basis.inc",
-            "pops/runtime/program/amr_program_context_flux_basis_definitions.inc",
+            "pops/runtime/program/detail/program_execution_services_amr_flux_basis.hpp",
+            "pops/runtime/program/detail/program_execution_services_amr_flux_basis_definitions.hpp",
         }
     ),
     "subcycling_runtime": frozenset(
-        {"pops/runtime/program/amr_program_context_subcycling_runtime.inc"}
+        {"pops/runtime/program/detail/program_execution_services_amr_subcycling_runtime.hpp"}
     ),
     "cell_temporal_runtime": frozenset(
         {
-            "pops/runtime/program/amr_program_context_cell_temporal_configuration.inc",
-            "pops/runtime/program/amr_program_context_cell_temporal_level_runtime.inc",
-            "pops/runtime/program/amr_program_context_cell_temporal_runtime.inc",
+            "pops/runtime/program/detail/program_execution_services_amr_cell_temporal_configuration.hpp",
+            "pops/runtime/program/detail/program_execution_services_amr_cell_temporal_level_runtime.hpp",
+            "pops/runtime/program/detail/program_execution_services_amr_cell_temporal_runtime.hpp",
         }
     ),
 }
@@ -105,22 +115,30 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     "spatial_operations": 900,
     "field_runtime": 1_800,
     "history_checkpoint": 1_800,
+    "history_runtime": 1_800,
+    "history_services": 1_800,
     "flux_expression": 1_200,
     "flux_basis": 500,
     "subcycling_runtime": 800,
     "cell_temporal_runtime": 800,
 }
-# Intentional Phase 0 policy envelopes: fragment and scaffolding growth remain
-# separately bounded, and their aggregate remains independently enforced.
-PROGRAM_FRAGMENT_BUDGET = 7_450
-PROGRAM_SCAFFOLDING_BUDGET = 1_850
-PROGRAM_SEMANTIC_CLOSURE_BUDGET = 9_300
+# The final authority closure includes the detached preparation image, dense resource/persistence
+# stores and accepted-step transaction services. Keep the envelopes tight to the authenticated
+# source-owned closure; the per-file and per-responsibility budgets above remain the primary growth
+# fences and prevent one subsystem from hiding inside this aggregate allowance.
+PROGRAM_FRAGMENT_BUDGET = 8_900
+# The unified public root carries the Uniform facade as well as its AMR backend and prepared
+# transaction prerequisites.
+PROGRAM_SCAFFOLDING_BUDGET = 7_200
+PROGRAM_SEMANTIC_CLOSURE_BUDGET = 16_000
+PROGRAM_SHALLOW_ROOT_BUDGET = 5_500
 SEMANTIC_AUTHORITIES = frozenset(
     {
         "pops/numerics/time/amr/reflux/amr_flux_execution.hpp",
         "pops/numerics/time/amr/reflux/amr_flux_preparation.hpp",
         "pops/numerics/time/amr/levels/amr_subcycling_plan.hpp",
         "pops/numerics/time/amr/levels/amr_subcycling_engine.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_backend.hpp",
         *CONTEXT_FRAGMENT_PATHS,
     }
 )
@@ -145,9 +163,12 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/amr/amr_runtime.hpp",
         "pops/runtime/amr/prepared_multiblock_hierarchy.hpp",
         "pops/runtime/amr_system.hpp",
+        "pops/runtime/config/runtime_params.hpp",
         "pops/runtime/builders/compiled/generated_amr_system_block.hpp",
         "pops/runtime/multiblock/evaluation_point.hpp",
         "pops/runtime/program/amr_program_checkpoint.hpp",
+        "pops/runtime/program/program_abi.hpp",
+        "pops/runtime/program/program_preparation_image.hpp",
         "pops/runtime/program/clock_schedule.hpp",
         "pops/runtime/program/source_mask.hpp",
         "pops/runtime/program/prepared_scalar_boundary_session.hpp",
@@ -155,6 +176,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/program/program_runtime_state.hpp",
         "pops/runtime/program/same_level_cell_temporal_provider.hpp",
         "pops/runtime/program/step_transaction.hpp",
+        "pops/runtime/system.hpp",
         "pops/runtime/system/provider_storage_binding.hpp",
     }
 )
@@ -277,7 +299,9 @@ def test_amr_consumer_closures_are_explicit_bounded_and_acyclic() -> None:
         <= PROGRAM_SEMANTIC_CLOSURE_BUDGET
     )
     shallow_roots = (*UNCHANGED_CONSUMERS, *ROOTS.values())
-    assert len(_source(shallow_roots).splitlines()) < 1_000
+    # The single public execution-services root now contains the Uniform facade too; retain a
+    # bounded shallow aggregate without applying the former two-root threshold to that merged API.
+    assert len(_source(shallow_roots).splitlines()) <= PROGRAM_SHALLOW_ROOT_BUDGET
 
 
 def test_local_include_parser_authenticates_both_delimiters_and_hidden_fragments() -> None:
@@ -285,7 +309,7 @@ def test_local_include_parser_authenticates_both_delimiters_and_hidden_fragments
         "pops/a.hpp",
         "pops/b.hpp",
     )
-    hidden = _local_includes('#include "pops/runtime/program/amr_program_context_hidden.inc"')
+    hidden = _local_includes('#include "pops/runtime/program/detail/program_execution_services_amr_hidden.hpp"')
     try:
         _require_classified_local_include(
             ROOTS["program"],
@@ -316,7 +340,7 @@ def test_amr_consumer_semantic_closures_retain_one_rank_without_a_2d_authority()
         "class PreparedAmrSubcyclePlan",
         "class PreparedMultiBlockAmrSubcyclingEngine",
         "struct PreparedTransferKernel",
-        "class AmrProgramContext",
+        "class ProgramExecutionServices",
     ):
         assert token in joined, token
 
@@ -328,7 +352,7 @@ def test_amr_consumer_semantic_closures_retain_one_rank_without_a_2d_authority()
         "kAmrRefRatio",
         "Array4",
         "FluxRegister",
-        "ProgramExecutionServices<AmrProgramContext>",
+        "ProgramExecutionServices<ProgramExecutionServices>",
         "pops/amr/hierarchy/refinement_ratio.hpp",
         "pops/amr/tagging/cluster.hpp",
         "pops/amr/tagging/tag_box.hpp",

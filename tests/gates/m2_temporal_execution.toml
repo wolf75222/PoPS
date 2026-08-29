@@ -103,6 +103,46 @@ nodeid = "tests/python/unit/time/test_solve_outcome_contract.py::test_solve_outc
 
 [[check]]
 issue = "ADC-665"
+requirement = "solve_outcome"
+polarity = "positive"
+kind = "pytest"
+target = "solve"
+nodeid = "tests/python/unit/time/test_field_solve_outcome.py::test_consuming_field_solve_publishes_one_exact_field_context"
+
+[[check]]
+issue = "ADC-665"
+requirement = "solve_outcome"
+polarity = "refusal"
+kind = "pytest"
+target = "solve"
+nodeid = "tests/python/unit/time/test_field_solve_outcome.py::test_field_solve_consume_rejects_untyped_failure_action_atomically"
+
+[[check]]
+issue = "ADC-665"
+requirement = "solve_outcome"
+polarity = "positive"
+kind = "ctest"
+target = "test_newton_robustness"
+test_regex = "^NewtonRobustnessTest\\.prepared_success_publishes_only_on_single_accept$"
+
+[[check]]
+issue = "ADC-665"
+requirement = "solve_outcome"
+polarity = "refusal"
+kind = "ctest"
+target = "test_newton_robustness"
+test_regex = "^NewtonRobustnessTest\\.publication_layout_failure_does_not_consume_the_outcome$"
+
+[[check]]
+issue = "ADC-665"
+requirement = "solve_outcome"
+polarity = "positive"
+kind = "ctest"
+target = "test_mpi_field_plan_consensus"
+test_regex = "^test_mpi_field_plan_consensus_np2$"
+
+[[check]]
+issue = "ADC-665"
 requirement = "fallible_nonlinear_evaluation"
 polarity = "positive"
 kind = "ctest"
@@ -123,7 +163,7 @@ requirement = "fallible_linear_evaluation"
 polarity = "positive"
 kind = "ctest"
 target = "test_coupled_fieldsolve"
-test_regex = "^test_coupled_fieldsolve\\.named_solve_honors_every_qualified_stage_without_live_mutation$"
+test_regex = "^test_coupled_fieldsolve_np2$"
 
 [[check]]
 issue = "ADC-665"
@@ -131,7 +171,7 @@ requirement = "fallible_linear_evaluation"
 polarity = "refusal"
 kind = "ctest"
 target = "test_krylov_collective_contract"
-test_regex = "^test_krylov_collective_contract\\.RankLocalFailuresAreUniformBeforeScientificCollectives$"
+test_regex = "^test_krylov_collective_contract_np2$"
 
 [[check]]
 issue = "ADC-668"
@@ -245,24 +285,32 @@ issue = "ADC-666"
 requirement = "step_transaction"
 polarity = "positive"
 kind = "ctest"
-target = "test_program_runtime"
-test_regex = "^ProgramRuntime\\.ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate$"
+target = "test_system_transaction_authority"
+test_regex = "^SystemTransactionAuthority\\.RejectRestoresProgramImageAndRetryCommitsOnce$"
 
 [[check]]
 issue = "ADC-666"
 requirement = "step_transaction"
 polarity = "refusal"
 kind = "ctest"
-target = "test_program_runtime"
-test_regex = "^ProgramRuntime\\.ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPublication$"
+target = "test_system_transaction_authority"
+test_regex = "^SystemTransactionAuthority\\.PublicReaderCannotReenterUniformCandidate$"
 
 [[check]]
 issue = "ADC-666"
 requirement = "step_transaction"
 polarity = "positive"
 kind = "ctest"
-target = "test_program_runtime"
-test_regex = "^ProgramRuntime\\.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock$"
+target = "test_system_transaction_authority"
+test_regex = "^SystemTransactionAuthority\\.ExternalAcceptedWindowRemainsComposableWithInternalStep$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_system_transaction_authority"
+test_regex = "^SystemTransactionAuthority\\.ReusedImageDoesNotAllocateFabStorageAfterWarmup$"
 
 [[check]]
 issue = "ADC-666"
@@ -271,6 +319,142 @@ polarity = "refusal"
 kind = "pytest"
 target = "transaction"
 nodeid = "tests/python/unit/runtime/test_step_transaction_runtime.py::test_fault_injection_matrix_restores_every_available_store_and_reports_exact_phase"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "pytest"
+target = "transaction"
+nodeid = "tests/python/unit/runtime/test_step_transaction_runtime.py::test_success_commits_native_clock_cursors_and_attempt_counter_together"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "pytest"
+target = "transaction"
+nodeid = "tests/python/unit/runtime/test_step_transaction_runtime.py::test_error_controlled_retry_rolls_back_before_opening_the_next_attempt"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "pytest"
+target = "transaction"
+nodeid = "tests/python/unit/runtime/test_step_transaction_runtime.py::test_error_controlled_retry_exhaustion_restores_the_last_accepted_boundary"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_mpi_cell_temporal_program"
+test_regex = "^test_mpi_cell_temporal_program_np2$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_mpi_cell_temporal_program_multibox"
+test_regex = "^test_mpi_cell_temporal_program_multibox_np2$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_mpi_cell_temporal_program_collective_rollback"
+test_regex = "^test_mpi_cell_temporal_program_collective_rollback_np2$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_mpi_cell_temporal_program_refusal"
+test_regex = "^test_mpi_cell_temporal_program_refusal_np2$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_program_transaction"
+test_regex = "^ProgramTransaction\\.BindFreezesTypedOrderBudgetsAndHotCapacity$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_program_transaction"
+test_regex = "^ProgramTransaction\\.SnapshotFailureDoesNotTouchAcceptedState$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_program_transaction"
+test_regex = "^ProgramTransaction\\.CandidateAndPrepareFaultsLeaveGenerationUnchanged$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_program_transaction"
+test_regex = "^ProgramTransaction\\.SolveGuardAndAtomicSealConsensusFaultsRollback$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_program_transaction"
+test_regex = "^ProgramTransaction\\.HiddenPublishParticipantFailureRestoresAllPublishedState$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_program_transaction"
+test_regex = "^ProgramTransaction\\.PublishFaultCompensatesEffectsInReverseOrderExactlyOnce$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_program_transaction"
+test_regex = "^ProgramTransaction\\.ReaderSeesOldGenerationAndNewReadersBlockUntilSeal$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_program_transaction"
+test_regex = "^ProgramTransaction\\.SealIsAtomicAndFinalizeFailureIsFailStopWithoutScientificRollback$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_program_transaction"
+test_regex = "^ProgramTransaction\\.SuccessfulEffectsAndReceiptsAreExactOnce$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_program_transaction"
+test_regex = "^ProgramTransaction\\.FrozenHotPathDoesNotRecordPoPSAllocations$"
 
 [[check]]
 issue = "ADC-666"

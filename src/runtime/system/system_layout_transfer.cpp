@@ -452,7 +452,7 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
       throw std::logic_error(std::string(where) + " crossed its active transfer generation");
     if (attempt == 0)
       throw std::invalid_argument(std::string(where) + " requires a positive attempt");
-    if (!source->external_step_transaction_ || !target->external_step_transaction_ ||
+    if (!source->external_program_transaction_ || !target->external_program_transaction_ ||
         source->external_step_transaction_committed_ ||
         target->external_step_transaction_committed_)
       throw std::logic_error(std::string(where) +
@@ -471,6 +471,12 @@ template <int Dim>
 std::shared_ptr<PreparedSystemLayoutTransfer<Dim>> PreparedSystemLayoutTransfer<Dim>::prepare(
     System<Dim>& source, System<Dim>& target, std::shared_ptr<component::LoadedComponent> component,
     SystemLayoutTransferSpec<Dim> spec, SystemLayoutTransferExecution execution) {
+  // Preparation and warmup inspect accepted resident layouts only. Keep both read leases alive
+  // through construction, provider preparation, and the first exact-copy warmup; capture/apply
+  // below are deliberately writer-private and use the detached source snapshot/direct target
+  // storage without reacquiring a public observer lease.
+  auto source_read = source.p_->acquire_accepted_read_lease();
+  auto target_read = target.p_->acquire_accepted_read_lease();
   const CommunicatorView field_rank_space = world_communicator_view();
   CommunicatorView communicator;
   collectively_validate(field_rank_space, "layout-transfer execution communicator", [&] {
@@ -508,7 +514,7 @@ void PreparedSystemLayoutTransfer<Dim>::begin_transaction(std::uint64_t generati
       throw std::logic_error("layout-transfer transaction is already active");
     if (generation == 0 || generation <= p_->last_generation)
       throw std::invalid_argument("layout-transfer generation must be positive and monotonic");
-    if (!p_->source->external_step_transaction_ || !p_->target->external_step_transaction_ ||
+    if (!p_->source->external_program_transaction_ || !p_->target->external_program_transaction_ ||
         p_->source->external_step_transaction_committed_ ||
         p_->target->external_step_transaction_committed_)
       throw std::logic_error(

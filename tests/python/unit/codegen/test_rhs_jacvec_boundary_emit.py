@@ -135,6 +135,33 @@ def test_apply_captures_point_and_only_conditionally_allocates_boundary_scratch(
     assert "std::make_shared" not in apply_source
 
 
+def test_metric_reduction_storage_is_install_primed_without_hot_vector_or_shape_lookup():
+    source, operator, jacvec, _ = _emit(sources=None)
+    metric = "jac_metric_scratch%d_%d" % (operator.id, jacvec.id)
+    factory = source.index(
+        "pops::PreparedAffineOperatorSessionFactory<pops::kNativeDimension> "
+        "make_apply_A%d_session" % operator.id
+    )
+    begin_step = source.index("ctx.begin_step(dt)")
+    array_declaration = source.index(
+        "const std::array<double, 2 * "
+        "pops::detail::PreparedFieldAlgebra::kRobustDotPayloadWidth> %s{};" % metric
+    )
+    apply_source = _apply_source(source, operator)
+
+    # The robust reduction payload has a fixed bounded shape for the authenticated distributed /
+    # replicated Program distributions.  Its template is installed before the session factory;
+    # each session receives a value copy, so no post-begin vector allocation or distribution-shape
+    # query can occur.
+    assert array_declaration < factory < begin_step
+    assert "std::make_shared<std::vector<double>>" not in source
+    assert "reduction_scratch_value_count(" not in source
+    assert (
+        "std::span<double>(%s.data(), %s.size())" % (metric, metric)
+    ) in apply_source
+    assert apply_source.splitlines()[0].endswith(") mutable {")
+
+
 def test_step_refresh_uses_r0_exact_explicit_stage_and_separates_boundary_residual():
     source, operator, jacvec, r0 = _emit(sources=None)
     names = _names(operator, jacvec)

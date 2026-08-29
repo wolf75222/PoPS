@@ -22,7 +22,7 @@
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/program/amr_program_context.hpp>
+#include <pops/runtime/program/program_execution_services.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
 
 #include <algorithm>
@@ -202,43 +202,68 @@ struct ProgramEvidence {
 
 template <int Dim>
 std::shared_ptr<ProgramEvidence> install_program(pops::AmrSystem<Dim>& system) {
-  auto context = pops::runtime::program::make_program_execution_provider(&system);
   auto evidence = std::make_shared<ProgramEvidence>();
-  context->configure_primary_clock("test.amr.positivity.clock");
-  context->install([context, evidence](double macro_dt) {
-    context->begin_step(macro_dt);
-    context->for_each_program_resource_level([context, evidence, macro_dt](int selected) {
-      context->set_stage_time(0, 1);
-      std::vector<pops::MultiFab<Dim>*> states;
-      std::vector<pops::MultiFab<Dim>*> residuals;
-      states.reserve(static_cast<std::size_t>(context->n_blocks()));
-      residuals.reserve(static_cast<std::size_t>(context->n_blocks()));
-      for (int block = 0; block < context->n_blocks(); ++block) {
-        pops::MultiFab<Dim>& state = context->state(block);
-        if (selected > 0) {
-          const auto provider_at = [context, block](std::size_t local_patch) {
-            return context->template provider_values_view<1>(kProviderConsumer, block, local_patch);
-          };
-          if (block != 0)
-            ++evidence->nonzero_block_provider_binds;
-          pops::SolveOutcome source = pops::backward_euler_source(
-              DensityAdvection<Dim>{}, provider_at, state, pops::Real(macro_dt),
-              pops::NewtonOptions{}, context->prepared_execution_lane());
-          const pops::SolveReport accepted = source.consume(pops::SolveConsumption::kAccept);
-          if (!accepted.solved())
-            throw std::runtime_error("positivity test Program source solve failed: " +
-                                     accepted.reason);
-          ++evidence->accepted_source_solves;
-        }
-        pops::MultiFab<Dim>& residual = context->rhs_scratch(1000 + block, 0, state);
-        context->rhs_into(block, state, residual, 3000 + block);
-        states.push_back(&state);
-        residuals.push_back(&residual);
-      }
-      for (std::size_t block = 0; block < states.size(); ++block)
-        context->axpy(*states[block], pops::Real(macro_dt), *residuals[block]);
-    });
-  });
+  const int block_count = system.n_blocks();
+  const int level_count = system.n_levels();
+  if (block_count != 2 || level_count < 1)
+    throw std::logic_error("positivity test requires two prepared AMR blocks and one level");
+  using Resource = pops::test::program_v5::CallbackProgramResource;
+  std::vector<Resource> resources;
+  resources.reserve(static_cast<std::size_t>(block_count * level_count));
+  for (int level = 0; level < level_count; ++level) {
+    for (int block = 0; block < block_count; ++block) {
+      const auto state = system.prepared_amr_block_state(block, level);
+      if (!state)
+        throw std::logic_error("positivity test Program resource has no prepared block state");
+      resources.push_back({Resource::Kind::rhs,
+                           static_cast<std::size_t>(level * block_count + block),
+                           0,
+                           block,
+                           level,
+                           static_cast<std::uint32_t>(state->ncomp()),
+                           static_cast<std::uint32_t>(state->ghosts()[0])});
+    }
+  }
+  pops::test::install_explicit_amr_callback_program<Dim>(
+      system, "test.amr.positivity/program@1", "test.amr.positivity.clock", resources, {},
+      [evidence, block_count](pops::test::explicit_amr_program_detail::context_type& context,
+                              double macro_dt) {
+        context.advance_hierarchy(macro_dt, [&context, evidence, block_count](double level_dt) {
+          const int selected = context.level();
+          context.set_stage_time(0, 1);
+          std::vector<pops::MultiFab<Dim>*> states;
+          std::vector<pops::MultiFab<Dim>*> residuals;
+          states.reserve(static_cast<std::size_t>(context.n_blocks()));
+          residuals.reserve(static_cast<std::size_t>(context.n_blocks()));
+          for (int block = 0; block < context.n_blocks(); ++block) {
+            pops::MultiFab<Dim>& state = context.state(block);
+            if (selected > 0) {
+              const auto provider_at = [&context, block](std::size_t local_patch) {
+                return context.template provider_values_view<1>(kProviderConsumer, block,
+                                                                 local_patch);
+              };
+              if (block != 0)
+                ++evidence->nonzero_block_provider_binds;
+              pops::SolveOutcome source = pops::backward_euler_source(
+                  DensityAdvection<Dim>{}, provider_at, state, pops::Real(level_dt),
+                  pops::NewtonOptions{}, context.prepared_execution_lane());
+              const pops::SolveReport accepted = source.consume(pops::SolveConsumption::kAccept);
+              if (!accepted.solved())
+                throw std::runtime_error("positivity test Program source solve failed: " +
+                                         accepted.reason);
+              ++evidence->accepted_source_solves;
+            }
+            const auto slot = static_cast<pops::runtime::program::ProgramCacheSlot>(
+                context.level() * block_count + block);
+            pops::MultiFab<Dim>& residual = context.rhs_scratch(slot, 0, state);
+            context.rhs_into(block, state, residual, 3000 + block);
+            states.push_back(&state);
+            residuals.push_back(&residual);
+          }
+          for (std::size_t block = 0; block < states.size(); ++block)
+            context.axpy(*states[block], pops::Real(level_dt), *residuals[block]);
+        });
+      });
   system.set_program_block_map({0, 1});
   return evidence;
 }
@@ -337,10 +362,11 @@ RunResult advance_with_floor(double positivity_floor) {
 
   RunResult result;
   result.levels = system.n_levels();
-  auto& runtime = *system.engine();
-  const pops::MultiFab<Dim>& fine = runtime.hierarchy().state(1);
+  auto* runtime = pops::test::AmrSystemTestAccess<Dim>::engine(system);
+  ASSERT_NE(runtime, nullptr);
+  const pops::MultiFab<Dim>& fine = runtime->hierarchy().state(1);
   result.fine_patches = static_cast<int>(fine.layout().size());
-  const pops::Box<Dim>& fine_domain = runtime.hierarchy().layout(1).domain();
+  const pops::Box<Dim>& fine_domain = runtime->hierarchy().layout(1).domain();
   std::vector<std::size_t> fine_interior_indices;
   for (const pops::Box<Dim>& patch : fine.layout().boxes()) {
     const pops::Box<Dim> interior = patch.grow(-4);

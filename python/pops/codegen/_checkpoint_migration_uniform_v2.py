@@ -281,6 +281,15 @@ def _int_vector(payload: Mapping[str, Any], key: str) -> tuple[int, ...]:
     return tuple(int(item) for item in value.tolist())
 
 
+def _bool_vector(payload: Mapping[str, Any], key: str) -> tuple[bool, ...]:
+    import numpy as np
+
+    value = np.asarray(payload[key])
+    if value.ndim != 1 or value.dtype.kind != "b":
+        raise TypeError("%s must be an exact boolean vector" % key)
+    return tuple(bool(item) for item in value.tolist())
+
+
 def _float64_array(
     payload: Mapping[str, Any],
     key: str,
@@ -482,6 +491,15 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
     from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
     from pops.runtime._system_io_history import validate_history_slot_dt_payload
     from pops.time._history.persistence import Dense, HistoryPersistence
+    from pops.output._checkpoint_contract import (
+        PROGRAM_PERSISTENT_CHECKPOINT_KEY,
+        PROGRAM_PERSISTENT_CHECKPOINT_SCHEMA_KEY,
+        PROGRAM_PERSISTENT_PLAN_DIGEST_KEY,
+        PROGRAM_PERSISTENT_PLAN_MAXIMUM_BYTES_KEY,
+        PROGRAM_PERSISTENT_PLAN_SCHEMA_KEY,
+        PROGRAM_PERSISTENT_SLOT_COUNT_KEY,
+        program_persistent_checkpoint_from_payload,
+    )
 
     manifest, restart = inspect_checkpoint_payload_integrity(payload, runtime_kind="uniform")
     require_exact_payload_version(
@@ -511,8 +529,49 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
     histories = _text_vector(payload, "history_names", nonempty=False)
     if _text_vector(payload, "field_provider_slots", nonempty=False):
         raise ValueError("Uniform v2 migration authority must have no field-provider slots")
-    if _int_vector(payload, "cache_nodes") or _text_vector(payload, "cache_names", nonempty=False):
+    if (
+        _int_vector(payload, "cache_slots")
+        or _text_vector(payload, "cache_names", nonempty=False)
+        or _bool_vector(payload, "cache_valid")
+        or _bool_vector(payload, "cache_cold")
+    ):
         raise ValueError("Uniform v2 migration authority must have no scheduled caches")
+    if _text_scalar(payload, "cache_plan_schema") != "program-resource-plan:v1":
+        raise ValueError("Uniform v2 migration authority has an unsupported cache plan schema")
+    _require_sha256(
+        _text_scalar(payload, "cache_plan_digest"),
+        where="current Uniform cache plan digest",
+    )
+
+    persistent_keys = {
+        PROGRAM_PERSISTENT_CHECKPOINT_KEY,
+        PROGRAM_PERSISTENT_CHECKPOINT_SCHEMA_KEY,
+        PROGRAM_PERSISTENT_PLAN_SCHEMA_KEY,
+        PROGRAM_PERSISTENT_PLAN_DIGEST_KEY,
+        PROGRAM_PERSISTENT_PLAN_MAXIMUM_BYTES_KEY,
+        PROGRAM_PERSISTENT_SLOT_COUNT_KEY,
+    }
+    persistent_present = persistent_keys.intersection(_files(payload))
+    if persistent_present != persistent_keys:
+        missing = sorted(persistent_keys - persistent_present)
+        raise ValueError(
+            "Uniform v2 migration authority requires its complete authenticated POPSPVS1 "
+            "empty-plan envelope (%s)" % ", ".join(missing)
+        )
+    _raw_persistent, persistent_image = program_persistent_checkpoint_from_payload(payload)
+    if (
+        not persistent_image.bound
+        or persistent_image.maximum_bytes != 0
+        or persistent_image.slot_count != 0
+        or persistent_image.rows
+        or persistent_image.metadata
+        or persistent_image.offsets != (0,)
+        or persistent_image.value_bytes
+        or persistent_image.storage
+    ):
+        raise ValueError(
+            "Uniform v2 migration authority must carry an authenticated empty dense Program plan"
+        )
 
     expected = {
         "pops_checkpoint_version",
@@ -527,8 +586,13 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
         "field_provider_slots",
         "auxiliary_checkpoint",
         "history_names",
-        "cache_nodes",
+        "cache_slots",
+        "cache_plan_schema",
+        "cache_plan_digest",
         "cache_names",
+        "cache_valid",
+        "cache_cold",
+        *persistent_keys,
         "temporal_restart_state",
         "runtime_consumer_graph",
         "runtime_consumer_cursors",
@@ -1090,7 +1154,7 @@ def migrate_uniform_v2_checkpoint(
 ) -> UniformV2MigrationReport:
     """Publish one current checkpoint from a true v2 artifact, entirely offline.
 
-    ``current_authority`` is a complete, authenticated v8 checkpoint captured from the exact
+    ``current_authority`` is a complete, authenticated v9 checkpoint captured from the exact
     target runtime. The schema-4 mapping pins both artifact byte streams, their ABI/Program and
     lifecycle identities, the empty natively attested POPSAUX2 image and binary registry-contract
     SHA-256 values, and supplies every semantic correspondence absent from v2. The emitted

@@ -167,6 +167,25 @@ class ClockScheduleState {
     std::copy(frames_.begin(), frames_.end(), destination.frames_.begin());
   }
 
+  /// Copy one resident accepted image without changing any container capacity.  The schedule graph
+  /// is sealed at Program bind, so a different key/frame shape is an authority change rather than
+  /// a reason to allocate while a transaction holds its accepted writer.
+  void copy_into_preallocated(ClockScheduleState& destination) const {
+    if (destination.primary_ != primary_)
+      throw std::logic_error("logical-clock primary identity changed after transaction prime");
+    copy_relations_preallocated_(destination.relations_, relations_);
+    copy_ticks_preallocated_(destination.accepted_ticks_, accepted_ticks_);
+    if (destination.frames_.size() != frames_.size())
+      throw std::logic_error("logical-clock frame shape changed after transaction prime");
+    for (std::size_t index = 0; index < frames_.size(); ++index) {
+      if (destination.frames_[index].parent != frames_[index].parent ||
+          destination.frames_[index].child != frames_[index].child ||
+          destination.frames_[index].count != frames_[index].count)
+        throw std::logic_error("logical-clock frame identity changed after transaction prime");
+      destination.frames_[index].next = frames_[index].next;
+    }
+  }
+
   void synchronize_sample_and_hold(const std::string& source, const std::string& target,
                                    int /*step*/, double offset) const {
     if (source.empty() || target.empty() || source == target)
@@ -194,6 +213,41 @@ class ClockScheduleState {
     }
     for (const auto& [key, value] : source)
       destination.insert_or_assign(key, value);
+  }
+
+  static void copy_string_preallocated_(std::string& destination, const std::string& source) {
+    if (source.size() > destination.capacity())
+      throw std::logic_error("logical-clock string capacity was not primed");
+    destination.assign(source.data(), source.size());
+  }
+
+  template <class Map>
+  static void copy_relations_preallocated_(Map& destination, const Map& source) {
+    if (destination.size() != source.size())
+      throw std::logic_error("logical-clock relation graph changed after transaction prime");
+    auto target = destination.begin();
+    auto input = source.begin();
+    for (; input != source.end(); ++input, ++target) {
+      if (target->first != input->first)
+        throw std::logic_error("logical-clock relation identity changed after transaction prime");
+      if (target->second.parent != input->second.parent ||
+          target->second.count != input->second.count)
+        throw std::logic_error("logical-clock relation authority changed after transaction prime");
+    }
+  }
+
+  static void copy_ticks_preallocated_(std::map<std::string, std::int64_t>& destination,
+                                       const std::map<std::string, std::int64_t>& source) {
+    if (destination.size() != source.size())
+      throw std::logic_error("logical-clock accepted tick graph changed after transaction prime");
+    auto target = destination.begin();
+    auto input = source.begin();
+    for (; input != source.end(); ++input, ++target) {
+      if (target->first != input->first)
+        throw std::logic_error(
+            "logical-clock accepted tick identity changed after transaction prime");
+      target->second = input->second;
+    }
   }
 
   static std::int64_t checked_multiply_(std::int64_t a, std::int64_t b) {

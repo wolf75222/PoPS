@@ -11,9 +11,9 @@ from tests.python.architecture.test_final_nd_amr_consumers import (
 
 ROOT = Path(__file__).resolve().parents[3]
 PROGRAM_STATE = ROOT / "include/pops/runtime/program/program_runtime_state.hpp"
-UNIFORM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
+UNIFORM_CONTEXT = ROOT / "include/pops/runtime/program/program_execution_services.hpp"
 BALANCE_CODEGEN = ROOT / "python/pops/codegen/program_balance_due.py"
-RETIRED_SERVICES = ROOT / "include/pops/runtime/program/program_execution_services.hpp"
+RETIRED_SERVICES = ROOT / "include/pops/runtime/program/program_context.hpp"
 
 
 def _between(text: str, begin: str, end: str) -> str:
@@ -62,7 +62,7 @@ def test_projection_dispatch_lives_on_the_ranked_context_not_a_parallel_service(
     assert "template <int Dim>" in uniform
 
     amr = _amr_semantic_source(_amr_semantic_closure(AMR_CONSUMER_ROOTS["program"]))
-    assert "ProgramExecutionServices" not in amr
+    assert "AmrProgramContext" not in amr
     projection = _between(
         amr,
         "void apply_projection(int program_block, field_type& detached_candidate) const",

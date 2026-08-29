@@ -249,12 +249,12 @@ class _AmrSystemInstall(_AmrSystem):
             ``ComponentKey`` ``InputAux`` values, and registers each instance's initial density.
           - COMPILED install (a ``compiled`` handle carrying a time Program, epic ADC-511 / ADC-508 /
             ADC-634): the same wiring, then ``install_program(so_path)`` installs the compiled Program
-            on the AMR hierarchy (the .so must export ``pops_install_program_amr``: compile it with
+            on the AMR hierarchy (the .so must export ``pops_install_program``: compile it with
             ``target='amr_system'``). The runtime params (``params=``) route to ``set_program_params``
             through the same Program transaction contract as Uniform. The per-level macro-step driver
-            is the AmrProgramContext seam (ADC-508); a
+            is the ProgramExecutionServices seam (ADC-508); a
             Program using a deferred op (Schur / history / named-flux) compiles against it and throws
-            the honest AmrProgramContext backstop only when that op is reached at run.
+            the honest ProgramExecutionServices backstop only when that op is reached at run.
 
         @param compiled a compiled time-Program handle, or ``None`` for a native AMR install.
         @param instances dict {name: {"initial": array, "spatial": <brick>, "model": <CompiledModel>,

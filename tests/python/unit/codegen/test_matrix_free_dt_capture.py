@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from fractions import Fraction
 import re
+from types import SimpleNamespace
 
 import pytest
 
 from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen.program_emit_solve import _matrix_free_consumer_block
 from pops.linalg import LinearProblem
 from pops.model import StateSpace
 from pops.solvers.krylov import Richardson
@@ -165,7 +167,7 @@ def test_matrix_free_apply_reads_live_step_dt_before_prepared_krylov():
         "pops::PreparedAffineOperatorSessionFactory<pops::kNativeDimension> make_apply_A"
     )
     lambda_start = source.index("pops::ApplyFn<pops::kNativeDimension> apply =", factory_start)
-    install_start = source.index("ctx.install([=](double dt)")
+    install_start = source.index("state->step = [ctx_owner = state->ctx_owner](double dt)")
     operator_refresh = source.index(
         f"*{operator_dt} = static_cast<pops::Real>(dt);", install_start)
     apply_refresh = source.index(
@@ -188,6 +190,30 @@ def test_matrix_free_apply_reads_live_step_dt_before_prepared_krylov():
         "pops::Real(-1) * (*%s) + (pops::Real(2) / pops::Real(3)) * (*%s) * (*%s)"
         % (operator_dt, operator_dt, operator_dt)
     ) in source[lambda_start:install_start]
+
+
+def test_matrix_free_templates_are_plan_primed_before_step_and_never_allocate_in_apply():
+    source = emit_cpp_program(_matrix_free_program())
+    begin_step = source.index("state->step = [ctx_owner = state->ctx_owner](double dt)")
+
+    assert "ctx.alloc_scalar_field(" not in source
+    assert source.count("ctx.prepare_scalar_scratch(") == 3
+    assert source.count("ctx.scalar_scratch(") == 3
+    assert source.index("ctx.prepare_scalar_scratch(") < begin_step
+    assert source.index("ctx.scalar_scratch(") < begin_step
+
+
+def test_matrix_free_owner_inference_refuses_conflicting_solve_consumers():
+    operator = SimpleNamespace(
+        op="matrix_free_operator", block=None, attrs={}, inputs=(), name="A")
+    first = SimpleNamespace(
+        op="solve_linear", inputs=(operator,), block=object(), attrs={}, name="left")
+    second = SimpleNamespace(
+        op="solve_linear", inputs=(operator,), block=object(), attrs={}, name="right")
+    program = SimpleNamespace(_values=(operator, first, second))
+
+    with pytest.raises(ValueError, match="conflicting owner blocks"):
+        _matrix_free_consumer_block(program, operator, where="test matrix-free owner")
 
 
 def test_subcycle_refreshes_both_matrix_free_dt_captures_inside_each_child_tick():
@@ -227,7 +253,7 @@ def test_subcycle_refreshes_both_matrix_free_dt_captures_inside_each_child_tick(
 def test_structured_regions_hoist_prepared_storage_and_emit_solve_in_region(
         kind, region_marker, solve_count):
     source = emit_cpp_program(_structured_region_krylov_program(kind))
-    install = source.index("ctx.install([=](double dt)")
+    install = source.index("state->step = [ctx_owner = state->ctx_owner](double dt)")
     region = source.index(region_marker, install)
     solution_owners = [match.start() for match in re.finditer(r"auto sf_sol\d+ =", source)]
     solve_calls = [

@@ -41,14 +41,23 @@ def _float_scalar(payload: Any, key: str, *, minimum: float | None = None) -> fl
     import numpy as np
 
     value = np.asarray(payload[key])
-    if value.shape != () or value.dtype.kind != "f":
-        raise TypeError("restart : %s must be an exact floating scalar" % key)
+    if value.shape != () or value.dtype.kind != "f" or value.dtype.itemsize != 8:
+        raise TypeError("restart : %s must be an exact binary64 scalar" % key)
     result = float(value.item())
     if not math.isfinite(result):
         raise ValueError("restart : %s must be finite" % key)
     if minimum is not None and result < minimum:
         raise ValueError("restart : %s must be >= %s" % (key, minimum))
     return result
+
+
+def _float_array(payload: Any, key: str) -> Any:
+    import numpy as np
+
+    value = np.asarray(payload[key])
+    if value.ndim == 0 or value.dtype != np.dtype(np.float64) or not value.flags.c_contiguous:
+        raise TypeError("restart : %s must be an exact C-contiguous binary64 array" % key)
+    return value
 
 
 def _bool_scalar(payload: Any, key: str) -> bool:
@@ -95,12 +104,33 @@ def _integer_vector(payload: Any, key: str) -> tuple[int, ...]:
     return tuple(int(item) for item in value.tolist())
 
 
+def _bool_vector(payload: Any, key: str) -> tuple[bool, ...]:
+    import numpy as np
+
+    value = np.asarray(payload[key])
+    if value.ndim != 1 or value.dtype.kind != "b":
+        raise TypeError("restart : %s must be an exact boolean vector" % key)
+    return tuple(bool(item) for item in value.tolist())
+
+
 def preflight_uniform_restart(payload: Any) -> None:
     """Validate every dynamic history/cache key before restart mutates native state."""
-    from pops.output._checkpoint_contract import IDENTITY_KEY, MANIFEST_KEY
+    from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
+    from pops.output._checkpoint_contract import (
+        IDENTITY_KEY,
+        MANIFEST_KEY,
+        PROGRAM_PERSISTENT_CHECKPOINT_KEY,
+        PROGRAM_PERSISTENT_CHECKPOINT_SCHEMA_KEY,
+        PROGRAM_PERSISTENT_PLAN_DIGEST_KEY,
+        PROGRAM_PERSISTENT_PLAN_MAXIMUM_BYTES_KEY,
+        PROGRAM_PERSISTENT_PLAN_SCHEMA_KEY,
+        PROGRAM_PERSISTENT_SLOT_COUNT_KEY,
+        program_persistent_checkpoint_from_payload,
+    )
     from pops.runtime._program_cadence_checkpoint import (
         PROGRAM_CADENCE_CHECKPOINT_KEYS,
     )
+    from pops.runtime._checkpoint_manifest import require_exact_payload_version
     from pops.runtime._system_io_history import (
         _history_level_key,
         _history_slot_key,
@@ -109,20 +139,31 @@ def preflight_uniform_restart(payload: Any) -> None:
 
     files = _files(payload)
     required = {
+        "pops_checkpoint_version",
         "t",
         "macro_step",
         "pops_spatial_contract",
         "pops_embedded_boundary_contract",
         "program_hash",
         "history_names",
-        "cache_nodes",
+        "cache_slots",
+        "cache_plan_schema",
+        "cache_plan_digest",
         "cache_names",
+        "cache_valid",
+        "cache_cold",
         "temporal_restart_state",
     } | PROGRAM_CADENCE_CHECKPOINT_KEYS
     missing = sorted(required - files)
     if missing:
         raise ValueError("restart : strict Uniform checkpoint is missing %s" % ", ".join(missing))
 
+    require_exact_payload_version(
+        payload,
+        key="pops_checkpoint_version",
+        expected=UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
+        runtime_kind="Uniform",
+    )
     _float_scalar(payload, "t")
     macro_step = _integer_scalar(payload, "macro_step", minimum=0)
     program_hash = _text_scalar(payload, "program_hash")
@@ -154,13 +195,23 @@ def preflight_uniform_restart(payload: Any) -> None:
         "auxiliary_checkpoint",
         "checkpoint_migration",
         "history_names",
-        "cache_nodes",
+        "cache_slots",
+        "cache_plan_schema",
+        "cache_plan_digest",
         "cache_names",
+        "cache_valid",
+        "cache_cold",
         "runtime_consumer_graph",
         "runtime_consumer_cursors",
         "runtime_consumer_diagnostics",
         MANIFEST_KEY,
         IDENTITY_KEY,
+        PROGRAM_PERSISTENT_CHECKPOINT_KEY,
+        PROGRAM_PERSISTENT_CHECKPOINT_SCHEMA_KEY,
+        PROGRAM_PERSISTENT_PLAN_SCHEMA_KEY,
+        PROGRAM_PERSISTENT_PLAN_DIGEST_KEY,
+        PROGRAM_PERSISTENT_PLAN_MAXIMUM_BYTES_KEY,
+        PROGRAM_PERSISTENT_SLOT_COUNT_KEY,
         *PROGRAM_CADENCE_CHECKPOINT_KEYS,
     }
     if "blocks" in files:
@@ -259,45 +310,90 @@ def preflight_uniform_restart(payload: Any) -> None:
                     )
                 allowed.add(key)
 
-    cache_nodes = _integer_vector(payload, "cache_nodes")
-    cache_names = _text_vector(payload, "cache_names", unique=False)
+    cache_slots = _integer_vector(payload, "cache_slots")
+    cache_plan_schema = _text_scalar(payload, "cache_plan_schema")
+    cache_plan_digest = _text_scalar(payload, "cache_plan_digest")
+    cache_names = _text_vector(payload, "cache_names", unique=True)
+    cache_valid = _bool_vector(payload, "cache_valid")
+    cache_cold = _bool_vector(payload, "cache_cold")
+    if cache_plan_schema != "program-resource-plan:v1":
+        raise ValueError("restart : strict Uniform cache plan schema is unsupported")
+    try:
+        digest_bytes = bytes.fromhex(cache_plan_digest)
+    except ValueError:
+        digest_bytes = b""
+    if len(cache_plan_digest) != 64 or digest_bytes.hex() != cache_plan_digest:
+        raise ValueError("restart : strict Uniform cache plan digest is not canonical SHA-256")
     if (
-        cache_nodes != tuple(sorted(set(cache_nodes)))
-        or any(node < 0 for node in cache_nodes)
-        or len(cache_names) != len(cache_nodes)
+        cache_slots != tuple(range(len(cache_slots)))
+        or len(cache_names) != len(cache_slots)
+        or len(cache_valid) != len(cache_slots)
+        or len(cache_cold) != len(cache_slots)
     ):
         raise ValueError("restart : strict Uniform cache index is inconsistent")
-    if cache_nodes and macro_step == 0:
+    if any(valid == cold for valid, cold in zip(cache_valid, cache_cold, strict=True)):
+        raise ValueError("restart : strict Uniform cache validity/cold state is inconsistent")
+    if any(cache_valid) and macro_step == 0:
         raise ValueError("restart : a step-zero checkpoint cannot contain a valid scheduled cache")
-    for node, cache_name in zip(cache_nodes, cache_names, strict=True):
-        fallback_name = "node_%d" % node
-        if not cache_name or (cache_name.startswith("node_") and cache_name != fallback_name):
-            raise ValueError(
-                "restart : scheduled cache node %d must use its live cache name or %r"
-                % (node, fallback_name)
-            )
+    for slot, cache_name, valid, cold in zip(
+        cache_slots, cache_names, cache_valid, cache_cold, strict=True
+    ):
+        if not cache_name:
+            raise ValueError("restart : scheduled cache slot %d has no static identity" % slot)
         keys = {
-            "cache_ncomp_%d" % node,
-            "cache_ngrow_%d" % node,
-            "cache_last_update_%d" % node,
-            "cache_accum_dt_%d" % node,
-            "cache_value_%d" % node,
+            "cache_ncomp_%d" % slot,
+            "cache_ngrow_%d" % slot,
+            "cache_last_update_%d" % slot,
+            "cache_accum_dt_%d" % slot,
         }
+        if valid:
+            keys.add("cache_value_%d" % slot)
         absent = sorted(keys - files)
         if absent:
             raise ValueError(
-                "restart : scheduled cache node %d has an incomplete strict manifest (%s)"
-                % (node, ", ".join(absent))
+                "restart : scheduled cache slot %d has an incomplete strict manifest (%s)"
+                % (slot, ", ".join(absent))
             )
         allowed.update(keys)
-        _integer_scalar(payload, "cache_ncomp_%d" % node, minimum=1)
-        _integer_scalar(payload, "cache_ngrow_%d" % node, minimum=0)
-        last_update = _integer_scalar(payload, "cache_last_update_%d" % node, minimum=0)
-        if last_update >= macro_step:
+        ncomp = _integer_scalar(payload, "cache_ncomp_%d" % slot, minimum=0)
+        ngrow = _integer_scalar(payload, "cache_ngrow_%d" % slot, minimum=0)
+        last_update = _integer_scalar(payload, "cache_last_update_%d" % slot)
+        _float_scalar(payload, "cache_accum_dt_%d" % slot, minimum=0.0)
+        if valid:
+            value = _float_array(payload, "cache_value_%d" % slot)
+            if value.size == 0:
+                raise ValueError(
+                    "restart : scheduled cache slot %d has an empty accepted value" % slot
+                )
+            if ncomp < 1 or last_update < 0 or last_update >= macro_step:
+                raise ValueError(
+                    "restart : scheduled cache slot %d has invalid accepted metadata" % slot
+                )
+        elif not cold or ncomp != 0 or ngrow != 0 or last_update != -1:
             raise ValueError(
-                "restart : scheduled cache node %d last update is not an accepted prior step" % node
+                "restart : cold scheduled cache slot %d has fabricated value metadata" % slot
             )
-        _float_scalar(payload, "cache_accum_dt_%d" % node, minimum=0.0)
+
+    persistent_keys = {
+        PROGRAM_PERSISTENT_CHECKPOINT_KEY,
+        PROGRAM_PERSISTENT_CHECKPOINT_SCHEMA_KEY,
+        PROGRAM_PERSISTENT_PLAN_SCHEMA_KEY,
+        PROGRAM_PERSISTENT_PLAN_DIGEST_KEY,
+        PROGRAM_PERSISTENT_PLAN_MAXIMUM_BYTES_KEY,
+        PROGRAM_PERSISTENT_SLOT_COUNT_KEY,
+    }
+    persistent_present = persistent_keys.intersection(files)
+    if persistent_present:
+        if persistent_present != persistent_keys:
+            missing = sorted(persistent_keys - persistent_present)
+            raise ValueError(
+                "restart : Program persistent checkpoint envelope is incomplete (%s)"
+                % ", ".join(missing)
+            )
+        # Decode and authenticate POPSPVS1 before the native restart transaction.  This is kept in
+        # the preflight even though the sealed manifest also inspects it, because callers of this
+        # semantic guard may provide an in-memory payload without a manifest.
+        program_persistent_checkpoint_from_payload(payload)
 
     unknown = sorted(files - allowed)
     if unknown:

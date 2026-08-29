@@ -732,7 +732,7 @@ réduction MPI, la transaction et l'application à l'état. Un provider `Reflux`
 une seconde autorité conservative. Une autre dimension ou un autre ratio est refusé pendant la
 résolution ou le bind avec les capacités observées. Le coeur de
 planification ne normalise jamais la demande vers ce sous-ensemble. Défensivement,
-`AmrProgramContext` revalide aussi chaque transition à sa construction et refuse un ratio différent
+`ProgramExecutionServices` revalide aussi chaque transition à sa construction et refuse un ratio différent
 de 2 avant le premier pas : cette limite appartient au provider natif reflux/average-down installé,
 pas aux protocoles publics `AMRHierarchy`, `Transfer` et `AMRExecution`, qui restent extensibles par
 sélection d'un autre provider déclarant les capacités correspondantes.
@@ -987,7 +987,7 @@ code généré construit une fois `PreparedAffineLinearProblem`, `PreparedLinear
 256 bits du Program/opérateur, révision, macro-pas, fraction d'étape, bits IEEE de `dt` et du temps,
 empreintes 256 bits de la topologie native (boxes, distribution, halo, métrique et BC) et des
 ressources figées. Le probe réutilise uniquement la topologie complète et la révision immuables
-frappées lors de `prepare`, puis recalcule depuis l'unique `ProgramContext` partagé par le step,
+frappées lors de `prepare`, puis recalcule depuis l'unique `ProgramExecutionServices` partagé par le step,
 l'ApplyFn et le préconditionneur les identités dynamiques de l'horloge et de la révision topologique ;
 il ne renvoie jamais simplement la copie du snapshot attendu. La
 préparation copie les coefficients variables, matérialise les plans halo/buffers MPI et prépare le
@@ -1023,7 +1023,7 @@ est déclenché par le bundle du niveau racine. Le gel des coefficients tensorie
 allouée, halos compris, car les moyennes de face et termes croisés lisent les voisins inter-boxes.
 
 Les récurrences utilisent une algèbre de champs pure qui ne touche ni le ledger reflux AMR ni les
-effets temporels de `ProgramContext`. Aucune allocation de champ, de plan halo, de buffer MPI ou de
+effets temporels de `ProgramExecutionServices`. Aucune allocation de champ, de plan halo, de buffer MPI ou de
 scratch de field solve et aucun calcul cellule par cellule n'ont lieu en Python ou dans la boucle
 Krylov ; les capacités sont persistantes et les kernels de champ et réductions collectives restent
 Kokkos/C++. L'initialisation des vecteurs persistants, y compris le départ froid de chaque V-cycle de

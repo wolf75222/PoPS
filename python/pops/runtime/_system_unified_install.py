@@ -515,8 +515,11 @@ class _SystemUnifiedInstall(_System):
                 authored.transaction_plan() if authored is not None else None
             )
             if authored is not None:
+                from pops.codegen.temporal_manifest import build_temporal_manifest
+
                 self._temporal_restart_state.configure_program(
-                    authored.temporal_manifest(), time=self.time(), macro_step=self.macro_step()
+                    build_temporal_manifest(authored, target="system"),
+                    time=self.time(), macro_step=self.macro_step(),
                 )
 
         # Shared NumericalFlux routes need both endpoint MultiFabs and the installed Program, but

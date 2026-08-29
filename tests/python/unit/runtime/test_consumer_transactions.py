@@ -43,6 +43,8 @@ from pops.runtime._consumer import (
     PublicationReceipt,
     plan_accepted_side_effects,
 )
+from pops.runtime._consumer_transaction import ConsumerTransactionWorkspace
+from pops.runtime._runtime_instance import _ConsumerBindAuthority
 from pops.time import AcceptedStep, Clock, Every, Schedule, TimePoint, every_dt
 from tests.python.unit.runtime.test_runtime_planning import _install, _manifest
 
@@ -199,6 +201,35 @@ class _Publisher(ConsumerPublisher):
     def prepare(self, effect):
         self.prepare_calls += 1
         return _Prepared(effect, self)
+
+
+class _PhasePrepared(_Prepared):
+    """Trace publication cleanup without changing the writer contract under test."""
+
+    def publish(self):
+        self.publisher.events.append(("publish", self.temp_id))
+        return super().publish()
+
+    def discard(self):
+        self.publisher.events.append(("discard", self.temp_id))
+        return super().discard()
+
+    def rollback(self):
+        self.publisher.events.append(("rollback", self.temp_id))
+        return super().rollback()
+
+
+class _PhasePublisher(_Publisher):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.phase = "candidate"
+        self.prepare_phases = []
+        self.events = []
+
+    def prepare(self, effect):
+        self.prepare_phases.append(self.phase)
+        self.prepare_calls += 1
+        return _PhasePrepared(effect, self)
 
 
 def test_graph_and_plan_are_semantic_and_insertion_order_independent():
@@ -432,6 +463,127 @@ def test_failure_actions_have_exact_cursor_and_artifact_semantics():
     assert len(skipped.skipped) == 1
     assert skipped.cursors.to_data() == cursors.to_data()
     assert skip_publisher.artifacts == set()
+
+
+def test_retry_uses_only_pre_staged_publication_alternatives_after_hidden_publish():
+    _, runtime = _runtime()
+    clock = Clock("solution", owner=OwnerPath.consumer("adc-685-frozen-retry"))
+    manifest = _manifest_for(runtime, "frozen-retry", clock, action=Retry(3))
+    cursors = ConsumerCursorSet()
+    plan = plan_accepted_side_effects(runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
+    publisher = _PhasePublisher(fail_publications=1)
+
+    transaction = ConsumerTransaction(plan, cursors, publisher)
+    assert publisher.prepare_calls == 3
+    assert publisher.prepare_phases == ["candidate", "candidate", "candidate"]
+
+    # This models the native hidden publication boundary.  Any prepare here would recapture a
+    # scientific payload after the native writer lock was acquired.
+    publisher.phase = "hidden-published"
+    report = transaction.accept()
+
+    assert report.status == "accepted"
+    assert len(report.published) == 1
+    assert publisher.prepare_calls == 3
+    assert publisher.prepare_phases == ["candidate", "candidate", "candidate"]
+    assert publisher.temporaries == set()
+    assert len(publisher.artifacts) == 1
+    assert publisher.events == [
+        ("publish", "temp-1"),
+        ("rollback", "temp-1"),
+        ("publish", "temp-2"),
+        ("discard", "temp-3"),
+    ]
+
+
+def test_bind_workspace_enforces_the_exact_frozen_retry_budget_before_preparation():
+    _, runtime = _runtime()
+    clock = Clock("solution", owner=OwnerPath.consumer("adc-685-workspace-budget"))
+    manifest = _manifest_for(runtime, "bounded-retry", clock, action=Retry(2))
+    plan = plan_accepted_side_effects(runtime, ConsumerGraph((manifest,)), _moment(clock))
+    publisher = _Publisher()
+    workspace = ConsumerTransactionWorkspace(
+        max_effects=1, max_prepared=2, max_transactions=1,
+    )
+
+    transaction = ConsumerTransaction(plan, ConsumerCursorSet(), publisher, workspace=workspace)
+    assert publisher.prepare_calls == 2
+    transaction.reject()
+
+    undersized = ConsumerTransactionWorkspace(
+        max_effects=1, max_prepared=1, max_transactions=1,
+    )
+    with pytest.raises(ValueError, match="frozen bind-time effect/retry budget"):
+        ConsumerTransaction(plan, ConsumerCursorSet(), publisher, workspace=undersized)
+    assert publisher.prepare_calls == 2
+
+
+def test_bind_authority_refuses_a_late_consumer_shape_before_writer_mutation():
+    _, runtime = _runtime()
+    clock = Clock("solution", owner=OwnerPath.consumer("adc-685-late-shape"))
+    first = _manifest_for(runtime, "first", clock)
+    second = _manifest_for(runtime, "second", clock, dependency=first.handle)
+    graph = ConsumerGraph((first, second))
+    authority = _ConsumerBindAuthority.capture(graph, runtime)
+    late_plan = plan_accepted_side_effects(runtime, graph, _moment(clock))
+    publisher = _Publisher()
+
+    # A bind that reserved only the first graph shape cannot be widened by a later plan.  The
+    # refusal happens before ConsumerTransaction.prepare(), hence no temporary/artifact exists.
+    first_only = ConsumerGraph((first,))
+    first_authority = _ConsumerBindAuthority.capture(first_only, runtime)
+    with pytest.raises(ValueError, match="bound runtime authority"):
+        first_authority.validate(late_plan)
+    assert publisher.prepare_calls == 0
+    authority.validate(late_plan)
+
+
+def test_workspace_does_not_grow_while_an_irreversible_finalizer_is_retained():
+    _, runtime = _runtime()
+    clock = Clock("solution", owner=OwnerPath.consumer("adc-685-workspace-retained"))
+    manifest = _manifest_for(runtime, "retained-finalizer", clock)
+    plan = plan_accepted_side_effects(runtime, ConsumerGraph((manifest,)), _moment(clock))
+    workspace = ConsumerTransactionWorkspace(
+        max_effects=1, max_prepared=1, max_transactions=1,
+    )
+    publisher = _Publisher(fail_finalizations=1)
+    transaction = ConsumerTransaction(plan, ConsumerCursorSet(), publisher, workspace=workspace)
+
+    transaction.accept()
+    assert transaction.seal()
+    with pytest.raises(RuntimeError, match="retained by an unfinished finalizer"):
+        ConsumerTransaction(plan, ConsumerCursorSet(), publisher, workspace=workspace)
+    assert publisher.prepare_calls == 1
+
+    assert transaction.seal() == ()
+    ConsumerTransaction(plan, ConsumerCursorSet(), publisher, workspace=workspace).reject()
+    assert publisher.prepare_calls == 2
+
+
+def test_publication_failure_cleans_prepared_and_accepted_effects_in_reverse_order():
+    _, runtime = _runtime()
+    clock = Clock("solution", owner=OwnerPath.consumer("adc-685-reverse-cleanup"))
+    first = _manifest_for(runtime, "first", clock, n=1)
+    second = _manifest_for(runtime, "second", clock, n=1, dependency=first.handle)
+    cursors = ConsumerCursorSet()
+    plan = plan_accepted_side_effects(
+        runtime, ConsumerGraph((first, second)), _moment(clock, step=1), cursors
+    )
+    publisher = _PhasePublisher(fail_on=(2,))
+
+    with pytest.raises(ConsumerPublicationError):
+        ConsumerTransaction(plan, cursors, publisher).accept()
+
+    # The second published preparation is compensated before the earlier accepted artifact, and
+    # no temporary survives the transaction failure.
+    assert publisher.events == [
+        ("publish", "temp-1"),
+        ("publish", "temp-2"),
+        ("rollback", "temp-2"),
+        ("rollback", "temp-1"),
+    ]
+    assert publisher.temporaries == set()
+    assert publisher.artifacts == set()
 
 
 def test_success_receipt_is_the_only_cursor_commit_and_deduplicates_occurrence():

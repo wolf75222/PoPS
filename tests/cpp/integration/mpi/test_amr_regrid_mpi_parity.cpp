@@ -214,7 +214,10 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
 
   const double m0a = sys.mass("a");  // declenche le build paresseux
   const double m0b = sys.mass("b");
-  EXPECT_NE(sys.engine(), nullptr);
+  {
+    const auto accepted_runtime = sys.accepted_amr_runtime();
+    EXPECT_TRUE(accepted_runtime);
+  }
   const int coarse_local = sys.coarse_local_boxes();
   const int coarse_total = sys.coarse_total_boxes();
 

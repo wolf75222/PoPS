@@ -3,7 +3,7 @@
 /// @file
 /// @brief Side-effect-free field algebra used by prepared linear solves.
 ///
-/// These operations deliberately bypass ProgramContext.  In particular, an AMR ProgramContext may
+/// These operations deliberately bypass ProgramExecutionServices.  In particular, an AMR ProgramExecutionServices may
 /// attach time-integration and reflux-ledger semantics to its public axpy/lincomb methods; Krylov
 /// recurrences are private algebra on scratch fields and must never mutate that ledger.
 

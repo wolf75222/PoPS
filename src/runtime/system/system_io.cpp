@@ -7,7 +7,10 @@
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/dynamic/dynlib.hpp>
+#include <pops/runtime/program/program_execution_services.hpp>
+#include <pops/runtime/program/program_loader.hpp>
 #include <pops/runtime/program/module_metadata.hpp>
+#include <pops/runtime/program/program_persistent_value_checkpoint.hpp>
 #include <pops/runtime/system/exact_field_marshaling.hpp>
 
 #include <algorithm>
@@ -65,6 +68,54 @@ void System<Dim>::set_clock(double t, int macro_step) {
   }
   p_->t = t;
   p_->macro_step_ = macro_step;
+}
+
+template <int Dim>
+std::vector<std::uint8_t> System<Dim>::capture_program_persistent_value_checkpoint() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return runtime::program::serialize_program_persistent_value_checkpoint(
+      runtime::program::capture_program_persistent_value_checkpoint(
+          p_->program_.persistent_values()));
+}
+
+template <int Dim>
+runtime::program::PreparedProgramPersistentValueRestore
+System<Dim>::prepare_program_persistent_value_restore(
+    const std::vector<std::uint8_t>& payload) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  const auto checkpoint = runtime::program::deserialize_program_persistent_value_checkpoint(
+      std::span<const std::uint8_t>(payload.data(), payload.size()));
+  const auto& receipt = p_->program_.artifact_publication_receipt();
+  if (!receipt)
+    throw std::logic_error(
+        "System Program persistent restore requires an installed prepared artifact");
+  auto prepared = runtime::program::prepare_program_persistent_value_restore(
+      checkpoint, receipt->resource_plan);
+  return runtime::program::PreparedProgramPersistentValueRestore(
+      std::move(prepared), p_->program_.step_install_generation_);
+}
+
+template <int Dim>
+void System<Dim>::publish_program_persistent_value_restore(
+    runtime::program::PreparedProgramPersistentValueRestore& prepared) {
+  if (!p_->external_program_transaction_ || p_->external_step_transaction_committed_ ||
+      p_->external_program_transaction_->phase() !=
+          runtime::program::ProgramTransactionPhase::kCandidate)
+    throw std::logic_error(
+        "System Program persistent restore publication requires the restart candidate writer");
+  std::exception_ptr validation_error;
+  try {
+    prepared.validate_publication(p_->program_.step_install_generation_);
+  } catch (...) {
+    validation_error = std::current_exception();
+  }
+  if (all_reduce_max(validation_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && validation_error)
+      std::rethrow_exception(validation_error);
+    throw std::runtime_error(
+        "System Program persistent restore publication failed collective validation");
+  }
+  prepared.publish_validated_into(p_->program_.persistent_values());
 }
 
 template <int Dim>
@@ -144,11 +195,13 @@ void System<Dim>::rotate_histories(const std::string& clock_identity) {
 // MPI-safe and bit-identical under np>1. No .so checkpoint_extra ABI is needed for the buffers.
 template <int Dim>
 std::vector<std::string> System<Dim>::history_names() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   // enumeration lives in the extracted Program subsystem (ADC-594)
   return p_->program_.hist_.names();
 }
 template <int Dim>
 int System<Dim>::history_depth(const std::string& name) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   auto it = p_->program_.hist_.depth.find(name);
   if (it == p_->program_.hist_.depth.end())
     throw std::runtime_error("System::history_depth: unknown history '" + name + "'");
@@ -156,6 +209,7 @@ int System<Dim>::history_depth(const std::string& name) const {
 }
 template <int Dim>
 int System<Dim>::history_ncomp(const std::string& name) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   auto it = p_->program_.hist_.histories.find(name);
   if (it == p_->program_.hist_.histories.end())
     throw std::runtime_error("System::history_ncomp: unknown history '" + name + "'");
@@ -163,6 +217,7 @@ int System<Dim>::history_ncomp(const std::string& name) const {
 }
 template <int Dim>
 std::vector<double> System<Dim>::history_global(const std::string& name, int slot) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   const std::string request = std::to_string(slot);
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{std::string_view(name), std::string_view(request)}}))
@@ -178,6 +233,7 @@ std::vector<double> System<Dim>::history_global(const std::string& name, int slo
 }
 template <int Dim>
 bool System<Dim>::history_initialized(const std::string& name) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   auto it = p_->program_.hist_.initialized.find(name);
   if (it == p_->program_.hist_.initialized.end())
     throw std::runtime_error("System::history_initialized: unknown history '" + name + "'");
@@ -185,6 +241,7 @@ bool System<Dim>::history_initialized(const std::string& name) const {
 }
 template <int Dim>
 int System<Dim>::history_fill_count(const std::string& name) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   auto it = p_->program_.hist_.fill_count.find(name);
   if (it == p_->program_.hist_.fill_count.end())
     throw std::runtime_error("System::history_fill_count: unknown history '" + name + "'");
@@ -275,6 +332,7 @@ void System<Dim>::restore_history_fill_count(const std::string& name, int fill_c
 // reconstructs the missing slots by re-stepping the installed Program from the nearest older slot.
 template <int Dim>
 double System<Dim>::history_slot_dt(const std::string& name, int slot) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   auto it = p_->program_.hist_.histories.find(name);
   if (it == p_->program_.hist_.histories.end())
     throw std::runtime_error("System::history_slot_dt: unknown history '" + name + "'");
@@ -429,10 +487,8 @@ int System<Dim>::rebuild_history_slots(const std::string& name,
       // Adjacent anchors bracket only omitted slots. Stop before `newer`: that exact checkpoint
       // value needs no Program execution. The interval from slot j+1 to j is dts[j+1].
       for (int j = older - 1; j > newer; --j) {
-        p_->program_.last_dt_ = dts[static_cast<std::size_t>(j + 1)];
-        p_->program_.run_balance_replay("System::rebuild_history_slots", [&] {
-          p_->program_.step_(static_cast<double>(dts[static_cast<std::size_t>(j + 1)]));
-        });
+        p_->program_.replay_step(static_cast<double>(dts[static_cast<std::size_t>(j + 1)]),
+                                 "System::rebuild_history_slots");
         reconstructed[static_cast<std::size_t>(j)] =
             p_->sp[owner].U;  // deep copy the fresh owner state
       }
@@ -466,16 +522,19 @@ int System<Dim>::rebuild_history_slots(const std::string& name,
 // Load a generated problem.so and install its compiled time Program. Mirrors add_native_block
 // (native_loader.hpp): self-promote this module to the global scope so the .so resolves the System
 // seam accessors (POPS_EXPORT) against it, load the generated package locally, fail-loud on ABI-key
-// mismatch, then call pops_install_program(this), whose shared facade factory selects the provider
-// and installs the macro-step closure. The .so stays loaded for the process lifetime.
+// mismatch, then prepare the generated v5 candidate against the exact-ranked host services.  The
+// committed ProgramRuntimeState owns the private image for exactly as long as its callbacks exist.
 template <int Dim>
 POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
   require_assembling(p_->lifecycle_,
                      "install_program");  // frozen once pops.bind completes (ADC-592)
+  if (p_->program_.step_install_generation_ == std::numeric_limits<std::uint64_t>::max())
+    throw std::overflow_error("System::install_program: Program generation overflow");
+  const std::uint64_t preparation_generation = p_->program_.step_install_generation_ + 1;
 #if defined(_WIN32)
   // Windows: the generated .dll links against _pops.lib at compile time; no global promotion needed.
-  pops::dynlib::handle h = pops::dynlib::open(so_path);
-  if (!h) {
+  pops::dynlib::UniqueHandle image(pops::dynlib::open_private_image(so_path));
+  if (!pops::dynlib::valid(image.get())) {
     throw std::runtime_error("System::install_program: LoadLibrary('" + so_path +
                              "'): " + pops::dynlib::last_error());
   }
@@ -490,71 +549,52 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
   }
   // The host must be visible to the package, but the package itself must remain local: generated
   // Programs deliberately reuse fixed ABI and C++ template names across semantic identities.
-  pops::dynlib::handle h = pops::dynlib::open(so_path);
-  if (!h) {
+  pops::dynlib::UniqueHandle image(pops::dynlib::open_private_image(so_path));
+  if (!pops::dynlib::valid(image.get())) {
     throw std::runtime_error(
         "System::install_program: dlopen('" + so_path + "'): " + pops::dynlib::last_error() +
         " (the pops::System seam accessors must be exported and the host module promoted "
         "globally; cf. POPS_EXPORT)");
   }
 #endif
-  auto key_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_abi_key"));
-  if (!key_fn) {
-    pops::dynlib::close(h);
-    throw std::runtime_error("System::install_program: pops_program_abi_key missing from '" +
-                             so_path +
-                             "' (regenerate the problem module with the current pops headers)");
-  }
-  const std::string loader_key = key_fn();
+  // Build a typed, retained preparation image before entering the private DSO.  It is the only
+  // object candidates can use to construct execution services; the raw service registry never
+  // grants a generated artifact a System facade during its prelude.
+  auto preparation_image =
+      pops::runtime::program::make_program_preparation_image<Dim>(this, preparation_generation);
+  auto preparation_host = program_host_descriptor();
+  pops::runtime::program::bind_program_preparation_image(preparation_host, preparation_image);
+  // Exactly one Program symbol is resolved by inspect_program_installation.  It copies every
+  // descriptor view while the private image is resident; all checks below consume that host image.
+  auto inspected =
+      pops::runtime::program::inspect_program_installation(std::move(image), preparation_host);
+  inspected.set_preparation_image(preparation_image);
+  const auto& candidate_metadata = inspected.metadata();
+  const auto& candidate_tables = inspected.tables();
+  const std::string loader_key = candidate_metadata.abi_key;
   const std::string module_key = pops::abi_key();
   if (loader_key != module_key) {
-    pops::dynlib::close(h);
     throw std::runtime_error(
         "System::install_program: compiled program ABI mismatch: expected '" + module_key +
         "', got '" + loader_key +
         "'. Recompile the problem module with the SAME compiler, C++ standard and "
         "pops headers as the _pops module.");
   }
-  // Route registry guard: the manifest is mandatory and must match before any installer is called.
-  {
-    auto manifest_fn =
-        reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_route_manifest"));
-    if (!manifest_fn) {
-      pops::dynlib::close(h);
-      throw std::runtime_error(
-          "System::install_program: pops_program_route_manifest missing; regenerate artifact");
-    }
-    try {
-      const char* raw = manifest_fn();
-      if (!raw || raw[0] == '\0')
-        throw std::runtime_error(
-            "System::install_program: pops_program_route_manifest returned empty data");
-      pops::verify_route_manifest(std::string(raw), "install_program");
-    } catch (...) {
-      pops::dynlib::close(h);
-      throw;
-    }
-  }
+  pops::verify_route_manifest(candidate_metadata.route_manifest, "install_program");
   std::vector<pops::runtime::program::ProgramOperatorAuthority> operator_authorities;
   std::vector<pops::runtime::program::ProgramHistoryReplayAuthority> history_replay_authorities;
   try {
-    operator_authorities = pops::runtime::program::read_program_operator_authorities(h);
-    history_replay_authorities = pops::runtime::program::read_program_history_replay_authorities(h);
+    operator_authorities =
+        pops::runtime::program::read_program_operator_authorities(candidate_tables);
+    history_replay_authorities =
+        pops::runtime::program::read_program_history_replay_authorities(candidate_tables);
   } catch (...) {
-    pops::dynlib::close(h);
     throw;
-  }
-  auto install =
-      reinterpret_cast<void (*)(System<Dim>*)>(pops::dynlib::sym(h, "pops_install_program"));
-  if (!install) {
-    pops::dynlib::close(h);
-    throw std::runtime_error("System::install_program: pops_install_program missing from '" +
-                             so_path + "'");
   }
   // Mandatory install-time requirement validation. The complete owner-qualified metadata table is
   // authenticated before installation on every platform; no pre-metadata artifact can bypass it.
   try {
-    const auto meta = pops::runtime::program::read_module_metadata(h);
+    const auto meta = pops::runtime::program::read_module_metadata(candidate_tables);
     const std::vector<std::string> sys_block_names = block_names();
     const std::string configured_solver = poisson_solver();
     auto has_block = [&sys_block_names](const std::string& want) {
@@ -588,58 +628,259 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
       }
     }
   } catch (...) {
-    pops::dynlib::close(h);
     throw;
   }
-  // Resolve every optional scalar ABI before the first facade mutation. A module that declares a
-  // dt bound but omits its target entry is malformed; silently falling back to native CFL would
-  // execute different numerics from the authored Program.
-  using has_dt_t = bool (*)();
-  using dt_bound_t = pops::Real (*)(System<Dim>*, pops::Real);
-  auto has_dt = reinterpret_cast<has_dt_t>(pops::dynlib::sym(h, "pops_program_has_dt_bound"));
-  auto dt_bound = reinterpret_cast<dt_bound_t>(pops::dynlib::sym(h, "pops_program_dt_bound"));
-  const bool program_has_dt_bound = has_dt && has_dt();
-  if (program_has_dt_bound && !dt_bound) {
-    pops::dynlib::close(h);
+  const bool program_has_dt_bound = inspected.candidate().dt_bound != nullptr;
+  const std::string installed_hash = candidate_metadata.artifact_identity;
+  const bool state_free_program = candidate_tables.blocks.empty();
+  if (state_free_program &&
+      (!candidate_tables.parameters.empty() || !candidate_tables.operator_authorities.empty() ||
+       !candidate_tables.history_authorities.empty() || !candidate_tables.checkpoint_shape.empty()))
     throw std::runtime_error(
-        "System::install_program: Program declares a dt bound but pops_program_dt_bound is "
-        "missing; regenerate the System artifact");
+        "System::install_program: state-free Program declares block-owned authority before "
+        "candidate_prepare");
+  // Bind all compact symbolic resource identities before the DSO gets its descriptor.  A
+  // runtime-sized plan deliberately has no byte authority yet: prepare_* below records exact
+  // local MultiFab prototypes and the host seals one collective plan before publication.  The
+  // candidate therefore still has dense slots (never value ids), but cannot fabricate an extent.
+  std::vector<int> preparation_block_map;
+  {
+    const std::vector<std::string> sys_names = block_names();
+    const int count = static_cast<int>(candidate_tables.blocks.size());
+    if (state_free_program && !sys_names.empty())
+      throw std::runtime_error(
+          "System::install_program: a state-free Program has an empty block identity table, but "
+          "this System has accepted blocks; positional Program-to-System binding is not supported");
+    preparation_block_map.assign(static_cast<std::size_t>(count), -1);
+    for (int program_block = 0; program_block < count; ++program_block) {
+      const auto& want = candidate_tables.blocks.at(static_cast<std::size_t>(program_block)).name;
+      const auto found = std::find(sys_names.begin(), sys_names.end(), want);
+      if (found == sys_names.end())
+        throw std::runtime_error("Program requires block instance '" + want +
+                                 "', but simulation did not instantiate it");
+      preparation_block_map[static_cast<std::size_t>(program_block)] =
+          static_cast<int>(std::distance(sys_names.begin(), found));
+    }
   }
-  auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_hash"));
-  const std::string installed_hash = hash_fn ? std::string(hash_fn()) : std::string();
-  auto install_boundaries = reinterpret_cast<void (*)(System<Dim>*)>(
-      pops::dynlib::sym(h, "pops_install_field_boundaries"));
+  pops::runtime::program::bind_staged_uniform_program_resource_declaration<Dim>(
+      preparation_image, candidate_tables.resource_declarations(), preparation_block_map);
 
-  // NAME-based block binding (Spec 3 criterion 23, ADC-457). A compiled Program numbers its blocks in
-  // P.state declaration order (the .so's pops_program_block_name table); the System numbers its blocks
+  using preparation_boundary_registry =
+      runtime::program::ArtifactFieldBoundaryAuthorityRegistry<Dim>;
+  preparation_boundary_registry preparation_boundary_baseline;
+  {
+    auto capture_authorities = [](const auto& plans) {
+      preparation_boundary_registry result;
+      for (const auto& [slot, plan] : plans)
+        result.emplace(slot,
+                       runtime::program::ArtifactFieldBoundaryAuthority<Dim>{
+                           plan.boundary_kernel, plan.boundary_point, plan.boundary_parameters});
+      return result;
+    };
+    const auto current = capture_authorities(p_->field_plans_);
+    if (p_->program_.artifact_field_boundary_baseline_) {
+      preparation_boundary_baseline = *p_->program_.artifact_field_boundary_baseline_;
+      if (preparation_boundary_baseline.size() != current.size())
+        throw std::logic_error(
+            "System::install_program: field-plan registry changed after an artifact boundary "
+            "baseline was established; create a fresh runtime");
+    } else {
+      preparation_boundary_baseline = current;
+    }
+  }
+  pops::runtime::program::seed_staged_uniform_field_boundaries<Dim>(preparation_image,
+                                                                    preparation_boundary_baseline);
+
+  // Run the candidate prelude against the detached preparation image before a live Program,
+  // boundary, persistent carrier, or auxiliary registry is changed.  Provider-consumer plans are
+  // copied into a complete registry image and authenticated collectively; publication below is an
+  // allocation-free swap and therefore cannot expose a rank-local half-installation.
+  using auxiliary_registry = decltype(p_->auxiliary_registry_);
+  using staged_history_request =
+      typename runtime::program::ProgramExecutionPreparationImage<Dim>::HistoryRequest;
+  std::optional<auxiliary_registry> candidate_auxiliary_registry;
+  std::vector<staged_history_request> staged_histories;
+  std::optional<preparation_boundary_registry> staged_field_boundaries;
+  std::vector<typename runtime::program::ProgramExecutionPreparationImage<Dim>::CacheRequest>
+      staged_cache_requests;
+  std::optional<runtime::program::ProgramRuntimeState<Dim>> staged_transaction_state;
+  std::string staged_transaction_authority_contract;
+  bool has_staged_auxiliary_registry = false;
+  std::exception_ptr detached_prepare_error;
+  try {
+    inspected.prepare(preparation_host);
+    // The DSO has finished declaring its local clock image. Seal that host-owned provider before
+    // reading any other staged carrier; no System state is touched by this transition.
+    pops::runtime::program::seal_staged_uniform_program_execution_services<Dim>(preparation_image);
+    auto staged =
+        pops::runtime::program::take_staged_auxiliary_consumer_plans<Dim>(preparation_image);
+    staged_histories = pops::runtime::program::take_staged_histories<Dim>(preparation_image);
+    if (state_free_program && !staged_histories.empty())
+      throw std::logic_error("System::install_program: state-free Program staged histories");
+    staged_field_boundaries =
+        pops::runtime::program::take_staged_uniform_field_boundaries<Dim>(preparation_image);
+    staged_cache_requests =
+        pops::runtime::program::take_staged_uniform_cache_requests<Dim>(preparation_image);
+    staged_transaction_authority_contract =
+        pops::runtime::program::staged_program_transaction_authority_contract<Dim>(
+            preparation_image);
+    staged_transaction_state.emplace(
+        pops::runtime::program::take_staged_uniform_transaction_authority_state<Dim>(
+            preparation_image));
+    if (!staged.empty()) {
+      candidate_auxiliary_registry.emplace(p_->auxiliary_registry_);
+      for (auto& plan : staged)
+        candidate_auxiliary_registry->add_consumer_plan(std::move(plan));
+      has_staged_auxiliary_registry = true;
+    }
+  } catch (...) {
+    detached_prepare_error = std::current_exception();
+  }
+  if (all_reduce_max(detached_prepare_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && detached_prepare_error)
+      std::rethrow_exception(detached_prepare_error);
+    throw std::runtime_error(
+        "System::install_program: Program detached preparation failed collectively");
+  }
+  if (all_reduce_min(has_staged_auxiliary_registry ? 1L : 0L) !=
+      all_reduce_max(has_staged_auxiliary_registry ? 1L : 0L))
+    throw std::runtime_error(
+        "System::install_program: Program provider-plan presence differs between MPI ranks");
+  if (has_staged_auxiliary_registry &&
+      !all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-program-provider-plans", candidate_auxiliary_registry->collective_contract()}}))
+    throw std::runtime_error(
+        "System::install_program: staged Program provider plans differ between MPI ranks");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-program-transaction-authorities",
+            staged_transaction_authority_contract}}))
+    throw std::runtime_error(
+        "System::install_program: staged transaction authorities differ between MPI ranks");
+
+  // Runtime-sized resources are intentionally materialized only after the DSO has completed its
+  // detached prelude.  First authenticate the exact finite family/key/shape set, then reduce only
+  // the rank-local allocated-cell footprint.  A rank with no local fabs contributes cells==0;
+  // using max (rather than a global-cell sum) preserves the exact worst-rank memory ceiling.
+  using resource_prototype = runtime::program::ProgramInstallationTables::ResourcePrototype;
+  std::vector<resource_prototype> prepared_resource_prototypes;
+  std::exception_ptr resource_materialization_error;
+  try {
+    prepared_resource_prototypes =
+        pops::runtime::program::take_staged_uniform_resource_prototypes<Dim>(preparation_image);
+    std::sort(prepared_resource_prototypes.begin(), prepared_resource_prototypes.end(),
+              [](const resource_prototype& left, const resource_prototype& right) {
+                return std::tie(left.kind, left.slot, left.subslot) <
+                       std::tie(right.kind, right.slot, right.subslot);
+              });
+    for (std::size_t index = 1; index < prepared_resource_prototypes.size(); ++index) {
+      const auto& previous = prepared_resource_prototypes[index - 1];
+      const auto& current = prepared_resource_prototypes[index];
+      if (std::tie(previous.kind, previous.slot, previous.subslot) ==
+          std::tie(current.kind, current.slot, current.subslot))
+        throw std::logic_error(
+            "System::install_program: detached prepare emitted a duplicate resource prototype");
+    }
+  } catch (...) {
+    resource_materialization_error = std::current_exception();
+  }
+  if (all_reduce_max(resource_materialization_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && resource_materialization_error)
+      std::rethrow_exception(resource_materialization_error);
+    throw std::runtime_error(
+        "System::install_program: Program resource prototype capture failed collectively");
+  }
+
+  std::string resource_family_contract;
+  std::exception_ptr resource_family_contract_error;
+  try {
+    ExactContractBuilder contract;
+    contract.text("pops.system.detached-uniform-resource-families")
+        .scalar(static_cast<std::uint32_t>(Dim))
+        .scalar(preparation_generation)
+        .scalar(static_cast<std::uint64_t>(prepared_resource_prototypes.size()));
+    for (const auto& prototype : prepared_resource_prototypes) {
+      contract.scalar(static_cast<std::uint8_t>(prototype.kind))
+          .scalar(prototype.slot)
+          .scalar(prototype.subslot)
+          .scalar(prototype.layout.itemsize)
+          .scalar(prototype.layout.components)
+          .scalar(prototype.layout.ghosts);
+    }
+    resource_family_contract = std::move(contract).release();
+  } catch (...) {
+    resource_family_contract_error = std::current_exception();
+  }
+  if (all_reduce_max(resource_family_contract_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && resource_family_contract_error)
+      std::rethrow_exception(resource_family_contract_error);
+    throw std::runtime_error(
+        "System::install_program: Program resource-family contract preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-detached-uniform-resource-families", resource_family_contract}})) {
+    throw std::runtime_error(
+        "System::install_program: detached Program resource families differ between MPI ranks");
+  }
+  for (auto& prototype : prepared_resource_prototypes) {
+    prototype.layout.cells = all_reduce_max(prototype.layout.cells);
+    if (prototype.layout.cells == 0)
+      throw std::runtime_error(
+          "System::install_program: runtime-sized Program resource has no local allocation on any rank");
+    if (prototype.layout.itemsize == 0 || prototype.layout.components == 0 ||
+        prototype.layout.cells > std::numeric_limits<std::uint64_t>::max() /
+                                     prototype.layout.itemsize ||
+        prototype.layout.cells * prototype.layout.itemsize >
+            std::numeric_limits<std::uint64_t>::max() / prototype.layout.components)
+      throw std::overflow_error(
+          "System::install_program: runtime-sized Program resource byte size overflows uint64");
+    const std::uint64_t exact_bytes =
+        prototype.layout.cells * prototype.layout.itemsize * prototype.layout.components;
+    prototype.layout.bytes = exact_bytes;
+    prototype.layout.maximum_bytes = exact_bytes;
+  }
+
+  std::optional<pops::runtime::program::PreparedProgramInstallation> sealed_installation;
+  resource_materialization_error = nullptr;
+  try {
+    sealed_installation.emplace(std::move(inspected));
+    if (!sealed_installation->resource_plan_sealed())
+      sealed_installation->seal_resource_plan(prepared_resource_prototypes);
+  } catch (...) {
+    resource_materialization_error = std::current_exception();
+  }
+  if (all_reduce_max(resource_materialization_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && resource_materialization_error)
+      std::rethrow_exception(resource_materialization_error);
+    throw std::runtime_error(
+        "System::install_program: Program resource-plan materialization failed collectively");
+  }
+  const auto& sealed_tables = sealed_installation->tables();
+  if (sealed_tables.blocks.empty() != state_free_program)
+    throw std::logic_error(
+        "System::install_program: block identity table changed after descriptor authentication");
+
+  // NAME-based block binding (Spec 3 criterion 23, ADC-457). A compiled Program carries its block
+  // identities in the v5 descriptor; the System numbers its blocks
   // in add order (block_names). They need NOT agree -- bind by NAME, not add-order. Read the .so's
   // block names, map each Program block index to the System block of that name, and store the
-  // program-index -> system-index map (read by ProgramContext to resolve every ctx.state / rhs_into /
+  // program-index -> system-index map (read by ProgramExecutionServices to resolve every ctx.state / rhs_into /
   // commit). A Program block whose name has no instantiated System block fails loud with the spec
-  // message. The table is REQUIRED: a library without explicit block identities is ambiguous and
-  // must be regenerated; the historical positional convention is no longer a binding contract.
-  // Built BEFORE install() so the step closure (which captures a ProgramContext) sees the map on its
+  // message. The table is REQUIRED whenever the Program owns block state: a state-free Program
+  // instead carries the authenticated empty table accepted above. The historical positional
+  // convention is no longer a binding contract.
+  // Built BEFORE install() so the step closure (which captures a ProgramExecutionServices) sees the map on its
   // first run.
   std::vector<int> program_block_map;
   {
-    using count_t = int (*)();
-    using name_t = const char* (*)(int);
-    auto block_count = reinterpret_cast<count_t>(pops::dynlib::sym(h, "pops_program_block_count"));
-    auto block_name = reinterpret_cast<name_t>(pops::dynlib::sym(h, "pops_program_block_name"));
-    if (!block_count || !block_name) {
-      pops::dynlib::close(h);
-      throw std::runtime_error(
-          "System::install_program: compiled Program '" + so_path +
-          "' does not export the required block identity table "
-          "(pops_program_block_count + pops_program_block_name). Positional Program-to-System "
-          "binding has been removed; regenerate the Program library with the current PoPS "
-          "codegen and headers.");
-    }
     const std::vector<std::string> sys_names = block_names();
-    const int n = block_count();
+    const int n = static_cast<int>(sealed_tables.blocks.size());
+    if (state_free_program && !sys_names.empty())
+      throw std::runtime_error(
+          "System::install_program: a state-free Program has an empty block identity table, but "
+          "this System has accepted blocks; positional Program-to-System binding is not supported");
     program_block_map.assign(static_cast<std::size_t>(n), -1);
     for (int p = 0; p < n; ++p) {
-      const std::string want = block_name(p);
+      const std::string& want = sealed_tables.blocks.at(static_cast<std::size_t>(p)).name;
       int found = -1;
       for (std::size_t s = 0; s < sys_names.size(); ++s)
         if (sys_names[s] == want) {
@@ -647,7 +888,6 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
           break;
         }
       if (found < 0) {
-        pops::dynlib::close(h);
         throw std::runtime_error("Program requires block instance '" + want +
                                  "', but simulation did not instantiate it");
       }
@@ -655,33 +895,23 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
     }
   }
   // RUNTIME PARAMETERS (ADC-510, Spec 5 C5). A Program whose physics reads dsl.Param(..., kind="runtime")
-  // exports a pops_program_param_* table: per flat parameter, its PROGRAM block index, its stable index
+  // carries a v5 parameter table: per flat parameter, its PROGRAM block index, its stable index
   // WITHIN that block (sorted-name order, matching the lowered params.get(index)) and its declaration
   // default. Group the defaults per block (in index order) and seed each block's RuntimeParams to those
   // defaults, so an install WITHOUT a runtime set behaves as with a const param. A later Python params=
   // route overwrites the supplied values via set_program_params. A Program with no runtime param (the
   // count symbol absent or 0) seeds nothing -> the param store stays empty (program_params returns
   // count 0, the lowered kernels read no param). Built BEFORE install() so the step closure (which
-  // captures a ProgramContext) reads the seeded value on its first run.
+  // captures a ProgramExecutionServices) reads the seeded value on its first run.
   std::map<int, std::vector<double>> program_param_defaults;
   {
-    using count_t = int (*)();
-    using ival_t = int (*)(int);
-    using dval_t = double (*)(int);
-    auto pcount = reinterpret_cast<count_t>(pops::dynlib::sym(h, "pops_program_param_count"));
-    auto pblock = reinterpret_cast<ival_t>(pops::dynlib::sym(h, "pops_program_param_block"));
-    auto pindex = reinterpret_cast<ival_t>(pops::dynlib::sym(h, "pops_program_param_index"));
-    auto pdef = reinterpret_cast<dval_t>(pops::dynlib::sym(h, "pops_program_param_default"));
-    if (pcount && pblock && pindex && pdef) {
-      const int np = pcount();
-      for (int i = 0; i < np; ++i) {
-        const int blk = pblock(i);
-        const int idx = pindex(i);
-        std::vector<double>& d = program_param_defaults[blk];
-        if (static_cast<int>(d.size()) <= idx)
-          d.resize(static_cast<std::size_t>(idx) + 1, 0.0);
-        d[static_cast<std::size_t>(idx)] = pdef(i);
-      }
+    for (const auto& parameter : sealed_tables.parameters) {
+      const int blk = parameter.block;
+      const int idx = parameter.index;
+      std::vector<double>& d = program_param_defaults[blk];
+      if (static_cast<int>(d.size()) <= idx)
+        d.resize(static_cast<std::size_t>(idx) + 1, 0.0);
+      d[static_cast<std::size_t>(idx)] = parameter.default_value;
     }
   }
 
@@ -697,18 +927,14 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
   using field_plan_registry = decltype(p_->field_plans_);
   boundary_registry static_boundary_baseline;
   kernel_registry materialized_candidate;
-  kernel_registry materialized_previous;
   field_plan_registry candidate_field_plans;
   std::string candidate_boundary_contract;
   std::exception_ptr boundary_preparation_error;
 
   // Baseline preparation and stage allocation finish collectively before the DSO entry is invoked.
-  // Otherwise one rank rejecting a changed registry could skip the ProgramContext communicator
+  // Otherwise one rank rejecting a changed registry could skip the ProgramExecutionServices communicator
   // construction while a peer entered it.
   try {
-    if (p_->program_.artifact_field_boundary_stage_)
-      throw std::logic_error(
-          "System::install_program: a field-boundary artifact transaction is already active");
     auto capture_authorities = [](const field_plan_registry& plans) {
       boundary_registry result;
       for (const auto& [slot, plan] : plans)
@@ -735,40 +961,27 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
       static_boundary_baseline = current;
     }
 
-    p_->program_.artifact_field_boundary_stage_.emplace();
-    p_->program_.artifact_field_boundary_stage_->authorities = static_boundary_baseline;
   } catch (...) {
     boundary_preparation_error = std::current_exception();
   }
   if (all_reduce_max(boundary_preparation_error ? 1L : 0L) != 0) {
-    p_->program_.artifact_field_boundary_stage_.reset();
-    pops::dynlib::close(h);
     if (n_ranks() == 1 && boundary_preparation_error)
       std::rethrow_exception(boundary_preparation_error);
     throw std::runtime_error(
         "System::install_program: field-boundary baseline preparation failed collectively");
   }
 
-  std::exception_ptr boundary_installer_error;
-  try {
-    if (install_boundaries)
-      install_boundaries(this);
-  } catch (...) {
-    boundary_installer_error = std::current_exception();
-  }
-  if (all_reduce_max(boundary_installer_error ? 1L : 0L) != 0) {
-    p_->program_.artifact_field_boundary_stage_.reset();
-    pops::dynlib::close(h);
-    if (n_ranks() == 1 && boundary_installer_error)
-      std::rethrow_exception(boundary_installer_error);
-    throw std::runtime_error(
-        "System::install_program: generated field-boundary installer failed collectively");
-  }
+  // Boundary routes are part of the candidate table.  The current generated routes are pure
+  // metadata; actual kernel authorities are staged by candidate preparation, never a second DSO
+  // entry point.
 
   boundary_preparation_error = nullptr;
   try {
     candidate_field_plans = p_->field_plans_;
-    const auto& staged = p_->program_.artifact_field_boundary_stage_->authorities;
+    if (!staged_field_boundaries)
+      throw std::logic_error(
+          "System::install_program: detached field-boundary stage was not returned by prepare");
+    const auto& staged = *staged_field_boundaries;
     if (staged.size() != candidate_field_plans.size())
       throw std::logic_error(
           "System::install_program: artifact boundary candidate does not exactly cover the "
@@ -828,14 +1041,11 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
             "System::install_program: materialized field lacks its qualified field plan");
       field->validate_boundary_kernel_replacement(candidate->second.boundary_kernel);
       materialized_candidate.emplace(slot, candidate->second.boundary_kernel);
-      materialized_previous.emplace(slot, previous->second.boundary_kernel);
     }
   } catch (...) {
     boundary_preparation_error = std::current_exception();
   }
-  p_->program_.artifact_field_boundary_stage_.reset();
   if (all_reduce_max(boundary_preparation_error ? 1L : 0L) != 0) {
-    pops::dynlib::close(h);
     if (n_ranks() == 1 && boundary_preparation_error)
       std::rethrow_exception(boundary_preparation_error);
     throw std::runtime_error(
@@ -843,114 +1053,313 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{"system-artifact-field-boundary-registry", candidate_boundary_contract}})) {
-    pops::dynlib::close(h);
     throw std::runtime_error(
         "System::install_program: generated field-boundary authorities differ between MPI ranks");
   }
-
-  // Install the boundary registry before the Program materializes any closure that may call a field
-  // solve.  candidate_field_plans retains the complete prior image after the noexcept swap and is
-  // therefore the rollback journal for every subsequent installer failure.
-  using artifact_install_snapshot = decltype(p_->program_.capture_artifact_step_install());
-  std::optional<artifact_install_snapshot> previous_install;
-  std::exception_ptr snapshot_error;
+  // The first generated step must never be the field-plan consensus boundary.  Authenticate the
+  // complete candidate registry (not merely its staged boundary overlay) while refusal remains
+  // harmless, then publish its already-verified flag with the no-throw swap below.
+  std::string candidate_field_plan_contract;
+  boundary_preparation_error = nullptr;
   try {
-    previous_install.emplace(p_->program_.capture_artifact_step_install());
+    ExactContractBuilder contract;
+    contract.text("pops.system.prepared-field-plan-registry")
+        .scalar(std::uint32_t{1})
+        .scalar(static_cast<std::uint64_t>(candidate_field_plans.size()));
+    for (const auto& [slot, plan] : candidate_field_plans)
+      contract.text(slot).bytes(Impl::exact_field_plan_contract(plan));
+    candidate_field_plan_contract = std::move(contract).release();
   } catch (...) {
-    snapshot_error = std::current_exception();
+    boundary_preparation_error = std::current_exception();
   }
-  if (all_reduce_max(snapshot_error ? 1L : 0L) != 0) {
-    pops::dynlib::close(h);
-    if (n_ranks() == 1 && snapshot_error)
-      std::rethrow_exception(snapshot_error);
+  if (all_reduce_max(boundary_preparation_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && boundary_preparation_error)
+      std::rethrow_exception(boundary_preparation_error);
     throw std::runtime_error(
-        "System::install_program: Program rollback snapshot failed collectively");
+        "System::install_program: candidate field-plan consensus preparation failed collectively");
   }
-  const bool previous_field_plan_consensus = p_->field_plan_consensus_verified_;
-  bool boundary_registry_published = false;
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-prepared-field-plan-registry", candidate_field_plan_contract}})) {
+    throw std::runtime_error(
+        "System::install_program: candidate field-plan registry differs between MPI ranks");
+  }
+
+  // The DSO retained only the detached image while its callback ran. Its execution-services
+  // adapter becomes eligible to borrow System after every collective candidate contract above has
+  // succeeded; this changes no accepted value and keeps a failed prepare completely facade-cold.
+  pops::runtime::program::activate_staged_uniform_program_execution_services<Dim>(
+      preparation_image);
+
+  // Build the complete Program-owned publication image while refusal is still harmless.  Histories,
+  // cache images, block parameters and DSO closures all live in this disconnected carrier; there is
+  // no live ProgramRuntimeState rollback journal because nothing accepted has changed yet.
+  using publication_type =
+      typename runtime::program::ProgramRuntimeState<Dim>::PreparedArtifactPublication;
+  std::optional<publication_type> prepared_publication;
+  std::exception_ptr publication_prepare_error;
   try {
-    p_->field_plans_.swap(candidate_field_plans);
-    p_->field_plan_consensus_verified_ = false;
-    for (auto& [slot, kernel] : materialized_candidate) {
-      const auto field = p_->named_fields_.find(slot);
-      if (field == p_->named_fields_.end())
-        std::terminate();
-      field->second->replace_boundary_kernel(std::move(kernel));
-    }
-    boundary_registry_published = true;
-
-    p_->program_.reset_artifact_candidate_state();
-    // The generated prelude may resolve blocks and parameters before ctx.install() publishes the
-    // closure. Install the candidate image first; install_unverified_step then revokes it, and the
-    // authenticated image is republished only after the exact one-step witness succeeds.
-    p_->program_.block_map_ = program_block_map;
-    p_->program_.block_params_.clear();
-    for (const auto& [block, defaults] : program_param_defaults)
-      seed_program_params(block, defaults);
-    p_->program_.operator_authorities_ = operator_authorities;
-    install(this);
-    p_->program_.require_exact_artifact_step_install(*previous_install, "System::install_program:");
-
-    p_->program_.block_map_ = std::move(program_block_map);
-    for (const auto& [block, defaults] : program_param_defaults)
-      seed_program_params(block, defaults);
-    p_->program_.operator_authorities_ = std::move(operator_authorities);
-    p_->program_.history_replay_authorities_ = std::move(history_replay_authorities);
-    p_->program_.installed_hash_ = installed_hash;
-    if (program_has_dt_bound) {
-      System<Dim>* self = this;
-      p_->program_.dt_bound_ = [self, dt_bound](Real cfl) -> Real { return dt_bound(self, cfl); };
-    }
-    p_->program_.artifact_backed_ = true;
-
-    if (!p_->program_.artifact_field_boundary_baseline_)
-      p_->program_.artifact_field_boundary_baseline_.emplace(std::move(static_boundary_baseline));
-
-  } catch (...) {
-    const std::exception_ptr failure = std::current_exception();
-    p_->program_.rollback_artifact_step_install(std::move(*previous_install));
-    if (boundary_registry_published) {
-      p_->field_plans_.swap(candidate_field_plans);
-      p_->field_plan_consensus_verified_ = previous_field_plan_consensus;
-      for (auto& [slot, kernel] : materialized_previous) {
-        const auto field = p_->named_fields_.find(slot);
-        if (field == p_->named_fields_.end())
-          std::terminate();
-        field->second->replace_boundary_kernel(std::move(kernel));
+    runtime::program::HistoryManager<Dim> prepared_histories;
+    for (const auto& history : staged_histories) {
+      if (history.lag < 1 || history.name.empty())
+        throw std::invalid_argument("System::install_program: staged history is incomplete");
+      const int owner =
+          history.program_owner < 0
+              ? -1
+              : preparation_block_map.at(static_cast<std::size_t>(history.program_owner));
+      const int components = history.components < 0
+                                 ? program_block_state_(owner < 0 ? 0 : owner).ncomp()
+                                 : history.components;
+      if (components < 1)
+        throw std::invalid_argument("System::install_program: staged history has no components");
+      const int depth = history.lag + 1;
+      Extent<Dim> ghosts{};
+      for (int axis = 0; axis < Dim; ++axis)
+        ghosts[axis] = 1;
+      std::vector<MultiFab<Dim>> ring;
+      ring.reserve(static_cast<std::size_t>(depth));
+      for (int slot = 0; slot < depth; ++slot)
+        ring.emplace_back(p_->ba, p_->dm, p_->local_rank, components, ghosts);
+      const auto [found, inserted] =
+          prepared_histories.histories.emplace(history.name, std::move(ring));
+      if (!inserted)
+        throw std::invalid_argument("System::install_program: duplicate staged history identity");
+      prepared_histories.depth[history.name] = depth;
+      prepared_histories.initialized[history.name] = false;
+      prepared_histories.fill_count[history.name] = 0;
+      prepared_histories.store_pending[history.name] = false;
+      prepared_histories.owner[history.name] = owner;
+      prepared_histories.slot_dt[history.name] =
+          std::vector<Real>(static_cast<std::size_t>(depth), Real(0));
+      if (owner >= 0) {
+        if (history.state_identity.empty() || history.space_identity.empty() ||
+            history.clock_identity.empty() || history.interpolation_identity.empty())
+          throw std::invalid_argument(
+              "System::install_program: qualified staged history is incomplete");
+        prepared_histories.state_identity[history.name] = history.state_identity;
+        prepared_histories.space_identity[history.name] = history.space_identity;
+        prepared_histories.clock_identity[history.name] = history.clock_identity;
+        prepared_histories.interpolation_identity[history.name] = history.interpolation_identity;
       }
     }
-    pops::dynlib::close(h);
-    std::rethrow_exception(failure);
+
+    runtime::program::ProgramRuntimeState<Dim> prepared_execution_state;
+    std::map<int, RuntimeParams> prepared_params;
+    for (const auto& [block, defaults] : program_param_defaults) {
+      prepared_execution_state.seed_params(block, defaults);
+      prepared_params.emplace(block, prepared_execution_state.params(block));
+    }
+    prepared_publication.emplace(
+        publication_type::prepare(std::move(*sealed_installation), preparation_generation));
+    for (const auto& request : staged_cache_requests)
+      prepared_publication->prime_cache_slot(request.slot, request.prototype);
+    prepared_publication->set_resolved_authority(
+        installed_hash, operator_authorities, history_replay_authorities,
+        runtime::program::read_program_checkpoint_metadata(prepared_publication->tables()),
+        program_block_map, std::move(prepared_params), state_free_program);
+    if (!staged_transaction_state)
+      throw std::logic_error(
+          "System::install_program: staged transaction-authority image is absent");
+    prepared_publication->adopt_prepared_transaction_authorities(*staged_transaction_state);
+    prepared_publication->adopt_prepared_histories(std::move(prepared_histories));
+    prepared_publication->set_field_boundary_baseline(
+        std::optional<boundary_registry>{std::move(static_boundary_baseline)});
+  } catch (...) {
+    publication_prepare_error = std::current_exception();
   }
-  // .so left loaded for the duration of the process (the installed closure points to code in it).
+  if (all_reduce_max(publication_prepare_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && publication_prepare_error)
+      std::rethrow_exception(publication_prepare_error);
+    throw std::runtime_error(
+        "System::install_program: Program publication image preparation failed collectively");
+  }
+  std::string publication_contract;
+  std::exception_ptr publication_contract_error;
+  try {
+    ExactContractBuilder contract;
+    const auto& final_resource_plan = prepared_publication->resource_plan();
+    const auto& final_metadata = prepared_publication->metadata();
+    const auto& final_tables = prepared_publication->tables();
+    contract.text("pops.system.prepared-uniform-program-publication")
+        .scalar(static_cast<std::uint32_t>(Dim))
+        .scalar(preparation_generation)
+        .text(final_metadata.artifact_identity)
+        .text(final_metadata.abi_key)
+        .text(final_metadata.route_manifest)
+        .text(final_metadata.boundary_manifest)
+        .text(final_metadata.persistent_resource_manifest)
+        .text(final_metadata.checkpoint_identity)
+        .text(final_metadata.program_name)
+        .bytes(staged_transaction_authority_contract)
+        .text(final_resource_plan.schema())
+        .text(final_resource_plan.digest())
+        .scalar(final_resource_plan.maximum_bytes())
+        .text(final_tables.canonical_resource_digest_payload(final_resource_plan.maximum_bytes()))
+        .scalar(static_cast<std::uint64_t>(staged_histories.size()))
+        .scalar(static_cast<std::uint64_t>(staged_cache_requests.size()));
+    contract.scalar(static_cast<std::uint64_t>(final_tables.blocks.size()));
+    for (const auto& block : final_tables.blocks)
+      contract.text(block.name);
+    contract.scalar(static_cast<std::uint64_t>(final_tables.parameters.size()));
+    for (const auto& parameter : final_tables.parameters)
+      contract.scalar(parameter.block)
+          .scalar(parameter.index)
+          .scalar(std::bit_cast<std::uint64_t>(parameter.default_value))
+          .text(parameter.name);
+    contract.scalar(static_cast<std::uint64_t>(final_tables.operator_authorities.size()));
+    for (const auto& authority : final_tables.operator_authorities)
+      for (const auto word : authority.words)
+        contract.scalar(word);
+    contract.scalar(static_cast<std::uint64_t>(final_tables.history_authorities.size()));
+    for (const auto& authority : final_tables.history_authorities)
+      contract.text(authority.identity).scalar(authority.depth);
+    contract.scalar(static_cast<std::uint64_t>(final_tables.checkpoint_shape.size()));
+    for (const auto& checkpoint : final_tables.checkpoint_shape)
+      contract.text(checkpoint.identity)
+          .text(checkpoint.owner)
+          .text(checkpoint.space)
+          .text(checkpoint.clock)
+          .text(checkpoint.transfer)
+          .scalar(checkpoint.block)
+          .scalar(checkpoint.components)
+          .scalar(checkpoint.retained_images);
+    contract.scalar(static_cast<std::uint64_t>(final_tables.flux_budgets.size()));
+    for (const auto& budget : final_tables.flux_budgets)
+      contract.scalar(budget.rhs_basis_bound)
+          .scalar(budget.coefficient_term_bound)
+          .scalar(budget.interface_application_bound)
+          .scalar(budget.interface_identity_character_bound);
+    const auto append_routes = [&contract](const auto& routes) {
+      contract.scalar(static_cast<std::uint64_t>(routes.size()));
+      for (const auto& route : routes)
+        contract.text(route.identity).text(route.kind).scalar(route.capability_bits);
+    };
+    append_routes(final_tables.boundary_routes);
+    append_routes(final_tables.provider_routes);
+    const auto append_modules = [&contract](const auto& modules) {
+      contract.scalar(static_cast<std::uint64_t>(modules.size()));
+      for (const auto& module : modules)
+        contract.text(module.identity)
+            .text(module.kind)
+            .text(module.signature)
+            .text(module.requirements)
+            .text(module.owner);
+    };
+    append_modules(final_tables.module_operators);
+    append_modules(final_tables.module_state_spaces);
+    append_modules(final_tables.module_field_spaces);
+    contract.scalar(static_cast<std::uint64_t>(program_block_map.size()));
+    for (const int block : program_block_map)
+      contract.scalar(block);
+    contract.scalar(static_cast<std::uint64_t>(program_param_defaults.size()));
+    for (const auto& [block, defaults] : program_param_defaults) {
+      contract.scalar(block).scalar(static_cast<std::uint64_t>(defaults.size()));
+      for (const double value : defaults)
+        contract.scalar(std::bit_cast<std::uint64_t>(value));
+    }
+    for (const auto& history : staged_histories)
+      contract.text(history.name)
+          .scalar(history.lag)
+          .scalar(history.components)
+          .scalar(history.program_owner)
+          .text(history.state_identity)
+          .text(history.space_identity)
+          .text(history.clock_identity)
+          .text(history.interpolation_identity);
+    for (const auto& request : staged_cache_requests)
+      contract.scalar(request.slot)
+          .scalar(request.program_block)
+          .scalar(static_cast<std::uint64_t>(request.prototype.ncomp()))
+          .scalar(static_cast<std::uint64_t>(request.prototype.ghosts()[0]))
+          .text(final_resource_plan.entry(request.slot).identity);
+    publication_contract = std::move(contract).release();
+  } catch (...) {
+    publication_contract_error = std::current_exception();
+  }
+  if (all_reduce_max(publication_contract_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && publication_contract_error)
+      std::rethrow_exception(publication_contract_error);
+    throw std::runtime_error(
+        "System::install_program: Program publication contract preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-prepared-uniform-program-publication", publication_contract}})) {
+    throw std::runtime_error(
+        "System::install_program: prepared Program publication differs between MPI ranks");
+  }
+
+  // All collective checks and allocations have completed.  This is deliberately a closed
+  // no-throw publication: readers either see the old complete authority or the new one, never an
+  // install-time boundary/provider/history fragment.  ProgramRuntimeState publishes its owner last.
+  [[maybe_unused]] auto accepted_write = p_->acquire_accepted_write_lease();
+  if (has_staged_auxiliary_registry) {
+    p_->auxiliary_registry_.swap_complete(*candidate_auxiliary_registry);
+    p_->auxiliary_registry_consensus_verified_ = true;
+  }
+  p_->field_plans_.swap(candidate_field_plans);
+  p_->field_plan_consensus_verified_ = true;
+  for (auto& [slot, kernel] : materialized_candidate) {
+    const auto field = p_->named_fields_.find(slot);
+    if (field == p_->named_fields_.end())
+      std::terminate();
+    field->second->replace_boundary_kernel(std::move(kernel));
+  }
+  p_->program_.publish_prepared_artifact(std::move(*prepared_publication));
+  (void)program_has_dt_bound;
+  // The committed ProgramRuntimeState keeps the DSO resident until its candidate and closures are gone.
 }
 // Scheduler-cache checkpoint/restart seam (ADC-458, Spec 3 section 30): the System owns the cache, so
 // the facade (sim.checkpoint / sim.restart) gathers and restores it DIRECTLY -- reusing the SAME global
 // exact-ranked global gather/write machinery as the block state and the
 // history rings, so the round-trip is MPI-safe and bit-identical under np>1. Mirrors the history seam.
 template <int Dim>
-std::vector<int> System<Dim>::program_cache_nodes() const {
-  return p_->program_.cache_.node_ids();
+std::vector<std::size_t> System<Dim>::program_cache_slots() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return p_->program_.cache_.checkpoint_slot_indices();
 }
 template <int Dim>
-std::string System<Dim>::program_cache_name(int node_id) const {
-  return p_->program_.cache_.name_of(node_id);
+std::string System<Dim>::program_cache_plan_schema() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return std::string(p_->program_.cache_.plan_schema());
 }
 template <int Dim>
-int System<Dim>::program_cache_last_update_step(int node_id) const {
-  return p_->program_.cache_.last_update_step(node_id);
+std::string System<Dim>::program_cache_plan_digest() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return std::string(p_->program_.cache_.plan_digest());
 }
 template <int Dim>
-double System<Dim>::program_cache_accumulated_dt(int node_id) const {
-  return static_cast<double>(p_->program_.cache_.accumulated_dt_of(node_id));
+bool System<Dim>::program_cache_valid(std::size_t slot) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return p_->program_.cache_.valid(slot);
 }
 template <int Dim>
-int System<Dim>::program_cache_ncomp(int node_id) const {
-  return p_->program_.cache_.ncomp_of(node_id);
+bool System<Dim>::program_cache_cold(std::size_t slot) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return p_->program_.cache_.cold(slot);
 }
 template <int Dim>
-int System<Dim>::program_cache_ngrow(int node_id) const {
-  const Extent<Dim> ghosts = p_->program_.cache_.ghosts_of(node_id);
+std::string System<Dim>::program_cache_name(std::size_t slot) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return p_->program_.cache_.name_of(slot);
+}
+template <int Dim>
+int System<Dim>::program_cache_last_update_step(std::size_t slot) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return p_->program_.cache_.last_update_step(slot);
+}
+template <int Dim>
+double System<Dim>::program_cache_accumulated_dt(std::size_t slot) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return static_cast<double>(p_->program_.cache_.accumulated_dt(slot));
+}
+template <int Dim>
+int System<Dim>::program_cache_ncomp(std::size_t slot) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return p_->program_.cache_.ncomp_of(slot);
+}
+template <int Dim>
+int System<Dim>::program_cache_ngrow(std::size_t slot) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  const Extent<Dim> ghosts = p_->program_.cache_.ghosts_of(slot);
   const int width = ghosts[0];
   for (int axis = 1; axis < Dim; ++axis)
     if (ghosts[axis] != width)
@@ -959,21 +1368,24 @@ int System<Dim>::program_cache_ngrow(int node_id) const {
   return width;
 }
 template <int Dim>
-std::vector<double> System<Dim>::program_cache_global(int node_id) const {
+std::vector<double> System<Dim>::program_cache_global(std::size_t slot) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   // The cache value is co-distributed with block 0 and uses the same authenticated component-major
   // collective gather as state_global and history_global.
-  const std::string request = std::to_string(node_id);
+  const std::string request = std::to_string(slot);
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{std::string_view("program-cache-global"), std::string_view(request)}}))
     throw std::invalid_argument("System::program_cache_global request differs between MPI ranks");
-  if (all_reduce_max(p_->program_.cache_.valid(node_id) ? 0L : 1L) != 0)
-    throw std::out_of_range("System::program_cache_global node is absent on at least one MPI rank");
-  const MultiFab<Dim>& value = p_->program_.cache_.value_of(node_id);
+  if (all_reduce_max(p_->program_.cache_.valid(slot) ? 0L : 1L) != 0)
+    throw std::out_of_range(
+        "System::program_cache_global slot is invalid on at least one MPI rank");
+  const MultiFab<Dim>& value = p_->program_.cache_.value_of(slot);
   return runtime::system::marshaling::gather_global(value, p_->dom, value.ncomp());
 }
 template <int Dim>
-void System<Dim>::restore_program_cache(int node_id, int ncomp, int ngrow, int last_update_step,
-                                        double accumulated_dt, const std::string& name,
+void System<Dim>::restore_program_cache(std::size_t slot, int ncomp, int ngrow,
+                                        int last_update_step, double accumulated_dt,
+                                        const std::string& name,
                                         const std::vector<double>& values) {
   if (all_reduce_max(p_->sp.empty() ? 1L : 0L) != 0)
     throw std::runtime_error(
@@ -984,14 +1396,14 @@ void System<Dim>::restore_program_cache(int node_id, int ncomp, int ngrow, int l
   // ghost width the slot was cached with: 1 for the aux, the block-state width for a held scratch) and
   // stage the GLOBAL payload into it through the exact-ranked collective writer, then re-key the
   // slot with its bookkeeping. MPI-safe (all ranks call), bit-identical under np>1.
-  const std::string request = std::to_string(node_id) + ":" + std::to_string(ncomp) + ":" +
+  const std::string request = std::to_string(slot) + ":" + std::to_string(ncomp) + ":" +
                               std::to_string(ngrow) + ":" + std::to_string(last_update_step) + ":" +
                               std::to_string(std::bit_cast<std::uint64_t>(accumulated_dt));
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{std::string_view(name), std::string_view(request)}}))
     throw std::invalid_argument("System::restore_program_cache request differs between MPI ranks");
   const long local_metadata_invalid =
-      ncomp < 1 || ngrow < 0 || last_update_step < -1 || !std::isfinite(accumulated_dt) ||
+      ncomp < 1 || ngrow < 0 || last_update_step < 0 || !std::isfinite(accumulated_dt) ||
               accumulated_dt < 0.0 ||
               !std::isfinite(static_cast<double>(static_cast<Real>(accumulated_dt)))
           ? 1L
@@ -1008,11 +1420,37 @@ void System<Dim>::restore_program_cache(int node_id, int ncomp, int ngrow, int l
   MultiFab<Dim> value(p_->ba, p_->dm, p_->local_rank, ncomp, uniform_ghosts<Dim>(ngrow));
   value.set_val(Real(0));
   runtime::system::marshaling::write_global(value, p_->dom, values, ncomp);
-  p_->program_.cache_.restore_slot(node_id, std::move(value), last_update_step,
+  p_->program_.cache_.restore_slot(slot, std::move(value), last_update_step,
                                    static_cast<Real>(accumulated_dt), name);
 }
 
+template <int Dim>
+void System<Dim>::restore_program_cache_pending(std::size_t slot, double accumulated_dt,
+                                                const std::string& name) {
+  const std::string request =
+      std::to_string(slot) + ":" + std::to_string(std::bit_cast<std::uint64_t>(accumulated_dt));
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view(name), std::string_view(request)}}))
+    throw std::invalid_argument(
+        "System::restore_program_cache_pending request differs between MPI ranks");
+  const long invalid =
+      !std::isfinite(accumulated_dt) || accumulated_dt < 0.0 ||
+              !std::isfinite(static_cast<double>(static_cast<Real>(accumulated_dt)))
+          ? 1L
+          : 0L;
+  if (all_reduce_max(invalid) != 0)
+    throw std::invalid_argument("System::restore_program_cache_pending metadata is invalid");
+  p_->program_.cache_.restore_pending_slot(slot, static_cast<Real>(accumulated_dt), name);
+}
+
 template void System<kNativeDimension>::set_clock(double, int);
+template std::vector<std::uint8_t>
+System<kNativeDimension>::capture_program_persistent_value_checkpoint() const;
+template runtime::program::PreparedProgramPersistentValueRestore
+System<kNativeDimension>::prepare_program_persistent_value_restore(
+    const std::vector<std::uint8_t>&) const;
+template void System<kNativeDimension>::publish_program_persistent_value_restore(
+    runtime::program::PreparedProgramPersistentValueRestore&);
 template void System<kNativeDimension>::store_history(const std::string&,
                                                       const MultiFab<kNativeDimension>&);
 template void System<kNativeDimension>::store_history(const std::string&,
@@ -1035,15 +1473,21 @@ template void System<kNativeDimension>::restore_history_slot_dt(const std::strin
 template int System<kNativeDimension>::rebuild_history_slots(const std::string&,
                                                              const std::vector<int>&);
 template void System<kNativeDimension>::install_program(const std::string&);
-template std::vector<int> System<kNativeDimension>::program_cache_nodes() const;
-template std::string System<kNativeDimension>::program_cache_name(int) const;
-template int System<kNativeDimension>::program_cache_last_update_step(int) const;
-template double System<kNativeDimension>::program_cache_accumulated_dt(int) const;
-template int System<kNativeDimension>::program_cache_ncomp(int) const;
-template int System<kNativeDimension>::program_cache_ngrow(int) const;
-template std::vector<double> System<kNativeDimension>::program_cache_global(int) const;
-template void System<kNativeDimension>::restore_program_cache(int, int, int, int, double,
+template std::vector<std::size_t> System<kNativeDimension>::program_cache_slots() const;
+template std::string System<kNativeDimension>::program_cache_plan_schema() const;
+template std::string System<kNativeDimension>::program_cache_plan_digest() const;
+template bool System<kNativeDimension>::program_cache_valid(std::size_t) const;
+template bool System<kNativeDimension>::program_cache_cold(std::size_t) const;
+template std::string System<kNativeDimension>::program_cache_name(std::size_t) const;
+template int System<kNativeDimension>::program_cache_last_update_step(std::size_t) const;
+template double System<kNativeDimension>::program_cache_accumulated_dt(std::size_t) const;
+template int System<kNativeDimension>::program_cache_ncomp(std::size_t) const;
+template int System<kNativeDimension>::program_cache_ngrow(std::size_t) const;
+template std::vector<double> System<kNativeDimension>::program_cache_global(std::size_t) const;
+template void System<kNativeDimension>::restore_program_cache(std::size_t, int, int, int, double,
                                                               const std::string&,
                                                               const std::vector<double>&);
+template void System<kNativeDimension>::restore_program_cache_pending(std::size_t, double,
+                                                                      const std::string&);
 
 }  // namespace pops

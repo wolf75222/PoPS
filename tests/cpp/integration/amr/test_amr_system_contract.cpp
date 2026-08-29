@@ -232,13 +232,15 @@ void verify_model_qualified_primitive_boundary_conversion() {
   oracle.set_conservative_state("gas", initial);
   const pops::runtime::multiblock::BoundaryEvaluationPoint point{
       "tests.amr.system-contract/boundary-conversion", 0, 0, 0, 0, {0, 1}, 0.0, 0.0};
-  const auto& authored_evaluation = authored.evaluate_prepared_amr_level(point);
-  const auto& oracle_evaluation = oracle.evaluate_prepared_amr_level(point);
-  EXPECT_EQ(pops::difference_sum_sq_all(authored_evaluation.residual, oracle_evaluation.residual),
+  const auto authored_evaluation = authored.evaluate_prepared_amr_level(point);
+  const auto oracle_evaluation = oracle.evaluate_prepared_amr_level(point);
+  ASSERT_TRUE(authored_evaluation);
+  ASSERT_TRUE(oracle_evaluation);
+  EXPECT_EQ(pops::difference_sum_sq_all(authored_evaluation->residual, oracle_evaluation->residual),
             pops::Real(0));
-  pops::MultiFab<Dim> zero(authored_evaluation.residual);
+  pops::MultiFab<Dim> zero(authored_evaluation->residual);
   zero.set_val(pops::Real(0));
-  EXPECT_GT(pops::difference_sum_sq_all(authored_evaluation.residual, zero), pops::Real(0));
+  EXPECT_GT(pops::difference_sum_sq_all(authored_evaluation->residual, zero), pops::Real(0));
 }
 
 template <int Dim>
@@ -302,17 +304,25 @@ void verify_prepared_installation_parity() {
   direct.set_program_block_map({0});
   prepared.set_program_block_map({0});
 
-  const pops::MultiFab<Dim>& direct_state = direct.prepared_amr_block_state(0, 0);
-  const pops::MultiFab<Dim>& prepared_state = prepared.prepared_amr_block_state(0, 0);
-  ASSERT_EQ(direct_state.layout(), prepared_state.layout());
-  ASSERT_EQ(direct_state.distribution(), prepared_state.distribution());
-  ASSERT_EQ(direct_state.ncomp(), prepared_state.ncomp());
-  EXPECT_EQ(pops::difference_sum_sq_all(direct_state, prepared_state), pops::Real(0));
-  ASSERT_NE(direct.engine(), nullptr);
-  ASSERT_NE(prepared.engine(), nullptr);
-  EXPECT_EQ(direct.engine()->spatial_contract(), prepared.engine()->spatial_contract());
-  const auto& direct_map = direct.prepared_amr_program_block_map();
-  const auto& prepared_map = prepared.prepared_amr_program_block_map();
+  {
+    auto direct_state_view = direct.prepared_amr_block_state(0, 0);
+    auto prepared_state_view = prepared.prepared_amr_block_state(0, 0);
+    ASSERT_TRUE(direct_state_view);
+    ASSERT_TRUE(prepared_state_view);
+    const pops::MultiFab<Dim>& direct_state = *direct_state_view;
+    const pops::MultiFab<Dim>& prepared_state = *prepared_state_view;
+    ASSERT_EQ(direct_state.layout(), prepared_state.layout());
+    ASSERT_EQ(direct_state.distribution(), prepared_state.distribution());
+    ASSERT_EQ(direct_state.ncomp(), prepared_state.ncomp());
+    EXPECT_EQ(pops::difference_sum_sq_all(direct_state, prepared_state), pops::Real(0));
+    const auto direct_runtime = direct.accepted_amr_runtime();
+    const auto prepared_runtime = prepared.accepted_amr_runtime();
+    ASSERT_TRUE(direct_runtime);
+    ASSERT_TRUE(prepared_runtime);
+    EXPECT_EQ(direct_runtime->spatial_contract(), prepared_runtime->spatial_contract());
+  }
+  const auto direct_map = direct.prepared_amr_program_block_map();
+  const auto prepared_map = prepared.prepared_amr_program_block_map();
   EXPECT_EQ(direct_map.canonical_indices, prepared_map.canonical_indices);
   EXPECT_EQ(direct_map.hierarchy_contract, prepared_map.hierarchy_contract);
   EXPECT_EQ(direct_map.exact_contract, prepared_map.exact_contract);
@@ -346,17 +356,29 @@ void verify_prepared_installation_parity() {
     EXPECT_EQ(direct_geometry.upper()[axis], config.upper[axis]);
   }
 
+  std::string direct_spatial_contract;
+  std::string prepared_spatial_contract;
+  {
+    const auto direct_runtime = direct.accepted_amr_runtime();
+    const auto prepared_runtime = prepared.accepted_amr_runtime();
+    ASSERT_TRUE(direct_runtime);
+    ASSERT_TRUE(prepared_runtime);
+    direct_spatial_contract = direct_runtime->spatial_contract();
+    prepared_spatial_contract = prepared_runtime->spatial_contract();
+  }
   const pops::runtime::multiblock::BoundaryEvaluationPoint point{
       "tests.amr.system-contract.installation-parity", 0, 0, 0, 0, {0, 1}, 0.0, 0.0};
-  const auto& direct_evaluation = direct.evaluate_prepared_amr_level(point);
-  const auto& prepared_evaluation = prepared.evaluate_prepared_amr_level(point);
-  EXPECT_EQ(direct_evaluation.spatial_contract, direct.engine()->spatial_contract());
-  EXPECT_EQ(prepared_evaluation.spatial_contract, prepared.engine()->spatial_contract());
-  EXPECT_EQ(pops::difference_sum_sq_all(direct_evaluation.residual, prepared_evaluation.residual),
+  const auto direct_evaluation = direct.evaluate_prepared_amr_level(point);
+  const auto prepared_evaluation = prepared.evaluate_prepared_amr_level(point);
+  ASSERT_TRUE(direct_evaluation);
+  ASSERT_TRUE(prepared_evaluation);
+  EXPECT_EQ(direct_evaluation->spatial_contract, direct_spatial_contract);
+  EXPECT_EQ(prepared_evaluation->spatial_contract, prepared_spatial_contract);
+  EXPECT_EQ(pops::difference_sum_sq_all(direct_evaluation->residual, prepared_evaluation->residual),
             pops::Real(0));
-  pops::MultiFab<Dim> zero(direct_evaluation.residual);
+  pops::MultiFab<Dim> zero(direct_evaluation->residual);
   zero.set_val(pops::Real(0));
-  EXPECT_GT(pops::difference_sum_sq_all(direct_evaluation.residual, zero), pops::Real(0));
+  EXPECT_GT(pops::difference_sum_sq_all(direct_evaluation->residual, zero), pops::Real(0));
 }
 
 template <int Dim>
@@ -560,7 +582,9 @@ void verify_bootstrap_covered_cell_synchronization() {
 
   std::vector<bool> covered(cells, false);
   const pops::Box<Dim> coarse_domain = system.prepared_amr_level_geometry(0).domain();
-  const pops::MultiFab<Dim>& fine_carrier = system.prepared_amr_block_state(0, 1);
+  auto fine_carrier_view = system.prepared_amr_block_state(0, 1);
+  ASSERT_TRUE(fine_carrier_view);
+  const pops::MultiFab<Dim>& fine_carrier = *fine_carrier_view;
   for (const pops::Box<Dim>& fine_patch : fine_carrier.layout().boxes()) {
     const pops::Box<Dim> coarse_patch = pops::coarsen(fine_patch, config.transition_ratios.front());
     for (std::int64_t ordinal = 0; ordinal < coarse_patch.numPts(); ++ordinal) {
@@ -638,7 +662,10 @@ std::vector<std::vector<double>> run_magnetic_source(pops::Real bz) {
     EXPECT_EQ(value, static_cast<double>(bz));
   std::vector<std::vector<double>> result;
   for (int level = 0; level < system.n_levels(); ++level) {
-    const pops::MultiFab<Dim>& accepted = system.prepared_amr_block_state(0, level);
+    auto accepted_view = system.prepared_amr_block_state(0, level);
+    if (!accepted_view)
+      throw std::logic_error("AMR accepted block view is invalid");
+    const pops::MultiFab<Dim>& accepted = *accepted_view;
     std::int64_t level_cells = 0;
     for (const pops::Box<Dim>& box : accepted.layout().boxes())
       level_cells += box.numPts();
@@ -669,7 +696,10 @@ std::vector<pops::MultiFab<Dim>> prepare_exact_composite_masks(
   std::vector<pops::MultiFab<Dim>> masks;
   masks.reserve(static_cast<std::size_t>(level_count));
   for (int level = 0; level < level_count; ++level) {
-    const pops::MultiFab<Dim>& carrier = system.prepared_amr_block_state(0, level);
+    auto carrier_view = system.prepared_amr_block_state(0, level);
+    if (!carrier_view)
+      throw std::logic_error("AMR accepted block view is invalid");
+    const pops::MultiFab<Dim>& carrier = *carrier_view;
     masks.emplace_back(carrier.layout(), carrier.distribution(), carrier.local_rank(), 1,
                        pops::Extent<Dim>{});
     masks.back().set_val(pops::Real(1));
@@ -677,7 +707,10 @@ std::vector<pops::MultiFab<Dim>> prepare_exact_composite_masks(
 
   for (int level = 0; level + 1 < level_count; ++level) {
     pops::MultiFab<Dim>& parent_mask = masks[static_cast<std::size_t>(level)];
-    const pops::MultiFab<Dim>& child = system.prepared_amr_block_state(0, level + 1);
+    auto child_view = system.prepared_amr_block_state(0, level + 1);
+    if (!child_view)
+      throw std::logic_error("AMR accepted block view is invalid");
+    const pops::MultiFab<Dim>& child = *child_view;
     const pops::Extent<Dim>& ratio = transition_ratios[static_cast<std::size_t>(level)];
     for (const pops::Box<Dim>& child_patch : child.layout().boxes()) {
       const pops::Box<Dim> covered = pops::coarsen(child_patch, ratio);
@@ -707,14 +740,19 @@ pops::runtime::amr::CompositeReductionResult exact_block_composite_sum(
       pops::runtime::amr::CompositeLevelView<Dim, typename pops::MultiFab<Dim>::memory_space>>
       levels;
   levels.reserve(masks.size());
+  std::vector<typename pops::AmrSystem<Dim>::AcceptedBlockStateReadView> accepted_views;
+  accepted_views.reserve(masks.size());
   for (std::size_t level = 0; level < masks.size(); ++level) {
     const pops::Geometry<Dim> geometry =
         system.prepared_amr_level_geometry(static_cast<int>(level));
     std::array<pops::Real, Dim> cell_extent{};
     for (int axis = 0; axis < Dim; ++axis)
       cell_extent[static_cast<std::size_t>(axis)] = geometry.spacing(axis);
-    levels.push_back({&system.prepared_amr_block_state(runtime_block, static_cast<int>(level)),
-                      &masks[level], cell_extent, nullptr});
+    auto accepted_view = system.prepared_amr_block_state(runtime_block, static_cast<int>(level));
+    if (!accepted_view)
+      throw std::logic_error("AMR accepted block view is invalid");
+    accepted_views.emplace_back(std::move(accepted_view));
+    levels.push_back({accepted_views.back().get(), &masks[level], cell_extent, nullptr});
   }
   return pops::runtime::amr::composite_reduce<Dim, typename pops::MultiFab<Dim>::memory_space>(
       levels, component, pops::runtime::amr::CompositeReductionKind::Sum,
@@ -724,7 +762,10 @@ pops::runtime::amr::CompositeReductionResult exact_block_composite_sum(
 template <int Dim>
 std::vector<double> explicit_block_state_oracle(pops::AmrSystem<Dim>& system, int runtime_block,
                                                 int level, int components) {
-  const pops::MultiFab<Dim>& carrier = system.prepared_amr_block_state(runtime_block, level);
+  auto carrier_view = system.prepared_amr_block_state(runtime_block, level);
+  if (!carrier_view)
+    throw std::logic_error("AMR accepted block view is invalid");
+  const pops::MultiFab<Dim>& carrier = *carrier_view;
   return pops::runtime::system::marshaling::gather_global(
       carrier, system.prepared_amr_level_geometry(level).domain(), components);
 }
@@ -813,17 +854,25 @@ MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
   MultiblockRegridObservation result;
   result.levels = system.n_levels();
   result.patches = system.n_patches();
-  result.topology_before = system.engine()->topology_epoch();
-  EXPECT_NE(&system.prepared_amr_block_state(0, 0), &system.prepared_amr_block_state(1, 0));
-  EXPECT_GT(pops::difference_sum_sq_all(system.prepared_amr_block_state(0, 0),
-                                        system.prepared_amr_block_state(1, 0)),
-            pops::Real(0));
+  {
+    const auto accepted_runtime = system.accepted_amr_runtime();
+    ASSERT_TRUE(accepted_runtime);
+    result.topology_before = accepted_runtime->topology_epoch();
+  }
+  auto first_state_view = system.prepared_amr_block_state(0, 0);
+  auto second_state_view = system.prepared_amr_block_state(1, 0);
+  ASSERT_TRUE(first_state_view);
+  ASSERT_TRUE(second_state_view);
+  EXPECT_NE(first_state_view.get(), second_state_view.get());
+  EXPECT_GT(pops::difference_sum_sq_all(*first_state_view, *second_state_view), pops::Real(0));
   std::array<std::vector<std::vector<double>>, 2> block_oracles;
   for (std::size_t block = 0; block < names.size(); ++block) {
     block_oracles[block].reserve(static_cast<std::size_t>(system.n_levels()));
     for (int level = 0; level < system.n_levels(); ++level) {
-      const pops::MultiFab<Dim>& carrier =
+      auto carrier_view =
           system.prepared_amr_block_state(static_cast<int>(block), level);
+      ASSERT_TRUE(carrier_view);
+      const pops::MultiFab<Dim>& carrier = *carrier_view;
       block_oracles[block].push_back(
           explicit_block_state_oracle(system, static_cast<int>(block), level, carrier.ncomp()));
       EXPECT_EQ(system.block_level_state(names[block], level), block_oracles[block].back());
@@ -859,7 +908,11 @@ MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
   pops::test::install_forward_euler_program(system, false);
   system.step(1.0e-4);
 
-  result.topology_after = system.engine()->topology_epoch();
+  {
+    const auto accepted_runtime = system.accepted_amr_runtime();
+    ASSERT_TRUE(accepted_runtime);
+    result.topology_after = accepted_runtime->topology_epoch();
+  }
   result.levels = system.n_levels();
   result.patches = system.n_patches();
   const auto masks_after = prepare_exact_composite_masks(system, config.transition_ratios);
@@ -892,14 +945,14 @@ void verify_stride_window_contract() {
       {"reflux", 4.0},
       {"projection", 5.0},
   }};
-  const auto context = pops::runtime::program::make_program_execution_provider(&system);
-  context->configure_primary_clock("tests.amr.system-contract/cadence/macro");
-  context->install([&, context](double step) {
-    times.push_back(system.time());
+  pops::test::install_explicit_amr_callback_program<Dim>(
+      system, "tests.amr.system-contract/cadence@1", "tests.amr.system-contract/cadence/macro",
+      {}, {}, [&](pops::test::explicit_amr_program_detail::context_type& context, double step) {
+    times.push_back(static_cast<double>(context.physical_time()));
     steps.push_back(step);
-    macro_steps.push_back(system.macro_step());
+    macro_steps.push_back(context.macro_step());
     for (const auto& [term, value] : balance_records)
-      context->record_balance_term(balance_route, term, static_cast<pops::Real>(value));
+      context.record_balance_term(balance_route, term, static_cast<pops::Real>(value));
   });
   system.set_program_block_map({0});
   system.set_program_cadence(3, 2);

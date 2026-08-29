@@ -14,6 +14,8 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include "native_dso_compiler.hpp"
+#include "program_v5_fixture.hpp"
 #include <pops/physics/composition/composite.hpp>
 #include <pops/physics/bricks/hyperbolic.hpp>
 #include <pops/physics/bricks/source.hpp>  // NoSource
@@ -21,7 +23,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
-#include <pops/runtime/program/program_context.hpp>
+#include <pops/runtime/program/program_execution_services.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes, miroir Python)
@@ -30,6 +32,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -46,6 +50,22 @@ using namespace pops;
 constexpr int kDim = kNativeDimension;
 using NativeSystem = System<kDim>;
 using NativeMultiFab = MultiFab<kDim>;
+using CoupledSourceProgramServices = runtime::program::ProgramExecutionServices<kDim>;
+using CoupledSourceProgramCallback = std::function<void(CoupledSourceProgramServices&, double)>;
+
+static std::vector<CoupledSourceProgramCallback>& coupled_source_program_callbacks() {
+  static std::vector<CoupledSourceProgramCallback> callbacks;
+  return callbacks;
+}
+
+extern "C" void pops_test_mpi_coupled_source_callback(std::uint64_t identifier, void* opaque,
+                                                      double dt) {
+  auto& callbacks = coupled_source_program_callbacks();
+  if (opaque == nullptr || identifier >= callbacks.size())
+    throw std::logic_error("MPI coupled-source ABI-v5 callback received an invalid dispatch token");
+  callbacks.at(static_cast<std::size_t>(identifier))(
+      *static_cast<CoupledSourceProgramServices*>(opaque), dt);
+}
 
 namespace pops {
 template <int Dim, class Model>
@@ -76,17 +96,27 @@ static std::vector<double> uniform_state(std::size_t cells, double density) {
 }
 
 static void install_ionization_program(NativeSystem& system) {
-  system.set_program_block_map({0, 1, 2});
-  runtime::program::ProgramContext<kDim> context(&system);
-  context.configure_primary_clock("test.clock.macro");
-  context.install([context](double step) {
+  using Resource = test::program_v5::CallbackProgramResource;
+  std::vector<Resource> resources;
+  resources.reserve(3);
+  for (int block = 0; block < 3; ++block) {
+    const auto state = system.block_state(block);
+    if (!state)
+      throw std::logic_error("MPI coupled-source Program requires materialized block states");
+    resources.push_back({Resource::Kind::state, resources.size(), 0, block, -1,
+                         static_cast<std::uint32_t>(state->ncomp()),
+                         static_cast<std::uint32_t>(state->ghosts()[0])});
+  }
+  auto& callbacks = coupled_source_program_callbacks();
+  const auto callback_identifier = static_cast<std::uint64_t>(callbacks.size());
+  callbacks.emplace_back([](CoupledSourceProgramServices& context, double step) {
     context.begin_step(step);
     NativeMultiFab& electrons = context.state(0);
     NativeMultiFab& ions = context.state(1);
     NativeMultiFab& neutrals = context.state(2);
-    NativeMultiFab& next_electrons = context.scratch_state(100, 0, electrons);
-    NativeMultiFab& next_ions = context.scratch_state(101, 0, ions);
-    NativeMultiFab& next_neutrals = context.scratch_state(102, 0, neutrals);
+    NativeMultiFab& next_electrons = context.scratch_state(0, 0, electrons);
+    NativeMultiFab& next_ions = context.scratch_state(1, 0, ions);
+    NativeMultiFab& next_neutrals = context.scratch_state(2, 0, neutrals);
     context.lincomb(next_electrons, Real(1), electrons, Real(0), electrons);
     context.lincomb(next_ions, Real(1), ions, Real(0), ions);
     context.lincomb(next_neutrals, Real(1), neutrals, Real(0), neutrals);
@@ -95,7 +125,29 @@ static void install_ionization_program(NativeSystem& system) {
     context.commit_many(
         {{&electrons, &next_electrons}, {&ions, &next_ions}, {&neutrals, &next_neutrals}});
   });
-  system.set_program_block_map({0, 1, 2});
+#if !defined(POPS_TEST_TMPDIR)
+  throw std::runtime_error("MPI coupled-source ABI-v5 fixture requires POPS_TEST_TMPDIR");
+#else
+  static std::size_t fixture_index = 0;
+  const std::string prefix = std::string(POPS_TEST_TMPDIR) + "/mpi_coupled_source_program_" +
+                             std::to_string(++fixture_index);
+  const std::string source_path = prefix + ".cpp";
+  const std::string library_path = prefix + ".so";
+  {
+    std::ofstream source(source_path);
+    if (!source)
+      throw std::runtime_error("cannot create MPI coupled-source ABI-v5 fixture source");
+    source << test::program_v5::callback_program_source(
+        callback_identifier, "tests.mpi-coupled-source/ionization@1", "test.clock.macro",
+        system.block_names(), resources, "pops_test_mpi_coupled_source_callback", "uniform");
+  }
+  const auto compiled = test::native_dso::compile_shared(source_path, library_path);
+  if (!compiled.ok) {
+    test::native_dso::report_compile_failure("test_mpi_coupled_source", compiled);
+    throw std::runtime_error("MPI coupled-source ABI-v5 fixture compilation failed");
+  }
+  system.install_program(library_path);
+#endif
 }
 
 static int run_test_mpi_coupled_source_body(int argc, char** argv) {
@@ -218,8 +270,19 @@ static int run_test_mpi_coupled_source_body(int argc, char** argv) {
       });
   bool live_state_rejected = false;
   try {
-    sys.apply_coupling_operators(Real(dt),
-                                 {&sys.block_state(0), &sys.block_state(1), &sys.block_state(2)});
+    NativeMultiFab state_electrons = [&] {
+      const auto state_view = sys.block_state(0);
+      return NativeMultiFab(*state_view.get());
+    }();
+    NativeMultiFab state_ions = [&] {
+      const auto state_view = sys.block_state(1);
+      return NativeMultiFab(*state_view.get());
+    }();
+    NativeMultiFab state_neutrals = [&] {
+      const auto state_view = sys.block_state(2);
+      return NativeMultiFab(*state_view.get());
+    }();
+    sys.apply_coupling_operators(Real(dt), {&state_electrons, &state_ions, &state_neutrals});
   } catch (const std::invalid_argument&) {
     live_state_rejected = true;
   } catch (const std::runtime_error&) {
@@ -238,9 +301,18 @@ static int run_test_mpi_coupled_source_body(int argc, char** argv) {
     ng -= dt * rate;
   }
 
-  NativeMultiFab candidate_electrons(sys.block_state(0));
-  NativeMultiFab candidate_ions(sys.block_state(1));
-  NativeMultiFab candidate_neutrals(sys.block_state(2));
+  NativeMultiFab candidate_electrons = [&] {
+    const auto state_view = sys.block_state(0);
+    return NativeMultiFab(*state_view.get());
+  }();
+  NativeMultiFab candidate_ions = [&] {
+    const auto state_view = sys.block_state(1);
+    return NativeMultiFab(*state_view.get());
+  }();
+  NativeMultiFab candidate_neutrals = [&] {
+    const auto state_view = sys.block_state(2);
+    return NativeMultiFab(*state_view.get());
+  }();
   const Real rollback_electrons = reduce_max_local(candidate_electrons, 0);
   const Real rollback_ions = reduce_max_local(candidate_ions, 0);
   const Real rollback_neutrals = reduce_max_local(candidate_neutrals, 0);

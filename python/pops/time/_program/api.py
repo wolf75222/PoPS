@@ -114,7 +114,7 @@ class Program(
         # checkpoint_policy is resolved during authoring to Dense (whole ring, no recomputation).
         self._history_persistence = {}
         # OPTIONAL dt bound (spec s18 / ADC-417): a recorded scalar sub-program (cfl -> Scalar) the
-        # generated .so exports as pops_program_dt_bound; None = no bound (the native CFL is used).
+        # candidate descriptor carries; None = no bound (the native CFL is used).
         self._dt_bound = None  # (block, scalar_value) once set; the block is the scalar sub-block
         self.dt = _Coeff({1: 1})  # symbolic time step; participates in coefficient arithmetic
         # Operator registries are indexed by their exact authoring OwnerPath. A coupled Program may

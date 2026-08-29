@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from pops._bootstrap import StepAttemptRejected
+from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
 from pops.runtime._native_step_target import native_step_target
 from pops.runtime._program_cadence_checkpoint import (
     capture_program_cadence,
@@ -744,9 +745,9 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
         assert checkpoint_time == checkpoint_deadline
         checkpoint_temporal = json.loads(str(stored["temporal_restart_state"]))
         history_names = tuple(str(value) for value in stored["history_names"])
-        cache_nodes = tuple(int(value) for value in stored["cache_nodes"])
+        cache_slots = tuple(int(value) for value in stored["cache_slots"])
         assert history_names
-        assert cache_nodes
+        assert cache_slots
         assert checkpoint_temporal["schedule_cursors"]
         assert checkpoint_temporal["history_cursors"]
         assert checkpoint_temporal["cache_cursors"]
@@ -761,10 +762,10 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
                 for value in stored["history_stored_slots_" + name]
             )
         }
-        assert all("cache_value_%d" % node in stored.files for node in cache_nodes)
+        assert all("cache_value_%d" % slot in stored.files for slot in cache_slots)
         cache_values = {
-            node: np.array(stored["cache_value_%d" % node])
-            for node in cache_nodes
+            slot: np.array(stored["cache_value_%d" % slot])
+            for slot in cache_slots
         }
 
     resumed = fresh()
@@ -776,11 +777,11 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
             values,
         )
     restored_native = resumed._executor._s
-    assert tuple(int(node) for node in restored_native.program_cache_nodes()) \
-        == cache_nodes
-    for node, values in cache_values.items():
+    assert tuple(int(slot) for slot in restored_native.program_cache_slots()) \
+        == cache_slots
+    for slot, values in cache_values.items():
         assert np.array_equal(
-            np.asarray(restored_native.program_cache_global(node)),
+            np.asarray(restored_native.program_cache_global(slot)),
             values,
         )
 
@@ -826,7 +827,7 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
     # current runtime identities and prove the strict preflight refuses it before beginning the
     # native restore transaction or mutating state/history/cache/clock.
     first_history = history_names[0]
-    first_cache = cache_nodes[0]
+    first_cache = cache_slots[0]
     invalid_metadata = {
         "history-slot-dt-nan": (
             {
@@ -842,8 +843,8 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
             {"history_fill_count_" + first_history: np.asarray(-1, dtype=np.int64)},
             "history_fill_count_.*must be >= 0",
         ),
-        "cache-node": (
-            {"cache_nodes": np.asarray([-1], dtype=np.int64)},
+        "cache-slot": (
+            {"cache_slots": np.asarray([-1], dtype=np.int64)},
             "cache index is inconsistent",
         ),
         "cache-future-update": (
@@ -852,7 +853,7 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
                     int(pristine["macro_step"]), dtype=np.int64
                 )
             },
-            "last update is not an accepted prior step",
+            "invalid accepted metadata",
         ),
         "cache-accumulated-dt-nan": (
             {
@@ -884,7 +885,7 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
             for name in native.history_names()
             for slot in range(native.history_depth(name))
         }
-        before_cache_nodes = tuple(native.program_cache_nodes())
+        before_cache_slots = tuple(native.program_cache_slots())
 
         def transaction_must_not_begin(self):
             del self
@@ -901,7 +902,7 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
         assert "_checkpoint_restart_python_snapshot" not in engine.__dict__
         assert (refused.time(), refused.macro_step()) == before_clock
         assert np.array_equal(np.asarray(refused.state_global("blk")), before_state)
-        assert tuple(native.program_cache_nodes()) == before_cache_nodes
+        assert tuple(native.program_cache_slots()) == before_cache_slots
         for (name, slot), values in before_histories.items():
             assert np.array_equal(np.asarray(native.history_global(name, slot)), values)
 
@@ -1139,14 +1140,21 @@ class _Payload(dict):
 def test_uniform_preflight_rejects_incomplete_dynamic_indexes_before_native_restore():
     payload = _Payload(
         {
+            "pops_checkpoint_version": np.array(
+                UNIFORM_CHECKPOINT_PAYLOAD_VERSION, dtype=np.int64
+            ),
             "t": np.array(0.0, dtype=np.float64),
             "macro_step": np.array(0, dtype=np.int64),
             "pops_spatial_contract": np.array("{}"),
             "pops_embedded_boundary_contract": np.array("{}"),
             "program_hash": np.array("ab" * 32),
             "history_names": np.array([], dtype="U1"),
-            "cache_nodes": np.array([], dtype=np.int64),
+            "cache_slots": np.array([], dtype=np.int64),
+            "cache_plan_schema": np.array("program-resource-plan:v1"),
+            "cache_plan_digest": np.array("a" * 64),
             "cache_names": np.array([], dtype="U1"),
+            "cache_valid": np.array([], dtype=np.bool_),
+            "cache_cold": np.array([], dtype=np.bool_),
             "temporal_restart_state": np.array("{}"),
             "program_cadence_substeps": np.array(1, dtype=np.int64),
             "program_cadence_stride": np.array(1, dtype=np.int64),
@@ -1157,23 +1165,37 @@ def test_uniform_preflight_rejects_incomplete_dynamic_indexes_before_native_rest
         }
     )
     preflight_uniform_restart(payload)
+    for legacy_version in (8, 11):
+        payload["pops_checkpoint_version"] = np.array(legacy_version, dtype=np.int64)
+        with pytest.raises(ValueError, match="payload version .* unsupported"):
+            preflight_uniform_restart(payload)
+    payload["pops_checkpoint_version"] = np.array(
+        UNIFORM_CHECKPOINT_PAYLOAD_VERSION, dtype=np.int64
+    )
 
     payload["history_names"] = np.array(["rhs"])
     with pytest.raises(ValueError, match="history 'rhs'.*incomplete strict manifest"):
         preflight_uniform_restart(payload)
 
 
-def test_uniform_preflight_rejects_noncanonical_scheduled_cache_name():
+def test_uniform_preflight_rejects_empty_scheduled_cache_name():
     payload = _Payload(
         {
+            "pops_checkpoint_version": np.array(
+                UNIFORM_CHECKPOINT_PAYLOAD_VERSION, dtype=np.int64
+            ),
             "t": np.array(1.0, dtype=np.float64),
             "macro_step": np.array(1, dtype=np.int64),
             "pops_spatial_contract": np.array("{}"),
             "pops_embedded_boundary_contract": np.array("{}"),
             "program_hash": np.array("ab" * 32),
             "history_names": np.array([], dtype="U1"),
-            "cache_nodes": np.array([7], dtype=np.int64),
-            "cache_names": np.array(["wrong_name"]),
+            "cache_slots": np.array([0], dtype=np.int64),
+            "cache_plan_schema": np.array("program-resource-plan:v1"),
+            "cache_plan_digest": np.array("a" * 64),
+            "cache_names": np.array([""]),
+            "cache_valid": np.array([False], dtype=np.bool_),
+            "cache_cold": np.array([True], dtype=np.bool_),
             "temporal_restart_state": np.array("{}"),
             "program_cadence_substeps": np.array(1, dtype=np.int64),
             "program_cadence_stride": np.array(1, dtype=np.int64),
@@ -1181,15 +1203,14 @@ def test_uniform_preflight_rejects_noncanonical_scheduled_cache_name():
             "program_cadence_window_dt": np.array(0.0, dtype=np.float64),
             "program_cadence_window_start_time": np.array(0.0, dtype=np.float64),
             "program_last_dt": np.array(0.0, dtype=np.float64),
-            "cache_ncomp_7": np.array(1, dtype=np.int64),
-            "cache_ngrow_7": np.array(0, dtype=np.int64),
-            "cache_last_update_7": np.array(0, dtype=np.int64),
-            "cache_accum_dt_7": np.array(0.0, dtype=np.float64),
-            "cache_value_7": np.ones((1, 1), dtype=np.float64),
+            "cache_ncomp_0": np.array(0, dtype=np.int64),
+            "cache_ngrow_0": np.array(0, dtype=np.int64),
+            "cache_last_update_0": np.array(-1, dtype=np.int64),
+            "cache_accum_dt_0": np.array(0.0, dtype=np.float64),
         }
     )
 
-    with pytest.raises(ValueError, match="node 7 must use canonical cache name 'node_7'"):
+    with pytest.raises(ValueError, match="must contain non-empty text"):
         preflight_uniform_restart(payload)
 
 
@@ -1315,7 +1336,7 @@ def test_uniform_restart_restores_clock_before_selective_history_replay(monkeypa
         "field_provider_slots": np.array([], dtype="U1"),
         "history_names": np.array(["blk.state"]),
         "cache_names": np.array([], dtype="U1"),
-        "cache_nodes": np.array([], dtype=np.int64),
+        "cache_slots": np.array([], dtype=np.int64),
         "t": np.array(1.5, dtype=np.float64),
         "macro_step": np.array(3, dtype=np.int64),
     }
@@ -1389,7 +1410,7 @@ def test_uniform_capture_uses_field_slots_without_materializing_default_field(
         field_slots=field_slots,
         spatial_shape=(2, 2),
         history_plan=object(),
-        cache_nodes=(),
+        cache_slots=(),
         capture_identity="capture",
     )
     owner = type("Owner", (), {"_s": Native()})()
@@ -1422,8 +1443,8 @@ def test_uniform_capture_defers_field_free_alias_until_every_native_gather_finis
             calls.append(("auxiliary",))
             return b"POPSAUX2"
 
-        def program_cache_global(self, node):
-            calls.append(("cache", node))
+        def program_cache_global(self, slot):
+            calls.append(("cache", slot))
             return np.ones((1, 2, 2), dtype=np.float64)
 
     def capture_histories(_native, _plan, _payload):
@@ -1442,7 +1463,7 @@ def test_uniform_capture_defers_field_free_alias_until_every_native_gather_finis
         field_slots=(),
         spatial_shape=(2, 2),
         history_plan=object(),
-        cache_nodes=(7,),
+        cache_slots=(7,),
         capture_identity="capture",
     )
 
@@ -1496,7 +1517,7 @@ def test_uniform_capture_default_field_keeps_the_legacy_phi_as_an_exact_alias(mo
         field_slots=(_DEFAULT_FIELD_SLOT,),
         spatial_shape=(2, 2),
         history_plan=object(),
-        cache_nodes=(),
+        cache_slots=(),
         capture_identity="capture",
     )
     payload, _token = _SystemIO._capture_checkpoint(
@@ -1584,7 +1605,7 @@ def test_uniform_phi_alias_validation_and_restore_uses_default_once():
         "field_potential_1": np.full((2, 2), 7.0, dtype=np.float64),
         "history_names": np.array([], dtype="U1"),
         "cache_names": np.array([], dtype="U1"),
-        "cache_nodes": np.array([], dtype=np.int64),
+        "cache_slots": np.array([], dtype=np.int64),
         "t": np.array(0.0, dtype=np.float64),
         "macro_step": np.array(0, dtype=np.int64),
     }

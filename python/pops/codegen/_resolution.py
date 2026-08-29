@@ -26,7 +26,7 @@ def resolve_capability_evidence(
     libraries: Any = (),
     time: Any = None,
     module_abi_key: Any = None,
-    amr_program_context: Any = None,
+    program_execution_services_amr: Any = None,
 ) -> dict[str, Any]:
     """Join requirements and providers before artifact creation.
 
@@ -62,7 +62,7 @@ def resolve_capability_evidence(
             external_evidence.append(
                 _resolve_external_row(source, row, layout_name, external_providers)
             )
-    amr_evidence = _resolve_amr_program(layout_name, time, context=amr_program_context)
+    amr_evidence = _resolve_amr_program(layout_name, time, context=program_execution_services_amr)
     evidence = {
         "schema_version": CAPABILITY_EVIDENCE_SCHEMA_VERSION,
         "layout": layout_name,

@@ -167,8 +167,7 @@ Snap run(AmrSystem<Dim>& s, int nsteps) {
   s.set_temporal_relations({2}, {1}, {"integral_only"});
   s.set_poisson("charge_density", "geometric_mg");
   test::install_prepared_threshold_union(s, {{"gas", "rho", 1.2}});
-  auto context = test::install_forward_euler_program_context(s, true);
-  context->declare_clock_relation(kPrimaryClock, kFineClock, 2);
+  test::install_forward_euler_program_execution_services(s, true);
 
   // Installing the explicit Program materializes the engine and performs the automatic initial
   // hierarchy bootstrap.  The cadence witness must therefore advance strictly after this baseline,
@@ -186,7 +185,10 @@ Snap run(AmrSystem<Dim>& s, int nsteps) {
   snap.n_patches = s.n_patches();
   snap.n_levels = s.n_levels();
   if (snap.n_levels >= 2) {
-    for (const pops::Box<Dim>& patch : s.prepared_amr_block_state(0, 1).layout().boxes())
+    auto fine_view = s.prepared_amr_block_state(0, 1);
+    if (!fine_view)
+      throw std::logic_error("AMR accepted block view is invalid");
+    for (const pops::Box<Dim>& patch : fine_view->layout().boxes())
       snap.refined_cells += patch.numPts();
     snap.fine_domain_cells = s.prepared_amr_level_geometry(1).domain().numPts();
   }

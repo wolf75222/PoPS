@@ -51,26 +51,94 @@ def test_resolved_amr_program_emits_only_the_amr_install_entry() -> None:
         field_plans=system.field_plans,
     )
 
-    assert "pops_install_program_amr" in amr_source
+    assert "pops_install_program" in amr_source
+    assert (
+        'extern "C" bool pops_install_program(\n'
+        "    const pops::runtime::program::ProgramHostDescriptor* host,\n"
+        "    pops::runtime::program::ProgramCandidateDescriptor* candidate,\n"
+        "    pops::runtime::program::ProgramInstallDiagnostic* diagnostic) noexcept"
+    ) in amr_source
     assert (
         'extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* sys)'
         not in amr_source
     )
-    assert "make_program_execution_provider(sys)" in amr_source
-    assert "AmrProgramContext& ctx" not in amr_source
+    amr_prepare = amr_source.split("bool program_candidate_prepare", 1)[1].split(
+        'extern "C" bool pops_install_program', 1
+    )[0]
+    amr_inspect = amr_source.split('extern "C" bool pops_install_program', 1)[1]
+    assert (
+        "make_program_execution_provider<pops::kNativeDimension>(host->preparation)"
+        in amr_prepare
+    )
+    assert "make_program_execution_provider" not in amr_inspect
+    assert "ProgramExecutionServices& ctx" not in amr_source
     assert "_make_level_program" in amr_source
     assert "const auto topology = ctx.program_resource_topology();" in amr_source
     assert "ctx.for_each_program_resource_level(" in amr_source
     assert "ctx.set_level(" not in amr_source
     assert "_refresh_level_programs();" in amr_source
     assert "ctx.advance_hierarchy(dt, _advance_level)" in amr_source
-    assert "}, ctx_owner, _refresh_level_programs);" in amr_source
+    assert "state->hierarchy_resource_refresh = _refresh_level_programs;" in amr_source
     level_advance = amr_source.split("auto _advance_level", 1)[1].split("};", 1)[0]
     assert level_advance.index("_refresh_level_programs();") < level_advance.index(
         "_level_programs->at"
     ), "a transactional regrid must refresh resources before the first level-bundle access"
-    assert "pops_install_program(" in system_source
-    assert "pops_install_program_amr" not in system_source
+    assert (
+        'extern "C" bool pops_install_program(\n'
+        "    const pops::runtime::program::ProgramHostDescriptor* host,\n"
+        "    pops::runtime::program::ProgramCandidateDescriptor* candidate,\n"
+        "    pops::runtime::program::ProgramInstallDiagnostic* diagnostic) noexcept"
+    ) in system_source
+    assert 'extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* sys)' not in system_source
+    system_prepare = system_source.split("bool program_candidate_prepare", 1)[1].split(
+        'extern "C" bool pops_install_program', 1
+    )[0]
+    system_inspect = system_source.split('extern "C" bool pops_install_program', 1)[1]
+    assert (
+        "make_program_execution_provider<pops::kNativeDimension>(host->preparation)"
+        in system_prepare
+    )
+    assert "make_program_execution_provider" not in system_inspect
+    assert "ctx.install(" not in system_source
+    for token in (
+        "struct ProgramCandidateState final",
+        "std::function<void(double)> step;",
+        "host->services.state_store",
+        "valid_program_host_descriptor(*host)",
+        "ProgramRuntimeKind::uniform",
+        "write_program_install_diagnostic(",
+        "catch (...)",
+        "descriptor.artifact_identity =",
+        "descriptor.abi_key =",
+        "descriptor.route_manifest =",
+        "descriptor.boundary_manifest =",
+        "descriptor.persistent_resource_manifest =",
+        "descriptor.checkpoint_identity =",
+        "descriptor.dt_bound = nullptr;",
+        "descriptor.step = &program_candidate_step;",
+        "descriptor.destroy = &program_candidate_destroy;",
+        "(void)state.release();",
+    ):
+        assert token in system_source
+
+    for token in (
+        "struct ProgramCandidateState final",
+        "ProgramRuntimeKind::amr",
+        "host->services.state_store",
+        "program_candidate_hierarchy_refresh",
+        "program_candidate_history_remap",
+        "program_candidate_restart_preflight",
+        "program_candidate_accepted_snapshot",
+        "descriptor.hierarchy_refresh =",
+        "descriptor.history_remap_accepted =",
+        "descriptor.restart_regrid_preflight =",
+        "descriptor.create_accepted_snapshot =",
+        "descriptor.destroy = &program_candidate_destroy;",
+    ):
+        assert token in amr_source
+    assert "ctx.install(" not in amr_source
+    assert "pops_register_program_provider_routes" not in amr_source
+    assert "descriptor.provider_routes = kProgramCandidateProviderRoutes" in amr_source
 
 
 def test_unknown_program_target_is_rejected_before_emission() -> None:

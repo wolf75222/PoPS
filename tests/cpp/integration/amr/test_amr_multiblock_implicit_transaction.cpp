@@ -7,17 +7,20 @@
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/program/amr_program_context.hpp>
+#include <pops/runtime/program/program_execution_services.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <future>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -197,25 +200,37 @@ TEST(test_amr_multiblock_implicit_transaction,
                                 "tests.implicit-transaction/fast/physical-flux");
   system.set_conservative_state("slow", std::vector<double>(cell_count(config.shape), 0.25));
   system.set_conservative_state("fast", std::vector<double>(cell_count(config.shape), 3.0));
-  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  using Resource = pops::test::program_v5::CallbackProgramResource;
+  std::vector<Resource> resources;
+  resources.reserve(2);
+  for (int program_block = 0; program_block < 2; ++program_block) {
+    const int runtime_block = program_block == 0 ? 1 : 0;
+    const auto state = system.prepared_amr_block_state(runtime_block, 0);
+    ASSERT_TRUE(state);
+    resources.push_back({Resource::Kind::state, resources.size(), 0, program_block, 0,
+                         static_cast<std::uint32_t>(state->ncomp()),
+                         static_cast<std::uint32_t>(state->ghosts()[0])});
+  }
   auto inject_retry = std::make_shared<bool>(true);
-  context->configure_primary_clock("tests.implicit-transaction.multiblock-clock");
-  context->install(
-      [context, inject_retry](double macro_dt) {
-        context->advance_hierarchy(macro_dt, [context, inject_retry](double level_dt) {
+  pops::test::install_explicit_amr_callback_program<Dim>(
+      system, "tests.implicit-transaction/multiblock-program@1",
+      "tests.implicit-transaction.multiblock-clock", std::vector<std::string>{"fast", "slow"},
+      resources, {}, [inject_retry](auto& context, double macro_dt) {
+        context.advance_hierarchy(macro_dt, [&context, inject_retry](double level_dt) {
           std::array<pops::MultiFab<Dim>*, 2> accepted{};
           std::array<pops::MultiFab<Dim>*, 2> candidates{};
-          context->set_stage_time(0, 1);
+          context.set_stage_time(0, 1);
           for (int program_block = 0; program_block < 2; ++program_block) {
-            accepted[program_block] = &context->state(program_block);
-            auto& candidate =
-                context->scratch_state(1000 + program_block, 0, *accepted[program_block]);
+            accepted[program_block] = &context.state(program_block);
+            auto& candidate = context.scratch_state(
+                static_cast<pops::runtime::program::ProgramCacheSlot>(program_block), 0,
+                *accepted[program_block]);
             // This is intentionally a source-only, atomic two-block transaction.  Do not add a
             // numerically-zero transport stage: temporal composition belongs to authored Program
             // evidence, while this fixture proves the implicit solve/retry/commit contract.
-            context->lincomb(candidate, pops::Real(1), *accepted[program_block], pops::Real(0),
-                             *accepted[program_block]);
-            pops::SolveOutcome implicit = context->solve_source_default(
+            context.lincomb(candidate, pops::Real(1), *accepted[program_block], pops::Real(0),
+                            *accepted[program_block]);
+            pops::SolveOutcome implicit = context.solve_source_default(
                 program_block, candidate, pops::Real(level_dt), pops::NewtonOptions{});
             const pops::SolveReport report = implicit.consume(pops::SolveConsumption::kAccept);
             if (!report.solved())
@@ -230,22 +245,17 @@ TEST(test_amr_multiblock_implicit_transaction,
                 kImplicitTransactionRetryReason, "implicit-source",
                 "injected-implicit-transaction-retry");
           }
-          context->commit_many({{accepted[0], candidates[0]}, {accepted[1], candidates[1]}});
+          context.commit_many({{accepted[0], candidates[0]}, {accepted[1], candidates[1]}});
         });
-      },
-      context);
-  // Installing a whole-system Program resets its unverified binding image.  Bind this Program
-  // order only after that installation so the rollback snapshot and the prepared budget carry
-  // the same exact non-positional map.
-  system.set_program_block_map({1, 0});
-  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
-  system.install_prepared_amr_program_flux_expression_budget(
-      "tests.implicit-transaction.multiblock-program-v1", std::vector<FluxBudget>{{1, 1}, {1, 1}},
-      0, 0);
-
-  const pops::MultiFab<Dim> slow_before = system.prepared_amr_block_state(0, 0);
-  const pops::MultiFab<Dim> fast_before = system.prepared_amr_block_state(1, 0);
+      });
+  auto slow_before_view = system.prepared_amr_block_state(0, 0);
+  auto fast_before_view = system.prepared_amr_block_state(1, 0);
+  ASSERT_TRUE(slow_before_view);
+  ASSERT_TRUE(fast_before_view);
+  const pops::MultiFab<Dim> slow_before = *slow_before_view;
+  const pops::MultiFab<Dim> fast_before = *fast_before_view;
   constexpr double dt = 0.05;
+  EXPECT_EQ(system.accepted_transaction_generation_(), 0u);
   try {
     system.step(dt);
     FAIL() << "the full-pack retry was not surfaced";
@@ -256,12 +266,18 @@ TEST(test_amr_multiblock_implicit_transaction,
   }
   EXPECT_EQ(system.macro_step(), 0);
   EXPECT_DOUBLE_EQ(system.time(), 0.0);
-  EXPECT_TRUE(byte_exact_equal(slow_before, system.prepared_amr_block_state(0, 0)));
-  EXPECT_TRUE(byte_exact_equal(fast_before, system.prepared_amr_block_state(1, 0)));
+  EXPECT_EQ(system.accepted_transaction_generation_(), 0u);
+  auto slow_after_reject_view = system.prepared_amr_block_state(0, 0);
+  auto fast_after_reject_view = system.prepared_amr_block_state(1, 0);
+  ASSERT_TRUE(slow_after_reject_view);
+  ASSERT_TRUE(fast_after_reject_view);
+  EXPECT_TRUE(byte_exact_equal(slow_before, *slow_after_reject_view));
+  EXPECT_TRUE(byte_exact_equal(fast_before, *fast_after_reject_view));
 
   ASSERT_NO_THROW(system.step(dt));
   EXPECT_EQ(system.macro_step(), 1);
   EXPECT_DOUBLE_EQ(system.time(), dt);
+  EXPECT_EQ(system.accepted_transaction_generation_(), 1u);
   const auto slow_after = system.block_level_state_global("slow", 0);
   const auto fast_after = system.block_level_state_global("fast", 0);
   ASSERT_FALSE(slow_after.empty());
@@ -269,6 +285,38 @@ TEST(test_amr_multiblock_implicit_transaction,
   EXPECT_NEAR(slow_after.front(), (0.25 + dt * 8.0 * 2.0) / (1.0 + dt * 8.0), 1.0e-12);
   EXPECT_NEAR(fast_after.front(), (3.0 + dt * 24.0 * -1.0) / (1.0 + dt * 24.0), 1.0e-12);
   EXPECT_NE(slow_after.front(), fast_after.front());
+
+  // RuntimeInstance's outer transaction owns the candidate writer from begin through rollback or
+  // finalize. A nested AMR step must not seal early or let another reader observe its provisional
+  // clocks. First prove rollback; then prove commit/seal increments exactly once.
+  system.begin_step_transaction();
+  ASSERT_NO_THROW(system.step(dt));
+  EXPECT_EQ(system.accepted_transaction_generation_(), 1u);
+  EXPECT_THROW((void)system.time(), std::logic_error);
+  EXPECT_THROW((void)system.macro_step(), std::logic_error);
+  std::promise<void> reader_finished;
+  auto reader_done = reader_finished.get_future();
+  std::thread reader([&] {
+    (void)system.time();
+    reader_finished.set_value();
+  });
+  EXPECT_EQ(reader_done.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
+  system.rollback_step_transaction();
+  EXPECT_EQ(system.accepted_transaction_generation_(), 1u);
+  EXPECT_EQ(reader_done.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+  reader.join();
+  EXPECT_EQ(system.macro_step(), 1);
+  EXPECT_DOUBLE_EQ(system.time(), dt);
+
+  system.begin_step_transaction();
+  ASSERT_NO_THROW(system.step(dt));
+  ASSERT_NO_THROW(system.commit_step_transaction());
+  EXPECT_EQ(system.accepted_transaction_generation_(), 1u);
+  EXPECT_THROW((void)system.time(), std::logic_error);
+  ASSERT_NO_THROW(system.finalize_step_transaction());
+  EXPECT_EQ(system.accepted_transaction_generation_(), 2u);
+  EXPECT_EQ(system.macro_step(), 2);
+  EXPECT_DOUBLE_EQ(system.time(), 2.0 * dt);
 }
 
 TEST(test_amr_multiblock_implicit_transaction, MetadataNeverCreatesAnImplicitTemporalFallback) {

@@ -14,7 +14,15 @@ from pops._checkpoint_migration_protocol import (
 from pops.identity import canonical_bytes
 from pops.output._checkpoint_contract import (
     CheckpointResourceBudget,
+    PROGRAM_PERSISTENT_CHECKPOINT_KEY,
+    PROGRAM_PERSISTENT_CHECKPOINT_SCHEMA_KEY,
+    PROGRAM_PERSISTENT_PLAN_DIGEST_KEY,
+    PROGRAM_PERSISTENT_PLAN_MAXIMUM_BYTES_KEY,
+    PROGRAM_PERSISTENT_PLAN_SCHEMA_KEY,
+    PROGRAM_PERSISTENT_SLOT_COUNT_KEY,
     _capacity,
+    program_persistent_value_checkpoint_capacity,
+    program_persistent_value_checkpoint_capture_available,
     require_checkpoint_resource_budget,
 )
 
@@ -225,11 +233,11 @@ def _cache_capacity(
     program: Any,
     block_nvars_by_name: dict[str, int],
 ) -> tuple[tuple[str, ...], int, Any]:
-    """Reserve every cacheable schedule node from the immutable Program authority.
+    """Reserve the bind-sealed dense scheduler slots from the immutable Program authority.
 
-    Native cache nodes are intentionally lazy: before the first accepted execution they need not
-    exist at all.  Their mutable materialization state is therefore validation evidence, not the
-    source of the resource envelope or its bind identity.
+    Slot composition is frozen by the resource plan before the first step.  The checkpoint carries
+    every slot, including invalid/cold slots whose accumulated ``dt`` window has no field payload;
+    the native materialization state is therefore evidence only, never the source of the envelope.
     """
     native = owner._s
     temporal = program.temporal_manifest()
@@ -238,87 +246,214 @@ def _cache_capacity(
     schedules = temporal.get("schedules")
     if not isinstance(schedules, list):
         raise TypeError("checkpoint cache authority requires temporal schedule rows")
-    declared_nodes = []
-    potential_nodes = []
+    manifest_schema = temporal.get("resource_plan_schema")
+    manifest_digest = temporal.get("resource_plan_digest")
+    if type(manifest_schema) is not str or manifest_schema != "program-resource-plan:v1":
+        raise ValueError(
+            "checkpoint cache authority has an invalid temporal resource-plan schema"
+        )
+    if (
+        type(manifest_digest) is not str
+        or len(manifest_digest) != 64
+        or any(character not in "0123456789abcdef" for character in manifest_digest)
+    ):
+        raise ValueError(
+            "checkpoint cache authority has an invalid temporal resource-plan digest"
+        )
+    declared_slots = []
+    potential_slots = []
     for index, row in enumerate(schedules):
         if not isinstance(row, Mapping):
             raise TypeError("checkpoint cache schedule %d must be a mapping" % index)
-        raw_node = row.get("node_id")
-        if type(raw_node) is not int:
-            raise TypeError("checkpoint cache schedule node id must be an exact integer")
-        node = _capacity(
-            raw_node,
-            where="checkpoint cache schedule node id",
-        )
-        declared_nodes.append(node)
+        if "slot" in row and "cache_slots" in row:
+            raise ValueError(
+                "checkpoint cache schedule cannot mix cache_slots with singular slot"
+            )
+        raw_slots = row.get("cache_slots")
+        if not isinstance(raw_slots, list):
+            raise TypeError("checkpoint cache schedule cache_slots must be a list")
+        checked_slots = []
+        for raw_slot in raw_slots:
+            if type(raw_slot) is not int:
+                raise TypeError("checkpoint cache schedule slot must be an exact integer")
+            checked_slots.append(
+                _capacity(raw_slot, where="checkpoint cache schedule slot")
+            )
+        row_slots = tuple(checked_slots)
+        if row_slots != tuple(sorted(set(row_slots))):
+            raise ValueError(
+                "checkpoint cache schedule cache_slots must be unique and increasing"
+            )
         cache_required = row.get("cache_required")
         if type(cache_required) is not bool:
             raise TypeError("checkpoint cache schedule cache_required must be bool")
+        if cache_required != bool(row_slots):
+            raise ValueError(
+                "checkpoint cache schedule cache_slots disagree with cache_required"
+            )
+        declared_slots.extend(row_slots)
         if cache_required:
-            potential_nodes.append(node)
-    potential = tuple(sorted(potential_nodes))
-    if len(declared_nodes) != len(set(declared_nodes)):
-        raise ValueError("checkpoint cache authority has duplicate schedule node ids")
+            potential_slots.extend(row_slots)
+    potential = tuple(sorted(potential_slots))
+    if len(declared_slots) != len(set(declared_slots)):
+        raise ValueError("checkpoint cache authority has duplicate schedule slots")
 
-    provider = getattr(native, "program_cache_nodes", None)
-    raw_nodes = (
-        _require_iterable(provider(), where="checkpoint cache native node evidence")
+    provider = getattr(native, "program_cache_slots", None)
+    name_provider = getattr(native, "program_cache_name", None)
+    plan_schema_provider = getattr(native, "program_cache_plan_schema", None)
+    plan_digest_provider = getattr(native, "program_cache_plan_digest", None)
+    if (
+        not callable(provider)
+        or not callable(name_provider)
+        or not callable(plan_schema_provider)
+        or not callable(plan_digest_provider)
+    ):
+        raise TypeError(
+            "checkpoint cache authority requires dense slot, name and plan accessors"
+        )
+    raw_slots = (
+        _require_iterable(provider(), where="checkpoint cache native slot evidence")
         if callable(provider)
         else ()
     )
-    nodes = []
-    for node in raw_nodes:
-        if type(node) is not int or node < 0:
-            raise ValueError("checkpoint cache authority has invalid exact node ids")
-        nodes.append(node)
-    nodes = tuple(nodes)
-    if nodes != tuple(sorted(set(nodes))):
-        raise ValueError("checkpoint cache authority has invalid exact node ids")
-    unknown = tuple(node for node in nodes if node not in potential)
-    if unknown:
-        raise ValueError("checkpoint cache authority has live nodes outside the Program schedule")
+    slots = []
+    for slot in raw_slots:
+        if type(slot) is not int or slot < 0:
+            raise ValueError("checkpoint cache authority has invalid exact slot indices")
+        slots.append(slot)
+    slots = tuple(slots)
+    if slots != tuple(range(len(slots))):
+        raise ValueError("checkpoint cache authority has non-dense exact slot indices")
+    if any(slot >= len(slots) for slot in potential):
+        raise ValueError("checkpoint cache schedule refers to an absent prepared slot")
+    plan_schema = plan_schema_provider()
+    plan_digest = plan_digest_provider()
+    if (
+        type(plan_schema) is not str
+        or plan_schema != "program-resource-plan:v1"
+        or type(plan_digest) is not str
+        or len(plan_digest) != 64
+        or any(character not in "0123456789abcdef" for character in plan_digest)
+    ):
+        raise ValueError("checkpoint cache authority has an invalid resource-plan identity")
+    if plan_schema != manifest_schema or plan_digest != manifest_digest:
+        raise ValueError(
+            "checkpoint cache authority resource-plan identity differs from the temporal manifest"
+        )
 
     width = _sum(block_nvars_by_name.values(), where="checkpoint cache scalar width")
     valid_cells = _product(shape, where="checkpoint cache valid cells")
-    names = ["cache_nodes", "cache_names"]
+    names = [
+        "cache_slots",
+        "cache_plan_schema",
+        "cache_plan_digest",
+        "cache_names",
+        "cache_valid",
+        "cache_cold",
+    ]
     data_bytes = 0
     evidence = []
-    for node in potential:
+    for slot in slots:
         names.extend(
             (
-                "cache_ncomp_%d" % node,
-                "cache_ngrow_%d" % node,
-                "cache_last_update_%d" % node,
-                "cache_accum_dt_%d" % node,
-                "cache_value_%d" % node,
+                "cache_ncomp_%d" % slot,
+                "cache_ngrow_%d" % slot,
+                "cache_last_update_%d" % slot,
+                "cache_accum_dt_%d" % slot,
             )
         )
-        data_bytes = _add(
-            data_bytes,
-            _mul(
-                _mul(valid_cells, width, where="checkpoint cache scalar budget"),
-                8,
+        if slot in potential:
+            names.append("cache_value_%d" % slot)
+            data_bytes = _add(
+                data_bytes,
+                _mul(
+                    _mul(valid_cells, width, where="checkpoint cache scalar budget"),
+                    8,
+                    where="checkpoint cache byte budget",
+                ),
                 where="checkpoint cache byte budget",
-            ),
-            where="checkpoint cache byte budget",
-        )
-        # This stable potential-node evidence deliberately does not depend on whether native
-        # execution has materialized the lazy cache yet.
-        evidence.append((node, "node_%d" % node, width))
+            )
+        name = name_provider(slot)
+        if not isinstance(name, str) or not name:
+            raise ValueError("checkpoint cache authority has an invalid slot name")
+        if callable(getattr(native, "program_cache_valid", None)) and native.program_cache_valid(slot):
+            ncomp = _capacity(
+                native.program_cache_ncomp(slot),
+                where="checkpoint cache component count",
+                positive=True,
+            )
+            _capacity(native.program_cache_ngrow(slot), where="checkpoint cache ghost width")
+            if ncomp > width:
+                raise ValueError("checkpoint cache component count exceeds the Program width")
+        # This evidence is stable even when a slot is cold and carries only metadata.
+        evidence.append((slot, name, width))
+    return (
+        tuple(names),
+        data_bytes,
+        {"plan_schema": plan_schema, "plan_digest": plan_digest, "slots": tuple(evidence)},
+    )
 
-    for node in nodes:
-        name = native.program_cache_name(node)
-        ncomp = _capacity(
-            native.program_cache_ncomp(node),
-            where="checkpoint cache component count",
-            positive=True,
-        )
-        _capacity(native.program_cache_ngrow(node), where="checkpoint cache ghost width")
-        if name != "node_%d" % node:
-            raise ValueError("checkpoint cache authority has a noncanonical exact node name")
-        if ncomp > width:
-            raise ValueError("checkpoint cache component count exceeds the Program width")
-    return tuple(names), data_bytes, evidence
+
+def _persistent_checkpoint_capacity(
+    program: Any,
+    *,
+    target: str,
+) -> tuple[tuple[str, ...], int, Any, Any]:
+    """Reserve the complete native ProgramPersistentValueCheckpoint image.
+
+    The native store allocates each row's ``maximum_bytes`` at bind time, including rows that are
+    still invalid/cold.  A checkpoint budget therefore reserves the exact codec upper bound from
+    the sealed static plan; deriving it from a live-value-only cache enumeration would omit cold
+    slots and make a later capture exceed the authenticated archive envelope.
+    """
+    from pops.codegen.program_persistent_plan import get_program_resource_plan
+
+    try:
+        plan = get_program_resource_plan(program, target=target)
+    except TypeError as error:
+        # A few producer-only/unit budget paths use a deliberately minimal temporal fake with no
+        # Program value sequence at all.  It cannot own a persistent carrier; preserve that
+        # legacy producer envelope while every artifact-backed Program still takes the strict path.
+        if hasattr(program, "_values") or hasattr(program, "values") or hasattr(program, "resource_plan"):
+            raise
+        if "requires Program values" not in str(error):
+            raise
+        return (), 0, {}, None
+    encoded_capacity = program_persistent_value_checkpoint_capacity(plan)
+    import numpy as np
+
+    string_itemsize = int(np.dtype("U1").itemsize)
+    schema_chars = len("program-persistent-value-checkpoint:v1")
+    plan_schema_chars = len("program-resource-plan:v1")
+    digest_chars = len(plan.digest)
+    scalar_bytes = _add(
+        _mul(schema_chars + plan_schema_chars + digest_chars, string_itemsize,
+             where="Program persistent checkpoint text capacity"),
+        8 + 4,
+        where="Program persistent checkpoint scalar capacity",
+    )
+    names = (
+        PROGRAM_PERSISTENT_CHECKPOINT_KEY,
+        PROGRAM_PERSISTENT_CHECKPOINT_SCHEMA_KEY,
+        PROGRAM_PERSISTENT_PLAN_SCHEMA_KEY,
+        PROGRAM_PERSISTENT_PLAN_DIGEST_KEY,
+        PROGRAM_PERSISTENT_PLAN_MAXIMUM_BYTES_KEY,
+        PROGRAM_PERSISTENT_SLOT_COUNT_KEY,
+    )
+    data_bytes = _add(
+        encoded_capacity,
+        scalar_bytes,
+        where="Program persistent checkpoint payload byte capacity",
+    )
+    evidence = {
+        "schema": "program-persistent-value-checkpoint:v1",
+        "plan_schema": "program-resource-plan:v1",
+        "plan_digest": plan.digest,
+        "maximum_bytes": plan.maximum_bytes,
+        "slot_count": len(plan),
+        "encoded_capacity": encoded_capacity,
+    }
+    return names, data_bytes, evidence, plan
 
 
 def _consumer_evidence(install_plan: Any) -> tuple[str, int, Any]:
@@ -350,7 +485,7 @@ def _consumer_evidence(install_plan: Any) -> tuple[str, int, Any]:
 def _amr_field_provider_manifest_capacity(
     owner: Any, *, configured_levels: int
 ) -> tuple[tuple[str, ...], int, int]:
-    """Bound the v11 field-provider manifest from its live immutable native rows."""
+    """Bound the v12 field-provider manifest from its live immutable native rows."""
     provider = getattr(owner._s, "field_provider_checkpoint_manifest", None)
     if not callable(provider):
         raise TypeError("AMR checkpoint budget requires the native field-provider manifest")
@@ -434,6 +569,7 @@ def _checkpoint_member_names(
     field_names: tuple[str, ...],
     history_names: tuple[str, ...],
     cache_names: tuple[str, ...],
+    persistent_names: tuple[str, ...] = (),
     levels: int,
     rank_capacity: int,
     has_amr_legacy_phi: bool = False,
@@ -468,6 +604,7 @@ def _checkpoint_member_names(
             *cadence,
             "field_provider_slots",
             "program_hash",
+            *persistent_names,
             "phi",
             "auxiliary_checkpoint",
             "checkpoint_migration",
@@ -499,6 +636,7 @@ def _checkpoint_member_names(
             "field_provider_manifest",
             SPATIAL_CONTRACT_KEY,
             *cadence,
+            *persistent_names,
             "program_accepted_state_source_authority",
             *history_names,
         ]
@@ -572,6 +710,10 @@ def _common_budget(
         block_nvars=block_nvars_by_name,
         native=owner._s,
     )
+    # POPSPVS1 and the dense field cache are independent accepted-state authorities.  When both
+    # are installed, reserve and authenticate both images; the persistent carrier must never make
+    # a field cache disappear from the checkpoint envelope.
+    persistent_carrier_available = program_persistent_value_checkpoint_capture_available(owner._s)
     cache_names, cache_bytes, cache_evidence = (
         _cache_capacity(
             owner,
@@ -581,6 +723,14 @@ def _common_budget(
         )
         if runtime_kind == "uniform"
         else ((), 0, ())
+    )
+    persistent_names, persistent_bytes, persistent_evidence, persistent_plan = (
+        _persistent_checkpoint_capacity(
+            program,
+            target="amr_system" if runtime_kind == "amr" else "system",
+        )
+        if persistent_carrier_available or runtime_kind == "amr"
+        else ((), 0, {}, None)
     )
     auxiliary_bytes = _mul(auxiliary_components, 8, where="auxiliary scalar width")
     auxiliary_bytes = _mul(
@@ -610,6 +760,7 @@ def _common_budget(
         scientific_bytes,
         history_bytes,
         cache_bytes,
+        persistent_bytes,
         auxiliary_bytes,
         program_bytes,
         source_authority_bytes,
@@ -624,6 +775,7 @@ def _common_budget(
         field_names=field_names,
         history_names=history_names,
         cache_names=cache_names,
+        persistent_names=persistent_names,
         levels=len(cells),
         rank_capacity=rank_capacity,
         has_amr_legacy_phi=runtime_kind == "amr" and bool(field_names),
@@ -649,6 +801,11 @@ def _common_budget(
         "cells": list(cells),
         "rank_capacity": rank_capacity,
     }
+    if persistent_plan is not None:
+        control_data["program_persistent"] = persistent_evidence
+        # Keep the complete sealed static plan in the bind authority.  The compact manifest fields
+        # identify the carrier at archive time; this row set is the pre-allocation source of truth.
+        control_data["program_resource_plan"] = persistent_plan.to_data()
     control_characters = len(
         json.dumps(control_data, sort_keys=True, separators=(",", ":"), allow_nan=False)
     )
@@ -686,6 +843,7 @@ def _common_budget(
             "source_authority_bytes": source_authority_bytes,
             "structural_bytes": structural_bytes,
             "field_provider_manifest_characters": field_provider_manifest_characters,
+            "program_persistent_checkpoint_bytes": persistent_bytes,
             "members": list(names),
             "manifest_characters": max_manifest_characters,
             "uncompressed_bytes": uncompressed,
@@ -696,6 +854,16 @@ def _common_budget(
     ).token
     archive_bytes = _archive_byte_capacity(
         uncompressed, names, where="checkpoint archive byte budget"
+    )
+    budget_plan_fields = (
+        {
+            "program_resource_plan_schema": persistent_plan.schema,
+            "program_resource_plan_digest": persistent_plan.digest,
+            "program_resource_plan_maximum_bytes": persistent_plan.maximum_bytes,
+            "program_resource_slot_count": len(persistent_plan),
+        }
+        if persistent_plan is not None
+        else {}
     )
     return CheckpointResourceBudget(
         runtime_kind,
@@ -712,6 +880,7 @@ def _common_budget(
         uncompressed,
         archive_bytes,
         authority,
+        **budget_plan_fields,
     )
 
 

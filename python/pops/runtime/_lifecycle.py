@@ -50,7 +50,7 @@ FROZEN_STRUCTURAL = frozenset({
     # AMR layout
     "set_conservative_state",
     # installed time Program
-    "install_program", "install_program_step", "set_program_cadence", "add_dt_bound",
+    "install_program", "set_program_cadence", "add_dt_bound",
     "set_program_params",
 })
 

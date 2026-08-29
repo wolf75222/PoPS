@@ -52,6 +52,7 @@ from pops.codegen.program_emit_solve import (
     _emit_solve_linear,
 )
 from pops.codegen.program_emit_schedule import _emit_schedule_wrap
+from pops.codegen.program_persistent_plan import persistent_slot_token
 from pops.codegen.program_emit_field_routes import field_point_cpp, resolved_field_route
 
 
@@ -120,6 +121,214 @@ def _cartesian_generated_owner_index(block_idx: Any, value: Any, *, where: str) 
     """Map a generated Cartesian op to its unique runtime owner index."""
     return _required_block_index(
         block_idx, _unique_dataflow_owner_block(value, where=where), where)
+
+
+def _unique_resource_owner_block(program: Any, value: Any, *, where: str) -> Any:
+    """Resolve the one authenticated block owner for an unqualified resource occurrence.
+
+    Some top-level field buffers (notably condensed RHS storage) are deliberately authoring-
+    unqualified.  Their owner is still recoverable from the executable dataflow: walk both the
+    producer inputs and the reachable consumers, collecting only explicit ``ProgramValue.block`` /
+    ``state_ref.block_ref`` identities.  A dead consumer is excluded by the same reachability pass
+    that drives emission, and an absent or conflicting owner is a hard lowering error.  In
+    particular, this helper never turns an ownerless occurrence into runtime block zero.
+    """
+    if program is None:
+        raise ValueError("%s requires an authenticated Program owner block" % where)
+    from pops.codegen.program_persistent_plan import (
+        _embedded_program_values,
+        _reachable_program_occurrences,
+    )
+
+    occurrences = tuple(_reachable_program_occurrences(program))
+    by_object = {id(candidate): candidate for candidate, _path in occurrences}
+    if id(value) not in by_object:
+        raise ValueError(
+            "%s references a Program resource occurrence outside the reachable executable graph"
+            % where
+        )
+
+    users: dict[int, list[Any]] = {}
+    for candidate in by_object.values():
+        if candidate is value:
+            continue
+        refs = _embedded_program_values(
+            (getattr(candidate, "inputs", ()), getattr(candidate, "attrs", {}))
+        )
+        for reference in refs:
+            if id(reference) in by_object:
+                users.setdefault(id(reference), []).append(candidate)
+
+    owners: list[Any] = []
+    seen: set[int] = set()
+    pending = [value]
+    while pending:
+        current = pending.pop()
+        marker = id(current)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        owner = _value_owner_block(current)
+        if owner is not None and owner not in owners:
+            owners.append(owner)
+        for reference in _embedded_program_values(getattr(current, "inputs", ())):
+            if id(reference) in by_object:
+                pending.append(reference)
+        pending.extend(users.get(marker, ()))
+
+    if len(owners) == 1:
+        return owners[0]
+    if not owners:
+        raise ValueError(
+            "%s: resource occurrence %r has no unique authenticated owner block"
+            % (where, getattr(value, "name", "<?>"))
+        )
+    raise ValueError(
+        "%s: resource occurrence %r has conflicting owner blocks %s"
+        % (where, getattr(value, "name", "<?>"),
+           sorted(block_name(item) for item in owners))
+    )
+
+
+def _append_resource_preparation(
+    prelude: Any,
+    var: Any,
+    *,
+    kind: str,
+    slot: str,
+    subslot: int,
+    program_block: int,
+    ncomp: int | None = None,
+    ghost_depth: int | None = None,
+) -> None:
+    """Emit one install-time preparation call for a dense resource occurrence.
+
+    ``ProgramResourcePlan`` owns the slot contract; the generated call only carries the compact
+    slot, its scratch subslot and the exact program block used to obtain the detached prototype.
+    The emission-local ``var`` table is also the deduplication authority because nested control-flow
+    walkers copy it before re-entering this dispatcher.  A missing prelude is a codegen misuse: it
+    would otherwise move a first allocation into the step body.
+    """
+    key = ("program_resource_preparation", kind, slot, int(subslot))
+    contract = (int(program_block), ncomp, ghost_depth)
+    if key in var:
+        if var[key] != contract:
+            raise ValueError(
+                "Program resource %s slot %s subslot %d has conflicting preparation contracts"
+                % (kind, slot, int(subslot))
+            )
+        return
+    if prelude is None:
+        raise NotImplementedError(
+            "Program resource preparation requires an install-time prelude; refusing step-local "
+            "scratch allocation"
+        )
+    var[key] = contract
+    if kind == "state":
+        prelude.append(
+            "ctx.prepare_state_scratch(%s, %d, %d);"
+            % (slot, int(subslot), int(program_block))
+        )
+    elif kind == "rhs":
+        prelude.append(
+            "ctx.prepare_rhs_scratch(%s, %d, %d);"
+            % (slot, int(subslot), int(program_block))
+        )
+    elif kind == "scalar":
+        if ncomp is None or ghost_depth is None:
+            raise ValueError("scalar Program resource preparation requires ncomp and ghost depth")
+        prelude.append(
+            "ctx.prepare_scalar_scratch(%s, %d, %d, %d, %d);"
+            % (slot, int(subslot), int(program_block), int(ncomp), int(ghost_depth))
+        )
+    else:
+        raise ValueError("unsupported Program resource preparation kind %r" % kind)
+
+
+def _append_transaction_authority_declaration(
+    prelude: Any,
+    var: Any,
+    *,
+    kind: str,
+    identity: str,
+) -> None:
+    """Declare one finite ProgramRuntimeState authority during candidate preparation.
+
+    The declaration is emitted from the same dispatcher branch as the corresponding hot sink.  It
+    therefore follows the executable lowering (including structured regions and post-sync bodies)
+    instead of rescanning authoring nodes that a dead enclosing operator may have made inert.  The
+    registry is a mutable value deliberately shared by shallow-copied structured-region token maps,
+    so sibling branches deduplicate one install-wide authority without leaking their C++ aliases.
+    """
+    if prelude is None:
+        raise NotImplementedError(
+            "Program transaction authority declaration requires an install-time prelude"
+        )
+    if not isinstance(identity, str) or not identity:
+        raise ValueError("Program transaction authority identity must be non-empty text")
+    declarations_key = ("program_transaction_authority_declarations",)
+    declarations = var.get(declarations_key)
+    if declarations is None:
+        declarations = set()
+        var[declarations_key] = declarations
+    if not isinstance(declarations, set):
+        raise TypeError("Program transaction authority declaration registry is invalid")
+    declaration = (kind, identity)
+    if declaration in declarations:
+        return
+    if kind == "diagnostic":
+        prelude.append("ctx.declare_diagnostic(%s);" % json.dumps(identity))
+    elif kind == "balance_route":
+        prelude.append("ctx.declare_balance_route(%s);" % json.dumps(identity))
+    elif kind == "step_projection":
+        prelude.append("ctx.declare_step_projection(%s);" % json.dumps(identity))
+    else:
+        raise ValueError("unsupported Program transaction authority kind %r" % kind)
+    declarations.add(declaration)
+
+
+def _append_generated_field_route_preparation(
+    prelude: Any,
+    var: Any,
+    *,
+    slot: str,
+    field: str,
+    program_blocks: tuple[int, ...],
+) -> None:
+    """Emit one install-time dense field-route registration.
+
+    ``solve_fields_from_blocks_at`` used to key its hot route cache by the SSA value id.  That id is
+    an authoring identity, not the bind-sealed resource slot, and two equivalent occurrences could
+    therefore create an untracked runtime map entry.  Route preparation is now explicit and
+    install-time: the dense slot, qualified provider identity, and exact Program-block subset are
+    registered once before the first step.  The emission-local ``var`` table is shared by nested
+    control walkers, so duplicate visits either coalesce or fail on a changed contract.
+    """
+    if prelude is None:
+        raise NotImplementedError(
+            "generated field-route preparation requires an install-time prelude; refusing a "
+            "step-local route registration"
+        )
+    if not isinstance(field, str) or not field:
+        raise ValueError("generated field-route preparation requires a non-empty provider identity")
+    if any(isinstance(block, bool) or not isinstance(block, int) or block < 0
+           for block in program_blocks):
+        raise ValueError("generated field-route preparation requires exact non-negative blocks")
+    if len(program_blocks) != len(set(program_blocks)):
+        raise ValueError("generated field-route preparation contains duplicate Program blocks")
+    key = ("program_generated_field_route", slot)
+    contract = (field, program_blocks)
+    if key in var:
+        if var[key] != contract:
+            raise ValueError(
+                "Program resource slot %s has conflicting generated field-route contracts" % slot
+            )
+        return
+    var[key] = contract
+    prelude.append(
+        "ctx.prepare_generated_field_route(%s, %s, {%s});"
+        % (slot, json.dumps(field), ", ".join(str(block) for block in program_blocks))
+    )
 
 
 def _canonical_metadata_int(value: Any, *, where: str) -> int:
@@ -314,6 +523,55 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     # is off (record early-returns), changes no numerics; ops emitting no statement (pure inline
     # token: cfl / compare) are skipped by the len guard below. _start marks this op's first line.
     _profile_start = len(lines)
+
+    # Resource ids are authoring identities and are deliberately not passed to
+    # the generated runtime. Resolve the sealed dense slot once per emitted
+    # occurrence; generated calls contain only this integer.
+    resource_program_block = bidx
+
+    def _resource_slot() -> str:
+        return persistent_slot_token(program, v, target=target)
+
+    def _prepare_resource(
+        kind: str,
+        prototype: Any,
+        *,
+        subslot: int = 0,
+        ncomp: int | None = None,
+        ghost_depth: int | None = None,
+        owner: Any = None,
+    ) -> None:
+        nonlocal resource_program_block
+        resource_owner = owner
+        if resource_owner is None:
+            resource_owner = v.block if v.block is not None else _value_owner_block(prototype)
+        if resource_owner is None:
+            resource_owner = _unique_resource_owner_block(
+                program,
+                v,
+                where="prepare %s resource %r" % (kind, v.name),
+            )
+        program_block = _required_block_index(
+            block_idx, resource_owner, "prepare %s resource %r" % (kind, v.name)
+        )
+        if resource_program_block is not None and resource_program_block != program_block:
+            raise ValueError(
+                "resource %r has conflicting owner blocks %d and %d"
+                % (v.name, int(resource_program_block), int(program_block))
+            )
+        if resource_program_block is None:
+            resource_program_block = program_block
+        _append_resource_preparation(
+            prelude,
+            var,
+            kind=kind,
+            slot=_resource_slot(),
+            subslot=subslot,
+            program_block=program_block,
+            ncomp=ncomp,
+            ghost_depth=ghost_depth,
+        )
+
     if v.op == "post_synchronization":
         var[v.id] = "/* post_synchronization */"
     elif v.op == "state":
@@ -368,9 +626,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                     "LinearInterpolation target %s lies outside retained history [-%d, 0]"
                     % (coordinate, depth))
             var[v.id] = "u%d" % v.id
+            _prepare_resource("state", var[source.id])
             lines.append(
-                "pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
-                % (var[v.id], int(v.id), var[source.id]))
+                "pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%s, 0, %s);"
+                % (var[v.id], _resource_slot(), var[source.id]))
             lines.append(
                 "ctx.interpolate_history_linear(%s, %s, %d, %d, %s, %s, %d, %s);"
                 % (
@@ -427,14 +686,28 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 "solve_fields_from_blocks: runtime block routing is unavailable")
         bmap = block_idx
         overrides = []
+        program_blocks = []
         for st in v.inputs:  # inputs = the N state values, slotted by their own block index
             index = _required_block_index(
                 bmap, st.block, "solve_fields_from_blocks input node %r" % st.id)
+            program_blocks.append(index)
             overrides.append("{%d, &%s}" % (index, var[st.id]))
         field_ref = v.attrs.get("field")
         if field_ref is None:
             raise ValueError("solve_fields_from_blocks node has no exact field identity")
         field, _ = resolved_field_route(field_ref, field_plans)
+        if program is None:
+            raise NotImplementedError(
+                "solve_fields_from_blocks requires an authenticated Program resource plan"
+            )
+        resource_slot = _resource_slot()
+        _append_generated_field_route_preparation(
+            prelude,
+            var,
+            slot=resource_slot,
+            field=field,
+            program_blocks=tuple(program_blocks),
+        )
         lines += field_point_cpp(program, v, field)
         boundary_point = "field_boundary_point_%d" % v.id
         lines.append(
@@ -443,12 +716,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         )
         report = "field_report_%d" % v.id
         lines.append(
-            "pops::SolveOutcome %s = ctx.solve_fields_from_blocks_at(%s, %d, %s, {%s});"
+            "pops::SolveOutcome %s = ctx.solve_fields_from_blocks_at(%s, %s, {%s});"
             % (
                 report,
                 boundary_point,
-                int(v.id),
-                json.dumps(field),
+                resource_slot,
                 ", ".join(overrides),
             )
         )
@@ -480,8 +752,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         scratch = {}
         for subslot, blk in enumerate(components):   # bundle / expr block order
             scratch[blk] = "cr%d_%s" % (v.id, block_name(blk))
-            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, %d, %s);"
-                         % (scratch[blk], int(v.id), subslot, var[by_block[blk].id]))
+            _prepare_resource("rhs", var[by_block[blk].id], subslot=subslot, owner=blk)
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%s, %d, %s);"
+                         % (scratch[blk], _resource_slot(), subslot, var[by_block[blk].id]))
         lines += _emit_coupled_rate_kernel(components, by_block, var, scratch)
         # Per-block names live in this emission's local token table. Codegen is a pure read of the
         # Program: repeated emission never writes scratch metadata back into frozen authoring state.
@@ -506,13 +779,15 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         scratch = {}
         for subslot, block in enumerate(components):
             scratch[block] = "ci%d_%s" % (v.id, block_name(block))
-            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, %d, %s);"
-                         % (scratch[block], int(v.id), subslot, var[by_block[block].id]))
+            _prepare_resource("state", var[by_block[block].id], subslot=subslot, owner=block)
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%s, %d, %s);"
+                         % (scratch[block], _resource_slot(), subslot, var[by_block[block].id]))
         status = "ci_status_%d" % v.id
         prototype_block = next(iter(components))
         prototype = var[by_block[prototype_block].id]
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 0, %s, 11, 0);"
-                     % (status, int(v.id), prototype))
+        _prepare_resource("scalar", prototype, ncomp=11, ghost_depth=0, owner=prototype_block)
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%s, 0, %s, 11, 0);"
+                     % (status, _resource_slot(), prototype))
         lines += _emit_solve_coupled_implicit_kernel(
             components, by_block, var, scratch, status,
             controls=v.attrs, coefficient=v.attrs["coefficient"])
@@ -578,6 +853,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 raise TypeError("project step_projection must be a non-empty string")
         lines.append("ctx.apply_projection(%d, %s);" % (bidx, var[state_in.id]))
         if step_projection is not None:
+            _append_transaction_authority_declaration(
+                prelude,
+                var,
+                kind="step_projection",
+                identity=step_projection,
+            )
             lines.append("ctx.note_step_projection(%s);" % json.dumps(step_projection))
         var[v.id] = var[state_in.id]
     elif v.op == "local_transform":
@@ -587,16 +868,17 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         state_in = v.inputs[0]
         var[v.id] = "u%d" % v.id
         status = "transform_status_field_%d" % v.id
-        state_resource = "transform_state_resource_%d" % v.id
         status_resource = "transform_status_resource_%d" % v.id
         active_mask = "transform_active_mask_%d" % v.id
+        _prepare_resource("state", state_in)
+        lines.append(
+            "pops::MultiFab<pops::kNativeDimension>& %s = "
+            "ctx.scratch_state(%s, 0, ctx.state(%d));"
+            % (var[v.id], _resource_slot(), bidx))
+        _prepare_resource("scalar", state_in, ncomp=1, ghost_depth=0)
         prelude.append(
-            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.scratch_state_like(ctx.state(%d)));"
-            % (state_resource, bidx))
-        prelude.append(
-            "auto* %s = &ctx.scalar_scratch(%d, 0, ctx.state(%d), 1, 0);"
-            % (status_resource, int(v.id), bidx))
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (var[v.id], state_resource))
+            "auto* %s = &ctx.scalar_scratch(%s, 0, ctx.state(%d), 1, 0);"
+            % (status_resource, _resource_slot(), bidx))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (status, status_resource))
         lines.append(
             "const pops::MultiFab<pops::kNativeDimension>* %s = ctx.pointwise_active_mask(%d, %s);"
@@ -630,8 +912,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps("cell_compare")))
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 0, %s, 1, 1);"
-                     % (var[v.id], int(v.id), var[field_in.id]))
+        _prepare_resource("scalar", var[field_in.id], ncomp=1, ghost_depth=1)
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%s, 0, %s, 1, 1);"
+                     % (var[v.id], _resource_slot(), var[field_in.id]))
         lines += _emit_cell_compare_kernel(var[field_in.id], var[v.id], v.attrs["cmp"],
                                            v.attrs["value"])
     elif v.op == "where":
@@ -644,14 +927,21 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps("where")))
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
-                     % (var[v.id], int(v.id), var[a_in.id]))
+        _prepare_resource("state", var[a_in.id])
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%s, 0, %s);"
+                     % (var[v.id], _resource_slot(), var[a_in.id]))
         lines += _emit_where_kernel(var[mask_in.id], var[a_in.id], var[b_in.id], var[v.id])
     elif v.op == "record_scalar":
         # Store the (already-computed) Scalar into the System diagnostics map under its name. A
         # side-effecting op; its var maps to the recorded scalar (a harmless alias). The scalar input
         # is a 'reduce' result emitted earlier in the body (a const pops::Real local).
         (scalar_in,) = v.inputs
+        _append_transaction_authority_declaration(
+            prelude,
+            var,
+            kind="diagnostic",
+            identity=v.attrs["diagnostic"],
+        )
         lines.append("ctx.record_scalar(%s, %s);"
                      % (json.dumps(v.attrs["diagnostic"]), var[scalar_in.id]))
         var[v.id] = var[scalar_in.id]
@@ -661,6 +951,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         from pops.codegen.program_balance_due import balance_record_due_expression
 
         (scalar_in,) = v.inputs
+        _append_transaction_authority_declaration(
+            prelude,
+            var,
+            kind="balance_route",
+            identity=v.attrs["route"],
+        )
         due = balance_record_due_expression(var, v.id)
         if due != "false":
             lines.append(
@@ -685,8 +981,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps(operation)))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = "
-                     "ctx.rhs_scratch(%d, 0, %s);"
-                     % (var[v.id], int(v.id), var[state_in.id]))
+                     "ctx.rhs_scratch(%s, 0, %s);"
+                     % (var[v.id], _resource_slot(), var[state_in.id]))
+        _prepare_resource("rhs", var[state_in.id])
         named_source_subslot = 3
         want_flux = v.attrs.get("flux", True)
         # ADC-425 routing (spec criterion 17): the default/composite source is folded in iff the
@@ -742,10 +1039,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append("ctx.prepare_generated_state(%d, %s, %d);"
                          % (bidx, var[state_in.id], int(v.id)))
             for axis_index, axis in enumerate(axes):
+                _prepare_resource("rhs", var[state_in.id], subslot=axis_index + 1)
                 lines.append(
                     "pops::MultiFab<pops::kNativeDimension>& %s = "
-                    "ctx.rhs_scratch(%d, %d, %s);"
-                    % (flux_vars[axis], int(v.id), axis_index + 1, var[state_in.id])
+                    "ctx.rhs_scratch(%s, %d, %s);"
+                    % (flux_vars[axis], _resource_slot(), axis_index + 1, var[state_in.id])
                 )
             named_source_subslot = 1 + len(axes)
         plan_exprs = []
@@ -786,9 +1084,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             # R += S_s(U, aux): assemble the named source into a scratch (same per-cell kernel as
             # the standalone 'source' op) and axpy it onto R.
             ssrc = "%s_%s" % (var[v.id], s)
+            _prepare_resource("rhs", var[state_in.id], subslot=source_subslot)
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = "
-                         "ctx.rhs_scratch(%d, %d, %s);"
-                         % (ssrc, int(v.id), source_subslot, var[state_in.id]))
+                         "ctx.rhs_scratch(%s, %d, %s);"
+                         % (ssrc, _resource_slot(), source_subslot, var[state_in.id]))
             if consumer_qid is None:
                 raise ValueError(
                     "named-source kernel requires an explicit Program consumer qid"
@@ -802,8 +1101,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "implicit_source":
         state_in = v.inputs[0]
         var[v.id] = "r%d" % v.id
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
-                     % (var[v.id], int(v.id), var[state_in.id]))
+        _prepare_resource("rhs", var[state_in.id])
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%s, 0, %s);"
+                     % (var[v.id], _resource_slot(), var[state_in.id]))
         lines.append("ctx.source_default_into(%d, %s, %s);"
                      % (bidx, var[state_in.id], var[v.id]))
         keep = ",".join(str(int(index)) for index in v.attrs["keep_components"])
@@ -811,8 +1111,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "solve_implicit_source":
         state_in = v.inputs[0]
         var[v.id] = "u%d" % v.id
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
-                     % (var[v.id], int(v.id), var[state_in.id]))
+        _prepare_resource("state", var[state_in.id])
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%s, 0, %s);"
+                     % (var[v.id], _resource_slot(), var[state_in.id]))
         lines.append(
             "ctx.lincomb(%s, static_cast<pops::Real>(1), %s, static_cast<pops::Real>(0), %s);"
             % (var[v.id], var[state_in.id], var[state_in.id]))
@@ -833,8 +1134,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps("named_source")))
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
-                     % (var[v.id], int(v.id), var[state_in.id]))
+        _prepare_resource("rhs", var[state_in.id])
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%s, 0, %s);"
+                     % (var[v.id], _resource_slot(), var[state_in.id]))
         lines += _emit_source_kernel(
             node_model, v.attrs["source"], var[state_in.id], var[v.id], bidx,
             provider_plans=provider_plans,
@@ -847,8 +1149,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps("linear_source_apply")))
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
-                     % (var[v.id], int(v.id), var[state_in.id]))
+        _prepare_resource("rhs", var[state_in.id])
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%s, 0, %s);"
+                     % (var[v.id], _resource_slot(), var[state_in.id]))
         lines += _emit_apply_kernel(node_model, v.attrs["linear_source"], var[state_in.id], var[v.id],
                                     bidx, provider_plans=provider_plans,
                                     consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block))
@@ -860,10 +1163,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps("solve_local_linear")))
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
-                     % (var[v.id], int(v.id), var[base.id]))
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
-                     % (status, int(v.id), var[v.id]))
+        _prepare_resource("state", var[base.id])
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%s, 0, %s);"
+                     % (var[v.id], _resource_slot(), var[base.id]))
+        _prepare_resource("scalar", var[v.id], ncomp=1, ghost_depth=0)
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%s, 0, %s, 1, 0);"
+                     % (status, _resource_slot(), var[v.id]))
         lines += _emit_solve_local_linear_kernel(
             node_model, v.attrs["linear_source"], v.attrs["a_coeff"],
             var[rhs_in.id], var[v.id], status, bidx,
@@ -878,10 +1183,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         guess_in = v.inputs[0]  # solve inputs = (initial_guess,)
         var[v.id] = "u%d" % v.id
         status = "ln_status_%d" % v.id
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
-                     % (var[v.id], int(v.id), var[base.id]))
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 1, %s, 11, 0);"
-                     % (status, int(v.id), var[base.id]))
+        _prepare_resource("state", var[base.id])
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%s, 0, %s);"
+                     % (var[v.id], _resource_slot(), var[base.id]))
+        _prepare_resource("scalar", var[base.id], subslot=1, ncomp=11, ghost_depth=0)
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%s, 1, %s, 11, 0);"
+                     % (status, _resource_slot(), var[base.id]))
         active_mask = "local_solve_active_mask_%d" % v.id
         lines.append(
             "const pops::MultiFab<pops::kNativeDimension>* %s = ctx.pointwise_active_mask(%d, %s);"
@@ -897,32 +1204,67 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             program, v, outcome, lines, label="local_nonlinear")
     elif v.op == "scalar_field":
         # A step-body scratch scalar field (e.g. the explicit-flux buffer the RHS assembly fills):
-        # a persistent shared_ptr (prelude, alloc-once) reused every step. Inside an apply sub-block
-        # the scalar_field is handled by _emit_matrix_free_operator instead (this branch is the
+        # a plan-slotted scratch reference reused every step. Inside an apply sub-block the
+        # scalar_field is handled by _emit_matrix_free_operator instead (this branch is the
         # top-level / step-body path -- prelude is not None there).
         if prelude is None:
             raise NotImplementedError(
                 "scalar_field is only lowerable at the top level / step body or inside a "
                 "matrix_free_operator apply sub-block, not inside a control-flow (if/while/range) body")
         sp = "sf%d" % v.id
-        var[v.id] = "(*%s)" % sp
         ncomp = int(v.attrs.get("ncomp", 1))
-        prelude.append("auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.alloc_scalar_field(%d, 1));"
-                       % (sp, ncomp))
+        owner = _unique_resource_owner_block(
+            program,
+            v,
+            where="prepare scalar_field resource %r" % v.name,
+        )
+        owner_index = _required_block_index(
+            block_idx, owner, "prepare scalar_field resource %r" % v.name
+        )
+        _prepare_resource(
+            "scalar",
+            v,
+            ncomp=ncomp,
+            ghost_depth=1,
+            owner=owner,
+        )
+        var[v.id] = sp
+        lines.append(
+            "pops::MultiFab<pops::kNativeDimension>& %s = "
+            "ctx.scalar_scratch(%s, 0, ctx.state(%d), %d, 1);"
+            % (sp, _resource_slot(), owner_index, ncomp)
+        )
     elif v.op == "vector_field":
         if prelude is None:
             raise NotImplementedError(
                 "vector_field is only lowerable at the top level / step body or inside a "
                 "matrix_free_operator apply sub-block")
         sp = "sf%d" % v.id
-        var[v.id] = "(*%s)" % sp
         ncomp = int(v.attrs["ncomp"])
-        prelude.append(
-            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-            "ctx.alloc_scalar_field(%d, 1));" % (sp, ncomp))
+        owner = _unique_resource_owner_block(
+            program,
+            v,
+            where="prepare vector_field resource %r" % v.name,
+        )
+        owner_index = _required_block_index(
+            block_idx, owner, "prepare vector_field resource %r" % v.name
+        )
+        _prepare_resource(
+            "scalar",
+            v,
+            ncomp=ncomp,
+            ghost_depth=1,
+            owner=owner,
+        )
+        var[v.id] = sp
+        lines.append(
+            "pops::MultiFab<pops::kNativeDimension>& %s = "
+            "ctx.scalar_scratch(%s, 0, ctx.state(%d), %d, 1);"
+            % (sp, _resource_slot(), owner_index, ncomp)
+        )
         sources = ", ".join("&%s" % _deref(var[value.id]) for value in v.inputs)
         lines.append(
-            "ctx.pack_vector(*%s, std::array<const pops::MultiFab<"
+            "ctx.pack_vector(%s, std::array<const pops::MultiFab<"
             "pops::kNativeDimension>*, pops::kNativeDimension>{%s});"
             % (sp, sources))
     elif v.op == "laplacian":
@@ -1014,7 +1356,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # A collective owner/block/layout/lane-authenticated raw active-domain algebra
         # reduction -> a C++ scalar. Inactive cells are excluded; there is no kappa/volume
         # weighting. Physical weighted integrals stay System services. Route every
-        # operation through ProgramContext with the exact Program block owner. All ranks
+        # operation through ProgramExecutionServices with the exact Program block owner. All ranks
         # execute the same context call, including ranks that own no box.
         var[v.id] = "s%d" % v.id
         kind = v.attrs["kind"]
@@ -1054,7 +1396,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             reduction = "(%s) ? (%s) : pops::Real(0)" % (due, reduction)
         lines.append("const pops::Real %s = %s;" % (var[v.id], reduction))
     elif v.op == "cfl":
-        # The dt_bound's runtime cfl argument -- the C++ parameter of pops_program_dt_bound. It is
+        # The candidate dt-bound's runtime cfl argument. It is
         # NOT a statement; its token is the bound parameter name (spec s18 / ADC-417).
         var[v.id] = "cfl"
     elif v.op == "hmin":
@@ -1136,8 +1478,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             # Commit: block state <- c_base * base + sum(non-base coeff * term), in place.
             c_base = {0: 0}
             acc = "acc%d" % v.id
-            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
-                         % (acc, int(v.id), var[base.id]))
+            _prepare_resource("state", var[base.id])
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%s, 0, %s);"
+                         % (acc, _resource_slot(), var[base.id]))
             for inp, coeff in terms:
                 if inp.id == base.id:
                     c_base = coeff
@@ -1156,8 +1499,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             # base block-state to shape the scratch: template it on the FIRST scalar input instead (a
             # 1-component field, same (ba, dm)). A State combine shapes it on the block base as before.
             template = var[terms[0][0].id] if v.vtype == "scalar_field" else var[base.id]
-            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
-                         % (var[v.id], int(v.id), template))
+            _prepare_resource("state", template)
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%s, 0, %s);"
+                         % (var[v.id], _resource_slot(), template))
             for inp, coeff in terms:
                 lines.append("ctx.axpy(%s, %s, %s, dt, %s);"
                              % (var[v.id], _coeff_cpp(coeff), var[inp.id],
@@ -1168,7 +1512,16 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     # source, linear_combine, where, ...) reuses the one general mechanism -- no per-op special
     # case. The wrap nests INSIDE the per-node profiling pair below (the profiler times the guarded
     # block as the node's cost). An always() schedule (or no schedule) leaves the lines untouched.
-    _emit_schedule_wrap(program, v, var, lines, _profile_start)
+    _emit_schedule_wrap(
+        program,
+        v,
+        var,
+        lines,
+        _profile_start,
+        target=target,
+        prelude=prelude,
+        program_block=resource_program_block,
+    )
     # PER-NODE PROFILING (ADC-459): if this op emitted at least one statement, bracket those
     # statements with the steady_clock pair (see the note at the top of _emit_op). A ProfileScope is
     # named "node:<v.name>"; profile_record(name, _pt) accumulates now() - _pt into the System

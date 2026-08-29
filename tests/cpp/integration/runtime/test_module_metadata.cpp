@@ -1,7 +1,6 @@
-// Locks the GeneratedModule metadata reader (include/pops/runtime/program/module_metadata.hpp,
-// Spec 2 / ADC-442): the typed operator registry a problem.so exports for introspection and
-// install-time validation. OperatorId is the registration index; incomplete metadata is rejected
-// before installation. The loader-symbol integration test exercises a real shared object.
+// Locks the host-owned candidate-table metadata adapter
+// (include/pops/runtime/program/module_metadata.hpp, Spec 2 / ADC-442). OperatorId is the
+// registration index; the loader materializes these records before candidate preparation.
 #include <gtest/gtest.h>
 
 #include <pops/runtime/program/module_metadata.hpp>
@@ -33,20 +32,11 @@ TEST(ModuleMetadata, HandBuiltDescriptorResolvesOperatorsByName) {
   EXPECT_TRUE(m.find("nope") == nullptr) << "find on an unknown operator returns nullptr";
 }
 
-TEST(ModuleMetadata, MissingModuleContractIsRejected) {
-  EXPECT_THROW((void)read_module_metadata(pops::dynlib::handle{}), std::runtime_error)
-      << "a null module handle is invalid";
-#if defined(_WIN32)
-  pops::dynlib::handle self = ::GetModuleHandleW(nullptr);
-#else
-  pops::dynlib::handle self = ::dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
-#endif
-  ASSERT_TRUE(pops::dynlib::valid(self));
-  EXPECT_THROW((void)read_module_metadata(self), std::runtime_error)
-      << "a module without the complete metadata family is rejected";
-#if !defined(_WIN32)
-  pops::dynlib::close(self);
-#endif
+TEST(ModuleMetadata, CandidateTablesRejectMalformedModuleRecords) {
+  ProgramInstallationTables tables;
+  tables.module_operators.push_back({"rhs", "local_rate", "", "not-json", "model/a"});
+  EXPECT_THROW((void)read_module_metadata(tables), std::runtime_error)
+      << "the host rejects malformed copied module records before candidate preparation";
 }
 
 TEST(ModuleMetadata, RequiredAuxParsesAuxArray) {
