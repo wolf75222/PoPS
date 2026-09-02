@@ -555,8 +555,10 @@ struct ProgramPublishReceipt final {
   [[nodiscard]] bool valid() const noexcept { return published; }
 };
 
-/// Summary receipt returned by `seal()`.  Sealing publishes the candidate generation and releases
-/// the writer lock; it never finalizes an effect.
+/// Summary receipt returned by `seal()`. A transaction that owns its writer publishes a new
+/// generation and releases that writer; a nested transaction borrowing an external writer seals
+/// only its participant publication, leaving the enclosing typed transaction to publish the one
+/// accepted generation. Neither form finalizes an effect.
 struct ProgramSealReceipt final {
   AcceptedGeneration generation{};
   std::uint32_t effect_count = 0;
@@ -809,14 +811,26 @@ class ProgramTransactionRegistry final {
   [[nodiscard]] AcceptedReadLease acquire_read() const;
 
   /// Acquire an explicit writer-thread scope for reading the resident candidate.  This scope is
-  /// accepted only while this registry owns its visibility writer for an active Candidate or
-  /// SolveGuardEffectPrepare transaction.  It is deliberately separate from `acquire_read()` so a
-  /// public reader cannot accidentally bypass the shared mutex through same-thread recursion.
+  /// accepted while this registry owns its visibility writer for an active Candidate or
+  /// SolveGuardEffectPrepare transaction, or for a typed external transaction that owns an
+  /// AcceptedWriteLease. It is deliberately separate from `acquire_read()` so a public reader
+  /// cannot accidentally bypass the shared mutex through same-thread recursion.
   [[nodiscard]] ProvisionalReadLease acquire_provisional_read() const;
 
   /// Acquire the same visibility writer used by a step transaction.  This is for cold external
   /// savepoint capture and rollback only; it does not alter the registry phase or generation.
   [[nodiscard]] AcceptedWriteLease acquire_write() const;
+
+  /// Non-blocking counterpart of `acquire_write()`.  It returns an invalid lease when the
+  /// visibility writer is unavailable, including when this thread already owns an accepted read
+  /// or writer lease.  Collective callers use this probe before entering their first mutation so
+  /// every rank can agree to abandon a partially acquired external writer set.
+  [[nodiscard]] AcceptedWriteLease try_acquire_write() const noexcept;
+
+  /// Advance the accepted generation while an externally owned writer lease is still held.  This
+  /// never starts a generic candidate or releases the writer; typed runtimes retain the lease
+  /// until their own no-throw finalization finishes.
+  [[nodiscard]] bool seal_external_writer() noexcept;
 
   /// Update the MPI-neutral callback only before bind.  The callback is copied, never owned.
   void set_consensus(ProgramTransactionConsensus consensus);
@@ -1308,11 +1322,13 @@ inline bool ProgramTransactionRegistry::provisional_scope_allowed_(
   if (!scope->linked_ || scope->registry_ != this ||
       scope->owner_thread_ != std::this_thread::get_id())
     return false;
-  if (!bound_ || fail_stop_ || !active_ ||
-      last_fault_.failure != ProgramTransactionFailure::kNone || !writer_thread_owns_(this))
+  if (!bound_ || fail_stop_ || !writer_thread_owns_(this))
     return false;
-  return active_phase_ == ProgramTransactionPhase::kCandidate ||
-         active_phase_ == ProgramTransactionPhase::kSolveGuardEffectPrepare;
+  if (!active_)
+    return true;
+  return last_fault_.failure == ProgramTransactionFailure::kNone &&
+         (active_phase_ == ProgramTransactionPhase::kCandidate ||
+          active_phase_ == ProgramTransactionPhase::kSolveGuardEffectPrepare);
 }
 
 inline void ProgramTransactionRegistry::link_writer_thread_() const noexcept {
@@ -1874,18 +1890,23 @@ inline ProgramSealReceipt ProgramTransaction::seal() noexcept {
   }
   const std::uint64_t old_generation =
       registry_->accepted_generation_.load(std::memory_order_relaxed);
-  if (old_generation == std::numeric_limits<std::uint64_t>::max()) {
+  if (!publication_lock_borrowed_ && old_generation == std::numeric_limits<std::uint64_t>::max()) {
     fail_(ProgramTransactionPhase::kAtomicSeal, ProgramTransactionFailure::kAtomicSeal,
           kInvalidProgramTransactionIndex, 2);
     close_rollback_();
     return {base_generation_, static_cast<std::uint32_t>(registry_->effects_.size()), phase_,
             false};
   }
-  sealed_generation_ = AcceptedGeneration{old_generation + 1};
+  // A typed external transaction can lend its writer to a nested topology publication (AMR
+  // restart).  That nested transaction may finalize its cold carrier, but it must not expose or
+  // count an accepted generation: the enclosing typed snapshot supplies the single final seal.
+  sealed_generation_ =
+      AcceptedGeneration{publication_lock_borrowed_ ? old_generation : old_generation + 1U};
   for (auto& entry : registry_->effects_)
     if (entry.receipt.published)
       entry.receipt.generation = sealed_generation_;
-  registry_->accepted_generation_.store(sealed_generation_.value, std::memory_order_release);
+  if (!publication_lock_borrowed_)
+    registry_->accepted_generation_.store(sealed_generation_.value, std::memory_order_release);
   unlock_publication_();
   return {sealed_generation_, static_cast<std::uint32_t>(registry_->effects_.size()), phase_, true};
 }
@@ -2065,12 +2086,18 @@ inline AcceptedReadLease ProgramTransactionRegistry::acquire_read() const {
 }
 
 inline ProvisionalReadLease ProgramTransactionRegistry::acquire_provisional_read() const {
-  if (!bound_ || fail_stop_ || !active_ ||
-      last_fault_.failure != ProgramTransactionFailure::kNone || !writer_thread_owns_(this) ||
-      (active_phase_ != ProgramTransactionPhase::kCandidate &&
-       active_phase_ != ProgramTransactionPhase::kSolveGuardEffectPrepare))
+  const bool transaction_candidate =
+      active_ && last_fault_.failure == ProgramTransactionFailure::kNone &&
+      (active_phase_ == ProgramTransactionPhase::kCandidate ||
+       active_phase_ == ProgramTransactionPhase::kSolveGuardEffectPrepare);
+  // A typed external transaction (AMR restart) owns its cross-topology rollback image itself but
+  // borrows this same writer.  It can therefore grant a deliberately explicit same-thread read
+  // scope; a plain accepted reader still rejects on the writer marker above.
+  const bool external_candidate = !active_;
+  if (!bound_ || fail_stop_ || !writer_thread_owns_(this) ||
+      (!transaction_candidate && !external_candidate))
     throw std::logic_error(
-        "Program provisional read scope requires an active writer-owned candidate transaction");
+        "Program provisional read scope requires a writer-owned candidate transaction");
   return ProvisionalReadLease(this);
 }
 
@@ -2087,6 +2114,53 @@ inline AcceptedWriteLease ProgramTransactionRegistry::acquire_write() const {
   std::unique_lock<std::shared_mutex> lock(visibility_mutex_);
   link_writer_thread_();
   return AcceptedWriteLease(this, std::move(lock));
+}
+
+inline AcceptedWriteLease ProgramTransactionRegistry::try_acquire_write() const noexcept {
+  // This is deliberately a status probe, not the diagnostic API.  In particular, rejecting a
+  // same-thread accepted reader here avoids making one MPI rank throw while peers reach their
+  // collective availability vote below.
+  // A generic transaction owns the registry from Snapshot onward even before Candidate acquires
+  // its visibility mutex.  Refuse an external savepoint during that gap rather than letting a
+  // typed caller interleave its own restore authority with an active transaction.
+  if (!bound_ || fail_stop_ || active_ || AcceptedReadLease::find_(this) != nullptr ||
+      writer_thread_owns_(this))
+    return {};
+  try {
+    std::unique_lock<std::shared_mutex> lock(visibility_mutex_, std::try_to_lock);
+    if (!lock.owns_lock())
+      return {};
+    link_writer_thread_();
+    return AcceptedWriteLease(this, std::move(lock));
+  } catch (...) {
+    return {};
+  }
+}
+
+inline bool ProgramTransactionRegistry::seal_external_writer() noexcept {
+  if (!bound_ || fail_stop_ || active_ || !writer_thread_owns_(this))
+    return false;
+  // Mirror ProgramTransaction::seal(): this is only the authenticated visibility-generation
+  // transition for a typed external snapshot, whose live mutation and rollback are held under
+  // the same writer lease.
+  if (!consensus_(ProgramTransactionPhase::kAtomicSeal, 0)) {
+    // The typed owner is already in its noexcept finalization boundary.  It cannot safely
+    // coordinate a compensating restore after a failed seal consensus, so preserve the writer and
+    // fail-stop rather than making either half-visible image readable.
+    fail_stop_ = true;
+    last_fault_ = {ProgramTransactionPhase::kAtomicSeal, ProgramTransactionFailure::kAtomicSeal,
+                   kInvalidProgramTransactionIndex, 1};
+    return false;
+  }
+  const std::uint64_t old_generation = accepted_generation_.load(std::memory_order_relaxed);
+  if (old_generation == std::numeric_limits<std::uint64_t>::max()) {
+    fail_stop_ = true;
+    last_fault_ = {ProgramTransactionPhase::kAtomicSeal, ProgramTransactionFailure::kAtomicSeal,
+                   kInvalidProgramTransactionIndex, 2};
+    return false;
+  }
+  accepted_generation_.store(old_generation + 1U, std::memory_order_release);
+  return true;
 }
 
 inline void ProgramTransactionRegistry::set_consensus(ProgramTransactionConsensus consensus) {

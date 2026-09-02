@@ -1994,6 +1994,76 @@ TEST(AmrTransactionAuthority, DistributionReplayAndDensityReadersRequireAnExplic
   EXPECT_EQ(*density_after_seal.value, candidate_density);
 }
 
+TEST(AmrTransactionAuthority, RestartCandidateBlocksForeignReadersUntilSealOrRollback) {
+  constexpr int Dim = pops::kNativeDimension;
+  auto system_owner = make_system<Dim>();
+  auto& system = *system_owner;
+
+  const std::uint64_t initial_generation = system.accepted_transaction_generation_();
+  const int initial_regrid_count = system.checkpoint_regrid_count();
+  const std::uint64_t topology_epoch = system.checkpoint_topology_epoch();
+  const int committed_regrid_count = initial_regrid_count + 7;
+
+  ASSERT_NO_THROW(system.begin_restart_transaction());
+  // The writer thread does not inherit a public-reader bypass.  Restart internals that must read
+  // their live candidate must name the same explicit capability as a step candidate.
+  EXPECT_THROW((void)system.checkpoint_regrid_count(), std::logic_error);
+  {
+    auto provisional = system._provisional_read_scope();
+    ASSERT_TRUE(provisional.valid());
+    EXPECT_EQ(system.checkpoint_regrid_count(), initial_regrid_count);
+  }
+  ASSERT_NO_THROW(system.restore_checkpoint_counters(committed_regrid_count, topology_epoch));
+
+  std::promise<void> committed_reader_started;
+  auto committed_reader_ready = committed_reader_started.get_future();
+  std::promise<int> committed_reader_value;
+  auto committed_reader_result = committed_reader_value.get_future();
+  std::thread committed_reader([&] {
+    committed_reader_started.set_value();
+    try {
+      committed_reader_value.set_value(system.checkpoint_regrid_count());
+    } catch (...) {
+      committed_reader_value.set_exception(std::current_exception());
+    }
+  });
+  ASSERT_EQ(committed_reader_ready.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+  EXPECT_EQ(committed_reader_result.wait_for(std::chrono::milliseconds(20)),
+            std::future_status::timeout);
+  ASSERT_NO_THROW(system.commit_restart_transaction());
+  EXPECT_EQ(committed_reader_result.wait_for(std::chrono::milliseconds(20)),
+            std::future_status::timeout);
+  system.finalize_restart_transaction();
+  ASSERT_EQ(committed_reader_result.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+  committed_reader.join();
+  EXPECT_EQ(committed_reader_result.get(), committed_regrid_count);
+  EXPECT_EQ(system.accepted_transaction_generation_(), initial_generation + 1U);
+
+  const int rejected_regrid_count = committed_regrid_count + 9;
+  ASSERT_NO_THROW(system.begin_restart_transaction());
+  ASSERT_NO_THROW(system.restore_checkpoint_counters(rejected_regrid_count, topology_epoch));
+  std::promise<void> rollback_reader_started;
+  auto rollback_reader_ready = rollback_reader_started.get_future();
+  std::promise<int> rollback_reader_value;
+  auto rollback_reader_result = rollback_reader_value.get_future();
+  std::thread rollback_reader([&] {
+    rollback_reader_started.set_value();
+    try {
+      rollback_reader_value.set_value(system.checkpoint_regrid_count());
+    } catch (...) {
+      rollback_reader_value.set_exception(std::current_exception());
+    }
+  });
+  ASSERT_EQ(rollback_reader_ready.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+  EXPECT_EQ(rollback_reader_result.wait_for(std::chrono::milliseconds(20)),
+            std::future_status::timeout);
+  ASSERT_NO_THROW(system.rollback_restart_transaction());
+  ASSERT_EQ(rollback_reader_result.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+  rollback_reader.join();
+  EXPECT_EQ(rollback_reader_result.get(), committed_regrid_count);
+  EXPECT_EQ(system.accepted_transaction_generation_(), initial_generation + 1U);
+}
+
 // Regrid fault injection intentionally remains outside this witness: the public v5 fixture has
 // DSO step failures only, while a regrid failure must be injected between forward staging and the
 // hidden no-throw topology publication.  Adding a synthetic public hook here would create the

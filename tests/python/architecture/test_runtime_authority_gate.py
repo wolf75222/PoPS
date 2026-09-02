@@ -374,6 +374,17 @@ def test_runtime_authority_manifest_is_closed_and_source_owned():
     }
 
 
+def test_amr_noop_regrid_seals_cell_temporal_diagnostics_in_hidden_publish():
+    source = (ROOT / "src/runtime/amr/amr_system.cpp").read_text(encoding="utf-8")
+    branch = source.split("if (!candidate.topology_changed) {", 1)[1].split(
+        "retain_topology_authority_noexcept", 1
+    )[0]
+
+    publication = "publish_transaction_diagnostics_noexcept();"
+    assert publication in branch
+    assert branch.index(publication) < branch.index("return true;")
+
+
 def test_runtime_authority_cli_is_closed_and_lists_the_mpi_targets():
     closed = subprocess.run(
         [sys.executable, str(RUNNER), "--check-only", "--dim", "2"],
@@ -814,6 +825,11 @@ def test_runtime_authority_source_barriers_reject_retired_contexts(monkeypatch, 
             "retired context names",
         ),
         (
+            "src/runtime/program/context_adapter.cpp",
+            "using runtime_program_context_detail_generated_v2 = int;\n",
+            "retired context names",
+        ),
+        (
             "src/runtime/amr/legacy.cpp",
             "extern void pops_install_program_amr();\n",
             "retired runtime symbols",
@@ -986,6 +1002,11 @@ def test_runtime_authority_source_barriers_reject_retired_contexts(monkeypatch, 
             "cell-local installer",
         ),
         (
+            "src/runtime/amr/cell_program_installer_unprefixed.cpp",
+            "void install_program_cell();\n",
+            "cell-local installer",
+        ),
+        (
             "src/runtime/amr/cell_temporal_installer.cpp",
             "void pops_install_cell_temporal();\n",
             "cell-local installer",
@@ -993,6 +1014,11 @@ def test_runtime_authority_source_barriers_reject_retired_contexts(monkeypatch, 
         (
             "src/runtime/amr/cell_temporal_installer.cpp",
             "void install_cell_temporal();\n",
+            "cell-local installer",
+        ),
+        (
+            "src/runtime/amr/cell_temporal_register.cpp",
+            "void register_program_cell_temporal();\n",
             "cell-local installer",
         ),
         (
@@ -1045,6 +1071,15 @@ def test_runtime_authority_source_barriers_reject_retired_contexts(monkeypatch, 
             "void pops_program_dt_cuda_amr_v2();\n"
             "void pops_program_boundaries_system();\n"
             "void pops_install_program_boundaries_amr();\n",
+            "retired runtime symbols",
+        ),
+        (
+            "include/pops/runtime/program/legacy_singular_split_variant.hpp",
+            "void pops_program_route_amr_v2();\n"
+            "void pops_program_boundary_cuda_amr_v2();\n"
+            "void pops_program_field_boundary_system();\n"
+            "void pops_install_field_boundary_backend_v3();\n"
+            "void pops_install_program_routes_amr();\n",
             "retired runtime symbols",
         ),
         (
@@ -1270,6 +1305,25 @@ def test_runtime_authority_allows_non_authority_near_miss_names(monkeypatch, tmp
     assert errors == []
 
 
+def test_runtime_authority_rejects_generic_program_dispatch_authorities(
+    monkeypatch, tmp_path
+):
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    path = _write_synthetic_source(
+        tmp_path,
+        "src/runtime/amr/generic_program_dispatch_authorities.cpp",
+        "struct ProgramDispatch {};\n"
+        "struct ProgramDispatchTable {};\n"
+        "void program_dispatch_for_level();\n"
+        "int program_table_for_level;\n",
+    )
+    errors: list[str] = []
+    runner._scan_production_barriers(errors, (path,))
+    assert any("secondary Program runtime authority table" in error for error in errors)
+    assert any("secondary Program runtime authority dispatch" in error for error in errors)
+
+
 def test_runtime_authority_ignores_native_brick_abi_symbols(monkeypatch, tmp_path):
     runner = _load_runner()
     monkeypatch.setattr(runner, "ROOT", tmp_path)
@@ -1380,7 +1434,9 @@ def test_runtime_authority_rejects_unversioned_and_targeted_program_split_abi_va
         "include/pops/runtime/program/detail/runtime_program_context.hpp",
         "include/pops/runtime/program/detail/runtime_program_context_detail.hpp",
         "include/pops/runtime/program/detail/runtime_program_context_v2.hpp",
+        "include/pops/runtime/program/detail/runtime_program_context_extra.hpp",
         "include/pops/runtime/program/detail/runtime-program-context-detail.hpp",
+        "include/pops/runtime/program/detail/runtime-program-context-v2.hpp",
         "include/pops/runtime/program/detail/AMR-Program-Context.hpp",
         "include/pops/runtime/program/detail/RuntimeProgramContext.hpp",
         "include/pops/runtime/program/detail/RuntimeProgramContextDetail.hpp",
@@ -1493,6 +1549,24 @@ def test_runtime_authority_rejects_retired_context_filenames(monkeypatch, tmp_pa
             "def build_cache_authority(row):\n"
             "    return {'node_id': row['node_id']}\n",
             True,
+        ),
+        (
+            "def store_cache_authority(row):\n"
+            "    cache_plan = {}\n"
+            "    cache_plan['node_id'] = row['node_id']\n"
+            "    return cache_plan\n",
+            True,
+        ),
+        (
+            "def resolve_node(row):\n"
+            "    row['node_id'] = row['node_id']\n"
+            "    return row\n",
+            False,
+        ),
+        (
+            "def inspect_legacy(row):\n"
+            "    return row.get('cache_nodes')\n",
+            False,
         ),
         (
             "def reject_cache_authority(row):\n"

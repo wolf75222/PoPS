@@ -84,6 +84,36 @@ function(pops_infer_test_labels out source)
   set(${out} ${_labels} PARENT_SCOPE)
 endfunction()
 
+# CMake versions before 3.30 only scan one source line at a time in
+# gtest_add_tests().  Keep configure-time discovery where that parser can see
+# every declaration, but route a suite to the executable's authoritative
+# --gtest_list_tests output when an older parser would miss a macro.  This is
+# deliberately source-based and fail-closed: a partially populated CTest list
+# must never look like a complete suite.
+function(pops_gtest_requires_runtime_discovery out)
+  set(_requires_runtime FALSE)
+  if(CMAKE_VERSION VERSION_LESS 3.30)
+    set(_old_gtest_decl_regex "(TYPED_TEST|TEST)_?[FP]? *\\([A-Za-z_0-9 ,]+\\)")
+    set(_gtest_decl_regex "(TYPED_TEST|TEST)_?[FP]?[ \\t\\r\\n]*\\([^)]*\\)")
+    foreach(_source IN LISTS ARGN)
+      file(READ "${_source}" _contents)
+      string(REGEX MATCHALL "${_gtest_decl_regex}" _gtest_declarations "${_contents}")
+      foreach(_declaration IN LISTS _gtest_declarations)
+        string(REGEX MATCH "${_old_gtest_decl_regex}" _old_gtest_declaration
+          "${_declaration}")
+        if(NOT _old_gtest_declaration)
+          set(_requires_runtime TRUE)
+          break()
+        endif()
+      endforeach()
+      if(_requires_runtime)
+        break()
+      endif()
+    endforeach()
+  endif()
+  set(${out} "${_requires_runtime}" PARENT_SCOPE)
+endfunction()
+
 # These sources compile an ABI-v5 Program MODULE during the test through the
 # explicit AMR/System helpers.  They are deliberately enumerated rather than
 # inferred from broad AMR/native-loader labels: only a real helper consumer is
@@ -189,9 +219,12 @@ function(pops_add_gtest_suite)
   set(_pops_test_labels "${ARG_LABELS};cpp-target:${ARG_NAME}")
 
   if(NOT ARG_NO_DISCOVER)
-    if(ARG_RUNTIME_DISCOVERY)
+    pops_gtest_requires_runtime_discovery(_pops_legacy_gtest_runtime ${ARG_SOURCES})
+    if(ARG_RUNTIME_DISCOVERY OR _pops_legacy_gtest_runtime)
+      set_property(TARGET ${ARG_NAME} PROPERTY POPS_GTEST_RUNTIME_DISCOVERY TRUE)
       # Runtime discovery is an explicit escape hatch for a future suite whose
-      # parameterized or generated names cannot be recovered from its sources.
+      # parameterized or generated names cannot be recovered from its sources,
+      # and the compatibility path for CMake's pre-3.30 line parser.
       # Keep it POST_BUILD: PRE_TEST would enumerate every executable on each
       # CTest inventory and again on execution, which is especially costly for
       # CI's label-authenticated shards.
@@ -837,8 +870,28 @@ set_tests_properties(
   SystemTransactionAuthority.AcceptedMultiFabReadViewDoesNotBypassSameThreadWriter
   SystemTransactionAuthority.ProvisionalMailboxLeasePreventsStaleBalanceOrProjectionRetry
   PROPERTIES RESOURCE_LOCK native_loader)
-set_tests_properties(AmrTransactionAuthority.ExternalCandidateBlocksReadersAndSealsOnce
-  PROPERTIES RESOURCE_LOCK native_loader)
+get_target_property(_pops_amr_transaction_runtime test_amr_transaction_authority
+  POPS_GTEST_RUNTIME_DISCOVERY)
+if(_pops_amr_transaction_runtime)
+  # This case is a native-loader consumer.  Defer its lock until POST_BUILD
+  # discovery has materialized the CTest name on legacy CMake.
+  set(_pops_amr_transaction_properties_file
+    "${CMAKE_CURRENT_BINARY_DIR}/test_amr_transaction_authority_properties.cmake")
+  file(GENERATE OUTPUT "${_pops_amr_transaction_properties_file}" CONTENT
+"foreach(_pops_discovered_test IN LISTS test_amr_transaction_authority_TESTS)
+  if(\"\${_pops_discovered_test}\" STREQUAL
+     [==[AmrTransactionAuthority.ExternalCandidateBlocksReadersAndSealsOnce]==])
+    set_tests_properties(\"\${_pops_discovered_test}\" PROPERTIES
+      RESOURCE_LOCK native_loader)
+  endif()
+endforeach()
+")
+  set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+    "${_pops_amr_transaction_properties_file}")
+else()
+  set_tests_properties(AmrTransactionAuthority.ExternalCandidateBlocksReadersAndSealsOnce
+    PROPERTIES RESOURCE_LOCK native_loader)
+endif()
 pops_cap_opt_for_kokkos_ram(test_multiblock_interface_scheduler)
 
 if(TARGET test_solver_codegen_generated AND TARGET pops_gen_solver_kernel)

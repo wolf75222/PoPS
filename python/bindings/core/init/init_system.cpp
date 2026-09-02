@@ -1167,6 +1167,7 @@ void bind_system_stepping(py::class_<System>& cls) {
       .def("_begin_step_transaction", &System::begin_step_transaction)
       .def("_commit_step_transaction", &System::commit_step_transaction)
       .def("_provisional_read_scope", &System::_provisional_read_scope)
+      .def("accepted_transaction_generation_", &System::accepted_transaction_generation_)
       .def("_accepted_transaction_fail_stop_", &System::accepted_transaction_fail_stop_)
       .def("_step_change_l2_for_block", &System::step_change_l2_for_block, py::arg("block"))
       .def("_step_change_l2", &System::step_change_l2)

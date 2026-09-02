@@ -5263,6 +5263,11 @@ struct AmrSystem<Dim>::Impl {
   bool external_step_transaction_committed = false;
   std::unique_ptr<AcceptedSnapshot> restart_transaction;
   bool restart_transaction_committed = false;
+  // Restart uses the same accepted-state visibility and generation authority as steps while its
+  // typed snapshot remains the only cross-topology rollback image.  This lease is held from
+  // begin through finalize/rollback; same-thread reads still require an explicit provisional
+  // scope and therefore cannot bypass the public accepted-reader contract implicitly.
+  std::optional<runtime::program::AcceptedWriteLease> restart_transaction_write_lease;
 
   /// Aggregate participant for the AMR carrier, graph, clocks, histories, diagnostics and Program
   /// state already represented by AcceptedSnapshot.  The registry image is deliberately one byte:
@@ -7046,8 +7051,15 @@ struct AmrSystem<Dim>::Impl {
         // A prepared tagging pass can carry a no-op regrid transition.  It has no forward
         // accepted image and therefore must not retain/swap topology authority; the post-seal
         // finalizer discards this staged no-op without a cross-generation adoption.
-        if (!candidate.topology_changed)
+        if (!candidate.topology_changed) {
+          // Tagging still staged a real transaction, so the zero-transition branch above did not
+          // publish the candidate cell-temporal diagnostic arena.  A topology-static regrid must
+          // seal those diagnostics with the same accepted generation as fields and clocks before
+          // its unpublished forward image is discarded by the finalizer.
+          if (accepted->program_execution_services)
+            accepted->program_execution_services->publish_transaction_diagnostics_noexcept();
           return true;
+        }
         retain_topology_authority_noexcept(std::move(owner->prepared_hierarchy),
                                            std::move(owner->prepared_program_block_map),
                                            std::move(owner->program_flux_expression_budget));
@@ -7418,6 +7430,11 @@ struct AmrSystem<Dim>::Impl {
     return step_transaction_registry.acquire_write();
   }
 
+  [[nodiscard]] runtime::program::AcceptedWriteLease try_acquire_accepted_write_lease()
+      const noexcept {
+    return step_transaction_registry.try_acquire_write();
+  }
+
   void prime_step_transaction_image() {
     // The outer carrier is also used by native AMR topology setup, before a compiled artifact is
     // installed.  Seal that empty finite Program authority while this image is cold-primed so
@@ -7507,9 +7524,11 @@ struct AmrSystem<Dim>::Impl {
   }
 
   ~Impl() noexcept {
-    // The optional transaction is declared before its registry. Close it explicitly while the
-    // registry and aggregate restore carrier are still alive, preserving rollback-before-carrier
-    // destruction on every teardown path.
+    // External transaction holders are declared before the registry.  Close them explicitly
+    // while the registry and aggregate restore carrier are still alive; in particular an active
+    // restart write lease must unlink its TLS writer marker before the registry is destroyed.
+    restart_transaction.reset();
+    restart_transaction_write_lease.reset();
     external_program_transaction.reset();
   }
 
@@ -15378,8 +15397,7 @@ struct AmrSystem<Dim>::Impl {
   }
 
   template <class Function>
-  void execute_candidate_body(runtime::program::ProgramTransaction& transaction,
-                              Function&& function) {
+  void execute_candidate_body(Function&& function) {
     std::exception_ptr function_error;
     try {
       std::forward<Function>(function)();
@@ -15406,7 +15424,7 @@ struct AmrSystem<Dim>::Impl {
                                Function&& function) {
     if (!transaction.begin_candidate())
       throw std::runtime_error("AmrSystem transaction candidate phase rejected collectively");
-    execute_candidate_body(transaction, std::forward<Function>(function));
+    execute_candidate_body(std::forward<Function>(function));
   }
 
   template <class Function>
@@ -15422,15 +15440,14 @@ struct AmrSystem<Dim>::Impl {
               runtime::program::ProgramTransactionPhase::kCandidate)
         throw std::logic_error("AmrSystem transaction candidate is already committed or consumed");
       if constexpr (std::is_void_v<std::invoke_result_t<Function&>>) {
-        execute_candidate_body(*external_program_transaction, std::forward<Function>(function));
+        execute_candidate_body(std::forward<Function>(function));
         return;
       } else {
         using result_type = std::invoke_result_t<Function&>;
         static_assert(!std::is_reference_v<result_type>,
                       "AmrSystem transaction functions must return a value");
         std::optional<std::remove_cv_t<result_type>> result;
-        execute_candidate_body(*external_program_transaction,
-                               [&] { result.emplace(std::forward<Function>(function)()); });
+        execute_candidate_body([&] { result.emplace(std::forward<Function>(function)()); });
         return result_type(std::move(*result));
       }
     }
@@ -22888,17 +22905,39 @@ std::map<std::string, double> AmrSystem<Dim>::step_change_l2() const {
 template <int Dim>
 void AmrSystem<Dim>::begin_restart_transaction() {
   const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR restart transaction begin");
-  const long invalid = p_->restart_transaction || p_->external_program_transaction ? 1L : 0L;
+  const long invalid = p_->restart_transaction || p_->restart_transaction_write_lease ||
+                               p_->external_program_transaction
+                           ? 1L
+                           : 0L;
   if (all_reduce_max(invalid, lane) != 0)
     throw std::logic_error(
         "AmrSystem restart transaction cannot overlap another restart or step transaction");
 
-  // Freeze one complete all-provider warm-start image before any restart mutation.  The detached
-  // materializations are prepared collectively and published as one no-throw cache transaction,
-  // so rollback never depends on a same-epoch live solver surviving a topology publication.
-  p_->materialize_all_fields_atomically();
-  p_->restart_transaction = p_->prepare_accepted_snapshot_collectively("restart transaction");
-  p_->restart_transaction_committed = false;
+  // The generic registry owns the one visibility writer and accepted generation.  Probe it
+  // without blocking before the first restart collective: a rank can be locally busy with an
+  // accepted reader while its peers are free, and every free peer must release its probe lease
+  // before the collective failure becomes visible.  The typed AcceptedSnapshot remains the
+  // cross-topology rollback image: regrid-on-restart can replace a hierarchy that the
+  // preallocated step carrier deliberately cannot restore in place.
+  auto restart_writer = p_->try_acquire_accepted_write_lease();
+  if (all_reduce_max(restart_writer ? 0L : 1L, lane) != 0) {
+    restart_writer = {};
+    throw std::logic_error(
+        "AmrSystem restart transaction cannot acquire its accepted visibility writer on every "
+        "rank");
+  }
+
+  try {
+    p_->restart_transaction_write_lease.emplace(std::move(restart_writer));
+    p_->materialize_all_fields_atomically();
+    p_->restart_transaction = p_->prepare_accepted_snapshot_collectively("restart transaction");
+    p_->restart_transaction_committed = false;
+  } catch (...) {
+    p_->restart_transaction.reset();
+    p_->restart_transaction_committed = false;
+    p_->restart_transaction_write_lease.reset();
+    throw;
+  }
 }
 
 template <int Dim>
@@ -22906,7 +22945,10 @@ void AmrSystem<Dim>::commit_restart_transaction() {
   if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
     throw std::logic_error("AmrSystem restart commit requires its prepared hierarchy lane");
   const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
-  const long invalid = !p_->restart_transaction || p_->restart_transaction_committed ? 1L : 0L;
+  const long invalid = !p_->restart_transaction || !p_->restart_transaction_write_lease ||
+                               p_->restart_transaction_committed
+                           ? 1L
+                           : 0L;
   if (all_reduce_max(invalid, lane) != 0)
     throw std::logic_error("AmrSystem has no collective uncommitted restart transaction");
   p_->restart_transaction_committed = true;
@@ -22916,8 +22958,21 @@ template <int Dim>
 void AmrSystem<Dim>::finalize_restart_transaction() noexcept {
   if (p_->native_package_phase != Impl::NativePackagePhase::idle)
     return;
+  if (!p_->restart_transaction) {
+    if (p_->restart_transaction_write_lease)
+      std::terminate();
+    p_->restart_transaction_committed = false;
+    return;
+  }
+  if (!p_->restart_transaction_write_lease || !p_->restart_transaction_committed)
+    std::terminate();
+  // Seal while the writer is still held.  Readers are released only after the restart snapshot
+  // has been discarded, so neither the old nor a partially applied checkpoint image can escape.
+  if (!p_->step_transaction_registry.seal_external_writer())
+    std::terminate();
   p_->restart_transaction.reset();
   p_->restart_transaction_committed = false;
+  p_->restart_transaction_write_lease.reset();
 }
 
 template <int Dim>
@@ -22925,7 +22980,7 @@ void AmrSystem<Dim>::rollback_restart_transaction() {
   if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
     throw std::logic_error("AmrSystem restart rollback requires its prepared hierarchy lane");
   const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
-  const long inactive = p_->restart_transaction ? 0L : 1L;
+  const long inactive = p_->restart_transaction && p_->restart_transaction_write_lease ? 0L : 1L;
   if (all_reduce_max(inactive, lane) != 0)
     throw std::logic_error("AmrSystem has no collective restart transaction to roll back");
 
@@ -22941,10 +22996,15 @@ void AmrSystem<Dim>::rollback_restart_transaction() {
     throw std::runtime_error("AMR restart rollback lost its prepared hierarchy lane");
   const ExecutionLane& restored_lane = *p_->prepared_hierarchy->lane;
   if (all_reduce_max(restore_error ? 1L : 0L, restored_lane) != 0) {
+    // Keep the writer and typed snapshot resident on every rank: exposing an unsuccessfully
+    // restored cross-topology image would be worse than refusing further reads.
+    p_->restart_transaction = std::move(snapshot);
     if (restored_lane.size() == 1 && restore_error)
       std::rethrow_exception(restore_error);
     throw std::runtime_error("AMR restart rollback failed on at least one MPI rank");
   }
+  snapshot.reset();
+  p_->restart_transaction_write_lease.reset();
 }
 
 template <int Dim>

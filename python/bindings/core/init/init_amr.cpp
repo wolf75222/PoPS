@@ -973,9 +973,9 @@ void bind_amr_stepping(py::class_<AmrSystem>& cls) {
       .def("_begin_step_transaction", &AmrSystem::begin_step_transaction)
       .def("_commit_step_transaction", &AmrSystem::commit_step_transaction)
       .def("_provisional_read_scope", &AmrSystem::_provisional_read_scope)
+      .def("accepted_transaction_generation_", &AmrSystem::accepted_transaction_generation_)
       .def("_accepted_transaction_fail_stop_", &AmrSystem::accepted_transaction_fail_stop_)
-      .def("_step_change_l2_for_block", &AmrSystem::step_change_l2_for_block,
-           py::arg("block"))
+      .def("_step_change_l2_for_block", &AmrSystem::step_change_l2_for_block, py::arg("block"))
       .def("_step_change_l2", &AmrSystem::step_change_l2)
       .def("_finalize_step_transaction", &AmrSystem::finalize_step_transaction)
       .def("_rollback_step_transaction", &AmrSystem::rollback_step_transaction)

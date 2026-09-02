@@ -186,6 +186,15 @@ LEGACY_CONTEXT_TOKENS = (
     "amr_program_context.hpp",
     "runtime_program_context.hpp",
 )
+# Some old generated sources used the snake-case spelling as a type/variable rather than as an
+# include.  Keep the suffix boundary explicit so unrelated names such as
+# ``runtime_program_contextual`` remain valid.  Filename checks below cover the complete
+# ``runtime_program_context*.hpp`` family; this expression covers source identifiers outside a
+# header named after the retired context.
+LEGACY_CONTEXT_IDENTIFIER_PATTERN = re.compile(
+    r"\b(?:runtime_program_context(?:_[A-Za-z0-9]+)*|"
+    r"amr_program_context(?:_[A-Za-z0-9]+)*)\b"
+)
 # Native bricks have a deliberately separate C ABI. Keep the precise exported spellings here
 # rather than relying on an incidental mismatch with the retired Program-route patterns below:
 # a future broadening of those patterns must not reject one of these independently versioned
@@ -236,19 +245,28 @@ LEGACY_PROGRAM_INSTALL_TARGET_VARIANT_PATTERN = re.compile(
 # ABI, and reject only the known split families (including an explicit target/version suffix).
 LEGACY_PROGRAM_SPLIT_SYMBOL_TOKENS = (
     "pops_program_route_manifest",
+    "pops_program_route",
     "pops_program_routes",
     "pops_program_dt_bound",
     "pops_program_dt",
+    "pops_program_boundary",
     "pops_program_boundaries",
+    "pops_program_field_boundary",
+    "pops_program_field_boundaries",
+    "pops_install_field_boundary",
     "pops_install_field_boundaries",
+    "pops_install_program_route",
+    "pops_install_program_routes",
     "pops_install_program_boundaries",
 )
 LEGACY_PROGRAM_SPLIT_ABI_PATTERN = re.compile(
     # The first cutover used both the long manifest/bound spellings and the shorter
     # routes/dt/boundaries exports.  All of these names published a second Program ABI; keep
     # their roots closed while allowing historical target/backend/version suffix chains.
-    r"\b(?:pops_program_(?:route_manifest|routes|dt_bound|dt|boundaries)|"
-    r"pops_install_(?:field|program)_boundaries|pops_register_program_provider_routes)"
+    r"\b(?:pops_program_(?:route_manifest|route|routes|dt_bound|dt|boundary|boundaries|"
+    r"field_boundary|field_boundaries)|"
+    r"pops_install_(?:field|program)_(?:route|routes|boundary|boundaries)|"
+    r"pops_register_program_provider_routes)"
     # Historical generators appended target, backend, and version qualifiers (for example
     # ``_amr_v7``, ``_v2_system``, or ``_cuda_legacy``).  The base names are retired ABI families,
     # so consume any identifier suffix while retaining a word boundary.  Native
@@ -260,8 +278,10 @@ LEGACY_PROGRAM_SPLIT_ABI_PATTERN = re.compile(
 # only the suffix chain ending in the retired AMR target is open, so unrelated Program symbols do
 # not become false positives.
 LEGACY_PROGRAM_SPLIT_AMR_VARIANT_PATTERN = re.compile(
-    r"\b(?:pops_program_(?:route_manifest|routes|dt_bound|dt|boundaries)|"
-    r"pops_install_(?:field|program)_boundaries|pops_register_program_provider_routes)"
+    r"\b(?:pops_program_(?:route_manifest|route|routes|dt_bound|dt|boundary|boundaries|"
+    r"field_boundary|field_boundaries)|"
+    r"pops_install_(?:field|program)_(?:route|routes|boundary|boundaries)|"
+    r"pops_register_program_provider_routes)"
     r"(?:_[A-Za-z][A-Za-z0-9]*)*_amr\b"
 )
 # Historical generators also emitted a target-specific Program export that did not retain one of
@@ -380,14 +400,14 @@ PROGRAM_AUTHORITY_TABLE_PATTERN = re.compile(
     r"(?:_[A-Za-z0-9]+)*\b"
 )
 PROGRAM_AUTHORITY_DISPATCH_PATTERN = re.compile(
-    r"\bprogram_dispatch(?:_[A-Za-z0-9]+)*\b"
+    r"\b(?:program_dispatch|ProgramDispatch)(?:_[A-Za-z0-9]+)*\b"
 )
 PROGRAM_AUTHORITY_TABLE_NAME_PATTERN = re.compile(
     r"(?:ProgramDispatchTable|program_dispatch_table|program_table)"
     r"(?:_[A-Za-z0-9]+)*"
 )
 PROGRAM_AUTHORITY_DISPATCH_NAME_PATTERN = re.compile(
-    r"program_dispatch(?:_[A-Za-z0-9]+)*"
+    r"(?:program_dispatch|ProgramDispatch)(?:_[A-Za-z0-9]+)*"
 )
 # One candidate object is deliberately allowed to carry a local dispatch table while it is being
 # prepared.  These exact spellings are not a second published authority: their names encode the
@@ -2075,6 +2095,7 @@ def _scan_production_barriers(
             for token in LEGACY_CONTEXT_TOKENS
             if re.search(r"\b%s\b" % re.escape(token), semantic)
         ]
+        contexts.extend(LEGACY_CONTEXT_IDENTIFIER_PATTERN.findall(semantic))
         symbols = [
             token
             for token in (

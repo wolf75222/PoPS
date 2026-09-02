@@ -962,8 +962,9 @@ class AmrSystem {
   /// Collectively authenticate that every rank retains one rollback-capable accepted snapshot.
   /// This seals the transaction for commit without releasing rollback authority.
   void commit_restart_transaction();
-  /// Release a collectively committed restart snapshot.  The commit precondition is established by
-  /// commit_restart_transaction(), so this phase performs only no-throw ownership release.
+  /// Atomically seal the accepted restart generation, then release its committed snapshot and
+  /// visibility writer. The commit precondition is established by commit_restart_transaction();
+  /// a failed collective seal is fail-stop and never exposes a partial restart image.
   void finalize_restart_transaction() noexcept;
   void rollback_restart_transaction();
   /// Force exactly one artifact-owned scientific regrid inside an active restart transaction.

@@ -752,6 +752,40 @@ TEST(ProgramTransaction, ReaderSeesOldGenerationAndNewReadersBlockUntilSeal) {
   EXPECT_EQ(registry.accepted_generation().value, 1u);
 }
 
+TEST(ProgramTransaction, BorrowedWriterDefersGenerationUntilExternalSeal) {
+  State state;
+  state.accepted = 3;
+  state.candidate = 9;
+  ProgramTransactionRegistry registry({1, sizeof(int), sizeof(int), 0});
+  const auto handle = registry.register_participant(state, state_ops(), {sizeof(int), sizeof(int)});
+  registry.set_candidate_visibility_lock(true);
+  registry.bind();
+
+  auto external_writer = registry.acquire_write();
+  ASSERT_TRUE(external_writer);
+  auto transaction = registry.begin();
+  ASSERT_TRUE(transaction.begin_candidate());
+  transaction.provisional(handle)->candidate = 9;
+  ASSERT_TRUE(transaction.begin_solve_guard_effect_prepare());
+  ASSERT_TRUE(transaction.publish());
+  ASSERT_TRUE(transaction.seal());
+  ASSERT_TRUE(transaction.finalize());
+  EXPECT_EQ(state.accepted, 9);
+  EXPECT_EQ(registry.accepted_generation().value, 0u);
+
+  auto foreign_reader = std::async(std::launch::async, [&] {
+    auto lease = registry.acquire_read();
+    const State* accepted = lease.read(handle);
+    return accepted == nullptr ? -1 : accepted->accepted;
+  });
+  EXPECT_EQ(foreign_reader.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
+  EXPECT_TRUE(registry.seal_external_writer());
+  EXPECT_EQ(registry.accepted_generation().value, 1u);
+  external_writer = AcceptedWriteLease{};
+  EXPECT_EQ(foreign_reader.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+  EXPECT_EQ(foreign_reader.get(), 9);
+}
+
 TEST(ProgramTransaction, NestedAcceptedReadLeasesBorrowTheAuthenticatedRoot) {
   State state;
   state.accepted = 13;
@@ -829,6 +863,33 @@ TEST(ProgramTransaction, AcceptedReadRefusesWriterBeforeLockAttempt) {
   }
   auto writer = registry.acquire_write();
   ASSERT_TRUE(writer);
+}
+
+TEST(ProgramTransaction, TryAcquireWriterRefusesReadLeaseAndRetriesAfterRelease) {
+  State state;
+  ProgramTransactionRegistry registry({1, sizeof(int), sizeof(int), 0});
+  (void)registry.register_participant(state, state_ops(), {sizeof(int), sizeof(int)});
+  registry.bind();
+
+  {
+    auto reader = registry.acquire_read();
+    ASSERT_TRUE(reader);
+    EXPECT_FALSE(registry.try_acquire_write());
+  }
+
+  auto writer = registry.try_acquire_write();
+  ASSERT_TRUE(writer);
+}
+
+TEST(ProgramTransaction, TryAcquireWriterRefusesActiveTransactionBeforeCandidate) {
+  State state;
+  ProgramTransactionRegistry registry({1, sizeof(int), sizeof(int), 0});
+  (void)registry.register_participant(state, state_ops(), {sizeof(int), sizeof(int)});
+  registry.bind();
+
+  auto transaction = registry.begin();
+  EXPECT_FALSE(registry.try_acquire_write());
+  transaction.rollback();
 }
 
 TEST(ProgramTransaction, CandidateStillRefusesPublicReadWithoutProvisionalLease) {

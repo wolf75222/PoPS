@@ -430,6 +430,11 @@ function(_pops_normalize_kokkos_replay_records
         "Kokkos ${_pops_kokkos_property} exposes a non-replayable expression: "
         "${_pops_kokkos_record}")
     endif()
+    if(_pops_kokkos_record MATCHES "[<>]")
+      message(FATAL_ERROR
+        "Kokkos ${_pops_kokkos_property} exposes a nested or malformed CXX expression: "
+        "${_pops_kokkos_record}")
+    endif()
     if(_pops_kokkos_record MATCHES "[|\r\n]")
       message(FATAL_ERROR
         "Kokkos ${_pops_kokkos_property} cannot be serialized exactly: "
@@ -647,6 +652,19 @@ if(POPS_BUILD_TESTS)
       -P "${CMAKE_SOURCE_DIR}/tests/cmake/run_serial_parent_mpi_target.cmake")
   set_tests_properties(test_serial_add_subdirectory_ignores_parent_mpi PROPERTIES
     LABELS "cmake;integration;serial;mpi;cpp-standalone"
+    TIMEOUT 30)
+  add_test(
+    NAME test_kokkos_nested_replay_expression_rejected
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPOPS_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+      "-DPOPS_FIXTURE_SOURCE_DIR=${CMAKE_SOURCE_DIR}/tests/cmake/serial_parent_mpi_target"
+      "-DPOPS_KOKKOS_FIXTURE_DIR=${CMAKE_SOURCE_DIR}/tests/cmake/mpi_abi_mismatch"
+      "-DPOPS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}/kokkos-nested-replay-rejected"
+      "-DPOPS_NATIVE_DIM=${POPS_NATIVE_DIM}"
+      "-DPOPS_GENERATOR=${CMAKE_GENERATOR}"
+      -P "${CMAKE_SOURCE_DIR}/tests/cmake/run_kokkos_nested_replay_rejection.cmake")
+  set_tests_properties(test_kokkos_nested_replay_expression_rejected PROPERTIES
+    LABELS "cmake;integration;kokkos;authority;refusal"
     TIMEOUT 30)
   add_test(
     NAME test_hdf5_mpi_binary_identity
