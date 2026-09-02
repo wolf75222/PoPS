@@ -403,9 +403,28 @@ list(REMOVE_DUPLICATES _pops_kokkos_normalized_includes)
 function(_pops_normalize_kokkos_replay_records
          _pops_kokkos_property _pops_kokkos_records _pops_kokkos_out)
   set(_pops_kokkos_normalized_records "")
+  set(_pops_kokkos_cxx_wrapper_open FALSE)
   foreach(_pops_kokkos_record IN LISTS _pops_kokkos_records)
-    if(_pops_kokkos_record MATCHES "^\\$<\\$<COMPILE_LANGUAGE:CXX>:(.*)>$")
+    if(_pops_kokkos_cxx_wrapper_open)
+      # Installed Kokkos packages commonly put several CUDA options in one
+      # COMPILE_LANGUAGE wrapper.  CMake expands the semicolon-delimited
+      # payload into separate list records before this function sees it, so
+      # consume those records until the one exact closing '>'.  Fragments may
+      # not contain another expression or angle bracket: only the known outer
+      # CXX wrapper is replayable by the runtime DSO compiler.
+      if(_pops_kokkos_record MATCHES "^([^<>]*)>$")
+        set(_pops_kokkos_record "${CMAKE_MATCH_1}")
+        set(_pops_kokkos_cxx_wrapper_open FALSE)
+      elseif(_pops_kokkos_record MATCHES "[<>]")
+        message(FATAL_ERROR
+          "Kokkos ${_pops_kokkos_property} exposes a nested or malformed CXX expression: "
+          "${_pops_kokkos_record}")
+      endif()
+    elseif(_pops_kokkos_record MATCHES "^\\$<\\$<COMPILE_LANGUAGE:CXX>:(.*)>$")
       set(_pops_kokkos_record "${CMAKE_MATCH_1}")
+    elseif(_pops_kokkos_record MATCHES "^\\$<\\$<COMPILE_LANGUAGE:CXX>:(.*)$")
+      set(_pops_kokkos_record "${CMAKE_MATCH_1}")
+      set(_pops_kokkos_cxx_wrapper_open TRUE)
     elseif(_pops_kokkos_record MATCHES "\\$<")
       message(FATAL_ERROR
         "Kokkos ${_pops_kokkos_property} exposes a non-replayable expression: "
@@ -420,6 +439,10 @@ function(_pops_normalize_kokkos_replay_records
       list(APPEND _pops_kokkos_normalized_records "${_pops_kokkos_record}")
     endif()
   endforeach()
+  if(_pops_kokkos_cxx_wrapper_open)
+    message(FATAL_ERROR
+      "Kokkos ${_pops_kokkos_property} exposes an unterminated CXX expression")
+  endif()
   list(REMOVE_DUPLICATES _pops_kokkos_normalized_records)
   set(${_pops_kokkos_out} "${_pops_kokkos_normalized_records}" PARENT_SCOPE)
 endfunction()
