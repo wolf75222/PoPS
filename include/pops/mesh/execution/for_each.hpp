@@ -582,6 +582,14 @@ Real for_each_cell_reduce_max(const ExecutionSpace& execution, const Box<Dim>& b
   Real result = std::numeric_limits<Real>::lowest();
   const Index<Dim> lower = b.lo;
   const Extent<Dim> extent = b.extent();
+#if defined(KOKKOS_ENABLE_OPENMP) && defined(_OPENMP)
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::OpenMP>) {
+#pragma omp parallel for reduction(max : result) schedule(static)
+    for (std::int64_t ordinal = 0; ordinal < b.numPts(); ++ordinal)
+      result = std::max(result, f(detail::cell_index_from_ordinal(lower, extent, ordinal)));
+    return result;
+  }
+#endif
 #if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
   if constexpr (std::is_same_v<ExecutionSpace, Kokkos::DefaultExecutionSpace>) {
     for (std::int64_t ordinal = 0; ordinal < b.numPts(); ++ordinal)
@@ -647,6 +655,15 @@ Real for_each_cell_reduce_max(const ExecutionSpace& execution,
   }
 #endif
   const Extent<Dim> extent = b.extent();
+#if defined(KOKKOS_ENABLE_OPENMP) && defined(_OPENMP)
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::OpenMP>) {
+    Real result = std::numeric_limits<Real>::lowest();
+#pragma omp parallel for reduction(max : result) schedule(static)
+    for (std::int64_t ordinal = 0; ordinal < point_count; ++ordinal)
+      result = std::max(result, f(detail::cell_index_from_ordinal(lower, extent, ordinal)));
+    return result;
+  }
+#endif
   const auto partials = prepared.partials();
   const std::int64_t partial_count = prepared.partial_count();
   const auto policy = Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(

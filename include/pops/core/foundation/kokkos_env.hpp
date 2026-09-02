@@ -93,21 +93,21 @@ inline bool kokkos_atexit_finalize_registered() {
 #ifdef POPS_HAS_KOKKOS
 inline void device_fence(const std::string& label = detail::kokkos_device_fence_label()) {
   if (Kokkos::is_initialized()) {
-    // Serial kernels complete before returning.  Kokkos' process-wide fence constructs a fresh
-    // Serial execution-space control block and profiling payload, which is an allocation on the
-    // accepted Program path despite there being no asynchronous work to synchronize.  Keep the
-    // barrier for every asynchronous backend and make the synchronous backend explicitly free.
-#if !defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL) || defined(KOKKOS_ENABLE_OPENMP) || \
-    defined(KOKKOS_ENABLE_THREADS) || defined(KOKKOS_ENABLE_HPX) ||                       \
-    defined(KOKKOS_ENABLE_CUDA) || defined(KOKKOS_ENABLE_HIP) ||                         \
-    defined(KOKKOS_ENABLE_SYCL) || defined(KOKKOS_ENABLE_OPENACC) ||                     \
+    // OpenMP and Serial submit synchronously. Kokkos' process-wide OpenMP fence still builds a
+    // profiling payload, so it allocates even though there is no asynchronous work to drain.
+    // Keep the process-wide fence whenever a potentially asynchronous execution space is
+    // compiled: explicit CUDA/HIP streams must be complete before host-visible publication.
+#if defined(KOKKOS_ENABLE_THREADS) || defined(KOKKOS_ENABLE_HPX) || defined(KOKKOS_ENABLE_CUDA) || \
+    defined(KOKKOS_ENABLE_HIP) || defined(KOKKOS_ENABLE_SYCL) || defined(KOKKOS_ENABLE_OPENACC) || \
     defined(KOKKOS_ENABLE_OPENMPTARGET) || defined(KOKKOS_ENABLE_NEXTSILICON)
     // This is deliberately the process-wide Kokkos fence, not a fence on the retained default
     // instance.  Prepared CUDA/HIP paths may submit work on explicit execution-space instances;
     // publication must wait for those streams as well before exposing host-visible state.  A
-    // mixed build whose default is Serial also takes this branch when any asynchronous backend is
-    // enabled; only a genuinely Serial-only Kokkos build may elide the barrier.
+    // mixed CPU/accelerator build also takes this branch, regardless of its default execution
+    // space.
     Kokkos::fence(label);
+#else
+    (void)label;
 #endif
   }
 }
