@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <cstdint>
 #include <cstdlib>
@@ -668,6 +669,20 @@ int run_collective_program_route(int split_axis, bool prove_collective_rollback)
                                                first_full_step_after == first_full_step_before;
   if (all_reduce_min(first_full_step_allocation_free ? 1L : 0L, lane) != 1 ||
       all_reduce_max(first_full_step_allocation_free ? 1L : 0L, lane) != 1) {
+    std::fprintf(stderr,
+                 "cell-temporal first-step allocation witness failed on rank %d: accepted=%d "
+                 "heap=%llu fab_calls=%llu fab_bytes=%llu communication_calls=%llu "
+                 "communication_bytes=%llu\n",
+                 lane.rank(), first_full_step_accepted ? 1 : 0,
+                 static_cast<unsigned long long>(first_full_step_heap_allocations),
+                 static_cast<unsigned long long>(first_full_step_after.fab_calls -
+                                                 first_full_step_before.fab_calls),
+                 static_cast<unsigned long long>(first_full_step_after.fab_bytes -
+                                                 first_full_step_before.fab_bytes),
+                 static_cast<unsigned long long>(first_full_step_after.communication_calls -
+                                                 first_full_step_before.communication_calls),
+                 static_cast<unsigned long long>(first_full_step_after.communication_bytes -
+                                                 first_full_step_before.communication_bytes));
     return 3;
   }
   if (callback_state->dispatches != 1)
