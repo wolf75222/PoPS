@@ -443,6 +443,23 @@ CellTemporalPartitionAcceptedState prepare_same_level_transport_euler_partition(
 
 namespace same_level_cell_temporal_detail {
 
+// Cell-temporal providers use the default execution space for every prepared host/device
+// operation.  Host execution spaces complete their parallel dispatch before returning, while
+// routing them through pops::device_fence() constructs a fresh process-wide execution-space control
+// block on every stage.  Retain the process-wide barrier for accelerator builds, where explicitly
+// supplied streams may still need to be drained.
+inline void resident_execution_fence() {
+#if defined(POPS_HAS_KOKKOS)
+  ::pops::detail::ensure_kokkos_initialized();
+  if (!Kokkos::is_initialized())
+    return;
+  if constexpr (!std::is_same_v<Kokkos::DefaultExecutionSpace, Kokkos::DefaultHostExecutionSpace>)
+    ::pops::device_fence();
+#else
+  ::pops::device_fence();
+#endif
+}
+
 template <int Dim>
 mesh::BoxArray<Dim> face_boxes(const mesh::BoxArray<Dim>& cells, int axis) {
   if (axis < 0 || axis >= Dim)
@@ -506,7 +523,8 @@ void copy_local_storage(const MultiFab<Dim>& source, MultiFab<Dim>& destination)
       std::copy_n(source.fab(local).storage().data(), source.fab(local).size(),
                   destination.fab(local).storage().data());
     else
-      Kokkos::deep_copy(destination.fab(local).storage(), source.fab(local).storage());
+      Kokkos::deep_copy(::pops::detail::default_execution_space(), destination.fab(local).storage(),
+                        source.fab(local).storage());
   }
 }
 
@@ -631,7 +649,7 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
     std::exception_ptr local_error;
     try {
       validate_and_materialize_(partition);
-      device_fence();
+      same_level_cell_temporal_detail::resident_execution_fence();
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -685,7 +703,7 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
         attempt.local_cell_count != local_cell_count_)
       return PreparedProviderSupport::reject(0x756105u,
                                              "attempt differs from prepared temporal authority");
-    device_fence();
+    same_level_cell_temporal_detail::resident_execution_fence();
     try {
       same_level_cell_temporal_detail::copy_local_storage(*live_, state_a_);
     } catch (...) {
@@ -721,7 +739,7 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
     batch_point_.physical_time = static_cast<double>(batch.begin_tick) * seconds_per_tick_;
     same_level_cell_temporal_detail::copy_local_storage(current_state_(), candidate_state_());
     same_level_cell_temporal_detail::copy_local_storage(current_state_(), stage_snapshot_);
-    device_fence();
+    same_level_cell_temporal_detail::resident_execution_fence();
     prepared_batch_ = batch;
     batch_end_tick_ = batch.end_tick;
     batch_local_prepared_ = true;
@@ -740,7 +758,7 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
     const auto fluxes = face_flux_pointers_();
     runtime_->capture_same_level_negative_flux_divergence(
         batch_point_, std::as_const(stage_snapshot_), residual_, fluxes);
-    device_fence();
+    same_level_cell_temporal_detail::resident_execution_fence();
     batch_local_prepared_ = false;
     batch_active_ = true;
   }
@@ -779,7 +797,7 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
   }
 
   [[nodiscard]] PreparedProviderSupport prepare_commit_attempt() noexcept {
-    device_fence();
+    same_level_cell_temporal_detail::resident_execution_fence();
     if (!active_ || batch_local_prepared_ || batch_active_ || current_tick_ != attempt_target_tick_)
       return PreparedProviderSupport::reject(
           0x756106u, "provider did not reach its prepared synchronization barrier");
@@ -802,7 +820,7 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
       std::terminate();
     try {
       same_level_cell_temporal_detail::copy_local_storage(current_state_(), *live_);
-      device_fence();
+      same_level_cell_temporal_detail::resident_execution_fence();
     } catch (...) {
       std::terminate();
     }
@@ -817,7 +835,7 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
   void rollback_attempt() noexcept {
     if (!active_)
       return;
-    device_fence();
+    same_level_cell_temporal_detail::resident_execution_fence();
     active_ = false;
     batch_local_prepared_ = false;
     batch_active_ = false;
@@ -1257,7 +1275,7 @@ class PreparedSameLevelTransportEulerPackStageFluxProvider {
     std::exception_ptr local_error;
     try {
       validate_and_materialize_(partition);
-      device_fence();
+      same_level_cell_temporal_detail::resident_execution_fence();
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -1387,7 +1405,7 @@ class PreparedSameLevelTransportEulerPackStageFluxProvider {
         attempt.cell_count != global_record_count_ ||
         attempt.local_cell_count != device_cells_.size())
       return PreparedProviderSupport::reject(0x756203u, "route-pack attempt changed authority");
-    device_fence();
+    same_level_cell_temporal_detail::resident_execution_fence();
     try {
       for (RouteStorage& route : routes_)
         same_level_cell_temporal_detail::copy_local_storage(*route.live, route.state_a);
@@ -1425,7 +1443,7 @@ class PreparedSameLevelTransportEulerPackStageFluxProvider {
                                                           candidate_state_(route));
       same_level_cell_temporal_detail::copy_local_storage(current_state_(route), route.snapshot);
     }
-    device_fence();
+    same_level_cell_temporal_detail::resident_execution_fence();
     prepared_batch_ = batch;
     batch_end_tick_ = batch.end_tick;
     batch_local_prepared_ = true;
@@ -1443,7 +1461,7 @@ class PreparedSameLevelTransportEulerPackStageFluxProvider {
           route, *batch_point_, std::as_const(storage.snapshot), storage.residual,
           face_flux_pointers_(storage));
     }
-    device_fence();
+    same_level_cell_temporal_detail::resident_execution_fence();
     batch_local_prepared_ = false;
     batch_active_ = true;
   }
@@ -1488,7 +1506,7 @@ class PreparedSameLevelTransportEulerPackStageFluxProvider {
       throw std::logic_error("same-level route pack cannot finalize an incomplete attempt");
     for (RouteStorage& route : routes_)
       same_level_cell_temporal_detail::copy_local_storage(current_state_(route), *route.live);
-    device_fence();
+    same_level_cell_temporal_detail::resident_execution_fence();
     runtime_->prepare_same_level_cell_attempt_finalize_local();
   }
 
@@ -1517,7 +1535,7 @@ class PreparedSameLevelTransportEulerPackStageFluxProvider {
   }
 
   [[nodiscard]] PreparedProviderSupport prepare_commit_attempt() noexcept {
-    device_fence();
+    same_level_cell_temporal_detail::resident_execution_fence();
     if (!active_ || batch_local_prepared_ || batch_active_ || flux_metadata_prepared_ ||
         !attempt_finalized_ || current_tick_ != attempt_target_tick_)
       return PreparedProviderSupport::reject(0x756205u, "route pack did not reach its barrier");

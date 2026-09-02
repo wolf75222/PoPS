@@ -75,6 +75,8 @@ class HaloExchange {
   using execution_index_type = std::int64_t;
   using execution_policy =
       Kokkos::RangePolicy<execution_space, Kokkos::IndexType<execution_index_type>>;
+  inline static const std::string pack_kernel_label_ = "pops_halo_pack";
+  inline static const std::string unpack_kernel_label_ = "pops_halo_unpack";
 
   HaloExchange(const schedule_type& schedule, const ExecutionLane& lane,
                HaloExchangeContext context)
@@ -82,6 +84,8 @@ class HaloExchange {
         lane_(&lane),
         lane_borrow_(lane.borrow_immutably()),
         context_(context) {
+    ::pops::detail::ensure_kokkos_initialized();
+    execution_ = &::pops::detail::default_execution_space();
 #ifdef POPS_HAS_MPI
     validate_and_prepare_collectively_();
 #else
@@ -201,12 +205,12 @@ class HaloExchange {
       for (PeerStorage& peer : peers_)
         if (peer.send_plan != nullptr) {
           pack_plan_(fields, *peer.send_plan, peer.device_send);
-          if constexpr (std::is_same_v<MemorySpace, Kokkos::HostSpace>)
+          if constexpr (std::is_same_v<execution_space, Kokkos::DefaultHostExecutionSpace>)
             std::copy_n(peer.device_send.data(), peer.device_send.extent(0), peer.host_send.data());
           else
-            Kokkos::deep_copy(peer.host_send, peer.device_send);
+            Kokkos::deep_copy(*execution_, peer.host_send, peer.device_send);
         }
-      ::pops::device_fence(execution_fence_label_);
+      execution_fence_();
     } catch (...) {
       packing_failure = 1;
     }
@@ -308,13 +312,13 @@ class HaloExchange {
     try {
       for (PeerStorage& peer : peers_)
         if (peer.receive_plan != nullptr) {
-          if constexpr (std::is_same_v<MemorySpace, Kokkos::HostSpace>)
+          if constexpr (std::is_same_v<execution_space, Kokkos::DefaultHostExecutionSpace>)
             std::copy_n(peer.host_receive.data(), peer.host_receive.extent(0),
                         peer.device_receive.data());
           else
-            Kokkos::deep_copy(peer.device_receive, peer.host_receive);
+            Kokkos::deep_copy(*execution_, peer.device_receive, peer.host_receive);
         }
-      ::pops::device_fence(execution_fence_label_);
+      execution_fence_();
       if (context_.fail_staging_rank == lane_->rank())
         throw std::runtime_error("pops::HaloExchange injected receive staging failure");
     } catch (...) {
@@ -333,7 +337,7 @@ class HaloExchange {
           unpack_plan_(fields, *peer.receive_plan, peer.device_receive);
       if (schedule_->local_elements() != 0)
         unpack_jobs_(fields, schedule_->local_jobs(), schedule_->local_elements(), local_buffer_);
-      ::pops::device_fence(execution_fence_label_);
+      execution_fence_();
       if (context_.fail_publication_rank == lane_->rank())
         throw std::runtime_error("pops::HaloExchange injected publication failure");
     } catch (...) {
@@ -357,6 +361,11 @@ class HaloExchange {
   }
 
  private:
+  void execution_fence_() const {
+    if constexpr (!std::is_same_v<execution_space, Kokkos::DefaultHostExecutionSpace>)
+      execution_->fence(execution_fence_label_);
+  }
+
   struct PeerStorage {
     rank_type coordinate{};
     int mpi_rank = 0;
@@ -476,8 +485,24 @@ class HaloExchange {
     for (const job_type& job : jobs) {
       const FieldView<const Real, Dim> source = fields.fab_global(job.source_box).view();
       const KernelJob lowered = lower_job_(job);
-      Kokkos::parallel_for("pops_halo_pack", execution_policy(0, lowered.elements),
-                           PackKernel{buffer, source, lowered});
+      const PackKernel kernel{buffer, source, lowered};
+#if defined(KOKKOS_ENABLE_OPENMP) && defined(_OPENMP)
+      if constexpr (std::is_same_v<execution_space, Kokkos::OpenMP>) {
+#pragma omp parallel for schedule(static)
+        for (execution_index_type element = 0; element < lowered.elements; ++element)
+          kernel(element);
+        continue;
+      }
+#endif
+#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
+      if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, MemorySpace>::accessible) {
+        for (execution_index_type element = 0; element < lowered.elements; ++element)
+          kernel(element);
+        continue;
+      }
+#endif
+      Kokkos::parallel_for(pack_kernel_label_, execution_policy(*execution_, 0, lowered.elements),
+                           kernel);
     }
   }
 
@@ -493,8 +518,24 @@ class HaloExchange {
     for (const job_type& job : jobs) {
       const FieldView<Real, Dim> destination = fields.fab_global(job.destination_box).view();
       const KernelJob lowered = lower_job_(job);
-      Kokkos::parallel_for("pops_halo_unpack", execution_policy(0, lowered.elements),
-                           UnpackKernel{buffer, destination, lowered});
+      const UnpackKernel kernel{buffer, destination, lowered};
+#if defined(KOKKOS_ENABLE_OPENMP) && defined(_OPENMP)
+      if constexpr (std::is_same_v<execution_space, Kokkos::OpenMP>) {
+#pragma omp parallel for schedule(static)
+        for (execution_index_type element = 0; element < lowered.elements; ++element)
+          kernel(element);
+        continue;
+      }
+#endif
+#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
+      if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, MemorySpace>::accessible) {
+        for (execution_index_type element = 0; element < lowered.elements; ++element)
+          kernel(element);
+        continue;
+      }
+#endif
+      Kokkos::parallel_for(unpack_kernel_label_, execution_policy(*execution_, 0, lowered.elements),
+                           kernel);
     }
   }
 
@@ -835,6 +876,7 @@ class HaloExchange {
   const schedule_type* schedule_ = nullptr;
   const ExecutionLane* lane_ = nullptr;
   ExecutionLane::ImmutableBorrow lane_borrow_;
+  const execution_space* execution_ = nullptr;
   HaloExchangeContext context_{};
   std::string execution_fence_label_ = "pops.halo-exchange.fence";
   std::vector<PeerStorage> peers_{};

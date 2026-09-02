@@ -243,9 +243,10 @@ class PreparedAmrGhostFill {
   using peer_plan_type = CoarseFineGhostPeerPlan<Dim>;
   using device_buffer_type = Kokkos::View<Real*, MemorySpace>;
   using pinned_buffer_type = Kokkos::View<Real*, Kokkos::SharedHostPinnedSpace>;
+  using execution_space = Kokkos::DefaultExecutionSpace;
   using execution_index_type = std::int64_t;
   using execution_policy =
-      Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace, Kokkos::IndexType<execution_index_type>>;
+      Kokkos::RangePolicy<execution_space, Kokkos::IndexType<execution_index_type>>;
 
   struct KernelJob {
     int lower[Dim]{};
@@ -318,6 +319,7 @@ class PreparedAmrGhostFill {
     std::vector<PeerStorage> peers{};
     std::vector<const Real*> coarse_storage{};
     std::vector<const Real*> bound_fine_storage{};
+    const execution_space* execution = nullptr;
     std::string exact_contract{};
     // Kokkos' no-argument fence creates its default profiling label at every invocation.  This
     // provider is resident, so keep the labels allocated during preparation and reuse them on
@@ -352,6 +354,8 @@ class PreparedAmrGhostFill {
               static_cast<int>(coarse_field.rank_space().linear_rank(fine_field.local_rank())))
         throw std::invalid_argument(
             "prepared AMR ghost fill lane differs from the field process-coordinate space");
+      ::pops::detail::ensure_kokkos_initialized();
+      execution = &::pops::detail::default_execution_space();
       coarse = &coarse_field;
       lane = &requested_lane;
       preparation = std::move(requested);
@@ -483,26 +487,35 @@ class PreparedAmrGhostFill {
       return result;
     }
 
+    void fence() const {
+      if constexpr (!std::is_same_v<execution_space, Kokkos::DefaultHostExecutionSpace>)
+        execution->fence(execution_fence_label);
+    }
+
     void pack(const std::vector<job_type>& jobs, device_buffer_type buffer) const {
       for (const job_type& job : jobs) {
         const KernelJob lowered = lower(job);
-#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
-        if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, MemorySpace>::accessible) {
-          // Serial has one synchronous worker.  Calling the resident kernel directly preserves
-          // the same ordinal transfer and avoids constructing a profiled RangePolicy per route.
-          const PackKernel kernel{buffer, coarse->fab_global(job.coarse_patch).view(), lowered};
+        const PackKernel kernel{buffer, coarse->fab_global(job.coarse_patch).view(), lowered};
+#if defined(KOKKOS_ENABLE_OPENMP) && defined(_OPENMP)
+        if constexpr (std::is_same_v<execution_space, Kokkos::OpenMP>) {
+#pragma omp parallel for schedule(static)
           for (execution_index_type element = 0; element < lowered.elements; ++element)
             kernel(element);
-        } else {
-          Kokkos::parallel_for(
-              pack_kernel_label, execution_policy(0, lowered.elements),
-              PackKernel{buffer, coarse->fab_global(job.coarse_patch).view(), lowered});
+          continue;
         }
-#else
-        Kokkos::parallel_for(
-            pack_kernel_label, execution_policy(0, lowered.elements),
-            PackKernel{buffer, coarse->fab_global(job.coarse_patch).view(), lowered});
 #endif
+#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
+        if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, MemorySpace>::accessible) {
+          // Host-resident storage is consumed synchronously.  Calling the resident kernel
+          // directly preserves the same ordinal transfer and avoids constructing a profiled
+          // RangePolicy per route.
+          for (execution_index_type element = 0; element < lowered.elements; ++element)
+            kernel(element);
+          continue;
+        }
+#endif
+        Kokkos::parallel_for(pack_kernel_label, execution_policy(*execution, 0, lowered.elements),
+                             kernel);
       }
     }
 
@@ -512,19 +525,24 @@ class PreparedAmrGhostFill {
         if (scratch_index == no_scratch)
           throw std::logic_error("prepared AMR ghost receive has no local scratch owner");
         const KernelJob lowered = lower(job);
-#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
-        if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, MemorySpace>::accessible) {
-          const UnpackKernel kernel{buffer, scratch[scratch_index].coarse.view(), lowered};
+        const UnpackKernel kernel{buffer, scratch[scratch_index].coarse.view(), lowered};
+#if defined(KOKKOS_ENABLE_OPENMP) && defined(_OPENMP)
+        if constexpr (std::is_same_v<execution_space, Kokkos::OpenMP>) {
+#pragma omp parallel for schedule(static)
           for (execution_index_type element = 0; element < lowered.elements; ++element)
             kernel(element);
-        } else {
-          Kokkos::parallel_for(unpack_kernel_label, execution_policy(0, lowered.elements),
-                               UnpackKernel{buffer, scratch[scratch_index].coarse.view(), lowered});
+          continue;
         }
-#else
-        Kokkos::parallel_for(unpack_kernel_label, execution_policy(0, lowered.elements),
-                             UnpackKernel{buffer, scratch[scratch_index].coarse.view(), lowered});
 #endif
+#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
+        if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, MemorySpace>::accessible) {
+          for (execution_index_type element = 0; element < lowered.elements; ++element)
+            kernel(element);
+          continue;
+        }
+#endif
+        Kokkos::parallel_for(unpack_kernel_label, execution_policy(*execution, 0, lowered.elements),
+                             kernel);
       }
     }
 
@@ -605,11 +623,11 @@ class PreparedAmrGhostFill {
         for (PeerStorage& peer : peers)
           if (peer.send != nullptr)
             pack(peer.send->jobs, peer.device_send);
-        if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, MemorySpace>::accessible) {
+        if constexpr (std::is_same_v<execution_space, Kokkos::DefaultHostExecutionSpace>) {
           // Host-resident MPI buffers are already allocated and accessible.  Wait once for all
           // pack kernels, then copy their bytes directly instead of constructing a deep_copy
           // profiling label for each peer.
-          ::pops::device_fence(execution_fence_label);
+          fence();
           for (PeerStorage& peer : peers)
             if (peer.send != nullptr)
               std::copy_n(peer.device_send.data(), peer.device_send.extent(0),
@@ -617,9 +635,9 @@ class PreparedAmrGhostFill {
         } else {
           for (PeerStorage& peer : peers)
             if (peer.send != nullptr)
-              Kokkos::deep_copy(peer.host_send, peer.device_send);
+              Kokkos::deep_copy(*execution, peer.host_send, peer.device_send);
         }
-        ::pops::device_fence(execution_fence_label);
+        fence();
       } catch (...) {
         staging_failure = 1;
       }
@@ -640,7 +658,7 @@ class PreparedAmrGhostFill {
         for (PeerStorage& peer : peers)
           if (peer.receive != nullptr)
             unpack(peer.receive->jobs, peer.device_receive);
-        ::pops::device_fence(execution_fence_label);
+        fence();
       } catch (...) {
         unpack_failure = 1;
       }
@@ -736,7 +754,7 @@ class PreparedAmrGhostFill {
 
       long copy_failure = 0;
       try {
-        if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, MemorySpace>::accessible) {
+        if constexpr (std::is_same_v<execution_space, Kokkos::DefaultHostExecutionSpace>) {
           for (PeerStorage& peer : peers)
             if (peer.receive != nullptr)
               std::copy_n(peer.host_receive.data(), peer.host_receive.extent(0),
@@ -744,9 +762,9 @@ class PreparedAmrGhostFill {
         } else {
           for (PeerStorage& peer : peers)
             if (peer.receive != nullptr)
-              Kokkos::deep_copy(peer.device_receive, peer.host_receive);
+              Kokkos::deep_copy(*execution, peer.device_receive, peer.host_receive);
         }
-        ::pops::device_fence(execution_fence_label);
+        fence();
       } catch (...) {
         copy_failure = 1;
       }
@@ -768,7 +786,7 @@ class PreparedAmrGhostFill {
                   "prepared AMR ghost interpolation was not rebound to its destination");
             for_each_cell(slot.transfer->destination_region(), *slot.transfer);
           }
-        ::pops::device_fence(execution_fence_label);
+        fence();
       } catch (...) {
         publication_failure = 1;
       }

@@ -238,13 +238,13 @@ class CellTemporalLevelRuntime {
         throw std::logic_error("cell-local AMR evaluation lost its local face fluxes");
       if constexpr (std::is_same_v<MemorySpace, Kokkos::HostSpace>)
         // The resident direct copies below read completed face-flux kernels from the host.
-        device_fence();
+        same_level_cell_temporal_detail::resident_execution_fence();
       for (int axis = 0; axis < Dim; ++axis) {
         field_type& destination = *fluxes[static_cast<std::size_t>(axis)];
         for (std::size_t local = 0; local < destination.local_size(); ++local)
           copy_face_axis_(axis, evaluation.integrated_face_fluxes[local], destination.fab(local));
       }
-      device_fence();
+      same_level_cell_temporal_detail::resident_execution_fence();
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -294,7 +294,7 @@ class CellTemporalLevelRuntime {
       for (int axis = 0; axis < Dim; ++axis)
         pops::scale(integrated_flux_[route][static_cast<std::size_t>(axis)], Real(1) / interval_dt);
     }
-    device_fence();
+    same_level_cell_temporal_detail::resident_execution_fence();
   }
 
   void finalize_same_level_cell_flux_metadata() {
@@ -346,7 +346,8 @@ class CellTemporalLevelRuntime {
           // transfer itself can remain allocation-free.
           std::copy_n(source_storage.data(), source_storage.extent(0), destination_storage.data());
         } else {
-          Kokkos::deep_copy(destination_storage, source_storage);
+          Kokkos::deep_copy(::pops::detail::default_execution_space(), destination_storage,
+                            source_storage);
         }
         return;
       }

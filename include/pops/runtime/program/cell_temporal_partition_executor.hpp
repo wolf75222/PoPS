@@ -407,6 +407,13 @@ class PreparedBatchedCellTemporalExecutor {
         lane_borrow_(lane.borrow_immutably()),
         provider_(std::move(provider)),
         partition_() {
+#if defined(POPS_HAS_KOKKOS)
+    // The prepared executor is itself resident for the lifetime of the installed program.  Keep
+    // one default execution-space instance for the non-host path; constructing a temporary
+    // RangePolicy(0, n) otherwise constructs a fresh OpenMP/Cuda execution space for every rung.
+    ::pops::detail::ensure_kokkos_initialized();
+    execution_ = &::pops::detail::default_execution_space();
+#endif
     require_exact_lane_();
     std::optional<BatchedCellTemporalPartition> prepared_partition;
     std::optional<cell_temporal_detail::FixedCollectiveEnvelope> plan_envelope;
@@ -912,23 +919,33 @@ class PreparedBatchedCellTemporalExecutor {
 #if defined(POPS_HAS_KOKKOS)
       using Policy =
           Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace, Kokkos::IndexType<std::int64_t>>;
-      const Policy policy(0, static_cast<std::int64_t>(batch.local_count));
-      if constexpr (std::is_same_v<typename Kokkos::DefaultExecutionSpace::memory_space,
-                                   Kokkos::HostSpace>) {
-        Kokkos::View<std::uint64_t, Kokkos::HostSpace> aggregate_view(&aggregate);
-        // Host parallel_reduce constructs an internal long fence label per batch.  The outcome
-        // aggregate is an exact MAX, so a public atomic_max on this unmanaged scalar preserves
-        // the disposition ordering without allocating on the accepted step.
-        Kokkos::parallel_for(
-            stage_flux_kernel_label_, policy, KOKKOS_LAMBDA(const std::int64_t local_index) {
-              Kokkos::atomic_max(&aggregate_view(), kernel.evaluate(local_index));
-            });
-        ::pops::device_fence(stage_flux_fence_label_);
-      } else {
+#if defined(KOKKOS_ENABLE_OPENMP) && defined(_OPENMP)
+      if constexpr (std::is_same_v<Kokkos::DefaultExecutionSpace, Kokkos::OpenMP>) {
+        std::uint64_t host_aggregate = aggregate;
+#pragma omp parallel for reduction(max : host_aggregate) schedule(static)
+        for (std::int64_t local_index = 0;
+             local_index < static_cast<std::int64_t>(batch.local_count); ++local_index)
+          host_aggregate = std::max(host_aggregate, kernel.evaluate(local_index));
+        aggregate = host_aggregate;
+      } else
+#endif
+#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
+      {
+        // Host-resident candidates are consumed immediately by the enclosing lane.  The direct
+        // Serial loop is the exact MAX reduction and avoids constructing both a Kokkos policy and
+        // its profiled launch/fence state for every (usually tiny) rung batch.
+        for (std::int64_t local_index = 0;
+             local_index < static_cast<std::int64_t>(batch.local_count); ++local_index)
+          aggregate = std::max(aggregate, kernel.evaluate(local_index));
+      }
+#else
+      {
+        const Policy policy(*execution_, 0, static_cast<std::int64_t>(batch.local_count));
         Kokkos::parallel_reduce(stage_flux_kernel_label_, policy, kernel,
                                 Kokkos::Max<std::uint64_t>(aggregate));
+        execution_->fence(stage_flux_fence_label_);
       }
-      device_fence();
+#endif
 #else
       for (std::size_t index = 0; index < batch.local_count; ++index)
         kernel(static_cast<std::int64_t>(index), aggregate);
@@ -980,6 +997,9 @@ class PreparedBatchedCellTemporalExecutor {
 
   const ExecutionLane* lane_ = nullptr;
   ExecutionLane::ImmutableBorrow lane_borrow_;
+#if defined(POPS_HAS_KOKKOS)
+  const Kokkos::DefaultExecutionSpace* execution_ = nullptr;
+#endif
   // Kokkos accepts a ``const std::string&`` launch label.  Retaining it in the prepared executor
   // avoids constructing an allocating temporary on every rung batch.
   std::string stage_flux_kernel_label_{"pops_cell_temporal_stage_flux_batch"};
