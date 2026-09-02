@@ -167,7 +167,8 @@ configured_hierarchy_tensor_storage_receipt(std::span<const std::uint64_t> level
       candidate.configured_request_contract =
           hierarchy_tensor_detail::configured_storage_request_contract(configured);
       candidate.configured_limit_contract =
-          hierarchy_tensor_detail::configured_storage_limit_contract(configured, limit);
+          hierarchy_tensor_detail::configured_storage_limit_contract_from_request_contract<Dim>(
+              candidate.configured_request_contract, limit);
     }
     if (!candidate.active && !candidate.is_canonical_inactive())
       throw std::logic_error("AMR hierarchy tensor inactive storage receipt is non-canonical");

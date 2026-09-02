@@ -245,17 +245,27 @@ std::string configured_storage_request_contract(
 }
 
 template <int Dim>
-std::string configured_storage_limit_contract(
-    const HierarchyTensorConfiguredStorageRequest<Dim>& request,
-    const HierarchyTensorConfiguredStorageLimit& limit) {
+std::string configured_storage_limit_contract_from_request_contract(
+    std::string_view request_contract, const HierarchyTensorConfiguredStorageLimit& limit) {
+  if (request_contract.empty())
+    throw std::invalid_argument(
+        "hierarchy tensor configured storage limit requires an exact request contract");
   ExactContractBuilder contract;
   contract.text("pops.hierarchy.tensor-configured-storage-limit")
       .scalar(std::uint32_t{1})
       .scalar(std::int32_t{Dim})
-      .bytes(configured_storage_request_contract(request))
+      .bytes(request_contract)
       .scalar(static_cast<std::uint8_t>(limit.state))
       .scalar(limit.maximum_bytes);
   return std::move(contract).release();
+}
+
+template <int Dim>
+std::string configured_storage_limit_contract(
+    const HierarchyTensorConfiguredStorageRequest<Dim>& request,
+    const HierarchyTensorConfiguredStorageLimit& limit) {
+  return configured_storage_limit_contract_from_request_contract<Dim>(
+      configured_storage_request_contract(request), limit);
 }
 
 template <int Dim>
