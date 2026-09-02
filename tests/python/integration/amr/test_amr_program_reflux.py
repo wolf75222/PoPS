@@ -2,7 +2,7 @@
 """ADC-639: conservative reflux for a whole-system compiled Program on a genuinely two-level AMR
 hierarchy.
 
-The synchronous per-level Program driver (AmrProgramContext) advances every level with the same dt, then
+The synchronous per-level Program driver (ProgramExecutionServices) advances every level with the same dt, then
 couples fine->coarse by average_down THEN conservative REFLUX at the coarse-fine interface. The per-level
 effective flux is captured through the Program's OWN linear combination in the canonical face ledger
 and reconciled by ``PreparedAmrSubcycleTransition<Dim>`` at level sync (``amr_subcycling.hpp``).

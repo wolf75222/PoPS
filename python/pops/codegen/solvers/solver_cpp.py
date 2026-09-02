@@ -61,7 +61,7 @@ class _SolverCppLowering:
     The walker mirrors the proven ``pops.time.Program`` op lowering for the solver subset
     (``state`` / ``linear_source`` / ``reduce`` (norm2/dot) / ``apply`` / ``linear_combine`` /
     ``scalar_op`` / ``compare`` / ``logical_and`` / ``while``) but emits a free function that
-    is NOT bound to a ProgramContext / model: the matrix-free operator is the template
+    is NOT bound to a ProgramExecutionServices / model: the matrix-free operator is the template
     parameter ``A`` and the vector operands are exact-ranked
     ``pops::MultiFab<pops::kNativeDimension>`` scratch fields combined with the shared
     ``pops::dot`` / ``pops::saxpy`` / ``pops::lincomb`` primitives. It is a self-contained codegen

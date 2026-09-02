@@ -79,18 +79,52 @@ class Profiler {
     return *this;
   }
 
-  Profiler(Profiler&& other) {
+  Profiler(Profiler&& other) noexcept {
     std::lock_guard<std::mutex> lock(other.mutex_);
     move_from_unlocked_(std::move(other));
   }
 
-  Profiler& operator=(Profiler&& other) {
+  Profiler& operator=(Profiler&& other) noexcept {
     if (this == &other) {
       return *this;
     }
     std::scoped_lock lock(mutex_, other.mutex_);
     move_from_unlocked_(std::move(other));
     return *this;
+  }
+
+  /// Refresh a bind-frozen profiler image without replacing its maps/vectors. Scope and counter
+  /// identities are immutable once the Program has been primed; a late identity or an undersized
+  /// string buffer is rejected instead of allocating in the accepted-step snapshot callback.
+  void copy_from_preallocated(const Profiler& source) {
+    if (this == &source)
+      return;
+    std::scoped_lock lock(mutex_, source.mutex_);
+    if (order_.size() != source.order_.size() || entries_.size() != source.entries_.size() ||
+        counter_order_.size() != source.counter_order_.size() ||
+        counters_.size() != source.counters_.size())
+      throw std::logic_error("Program profiler identity set changed after preparation");
+    for (std::size_t index = 0; index < source.order_.size(); ++index) {
+      if (order_[index] != source.order_[index])
+        throw std::logic_error("Program profiler scope order changed after preparation");
+    }
+    for (const auto& [name, entry] : source.entries_) {
+      const auto found = entries_.find(name);
+      if (found == entries_.end())
+        throw std::logic_error("Program profiler scope identity changed after preparation");
+      found->second = entry;
+    }
+    for (std::size_t index = 0; index < source.counter_order_.size(); ++index) {
+      if (counter_order_[index] != source.counter_order_[index])
+        throw std::logic_error("Program profiler counter order changed after preparation");
+    }
+    for (const auto& [name, value] : source.counters_) {
+      const auto found = counters_.find(name);
+      if (found == counters_.end())
+        throw std::logic_error("Program profiler counter identity changed after preparation");
+      found->second = value;
+    }
+    enabled_.store(source.enabled_.load(std::memory_order_relaxed), std::memory_order_relaxed);
   }
 
   /// Fully allocated rollback image. The live profiler lock is acquired during preparation and
@@ -159,13 +193,19 @@ class Profiler {
 
   bool enabled() const noexcept { return enabled_.load(std::memory_order_acquire); }
 
-  // Drop all accumulated timings and counters (kept across enable/disable; cleared explicitly).
+  // Drop accumulated values while retaining the bind-primed identities.  Accepted-step snapshots
+  // copy the profiler into an already allocated image: clearing the maps here would make the next
+  // snapshot either allocate or reject a perfectly valid reset as an identity drift.
   void reset() {
     std::lock_guard<std::mutex> lock(mutex_);
-    order_.clear();
-    entries_.clear();
-    counters_.clear();
-    counter_order_.clear();
+    for (auto& [name, entry] : entries_) {
+      (void)name;
+      entry = {};
+    }
+    for (auto& [name, value] : counters_) {
+      (void)name;
+      value = 0;
+    }
   }
 
   // Record one timed sample of `name`, in seconds. No-op when disabled.

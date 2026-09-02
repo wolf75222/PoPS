@@ -96,7 +96,7 @@ class AmrFieldNewtonKrylovWorkspace final {
     auto&& gauge_provider = apply_gauge;
     gauge_provider(iterate_);
     residual_provider(iterate_, residual_, 0);
-    Kokkos::fence();
+    ::pops::device_fence();
 
     SolveReport report;
     report.evaluations = 1;
@@ -149,7 +149,7 @@ class AmrFieldNewtonKrylovWorkspace final {
         lincomb_(trial_, Real(1), iterate_, step, correction_);
         gauge_provider(trial_);
         residual_provider(trial_, trial_residual_, iteration + 1);
-        Kokkos::fence();
+        ::pops::device_fence();
         ++report.evaluations;
         const Real trial_norm = norm_(trial_residual_, lane);
         if (finite_(trial_norm) &&
@@ -220,7 +220,7 @@ class AmrFieldNewtonKrylovWorkspace final {
       bool cycle_converged = false;
       for (int column = 0; column < cycle; ++column) {
         apply_jvp(iterate, basis_[static_cast<std::size_t>(column)], work_, nonlinear_iteration);
-        Kokkos::fence();
+        ::pops::device_fence();
         ++result.evaluations;
         for (int row = 0; row <= column; ++row) {
           h_(row, column) = dot_(work_, basis_[static_cast<std::size_t>(row)], lane);
@@ -270,7 +270,7 @@ class AmrFieldNewtonKrylovWorkspace final {
         return result;
       }
       apply_jvp(iterate, correction_, image_, nonlinear_iteration);
-      Kokkos::fence();
+      ::pops::device_fence();
       ++result.evaluations;
       lincomb_(linear_residual_, Real(1), rhs, Real(-1), image_);
       beta = norm_(linear_residual_, lane);
@@ -355,7 +355,7 @@ class AmrFieldNewtonKrylovWorkspace final {
       throw std::invalid_argument("AMR field Newton external hierarchy size differs");
     for (std::size_t level = 0; level < source.size(); ++level)
       copy_field_(source[level], *destination[level]);
-    Kokkos::fence();
+    ::pops::device_fence();
   }
 
   static void set_zero_(hierarchy_type& fields) {

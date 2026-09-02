@@ -73,7 +73,7 @@ class FieldNewtonKrylovWorkspace final {
     authenticate_(iterate, "iterate");
     gauge_provider(iterate);
     residual_provider(iterate, residual_, 0);
-    Kokkos::fence();
+    ::pops::device_fence();
 
     SolveReport report;
     report.evaluations = 1;
@@ -125,7 +125,7 @@ class FieldNewtonKrylovWorkspace final {
         lincomb(trial_, Real(1), iterate, step, correction_);
         gauge_provider(trial_);
         residual_provider(trial_, trial_residual_, iteration + 1);
-        Kokkos::fence();
+        ::pops::device_fence();
         ++report.evaluations;
         const Real trial_norm = norm_(trial_residual_, lane);
         if (finite_(trial_norm) &&
@@ -195,7 +195,7 @@ class FieldNewtonKrylovWorkspace final {
       bool cycle_converged = false;
       for (int column = 0; column < cycle; ++column) {
         apply_jvp(iterate, basis_[static_cast<std::size_t>(column)], work_, nonlinear_iteration);
-        Kokkos::fence();
+        ::pops::device_fence();
         ++result.evaluations;
         for (int row = 0; row <= column; ++row) {
           h_(row, column) = static_cast<Real>(
@@ -248,7 +248,7 @@ class FieldNewtonKrylovWorkspace final {
         return result;
       }
       apply_jvp(iterate, correction_, image_, nonlinear_iteration);
-      Kokkos::fence();
+      ::pops::device_fence();
       ++result.evaluations;
       lincomb(linear_residual_, Real(1), rhs, Real(-1), image_);
       beta = norm_(linear_residual_, lane);

@@ -158,10 +158,10 @@ def test_codegen_exports_only_validated_selective_replay_ring_authorities():
         selective.value("U_next", 1.0 * tracked.n, at=tracked.next.point),
     )
     source = emit_cpp_program(selective)
-    assert "pops_program_history_replay_authority_count() { return 1; }" in source
-    assert 'case 0: return "plasma.U";' in source
-    assert "pops_program_history_replay_authority_depth" in source
-    assert "case 0: return 4;" in source
+    assert "kProgramCandidateHistoryAuthorities" in source
+    assert '"plasma.U"' in source
+    assert "ProgramHistoryAuthorityRecord" in source
+    assert "{kProgramCandidateString" in source
 
     dense = adctime.Program("dense_authority")
     dense_state = typed_state(dense, "plasma", state_name="U")
@@ -171,8 +171,8 @@ def test_codegen_exports_only_validated_selective_replay_ring_authorities():
         dense.value("U_next", 1.0 * dense_state.n, at=dense_state.next.point),
     )
     dense_source = emit_cpp_program(dense)
-    assert "pops_program_history_replay_authority_count() { return 0; }" in dense_source
-    assert 'case 0: return "plasma.U";' not in dense_source
+    assert "kProgramCandidateHistoryAuthorities{}" in dense_source
+    assert '"plasma.U"' not in dense_source
 
 
 def test_load_bearing_lag_refuses_single_anchor_replay():
@@ -263,13 +263,13 @@ def test_cross_block_commit_is_rejected_before_replay_validation():
         P.commit(U.next, P.value("U_next", 1.0 * W.n, at=U.next.point))
 
 
-def test_dense_policy_never_refused_even_with_unknown_op():
-    """Dense needs no replay, so the determinism scan never refuses it."""
+def test_dense_policy_never_refused_even_with_unknown_deterministic_op():
+    """Dense needs no replay, so the history determinism scan never refuses it."""
     from pops._report import ReportTree
     from pops.time._history.validation import validate_history_persistence
 
     class FakeOp:
-        op = "some_future_stochastic_op"
+        op = "some_future_deterministic_op"
         attrs = {}
 
     class FakeProg:
@@ -282,6 +282,20 @@ def test_dense_policy_never_refused_even_with_unknown_op():
     )
     report = validate_history_persistence(FakeProg(), root)
     assert report.ok, str(report)
+
+
+def test_program_validation_refuses_stochastic_op_without_rng_provider_even_for_dense_history():
+    from pops.time._program.stochastic_validation import validate_stochastic_authority
+
+    class FakeOp:
+        op = "rng_source"
+        attrs = {}
+
+    class FakeProgram:
+        _values = [FakeOp()]
+
+    with pytest.raises(ValueError, match="transactional RNG provider"):
+        validate_stochastic_authority(FakeProgram())
 
 
 def test_non_deterministic_op_refuses_non_dense_policy_verbatim():

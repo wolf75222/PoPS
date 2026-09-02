@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[3]
 UNIFORM_RECOVERY = ROOT / "include/pops/runtime/recovery/uniform_recovery_consumer.hpp"
 GENERATED_UNIFORM = ROOT / "include/pops/runtime/builders/compiled/generated_system_block.hpp"
 SYSTEM_FIELDS = ROOT / "src/runtime/system/system_fields.cpp"
-PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
+PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_execution_services.hpp"
 FLUX_FAILURE = ROOT / "include/pops/numerics/fv/flux_failure.hpp"
 FACE_FLUX = ROOT / "include/pops/numerics/spatial/primitives/face_flux.hpp"
 ND_RECONSTRUCTION = ROOT / "include/pops/numerics/spatial/nd/reconstruction.hpp"
@@ -129,29 +129,29 @@ def test_program_terminal_state_publication_validates_every_candidate_before_fir
     validation = commit.index("validate_program_state_publication_candidate_(")
     assert commit.count("validate_program_state_publication_candidate_(") == 1
     validation_boundary = commit.index(
-        '"ProgramContext commit mask classification differs between ranks"', validation
+        '"ProgramExecutionServices commit mask classification differs between ranks"', validation
     )
-    snapshots = commit.index("std::vector<std::optional<field_type>> snapshots;", validation_boundary)
+    snapshots = commit.index("workspace.commit_snapshots[block]", validation_boundary)
     masked_copy = commit.index("copy_active_valid_cells_(", snapshots)
     fence = commit.index("device_fence();", masked_copy)
     staging_boundary = commit.index(
         "if (all_reduce_max(staging_error ? 1L : 0L, lane) != 0)", fence
     )
-    final_moves = [
+    final_copies = [
         match.start()
         for match in re.finditer(
-            r"\*\w+\[[^]]+\]\s*=\s*std::move\(\*\w+\[[^]]+\]\)", commit
+            r"copy_field_storage_\(workspace\.commit_snapshots\["
+            r"workspace\.commit_runtime_blocks\[candidate\]\],\s*"
+            r"\*workspace\.commit_targets\[candidate\]\)",
+            commit,
         )
     ]
-    masked_snapshot = re.search(
-        r"\.emplace\(\s*\*\w+\[[^]]+\]\s*\)\s*;\s*copy_active_valid_cells_\(",
-        commit[snapshots:fence],
-    )
 
     assert validation < validation_boundary < snapshots < masked_copy < fence < staging_boundary
-    assert masked_snapshot
-    assert final_moves
-    assert all(staging_boundary < move for move in final_moves)
+    assert "bind_commit_images" in uniform
+    assert "std::vector<field_type> commit_snapshots;" in uniform
+    assert final_copies
+    assert all(staging_boundary < copy for copy in final_copies)
 
 
 def test_nd_face_reconstruction_consumes_typed_conversion_before_flux_evaluation():

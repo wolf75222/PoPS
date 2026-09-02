@@ -1,11 +1,14 @@
 // Selective history persistence authority (ADC-626). Rebuilding omitted Interval / Revolve slots
 // executes scientific code and is therefore reserved for a loader-authenticated Program artifact
-// whose metadata names the exact `(ring, depth)` pair. A direct install_program_step lambda remains
-// useful for ordinary low-level stepping tests, but must fail closed for selective replay. Dense
-// persistence stores every slot and remains a strict no-op that needs no replay authority.
+// whose metadata names the exact `(ring, depth)` pair. The fixture below installs a real ABI-v5
+// artifact with an exact block table and no history-replay authority; selective replay must fail
+// closed. Dense persistence stores every slot and remains a strict no-op that needs no replay
+// authority.
 
 #include <gtest/gtest.h>
 
+#include "native_dso_compiler.hpp"
+#include "program_v5_fixture.hpp"
 #include <pops/mesh/storage/mf_arith.hpp>  // saxpy / lincomb
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
@@ -13,6 +16,7 @@
 #include <pops/runtime/system.hpp>
 
 #include <limits>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -66,25 +70,32 @@ void register_state_history(NativeSystem& s, const std::string& ring, int depth,
                      "test.space", "test.clock", "test.exact");
 }
 
-// Install a deterministic macro-step closure with the exact compiled keep_history phase: snapshot
-// U^n first, advance the qualified owner by +inc, then rotate after the commit. The dt ledger therefore travels
-// with its starting sample (the outgoing interval toward the newer sample). `inc` scales with dt so
-// a variable-dt run with multiple independent gaps proves that exact provenance. The closure
-// captures &s; s must outlive it.
-void install_ramp_program(NativeSystem& s, const std::string& ring, double rate, int owner = 0,
-                          int* executed_steps = nullptr) {
-  NativeSystem* self = &s;
-  self->install_program_step([self, ring, rate, owner, executed_steps](double dt) {
-    if (executed_steps != nullptr)
-      ++*executed_steps;
-    NativeField& U = self->block_state(owner);
-    self->store_history(ring, U);
-    // Advance: U += rate*dt (a deterministic, dt-dependent conservative increment on every component).
-    NativeField bump = U;  // same layout
-    bump.set_val(Real(rate) * Real(dt));
-    pops::saxpy(U, Real(1), bump);
-    self->rotate_histories();
-  });
+// Compile and install a deterministic ABI-v5 Program: snapshot U^n first, advance the qualified
+// owner by +inc, then rotate after the commit. The dt ledger therefore travels with its starting
+// sample (the outgoing interval toward the newer sample). `inc` scales with dt so a variable-dt
+// run with multiple independent gaps proves that exact provenance. The artifact exports no
+// history-replay authority, which is the property exercised by this test suite.
+void install_ramp_program(NativeSystem& s, const std::string& ring, int depth, double rate,
+                          int owner = 0) {
+  static std::size_t fixture_index = 0;
+  const std::vector<std::string> blocks =
+      owner == 0 ? std::vector<std::string>{"gas"} : std::vector<std::string>{"first", "second"};
+  const std::string prefix = std::string(POPS_TEST_TMPDIR) + "/checkpoint_history_policy_" +
+                             std::to_string(++fixture_index);
+  const std::string source_path = prefix + ".cpp";
+  const std::string library_path = prefix + ".so";
+  {
+    std::ofstream source(source_path);
+    if (!source)
+      throw std::runtime_error("cannot create ABI-v5 checkpoint fixture source");
+    source << pops::test::program_v5::ramp_program_source(ring, depth, rate, owner, blocks);
+  }
+  const auto compiled = pops::test::native_dso::compile_shared(source_path, library_path);
+  if (!compiled.ok) {
+    pops::test::native_dso::report_compile_failure("test_checkpoint_history_policy", compiled);
+    throw std::runtime_error("ABI-v5 checkpoint fixture compilation failed");
+  }
+  s.install_program(library_path);
 }
 
 NativeSystemConfig make_cfg() {
@@ -100,7 +111,7 @@ NativeSystemConfig make_cfg() {
 
 }  // namespace
 
-TEST(CheckpointHistoryPolicy, DirectStepCannotAuthorizeIntervalOrRevolveSelectiveReplay) {
+TEST(CheckpointHistoryPolicy, ArtifactWithoutReplayAuthorityRefusesSelectiveReplay) {
   kokkos();
   const NativeSystemConfig cfg = make_cfg();
   const std::string ring = "state_prev";
@@ -111,8 +122,7 @@ TEST(CheckpointHistoryPolicy, DirectStepCannotAuthorizeIntervalOrRevolveSelectiv
     NativeSystem system(cfg);
     add_gas(system);
     register_state_history(system, ring, depth);
-    int executed_steps = 0;
-    install_ramp_program(system, ring, 3.0, /*owner=*/0, &executed_steps);
+    install_ramp_program(system, ring, depth, 3.0, /*owner=*/0);
     const std::vector<double> token = system.history_global(ring, 0);
     for (const int slot : stored)
       system.restore_history(ring, slot, token);
@@ -123,12 +133,12 @@ TEST(CheckpointHistoryPolicy, DirectStepCannotAuthorizeIntervalOrRevolveSelectiv
 
     try {
       (void)system.rebuild_history_slots(ring, stored);
-      FAIL() << "a direct Program step forged selective replay authority";
+      FAIL() << "an artifact without replay authority forged selective replay authority";
     } catch (const std::runtime_error& error) {
       EXPECT_NE(std::string(error.what()).find("validated native authority"), std::string::npos);
       EXPECT_NE(std::string(error.what()).find("Dense()"), std::string::npos);
     }
-    EXPECT_EQ(executed_steps, 0);
+    EXPECT_EQ(system.program_diagnostics().count("test.program.v5.ramp.executed"), 0u);
     EXPECT_EQ(system.state_global("gas"), live_before);
   }
 }
@@ -141,8 +151,7 @@ TEST(CheckpointHistoryPolicy, DenseIsANoOpWithoutArtifactReplayAuthority) {
   NativeSystem system(cfg);
   add_gas(system);
   register_state_history(system, ring, depth);
-  int executed_steps = 0;
-  install_ramp_program(system, ring, 2.0, /*owner=*/0, &executed_steps);
+  install_ramp_program(system, ring, depth, 2.0, /*owner=*/0);
   const std::vector<double> token = system.history_global(ring, 0);
   const std::vector<int> stored = {0, 1, 2, 3, 4};
   for (const int slot : stored)
@@ -151,11 +160,11 @@ TEST(CheckpointHistoryPolicy, DenseIsANoOpWithoutArtifactReplayAuthority) {
   const std::vector<double> live_before = system.state_global("gas");
 
   EXPECT_EQ(system.rebuild_history_slots(ring, stored), 0);
-  EXPECT_EQ(executed_steps, 0);
+  EXPECT_EQ(system.program_diagnostics().count("test.program.v5.ramp.executed"), 0u);
   EXPECT_EQ(system.state_global("gas"), live_before);
 }
 
-TEST(CheckpointHistoryPolicy, VariableDtDirectStepStillLacksArtifactReplayAuthority) {
+TEST(CheckpointHistoryPolicy, VariableDtArtifactStillLacksReplayAuthority) {
   kokkos();
   const NativeSystemConfig cfg = make_cfg();
   const std::string ring = "state_prev";
@@ -163,8 +172,7 @@ TEST(CheckpointHistoryPolicy, VariableDtDirectStepStillLacksArtifactReplayAuthor
   NativeSystem system(cfg);
   add_gas(system);
   register_state_history(system, ring, depth);
-  int executed_steps = 0;
-  install_ramp_program(system, ring, 2.0, /*owner=*/0, &executed_steps);
+  install_ramp_program(system, ring, depth, 2.0, /*owner=*/0);
   const std::vector<int> stored = {0, 2, 4};
   const std::vector<double> token = system.history_global(ring, 0);
   for (const int slot : stored)
@@ -181,7 +189,7 @@ TEST(CheckpointHistoryPolicy, VariableDtDirectStepStillLacksArtifactReplayAuthor
   } catch (const std::runtime_error& error) {
     EXPECT_NE(std::string(error.what()).find("validated native authority"), std::string::npos);
   }
-  EXPECT_EQ(executed_steps, 0);
+  EXPECT_EQ(system.program_diagnostics().count("test.program.v5.ramp.executed"), 0u);
   EXPECT_EQ(system.state_global("gas"), live_before);
 }
 
@@ -195,8 +203,7 @@ TEST(CheckpointHistoryPolicy, QualifiedNonzeroOwnerStillRequiresArtifactReplayAu
   add_gas_block(system, "second");
   system.set_poisson("charge_density", "cartesian_cg");
   register_state_history(system, ring, depth, /*owner=*/1);
-  int executed_steps = 0;
-  install_ramp_program(system, ring, 2.0, /*owner=*/1, &executed_steps);
+  install_ramp_program(system, ring, depth, 2.0, /*owner=*/1);
   const std::vector<int> stored = {0, 2, 4};
   const std::vector<double> token = system.history_global(ring, 0);
   for (const int slot : stored)
@@ -213,7 +220,7 @@ TEST(CheckpointHistoryPolicy, QualifiedNonzeroOwnerStillRequiresArtifactReplayAu
   } catch (const std::runtime_error& error) {
     EXPECT_NE(std::string(error.what()).find("validated native authority"), std::string::npos);
   }
-  EXPECT_EQ(executed_steps, 0);
+  EXPECT_EQ(system.program_diagnostics().count("test.program.v5.ramp.executed"), 0u);
   EXPECT_EQ(system.state_global("first"), first_before);
   EXPECT_EQ(system.state_global("second"), second_before);
 }
@@ -226,7 +233,7 @@ TEST(CheckpointHistoryPolicy, SelectiveReplayRefusesNonDefaultProgramCadence) {
   NativeSystem system(cfg);
   add_gas(system);
   register_state_history(system, ring, depth);
-  install_ramp_program(system, ring, 1.0);
+  install_ramp_program(system, ring, depth, 1.0);
   system.set_program_cadence(/*substeps=*/2, /*stride=*/3);
 
   const std::vector<double> token = system.history_global(ring, 0);
@@ -251,8 +258,7 @@ TEST(CheckpointHistoryPolicy, InvalidOutgoingDtFailsBeforeSelectiveReplayMutatio
   NativeSystem system(cfg);
   add_gas(system);
   register_state_history(system, ring, depth);
-  int executed_steps = 0;
-  install_ramp_program(system, ring, 1.0, /*owner=*/0, &executed_steps);
+  install_ramp_program(system, ring, depth, 1.0, /*owner=*/0);
 
   EXPECT_THROW(system.restore_history_slot_dt(ring, 0, std::numeric_limits<double>::quiet_NaN()),
                std::runtime_error);
@@ -270,7 +276,7 @@ TEST(CheckpointHistoryPolicy, InvalidOutgoingDtFailsBeforeSelectiveReplayMutatio
   const std::vector<double> slot_before = system.history_global(ring, 0);
 
   EXPECT_THROW((void)system.rebuild_history_slots(ring, {0, 2}), std::runtime_error);
-  EXPECT_EQ(executed_steps, 0);
+  EXPECT_EQ(system.program_diagnostics().count("test.program.v5.ramp.executed"), 0u);
   EXPECT_EQ(system.state_global("gas"), live_before);
   EXPECT_EQ(system.history_global(ring, 0), slot_before);
 }
@@ -283,7 +289,7 @@ TEST(CheckpointHistoryPolicy, RebuildRefusesMissingOldestSlot) {
   const int depth = 5;
   NativeSystem s(cfg);
   add_gas(s);
-  install_ramp_program(s, ring, 1.0);
+  install_ramp_program(s, ring, depth, 1.0);
   register_state_history(s, ring, depth);
   s.restore_history(ring, 0, s.history_global(ring, 0));  // register + a token slot
   s.set_history_initialized(ring, true);
@@ -310,7 +316,7 @@ TEST(CheckpointHistoryPolicy, RebuildRefusesMissingNewestSlot) {
   NativeSystem s(cfg);
   add_gas(s);
   register_state_history(s, ring, depth);
-  install_ramp_program(s, ring, 1.0);
+  install_ramp_program(s, ring, depth, 1.0);
   const std::vector<double> token = s.history_global(ring, 0);
   s.restore_history(ring, 2, token);
   s.restore_history(ring, 4, token);

@@ -4,7 +4,7 @@
 `emit_cpp_program` now LOWERS the Phase-4 IR ops -- ``source`` (a named ``m.source_term``),
 ``apply`` (LU for a named ``m.linear_source``) and typed ``Program.solve(LocalLinear(...))`` (an
 ``(I -/+ a*L) U = rhs`` system solved cell by cell via a dense per-cell inverse) -- reusing
-ProgramContext + for_each_cell + the existing
+ProgramExecutionServices + for_each_cell + the existing
 ``pops::detail::mat_inverse`` (no flux / solver reimplementation, no heap in the device kernel).
 
 (A) Codegen (pure Python, always runs): the generated C++ of a Lorentz local solve contains

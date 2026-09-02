@@ -67,7 +67,8 @@ def test_system_step_driver_is_the_exact_ranked_facade_not_a_parallel_authority(
     assert "p_->coupling_.coupled_frequencies" in runtime
     assert "p_->coupling_.dt_bounds" in runtime
     assert "dispatch_cadence_step(" in runtime
-    assert "if constexpr" not in runtime
+    assert "if constexpr (!std::is_same_v<Kokkos::DefaultExecutionSpace," in runtime
+    assert not re.search(r"if\s+constexpr\s*\([^{};]*\bDim\b", runtime, flags=re.DOTALL)
     assert not re.search(r"\bif\s*\(\s*Dim\s*(?:==|!=|<=|>=|<|>)", runtime)
     for legacy in ("SystemProgramDriver", "Box2D", "Array4"):
         assert legacy not in runtime

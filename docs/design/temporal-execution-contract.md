@@ -146,7 +146,7 @@ device exclusions fail collectively on the exact lane before a prepared state or
 `Program.cell_local_time(tick_denominator=..., rung=...)` now selects this bounded route explicitly.
 Generated AMR code accepts one exact Forward-Euler transport route per Program block, prepares the
 complete provider at an accepted boundary and installs
-`AmrProgramContext::advance_same_level_cell_temporal`.
+`ProgramExecutionServices::advance_same_level_cell_temporal`.
 The context routes checkpoint, attempt, commit and rollback through that sole executor; the ordinary
 hierarchy-global driver still refuses a cell-local image and never substitutes a global `dt`.
 Same-rank restart/regrid restores the numerical image and exact partition clocks. Because the
@@ -165,7 +165,7 @@ Offline envelope inspection authenticates only the integrity of a canonical chec
 a migration. The frozen release-v2 Uniform checkpoint predates the envelope and omits lifecycle
 identities, temporal state, consumer cursors, and field-provider state. The explicit
 `pops.codegen.checkpoint_migration` route can migrate exactly that frozen, store-all Uniform v2
-schema-4 mapping only when the caller supplies both a complete, separately authenticated current-v8
+schema-4 mapping only when the caller supplies both a complete, separately authenticated current-v9
 authority checkpoint and a reviewed mapping. The v2 source contains no auxiliary authority. The
 authority must carry an empty POPSAUX2 image natively attested by the installed specialization; the
 mapping pins the exact source and authority bytes, source ABI and Program hash, authority restart

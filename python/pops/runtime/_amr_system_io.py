@@ -141,7 +141,12 @@ class _AmrSystemIO(_AmrSystem):
             raise TypeError("AMR restart requires its exact prepared payload")
         from pops.runtime._amr_checkpoint_v3 import apply_v3
 
-        self._last_restart_report = apply_v3(self, self._s, prepared.codec)
+        # apply_v3 performs an ordered sequence of accepted-state reads and cross-topology
+        # mutations under the native restart writer.  Name that writer-owned capability for the
+        # complete apply window; plain public readers remain rejected on the same thread and all
+        # foreign readers remain blocked until native finalize/rollback releases the writer.
+        with self._s._provisional_read_scope():
+            self._last_restart_report = apply_v3(self, self._s, prepared.codec)
         self._last_restart_identity = prepared.restart_identity
         if prepared.codec.hierarchy_mode == "regrid_on_restart":
             return _AMRRegridRestartEvidence(

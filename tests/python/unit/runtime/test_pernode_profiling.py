@@ -87,8 +87,10 @@ def test_no_profiling_intent_still_valid_cpp():
     and cheap-when-disabled). The chrono header and the stable ABI surface are present."""
     src = emit_cpp_program(_forward_euler())
     for tok in ("#include <chrono>",
-                "make_program_execution_provider(sys)",
-                "pops_install_program", "ctx.install(", "std::chrono::steady_clock::now()"):
+                "make_program_execution_provider<pops::kNativeDimension>(host->preparation)",
+                "pops_install_program", "ProgramCandidateState",
+                "state->step = [ctx_owner = state->ctx_owner](double dt)",
+                "std::chrono::steady_clock::now()"):
         assert tok in src, "generated source missing %r" % tok
     # The body is balanced and the per-node opens precede their closes (a close after each node block).
     assert src.count("ctx.profile_record(") >= 2, "expected at least 2 per-node records"

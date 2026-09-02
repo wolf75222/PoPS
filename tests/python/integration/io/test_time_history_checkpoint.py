@@ -214,8 +214,12 @@ def test_current_checkpoint_envelope_roundtrips():
         "program_hash": "deadbeef" * 8,
         "temporal_restart_state": np.array(json.dumps(temporal, sort_keys=True)),
         "history_names": np.array([], dtype="U1"),
-        "cache_nodes": np.array([], dtype=np.int64),
+        "cache_slots": np.array([], dtype=np.int64),
+        "cache_plan_schema": np.array("program-resource-plan:v1"),
+        "cache_plan_digest": np.array("a" * 64),
         "cache_names": np.array([], dtype="U1"),
+        "cache_valid": np.array([], dtype=np.bool_),
+        "cache_cold": np.array([], dtype=np.bool_),
         "program_cadence_substeps": np.array(1, dtype=np.int64),
         "program_cadence_stride": np.array(1, dtype=np.int64),
         "program_cadence_window_steps": np.array(0, dtype=np.int64),
@@ -389,7 +393,7 @@ def test_history_persistence_key_scheme():
             assert fill_plan.storage_mode == "policy"
             assert fill_plan.stored_slots == (0, 2, 4)
 
-    # A strict v5 writer cannot publish a ring without its exact outgoing-dt ledger. Both a missing
+    # A strict v9 writer cannot publish a ring without its exact outgoing-dt ledger. Both a missing
     # native seam and invalid native data fail while building the collective-free plan: no slot gather
     # runs and the output mapping remains untouched.
     class MissingSlotDtSystem(FakeSystem):

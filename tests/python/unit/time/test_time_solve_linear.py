@@ -37,7 +37,7 @@ from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.time import FailRun, RejectAttempt
 from tests.python.support.requirements import require_native_or_skip
-from typed_program_support import typed_state
+from typed_program_support import state_refs, typed_state
 
 
 def _pops_time():
@@ -80,14 +80,18 @@ def _precond(scheme):
 
 
 def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200, alpha=_ALPHA,
-                   preconditioner=None, action=None, operator_uses_dt=False):
+                   preconditioner=None, action=None, operator_uses_dt=False, state_binding=None):
     """(I - alpha*Lap) phi = U, committed back into the 1-component block (its state == a scalar field).
 
     The apply ``out = in - alpha*Lap(in)`` is built with P.laplacian + the affine algebra; Program.solve
     drives the runtime Krylov loop. The Program needs no model (the apply is a pure Laplacian). An
     optional @p preconditioner (a typed descriptor) is carried by the Krylov solver."""
     P = t.Program(name)
-    U = typed_state(P, "blk")
+    if state_binding is None:
+        U = typed_state(P, "blk")
+    else:
+        block, state = state_binding
+        U = P.state(block[state]).n
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):
@@ -97,7 +101,11 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
         return x - coefficient * lap  # out = in - coefficient*Lap(in)
 
     P.set_apply(A, apply)
-    endpoint = typed_state(P, "blk", state_name="U").next
+    endpoint = (
+        typed_state(P, "blk", state_name="U").next
+        if state_binding is None
+        else P.state(block[state]).next
+    )
     rhs = P.value("rhs", U, at=endpoint.point)
     solver = _krylov(
         method, max_iter=max_iter, rel_tol=tol, preconditioner=preconditioner)
@@ -126,15 +134,16 @@ def test_apply_lambda_and_cg_codegen(t):
                  "pops::PreparedAffineLinearProblem<pops::kNativeDimension>",
                  "pops::KrylovWorkspace<pops::kNativeDimension>",
                  "std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-                 "ctx.alloc_scalar_field"):
+                 "ctx.scalar_scratch"):
         assert frag in src, "the generated cg solve must contain %r\n%s" % (frag, src)
 
 
 def test_reject_attempt_solve_codegen_throws_step_attempt_signal(t):
     src = emit_cpp_program(_solve_program(
         t, method="cg", action=RejectAttempt(statuses=("iteration_limit",))))
-    assert "#include <pops/runtime/program/step_transaction.hpp>" in src, src
-    assert "pops::runtime::program::StepAttemptRejected" in src, src
+    assert "program_reject_step(ctx," in src, src
+    assert "ProgramStepRejectSentinel" in src, src
+    assert "throw pops::runtime::program::StepAttemptRejected" not in src, src
     assert "solve_linear failed" in src, src
     assert ".status == pops::SolveStatus::kIterationLimit" in src, src
     assert ".status == pops::SolveStatus::kBreakdown" not in src, src
@@ -175,13 +184,35 @@ def test_richardson_codegen(t):
     assert "ctx.solve_prepared_linear" in src, src
 
 
-def test_identity_precond_byte_identical(t):
-    # Identity owns no mutable native session. The explicit Identity() descriptor and the None
-    # default therefore lower to the same direct prepared identity source.
-    src_default = emit_cpp_program(_solve_program(t, method="gmres"))
-    src_identity = emit_cpp_program(_solve_program(t, method="gmres",
-                                  preconditioner=_precond("identity")))
-    assert src_default == src_identity, "explicit Identity() must match the None default byte-for-byte"
+def test_identity_precond_has_the_same_canonical_solver_route(t):
+    # Identity owns no mutable native session. Build both Programs from one Case-owned state
+    # authority so their complete resource plans have the same owner-qualified identities. This
+    # keeps the byte-level assertion meaningful without weakening the authenticated plan digest.
+    authority_program = t.Program("identity_authority")
+    state_binding = state_refs(authority_program, "blk", state_name="U")
+    default_program = _solve_program(t, method="gmres", state_binding=state_binding)
+    identity_program = _solve_program(
+        t, method="gmres", preconditioner=_precond("identity"), state_binding=state_binding
+    )
+    assert default_program._ir_hash() == identity_program._ir_hash()
+
+    src_default = emit_cpp_program(default_program)
+    src_identity = emit_cpp_program(identity_program)
+
+    assert src_default == src_identity, (
+        "explicit Identity() must match the None default byte-for-byte when the owner authority "
+        "is shared"
+    )
+
+    def identity_route(source):
+        return tuple(
+            line.strip()
+            for line in source.splitlines()
+            if "PreparedLinearPreconditioner" in line
+            or "solve_prepared_linear" in line
+        )
+
+    assert identity_route(src_default) == identity_route(src_identity)
     assert (
         "PreparedLinearPreconditioner<pops::kNativeDimension>::identity()" in src_default
     )

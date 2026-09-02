@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <pops/amr/reflux/metric_reflux.hpp>
+#include <pops/amr/tagging/clustering_provider.hpp>
+#include <pops/core/foundation/allocator.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/time/amr/levels/amr_subcycling.hpp>
@@ -10,8 +12,10 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -22,6 +26,7 @@ namespace mesh = pops::mesh;
 namespace reflux = pops::amr::reflux;
 namespace runtime = pops::runtime::amr;
 namespace time_amr = pops::numerics::time::amr;
+namespace tagging = pops::amr::tagging;
 
 constexpr mesh::BoxArrayValidationBudget kLayoutBudget{32, 496};
 constexpr hierarchy::HierarchyValidationBudget kHierarchyBudget{3, 256};
@@ -94,7 +99,24 @@ hierarchy::LevelLayout<Dim> make_partial_child_layout(
 }
 
 template <int Dim>
-MultiBlock<Dim> make_hierarchy() {
+tagging::ClusterResult<Dim> cluster_all_parent_patches(const hierarchy::LevelLayout<Dim>& parent) {
+  tagging::ClusterOptions<Dim> options;
+  options.min_efficiency = 0.7;
+  for (int axis = 0; axis < Dim; ++axis) {
+    options.min_box_size[static_cast<std::size_t>(axis)] = 1;
+    options.max_box_size[static_cast<std::size_t>(axis)] = 8;
+  }
+  options.budget = {32, 496, 8192, 64, 1U << 20};
+  tagging::ClusterResultIdentity<Dim> identity{
+      "test.multiblock-subcycling.bootstrap", parent.exact_identity(), options, {},
+      parent.patches().boxes()};
+  return {parent.patches(), std::move(identity)};
+}
+
+template <int Dim>
+MultiBlock<Dim> make_hierarchy(std::size_t levels = 3) {
+  if (levels == 0 || levels > 3)
+    throw std::invalid_argument("test hierarchy level count is outside the prepared range");
   pops::ExecutionLane parent = pops::ExecutionLane::duplicate_world_collectively(
       "test.multiblock-subcycling.parent." + std::to_string(Dim));
   const auto authority = load_balance<Dim>();
@@ -107,10 +129,12 @@ MultiBlock<Dim> make_hierarchy() {
   const pops::Box<Dim> domain{lo, hi};
   std::vector<hierarchy::LevelLayout<Dim>> layouts;
   layouts.push_back(make_coarse_layout(domain, *authority, ranks, parent));
-  layouts.push_back(
-      make_partial_child_layout(layouts.back(), 1, spatial_ratio<Dim>(0), *authority, parent));
-  layouts.push_back(
-      make_partial_child_layout(layouts.back(), 2, spatial_ratio<Dim>(1), *authority, parent));
+  if (levels > 1)
+    layouts.push_back(
+        make_partial_child_layout(layouts.back(), 1, spatial_ratio<Dim>(0), *authority, parent));
+  if (levels > 2)
+    layouts.push_back(
+        make_partial_child_layout(layouts.back(), 2, spatial_ratio<Dim>(1), *authority, parent));
 
   const pops::Index<Dim> local_rank = ranks.coordinate(static_cast<std::size_t>(parent.rank()));
   std::vector<hierarchy::AmrLevelState<Dim>> primary_levels;
@@ -190,7 +214,8 @@ template <int Dim>
 reflux::FaceFluxFragmentKey<Dim> fragment_key(const reflux::CoarseFaceRefluxKey<Dim>& query,
                                               reflux::FaceLedgerRole role,
                                               const pops::Index<Dim>& face,
-                                              const pops::amr::ClockWindow& window) {
+                                              const pops::amr::ClockWindow& window,
+                                              std::string_view stage) {
   reflux::FaceFluxFragmentKey<Dim> key;
   key.owner = query.owner;
   key.state = query.state;
@@ -200,7 +225,7 @@ reflux::FaceFluxFragmentKey<Dim> fragment_key(const reflux::CoarseFaceRefluxKey<
   key.face = face;
   key.coarse_face = query.coarse_face;
   key.clock = window.begin;
-  key.stage = "forward-euler";
+  key.stage = stage;
   key.attempt = query.attempt;
   key.role = role;
   key.contribution = reflux::FaceLedgerContribution::NumericalFlux;
@@ -228,6 +253,8 @@ void prove_multiblock_subcycling() {
   bool fail_finest = false;
   std::vector<std::string> callback_order;
   std::vector<std::size_t> reflux_order;
+  std::array<std::size_t, 3> level_dispatches{};
+  std::vector<pops::amr::ClockWindow> level_one_windows;
   const reflux::MetricRefluxBudget metric_budget{64, 256, 64};
 
   auto record_flux = [&](auto& context, typename Engine<Dim>::ledger_type& ledger,
@@ -248,17 +275,25 @@ void prove_multiblock_subcycling() {
     const auto fine_faces =
         reflux::fine_faces_for_coarse_face(query, ratio, mapping, metric_budget);
     const double duration = context.window.end.physical_time - context.window.begin.physical_time;
-    const reflux::FaceFluxFragmentMeasure measure{
-        {1, 1},
-        context.window.begin.phase,
-        context.window.end.phase,
-        duration,
-        role == reflux::FaceLedgerRole::Coarse ? static_cast<double>(fine_faces.size()) : 1.0};
-    if (role == reflux::FaceLedgerRole::Coarse) {
-      ledger.accumulate(fragment_key(query, role, query.coarse_face, context.window), measure, 1.0);
-    } else {
-      for (const auto& face : fine_faces)
-        ledger.accumulate(fragment_key(query, role, face, context.window), measure, 1.25);
+    // Two quadrature terms deliberately share the same owner/state/face/basis identity and differ
+    // only by their frozen stage slot.  The two half weights must close one exact substep, proving
+    // that the prepared ledger budget carries both final terms rather than one inferred fallback.
+    constexpr std::array<std::string_view, 2> stages{"forward-euler.term-a",
+                                                     "forward-euler.term-b"};
+    for (const std::string_view stage : stages) {
+      const reflux::FaceFluxFragmentMeasure measure{
+          {1, 2},
+          context.window.begin.phase,
+          context.window.end.phase,
+          duration,
+          role == reflux::FaceLedgerRole::Coarse ? static_cast<double>(fine_faces.size()) : 1.0};
+      if (role == reflux::FaceLedgerRole::Coarse) {
+        ledger.accumulate(fragment_key(query, role, query.coarse_face, context.window, stage),
+                          measure, 1.0);
+      } else {
+        for (const auto& face : fine_faces)
+          ledger.accumulate(fragment_key(query, role, face, context.window, stage), measure, 1.25);
+      }
     }
   };
 
@@ -268,6 +303,9 @@ void prove_multiblock_subcycling() {
         group[0].window.begin != group[1].window.begin ||
         group[0].window.end != group[1].window.end)
       throw std::runtime_error("level-group callback lost its simultaneous block pack");
+    ++level_dispatches.at(group[0].level);
+    if (group[0].block == 0 && group[0].level == 1)
+      level_one_windows.push_back(group[0].window);
     for (auto& context : group) {
       callback_order.push_back(std::string(context.block_identity) + ":L" +
                                std::to_string(context.level) + ":S" +
@@ -290,8 +328,9 @@ void prove_multiblock_subcycling() {
         record_flux(context, *context.incoming_flux, context.level - 1,
                     reflux::FaceLedgerRole::Fine);
     }
-    if (fail_finest && group[0].level == 2 && group[0].substep == 1)
-      throw std::runtime_error("injected finest-level failure");
+    if (fail_finest && group[0].level == 2 &&
+        group[0].window.end.phase == pops::amr::Rational{1, 1})
+      throw std::runtime_error("injected final finest-level failure");
   };
 
   auto reconcile = [&](typename Engine<Dim>::RefluxContext& context) {
@@ -320,10 +359,29 @@ void prove_multiblock_subcycling() {
   engine.advance(first, advance, reconcile, validate);
   EXPECT_EQ(engine.last_accepted_attempt(), 1U);
   EXPECT_EQ(callback_order.size(), 20U);
+  EXPECT_EQ(level_dispatches, (std::array<std::size_t, 3>{1, 3, 6}));
+  ASSERT_EQ(level_one_windows.size(), 3U);
+  const auto expect_level_one_window = [&](std::size_t index, pops::amr::Rational begin,
+                                           pops::amr::Rational end) {
+    const auto& window = level_one_windows.at(index);
+    EXPECT_EQ(window.begin.level, 1);
+    EXPECT_EQ(window.end.level, 1);
+    EXPECT_EQ(window.begin.phase, begin);
+    EXPECT_EQ(window.end.phase, end);
+  };
+  expect_level_one_window(0, {0, 1}, {2, 5});
+  expect_level_one_window(1, {2, 5}, {4, 5});
+  expect_level_one_window(2, {4, 5}, {1, 1});
   EXPECT_EQ(reflux_order, (std::vector<std::size_t>{1, 1, 1, 1, 1, 1, 0, 0}));
   for (std::size_t block = 0; block < 2; ++block) {
     EXPECT_EQ(engine.ledgers(block, 0).size(), 1U);
     EXPECT_EQ(engine.ledgers(block, 1).size(), 3U);
+    // Every transition ledger retains both frozen stage terms.  The fine side can have several
+    // spatial faces, hence only the exact lower bound is invariant across dimensions.
+    for (const auto& ledger : engine.ledgers(block, 0))
+      EXPECT_GE(ledger.published_size(), 2U);
+    for (const auto& ledger : engine.ledgers(block, 1))
+      EXPECT_GE(ledger.published_size(), 2U);
     for (std::size_t level = 0; level < 3; ++level) {
       EXPECT_TRUE(engine.accepted_clock(block, level).has_value());
       EXPECT_TRUE(engine.accepted_history(block, level).has_value());
@@ -353,6 +411,8 @@ void prove_multiblock_subcycling() {
 
   callback_order.clear();
   reflux_order.clear();
+  level_dispatches.fill(0);
+  level_one_windows.clear();
   fail_finest = true;
   const pops::amr::ClockWindow retry{{0, 1, {0, 1}, 0.2}, {0, 1, {1, 1}, 0.4}};
   EXPECT_THROW(engine.advance(retry, advance, reconcile, validate), std::runtime_error);
@@ -365,13 +425,21 @@ void prove_multiblock_subcycling() {
     for (std::size_t level = 0; level < 3; ++level)
       EXPECT_EQ(pops::difference_sum_sq_all(hierarchy.state(block, level), accepted[block][level]),
                 pops::Real(0));
+  EXPECT_EQ(level_dispatches, (std::array<std::size_t, 3>{1, 3, 6}));
+  ASSERT_EQ(level_one_windows.size(), 3U);
+  EXPECT_EQ(level_one_windows.back().end.phase, (pops::amr::Rational{1, 1}));
 
   fail_finest = false;
   callback_order.clear();
   reflux_order.clear();
+  level_dispatches.fill(0);
+  level_one_windows.clear();
   engine.advance(retry, advance, reconcile, validate);
   EXPECT_EQ(engine.last_accepted_attempt(), 3U);
   EXPECT_EQ(callback_order.size(), 20U);
+  EXPECT_EQ(level_dispatches, (std::array<std::size_t, 3>{1, 3, 6}));
+  ASSERT_EQ(level_one_windows.size(), 3U);
+  EXPECT_EQ(level_one_windows.back().end.phase, (pops::amr::Rational{1, 1}));
   EXPECT_EQ(reflux_order, (std::vector<std::size_t>{1, 1, 1, 1, 1, 1, 0, 0}));
 
   std::vector<std::vector<pops::MultiFab<Dim>>> before_typed_rejection(2);
@@ -406,6 +474,43 @@ void prove_multiblock_subcycling() {
 
   engine.advance(typed_window, advance, reconcile, validate);
   EXPECT_EQ(engine.last_accepted_attempt(), 5U);
+
+  // Prime both alternating resident ledger images before observing the hot path.  The callbacks
+  // intentionally avoid string/vector/flux work: this window measures the prepared engine and
+  // hierarchy carriers, not test instrumentation or a user model's own allocation policy.
+  const auto quiet_advance = [](std::span<typename Engine<Dim>::LevelAdvanceContext>) {};
+  const auto quiet_reflux = [](typename Engine<Dim>::RefluxContext&) {};
+  const auto quiet_validate = [](std::size_t, std::size_t, const pops::MultiFab<Dim>&) {};
+  const auto window_for = [](std::int64_t macro_step) {
+    const double begin = 0.6 + 0.2 * static_cast<double>(macro_step - 3);
+    return pops::amr::ClockWindow{{0, macro_step, {0, 1}, begin},
+                                   {0, macro_step, {1, 1}, begin + 0.2}};
+  };
+  for (std::int64_t macro_step = 3; macro_step < 7; ++macro_step)
+    engine.advance(window_for(macro_step), quiet_advance, quiet_reflux, quiet_validate);
+
+  const pops::AllocationEventStats allocation_before_accept = pops::allocation_event_stats();
+  engine.advance(window_for(7), quiet_advance, quiet_reflux, quiet_validate);
+  EXPECT_EQ(pops::allocation_event_stats(), allocation_before_accept);
+
+  struct QuietReject final : std::exception {
+    const char* what() const noexcept override { return "quiet reject"; }
+  };
+  const std::uint64_t accepted_before_reject = engine.last_accepted_attempt();
+  const pops::AllocationEventStats allocation_before_reject = pops::allocation_event_stats();
+  EXPECT_THROW(engine.advance(window_for(8),
+                              [](std::span<typename Engine<Dim>::LevelAdvanceContext> group) {
+                                if (group.front().level == 0)
+                                  throw QuietReject{};
+                              },
+                              quiet_reflux, quiet_validate),
+               QuietReject);
+  EXPECT_EQ(engine.last_accepted_attempt(), accepted_before_reject);
+  EXPECT_EQ(pops::allocation_event_stats(), allocation_before_reject);
+
+  const pops::AllocationEventStats allocation_before_retry = pops::allocation_event_stats();
+  engine.advance(window_for(8), quiet_advance, quiet_reflux, quiet_validate);
+  EXPECT_EQ(pops::allocation_event_stats(), allocation_before_retry);
 }
 
 }  // namespace
@@ -414,4 +519,82 @@ TEST(test_amr_multiblock_substeps, three_levels_two_blocks_are_atomic_and_conser
   prove_multiblock_subcycling<1>();
   prove_multiblock_subcycling<2>();
   prove_multiblock_subcycling<3>();
+}
+
+TEST(test_amr_multiblock_substeps,
+     candidate_ledger_windows_follow_mixed_radix_remainder_partitions) {
+  MultiBlock<1> hierarchy = make_hierarchy<1>();
+  const std::array<Engine<1>::relation_type, 2> relations{
+      Engine<1>::relation_type{0, 1, {5, 2}, pops::amr::RemainderPolicy::ExplicitFinalSubstep},
+      Engine<1>::relation_type{1, 2, {2, 1}, pops::amr::RemainderPolicy::IntegralOnly}};
+  Engine<1> engine = Engine<1>::prepare(
+      hierarchy, relations, {{2, {32, 496}}, reflux::FaceFluxLedgerBudget{256, 256, 1}});
+
+  const auto expect_window = [](const pops::amr::ClockWindow& window, int level,
+                                pops::amr::Rational begin, pops::amr::Rational end) {
+    EXPECT_EQ(window.begin.level, level);
+    EXPECT_EQ(window.end.level, level);
+    EXPECT_EQ(window.begin.macro_step, 0);
+    EXPECT_EQ(window.end.macro_step, 0);
+    EXPECT_EQ(window.begin.phase, begin);
+    EXPECT_EQ(window.end.phase, end);
+    EXPECT_DOUBLE_EQ(window.begin.physical_time, begin.value());
+    EXPECT_DOUBLE_EQ(window.end.physical_time, end.value());
+  };
+
+  expect_window(engine.candidate_ledger_window(0, 0), 0, {0, 1}, {1, 1});
+  const std::array<std::array<pops::amr::Rational, 2>, 3> parent_windows{
+      std::array<pops::amr::Rational, 2>{pops::amr::Rational{0, 1}, pops::amr::Rational{2, 5}},
+      std::array<pops::amr::Rational, 2>{pops::amr::Rational{2, 5}, pops::amr::Rational{4, 5}},
+      std::array<pops::amr::Rational, 2>{pops::amr::Rational{4, 5}, pops::amr::Rational{1, 1}}};
+  const std::array<std::array<pops::amr::Rational, 2>, 6> child_windows{
+      std::array<pops::amr::Rational, 2>{pops::amr::Rational{0, 1}, pops::amr::Rational{1, 5}},
+      std::array<pops::amr::Rational, 2>{pops::amr::Rational{1, 5}, pops::amr::Rational{2, 5}},
+      std::array<pops::amr::Rational, 2>{pops::amr::Rational{2, 5}, pops::amr::Rational{3, 5}},
+      std::array<pops::amr::Rational, 2>{pops::amr::Rational{3, 5}, pops::amr::Rational{4, 5}},
+      std::array<pops::amr::Rational, 2>{pops::amr::Rational{4, 5}, pops::amr::Rational{9, 10}},
+      std::array<pops::amr::Rational, 2>{pops::amr::Rational{9, 10}, pops::amr::Rational{1, 1}}};
+  for (std::size_t invocation = 0; invocation < parent_windows.size(); ++invocation) {
+    const auto parent = engine.candidate_ledger_window(1, invocation);
+    expect_window(parent, 1, parent_windows[invocation][0], parent_windows[invocation][1]);
+    const auto children = relations[1].partition(parent);
+    ASSERT_EQ(children.size(), 2U);
+    for (std::size_t substep = 0; substep < children.size(); ++substep)
+      expect_window(children[substep].window, 2, child_windows[2 * invocation + substep][0],
+                    child_windows[2 * invocation + substep][1]);
+  }
+}
+
+TEST(test_amr_multiblock_substeps,
+     resident_workspace_rebinds_after_one_level_bootstrap_before_the_first_step) {
+  MultiBlock<1> hierarchy = make_hierarchy<1>(1);
+  const auto& parent = hierarchy.topology_runtime().hierarchy().layout(0);
+  auto regrid = hierarchy.topology_runtime().prepare_regrid(
+      0, spatial_ratio<1>(0), cluster_all_parent_patches(parent),
+      {.clustered_parent_layout = kLayoutBudget,
+       .fine_layout = kLayoutBudget,
+       .load_balance = kLoadBalanceBudget},
+      hierarchy.lane());
+  ASSERT_TRUE(regrid.fine_layout().has_value());
+  std::vector<std::optional<pops::MultiFab<1>>> children;
+  children.reserve(hierarchy.block_count());
+  for (std::size_t block = 0; block < hierarchy.block_count(); ++block) {
+    const auto& coarse = hierarchy.state(block, 0);
+    pops::MultiFab<1> child(regrid.fine_layout()->patches(), regrid.fine_layout()->distribution(),
+                            coarse.local_rank(), coarse.ncomp(), coarse.ghosts());
+    child.set_val(block == 0 ? pops::Real(1) : pops::Real(4));
+    children.emplace_back(std::move(child));
+  }
+  hierarchy.publish_regrid(0, std::move(regrid), std::move(children));
+  ASSERT_EQ(hierarchy.level_count(), 2U);
+
+  const std::array<Engine<1>::relation_type, 1> relations{
+      Engine<1>::relation_type{0, 1, {2, 1}, pops::amr::RemainderPolicy::IntegralOnly}};
+  Engine<1> engine = Engine<1>::prepare(
+      hierarchy, relations, {{1, kLayoutBudget}, reflux::FaceFluxLedgerBudget{8, 8, 1}});
+  const auto advance = [](std::span<Engine<1>::LevelAdvanceContext>) {};
+  const auto reconcile = [](Engine<1>::RefluxContext&) {};
+  const auto validate = [](std::size_t, std::size_t, const pops::MultiFab<1>&) {};
+  EXPECT_NO_THROW(engine.advance({{0, 0, {0, 1}, 0.0}, {0, 0, {1, 1}, 0.2}}, advance,
+                                 reconcile, validate));
 }

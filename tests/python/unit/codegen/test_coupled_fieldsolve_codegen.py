@@ -109,7 +109,7 @@ def main():
     src = _emit(P)
     chk("ctx.solve_fields_from_blocks_at(field_boundary_point_" in src,
         "emit contains the point/provider-qualified coupled multi-block solve call")
-    chk("const auto field_boundary_point_" in src,
+    chk("const auto& field_boundary_point_" in src,
         "emit materializes the exact multi-block BoundaryEvaluationPoint")
     chk("ctx.set_field_logical_timepoint(" in src and
         src.index("ctx.set_field_logical_timepoint(") <

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pops.codegen.program_emit_params import emit_program_params, program_param_entries
+from pops.codegen.program_emit_params import program_param_entries
 from pops.codegen.program_models import ProgramModelGraph
 from pops._ir.values import RuntimeParamRef
 from pops.model import OwnerPath
@@ -114,10 +114,6 @@ def test_homonymous_params_are_qualified_and_indexed_per_block_owner():
         (0, "alpha", 0, 1.0),
         (1, "alpha", 0, 2.0),
     ]
-    source = emit_program_params(program, models)
-    assert "pops_program_param_count() { return 2; }" in source
-    assert "static const int v[] = {0, 1};" in source
-    assert source.count('return "alpha";') == 2
 
 
 def test_graph_collection_never_uses_the_first_models_parameter_table():

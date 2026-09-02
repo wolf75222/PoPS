@@ -608,7 +608,7 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             gpu=False,
             status="partial",
             limitation=(
-                "Program.cell_local_time and its generated AmrProgramContext route cover exact-rank "
+                "Program.cell_local_time and its generated ProgramExecutionServices route cover exact-rank "
                 "host execution over independent multi-block, multi-level and distributed multi-box "
                 "AMR packs with transport-only forward Euler. One authored finest-level rung is "
                 "lifted through integral power-of-two temporal ratios to one homogeneous rung per "
@@ -626,7 +626,7 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             ),
             requested="prepared cell-local scientific stage and space-time flux transaction",
             available_route=(
-                "Program.cell_local_time plus the generated AmrProgramContext and native "
+                "Program.cell_local_time plus the generated ProgramExecutionServices and native "
                 "PreparedSameLevelTransportEulerPackStageFluxProvider in their exact bounded "
                 "host per-level homogeneous-rung envelope"
             ),
@@ -1367,17 +1367,17 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             source=source,
         ),
         _row(
-            "program_context:system",
+            "program_execution_services:system",
             layout="uniform",
             backend="production",
             platform="host",
             mpi=mpi,
             gpu=gpu,
-            limitation="compiled ProgramContext install on System",
+            limitation="compiled ProgramExecutionServices install on System",
             source=source,
         ),
         _row(
-            "program_context:amr",
+            "program_execution_services:amr",
             layout="amr",
             backend="production",
             platform="host",

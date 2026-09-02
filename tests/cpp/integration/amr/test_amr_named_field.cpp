@@ -6,11 +6,12 @@
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/program/amr_program_context.hpp>
+#include <pops/runtime/program/program_execution_services.hpp>
 #include <pops/runtime/system/auxiliary_checkpoint.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
 
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -219,8 +220,8 @@ void verifies_auxiliary_publication_rolls_back_every_sparse_level() {
   ASSERT_EQ(accepted_metadata.size(), 2U);
 
   const auto address = system.auxiliary_address(key);
-  const auto* fine_groups = system.prepared_amr_provider_storage_groups(1);
-  ASSERT_NE(fine_groups, nullptr);
+  auto fine_groups = system.prepared_amr_provider_storage_groups(1);
+  ASSERT_TRUE(fine_groups);
   const auto* fine = fine_groups->find(address.group);
   ASSERT_NE(fine, nullptr);
   std::int64_t sparse_cells = 0;
@@ -271,14 +272,18 @@ TEST(test_amr_named_field, DefaultFieldPublishesOnlyWhenSolveOutcomeIsAccepted) 
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   system.set_program_block_map({0});
 
-  auto context = pops::runtime::program::make_program_execution_provider(&system);
-  context->configure_primary_clock("test-clock");
-  context->begin_step(0.01);
-  pops::SolveOutcome outcome = context->solve_default_field_on_coarse_level();
-  ASSERT_TRUE(outcome.report().solved_value_available());
-
-  const pops::SolveReport accepted = outcome.consume(pops::SolveConsumption::kAccept);
-  EXPECT_TRUE(accepted.solved());
+  auto accepted = std::make_shared<bool>(false);
+  pops::test::install_explicit_amr_callback_program<Dim>(
+      system, "tests.amr.named-field/default-field-program@1", "test-clock", {}, {},
+      [accepted](auto& context, double macro_dt) {
+        context.begin_step(macro_dt);
+        pops::SolveOutcome outcome = context.solve_default_field_on_coarse_level();
+        if (!outcome.report().solved_value_available())
+          throw std::runtime_error("default field Program did not produce an accepted candidate");
+        *accepted = outcome.consume(pops::SolveConsumption::kAccept).solved();
+      });
+  ASSERT_NO_THROW(system.step(0.01));
+  EXPECT_TRUE(*accepted);
   EXPECT_EQ(system.field_provider_slots(), std::vector<std::string>{"pops.amr.default-field"});
   EXPECT_EQ(system.field_provider_levels("pops.amr.default-field"), 1);
 }
@@ -310,21 +315,55 @@ TEST(test_amr_named_field, NamedPlanConsumesExactStageWithoutPublishingConservat
       });
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   system.set_program_block_map({0});
+  system.refresh_prepared_amr_levels();
 
-  auto context = pops::runtime::program::make_program_execution_provider(&system);
-  context->configure_primary_clock("test-clock");
-  context->begin_step(0.01);
-  pops::MultiFab<Dim> stage = context->scratch_state_like(context->state(0));
-  stage.set_val(pops::Real(3));
-  pops::SolveOutcome outcome =
-      context->solve_fields_from_state_at(evaluation_point<Dim>(4), "field/tracer", 0, stage);
-  const pops::SolveReport accepted = pops::consume_solve_outcome(std::move(outcome));
-  EXPECT_EQ(pops::reduce_min_local(context->state(0), 0), pops::Real(1));
-  EXPECT_EQ(pops::reduce_max_local(context->state(0), 0), pops::Real(1));
-
-  EXPECT_TRUE(accepted.solved());
-  EXPECT_EQ(pops::reduce_min_local(context->state(0), 0), pops::Real(1));
-  EXPECT_EQ(pops::reduce_max_local(context->state(0), 0), pops::Real(1));
+  using Resource = pops::test::program_v5::CallbackProgramResource;
+  std::uint32_t state_ncomp = 0;
+  std::uint32_t state_ghost_depth = 0;
+  {
+    const auto state = system.prepared_amr_block_state(0, 0);
+    ASSERT_TRUE(state);
+    state_ncomp = static_cast<std::uint32_t>(state->ncomp());
+    state_ghost_depth = static_cast<std::uint32_t>(state->ghosts()[0]);
+  }
+  const std::vector<Resource> resources{{
+      Resource::Kind::state,
+      0,
+      0,
+      0,
+      0,
+      state_ncomp,
+      state_ghost_depth,
+  }};
+  const std::vector<pops::test::program_v5::CallbackProgramFieldRoute> field_routes{
+      {0, "field/tracer", {0}}};
+  struct ProgramEvidence {
+    bool solved = false;
+    pops::Real state_before = pops::Real(-1);
+    pops::Real state_after = pops::Real(-1);
+  };
+  auto evidence = std::make_shared<ProgramEvidence>();
+  pops::test::install_explicit_amr_callback_program<Dim>(
+      system, "tests.amr.named-field/exact-stage-program@1", "test-clock", resources, field_routes,
+      [evidence](auto& context, double macro_dt) {
+        context.begin_step(macro_dt);
+        auto& accepted_state = context.state(0);
+        evidence->state_before = pops::reduce_min_local(accepted_state, 0);
+        auto& stage = context.scratch_state(0, 0, accepted_state);
+        stage.set_val(pops::Real(3));
+        pops::SolveOutcome outcome =
+            context.solve_fields_from_state_at(evaluation_point<Dim>(4), "field/tracer", 0, stage);
+        evidence->solved = pops::consume_solve_outcome(std::move(outcome)).solved();
+        evidence->state_after = pops::reduce_max_local(accepted_state, 0);
+      });
+  ASSERT_NO_THROW(system.step(0.01));
+  EXPECT_TRUE(evidence->solved);
+  EXPECT_EQ(evidence->state_before, pops::Real(1));
+  EXPECT_EQ(evidence->state_after, pops::Real(1));
+  const auto accepted_state = system.prepared_amr_block_state(0, 0);
+  ASSERT_TRUE(accepted_state);
+  EXPECT_EQ(pops::reduce_min_local(*accepted_state, 0), pops::Real(1));
+  EXPECT_EQ(pops::reduce_max_local(*accepted_state, 0), pops::Real(1));
   EXPECT_EQ(system.field_provider_levels("field/tracer"), 1);
   EXPECT_EQ(observed_stage, pops::Real(3));
   EXPECT_EQ(system.auxiliary_component(output_key).size(), cell_count(config.shape));

@@ -18,7 +18,7 @@ from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_REL = PurePosixPath("include/pops_headers.manifest")
-HEADER_SUFFIXES = {".h", ".hpp", ".inc"}
+HEADER_SUFFIXES = {".h", ".hpp"}
 HEADER_CATEGORIES = ("api", "abi", "sdk-root", "sdk-support", "test-only")
 INSTALLED_HEADER_CATEGORIES = HEADER_CATEGORIES[:-1]
 PYTHON_SOURCE_SUFFIXES = {".py", ".pyi", ".typed"}

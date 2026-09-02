@@ -25,6 +25,12 @@ _PROGRAM_KEYS = frozenset((
     "schema_version", "kind", "primary_clock", "clocks", "subcycles",
     "synchronizations", "schedules", "histories",
 ))
+_CODEGEN_PROGRAM_KEYS = _PROGRAM_KEYS | frozenset((
+    "resource_plan", "resource_plan_schema", "resource_plan_digest",
+    "resource_plan_maximum_bytes", "codegen_target",
+))
+_SCHEDULE_KEYS = frozenset(("node_id", "schedule", "cache_required"))
+_CODEGEN_SCHEDULE_KEYS = _SCHEDULE_KEYS | frozenset(("cache_slots",))
 _UNSPECIFIED = object()
 _ERROR_PROPOSAL_KIND = "error_controlled_dt.proposal"
 
@@ -114,8 +120,41 @@ def _schedule_clock_identity(schedule: Any, *, where: str) -> str:
 def _validate_program_schedule(value: Any) -> dict[str, Any]:
     """Validate the generic temporal-program protocol and its clock topology."""
     data = _json_copy(value, where="temporal program schedule")
-    if not isinstance(data, dict) or set(data) != _PROGRAM_KEYS:
+    if not isinstance(data, dict) or set(data) not in {
+            _PROGRAM_KEYS, _CODEGEN_PROGRAM_KEYS}:
         raise ValueError("temporal program schedule has an incomplete strict manifest")
+    codegen_manifest = set(data) == _CODEGEN_PROGRAM_KEYS
+    resource_plan = None
+    if codegen_manifest:
+        from pops.codegen.program_persistent_plan import ProgramResourcePlan
+
+        if (type(data["resource_plan_schema"]) is not str
+                or type(data["resource_plan_digest"]) is not str
+                or isinstance(data["resource_plan_maximum_bytes"], bool)
+                or (data["resource_plan_maximum_bytes"] is not None
+                    and not isinstance(data["resource_plan_maximum_bytes"], int))):
+            raise TypeError("temporal codegen manifest has invalid resource-plan identity fields")
+        if data["codegen_target"] is not None and data["codegen_target"] not in {
+                "system", "amr_system"}:
+            raise ValueError("temporal codegen manifest has an unsupported target")
+        try:
+            resource_plan = ProgramResourcePlan.from_data(data["resource_plan"])
+        except (TypeError, ValueError, KeyError, OverflowError) as error:
+            raise ValueError(
+                "temporal codegen manifest has an invalid ProgramResourcePlan"
+            ) from error
+        if data["resource_plan"] != resource_plan.to_data():
+            raise ValueError(
+                "temporal codegen manifest resource_plan is not canonical"
+            )
+        if data["resource_plan_schema"] != resource_plan.schema:
+            raise ValueError("temporal codegen manifest resource_plan schema disagrees")
+        if data["resource_plan_digest"] != resource_plan.digest:
+            raise ValueError("temporal codegen manifest resource_plan digest disagrees")
+        if data["resource_plan_maximum_bytes"] != resource_plan.maximum_bytes:
+            raise ValueError(
+                "temporal codegen manifest resource_plan maximum_bytes disagrees"
+            )
     if data["schema_version"] != 1 or data["kind"] != "pops.temporal-program-schedule":
         raise ValueError("unsupported temporal program schedule schema or kind")
     if not isinstance(data["primary_clock"], str) or not data["primary_clock"]:
@@ -185,9 +224,10 @@ def _validate_program_schedule(value: Any) -> dict[str, Any]:
     if not isinstance(data["schedules"], list):
         raise TypeError("temporal program schedules must be a list")
     schedule_nodes: set[int] = set()
+    cache_slots_seen: set[int] = set()
     for index, row in enumerate(data["schedules"]):
-        if not isinstance(row, dict) or set(row) != {
-                "node_id", "schedule", "cache_required"}:
+        expected_keys = _CODEGEN_SCHEDULE_KEYS if codegen_manifest else _SCHEDULE_KEYS
+        if not isinstance(row, dict) or set(row) != expected_keys:
             raise ValueError("temporal schedule %d has incomplete keys" % index)
         node = _node_id(row["node_id"], where="temporal schedule node_id")
         if node in schedule_nodes:
@@ -199,6 +239,51 @@ def _validate_program_schedule(value: Any) -> dict[str, Any]:
             raise ValueError("temporal schedule references an undeclared clock")
         if type(row["cache_required"]) is not bool:
             raise TypeError("temporal schedule cache_required must be bool")
+        if codegen_manifest:
+            slots = row["cache_slots"]
+            if not isinstance(slots, list):
+                raise TypeError("temporal schedule cache_slots must be a list")
+            if any(
+                isinstance(slot, bool) or not isinstance(slot, int) or slot < 0
+                for slot in slots
+            ):
+                raise ValueError(
+                    "temporal schedule cache_slots must contain non-negative integers"
+                )
+            if slots != sorted(set(slots)):
+                raise ValueError(
+                    "temporal schedule cache_slots must be sorted and duplicate-free"
+                )
+            if row["cache_required"] and not slots:
+                raise ValueError(
+                    "cache-backed temporal schedule must declare finite cache_slots"
+                )
+            if not row["cache_required"] and slots:
+                raise ValueError(
+                    "non-cache temporal schedule must not declare cache_slots"
+                )
+            for slot in slots:
+                if slot not in resource_plan.slots:
+                    raise ValueError(
+                        "temporal schedule cache slot %d is absent from the ProgramResourcePlan"
+                        % slot
+                    )
+                entry = resource_plan.entries[slot]
+                if entry.key.value_id != node:
+                    raise ValueError(
+                        "temporal schedule cache slot %d does not belong to node_id %d"
+                        % (slot, node)
+                    )
+                if entry.lifetime != "persistent_schedule":
+                    raise ValueError(
+                        "temporal schedule cache slot %d is not persistent_schedule" % slot
+                    )
+                if slot in cache_slots_seen:
+                    raise ValueError(
+                        "temporal program cache slot %d is assigned to more than one schedule"
+                        % slot
+                    )
+                cache_slots_seen.add(slot)
 
     if not isinstance(data["histories"], list):
         raise TypeError("temporal program histories must be a list")
@@ -425,11 +510,20 @@ def _boundary_cursors(
     for row in schedule["schedules"]:
         if not row["cache_required"]:
             continue
+        if "cache_slots" not in row:
+            raise ValueError(
+                "cache-backed temporal schedule requires the codegen cache_slots manifest"
+            )
         clock_id = _schedule_clock_identity(row["schedule"], where="temporal cache cursor")
-        cache_cursors[str(row["node_id"])] = {
-            "clock": clock_id, "valid_through_tick": clock_ticks[clock_id],
-            "initialized": macro_step > 0,
-        }
+        # A schedule node may expand to several persistent resources (for example
+        # one row per resolved AMR level).  The complete lowering slot is the
+        # cache identity; a node id is only a control-graph label and must never
+        # collapse those resources into one cursor.
+        for slot in row["cache_slots"]:
+            cache_cursors[str(slot)] = {
+                "clock": clock_id, "valid_through_tick": clock_ticks[clock_id],
+                "initialized": macro_step > 0,
+            }
     return (
         clock_cursors, schedule_cursors, synchronization_cursors,
         history_cursors, cache_cursors,

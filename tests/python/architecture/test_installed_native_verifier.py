@@ -56,10 +56,11 @@ def _installed_native(
         "abi_key": abi,
         "has_mpi": mpi,
         "has_kokkos": kokkos,
+        "kokkos_execution_space": "Serial" if kokkos else "none",
     }
     manifest = extension.parents[1] / "variants.json"
     manifest.write_text(
-        json.dumps({"schema_version": 1, "variants": [row]}), encoding="utf-8"
+        json.dumps({"schema_version": 2, "variants": [row]}), encoding="utf-8"
     )
     native = ModuleType("pops._pops")
     native.__file__ = str(extension)

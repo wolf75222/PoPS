@@ -13,17 +13,21 @@
 
 #include <gtest/gtest.h>
 
+#include "native_dso_compiler.hpp"
+#include "program_v5_fixture.hpp"
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
-#include <pops/runtime/program/program_context.hpp>
+#include <pops/runtime/program/program_execution_services.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
+#include <functional>
 #include <memory>
 #include <numeric>
 #include <string>
@@ -59,6 +63,23 @@ using NativeExtent = Extent<kTestDimension>;
 constexpr int kCompressibleComponents = kTestDimension + 2;
 using ScalarModel = nd::ScalarAdvection<kTestDimension>;
 using CompressibleModel = nd::IdealGasEuler<kTestDimension>;
+using RoutingProgramExecutionServices =
+    runtime::program::ProgramExecutionServices<kTestDimension>;
+using RoutingProgramCallback = std::function<void(RoutingProgramExecutionServices&, double)>;
+
+std::vector<RoutingProgramCallback>& routing_program_callbacks() {
+  static std::vector<RoutingProgramCallback> callbacks;
+  return callbacks;
+}
+
+extern "C" void pops_test_facade_routing_callback(std::uint64_t identifier, void* opaque,
+                                                  double dt) {
+  auto& callbacks = routing_program_callbacks();
+  if (opaque == nullptr || identifier >= callbacks.size())
+    throw std::logic_error("ABI-v5 facade routing callback received an invalid dispatch token");
+  callbacks.at(static_cast<std::size_t>(identifier))(
+      *static_cast<RoutingProgramExecutionServices*>(opaque), dt);
+}
 
 void install_execution_lane(NativeSystem& system, std::string identity) {
   system.install_prepared_boundary_execution_lane(
@@ -104,34 +125,66 @@ NativeIndex index_from_linear(std::size_t linear, const NativeBox& box) {
 }
 
 void install_forward_euler_program(NativeSystem& system) {
-  std::vector<int> block_map(static_cast<std::size_t>(system.n_blocks()));
-  std::iota(block_map.begin(), block_map.end(), 0);
-  system.set_program_block_map(block_map);
-
-  auto context = runtime::program::make_program_execution_provider(&system);
-  context->configure_primary_clock("test.clock.macro");
-  context->install([context](double dt) {
-    context->begin_step(dt);
-    context->set_stage_time(0, 1);
-    (void)consume_solve_outcome(context->solve_fields());
+  using Resource = test::program_v5::CallbackProgramResource;
+  std::vector<Resource> resources;
+  resources.reserve(static_cast<std::size_t>(2 * system.n_blocks()));
+  for (int block = 0; block < system.n_blocks(); ++block) {
+    const auto state = system.block_state(block);
+    if (!state)
+      throw std::logic_error("facade routing Program requires materialized block states");
+    const auto components = static_cast<std::uint32_t>(state->ncomp());
+    const auto ghosts = static_cast<std::uint32_t>(state->ghosts()[0]);
+    resources.push_back({Resource::Kind::rhs, resources.size(), 0, block, -1, components, ghosts});
+    resources.push_back(
+        {Resource::Kind::state, resources.size(), 0, block, -1, components, ghosts});
+  }
+  auto& callbacks = routing_program_callbacks();
+  const auto callback_identifier = static_cast<std::uint64_t>(callbacks.size());
+  callbacks.emplace_back([](RoutingProgramExecutionServices& context, double dt) {
+    context.begin_step(dt);
+    context.set_stage_time(0, 1);
+    (void)consume_solve_outcome(context.solve_fields());
 
     std::vector<NativeField*> states;
     std::vector<NativeField*> next_states;
-    states.reserve(static_cast<std::size_t>(context->n_blocks()));
-    next_states.reserve(static_cast<std::size_t>(context->n_blocks()));
-    for (int block = 0; block < context->n_blocks(); ++block) {
-      NativeField& state = context->state(block);
-      NativeField& residual = context->rhs_scratch(1000 + block, 0, state);
-      NativeField& next = context->scratch_state(2000 + block, 0, state);
-      context->rhs_into(block, state, residual, 3000 + block);
-      context->lincomb(next, Real(1), state, Real(dt), residual);
+    states.reserve(static_cast<std::size_t>(context.n_blocks()));
+    next_states.reserve(static_cast<std::size_t>(context.n_blocks()));
+    for (int block = 0; block < context.n_blocks(); ++block) {
+      NativeField& state = context.state(block);
+      const auto resource_slot = static_cast<runtime::program::ProgramCacheSlot>(2 * block);
+      NativeField& residual = context.rhs_scratch(resource_slot, 0, state);
+      NativeField& next = context.scratch_state(resource_slot + 1, 0, state);
+      context.rhs_into(block, state, residual, 3000 + block);
+      context.lincomb(next, Real(1), state, Real(dt), residual);
       states.push_back(&state);
       next_states.push_back(&next);
     }
     for (std::size_t block = 0; block < states.size(); ++block)
-      context->lincomb(*states[block], Real(0), *states[block], Real(1), *next_states[block]);
+      context.lincomb(*states[block], Real(0), *states[block], Real(1), *next_states[block]);
   });
-  system.set_program_block_map(block_map);
+#if !defined(POPS_TEST_TMPDIR)
+  throw std::runtime_error("ABI-v5 facade routing fixture requires POPS_TEST_TMPDIR");
+#else
+  static std::size_t fixture_index = 0;
+  const std::string prefix =
+      std::string(POPS_TEST_TMPDIR) + "/facade_routing_program_" + std::to_string(++fixture_index);
+  const std::string source_path = prefix + ".cpp";
+  const std::string library_path = prefix + ".so";
+  {
+    std::ofstream source(source_path);
+    if (!source)
+      throw std::runtime_error("cannot create ABI-v5 facade routing fixture source");
+    source << test::program_v5::callback_program_source(
+        callback_identifier, "tests.facade-routing/forward-euler@1", "test.clock.macro",
+        system.block_names(), resources, "pops_test_facade_routing_callback", "uniform");
+  }
+  const auto compiled = test::native_dso::compile_shared(source_path, library_path);
+  if (!compiled.ok) {
+    test::native_dso::report_compile_failure("test_facade_routing", compiled);
+    throw std::runtime_error("ABI-v5 facade routing fixture compilation failed");
+  }
+  system.install_program(library_path);
+#endif
 }
 
 #if defined(POPS_HAS_KOKKOS)

@@ -37,7 +37,7 @@ namespace pops {
 /// older .so (pops_compiled_manifest) can be told apart from a newer module at load time. Distinct from
 /// the textual pops::abi_key() (compiler / std / header signature): that detects a toolchain ABI break,
 /// this versions the capability *vocabulary*.
-inline constexpr int kAbiVersion = 3;
+inline constexpr int kAbiVersion = 5;
 static_assert(kAbiVersion == release_contract::kReleaseNativeAbiVersion,
               "native ABI and generated release contract drifted");
 
@@ -369,10 +369,10 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "hierarchy lowering currently supports one top-level linear solve with "
                        "CompositeTensorFAC()",
                        kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
-      capability_route("program_context:system", "available",
-                       "compiled ProgramContext install on System", "uniform", "production", "host",
+      capability_route("program_execution_services:system", "available",
+                       "compiled ProgramExecutionServices install on System", "uniform", "production", "host",
                        mpi, gpu),
-      capability_route("program_context:amr", status_from_bool(caps.supports_amr),
+      capability_route("program_execution_services:amr", status_from_bool(caps.supports_amr),
                        "AMR program install requires target='amr_system'", "amr", "production",
                        "host", mpi, gpu),
       capability_route(

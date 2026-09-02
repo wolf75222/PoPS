@@ -220,7 +220,8 @@ def test_field_reject_attempt_codegen_filters_selected_statuses_and_fails_closed
     assert "SolveStatus::kBreakdown" in guard
     assert "SolveStatus::kSingular" not in guard
     assert ".action == pops::SolveAction::kRejectAttempt" in guard
-    assert "StepAttemptRejected" in guard
+    assert "program_reject_step(ctx," in guard
+    assert "throw pops::runtime::program::StepAttemptRejected" not in guard
 
 
 def test_field_factories_reject_invalid_solve_actions():

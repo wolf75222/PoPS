@@ -3960,10 +3960,11 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                     if quantity.execution["role"] is not None:
                         raise ValueError("step-change norm is a whole-state diagnostic")
                     if not callable(
-                        getattr(self._owner._executor_for_block(block), "_step_change_l2", None)
+                        getattr(self._owner._executor_for_block(block),
+                                "_step_change_l2_for_block", None)
                     ):
                         raise NotImplementedError(
-                            "step-change norm requires native _step_change_l2()"
+                            "step-change norm requires native _step_change_l2_for_block(block)"
                         )
                 else:
                     self._diagnostic_component(names, roles, quantity.execution["role"])
@@ -4037,15 +4038,10 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         if reduction == "step_change_l2":
             if not full_state:
                 raise ValueError("step-change L2 must reduce the complete conservative state")
-            native = getattr(engine, "_step_change_l2", None)
+            native = getattr(engine, "_step_change_l2_for_block", None)
             if not callable(native):
                 raise RuntimeError("installed runtime has no native step-change L2 provider")
-            values = native()
-            if not isinstance(values, Mapping):
-                raise TypeError("native step-change L2 provider returned no mapping")
-            if block not in values:
-                raise RuntimeError("native step-change L2 provider omitted block %r" % block)
-            return float(values[block]), True
+            return float(native(block)), True
         composite = getattr(engine, "composite_reduce", None)
         if callable(composite):
             active_depth = getattr(engine, "n_levels", None)
@@ -4261,9 +4257,14 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         return tuple(values), baseline_updates
 
     def _publish_diagnostics(
-        self, effect: AcceptedSideEffect, values: tuple[DiagnosticPayload, ...]
+        self,
+        effect: AcceptedSideEffect,
+        values: tuple[DiagnosticPayload, ...],
+        *,
+        baseline_updates: Mapping[str, float] | None = None,
     ) -> None:
-        baseline_updates = self._pending_baselines.get(effect.identity.token, {})
+        if baseline_updates is None:
+            baseline_updates = self._pending_baselines.get(effect.identity.token, {})
         for key, value in baseline_updates.items():
             self._baselines.setdefault(key, value)
         for value in values:
@@ -4386,14 +4387,28 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             def publish_console(
                 accepted_effect: AcceptedSideEffect, accepted_values: tuple[DiagnosticPayload, ...]
             ) -> None:
-                self._publish_diagnostics(accepted_effect, accepted_values)
+                # Retry alternatives are staged together, so an effect-keyed pending map cannot
+                # distinguish their baseline authorities.  Bind this candidate's updates to its
+                # publication callback instead.
+                self._publish_diagnostics(
+                    accepted_effect, accepted_values, baseline_updates=baseline_updates
+                )
                 self._render_console_diagnostics(
                     accepted_effect, manifest, accepted_values, unavailable=unavailable
                 )
 
             publish_callback = publish_console
         else:
-            publish_callback = self._publish_diagnostics
+            def publish_diagnostics(
+                accepted_effect: AcceptedSideEffect, accepted_values: tuple[DiagnosticPayload, ...]
+            ) -> None:
+                # Keep each frozen alternative's baseline paired with its captured diagnostic
+                # payload; no post-hidden-publication recapture or cross-alternative lookup occurs.
+                self._publish_diagnostics(
+                    accepted_effect, accepted_values, baseline_updates=baseline_updates
+                )
+
+            publish_callback = publish_diagnostics
         return _PreparedDiagnostic(
             effect, values, publish_callback, self._discard_diagnostics, rollback
         )

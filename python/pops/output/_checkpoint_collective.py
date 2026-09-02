@@ -230,12 +230,28 @@ def _manifest_character_budget(names: tuple[str, ...]) -> int:
         "arrays": evidence,
         "restart_identity": dict(identity, domain="restart"),
     }
+    # The POPSPVS1 carrier adds a signed, fixed-schema plan identity beside the ordinary array
+    # evidence.  Include that extension only when its carrier member is present so the derived
+    # budget remains exact for both field-only and Program-persistent envelopes.
+    if "program_persistent_value_checkpoint" in names:
+        maximal["program_persistent_value_checkpoint"] = {
+            "schema": "program-persistent-value-checkpoint:v1",
+            "plan_schema": "program-resource-plan:v1",
+            "plan_digest": "f" * 64,
+            "maximum_bytes": (1 << 64) - 1,
+            "slot_count": (1 << 32) - 1,
+        }
     return len(json.dumps(maximal, sort_keys=True, separators=(",", ":"), allow_nan=False))
 
 
 def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) -> None:
     from pops._generated_release_contract import CHECKPOINT_ENVELOPE_SCHEMA_VERSION
     from pops.identity import Identity, make_identity
+    from pops.output._checkpoint_contract import (
+        PROGRAM_PERSISTENT_CHECKPOINT_KEY,
+        PROGRAM_PERSISTENT_CHECKPOINT_SCHEMA,
+        PROGRAM_PERSISTENT_PLAN_SCHEMA,
+    )
 
     def identity(field: str, domain: str) -> Identity:
         value = manifest[field]
@@ -276,8 +292,40 @@ def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) 
         "arrays",
         "restart_identity",
     }
-    if set(manifest) != expected_keys:
+    persistent_manifest = PROGRAM_PERSISTENT_CHECKPOINT_KEY in manifest
+    if set(manifest) != expected_keys | (
+        {PROGRAM_PERSISTENT_CHECKPOINT_KEY} if persistent_manifest else set()
+    ):
         raise ValueError("checkpoint manifest has an invalid exact schema")
+    if persistent_manifest:
+        value = manifest[PROGRAM_PERSISTENT_CHECKPOINT_KEY]
+        required = {
+            "schema",
+            "plan_schema",
+            "plan_digest",
+            "maximum_bytes",
+            "slot_count",
+        }
+        if not isinstance(value, Mapping) or set(value) != required:
+            raise TypeError(
+                "checkpoint Program persistent manifest has an invalid exact schema"
+            )
+        digest = value["plan_digest"]
+        if (
+            value["schema"] != PROGRAM_PERSISTENT_CHECKPOINT_SCHEMA
+            or value["plan_schema"] != PROGRAM_PERSISTENT_PLAN_SCHEMA
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or digest != digest.lower()
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise ValueError("checkpoint Program persistent manifest has an invalid plan identity")
+        for name, maximum in (("maximum_bytes", (1 << 64) - 1), ("slot_count", (1 << 32) - 1)):
+            number = value[name]
+            if isinstance(number, bool) or not isinstance(number, int) or not 0 <= number <= maximum:
+                raise ValueError(
+                    "checkpoint Program persistent manifest %s is not a bounded integer" % name
+                )
     if (
         isinstance(manifest["schema_version"], bool)
         or manifest["schema_version"] != CHECKPOINT_ENVELOPE_SCHEMA_VERSION
@@ -304,7 +352,10 @@ def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) 
     identity("artifact_identity", "artifact")
     identity("bind_identity", "bind")
     identity("run_identity", "run")
-    base = {key: manifest[key] for key in expected_keys - {"restart_identity"}}
+    # The optional persistent extension is part of the signed restart identity.  It is not a
+    # second payload source of truth: the later full inspection compares it with the decoded
+    # POPSPVS1 carrier and its redundant scalar members.
+    base = {key: manifest[key] for key in manifest if key != "restart_identity"}
     expected = make_identity("restart", base)
     recorded = identity("restart_identity", "restart")
     if recorded.token != expected.token or token != expected.token:

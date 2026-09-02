@@ -57,7 +57,11 @@ def test_native_selector_requires_complete_owner_level_component_evidence() -> N
         "std::map<std::string, Real> selected_accepted_balance_terms(",
         "void begin_balance_due_window(",
     )
-    assert "AutomaticBalanceKey key{runtime_block, levels[index], component, term}" in selector
+    assert "const auto automatic_term = automatic_balance_term_(term, runtime);" in selector
+    assert (
+        "AutomaticBalanceKey key{runtime_block, levels[index], component, automatic_term}"
+        in selector
+    )
     assert "native producer omitted term" in selector
     assert "both Program and native producer authority" in selector
     assert 'term == "reflux" ? levels.size() - 1 : levels.size()' in selector

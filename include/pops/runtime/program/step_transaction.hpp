@@ -2,17 +2,16 @@
 
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/runtime/export.hpp>
+#include <pops/runtime/program/program_abi.hpp>
 
+#include <algorithm>
+#include <array>
+#include <charconv>
 #include <cstdint>
-#include <stdexcept>
-#include <string>
+#include <exception>
+#include <string_view>
 
 namespace pops::runtime::program {
-
-/// Attempt-level control requested by a recoverable native evaluation.  Retry asks an adaptive
-/// controller to propose a smaller step; Reject leaves proposal policy to the caller.  Both retain
-/// the same atomic rollback boundary and remain one Python-visible StepAttemptRejected type.
-enum class StepAttemptDisposition : std::uint8_t { kRetry, kReject };
 
 inline const char* step_attempt_disposition_name(StepAttemptDisposition disposition) noexcept {
   switch (disposition) {
@@ -43,52 +42,75 @@ inline const char* step_attempt_disposition_name(StepAttemptDisposition disposit
 /// Typed control-flow signal emitted by a consumed SolveOutcome whose action is RejectAttempt.
 /// Runtime step coordinators catch this exact type, restore the accepted snapshot and leave the
 /// macro-step clock untouched.  FailRun remains an ordinary fatal exception.
-class POPS_RUNTIME_EXCEPTION_ABI StepAttemptRejected final : public std::runtime_error {
+class POPS_RUNTIME_EXCEPTION_ABI StepAttemptRejected final : public std::exception {
  public:
-  StepAttemptRejected(SolveStatus status, std::string phase, std::string detail = {})
-      : std::runtime_error(message(status, phase, detail)),
-        status_(status),
-        phase_(std::move(phase)),
-        detail_(std::move(detail)) {}
+  StepAttemptRejected(SolveStatus status, std::string_view phase, std::string_view detail = {})
+      : status_(status) {
+    assign_text_(phase_, phase);
+    assign_text_(detail_, detail);
+    compose_what_();
+  }
   StepAttemptRejected(SolveStatus status, StepAttemptDisposition disposition,
-                      std::uint32_t reason_code, std::string phase, std::string detail = {})
-      : std::runtime_error(message(status, disposition, reason_code, phase, detail)),
-        status_(status),
-        phase_(std::move(phase)),
-        detail_(std::move(detail)),
-        disposition_(disposition),
-        reason_code_(reason_code) {}
+                      std::uint32_t reason_code, std::string_view phase,
+                      std::string_view detail = {})
+      : status_(status), disposition_(disposition), reason_code_(reason_code) {
+    assign_text_(phase_, phase);
+    assign_text_(detail_, detail);
+    compose_what_();
+  }
   ~StepAttemptRejected() noexcept override;
 
+  [[nodiscard]] const char* what() const noexcept override { return what_.data(); }
   SolveStatus status() const noexcept { return status_; }
-  const std::string& phase() const noexcept { return phase_; }
-  const std::string& detail() const noexcept { return detail_; }
+  std::string_view phase() const noexcept { return phase_.data(); }
+  std::string_view detail() const noexcept { return detail_.data(); }
   StepAttemptDisposition disposition() const noexcept { return disposition_; }
   std::uint32_t reason_code() const noexcept { return reason_code_; }
 
  private:
-  static std::string message(SolveStatus status, const std::string& phase,
-                             const std::string& detail) {
-    std::string out = "step attempt rejected during " + phase +
-                      ": solve status=" + std::string(solve_status_name(status));
-    if (!detail.empty())
-      out += " (" + detail + ")";
-    return out;
+  static constexpr std::size_t kTextCapacity = kProgramStepRejectTextCapacity;
+  static constexpr std::size_t kWhatCapacity = 3 * kTextCapacity;
+
+  template <std::size_t Capacity>
+  static void append_(std::array<char, Capacity>& destination, std::size_t& cursor,
+                      std::string_view text) noexcept {
+    const std::size_t available = cursor < Capacity ? Capacity - cursor - 1 : 0;
+    const std::size_t count = std::min(available, text.size());
+    for (std::size_t index = 0; index < count; ++index)
+      destination[cursor + index] = text[index];
+    cursor += count;
+    destination[std::min(cursor, Capacity - 1)] = '\0';
   }
-  static std::string message(SolveStatus status, StepAttemptDisposition disposition,
-                             std::uint32_t reason_code, const std::string& phase,
-                             const std::string& detail) {
-    std::string qualified = "attempt_action=";
-    qualified += step_attempt_disposition_name(disposition);
-    qualified += ", reason_code=" + std::to_string(reason_code);
-    if (!detail.empty())
-      qualified += ", " + detail;
-    return message(status, phase, qualified);
+
+  static void assign_text_(std::array<char, kTextCapacity>& destination,
+                           std::string_view text) noexcept {
+    std::size_t cursor = 0;
+    append_(destination, cursor, text);
+  }
+
+  void compose_what_() noexcept {
+    std::size_t cursor = 0;
+    append_(what_, cursor, "step attempt rejected during ");
+    append_(what_, cursor, phase());
+    append_(what_, cursor, ": solve status=");
+    append_(what_, cursor, solve_status_name(status_));
+    append_(what_, cursor, ", attempt_action=");
+    append_(what_, cursor, step_attempt_disposition_name(disposition_));
+    append_(what_, cursor, ", reason_code=");
+    char reason[16]{};
+    const auto [end, error] = std::to_chars(reason, reason + sizeof(reason) - 1, reason_code_);
+    if (error == std::errc{})
+      append_(what_, cursor, std::string_view(reason, static_cast<std::size_t>(end - reason)));
+    if (!detail().empty()) {
+      append_(what_, cursor, ", ");
+      append_(what_, cursor, detail());
+    }
   }
 
   SolveStatus status_;
-  std::string phase_;
-  std::string detail_;
+  std::array<char, kTextCapacity> phase_{};
+  std::array<char, kTextCapacity> detail_{};
+  std::array<char, kWhatCapacity> what_{};
   StepAttemptDisposition disposition_ = StepAttemptDisposition::kReject;
   std::uint32_t reason_code_ = 0;
 };

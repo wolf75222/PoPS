@@ -245,6 +245,9 @@ class PreparedPhysicalBoundary {
 
   const PhysicalBoundaryConditions<Dim>& conditions() const noexcept { return conditions_; }
   const BoundarySchedule<Dim>& schedule() const noexcept { return schedule_; }
+  [[nodiscard]] std::uint64_t resident_storage_bytes() const {
+    return schedule_.resident_storage_bytes();
+  }
 
   template <class MemorySpace>
   void authenticate(const MultiFab<Dim, MemorySpace>& fields) const {
@@ -334,7 +337,7 @@ void fill_physical_boundary(MultiFab<Dim, MemorySpace>& fields,
                                      conditions.spacing(), plan, first_component, component_count});
     }
   }
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 template <int Dim, class MemorySpace>

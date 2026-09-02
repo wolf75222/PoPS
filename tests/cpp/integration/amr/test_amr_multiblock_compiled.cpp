@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "explicit_amr_program.hpp"
+#include "amr_runtime_authority.hpp"
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/execution/for_each.hpp>
@@ -144,14 +144,20 @@ TEST(test_amr_multiblock_compiled, TwoCompiledBlocksUseOneTransactionalCarrier) 
 
   ASSERT_EQ(system.n_blocks(), 2);
   system.set_program_block_map({1, 0});
-  pops::MultiFab<Dim> poisson_rhs(system.prepared_amr_block_state(0, 0));
+  auto poisson_source_view = system.prepared_amr_block_state(0, 0);
+  ASSERT_TRUE(poisson_source_view);
+  pops::MultiFab<Dim> poisson_rhs(*poisson_source_view);
   poisson_rhs.set_val(pops::Real(0));
   system.add_prepared_amr_poisson_rhs(0, poisson_rhs);
   EXPECT_NEAR(pops::reduce_min_local(poisson_rhs), -1.0, 1e-14);
   EXPECT_NEAR(pops::reduce_max_local(poisson_rhs), -1.0, 1e-14);
 
-  pops::MultiFab<Dim> neutral(system.prepared_amr_block_state(1, 0));
-  pops::MultiFab<Dim> ion(system.prepared_amr_block_state(0, 0));
+  auto neutral_view = system.prepared_amr_block_state(1, 0);
+  auto ion_view = system.prepared_amr_block_state(0, 0);
+  ASSERT_TRUE(neutral_view);
+  ASSERT_TRUE(ion_view);
+  pops::MultiFab<Dim> neutral(*neutral_view);
+  pops::MultiFab<Dim> ion(*ion_view);
   const pops::Real total_before = pops::reduce_sum_local(ion) + pops::reduce_sum_local(neutral);
   std::vector<pops::MultiFab<Dim>*> candidates{&neutral, &ion};
   const pops::runtime::multiblock::BoundaryEvaluationPoint accepted_point{
@@ -161,17 +167,29 @@ TEST(test_amr_multiblock_compiled, TwoCompiledBlocksUseOneTransactionalCarrier) 
             1U);
   EXPECT_NEAR(pops::reduce_sum_local(ion) + pops::reduce_sum_local(neutral), total_before, 1e-12);
   system.publish_prepared_amr_program_candidates(0, candidates);
-  EXPECT_NEAR(pops::reduce_min_local(system.prepared_amr_block_state(0, 0)), 0.9, 1e-14);
-  EXPECT_NEAR(pops::reduce_min_local(system.prepared_amr_block_state(1, 0)), 3.1, 1e-14);
+  auto ion_after_view = system.prepared_amr_block_state(0, 0);
+  auto neutral_after_view = system.prepared_amr_block_state(1, 0);
+  ASSERT_TRUE(ion_after_view);
+  ASSERT_TRUE(neutral_after_view);
+  EXPECT_NEAR(pops::reduce_min_local(*ion_after_view), 0.9, 1e-14);
+  EXPECT_NEAR(pops::reduce_min_local(*neutral_after_view), 3.1, 1e-14);
 
-  neutral = system.prepared_amr_block_state(1, 0);
-  ion = system.prepared_amr_block_state(0, 0);
+  neutral_view = system.prepared_amr_block_state(1, 0);
+  ion_view = system.prepared_amr_block_state(0, 0);
+  ASSERT_TRUE(neutral_view);
+  ASSERT_TRUE(ion_view);
+  neutral = *neutral_view;
+  ion = *ion_view;
   std::vector<pops::MultiFab<Dim>*> malformed{&neutral, &ion};
   if (pops::my_rank() == 0)
     malformed.front() = nullptr;
   EXPECT_ANY_THROW(system.publish_prepared_amr_program_candidates(0, malformed));
-  EXPECT_NEAR(pops::reduce_min_local(system.prepared_amr_block_state(0, 0)), 0.9, 1e-14);
-  EXPECT_NEAR(pops::reduce_min_local(system.prepared_amr_block_state(1, 0)), 3.1, 1e-14);
+  ion_after_view = system.prepared_amr_block_state(0, 0);
+  neutral_after_view = system.prepared_amr_block_state(1, 0);
+  ASSERT_TRUE(ion_after_view);
+  ASSERT_TRUE(neutral_after_view);
+  EXPECT_NEAR(pops::reduce_min_local(*ion_after_view), 0.9, 1e-14);
+  EXPECT_NEAR(pops::reduce_min_local(*neutral_after_view), 3.1, 1e-14);
 
   const pops::runtime::multiblock::BoundaryEvaluationPoint rejected_point{
       "test.amr.multiblock.compiled", 0, 0, 0, 0, {0, 1}, 0.8, 0.0};
@@ -180,6 +198,10 @@ TEST(test_amr_multiblock_compiled, TwoCompiledBlocksUseOneTransactionalCarrier) 
                std::runtime_error);
   EXPECT_NEAR(pops::reduce_min_local(ion), 0.9, 1e-14);
   EXPECT_NEAR(pops::reduce_min_local(neutral), 3.1, 1e-14);
-  EXPECT_NEAR(pops::reduce_min_local(system.prepared_amr_block_state(0, 0)), 0.9, 1e-14);
-  EXPECT_NEAR(pops::reduce_min_local(system.prepared_amr_block_state(1, 0)), 3.1, 1e-14);
+  ion_after_view = system.prepared_amr_block_state(0, 0);
+  neutral_after_view = system.prepared_amr_block_state(1, 0);
+  ASSERT_TRUE(ion_after_view);
+  ASSERT_TRUE(neutral_after_view);
+  EXPECT_NEAR(pops::reduce_min_local(*ion_after_view), 0.9, 1e-14);
+  EXPECT_NEAR(pops::reduce_min_local(*neutral_after_view), 3.1, 1e-14);
 }

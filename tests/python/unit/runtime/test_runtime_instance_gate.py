@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import threading
 from types import SimpleNamespace
@@ -52,7 +53,9 @@ from pops.time import (
     Every,
     ExternalTimeGrid,
     FixedDt,
+    Hold,
     Schedule,
+    TimePoint,
     When,
     every_dt,
 )
@@ -238,6 +241,14 @@ class _Executor:
         self._time, self._step = self._step_snapshot
         self._step_snapshot = None
         self._step_committed = False
+
+    @contextmanager
+    def _provisional_read_scope(self):
+        """Test executor witness for the native candidate-read lease."""
+        yield
+
+    def _accepted_transaction_fail_stop_(self):
+        return False
 
     def nx(self):
         return self._nx
@@ -551,33 +562,45 @@ def test_checkpoint_budget_uses_authenticated_artifact_block_metadata():
 
 
 def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_authority():
-    from pops.runtime._checkpoint_resource_budget import _common_budget
+    from pops.runtime._checkpoint_resource_budget import _cache_capacity, _common_budget
 
     class Native:
-        def __init__(self, live_nodes=(), name="node_17"):
-            self.live_nodes = live_nodes
+        def __init__(
+            self,
+            live_slots=(0,),
+            name="stage_rhs",
+            plan_schema="program-resource-plan:v1",
+            plan_digest="a" * 64,
+        ):
+            self.live_slots = live_slots
             self.name = name
+            self.plan_schema = plan_schema
+            self.plan_digest = plan_digest
 
         @staticmethod
         def variable_names(block, space):
             assert (block, space) == ("fluid", "conservative")
             return ("rho",)
 
-        def program_cache_nodes(self):
-            return self.live_nodes
+        def program_cache_slots(self):
+            return self.live_slots
 
-        def program_cache_name(self, node):
-            assert node == 17
-            return self.name
+        def program_cache_plan_schema(self):
+            return self.plan_schema
 
-        @staticmethod
-        def program_cache_ncomp(node):
-            assert node == 17
+        def program_cache_plan_digest(self):
+            return self.plan_digest
+
+        def program_cache_name(self, slot):
+            assert slot in self.live_slots
+            return self.name if slot == 0 else "%s_%d" % (self.name, slot)
+
+        def program_cache_ncomp(self, slot):
+            assert slot in self.live_slots
             return 1
 
-        @staticmethod
-        def program_cache_ngrow(node):
-            assert node == 17
+        def program_cache_ngrow(self, slot):
+            assert slot in self.live_slots
             return 9
 
     class Program:
@@ -590,8 +613,14 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
         def temporal_manifest(self):
             return {
                 "schedules": [
-                    {"node_id": 17, "schedule": {"kind": "hold"}, "cache_required": self.cache_required}
-                ]
+                    {
+                        "cache_slots": [0] if self.cache_required else [],
+                        "schedule": {"kind": "hold"},
+                        "cache_required": self.cache_required,
+                    }
+                ],
+                "resource_plan_schema": "program-resource-plan:v1",
+                "resource_plan_digest": "a" * 64,
             }
 
     install_plan = SimpleNamespace(
@@ -623,13 +652,377 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
 
     no_cache = budget(SimpleNamespace(_s=Native()), Program(cache_required=False))
     before_run = budget(SimpleNamespace(_s=Native()), Program(cache_required=True))
-    after_run = budget(SimpleNamespace(_s=Native((17,))), Program(cache_required=True))
+    after_run = budget(SimpleNamespace(_s=Native((0,))), Program(cache_required=True))
 
-    assert before_run.max_members == no_cache.max_members + 5
+    assert before_run.max_members == no_cache.max_members + 1
     assert before_run == after_run
     assert before_run.max_uncompressed_bytes > no_cache.max_uncompressed_bytes
-    with pytest.raises(ValueError, match="noncanonical exact node name"):
-        budget(SimpleNamespace(_s=Native((17,), name="held-density")), Program(cache_required=True))
+    with pytest.raises(ValueError, match="invalid slot name"):
+        budget(SimpleNamespace(_s=Native((0,), name="")), Program(cache_required=True))
+
+    class MissingPlanSchemaProgram(Program):
+        def temporal_manifest(self):
+            manifest = super().temporal_manifest()
+            manifest.pop("resource_plan_schema")
+            return manifest
+
+    with pytest.raises(ValueError, match="invalid temporal resource-plan schema"):
+        budget(SimpleNamespace(_s=Native()), MissingPlanSchemaProgram(cache_required=True))
+
+    class MissingPlanDigestProgram(Program):
+        def temporal_manifest(self):
+            manifest = super().temporal_manifest()
+            manifest.pop("resource_plan_digest")
+            return manifest
+
+    with pytest.raises(ValueError, match="invalid temporal resource-plan digest"):
+        budget(SimpleNamespace(_s=Native()), MissingPlanDigestProgram(cache_required=True))
+
+    class LegacySingularSlotProgram(Program):
+        def temporal_manifest(self):
+            return {
+                "schedules": [
+                    {"slot": 0, "schedule": {"kind": "hold"}, "cache_required": True}
+                ],
+                "resource_plan_schema": "program-resource-plan:v1",
+                "resource_plan_digest": "a" * 64,
+            }
+
+    with pytest.raises(TypeError, match="cache_slots must be a list"):
+        budget(SimpleNamespace(_s=Native()), LegacySingularSlotProgram(cache_required=True))
+
+    class NodeIdOnlyProgram(Program):
+        def temporal_manifest(self):
+            return {
+                "schedules": [
+                    {"node_id": 0, "schedule": {"kind": "hold"}, "cache_required": True}
+                ],
+                "resource_plan_schema": "program-resource-plan:v1",
+                "resource_plan_digest": "a" * 64,
+            }
+
+    with pytest.raises(TypeError, match="cache_slots must be a list"):
+        budget(SimpleNamespace(_s=Native()), NodeIdOnlyProgram(cache_required=True))
+
+    class CacheNodesAliasProgram(Program):
+        def temporal_manifest(self):
+            return {
+                "schedules": [
+                    {
+                        "cache_nodes": [0],
+                        "schedule": {"kind": "hold"},
+                        "cache_required": True,
+                    }
+                ],
+                "resource_plan_schema": "program-resource-plan:v1",
+                "resource_plan_digest": "a" * 64,
+            }
+
+    with pytest.raises(TypeError, match="cache_slots must be a list"):
+        budget(SimpleNamespace(_s=Native()), CacheNodesAliasProgram(cache_required=True))
+
+    class MixedSlotProgram(Program):
+        def temporal_manifest(self):
+            return {
+                "schedules": [
+                    {
+                        "cache_slots": [0],
+                        "slot": 0,
+                        "schedule": {"kind": "hold"},
+                        "cache_required": True,
+                    }
+                ],
+                "resource_plan_schema": "program-resource-plan:v1",
+                "resource_plan_digest": "a" * 64,
+            }
+
+    with pytest.raises(ValueError, match="singular slot"):
+        budget(SimpleNamespace(_s=Native()), MixedSlotProgram(cache_required=True))
+
+    class TwoSlotProgram(Program):
+        def temporal_manifest(self):
+            return {
+                "schedules": [
+                    {
+                        "cache_slots": [0, 1],
+                        "schedule": {"kind": "hold"},
+                        "cache_required": True,
+                    }
+                ],
+                "resource_plan_schema": "program-resource-plan:v1",
+                "resource_plan_digest": "a" * 64,
+            }
+
+    two_slot = budget(SimpleNamespace(_s=Native((0, 1))), TwoSlotProgram(cache_required=True))
+    assert two_slot.max_uncompressed_bytes > before_run.max_uncompressed_bytes
+    cache_names, cache_bytes, _evidence = _cache_capacity(
+        SimpleNamespace(_s=Native((0, 1))),
+        (2, 3),
+        program=TwoSlotProgram(cache_required=True),
+        block_nvars_by_name={"fluid": 1},
+    )
+    assert cache_bytes == 2 * 6 * 8
+    assert cache_names.count("cache_value_0") == 1
+    assert cache_names.count("cache_value_1") == 1
+
+    class DuplicateSlotProgram(Program):
+        def temporal_manifest(self):
+            return {
+                "schedules": [
+                    {
+                        "cache_slots": [0],
+                        "schedule": {"kind": "hold"},
+                        "cache_required": True,
+                    },
+                    {
+                        "cache_slots": [0],
+                        "schedule": {"kind": "hold"},
+                        "cache_required": True,
+                    },
+                ],
+                "resource_plan_schema": "program-resource-plan:v1",
+                "resource_plan_digest": "a" * 64,
+            }
+
+    with pytest.raises(ValueError, match="duplicate schedule slots"):
+        budget(SimpleNamespace(_s=Native()), DuplicateSlotProgram(cache_required=True))
+
+    class OutOfPlanProgram(Program):
+        def temporal_manifest(self):
+            return {
+                "schedules": [
+                    {
+                        "cache_slots": [1],
+                        "schedule": {"kind": "hold"},
+                        "cache_required": True,
+                    }
+                ],
+                "resource_plan_schema": "program-resource-plan:v1",
+                "resource_plan_digest": "a" * 64,
+            }
+
+    with pytest.raises(ValueError, match="absent prepared slot"):
+        budget(SimpleNamespace(_s=Native()), OutOfPlanProgram(cache_required=True))
+
+    with pytest.raises(ValueError, match="non-dense"):
+        budget(SimpleNamespace(_s=Native((0, 2))), Program(cache_required=True))
+    with pytest.raises(ValueError, match="duplicate exact slot indices"):
+        budget(SimpleNamespace(_s=Native((0, 0))), Program(cache_required=True))
+    with pytest.raises(ValueError, match="differs from the temporal manifest"):
+        budget(
+            SimpleNamespace(_s=Native(plan_digest="b" * 64)),
+            Program(cache_required=True),
+        )
+    with pytest.raises(ValueError, match="invalid temporal resource-plan schema"):
+        budget(
+            SimpleNamespace(_s=Native()),
+            type(
+                "BadManifestProgram",
+                (Program,),
+                {
+                    "temporal_manifest": lambda self: {
+                        **Program.temporal_manifest(self),
+                        "resource_plan_schema": "wrong",
+                    }
+                },
+            )(cache_required=True),
+        )
+
+
+def test_checkpoint_cache_budget_derives_dense_slots_from_codegen_manifest():
+    """Authoring data is enriched and remains authenticated across native materialization."""
+    from pops.codegen.temporal_manifest import build_temporal_manifest
+    from pops.runtime._checkpoint_resource_budget import _cache_capacity
+    from pops.codegen.program_persistent_plan import (
+        ProgramPersistentValueKey,
+        ProgramResourcePlan,
+        ProgramResourcePlanEntry,
+    )
+
+    class Value:
+        id = 37
+        op = "rhs"
+        vtype = "scalar_field"
+        block = "owner"
+        space = "space"
+        inputs = ()
+        state_ref = None
+        name = "scheduled"
+
+        def __init__(self, clock):
+            self.clock = clock
+            self.point = TimePoint(clock)
+            self.attrs = {
+                "schedule": Schedule(Every(AcceptedStep(clock), 2), off=Hold()),
+                "components": 1,
+                "resolved_levels": (0, 1),
+                "bytes": (8, 16),
+                "maximum_bytes": (8, 16),
+                "cells": (1, 2),
+                "itemsize": 8,
+            }
+
+    class Program:
+        def __init__(self):
+            self.clock = Clock("cache-budget")
+            self._values = (Value(self.clock),)
+            self._histories = {}
+            self._histories_ncomp = {}
+            self._history_blocks = {}
+            self._history_state_refs = {}
+            self._history_spaces = {}
+            self._history_contracts = {}
+            self._history_persistence = {}
+            self._time_states = {}
+
+        def temporal_manifest(self):
+            from pops.time._program.temporal_manifest import build_temporal_manifest as build_base
+
+            return build_base(self)
+
+    program = Program()
+    manifest = build_temporal_manifest(program, target="system")
+    symbolic_plan = ProgramResourcePlan.from_data(manifest["resource_plan"])
+    symbolic_names = tuple(row.identity for row in symbolic_plan.abi_rows())
+
+    class Native:
+        @staticmethod
+        def program_cache_slots():
+            return [0, 1]
+
+        @staticmethod
+        def program_cache_name(slot):
+            return symbolic_names[slot]
+
+        @staticmethod
+        def program_cache_plan_schema():
+            return "program-resource-plan:v1"
+
+        @staticmethod
+        def program_cache_plan_digest():
+            return manifest["resource_plan_digest"]
+
+    names, cache_bytes, evidence = _cache_capacity(
+        SimpleNamespace(_s=Native()),
+        (2, 3),
+        program=program,
+        block_nvars_by_name={"owner": 1},
+    )
+
+    assert cache_bytes == 2 * 6 * 8
+    assert "cache_value_0" in names and "cache_value_1" in names
+    assert [slot for slot, _name, _width in evidence["slots"]] == [0, 1]
+
+    class MaterializedNative(Native):
+        @staticmethod
+        def program_cache_plan_digest():
+            # Host materialization changes this digest by sealing runtime-sized row footprints.
+            return "b" * 64
+
+    names, cache_bytes, evidence = _cache_capacity(
+        SimpleNamespace(_s=MaterializedNative()),
+        (2, 3),
+        program=program,
+        block_nvars_by_name={"owner": 1},
+    )
+    assert cache_bytes == 2 * 6 * 8
+    assert names.count("cache_value_0") == 1 and names.count("cache_value_1") == 1
+    assert [slot for slot, _name, _width in evidence["slots"]] == [0, 1]
+    assert evidence["compiler_plan_digest"] == manifest["resource_plan_digest"]
+    assert evidence["plan_digest"] == "b" * 64
+
+    exact_plan = ProgramResourcePlan(
+        [
+            ProgramResourcePlanEntry(
+                key=ProgramPersistentValueKey(
+                    value_id=73,
+                    occurrence_path="root/exact",
+                    owner="owner",
+                    space="space",
+                    clock="clock",
+                ),
+                components=1,
+                component_names=("u",),
+                bytes=8,
+                maximum_bytes=8,
+            )
+        ]
+    )
+    exact_manifest = {
+        "schedules": [
+            {
+                "cache_slots": [0],
+                "schedule": {"kind": "hold"},
+                "cache_required": True,
+            }
+        ],
+        "resource_plan": exact_plan.to_data(),
+        "resource_plan_schema": exact_plan.schema,
+        "resource_plan_digest": exact_plan.digest,
+    }
+
+    class ExactManifestProgram:
+        def temporal_manifest(self):
+            return exact_manifest
+
+    exact_names = tuple(row.identity for row in exact_plan.abi_rows())
+
+    class ExactMaterializedNative:
+        @staticmethod
+        def program_cache_slots():
+            return [0]
+
+        @staticmethod
+        def program_cache_name(slot):
+            return exact_names[slot]
+
+        @staticmethod
+        def program_cache_plan_schema():
+            return exact_plan.schema
+
+        @staticmethod
+        def program_cache_plan_digest():
+            # Host-resident materialization may alter the final digest even when exact value rows
+            # retain their byte footprint; the compiler ABI-row identity remains the continuity
+            # witness.
+            return "c" * 64
+
+    _names, exact_cache_bytes, exact_evidence = _cache_capacity(
+        SimpleNamespace(_s=ExactMaterializedNative()),
+        (1,),
+        program=ExactManifestProgram(),
+        block_nvars_by_name={"owner": 1},
+    )
+    assert exact_cache_bytes == 1 * 1 * 8
+    assert exact_evidence["compiler_plan_digest"] == exact_plan.digest
+    assert exact_evidence["plan_digest"] == "c" * 64
+
+    class ForgedNameNative(ExactMaterializedNative):
+        @staticmethod
+        def program_cache_name(slot):
+            return "forged-cache-name" if slot == 0 else exact_names[slot]
+
+    with pytest.raises(ValueError, match="compiler temporal plan"):
+        _cache_capacity(
+            SimpleNamespace(_s=ForgedNameNative()),
+            (1,),
+            program=ExactManifestProgram(),
+            block_nvars_by_name={"owner": 1},
+        )
+
+    class ForgedDigestProgram:
+        def temporal_manifest(self):
+            forged = dict(manifest)
+            forged["resource_plan_digest"] = "f" * 64
+            return forged
+
+    with pytest.raises(ValueError, match="identity disagrees with its plan"):
+        _cache_capacity(
+            SimpleNamespace(_s=MaterializedNative()),
+            (2, 3),
+            program=ForgedDigestProgram(),
+            block_nvars_by_name={"owner": 1},
+        )
 
 
 def test_checkpoint_history_budget_uses_installed_storage_depth_not_program_lookback():
@@ -4795,8 +5188,9 @@ def test_step_change_diagnostic_uses_the_native_transaction_snapshot():
     from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
 
     class _Provider:
-        def _step_change_l2(self):
-            return {"fluid": 0.125}
+        def _step_change_l2_for_block(self, block):
+            assert block == "fluid"
+            return 0.125
 
     value, composite = RuntimeConsumerPublisher._native_diagnostic_reduction(
         SimpleNamespace(), _Provider(), "fluid", "step_change_l2", 0, True, (0, 1)

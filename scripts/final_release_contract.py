@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+import re
 import tomllib
 
 
@@ -112,6 +113,8 @@ FORBIDDEN_FINAL_IMPORTS = (
 # must not serialize the complete suite a second time under a short release timeout.
 PYTHON_CONFORMANCE_MANIFEST = Path("tests/gates/m4_runtime_io.toml")
 PYTHON_REQUIRED_SELECTION = "m4-runtime-io-pytest+final-example-ledger"
+RUNTIME_AUTHORITY_MANIFEST = Path("tests/gates/runtime_authority.toml")
+RUNTIME_AUTHORITY_RUNNER = Path("scripts/run_runtime_authority_gate.py")
 INSTALLED_COMPONENT_PACKAGE_NODEID = (
     "tests/python/integration/native_loader/test_external_component_package.py"
     "::test_source_component_executes_through_generic_native_loader_and_flux_consumer"
@@ -175,6 +178,172 @@ def required_python_conformance_nodeids(root: Path) -> tuple[str, ...]:
     return tuple(nodeids)
 
 
+def runtime_authority_source_errors(root: Path) -> list[str]:
+    """Check that the closed ADC-700/702/720 ledger is wired into every release lane.
+
+    This is intentionally a small source contract rather than another runtime execution.  The
+    reusable CI workflow owns the full Serial/OpenMP/MPI execution matrix; release validation must
+    still refuse a tag when the ledger, its runner, or either source/release control is silently
+    removed.  The release workflow does not manufacture a second receipt format: the executable
+    gate runners currently expose no durable cross-job receipt, so this contract authenticates the
+    commands and the release dependency that actually executes them.
+    """
+    errors: list[str] = []
+    manifest = root / RUNTIME_AUTHORITY_MANIFEST
+    runner = root / RUNTIME_AUTHORITY_RUNNER
+    if not manifest.is_file():
+        errors.append("missing runtime authority gate manifest: %s" % RUNTIME_AUTHORITY_MANIFEST)
+    if not runner.is_file():
+        errors.append("missing runtime authority gate runner: %s" % RUNTIME_AUTHORITY_RUNNER)
+    if manifest.is_file():
+        try:
+            data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            errors.append("cannot read runtime authority gate manifest: %s" % exc)
+        else:
+            if data.get("schema_version") != 1 or data.get("gate") != "runtime-authority":
+                errors.append("runtime authority gate manifest identity drifted")
+            if data.get("issues") != ["ADC-700", "ADC-702", "ADC-720"]:
+                errors.append("runtime authority gate manifest issues drifted")
+            if data.get("deferred") != []:
+                errors.append("runtime authority gate manifest must be closed")
+
+    ci_path = root / ".github/workflows/ci.yml"
+    release_path = root / ".github/workflows/release.yml"
+    try:
+        ci = ci_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        errors.append("runtime authority CI source is unavailable: %s" % exc)
+        ci = ""
+    try:
+        release = release_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        errors.append("runtime authority release source is unavailable: %s" % exc)
+        release = ""
+
+    ci_markers = (
+        "gate-python-architecture",
+        "for dim in 1 2 3; do",
+        'python3 scripts/run_runtime_authority_gate.py --check-only --dim "$dim"',
+        '--list-ctest-targets --backend mpi --dim "$POPS_NATIVE_DIM"',
+        "--backend mpi",
+        "--mpi-exec mpiexec",
+        '--dim "$POPS_NATIVE_DIM"',
+        "Runtime authority OpenMP/allocation gate",
+        "POPS_RUNTIME_AUTHORITY_OPENMP",
+        "POPS_RUNTIME_AUTHORITY_ALLOCATION",
+    )
+    missing = [marker for marker in ci_markers if marker not in ci]
+    if missing:
+        errors.append("runtime authority CI wiring lacks markers %s" % missing)
+    if not re.search(
+        r"scripts/run_runtime_authority_gate\.py\s*\\?\s*\n\s*"
+        r"--backend\s+mpi\b[\s\S]{0,256}--mpi-exec\s+mpiexec\b"
+        r"[\s\S]{0,256}--dim\s+\"\$POPS_NATIVE_DIM\"",
+        ci,
+    ):
+        errors.append("runtime authority CI wiring lacks the executable MPI gate command")
+
+    # The source-only architecture job above is useful for fast routing, but it is not release
+    # evidence.  A release must select this explicit 3 x 3 executable matrix: M2 and runtime
+    # authority run for Serial/OpenMP/MPI at every native dimension, while M3 remains MPI-only.
+    matrix_start = ci.find("\n  final-authority-matrix:")
+    matrix_end = ci.find("\n  # Agregation REQUISE", matrix_start + 1)
+    if matrix_start < 0:
+        errors.append("runtime authority CI lacks the final-authority-matrix job")
+        matrix_source = ""
+    else:
+        matrix_source = ci[matrix_start:matrix_end if matrix_end >= 0 else len(ci)]
+    matrix_rows = re.findall(
+        r"(?m)^\s+- backend:\s*(serial|openmp|mpi)\s*\n\s+dimension:\s*([123])\b",
+        matrix_source,
+    )
+    for backend in ("serial", "openmp", "mpi"):
+        dimensions = sorted(
+            int(dimension) for selected_backend, dimension in matrix_rows
+            if selected_backend == backend
+        )
+        if dimensions != [1, 2, 3]:
+            errors.append(
+                "runtime authority %s matrix must execute exactly dimensions 1/2/3 (found %s)"
+                % (backend, dimensions)
+            )
+
+    def step_source(title: str, next_title: str | None = None) -> str:
+        start = matrix_source.find(title)
+        if start < 0:
+            errors.append("runtime authority matrix lacks step %r" % title)
+            return ""
+        end = matrix_source.find(next_title, start + len(title)) if next_title else -1
+        return matrix_source[start:end if end >= 0 else len(matrix_source)]
+
+    serial_step = step_source(
+        "Execute serial M2 and runtime authority",
+        "Execute OpenMP M2 and runtime authority",
+    )
+    openmp_step = step_source(
+        "Execute OpenMP M2 and runtime authority",
+        "Execute MPI M2, M3, and runtime authority",
+    )
+    mpi_step = step_source("Execute MPI M2, M3, and runtime authority")
+    executable_patterns = (
+        ("Serial M2", serial_step,
+         r"scripts/run_m2_gate\.py[\s\\\n]+--backend\s+serial\b"),
+        ("Serial runtime authority", serial_step,
+         r"scripts/run_runtime_authority_gate\.py[\s\\\n]+--backend\s+serial\b"),
+        ("OpenMP M2", openmp_step,
+         r"scripts/run_m2_gate\.py[\s\\\n]+--backend\s+serial\b"),
+        ("OpenMP runtime authority", openmp_step,
+         r"scripts/run_runtime_authority_gate\.py[\s\\\n]+--openmp\b"),
+        ("OpenMP CTest", openmp_step,
+         r"ctest\s+--test-dir\s+build-kokkos\s+--output-on-failure\b"),
+        ("MPI M2", mpi_step,
+         r"scripts/run_m2_gate\.py[\s\\\n]+--backend\s+mpi\b"),
+        ("MPI M3", mpi_step,
+         r"scripts/run_m3_gate\.py[\s\\\n]+--dim\b"),
+        ("MPI runtime authority", mpi_step,
+         r"scripts/run_runtime_authority_gate\.py[\s\\\n]+--backend\s+mpi\b"),
+    )
+    for label, source, pattern in executable_patterns:
+        if not re.search(pattern, source):
+            errors.append("runtime authority matrix lacks executable %s invocation" % label)
+    if re.search(
+        r"scripts/run_(?:m2|m3|runtime_authority)_gate\.py[\s\\\n]+--check-only\b",
+        matrix_source,
+    ):
+        errors.append("runtime authority final matrix must not use --check-only")
+    if len(re.findall(r"scripts/run_m3_gate\.py[\s\\\\n]+--", matrix_source)) != 1:
+        errors.append("runtime authority final matrix must contain exactly one M3 invocation")
+    if "KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-authority-${{ matrix.backend }}-dim${{ matrix.dimension }}" \
+            not in matrix_source:
+        errors.append("runtime authority matrix lacks distinct backend/dimension Kokkos prefixes")
+    for label, marker in (
+        ("Python module configuration", "-DPOPS_BUILD_PYTHON=ON"),
+        ("Kokkos native build", "cmake --build --preset ci-kokkos --parallel 2"),
+        ("MPI native build", "cmake --build --preset ci-mpi --parallel 2"),
+        ("Python module verification", "Verify Python module for authority gates"),
+        ("Python native leaf", "native_module=\"$(find \"$native_root\" -maxdepth 1 -type f -name '_pops*.so'"),
+        ("Kokkos Python gate path", "PYTHONPATH: ${{ github.workspace }}/build-kokkos/python"),
+        ("MPI Python gate path", "PYTHONPATH: ${{ github.workspace }}/build-mpi/python"),
+    ):
+        if marker not in matrix_source:
+            errors.append("runtime authority matrix lacks %s" % label)
+
+    release_markers = (
+        "full-source-matrix:",
+        "force_full: true",
+        "needs: [full-source-matrix, wheel, validate]",
+    )
+    missing = [marker for marker in release_markers if marker not in release]
+    if missing:
+        errors.append("runtime authority release wiring lacks markers %s" % missing)
+    if re.search(
+        r"scripts/run_runtime_authority_gate\.py[\s\\\n]+--check-only\b", release
+    ):
+        errors.append("release workflow must not substitute a check-only runtime authority audit")
+    return errors
+
+
 def release_matrix_source_errors(root: Path) -> list[str]:
     """Return drift between the declared support matrix and its executable workflow proof.
 
@@ -184,6 +353,7 @@ def release_matrix_source_errors(root: Path) -> list[str]:
     """
 
     errors: list[str] = []
+    errors.extend(runtime_authority_source_errors(root))
     contract_path = root / "schemas" / "release_contract.v2.json"
     try:
         contract = json.loads(contract_path.read_text(encoding="utf-8"))
@@ -288,6 +458,13 @@ def release_matrix_source_errors(root: Path) -> list[str]:
             Path(".github/workflows/wheels.yml"),
             "Kokkos wheel version",
             "git clone --depth 1 -b %s " % version,
+        )
+        require(
+            Path(".github/workflows/wheels.yml"),
+            "dimension-specific wheel Kokkos prefixes",
+            'export KOKKOS_PREFIX="/tmp/kokkos-install-dim${dim}"',
+            'output_dir="$PWD/wheel-leaves/dim${dim}"',
+            'CIBW_ENVIRONMENT="$cibw_environment"',
         )
         execution_space_proofs = {
             "Serial": (

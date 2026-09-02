@@ -165,7 +165,7 @@ void collective_boundary_provider_phase(const ExecutionLane& lane, std::string_v
   std::exception_ptr local_error;
   try {
     std::forward<Operation>(operation)();
-    Kokkos::fence();
+    ::pops::device_fence();
   } catch (const StepAttemptRejected& rejected) {
     try {
       rejection_payload = boundary_phase_detail::encode_step_rejection(rejected);

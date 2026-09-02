@@ -34,7 +34,7 @@ LEGACY_PUBLIC_TIME_SCHEDULER = ROOT / "include/pops/numerics/time/schemes/schedu
 AMR_SYSTEM_CPP = ROOT / "src/runtime/amr/amr_system.cpp"
 AMR_SYSTEM_HEADER = ROOT / "include/pops/runtime/amr_system.hpp"
 AMR_RUNTIME = ROOT / "include/pops/runtime/amr/amr_runtime.hpp"
-PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
+PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_execution_services.hpp"
 AMR_DSL_BLOCK = ROOT / "include/pops/runtime/builders/compiled/amr_dsl_block.hpp"
 BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
 POLAR_BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder_polar.hpp"
@@ -56,6 +56,20 @@ PUBLIC_COUPLING_ROOT = ROOT / "include/pops/coupling"
 POLAR_POISSON = ROOT / "include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp"
 POLAR_TENSOR = ROOT / "include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp"
 ALGORITHMS_DOC = ROOT / "docs/ALGORITHMS.md"
+
+RETIRED_PROGRAM_INSTALL_NAMES = (
+    "install_program_step",
+    "install_program_hierarchy_refresh",
+    "install_program_history_remap_accepted",
+    "install_program_restart_hooks",
+    "install_unverified_step",
+)
+PUBLIC_TEMPORAL_SURFACE_ROOTS = (
+    ROOT / "include/pops",
+    ROOT / "src/runtime",
+    ROOT / "python/bindings",
+    ROOT / "python/pops",
+)
 
 LEGACY_DIRECT_AMR_STEP_TESTS = set()
 NONLINEAR_AMR_TEST = ROOT / "tests/python/integration/amr/test_amr_newton_full.py"
@@ -110,7 +124,7 @@ def _ast_tree(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
 
-def _amr_program_context_source() -> str:
+def _program_execution_services_amr_source() -> str:
     return _amr_semantic_source(_amr_semantic_closure(AMR_CONSUMER_ROOTS["program"]))
 
 
@@ -288,6 +302,19 @@ def _cpp_without_comments(source: str) -> str:
     return re.sub(r"//[^\n]*|/\*.*?\*/", "", source, flags=re.DOTALL)
 
 
+def _public_temporal_surface_sources() -> tuple[Path, ...]:
+    """Return production source files carrying the public temporal-authority surface."""
+    suffixes = {".cpp", ".cc", ".cxx", ".h", ".hpp", ".inc", ".py"}
+    return tuple(
+        sorted(
+            path
+            for root in PUBLIC_TEMPORAL_SURFACE_ROOTS
+            for path in root.rglob("*")
+            if path.is_file() and path.suffix in suffixes
+        )
+    )
+
+
 def test_system_temporal_facades_dispatch_only_through_an_installed_program():
     source = SYSTEM_CPP.read_text(encoding="utf-8")
     for signature in (
@@ -445,8 +472,10 @@ def test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine():
 
     step = _function_body(source, "void AmrSystem<Dim>::step(double dt)")
     step_cfl = _function_body(source, "double AmrSystem<Dim>::step_cfl(")
-    assert "dispatch_cadence_step(" in step
-    assert "step(selected)" in step_cfl
+    execute = _function_body(source, "void execute_step_body(double dt)")
+    assert "execute_step_body(dt)" in step
+    assert "dispatch_cadence_step(" in execute
+    assert "execute_step_body(selected)" in step_cfl
 
 
 def test_amr_spatial_runtime_owns_no_cfl_or_temporal_advance_authority():
@@ -458,12 +487,13 @@ def test_amr_spatial_runtime_owns_no_cfl_or_temporal_advance_authority():
     step_cfl = _function_body(system, "double AmrSystem<Dim>::step_cfl(")
     assert "generated stability bound" in step_cfl
     assert "program.dt_bound_(" in step_cfl
-    assert "step(selected);" in step_cfl
+    assert "execute_step_transaction(" in step_cfl
+    assert "execute_step_body(selected)" in step_cfl
 
 
 def test_amr_regrid_is_an_explicit_prepared_program_operation():
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
-    context = _amr_program_context_source()
+    context = _program_execution_services_amr_source()
     assert "void regrid_if_due(" not in runtime
     assert "regrid_interval" not in runtime
     assert "regrid_if_due" not in context
@@ -622,7 +652,7 @@ def test_production_has_no_second_amr_time_engine():
 
 def test_prepared_amr_subcycle_plan_is_the_only_spatial_reflux_route():
     source = _amr_subcycling_source()
-    context = _amr_program_context_source()
+    context = _program_execution_services_amr_source()
     assert "class PreparedAmrSubcyclePlan" in source
     assert "class PreparedAmrSubcycleTransition" in source
     assert "PreparedAmrProgramReflux" not in source
@@ -660,11 +690,11 @@ def test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker():
     assert "installed whole-system Program" in d2_guard
 
 
-def test_program_contexts_do_not_claim_implicit_temporal_primitives():
+def test_program_execution_services_do_not_claim_implicit_temporal_primitives():
     """Keep retired temporal primitives absent from both exact Program contexts."""
     for source in (
         PROGRAM_CONTEXT.read_text(encoding="utf-8"),
-        _amr_program_context_source(),
+        _program_execution_services_amr_source(),
     ):
         for legacy_engine_primitive in (
             "coupled_source_step(",
@@ -676,22 +706,23 @@ def test_program_contexts_do_not_claim_implicit_temporal_primitives():
         assert "publish_newton_report(" in source
 
 
-def test_ranked_program_context_owns_candidate_state_coupling_not_a_live_state_step():
+def test_ranked_program_execution_services_owns_candidate_state_coupling_not_a_live_state_step():
     uniform = PROGRAM_CONTEXT.read_text(encoding="utf-8")
-    amr = _amr_program_context_source()
-    retired = ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
+    amr = _program_execution_services_amr_source()
+    retired = ROOT / "include" / "pops" / "runtime" / "program" / "program_context.hpp"
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
     assert not retired.exists()
     assert uniform.count("struct CouplingStateOverride") == 1
-    assert uniform.count("void apply_coupling_operators(") == 1
-    assert "ProgramContext coupling requires every runtime block candidate" in uniform
-    assert "system_->apply_coupling_operators(dt, runtime_states)" in uniform
+    assert uniform.count("void apply_coupling_operators(Real dt,") == 1
+    assert "ProgramExecutionServices coupling requires every runtime block candidate" in uniform
+    assert "system_->apply_coupling_operators(dt, workspace.coupling_states)" in uniform
+    assert "count_kernel_(" in uniform
     assert (
         "void apply_coupling_operators(std::string_view graph_identity, "
         "std::string_view rate_identity," in amr
     )
     assert "std::string_view application_identity, Real dt," in amr
-    assert "graph_identity != facade_->installed_program_hash()" in amr
+    assert "graph_identity != facade_->program_installed_hash_()" in amr
     assert "rate_identity.empty() || application_identity.empty()" in amr
     assert '"AMR Program coupling requires exact graph, rate, and application identities"' in amr
     assert 'unavailable_("exact-ranked multi-block AMR coupling provider")' not in amr
@@ -758,14 +789,28 @@ def test_gpu_amr_step_harnesses_install_a_program_authority():
         source = path.read_text(encoding="utf-8")
         if "AmrSystem" not in source or re.search(r"\b[A-Za-z_]\w*\.step\(", source) is None:
             continue
-        assert any(
-            installer in source
-            for installer in (
-                "install_forward_euler_program(",
-                "install_program_step(",
-                "install_program(",
-            )
-        ), path.relative_to(ROOT).as_posix()
+        assert "install_program(" in source, path.relative_to(ROOT).as_posix()
+        for retired in RETIRED_PROGRAM_INSTALL_NAMES:
+            pattern = re.compile(r"\b%s\b" % re.escape(retired))
+            assert pattern.search(source) is None, "%s: %s" % (path.relative_to(ROOT), retired)
+
+
+def test_production_temporal_surfaces_have_no_retired_installers():
+    """The only public program installation spelling is the authenticated install_program seam."""
+    patterns = {
+        name: re.compile(r"\b%s\b" % re.escape(name))
+        for name in RETIRED_PROGRAM_INSTALL_NAMES
+    }
+    violations = [
+        "%s: %s" % (path.relative_to(ROOT), name)
+        for path in _public_temporal_surface_sources()
+        for name, pattern in patterns.items()
+        if pattern.search(path.read_text(encoding="utf-8"))
+    ]
+    assert not violations, (
+        "retired temporal installer spellings remain on production public surfaces; "
+        "only install_program is allowed:\n  " + "\n  ".join(violations)
+    )
 
 
 def test_gpu_amr_program_harness_retains_the_exact_magnetic_provider_device_probe():

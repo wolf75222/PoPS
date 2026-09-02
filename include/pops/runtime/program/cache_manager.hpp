@@ -1,55 +1,32 @@
 #pragma once
 
-// Per-node value cache for the unified Program scheduler (Spec 3 section 17-18, ADC-458). A Program
-// node with a non-always schedule (e.g. every(N).hold) recomputes only when DUE and reuses the
-// cached field in between; an accumulate_dt policy also tracks the summed dt of the skipped steps so
-// the held result is applied with eff_dt = sum(dt_skipped), not N * dt_current. This header owns the
-// typed cache (a MultiFab + its bookkeeping) and the due/store/retrieve/accumulate logic; the
-// codegen wraps a scheduled node in `if (due) { recompute; store } else { retrieve }`. The System
-// owns one CacheManager per installed Program (System::program_cache()) so the checkpoint can reach
-// it; the ProgramContext forwards its cache_* seam ops to that single System-owned manager.
-//
-// CHECKPOINT (Spec 3 section 30, ADC-458): the held cache state (the cached MultiFab, last_update_step,
-// accumulated_dt, valid) round-trips through the EXISTING checkpoint -- exactly the way the System
-// history rings do (gather_global / write_state, MPI-safe, bit-identical). The System exposes the
-// serialize/restore accessors over THIS class (node_ids / name_of / valid / value_of / restore_slot);
-// the sim.checkpoint / sim.restart facade gathers and scatters the slots alongside the block state.
-// A restart against a DIFFERENT compiled Program is rejected by the program-hash guard, and a held
-// scheduled node whose cached value the checkpoint never recorded fails loud at restart.
-//
-// A slot caches EITHER the System aux (a held field solve restores phi/grad/E) OR a named scratch
-// MultiFab (a held rhs / source / linear_combine restores its own scratch buffer). The store/retrieve
-// API is the same in both cases (a deep MultiFab copy keyed by the IR node id); the codegen picks the
-// aux or the scratch as the value to cache per node. A slot carries an optional human-readable NAME
-// (the scheduled operator, e.g. "fields_from_state") so the restart can name a missing node; the
-// codegen's nameless store defaults it to "node_<id>", and the named store is the documented seam a
-// later codegen export uses to carry the operator name verbatim.
+/// @file
+/// @brief Dense, bind-sealed scheduler cache for Program resource slots.
+///
+/// The lowering phase assigns every scheduled Program value a finite slot in its
+/// ``ProgramResourcePlan``. The runtime keeps only that dense slot index on the
+/// hot path. Complete value/path/owner/space/clock/level identities are retained
+/// in the bind-time plan and in host-owned checkpoint images, never searched while
+/// executing a schedule.
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
-#include <map>
+#include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include <pops/core/foundation/types.hpp>  // Real
-#include <pops/mesh/storage/multifab.hpp>  // MultiFab
+#include <pops/core/foundation/types.hpp>
+#include <pops/mesh/storage/multifab.hpp>
+#include <pops/runtime/program/program_persistent_value_store.hpp>
 
 namespace pops::runtime::program {
 
 namespace detail {
-
-template <int Dim>
-struct CacheValueCopyKernel {
-  FieldView<Real, Dim> destination;
-  FieldView<const Real, Dim> source;
-  int components = 0;
-
-  POPS_HD void operator()(const Index<Dim>& index) const {
-    for (int component = 0; component < components; ++component)
-      destination(index, component) = source(index, component);
-  }
-};
 
 template <int Dim>
 bool same_cache_value_layout(const MultiFab<Dim>& left, const MultiFab<Dim>& right) noexcept {
@@ -58,9 +35,9 @@ bool same_cache_value_layout(const MultiFab<Dim>& left, const MultiFab<Dim>& rig
          left.ghosts() == right.ghosts();
 }
 
-/// Copy valid cells and ghosts into persistent storage. Kokkos performs the transfer in the field's
-/// native memory space; reallocation occurs only when the exact decomposition/component/ghost
-/// contract changes.
+/// Copy a complete resident value. The one possible allocation is confined to
+/// preparation or the first explicit prime_slot call; repeated stores reuse the
+/// exact resident layout.
 template <int Dim>
 void copy_cache_value_into(MultiFab<Dim>& destination, const MultiFab<Dim>& source) {
   if (!same_cache_value_layout(destination, source))
@@ -77,163 +54,420 @@ void copy_cache_value_into(MultiFab<Dim>& destination, const MultiFab<Dim>& sour
 
 }  // namespace detail
 
-// One cached node value plus the bookkeeping the schedule needs.
+using ProgramCacheSlot = std::size_t;
+
+/// One scheduled value and its accepted temporal bookkeeping.
 template <int Dim>
-struct CacheSlot {
-  MultiFab<Dim> value;            // the cached field/state (a deep copy of the last recompute)
-  int last_update_step = -1;      // macro step at the last recompute (-1 = never)
-  Real accumulated_dt = Real(0);  // for accumulate_dt: summed dt of the steps skipped since
-  bool valid = false;             // false until the first store (a cold-start node is always due)
-  std::string name;               // scheduled node name ("fields_from_state"); "" = "node_<id>"
+struct CacheSlot final {
+  MultiFab<Dim> value;
+  int last_update_step = -1;
+  Real accumulated_dt = Real(0);
+  bool valid = false;
+  bool cold = true;
+  bool resident = false;
+  std::string name;
 };
 
+/// Host-owned checkpoint image for one dense scheduler slot. Invalid/cold slots
+/// carry no fabricated value, but their accumulated window and complete static
+/// key remain durable across restart.
 template <int Dim>
-class CacheManager {
+struct CacheSlotSnapshot final {
+  ProgramCacheSlot slot = 0;
+  std::string plan_schema;
+  std::string plan_digest;
+  ProgramPersistentValueKey key{};
+  std::string identity;
+  std::string occurrence_path;
+  std::string owner_identity;
+  std::string space_identity;
+  std::string clock_identity;
+  std::int32_t amr_level = -1;
+  int last_update_step = -1;
+  Real accumulated_dt = Real(0);
+  bool valid = false;
+  bool cold = true;
+  std::string name;
+  std::optional<MultiFab<Dim>> value;
+};
+
+/// Dense cache bound to the immutable Program resource plan.
+template <int Dim>
+class CacheManager final {
  public:
-  // Is node `node_id` due to recompute at `macro_step`? A node never stored (cold start) is always
-  // due; otherwise it is due every `every_n` macro-steps (every_n <= 1 means every step).
-  bool is_due(int node_id, int macro_step, int every_n) const {
-    auto it = slots_.find(node_id);
-    if (it == slots_.end() || !it->second.valid) {
-      return true;
+  CacheManager() = default;
+  CacheManager(const CacheManager&) = default;
+  CacheManager& operator=(const CacheManager&) = default;
+  CacheManager(CacheManager&&) noexcept = default;
+  CacheManager& operator=(CacheManager&&) noexcept = default;
+
+  /// Bind the finite slot table before Program execution. All slot identities
+  /// and diagnostic strings are copied here; later operations use only a dense
+  /// index and a vector lookup.
+  void bind(const ProgramResourcePlan& plan) {
+    if (bound_)
+      throw std::logic_error("Program scheduler cache is already bind-sealed");
+    CacheManager prepared;
+    prepared.bound_ = true;
+    prepared.plan_schema_ = std::string(plan.schema());
+    prepared.plan_digest_ = std::string(plan.digest());
+    prepared.plan_entries_ = plan.entries();
+    prepared.slots_.resize(prepared.plan_entries_.size());
+    for (std::size_t slot = 0; slot != prepared.plan_entries_.size(); ++slot) {
+      if (prepared.plan_entries_[slot].slot != slot)
+        throw std::logic_error("Program scheduler cache plan slots are not dense");
+      prepared.slots_[slot].name = prepared.plan_entries_[slot].identity;
+      // Explicit schedule labels are optional metadata. Reserve a bounded
+      // diagnostic envelope (at least the complete plan identity) while the
+      // plan is prepared so naming a slot never grows a string on the hot path.
+      prepared.slots_[slot].name.reserve(
+          std::max<std::size_t>(128, prepared.plan_entries_[slot].identity.size()));
     }
-    if (every_n <= 1) {
+    swap(prepared);
+  }
+
+  [[nodiscard]] bool bound() const noexcept { return bound_; }
+
+  /// Compare only the immutable bind authority.  This deliberately excludes accepted values so a
+  /// prepared artifact publication may retain its newly bound dense image unless a staged image
+  /// was prepared from precisely the same resource plan.
+  [[nodiscard]] bool has_same_bound_plan(const CacheManager& other) const noexcept {
+    return bound_ && other.bound_ && plan_schema_ == other.plan_schema_ &&
+           plan_digest_ == other.plan_digest_ && plan_entries_ == other.plan_entries_ &&
+           slots_.size() == other.slots_.size();
+  }
+  [[nodiscard]] std::size_t size() const noexcept { return slots_.size(); }
+  [[nodiscard]] std::string_view plan_schema() const noexcept { return plan_schema_; }
+  [[nodiscard]] std::string_view plan_digest() const noexcept { return plan_digest_; }
+  [[nodiscard]] const ProgramResourcePlanEntry& plan_entry(ProgramCacheSlot slot) const {
+    (void)checked_slot_(slot);
+    return plan_entries_[slot];
+  }
+
+  bool is_due(ProgramCacheSlot slot, int macro_step, int every_n) const {
+    const CacheSlot<Dim>& state = checked_slot_(slot);
+    if (!state.valid || every_n <= 1)
       return true;
-    }
     return (macro_step % every_n) == 0;
   }
 
-  // Store `value` as node `node_id`'s cached result computed at `macro_step`; resets accumulated_dt
-  // (the held value is now fresh).
-  void store(int node_id, const MultiFab<Dim>& value, int macro_step) {
-    CacheSlot<Dim>& s = slots_[node_id];
-    detail::copy_cache_value_into(s.value, value);  // persistent deep copy; never aliases live data
-    s.last_update_step = macro_step;
-    s.accumulated_dt = Real(0);
-    s.valid = true;
+  /// Prime a slot's MultiFab storage during preparation. This is the explicit
+  /// boundary for field allocation; stores after priming only deep-copy.
+  void prime_slot(ProgramCacheSlot slot, const MultiFab<Dim>& prototype) {
+    CacheSlot<Dim>& state = checked_slot_(slot);
+    detail::copy_cache_value_into(state.value, prototype);
+    state.resident = true;
   }
 
-  // Same as store(), but also tags the slot with a human-readable NAME (the scheduled operator, e.g.
-  // "fields_from_state") so the checkpoint can name a missing node verbatim at restart. The nameless
-  // store above leaves the name empty (the checkpoint then falls back to "node_<id>"); a later codegen
-  // export of the operator name routes through here without changing the cached-value semantics.
-  void store(int node_id, const MultiFab<Dim>& value, int macro_step, const std::string& name) {
-    store(node_id, value, macro_step);
-    slots_[node_id].name = name;
+  void store(ProgramCacheSlot slot, const MultiFab<Dim>& value, int macro_step) {
+    CacheSlot<Dim>& state = checked_slot_(slot);
+    if (!state.resident)
+      throw std::logic_error("Program scheduler cache slot was not primed during preparation");
+    if (!detail::same_cache_value_layout(state.value, value))
+      throw std::logic_error("Program scheduler cache store changed the prepared value layout");
+    detail::copy_cache_value_into(state.value, value);
+    state.resident = true;
+    state.last_update_step = macro_step;
+    state.accumulated_dt = Real(0);
+    state.valid = true;
+    state.cold = false;
   }
 
-  // The cached value of `node_id` (must be valid: guard with is_due()==false first).
-  const MultiFab<Dim>& retrieve(int node_id) const { return slots_.at(node_id).value; }
-
-  // Restore into a caller-owned resident field.  Unlike assignment from retrieve(), an exact-layout
-  // destination keeps its Fab and communication-cache addresses stable across every held step.
-  void restore_into(int node_id, MultiFab<Dim>& destination) const {
-    const CacheSlot<Dim>& slot = slots_.at(node_id);
-    if (!slot.valid)
-      throw std::logic_error("cannot restore an invalid Program cache slot");
-    detail::copy_cache_value_into(destination, slot.value);
+  void store(ProgramCacheSlot slot, const MultiFab<Dim>& value, int macro_step,
+             std::string_view name) {
+    store(slot, value, macro_step);
+    CacheSlot<Dim>& state = checked_slot_(slot);
+    assign_name_(state, name);
   }
 
-  // Add a skipped step's dt to node `node_id`'s accumulator (accumulate_dt policy). Creates the slot
-  // if the node was never stored (a cold accumulate_dt node accumulates from its first skipped step,
-  // before any recompute), so this never throws on an absent slot -- the sum is the actual skipped dt.
-  void accumulate_dt(int node_id, Real dt) { slots_[node_id].accumulated_dt += dt; }
+  const MultiFab<Dim>& retrieve(ProgramCacheSlot slot) const { return checked_slot_(slot).value; }
 
-  // The accumulated skipped dt of `node_id` (0 if the node has no slot yet).
-  Real accumulated_dt(int node_id) const {
-    auto it = slots_.find(node_id);
-    return it == slots_.end() ? Real(0) : it->second.accumulated_dt;
+  void restore_into(ProgramCacheSlot slot, MultiFab<Dim>& destination) const {
+    const CacheSlot<Dim>& state = checked_slot_(slot);
+    if (!state.valid)
+      throw std::logic_error("cannot restore an invalid Program scheduler cache slot");
+    if (!detail::same_cache_value_layout(destination, state.value))
+      throw std::logic_error(
+          "Program scheduler cache restore changed the prepared destination layout");
+    detail::copy_cache_value_into(destination, state.value);
   }
 
-  // The effective dt a due accumulate_dt step should apply: the actual dt of THIS step plus the dt
-  // summed over the steps skipped since the last recompute. CRITICAL with a variable step_cfl: this
-  // is the real sum of the skipped dt, never N * dt_current. Resets the accumulator (a fresh window
-  // starts after this recompute); call once at the start of a due accumulate_dt step.
-  Real effective_dt(int node_id, Real dt_now) {
-    CacheSlot<Dim>& s = slots_[node_id];
-    const Real eff = dt_now + s.accumulated_dt;
-    s.accumulated_dt = Real(0);
-    return eff;
+  void accumulate_dt(ProgramCacheSlot slot, Real dt) {
+    if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
+      throw std::invalid_argument("Program cache accumulated dt must be finite and non-negative");
+    CacheSlot<Dim>& state = checked_slot_(slot);
+    const Real next = state.accumulated_dt + dt;
+    if (!std::isfinite(static_cast<double>(next)))
+      throw std::overflow_error("Program cache accumulated dt overflows its scalar range");
+    state.accumulated_dt = next;
   }
 
-  bool has(int node_id) const {
-    auto it = slots_.find(node_id);
-    return it != slots_.end() && it->second.valid;
+  [[nodiscard]] Real accumulated_dt(ProgramCacheSlot slot) const {
+    return checked_slot_(slot).accumulated_dt;
   }
 
-  int last_update_step(int node_id) const {
-    auto it = slots_.find(node_id);
-    return it == slots_.end() ? -1 : it->second.last_update_step;
+  Real effective_dt(ProgramCacheSlot slot, Real dt_now) {
+    if (!std::isfinite(static_cast<double>(dt_now)) || dt_now < Real(0))
+      throw std::invalid_argument("Program cache current dt must be finite and non-negative");
+    CacheSlot<Dim>& state = checked_slot_(slot);
+    const Real effective = dt_now + state.accumulated_dt;
+    if (!std::isfinite(static_cast<double>(effective)))
+      throw std::overflow_error("Program cache effective dt overflows its scalar range");
+    state.accumulated_dt = Real(0);
+    return effective;
   }
 
-  std::size_t size() const { return slots_.size(); }
+  [[nodiscard]] bool has(ProgramCacheSlot slot) const { return checked_slot_(slot).valid; }
+  [[nodiscard]] bool valid(ProgramCacheSlot slot) const { return has(slot); }
+  [[nodiscard]] bool cold(ProgramCacheSlot slot) const { return checked_slot_(slot).cold; }
+  [[nodiscard]] int last_update_step(ProgramCacheSlot slot) const {
+    return checked_slot_(slot).last_update_step;
+  }
 
-  void clear() { slots_.clear(); }
+  /// Valid slot indices. This host observer is not part of generated execution.
+  [[nodiscard]] std::vector<ProgramCacheSlot> slot_indices() const {
+    std::vector<ProgramCacheSlot> result;
+    result.reserve(slots_.size());
+    for (ProgramCacheSlot slot = 0; slot != slots_.size(); ++slot)
+      if (slots_[slot].valid)
+        result.push_back(slot);
+    return result;
+  }
 
-  // --- Checkpoint serialize / restore (Spec 3 section 30, ADC-458) ---
-  // The System reads these to gather each slot into the checkpoint and writes restore_slot to rebuild
-  // the cache on restart, mirroring the history ring serialization. Only VALID slots are serialized
-  // (a never-stored cold node carries no value); the codegen-keyed integer id is the stable key.
+  /// Every bind-declared slot, including invalid/cold slots with pending dt.
+  [[nodiscard]] std::vector<ProgramCacheSlot> checkpoint_slot_indices() const {
+    std::vector<ProgramCacheSlot> result(slots_.size());
+    for (ProgramCacheSlot slot = 0; slot != slots_.size(); ++slot)
+      result[slot] = slot;
+    return result;
+  }
 
-  // Node ids of every VALID slot, ascending (std::map order). A slot is valid once it has been stored;
-  // a cold accumulate_dt node that only has an accumulator (no value yet) is skipped -- its eff_dt
-  // window restarts from the first post-restart skipped step (the held value it would read is absent).
-  std::vector<int> node_ids() const {
-    std::vector<int> ids;
-    for (const auto& [id, s] : slots_) {
-      if (s.valid) {
-        ids.push_back(id);
+  [[nodiscard]] std::string name_of(ProgramCacheSlot slot) const {
+    const CacheSlot<Dim>& state = checked_slot_(slot);
+    return state.name.empty() ? plan_entries_[slot].identity : state.name;
+  }
+
+  [[nodiscard]] int ncomp_of(ProgramCacheSlot slot) const {
+    const CacheSlot<Dim>& state = checked_slot_(slot);
+    if (!state.valid)
+      throw std::out_of_range("invalid Program scheduler cache slot has no value layout");
+    return state.value.ncomp();
+  }
+
+  [[nodiscard]] Extent<Dim> ghosts_of(ProgramCacheSlot slot) const {
+    const CacheSlot<Dim>& state = checked_slot_(slot);
+    if (!state.valid)
+      throw std::out_of_range("invalid Program scheduler cache slot has no value layout");
+    return state.value.ghosts();
+  }
+
+  [[nodiscard]] const MultiFab<Dim>& value_of(ProgramCacheSlot slot) const {
+    const CacheSlot<Dim>& state = checked_slot_(slot);
+    if (!state.valid)
+      throw std::out_of_range("invalid Program scheduler cache slot has no value");
+    return state.value;
+  }
+
+  [[nodiscard]] std::vector<CacheSlotSnapshot<Dim>> checkpoint_slots() const {
+    std::vector<CacheSlotSnapshot<Dim>> result;
+    result.reserve(slots_.size());
+    for (ProgramCacheSlot slot = 0; slot != slots_.size(); ++slot) {
+      const auto& state = slots_[slot];
+      const auto& row = plan_entries_[slot];
+      CacheSlotSnapshot<Dim> image;
+      image.slot = slot;
+      image.plan_schema = plan_schema_;
+      image.plan_digest = plan_digest_;
+      image.key = row.key;
+      image.identity = row.identity;
+      image.occurrence_path = row.occurrence_path;
+      image.owner_identity = row.owner_identity;
+      image.space_identity = row.space_identity;
+      image.clock_identity = row.clock_identity;
+      image.amr_level = row.key.amr_level;
+      image.last_update_step = state.last_update_step;
+      image.accumulated_dt = state.accumulated_dt;
+      image.valid = state.valid;
+      image.cold = state.cold;
+      image.name = state.name;
+      if (state.valid)
+        image.value = state.value;
+      result.push_back(std::move(image));
+    }
+    return result;
+  }
+
+  /// Restore one already-prepared valid value. This does not create a slot.
+  void restore_slot(ProgramCacheSlot slot, MultiFab<Dim> value, int last_update_step,
+                    Real accumulated_dt, std::string_view name) {
+    if (!std::isfinite(static_cast<double>(accumulated_dt)) || accumulated_dt < Real(0) ||
+        last_update_step < 0)
+      throw std::invalid_argument("invalid Program scheduler cache slot metadata");
+    CacheSlot<Dim>& state = checked_slot_(slot);
+    state.value = std::move(value);
+    state.resident = true;
+    state.last_update_step = last_update_step;
+    state.accumulated_dt = accumulated_dt;
+    state.valid = true;
+    state.cold = false;
+    assign_name_(state, name);
+  }
+
+  /// Restore a pending cold slot without constructing a dummy field value.
+  void restore_pending_slot(ProgramCacheSlot slot, Real accumulated_dt, std::string_view name) {
+    if (!std::isfinite(static_cast<double>(accumulated_dt)) || accumulated_dt < Real(0))
+      throw std::invalid_argument("invalid pending Program scheduler cache slot");
+    CacheSlot<Dim>& state = checked_slot_(slot);
+    state.last_update_step = -1;
+    state.accumulated_dt = accumulated_dt;
+    state.valid = false;
+    state.cold = true;
+    assign_name_(state, name);
+  }
+
+  /// Refresh mutable accepted state from an identically bound cache. The table
+  /// and identities remain untouched and cannot allocate.
+  void copy_from_preallocated(const CacheManager& source) {
+    require_same_bind_(source);
+    for (ProgramCacheSlot slot = 0; slot != slots_.size(); ++slot) {
+      const CacheSlot<Dim>& input = source.slots_[slot];
+      CacheSlot<Dim>& output = slots_[slot];
+      if (input.valid) {
+        if (!output.resident || !detail::same_cache_value_layout(output.value, input.value))
+          throw std::logic_error("Program scheduler cache value storage was not primed");
+        detail::copy_cache_value_into(output.value, input.value);
+      }
+      output.last_update_step = input.last_update_step;
+      output.accumulated_dt = input.accumulated_dt;
+      output.valid = input.valid;
+      output.cold = input.cold;
+      output.resident = output.resident || input.resident;
+      if (input.name.size() > output.name.capacity())
+        throw std::logic_error("Program scheduler cache label capacity was not primed");
+      output.name.assign(input.name);
+    }
+  }
+
+  class PreparedCheckpointRestore final {
+   public:
+    PreparedCheckpointRestore() = default;
+    PreparedCheckpointRestore(const PreparedCheckpointRestore&) = delete;
+    PreparedCheckpointRestore& operator=(const PreparedCheckpointRestore&) = delete;
+    PreparedCheckpointRestore(PreparedCheckpointRestore&&) noexcept = default;
+    PreparedCheckpointRestore& operator=(PreparedCheckpointRestore&&) noexcept = default;
+
+   private:
+    friend class CacheManager;
+    bool bound = false;
+    std::string plan_schema, plan_digest;
+    std::vector<ProgramResourcePlanEntry> plan_entries;
+    std::vector<CacheSlot<Dim>> slots;
+  };
+
+  [[nodiscard]] PreparedCheckpointRestore prepare_checkpoint_restore(
+      const std::vector<CacheSlotSnapshot<Dim>>& images) const {
+    if (!bound_ || images.size() != slots_.size())
+      throw std::invalid_argument("Program scheduler cache checkpoint has the wrong bound plan");
+    PreparedCheckpointRestore prepared;
+    prepared.bound = true;
+    prepared.plan_schema = plan_schema_;
+    prepared.plan_digest = plan_digest_;
+    prepared.plan_entries = plan_entries_;
+    prepared.slots.resize(slots_.size());
+    for (ProgramCacheSlot slot = 0; slot != images.size(); ++slot) {
+      const auto& image = images[slot];
+      const auto& row = plan_entries_[slot];
+      if (image.slot != slot || image.plan_schema != plan_schema_ ||
+          image.plan_digest != plan_digest_ || image.key != row.key ||
+          image.identity != row.identity || image.occurrence_path != row.occurrence_path ||
+          image.owner_identity != row.owner_identity ||
+          image.space_identity != row.space_identity ||
+          image.clock_identity != row.clock_identity || image.amr_level != row.key.amr_level ||
+          !std::isfinite(static_cast<double>(image.accumulated_dt)) ||
+          image.accumulated_dt < Real(0))
+        throw std::invalid_argument("Program scheduler cache checkpoint identity mismatch");
+      if (image.valid != image.value.has_value() || (image.valid && image.cold) ||
+          (!image.valid && !image.cold) || (image.valid && image.last_update_step < 0) ||
+          (!image.valid && image.last_update_step != -1))
+        throw std::invalid_argument("Program scheduler cache checkpoint state mismatch");
+      CacheSlot<Dim>& state = prepared.slots[slot];
+      state.last_update_step = image.last_update_step;
+      state.accumulated_dt = image.accumulated_dt;
+      state.valid = image.valid;
+      state.cold = image.cold;
+      state.name.reserve(std::max<std::size_t>(128, row.identity.size()));
+      state.name = image.name;
+      if (image.value) {
+        state.value = *image.value;
+        state.resident = true;
       }
     }
-    return ids;
+    return prepared;
   }
 
-  // The human-readable name of node `node_id` ("fields_from_state"), or "node_<id>" when the slot was
-  // stored without one (today's nameless codegen). Used to name a missing node at restart.
-  std::string name_of(int node_id) const {
-    auto it = slots_.find(node_id);
-    if (it == slots_.end() || it->second.name.empty()) {
-      return "node_" + std::to_string(node_id);
-    }
-    return it->second.name;
+  void publish_checkpoint_restore(PreparedCheckpointRestore&& prepared) noexcept {
+    using std::swap;
+    swap(bound_, prepared.bound);
+    plan_schema_.swap(prepared.plan_schema);
+    plan_digest_.swap(prepared.plan_digest);
+    plan_entries_.swap(prepared.plan_entries);
+    slots_.swap(prepared.slots);
   }
 
-  bool valid(int node_id) const {
-    auto it = slots_.find(node_id);
-    return it != slots_.end() && it->second.valid;
+  void restore_checkpoint_slots(const std::vector<CacheSlotSnapshot<Dim>>& images) {
+    auto prepared = prepare_checkpoint_restore(images);
+    publish_checkpoint_restore(std::move(prepared));
   }
 
-  Real accumulated_dt_of(int node_id) const { return accumulated_dt(node_id); }
+  /// Lifecycle reset. A replacement must bind a fresh plan before execution.
+  void clear() noexcept { CacheManager{}.swap(*this); }
 
-  // The component count of node `node_id`'s cached value (for the checkpoint's per-slot ncomp key).
-  int ncomp_of(int node_id) const { return slots_.at(node_id).value.ncomp(); }
-
-  // The ghost-cell width of node `node_id`'s cached value (for the checkpoint's per-slot ngrow key).
-  // The aux is 1-ghost, but a held SCRATCH slot is allocated at the block-state width (2 ghosts), and a
-  // 2-ghost-stencil consumer reads the 2nd ghost layer -- so restore MUST rebuild with the SAME ngrow,
-  // not a hard-coded 1 (else a held-scratch restart under-reads its outer ghosts).
-  Extent<Dim> ghosts_of(int node_id) const { return slots_.at(node_id).value.ghosts(); }
-
-  // The cached MultiFab of node `node_id` (the checkpoint gathers it via the System's gather_global,
-  // exactly like a history slot). @throws if the slot is absent.
-  const MultiFab<Dim>& value_of(int node_id) const { return slots_.at(node_id).value; }
-
-  // RESTORE (restart) node `node_id` from a checkpoint: take ownership of the restored `value` (the
-  // System scattered the global buffer into it), tag the bookkeeping, and mark it valid -- the inverse
-  // of node_ids/value_of. `name` may be empty (defaults to "node_<id>" on read). Replaces any existing
-  // slot for that id (a re-installed Program re-keys by the same ids).
-  void restore_slot(int node_id, MultiFab<Dim> value, int last_update_step, Real accumulated_dt,
-                    const std::string& name) {
-    CacheSlot<Dim>& s = slots_[node_id];
-    s.value = std::move(value);
-    s.last_update_step = last_update_step;
-    s.accumulated_dt = accumulated_dt;
-    s.valid = true;
-    s.name = name;
+  void swap(CacheManager& other) noexcept {
+    using std::swap;
+    swap(bound_, other.bound_);
+    plan_schema_.swap(other.plan_schema_);
+    plan_digest_.swap(other.plan_digest_);
+    plan_entries_.swap(other.plan_entries_);
+    slots_.swap(other.slots_);
   }
 
  private:
-  std::map<int, CacheSlot<Dim>> slots_;  // node id (IR Value.id) -> its cache slot
+  [[nodiscard]] const CacheSlot<Dim>& checked_slot_(ProgramCacheSlot slot) const {
+    if (!bound_)
+      throw std::logic_error("Program scheduler cache is not bind-sealed");
+    if (slot >= slots_.size())
+      throw std::out_of_range("Program scheduler cache slot is outside the prepared plan");
+    return slots_[slot];
+  }
+
+  [[nodiscard]] CacheSlot<Dim>& checked_slot_(ProgramCacheSlot slot) {
+    return const_cast<CacheSlot<Dim>&>(std::as_const(*this).checked_slot_(slot));
+  }
+
+  void assign_name_(CacheSlot<Dim>& state, std::string_view name) {
+    if (name.empty())
+      return;
+    if (name.size() > state.name.capacity())
+      throw std::logic_error("Program scheduler cache label was not primed");
+    state.name.assign(name.data(), name.size());
+  }
+
+  void require_same_bind_(const CacheManager& source) const {
+    if (!bound_ || !source.bound_ || plan_schema_ != source.plan_schema_ ||
+        plan_digest_ != source.plan_digest_ || plan_entries_ != source.plan_entries_ ||
+        slots_.size() != source.slots_.size())
+      throw std::logic_error("Program scheduler cache bind image changed after preparation");
+  }
+
+  bool bound_ = false;
+  std::string plan_schema_, plan_digest_;
+  std::vector<ProgramResourcePlanEntry> plan_entries_;
+  std::vector<CacheSlot<Dim>> slots_;
 };
+
+template <int Dim>
+inline void swap(CacheManager<Dim>& left, CacheManager<Dim>& right) noexcept {
+  left.swap(right);
+}
 
 }  // namespace pops::runtime::program

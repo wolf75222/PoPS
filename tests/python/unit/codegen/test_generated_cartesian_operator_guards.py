@@ -40,7 +40,7 @@ def _owner_index(program: Program, block) -> int:
 
 
 def _step_body(source: str) -> str:
-    marker = "ctx.install([=](double dt)"
+    marker = "state->step = [ctx_owner = state->ctx_owner](double dt)"
     assert marker in source
     return source.split(marker, 1)[1]
 
@@ -171,9 +171,17 @@ def _condensed_rhs_program():
         th_dt=1.0,
         g=1.0,
     )
+    reconstructed = program.condensed_reconstruct(
+        state=temporal.n,
+        phi=rhs,
+        linear_operator=_linear_handle(emit_model),
+        subset=(1, 2),
+        th_dt=1.0,
+        c_rho=0,
+    )
     program.commit(
         temporal.next,
-        program.value("next", 1 * temporal.n, at=temporal.next.point),
+        program.value("next", reconstructed, at=temporal.next.point),
     )
     return program, emit_model, rhs
 
@@ -237,9 +245,14 @@ def _top_level_stencil_program():
     block, state = state_refs(program, "second")
     temporal = program.state(block[state])
     phi = program.history("second.phi", lag=1, ncomp=1, block=block)
-    program.laplacian(program.scalar_field("lap"), phi)
+    lap = program.laplacian(program.scalar_field("lap"), phi)
     gradient = program.gradient(program.scalar_field("grad", ncomp=2), phi)
-    program.divergence(program.scalar_field("div"), gradient)
+    divergence = program.divergence(program.scalar_field("div"), gradient)
+    # Top-level stencil values are executable only when consumed by a side effect.  Keep all three
+    # generated kernels live so the sealed resource plan and the emitted body traverse the same
+    # authenticated graph after dead declarations are filtered.
+    program.fill_boundary(lap)
+    program.fill_boundary(divergence)
     program.commit(
         temporal.next,
         program.value("next", 1 * temporal.n, at=temporal.next.point),
@@ -360,15 +373,10 @@ def test_amr_cell_compare_and_where_omit_uniform_cartesian_guard() -> None:
     assert "ctx.scratch_state(" in source
 
 
-def test_uniform_condensed_rhs_guard_exact_nonzero_owner() -> None:
-    program, emit_model, rhs = _condensed_rhs_program()
-    owner = _owner_index(program, rhs.block)
-    source = emit_cpp_program(program, model=emit_model)
-    step = _step_body(source)
-
-    assert step.count(CARTESIAN_GUARD + "(") == 1
-    _assert_guard_before(step, owner, "condensed_rhs", "ctx.laplacian(")
-    assert _guard_stmt(0, "condensed_rhs") not in source
+def test_uniform_condensed_rhs_refuses_without_retained_boundary_session() -> None:
+    program, emit_model, _ = _condensed_rhs_program()
+    with pytest.raises(NotImplementedError, match="cold-bound scalar boundary session"):
+        emit_cpp_program(program, model=emit_model)
 
 
 def test_amr_condensed_rhs_omits_uniform_cartesian_guard() -> None:
@@ -376,6 +384,20 @@ def test_amr_condensed_rhs_omits_uniform_cartesian_guard() -> None:
     source = emit_cpp_program(program, model=emit_model, target="amr_system")
     assert CARTESIAN_GUARD not in source
     assert "ctx.laplacian(" in source
+    assert "ctx.bind_mesh_boundary_session(" in source
+    assert "*cond_rhs_boundary" in source
+    assert "ctx.laplacian(cond" in source
+
+
+def test_amr_condensed_coefficients_capture_scalar_and_tensor_boundary_sessions() -> None:
+    program, emit_model = _hierarchy_direct_program()
+    source = emit_cpp_program(program, model=emit_model, target="amr_system")
+
+    assert "cond_tensor_boundary" in source
+    assert "cond_tensor_scalar_boundary" in source
+    assert "cond_rhs_boundary" in source
+    assert source.count("ctx.bind_mesh_boundary_session(") >= 3
+    assert "ctx.fill_boundary(" not in source
 
 
 def test_supported_local_transform_has_no_cartesian_guard() -> None:
@@ -383,8 +405,15 @@ def test_supported_local_transform_has_no_cartesian_guard() -> None:
     source = emit_cpp_program(program, model=emit_model)
     assert CARTESIAN_GUARD not in source
     assert "ctx.pointwise_active_mask(" in source
+    assert "ctx.scratch_state_like(" not in source
+    assert "ctx.alloc_scalar_field(" not in source
+    assert "ctx.prepare_state_scratch(" in source
+    assert "ctx.scratch_state(" in _step_body(source)
+    assert source.index("ctx.prepare_state_scratch(") < source.index("ctx.begin_step(")
     amr = emit_cpp_program(program, model=emit_model, target="amr_system")
     assert CARTESIAN_GUARD not in amr
+    assert "ctx.scratch_state_like(" not in amr
+    assert "ctx.alloc_scalar_field(" not in amr
 
 
 def test_supported_solve_local_nonlinear_has_no_cartesian_guard() -> None:
@@ -440,19 +469,10 @@ def test_amr_direct_hierarchy_provider_omits_matrix_free_stencil_guard() -> None
     assert "ctx.solve_hierarchy_tensor(" in source
 
 
-def test_uniform_top_level_stencils_guard_exact_nonzero_owner() -> None:
-    program, phi = _top_level_stencil_program()
-    owner = _owner_index(program, phi.block)
-    source = emit_cpp_program(program)
-    step = _step_body(source)
-
-    assert step.count(CARTESIAN_GUARD + "(") == 3
-    _assert_guard_before(step, owner, "laplacian", "ctx.laplacian(")
-    _assert_guard_before(step, owner, "gradient", "ctx.gradient(")
-    _assert_guard_before(step, owner, "divergence", "ctx.divergence(")
-    assert _guard_stmt(0, "laplacian") not in source
-    assert _guard_stmt(0, "gradient") not in source
-    assert _guard_stmt(0, "divergence") not in source
+def test_uniform_top_level_stencils_refuse_without_retained_boundary_session() -> None:
+    program, _ = _top_level_stencil_program()
+    with pytest.raises(NotImplementedError, match="cold-bound scalar boundary session"):
+        emit_cpp_program(program)
 
 
 def test_amr_top_level_stencils_omit_uniform_cartesian_guard() -> None:
@@ -464,23 +484,23 @@ def test_amr_top_level_stencils_omit_uniform_cartesian_guard() -> None:
     assert "ctx.divergence(" in source
 
 
-def test_top_level_stencil_refuses_missing_owner() -> None:
+def test_uniform_top_level_stencil_refuses_before_owner_fallback() -> None:
     program = Program("cartesian_top_level_missing_owner")
     _pin_leading_block(program)
     _pin_leading_block(program, "second")
     scratch = program.scalar_field("buf")
-    program.laplacian(scratch, scratch)
-    with pytest.raises(ValueError, match="no unique authenticated owner block"):
+    program.fill_boundary(program.laplacian(scratch, scratch))
+    with pytest.raises(NotImplementedError, match="cold-bound scalar boundary session"):
         emit_cpp_program(program)
 
 
-def test_top_level_stencil_refuses_conflicting_owners() -> None:
+def test_uniform_top_level_stencil_refuses_before_conflicting_owner_fallback() -> None:
     program = Program("cartesian_top_level_conflicting_owners")
     first, _ = _pin_leading_block(program)
     second, _ = _pin_leading_block(program, "second")
-    program.laplacian(
+    program.fill_boundary(program.laplacian(
         program.history("first.phi", lag=1, ncomp=1, block=first),
         program.history("second.phi", lag=1, ncomp=1, block=second),
-    )
-    with pytest.raises(ValueError, match="conflicting owner blocks"):
+    ))
+    with pytest.raises(NotImplementedError, match="cold-bound scalar boundary session"):
         emit_cpp_program(program)

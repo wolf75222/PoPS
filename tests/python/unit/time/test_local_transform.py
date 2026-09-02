@@ -83,9 +83,11 @@ def test_local_transform_program_emits_one_collective_fail_closed_kernel() -> No
     emit_model = _canonical_emit_model(model)
     source = emit_cpp_program(program, model=emit_model)
     assert source.count("transform_failed_") >= 1
-    assert "ctx.scratch_state_like(" in source
-    install_prelude, step_body = source.split("ctx.install([=](double dt)", 1)
-    assert "transform_state_resource_" in install_prelude
+    assert "ctx.scratch_state(" in source
+    install_prelude, step_body = source.split(
+        "state->step = [ctx_owner = state->ctx_owner](double dt)", 1
+    )
+    assert "ctx.prepare_state_scratch(" in install_prelude
     assert "transform_status_resource_" in install_prelude
     assert "ctx.scalar_scratch(" in install_prelude
     assert ", 0, ctx.state(0), 1, 0)" in install_prelude
@@ -97,7 +99,8 @@ def test_local_transform_program_emits_one_collective_fail_closed_kernel() -> No
     assert "transform_has_active_mask_" in source
     assert "outA(index, 0) = u0A(index, 0);" in source
     assert "ctx.pointwise_status_max(0," in source
-    assert "StepAttemptRejected" in source
+    assert "program_reject_step(ctx," in source
+    assert "throw pops::runtime::program::StepAttemptRejected" not in source
     assert "Kokkos::isfinite" in source
     assert "ctx.apply_projection" not in source
 

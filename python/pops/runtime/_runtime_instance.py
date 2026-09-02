@@ -7,6 +7,7 @@ import json
 import math
 import os
 from collections.abc import Iterable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
@@ -22,11 +23,16 @@ from pops.output._consumer_contracts import (
     ConsumerGraph,
     ConsumerKind,
     ConsumerMoment,
+    Retry,
     ScheduleCursor,
     SkipSampleReported,
 )
 from ._consumer_planning import next_consumer_deadline, plan_accepted_side_effects
-from ._consumer_transaction import ConsumerTransaction, ConsumerTransactionReport
+from ._consumer_transaction import (
+    ConsumerTransaction,
+    ConsumerTransactionReport,
+    ConsumerTransactionWorkspace,
+)
 from ._output_publisher import preflight_consumer_publication
 from ._runtime_component_manifests import component_manifests_for_install
 from ._runtime_consumers import (
@@ -383,6 +389,75 @@ class _PendingConsumerFinalization:
     base_diagnostics: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _ConsumerBindAuthority:
+    """The non-growing ConsumerGraph execution envelope captured at bind.
+
+    Scheduling still chooses which already-declared sample is due.  It cannot add a consumer,
+    reorder effects, or increase the number of retry preparations once this value exists.
+    """
+
+    graph_identity: Identity
+    runtime_plan_identity: Identity
+    rows: tuple[tuple[str, Identity, Any], ...]
+    clocks: tuple[Any, ...]
+    max_prepared: int
+
+    @classmethod
+    def capture(cls, graph: ConsumerGraph, runtime_plan: Any) -> _ConsumerBindAuthority:
+        rows = tuple(
+            (manifest.qualified_id, manifest.identity, manifest.failure_action)
+            for manifest in graph.topology
+        )
+        clocks = tuple(sorted(
+            {manifest.schedule.domain.clock for manifest in graph.nodes},
+            key=lambda clock: clock.qualified_id,
+        ))
+        return cls(
+            graph.identity,
+            runtime_plan.identity,
+            rows,
+            clocks,
+            sum(
+                action.max_attempts if type(action) is Retry else 1
+                for _, _, action in rows
+            ),
+        )
+
+    @property
+    def max_effects(self) -> int:
+        return len(self.rows)
+
+    def validate(self, plan: Any) -> None:
+        """Reject a late shape before writer preparation can mutate external state."""
+        if getattr(plan, "graph_identity", None) != self.graph_identity \
+                or getattr(plan, "runtime_plan_identity", None) != self.runtime_plan_identity:
+            raise ValueError("consumer effect plan does not belong to the bound runtime authority")
+        if len(plan.effects) > self.max_effects:
+            raise ValueError("consumer effect plan exceeds the bind-time effect budget")
+        previous = -1
+        prepared = 0
+        for ordinal, effect in enumerate(plan.effects):
+            if effect.ordinal != ordinal:
+                raise ValueError("consumer effect plan has a non-contiguous late effect ordinal")
+            match = -1
+            for index, (consumer_id, manifest_identity, failure_action) in enumerate(self.rows):
+                if effect.consumer_id == consumer_id:
+                    if effect.manifest_identity != manifest_identity \
+                            or effect.failure_action != failure_action:
+                        raise ValueError("consumer effect plan changes a bound consumer shape")
+                    match = index
+                    prepared += (
+                        failure_action.max_attempts if type(failure_action) is Retry else 1
+                    )
+                    break
+            if match < 0 or match <= previous:
+                raise ValueError("consumer effect plan changes the bound ConsumerGraph order")
+            previous = match
+        if prepared > self.max_prepared:
+            raise ValueError("consumer effect plan exceeds the bind-time retry budget")
+
+
 class RuntimeInstance:
     """Authenticated InstallPlan plus its sole native executor and transactional consumers."""
 
@@ -394,6 +469,8 @@ class RuntimeInstance:
         "_component_manifests",
         "_runtime_plan",
         "_consumer_graph",
+        "_consumer_bind_authority",
+        "_consumer_transaction_workspace",
         "_executor",
         "_checkpoint_resource_budget",
         "_consumer_cursors",
@@ -405,6 +482,7 @@ class RuntimeInstance:
         "_checkpoint_cursor_override",
         "_snapshot_builder",
         "_publisher",
+        "_native_fail_stop",
     )
 
     def __init__(
@@ -438,6 +516,14 @@ class RuntimeInstance:
         self._component_manifests = manifests
         self._runtime_plan = runtime_plan
         self._consumer_graph = graph
+        # Freeze the only structural consumer authority before native installation and before any
+        # writer can stage external payloads.  Runtime scheduling may select a due subset only.
+        self._consumer_bind_authority = _ConsumerBindAuthority.capture(graph, runtime_plan)
+        self._consumer_transaction_workspace = ConsumerTransactionWorkspace(
+            max_effects=self._consumer_bind_authority.max_effects,
+            max_prepared=self._consumer_bind_authority.max_prepared,
+            max_transactions=len(self._consumer_bind_authority.clocks),
+        )
         self._executor = native
         from ._checkpoint_resource_budget import CheckpointResourceBudget
 
@@ -457,6 +543,7 @@ class RuntimeInstance:
         self._attempt = 0
         self._checkpoint_cursor_override = None
         self._snapshot_builder = RuntimeOutputSnapshot(self)
+        self._native_fail_stop = False
         self._publisher = RuntimeConsumerPublisher(self) if publisher is None else publisher
 
     @property
@@ -791,21 +878,6 @@ class RuntimeInstance:
     def field_provider_slots(self) -> tuple[str, ...]:
         return tuple(self._executor.field_provider_slots())
 
-    def set_field_composite_mean_neutralizing(
-        self,
-        slot: str,
-        block: str,
-        component: int,
-        eps: float,
-    ) -> None:
-        """Evaluate neutralizing as ``eps * composite_mean(block[component])``."""
-        setter = getattr(self._executor, "set_field_composite_mean_neutralizing", None)
-        if not callable(setter):
-            raise NotImplementedError(
-                "this runtime does not expose composite-mean neutralizing"
-            )
-        setter(slot, block, int(component), float(eps))
-
     def field_provider_levels(self, slot: str) -> int:
         return int(self._executor.field_provider_levels(slot))
 
@@ -925,7 +997,11 @@ class RuntimeInstance:
     def _moments(
         self, *, at_start: bool = False, at_end: bool = False
     ) -> tuple[ConsumerMoment, ...]:
-        clocks = {row.schedule.domain.clock for row in self._consumer_graph.nodes}
+        authority = getattr(self, "_consumer_bind_authority", None)
+        clocks = authority.clocks if type(authority) is _ConsumerBindAuthority else tuple(sorted(
+            {row.schedule.domain.clock for row in self._consumer_graph.nodes},
+            key=lambda clock: clock.qualified_id,
+        ))
         native = self._executor
         temporal = getattr(native, "_temporal_restart_state", None)
         if clocks and temporal is None:
@@ -935,7 +1011,7 @@ class RuntimeInstance:
         temporal_state = cast(Any, temporal)
         accepted_step = int(native.macro_step())
         moments = []
-        for clock in sorted(clocks, key=lambda value: value.qualified_id):
+        for clock in clocks:
             cursor = temporal_state.cursor_for_clock(clock)
             moments.append(
                 ConsumerMoment(
@@ -965,6 +1041,12 @@ class RuntimeInstance:
             for moment in self._moments(at_start=at_start, at_end=at_end)
         )
         plans = tuple(plan for plan in plans if plan.effects)
+        authority = getattr(self, "_consumer_bind_authority", None)
+        if type(authority) is _ConsumerBindAuthority:
+            # This runs before ConsumerTransaction.prepare(), so a malformed late plan has no
+            # route to allocate a temporary artifact or mutate a publisher registry.
+            for plan in plans:
+                authority.validate(plan)
         all_effects = tuple(effect for plan in plans for effect in plan.effects)
         checkpoint_ids = {
             row.qualified_id
@@ -992,8 +1074,11 @@ class RuntimeInstance:
 
         staged = []
         try:
+            workspace = getattr(self, "_consumer_transaction_workspace", None)
             for plan in plans:
-                staged.append(ConsumerTransaction(plan, self._consumer_cursors, self._publisher))
+                staged.append(ConsumerTransaction(
+                    plan, self._consumer_cursors, self._publisher, workspace=workspace
+                ))
         except BaseException as error:
             cleanup_error = self._abort_consumers(tuple(staged))
             if cleanup_error is not None:
@@ -1208,6 +1293,141 @@ class RuntimeInstance:
             )
         return cast(tuple[Any, Any, Any, Any], methods)
 
+    @contextmanager
+    def _provisional_candidate_read_scope(self) -> Any:
+        """Read native candidate state through its private transaction capability.
+
+        Native public readers deliberately refuse while the step writer owns the visibility lock.
+        Candidate controller work and consumer staging are the only Python phases allowed to
+        inspect that state.  Controller execution uses this scope for the pre/post-attempt clock
+        witnesses in ``_native_attempt``; consumer staging freezes its complete publication
+        payload before native hidden publication.  Compensable effect publication and start/end
+        consumers continue to use ordinary accepted readers and must not reopen this capability.
+        """
+        provider = getattr(self._executor, "_provisional_read_scope", None)
+        if not callable(provider):
+            raise RuntimeError(
+                "accepted-step consumer execution requires native _provisional_read_scope()"
+            )
+        scope = provider()
+        if scope is None or not callable(getattr(scope, "__enter__", None)) \
+                or not callable(getattr(scope, "__exit__", None)):
+            raise TypeError(
+                "native _provisional_read_scope() must return a context manager"
+            )
+        with scope:
+            yield
+
+    @staticmethod
+    def _native_finalize_fail_stop(native: Any, error: BaseException) -> bool:
+        """Consume the native fail-stop witness after an irreversible finalize exception.
+
+        Entering native finalize means the scientific generation may already be sealed.  Missing,
+        failed or malformed evidence can therefore never authorize rollback; retain the accepted
+        image conservatively and attach the witness defect to the operational exception.
+        """
+        witness = getattr(native, "_accepted_transaction_fail_stop_", None)
+        if not callable(witness):
+            _append_exception_note(error, "native finalize fail-stop witness is missing")
+            return True
+        try:
+            result = witness()
+        except BaseException as witness_error:
+            _append_exception_note(
+                error,
+                "native finalize fail-stop witness failed: %s: %s"
+                % (type(witness_error).__name__, witness_error),
+            )
+            return True
+        if type(result) is not bool:
+            _append_exception_note(
+                error,
+                "native finalize fail-stop witness returned a non-bool result",
+            )
+            return True
+        return result
+
+    def _retain_native_fail_stop_acceptance(
+        self,
+        native: Any,
+        snapshot: dict[str, Any],
+        transactions: tuple[Any, ...],
+        reports: tuple[Any, ...],
+        cursors: ConsumerCursorSet,
+        error: BaseException,
+    ) -> None:
+        """Retain accepted Python effects after native irreversible finalization fail-stop.
+
+        A native finalizer can report failure only after sealing the scientific generation.  This
+        path therefore never calls consumer abort, native rollback, or envelope restoration.  The
+        original operational exception remains the raised error; the accepted reports carry an
+        explicit diagnostic and consumer finalizers remain retained for their normal post-commit
+        retry boundary.
+        """
+        diagnostic = "native transaction entered fail-stop during finalization: %s: %s" % (
+            type(error).__name__, error
+        )
+        _append_exception_note(error, diagnostic)
+        try:
+            sealed_reports = self._seal_consumer_reports(transactions, reports)
+        except BaseException as seal_error:
+            # Native fail-stop is irreversible even if Python release bookkeeping itself fails.
+            # Keep the accepted reports and attach the secondary operational detail to the root
+            # exception without reopening compensation.
+            _append_exception_note(
+                error,
+                "consumer report sealing after native fail-stop also failed: %s: %s"
+                % (type(seal_error).__name__, seal_error),
+            )
+            sealed_reports = reports
+        accepted_reports = []
+        for report in sealed_reports:
+            if type(report) is ConsumerTransactionReport:
+                try:
+                    report = replace(report, diagnostics=report.diagnostics + (diagnostic,))
+                except BaseException as report_error:
+                    _append_exception_note(
+                        error,
+                        "native fail-stop report diagnostic attachment failed: %s: %s"
+                        % (type(report_error).__name__, report_error),
+                    )
+            accepted_reports.append(report)
+        # Finalizer retries rebuild diagnostics from the pending owner's immutable base.  Extend
+        # only owners created for this accepted transaction so the fail-stop witness cannot vanish
+        # when a later release retry replaces the transient seal diagnostic.
+        report_offset = len(snapshot["consumer_reports"])
+        pending = []
+        for owner in getattr(self, "_consumer_finalize_pending", ()):
+            if owner.consumer_report_index >= report_offset:
+                owner = replace(
+                    owner,
+                    base_diagnostics=owner.base_diagnostics + (diagnostic,),
+                )
+            pending.append(owner)
+        self._consumer_finalize_pending = tuple(pending)
+        self._consumer_cursors = cursors
+        self._consumer_reports = snapshot["consumer_reports"] + tuple(accepted_reports)
+        native_report = getattr(native, "_last_step_transaction_report", None)
+        # A direct caller may not have produced a fresh StepTransactionReport before the
+        # finalizer failed.  Never attach this attempt's diagnostic to the previous accepted
+        # report retained in the envelope snapshot.
+        if (
+            native_report is not None
+            and native_report is not snapshot["last_step_transaction_report"]
+            and hasattr(native_report, "diagnostics")
+        ):
+            try:
+                native._last_step_transaction_report = replace(
+                    native_report,
+                    diagnostics=tuple(native_report.diagnostics) + (diagnostic,),
+                )
+            except BaseException as report_error:
+                _append_exception_note(
+                    error,
+                    "native fail-stop diagnostic attachment failed: %s: %s"
+                    % (type(report_error).__name__, report_error),
+                )
+
     def _step_envelope_snapshot(self) -> dict[str, Any]:
         native = self._executor
         return {
@@ -1363,6 +1583,7 @@ class RuntimeInstance:
         cursors = self._consumer_cursors
         native_active = False
         begin_entered = False
+        finalize_entered = False
         try:
             # ``begin`` is part of the failure boundary: a native backend may
             # have captured or mutated provisional stores before reporting a
@@ -1376,28 +1597,52 @@ class RuntimeInstance:
             begin()
             native_active = True
             phase = "solve"
-            result, attempts = advance()
+            # ``_native_attempt`` reads the pre/post clock around the prepared controller.  The
+            # native transaction is already in Candidate phase after ``begin``, so those internal
+            # reads require the same explicit lease as candidate consumer staging.
+            with self._provisional_candidate_read_scope():
+                result, attempts = advance()
             if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts <= 0:
                 raise RuntimeError("step controller returned an invalid native-attempt count")
             phase = "effect"
             self._attempt += attempts
-            transactions = self._stage_consumers(
-                at_end=bool(at_end() if callable(at_end) else at_end)
-            )
+            with self._provisional_candidate_read_scope():
+                transactions = self._stage_consumers(
+                    at_end=bool(at_end() if callable(at_end) else at_end)
+                )
             phase = "commit"
             commit()
             phase = "effect"
             reports, cursors, _all_reports = self._accept_consumers(transactions)
             phase = "commit"
+            finalize_entered = True
             finalize()
             native_active = False
             phase = "native_finalized"
+            from pops.runtime._step_strategy import _projections
+
+            sealed_projections = _projections(native, sealed=True)
+            native_report = getattr(native, "_last_step_transaction_report", None)
+            if type(native_report) is StepTransactionReport:
+                native_report = replace(native_report, projections=sealed_projections)
+                native._last_step_transaction_report = native_report
+            if type(result) is StepTransactionReport:
+                result = replace(result, projections=sealed_projections)
             sealed_reports = self._seal_consumer_reports(transactions, reports)
             self._consumer_cursors = cursors
             self._consumer_reports = self._consumer_reports + sealed_reports
             self._retry_consumer_finalizers()
             return result
         except BaseException as error:
+            # ``finalize`` is the native irreversible boundary.  A fail-stop receipt means the
+            # candidate generation is already sealed and must remain accepted even though the
+            # operation reports an error; no Python consumer/native rollback is legal here.
+            if finalize_entered and self._native_finalize_fail_stop(native, error):
+                self._native_fail_stop = True
+                self._retain_native_fail_stop_acceptance(
+                    native, snapshot, transactions, reports, cursors, error
+                )
+                raise
             try:
                 failed_temporal = copy.deepcopy(getattr(native, "_temporal_restart_state", None))
             except BaseException as stats_snapshot_error:
@@ -1679,7 +1924,7 @@ class RuntimeInstance:
             # invocation is allowed to reuse its deterministic identity.  Cleanup still runs when
             # restoration fails, but the identity remains sealed fail-closed.
             entry_restored = False
-            if steps == 0:
+            if steps == 0 and not bool(getattr(self, "_native_fail_stop", False)):
                 restore_error = None
                 try:
                     restore_temporal = getattr(native, "_restore_temporal_restart_state", None)

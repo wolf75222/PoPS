@@ -1,9 +1,9 @@
 """Explicit native Programs for low-level Python runtime tests.
 
 These helpers are deliberately low-level runtime fixtures, not Program-authoring evidence or a
-runtime compatibility layer.  A helper builds an ABI-checked ``problem.so`` with an explicit block
-identity table, installs a real ``ProgramContext`` or ``AmrProgramContext``, and only then lets a
-test exercise a spatial/runtime seam.
+runtime compatibility layer.  A helper builds an ABI-v5 ``problem.so`` with an explicit block
+identity table, prepares a real ``ProgramExecutionServices`` owner, and only then lets a test
+exercise a spatial/runtime seam.
 
 The forward-Euler bridge is the only such seam appropriate for a spatial/runtime test that does not
 need a temporal method.  Projection and coupled-source splitting are opt-in by block
@@ -20,7 +20,6 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from pops.codegen._compile_emit import _emit_route_manifest
 from pops.codegen.cache import (
     _artifact_cache_lock,
     _artifact_cache_staging_path,
@@ -39,111 +38,20 @@ from pops.codegen.toolchain import (
 from pops.runtime._system import AmrSystem, System
 
 
-def _block_identity_exports(block_names: tuple[str, ...]) -> str:
-    cases = "".join(
-        "    case %d: return %s;\n" % (index, json.dumps(name))
-        for index, name in enumerate(block_names)
-    )
-    return (
-        'extern "C" int pops_program_block_count() { return %d; }\n'
-        'extern "C" const char* pops_program_block_name(int index) {\n'
-        "  switch (index) {\n"
-        "%s"
-        '    default: return "";\n'
-        "  }\n"
-        "}\n"
-    ) % (len(block_names), cases)
-
-
-def _empty_module_metadata_exports() -> str:
-    """Emit the mandatory authenticated metadata families for an operator-free bridge Program."""
-    string_exports = "".join(
-        'extern "C" const char* pops_module_%s(int) { return ""; }\n' % name
-        for name in (
-            "operator_name",
-            "operator_kind",
-            "operator_signature",
-            "operator_requirements",
-            "operator_owner",
-            "state_space_name",
-            "state_space_owner",
-            "field_space_name",
-            "field_space_owner",
-        )
-    )
-    return (
-        'extern "C" int pops_module_operator_count() { return 0; }\n'
-        'extern "C" int pops_module_state_space_count() { return 0; }\n'
-        'extern "C" int pops_module_field_space_count() { return 0; }\n' + string_exports
-    )
-
-
 def _coupling_application(block_count: int, enabled: bool, *, target: str) -> str:
     if not enabled:
         return ""
     candidates = ["        {%d, &next_%d}" % (block, block) for block in range(block_count)]
     arguments = "dt"
     if target == "amr_system":
-        arguments = "pops_program_hash(), %s, %s, dt" % (
+        arguments = "%s, %s, %s, dt" % (
+            json.dumps("pops.test.euler.coupled-source.graph/final"),
             json.dumps("pops.test.euler.coupled-source.rate/final"),
             json.dumps("pops.test.euler.coupled-source.application/final"),
         )
     return "      ctx.apply_coupling_operators(%s, {\n%s\n      });" % (
         arguments,
         ",\n".join(candidates),
-    )
-
-
-def _amr_budget_exports(block_count: int, coupled_sources: bool, identity: str) -> str:
-    rate_identity = "pops.test.euler.coupled-source.rate/final"
-    application_identity = "pops.test.euler.coupled-source.application/final"
-    coupling_identity_characters = (
-        len(identity) + len(rate_identity) + len(application_identity) if coupled_sources else 0
-    )
-    return """\
-extern "C" bool pops_program_has_flux_expression() { return true; }
-extern "C" int pops_program_flux_expression_budget_count() { return %d; }
-extern "C" std::uint64_t pops_program_flux_rhs_basis_bound(int block) {
-  return block >= 0 && block < %d ? UINT64_C(%d) : UINT64_C(0);
-}
-extern "C" std::uint64_t pops_program_flux_coefficient_term_bound(int block) {
-  return block >= 0 && block < %d ? UINT64_C(1) : UINT64_C(0);
-}
-extern "C" std::uint64_t pops_program_interface_coupling_application_bound() {
-  return UINT64_C(%d);
-}
-extern "C" std::uint64_t pops_program_interface_coupling_identity_character_bound() {
-  return UINT64_C(%d);
-}
-extern "C" int pops_program_checkpoint_history_count() { return 0; }
-extern "C" const char* pops_program_checkpoint_history_name(int) { return ""; }
-extern "C" int pops_program_checkpoint_history_owner(int) { return 0; }
-extern "C" const char* pops_program_checkpoint_history_state_identity(int) { return ""; }
-extern "C" const char* pops_program_checkpoint_history_space_identity(int) { return ""; }
-extern "C" const char* pops_program_checkpoint_history_clock_identity(int) { return ""; }
-extern "C" const char* pops_program_checkpoint_history_interpolation_identity(int) { return ""; }
-extern "C" int pops_program_checkpoint_history_depth(int) { return 0; }
-extern "C" int pops_program_checkpoint_history_components(int) { return 0; }
-extern "C" int pops_program_checkpoint_logical_clock_count() { return 1; }
-extern "C" const char* pops_program_checkpoint_logical_clock_identity(int clock) {
-  return clock == 0 ? "pops.test.clock.macro" : "";
-}
-extern "C" const char* pops_program_checkpoint_temporal_provider_identity() {
-  return "pops.temporal-partition.global@1";
-}
-extern "C" std::uint64_t pops_program_checkpoint_temporal_cell_capacity() {
-  return UINT64_C(0);
-}
-extern "C" std::uint64_t pops_program_checkpoint_temporal_cells_per_topology_cell() {
-  return UINT64_C(0);
-}
-""" % (
-        block_count,
-        block_count,
-        1,
-        block_count,
-        1 if coupled_sources else 0,
-        coupling_identity_characters,
     )
 
 
@@ -225,83 +133,260 @@ def _source(
     )
     if target == "amr_system":
         body = _make_test_field_solve_explicitly_coarse(body)
-    common = """\
+    from pops.runtime.routes import route_registry_signature
+
+    block_strings = "\n".join(
+        'static constexpr char kBlockName%d[] = %s;' % (index, json.dumps(name))
+        for index, name in enumerate(block_names)
+    )
+    block_rows = ",\n    ".join(
+        '{{kBlockName%d, static_cast<std::uint64_t>(sizeof(kBlockName%d) - 1)}}' % (index, index)
+        for index in range(len(block_names))
+    )
+    coupled_identity_size = 0
+    if coupled_sources:
+        coupled_identity_size = sum(
+            len(value)
+            for value in (
+                "pops.test.euler.coupled-source.graph/final",
+                "pops.test.euler.coupled-source.rate/final",
+                "pops.test.euler.coupled-source.application/final",
+            )
+        )
+    flux_table = ""
+    if target == "amr_system":
+        flux_rows = ",\n    ".join(
+            "{UINT64_C(1), UINT64_C(1), UINT64_C(%d), UINT64_C(%d)}"
+            % (1 if coupled_sources else 0, coupled_identity_size)
+            for _ in block_names
+        )
+        flux_table = """
+static const ProgramFluxBudgetRecord kFluxBudgets[] = {
+    %s
+};
+""" % flux_rows
+    candidate_capabilities = (
+        "kProgramCapabilityHierarchy | kProgramCapabilitySchedules | "
+        "kProgramCapabilityCellTemporal | kProgramCapabilityPersistentValues | "
+        "kProgramCapabilityTransactions"
+        if target == "amr_system"
+        else "kProgramCapabilitySchedules | kProgramCapabilityPersistentValues | kProgramCapabilityTransactions"
+    )
+    candidate_services = (
+        "kProgramServiceState | kProgramServiceFields | kProgramServiceSpatial | "
+        "kProgramServiceHierarchy | kProgramServiceHistory | kProgramServiceClock | "
+        "kProgramServiceReduction | kProgramServiceTransaction | kProgramServicePersistentValues"
+        if target == "amr_system"
+        else "kProgramServiceState | kProgramServiceFields | kProgramServiceSpatial | "
+        "kProgramServiceHistory | kProgramServiceClock | kProgramServiceReduction | "
+        "kProgramServiceTransaction | kProgramServicePersistentValues"
+    )
+    if target == "system":
+        step_builder = """\
+    state->step = [ctx_owner = state->ctx_owner](double dt) {
+      auto& ctx = *ctx_owner;
+      ctx.begin_step(dt);
+%s
+    };""" % body
+        lifecycle = ""
+    else:
+        step_builder = """\
+    state->step = [ctx_owner = state->ctx_owner](double macro_dt) {
+      ctx_owner->advance_hierarchy(macro_dt, [ctx_owner](double dt) {
+        auto& ctx = *ctx_owner;
+%s
+      });
+    };""" % body
+        lifecycle = """
+    descriptor.hierarchy_refresh = &candidate_hierarchy_refresh;
+    descriptor.history_remap_accepted = &candidate_history_remap;
+    descriptor.restart_regrid_preflight = &candidate_restart_preflight;
+    descriptor.restart_regrid = &candidate_restart_regrid;
+    descriptor.restart_resync = &candidate_restart_resync;
+    descriptor.create_accepted_snapshot = &candidate_accepted_snapshot;"""
+    return """\
 #if !defined(POPS_RUNTIME_SHARED_EXCEPTION_ABI)
 #error "test Programs require the shared runtime exception ABI consumer contract"
 #endif
 #include <pops/runtime/dynamic/abi_key.hpp>
-#include <pops/runtime/program/program_context.hpp>
-#include <pops/runtime/program/amr_program_context.hpp>
+#include <pops/runtime/program/program_abi.hpp>
+#include <pops/runtime/program/program_execution_services.hpp>
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <cstdint>
-#include <limits>
+#include <cstring>
+#include <functional>
 #include <memory>
+#include <stdexcept>
 
-extern "C" const char* pops_program_abi_key() { return POPS_ABI_KEY_LITERAL; }
-%s
-extern "C" const char* pops_program_name() { return "pops.test.%s"; }
-extern "C" const char* pops_program_hash() { return "%s"; }
-extern "C" int pops_program_operator_authority_count() { return 0; }
-extern "C" std::uint64_t pops_program_operator_authority_word(int, int) {
-  return UINT64_C(0);
+namespace {
+using namespace pops::runtime::program;
+
+void write_diagnostic(ProgramInstallDiagnostic* diagnostic, ProgramInstallErrorCode code,
+                      const char* message) noexcept {
+  if (diagnostic == nullptr) return;
+  diagnostic->code = code;
+  std::size_t size = 0;
+  if (message != nullptr)
+    for (; size + 1 < sizeof(diagnostic->message) && message[size] != '\\0'; ++size)
+      diagnostic->message[size] = message[size];
+  diagnostic->message[size] = '\\0';
 }
+
+struct CandidateState final {
+  std::shared_ptr<ProgramExecutionServices<pops::kNativeDimension>> ctx_owner;
+  std::function<void(double)> step;
+};
+
+void candidate_step(void* opaque, double dt) {
+  static_cast<CandidateState*>(opaque)->step(dt);
+}
+void candidate_destroy(void* opaque) noexcept { delete static_cast<CandidateState*>(opaque); }
 %s
 %s
+static const ProgramBlockRecord kBlocks[] = {
+    %s
+};
 %s
-extern "C" bool pops_program_has_dt_bound() { return false; }
-extern "C" pops::Real %s(%s*, pops::Real) {
-  return std::numeric_limits<pops::Real>::infinity();
+static constexpr char kArtifactIdentity[] = %s;
+static constexpr char kProgramName[] = "pops.test.euler";
+static constexpr char kAbiKey[] = POPS_ABI_KEY_LITERAL;
+static constexpr char kRouteManifest[] = %s;
+static constexpr char kBoundaryManifest[] = "pops.boundary.manifest.v1";
+static constexpr char kResourceManifest[] = "pops.persistent-resource.manifest.v1";
+static constexpr char kCheckpointIdentity[] = "pops.checkpoint.identity.v1";
+
+bool candidate_prepare(void* opaque, const ProgramHostDescriptor* host,
+                       ProgramInstallDiagnostic* diagnostic) noexcept {
+  if (opaque == nullptr || host == nullptr || diagnostic == nullptr ||
+      !valid_program_host_descriptor(*host) ||
+      host->native_dimension != static_cast<std::uint32_t>(pops::kNativeDimension) ||
+      host->runtime_kind != ProgramRuntimeKind::%s ||
+      host->execution_lane != ProgramExecutionLane::host) {
+    write_diagnostic(diagnostic, ProgramInstallErrorCode::invalid_host_descriptor,
+                     "explicit test Program received an incompatible host");
+    return false;
+  }
+  auto* state = static_cast<CandidateState*>(opaque);
+  if (state->ctx_owner || state->step) {
+    write_diagnostic(diagnostic, ProgramInstallErrorCode::artifact_rejected,
+                     "explicit test Program candidate was prepared twice");
+    return false;
+  }
+  try {
+    state->ctx_owner = make_program_execution_provider<pops::kNativeDimension>(host->preparation);
+    state->ctx_owner->configure_primary_clock("pops.test.clock.macro");
+%s
+    return true;
+  } catch (...) {
+    write_diagnostic(diagnostic, ProgramInstallErrorCode::artifact_rejected,
+                     "explicit test Program preparation failed");
+    return false;
+  }
+}
+
+}  // namespace
+
+extern "C" pops::runtime::program::ProgramInstallAbiProbe
+pops_program_install_abi_probe_v5() noexcept {
+  return pops::runtime::program::make_program_install_abi_probe();
+}
+
+extern "C" bool pops_install_program(const ProgramHostDescriptor* host,
+                                      ProgramCandidateDescriptor* candidate,
+                                      ProgramInstallDiagnostic* diagnostic) noexcept {
+  if (host == nullptr || candidate == nullptr || diagnostic == nullptr ||
+      !valid_program_host_descriptor(*host) ||
+      host->native_dimension != static_cast<std::uint32_t>(pops::kNativeDimension) ||
+      host->runtime_kind != ProgramRuntimeKind::%s ||
+      host->execution_lane != ProgramExecutionLane::host) {
+    write_diagnostic(diagnostic, ProgramInstallErrorCode::invalid_host_descriptor,
+                     "explicit test Program received an incompatible host");
+    return false;
+  }
+  *candidate = {};
+  try {
+    auto state = std::make_unique<CandidateState>();
+    ProgramCandidateDescriptor descriptor{};
+    descriptor.struct_size = static_cast<std::uint32_t>(sizeof(ProgramCandidateDescriptor));
+    descriptor.abi_version = kProgramInstallAbiVersion;
+    descriptor.native_dimension = static_cast<std::uint32_t>(pops::kNativeDimension);
+    descriptor.runtime_kind = ProgramRuntimeKind::%s;
+    descriptor.provided_capability_bits = %s;
+    descriptor.required_capability_bits = %s;
+    descriptor.required_service_bits = %s;
+    descriptor.program_name = {kProgramName, sizeof(kProgramName) - 1};
+    descriptor.artifact_identity = {kArtifactIdentity, sizeof(kArtifactIdentity) - 1};
+    descriptor.abi_key = {kAbiKey, sizeof(kAbiKey) - 1};
+    descriptor.route_manifest = {kRouteManifest, sizeof(kRouteManifest) - 1};
+    descriptor.boundary_manifest = {kBoundaryManifest, sizeof(kBoundaryManifest) - 1};
+    descriptor.persistent_resource_manifest = {kResourceManifest, sizeof(kResourceManifest) - 1};
+    descriptor.checkpoint_identity = {kCheckpointIdentity, sizeof(kCheckpointIdentity) - 1};
+    descriptor.blocks = {kBlocks, %d, sizeof(ProgramBlockRecord)};
+%s
+    descriptor.maximum_bytes = sizeof(CandidateState);
+    descriptor.context = state.get();
+    descriptor.prepare = &candidate_prepare;
+    descriptor.step = &candidate_step;
+    descriptor.destroy = &candidate_destroy;
+%s
+    if (!valid_program_candidate_descriptor(descriptor)) {
+      write_diagnostic(diagnostic, ProgramInstallErrorCode::invalid_candidate,
+                       "explicit test Program produced an invalid candidate");
+      return false;
+    }
+    *candidate = descriptor;
+    (void)state.release();
+    return true;
+  } catch (...) {
+    write_diagnostic(diagnostic, ProgramInstallErrorCode::artifact_rejected,
+                     "explicit test Program candidate construction failed");
+    return false;
+  }
 }
 """ % (
-        _emit_route_manifest("pops_program_route_manifest"),
-        "euler",
-        identity,
-        _block_identity_exports(block_names),
-        _empty_module_metadata_exports(),
-        _amr_budget_exports(len(block_names), coupled_sources, identity)
+        "" if target == "system" else """\
+void candidate_hierarchy_refresh(void* opaque) {
+  static_cast<CandidateState*>(opaque)->ctx_owner->refresh_accepted_hierarchy({});
+}
+void candidate_history_remap(void* opaque, const void* descriptor) {
+  if (descriptor == nullptr) throw std::invalid_argument("null history remap");
+  static_cast<CandidateState*>(opaque)->ctx_owner->accept_history_remap(
+      *static_cast<const AmrProgramHistoryRemapDescriptor*>(descriptor));
+}
+void candidate_restart_preflight(void* opaque) {
+  static_cast<CandidateState*>(opaque)->ctx_owner->preflight_restart_regrid();
+}
+void candidate_restart_regrid(void* opaque) {
+  static_cast<CandidateState*>(opaque)->ctx_owner->restart_regrid();
+}
+void candidate_restart_resync(void* opaque) {
+  static_cast<CandidateState*>(opaque)->ctx_owner->resync_after_restart();
+}
+AcceptedProgramExecutionServicesSnapshot* candidate_accepted_snapshot(void* opaque) {
+  return static_cast<CandidateState*>(opaque)->ctx_owner->create_accepted_context_snapshot().release();
+}
+""",
+        block_strings,
+        block_rows,
+        flux_table,
+        json.dumps(identity),
+        json.dumps(route_registry_signature()),
+        "amr" if target == "amr_system" else "uniform",
+        step_builder,
+        "amr" if target == "amr_system" else "uniform",
+        "amr" if target == "amr_system" else "uniform",
+        candidate_capabilities,
+        candidate_capabilities,
+        candidate_services,
+        len(block_names),
+        "    descriptor.flux_budgets = {kFluxBudgets, %d, sizeof(ProgramFluxBudgetRecord)};"
+        % len(block_names)
         if target == "amr_system"
         else "",
-        "pops_program_dt_bound_amr" if target == "amr_system" else "pops_program_dt_bound",
-        (
-            "pops::AmrSystem<pops::kNativeDimension>"
-            if target == "amr_system"
-            else "pops::System<pops::kNativeDimension>"
-        ),
+        lifecycle,
     )
-    if target == "system":
-        install = (
-            """\
-extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* sys) {
-  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);
-  ctx_owner->configure_primary_clock("pops.test.clock.macro");
-  ctx_owner->install([=](double dt) {
-    auto& ctx = *ctx_owner;
-    ctx.begin_step(dt);
-%s
-  });
-}
-"""
-            % body
-        )
-    else:
-        install = (
-            """\
-extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>* sys) {
-  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);
-  ctx_owner->configure_primary_clock("pops.test.clock.macro");
-  ctx_owner->install([=](double macro_dt) {
-    ctx_owner->advance_hierarchy(macro_dt, [=](double dt) {
-      auto& ctx = *ctx_owner;
-%s
-    });
-  }, ctx_owner);
-}
-"""
-            % body
-        )
-    return common + install
 
 
 def _compile_program(source: str) -> str:

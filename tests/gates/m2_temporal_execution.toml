@@ -11,6 +11,7 @@ requirement = "amr_step_transaction"
 polarity = "positive"
 kind = "ctest"
 target = "test_amr_history_ring"
+backend = "serial"
 test_regex = "^test_amr_history_ring\\.AcceptedFacadeTransactionCommitsTopologyStateHistoryAndClock$"
 
 [[check]]
@@ -19,6 +20,7 @@ requirement = "amr_step_transaction"
 polarity = "refusal"
 kind = "ctest"
 target = "test_amr_history_ring"
+backend = "serial"
 test_regex = "^test_amr_history_ring\\.RejectedFacadeAttemptRestoresTopologyStateHistoryAndClock$"
 
 [[check]]
@@ -27,6 +29,7 @@ requirement = "phase_pipeline"
 polarity = "positive"
 kind = "pytest"
 target = "pipeline"
+backend = "serial"
 nodeid = "tests/python/unit/codegen/test_typed_phase_records.py::test_install_plan_is_bind_created_and_authenticates_all_inputs"
 
 [[check]]
@@ -35,6 +38,7 @@ requirement = "phase_pipeline"
 polarity = "refusal"
 kind = "pytest"
 target = "architecture"
+backend = "serial"
 nodeid = "tests/python/architecture/test_m1_semantic_core_gate.py::test_public_phase_functions_do_not_probe_or_swallow_unknown_shapes"
 
 [[check]]
@@ -43,6 +47,7 @@ requirement = "program_graph"
 polarity = "positive"
 kind = "pytest"
 target = "program_graph"
+backend = "serial"
 nodeid = "tests/python/unit/time/test_exact_program_graph.py::test_program_graph_has_exact_nodes_canonical_hash_and_no_builder_references"
 
 [[check]]
@@ -51,6 +56,7 @@ requirement = "program_graph"
 polarity = "refusal"
 kind = "pytest"
 target = "program_graph"
+backend = "serial"
 nodeid = "tests/python/unit/time/test_exact_program_graph.py::test_graph_rejects_forward_commit_and_opaque_builder_references"
 
 [[check]]
@@ -59,6 +65,7 @@ requirement = "schedules"
 polarity = "positive"
 kind = "pytest"
 target = "schedule"
+backend = "serial"
 nodeid = "tests/python/unit/time/test_typed_schedule.py::test_typed_schedule_serialization_and_rebuild_are_exact"
 
 [[check]]
@@ -67,6 +74,7 @@ requirement = "schedules"
 polarity = "refusal"
 kind = "pytest"
 target = "schedule"
+backend = "serial"
 nodeid = "tests/python/unit/time/test_typed_schedule.py::test_scheduled_read_without_off_policy_fails_before_native_lowering"
 
 [[check]]
@@ -75,6 +83,7 @@ requirement = "residual_operator"
 polarity = "positive"
 kind = "pytest"
 target = "residual"
+backend = "serial"
 nodeid = "tests/python/unit/time/test_time_ops_polish.py::test_solve_local_nonlinear_builds_newton_ir"
 
 [[check]]
@@ -83,6 +92,7 @@ requirement = "residual_operator"
 polarity = "refusal"
 kind = "pytest"
 target = "residual"
+backend = "serial"
 nodeid = "tests/python/unit/time/test_time_ops_polish.py::test_solve_local_nonlinear_validates_inputs"
 
 [[check]]
@@ -91,6 +101,7 @@ requirement = "solve_outcome"
 polarity = "positive"
 kind = "pytest"
 target = "solve"
+backend = "serial"
 nodeid = "tests/python/unit/time/test_solve_outcome_contract.py::test_reject_attempt_is_explicit_in_the_canonical_program_graph"
 
 [[check]]
@@ -99,7 +110,54 @@ requirement = "solve_outcome"
 polarity = "refusal"
 kind = "pytest"
 target = "solve"
+backend = "serial"
 nodeid = "tests/python/unit/time/test_solve_outcome_contract.py::test_solve_outcome_refuses_implicit_invalid_and_double_consumption"
+
+[[check]]
+issue = "ADC-665"
+requirement = "solve_outcome"
+polarity = "positive"
+kind = "pytest"
+target = "solve"
+backend = "serial"
+nodeid = "tests/python/unit/time/test_field_solve_outcome.py::test_consuming_field_solve_publishes_one_exact_field_context"
+
+[[check]]
+issue = "ADC-665"
+requirement = "solve_outcome"
+polarity = "refusal"
+kind = "pytest"
+target = "solve"
+backend = "serial"
+nodeid = "tests/python/unit/time/test_field_solve_outcome.py::test_field_solve_consume_rejects_untyped_failure_action_atomically"
+
+[[check]]
+issue = "ADC-665"
+requirement = "solve_outcome"
+polarity = "positive"
+kind = "ctest"
+target = "test_newton_robustness"
+backend = "serial"
+test_regex = "^NewtonRobustnessTest\\.prepared_success_publishes_only_on_single_accept$"
+
+[[check]]
+issue = "ADC-665"
+requirement = "solve_outcome"
+polarity = "refusal"
+kind = "ctest"
+target = "test_newton_robustness"
+backend = "serial"
+test_regex = "^NewtonRobustnessTest\\.publication_layout_failure_does_not_consume_the_outcome$"
+
+[[check]]
+issue = "ADC-665"
+requirement = "solve_outcome"
+polarity = "positive"
+kind = "ctest"
+target = "test_mpi_field_plan_consensus"
+backend = "mpi"
+dimensions = [1, 2, 3]
+test_regex = "^test_mpi_field_plan_consensus_np2$"
 
 [[check]]
 issue = "ADC-665"
@@ -107,6 +165,7 @@ requirement = "fallible_nonlinear_evaluation"
 polarity = "positive"
 kind = "ctest"
 target = "test_newton_robustness"
+backend = "serial"
 test_regex = "^NewtonRobustnessTest\\.fallible_analytic_jacobian_rejects_privately_and_success_keeps_legacy_result$"
 
 [[check]]
@@ -115,6 +174,7 @@ requirement = "fallible_nonlinear_evaluation"
 polarity = "refusal"
 kind = "ctest"
 target = "test_newton_robustness"
+backend = "serial"
 test_regex = "^NewtonRobustnessTest\\.fallible_source_propagates_retry_reject_fail_and_invalid_without_publication$"
 
 [[check]]
@@ -123,7 +183,9 @@ requirement = "fallible_linear_evaluation"
 polarity = "positive"
 kind = "ctest"
 target = "test_coupled_fieldsolve"
-test_regex = "^test_coupled_fieldsolve\\.named_solve_honors_every_qualified_stage_without_live_mutation$"
+backend = "mpi"
+dimensions = [1, 2, 3]
+test_regex = "^test_coupled_fieldsolve_np2$"
 
 [[check]]
 issue = "ADC-665"
@@ -131,7 +193,9 @@ requirement = "fallible_linear_evaluation"
 polarity = "refusal"
 kind = "ctest"
 target = "test_krylov_collective_contract"
-test_regex = "^test_krylov_collective_contract\\.RankLocalFailuresAreUniformBeforeScientificCollectives$"
+backend = "mpi"
+dimensions = [2]
+test_regex = "^test_krylov_collective_contract_np2$"
 
 [[check]]
 issue = "ADC-668"
@@ -139,6 +203,8 @@ requirement = "native_multiblock_implicit_phase"
 polarity = "positive"
 kind = "pytest"
 target = "solve"
+backend = "serial"
+dimensions = [2]
 nodeid = "tests/python/integration/runtime/test_multiblock_implicit_phase.py::test_generated_native_multiblock_implicit_phase_uses_exact_name_routes"
 
 [[check]]
@@ -147,6 +213,8 @@ requirement = "native_multiblock_implicit_phase"
 polarity = "refusal"
 kind = "pytest"
 target = "solve"
+backend = "serial"
+dimensions = [2]
 nodeid = "tests/python/integration/runtime/test_multiblock_implicit_phase.py::test_multiblock_implicit_fixture_refuses_route_or_phase_multiplicity_drift"
 
 # These are the temporal-composition proofs: the Program is authored in Python, compiled, then
@@ -158,6 +226,8 @@ requirement = "native_multiblock_implicit_phase"
 polarity = "positive"
 kind = "pytest"
 target = "solve"
+backend = "serial"
+dimensions = [2]
 nodeid = "tests/python/integration/amr/test_amr_newton_full.py::test_nonlinear_local_imex_executes_on_the_refined_amr_program"
 
 [[check]]
@@ -166,6 +236,8 @@ requirement = "native_multiblock_implicit_phase"
 polarity = "refusal"
 kind = "pytest"
 target = "solve"
+backend = "serial"
+dimensions = [2]
 nodeid = "tests/python/integration/amr/test_amr_newton_full.py::test_nonlinear_local_imex_failrun_rolls_back_refined_amr_attempt"
 
 [[check]]
@@ -174,6 +246,8 @@ requirement = "refined_hierarchy_native_ordering"
 polarity = "positive"
 kind = "pytest"
 target = "solve"
+backend = "serial"
+dimensions = [2]
 nodeid = "tests/python/unit/codegen/test_composite_tensor_fac_provider.py::test_header_only_hierarchy_extension_compiles_its_own_generic_provider_identity"
 
 [[check]]
@@ -182,6 +256,7 @@ requirement = "refined_hierarchy_native_ordering"
 polarity = "refusal"
 kind = "ctest"
 target = "test_amr_history_ring"
+backend = "serial"
 test_regex = "^test_amr_history_ring\\.FineNonFiniteAfterCoarseSuccessRestoresCompleteAcceptedState$"
 
 [[check]]
@@ -190,6 +265,8 @@ requirement = "normalized_program_execution"
 polarity = "positive"
 kind = "pytest"
 target = "program_graph"
+backend = "serial"
+dimensions = [2]
 nodeid = "tests/python/integration/native_loader/test_normalized_program_execution.py::test_manual_preset_ssprk2_and_imex_execute_through_same_program_graph_pipeline"
 
 [[check]]
@@ -198,6 +275,7 @@ requirement = "normalized_program_execution"
 polarity = "refusal"
 kind = "pytest"
 target = "program_graph"
+backend = "serial"
 nodeid = "tests/python/unit/time/test_field_solve_outcome.py::test_field_solve_is_unreadable_and_unconsumed_graph_is_rejected"
 
 [[check]]
@@ -206,6 +284,7 @@ requirement = "program_only_temporal_routes"
 polarity = "positive"
 kind = "pytest"
 target = "architecture"
+backend = "serial"
 nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_system_temporal_facades_dispatch_only_through_an_installed_program"
 
 [[check]]
@@ -214,6 +293,7 @@ requirement = "program_only_temporal_routes"
 polarity = "positive"
 kind = "pytest"
 target = "architecture"
+backend = "serial"
 nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine"
 
 [[check]]
@@ -222,6 +302,7 @@ requirement = "program_only_temporal_routes"
 polarity = "refusal"
 kind = "pytest"
 target = "architecture"
+backend = "serial"
 nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_static_system_assembler_is_retired_from_the_final_runtime_surface"
 
 [[check]]
@@ -230,6 +311,7 @@ requirement = "program_only_temporal_routes"
 polarity = "positive"
 kind = "pytest"
 target = "architecture"
+backend = "serial"
 nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker"
 
 [[check]]
@@ -238,6 +320,7 @@ requirement = "program_only_temporal_routes"
 polarity = "positive"
 kind = "pytest"
 target = "architecture"
+backend = "serial"
 nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_ssprk_semantics_have_only_typed_python_program_authority"
 
 [[check]]
@@ -245,24 +328,36 @@ issue = "ADC-666"
 requirement = "step_transaction"
 polarity = "positive"
 kind = "ctest"
-target = "test_program_runtime"
-test_regex = "^ProgramRuntime\\.ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate$"
+target = "test_system_transaction_authority"
+backend = "serial"
+test_regex = "^SystemTransactionAuthority\\.RejectRestoresProgramImageAndRetryCommitsOnce$"
 
 [[check]]
 issue = "ADC-666"
 requirement = "step_transaction"
 polarity = "refusal"
 kind = "ctest"
-target = "test_program_runtime"
-test_regex = "^ProgramRuntime\\.ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPublication$"
+target = "test_system_transaction_authority"
+backend = "serial"
+test_regex = "^SystemTransactionAuthority\\.PublicReaderCannotReenterUniformCandidate$"
 
 [[check]]
 issue = "ADC-666"
 requirement = "step_transaction"
 polarity = "positive"
 kind = "ctest"
-target = "test_program_runtime"
-test_regex = "^ProgramRuntime\\.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock$"
+target = "test_system_transaction_authority"
+backend = "serial"
+test_regex = "^SystemTransactionAuthority\\.ExternalAcceptedWindowRemainsComposableWithInternalStep$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_system_transaction_authority"
+backend = "serial"
+test_regex = "^SystemTransactionAuthority\\.PreparedFullAcceptedTransactionsAllocateNothing$"
 
 [[check]]
 issue = "ADC-666"
@@ -270,7 +365,165 @@ requirement = "step_transaction"
 polarity = "refusal"
 kind = "pytest"
 target = "transaction"
+backend = "serial"
 nodeid = "tests/python/unit/runtime/test_step_transaction_runtime.py::test_fault_injection_matrix_restores_every_available_store_and_reports_exact_phase"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "pytest"
+target = "transaction"
+backend = "serial"
+nodeid = "tests/python/unit/runtime/test_step_transaction_runtime.py::test_success_commits_native_clock_cursors_and_attempt_counter_together"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "pytest"
+target = "transaction"
+backend = "serial"
+nodeid = "tests/python/unit/runtime/test_step_transaction_runtime.py::test_error_controlled_retry_rolls_back_before_opening_the_next_attempt"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "pytest"
+target = "transaction"
+backend = "serial"
+nodeid = "tests/python/unit/runtime/test_step_transaction_runtime.py::test_error_controlled_retry_exhaustion_restores_the_last_accepted_boundary"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_mpi_cell_temporal_program"
+backend = "mpi"
+dimensions = [1, 2, 3]
+test_regex = "^test_mpi_cell_temporal_program_np2$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_mpi_cell_temporal_program_multibox"
+backend = "mpi"
+dimensions = [1, 2, 3]
+test_regex = "^test_mpi_cell_temporal_program_multibox_np2$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_mpi_cell_temporal_program_collective_rollback"
+backend = "mpi"
+dimensions = [1, 2, 3]
+test_regex = "^test_mpi_cell_temporal_program_collective_rollback_np2$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_mpi_cell_temporal_program_refusal"
+backend = "mpi"
+dimensions = [1, 2, 3]
+test_regex = "^test_mpi_cell_temporal_program_refusal_np2$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_program_transaction"
+backend = "serial"
+test_regex = "^ProgramTransaction\\.BindFreezesTypedOrderBudgetsAndHotCapacity$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_program_transaction"
+backend = "serial"
+test_regex = "^ProgramTransaction\\.SnapshotFailureDoesNotTouchAcceptedState$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_program_transaction"
+backend = "serial"
+test_regex = "^ProgramTransaction\\.CandidateAndPrepareFaultsLeaveGenerationUnchanged$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_program_transaction"
+backend = "serial"
+test_regex = "^ProgramTransaction\\.SolveGuardAndAtomicSealConsensusFaultsRollback$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_program_transaction"
+backend = "serial"
+test_regex = "^ProgramTransaction\\.HiddenPublishParticipantFailureRestoresAllPublishedState$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_program_transaction"
+backend = "serial"
+test_regex = "^ProgramTransaction\\.PublishFaultCompensatesEffectsInReverseOrderExactlyOnce$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_program_transaction"
+backend = "serial"
+test_regex = "^ProgramTransaction\\.ReaderSeesOldGenerationAndNewReadersBlockUntilSeal$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_program_transaction"
+backend = "serial"
+test_regex = "^ProgramTransaction\\.SealIsAtomicAndFinalizeFailureIsFailStopWithoutScientificRollback$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_program_transaction"
+backend = "serial"
+test_regex = "^ProgramTransaction\\.SuccessfulEffectsAndReceiptsAreExactOnce$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_program_transaction"
+backend = "serial"
+test_regex = "^ProgramTransaction\\.FrozenHotPathDoesNotRecordPoPSAllocations$"
 
 [[check]]
 issue = "ADC-666"
@@ -278,6 +531,8 @@ requirement = "restart"
 polarity = "positive"
 kind = "pytest"
 target = "restart"
+backend = "serial"
+dimensions = [2]
 nodeid = "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_native_linear_history_uses_bracketing_slots_and_restarts_exactly"
 
 [[check]]
@@ -286,6 +541,7 @@ requirement = "restart"
 polarity = "refusal"
 kind = "pytest"
 target = "restart"
+backend = "serial"
 nodeid = "tests/python/unit/runtime/test_temporal_restart_state.py::test_restart_rejects_a_different_installed_nested_clock_schedule"
 
 [[check]]
@@ -294,6 +550,7 @@ requirement = "temporal_restart"
 polarity = "positive"
 kind = "pytest"
 target = "transaction"
+backend = "serial"
 nodeid = "tests/python/unit/runtime/test_temporal_restart_state.py::test_accepted_attempt_advances_cursor_and_round_trips_exact_controller_state"
 
 [[check]]
@@ -302,6 +559,8 @@ requirement = "temporal_restart"
 polarity = "refusal"
 kind = "pytest"
 target = "transaction"
+backend = "serial"
+dimensions = [2]
 nodeid = "tests/python/unit/runtime/test_temporal_restart_state.py::test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible"
 
 [[check]]
@@ -310,6 +569,7 @@ requirement = "temporal_restart"
 polarity = "positive"
 kind = "pytest"
 target = "schedule"
+backend = "serial"
 nodeid = "tests/python/unit/time/test_multirate_history_contract.py::test_history_interpolation_is_an_explicit_cross_clock_provider"
 
 [[check]]
@@ -318,6 +578,8 @@ requirement = "temporal_restart"
 polarity = "positive"
 kind = "pytest"
 target = "restart"
+backend = "serial"
+dimensions = [2]
 nodeid = "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart"
 
 [[check]]
@@ -326,6 +588,7 @@ requirement = "temporal_restart"
 polarity = "refusal"
 kind = "pytest"
 target = "schedule"
+backend = "serial"
 nodeid = "tests/python/unit/time/test_multirate_history_contract.py::test_cross_clock_extension_without_provider_is_rejected"
 
 [[check]]
@@ -334,6 +597,8 @@ requirement = "temporal_restart"
 polarity = "positive"
 kind = "pytest"
 target = "restart"
+backend = "serial"
+dimensions = [2]
 nodeid = "tests/python/unit/codegen/test_checkpoint_migration.py::test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts"
 
 [[check]]
@@ -342,4 +607,5 @@ requirement = "temporal_restart"
 polarity = "refusal"
 kind = "pytest"
 target = "restart"
+backend = "serial"
 nodeid = "tests/python/unit/runtime/test_temporal_restart_state.py::test_frozen_release_v2_fixture_is_refused_offline_and_at_runtime_boundary"

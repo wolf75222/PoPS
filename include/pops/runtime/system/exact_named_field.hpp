@@ -113,6 +113,10 @@ class ExactNamedField final {
     accepted_outputs_ = state.outputs;
   }
   field_type& accepted_potential_for_restore() { return accepted_; }
+  /// Restore authority for the accepted output image. The owning System transaction has already
+  /// authenticated the exact field layout; exposing this resident buffer lets it deep-copy into
+  /// preallocated storage without invoking value assignment (which would allocate a fresh Fab).
+  field_type& accepted_outputs_for_restore() { return accepted_outputs_; }
   int maximum_iterations() const noexcept { return solver_->maximum_iterations(); }
   std::string_view solver_provider_identity() const noexcept {
     return solver_->provider_identity();
@@ -249,7 +253,7 @@ class ExactNamedField final {
           provider.evaluate(*states[block], *contribution_scratch_);
           saxpy(solver_->rhs(), provider.coefficient, *contribution_scratch_);
         }
-      Kokkos::fence();
+      ::pops::device_fence();
     } catch (...) {
       rhs_error = std::current_exception();
     }
@@ -289,7 +293,7 @@ class ExactNamedField final {
       copy_all_cells_(solver_->candidate(), accepted_);
       copy_all_cells_(candidate_outputs_, accepted_outputs_);
       accepted_topology_report_ = std::move(candidate_topology_report_);
-      Kokkos::fence();
+      ::pops::device_fence();
       clear_candidate_();
     } catch (...) {
       std::terminate();

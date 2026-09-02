@@ -166,7 +166,7 @@ def _program_accepted_state(path: str | Path) -> tuple[tuple[str, bytes], ...]:
 
 
 def _accepted_state_history_flux(payload: bytes) -> tuple[list[dict[str, Any]], bytes]:
-    """Decode only the POPSAND4 history-flux envelope, retaining exact byte boundaries.
+    """Decode only the POPSAND5 history-flux envelope, retaining exact byte boundaries.
 
     This is deliberately a test-side reader: it proves the wire image contains actual retained
     expressions and also catches accidental offset drift before a checkpoint reaches native restore.
@@ -174,7 +174,7 @@ def _accepted_state_history_flux(payload: bytes) -> tuple[list[dict[str, Any]], 
     cursor = 0
 
     def require(count: int) -> None:
-        assert 0 <= count <= len(payload) - cursor, "POPSAND4 payload is truncated"
+        assert 0 <= count <= len(payload) - cursor, "POPSAND5 payload is truncated"
 
     def read_u64() -> int:
         nonlocal cursor
@@ -195,7 +195,7 @@ def _accepted_state_history_flux(payload: bytes) -> tuple[list[dict[str, Any]], 
         skip(size)
         return payload[nonlocal_cursor : nonlocal_cursor + size].decode("utf-8")
 
-    assert payload[:8] == b"POPSAND4"
+    assert payload[:8] == b"POPSAND5"
     cursor = 8 + 8
     skip(read_u64())  # spatial contract
     skip(16)  # topology epoch, materialization generation

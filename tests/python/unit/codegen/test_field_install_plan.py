@@ -500,9 +500,12 @@ def test_dynamic_boundary_lowers_to_generated_parameter_launcher() -> None:
 
     source = emit_field_boundaries(None, None, plans, "system")
     assert (
-        'extern "C" void pops_install_field_boundaries(pops::System<pops::kNativeDimension>* sys)'
+        'static void program_candidate_prepare_field_boundaries('
+        '\n    pops::runtime::program::ProgramExecutionServices<pops::kNativeDimension>& ctx)'
     ) in source
-    assert "make_program_execution_provider(sys)" in source
+    assert "make_program_execution_provider" not in source
+    assert "pops::System<" not in source
+    assert "pops::AmrSystem<" not in source
     assert "prepare_field_boundary_residual_route_0" in source
     assert "prepare_field_boundary_jvp_route_0" in source
     assert ":boundary-jvp" in source

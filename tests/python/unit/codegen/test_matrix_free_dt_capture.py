@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from fractions import Fraction
 import re
+from types import SimpleNamespace
 
 import pytest
 
 from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen.program_emit_solve import _matrix_free_consumer_block
 from pops.linalg import LinearProblem
 from pops.model import StateSpace
 from pops.solvers.krylov import Richardson
@@ -165,7 +167,7 @@ def test_matrix_free_apply_reads_live_step_dt_before_prepared_krylov():
         "pops::PreparedAffineOperatorSessionFactory<pops::kNativeDimension> make_apply_A"
     )
     lambda_start = source.index("pops::ApplyFn<pops::kNativeDimension> apply =", factory_start)
-    install_start = source.index("ctx.install([=](double dt)")
+    install_start = source.index("state->step = [ctx_owner = state->ctx_owner](double dt)")
     operator_refresh = source.index(
         f"*{operator_dt} = static_cast<pops::Real>(dt);", install_start)
     apply_refresh = source.index(
@@ -188,6 +190,86 @@ def test_matrix_free_apply_reads_live_step_dt_before_prepared_krylov():
         "pops::Real(-1) * (*%s) + (pops::Real(2) / pops::Real(3)) * (*%s) * (*%s)"
         % (operator_dt, operator_dt, operator_dt)
     ) in source[lambda_start:install_start]
+
+
+def test_matrix_free_templates_are_plan_primed_before_step_and_never_allocate_in_apply():
+    source = emit_cpp_program(_matrix_free_program())
+    begin_step = source.index("state->step = [ctx_owner = state->ctx_owner](double dt)")
+
+    assert "ctx.alloc_scalar_field(" not in source
+    assert source.count("ctx.prepare_scalar_scratch(") == 3
+    assert source.count("ctx.scalar_scratch(") == 3
+    assert source.index("ctx.prepare_scalar_scratch(") < begin_step
+    assert source.index("ctx.scalar_scratch(") < begin_step
+
+
+def test_amr_matrix_free_sessions_retain_prepared_handles_without_candidate_copies():
+    """A requalified AMR level bundle owns handles, not copied active-level fabs."""
+
+    source = emit_cpp_program(_matrix_free_program(), target="amr_system")
+    factory = source.split("auto _make_level_program", 1)[1].split(
+        "struct _PopsAmrLevelProgramAuthority", 1
+    )[0]
+
+    assert factory.count("ctx.prepare_scalar_scratch(") == 3
+    assert factory.count("ctx.prepared_scalar_scratch_handle(") == 3
+    assert "std::make_shared<pops::MultiFab<pops::kNativeDimension>>(*" not in source
+    assert "const std::size_t session_field_count = std::size_t{0};" in factory
+    assert "pops::PreparedOperatorConcurrency::Exclusive" in factory
+    assert factory.index("ctx.prepare_scalar_scratch(") < factory.index(
+        "ctx.prepared_scalar_scratch_handle("
+    )
+    # Each level closure executes through the retained live provider.  A forward overlay is a
+    # cold-only preparation authority: capturing it in the hot closure would leave current_dt and
+    # the accepted facade on different service objects after publication.
+    assert "auto _make_level_program = [](auto ctx_owner, auto& ctx, bool prepare_resources)" in source
+    assert "if (!ctx_owner)" in factory
+    assert "auto& ctx = *ctx_owner;" in factory
+    assert "auto _make_level_program = [](auto& ctx, bool prepare_resources)" not in source
+    assert "_make_level_program(ctx_owner, ctx, prepare_resources)" in source
+    assert "_make_level_program(ctx_owner, *owner, true)" in source
+    assert "_make_level_program(owner, *owner, true)" not in source
+
+
+def test_amr_level_authority_is_one_rollbackable_snapshot_bundle():
+    source = emit_cpp_program(_matrix_free_program(), target="amr_system")
+
+    assert "struct _PopsAmrLevelProgramAuthoritySlot" in source
+    assert "_PopsAcceptedProgramExecutionServicesSnapshot" in source
+    assert "prepare_forward_execution_bundle" in source
+    assert "with_forward_execution_overlay" in source
+    assert (
+        "void refresh_from_owner_preallocated() override { "
+        "inner_->refresh_from_owner_preallocated(); }"
+        in source
+    )
+    assert "swap(slot_->active, staged_)" in source
+    assert "AMR Program level authority is absent or stale" in source
+    forward_bundle = source.split(
+        "void prepare_forward_execution_bundle", 1
+    )[1].split("prepare_forward_accepted_context", 1)[0]
+    assert forward_bundle.index("inner_->prepare_forward_execution_bundle(erased)") < (
+        forward_bundle.index("owner_->with_forward_execution_overlay")
+    )
+
+
+def test_uniform_matrix_free_sessions_keep_independent_private_templates():
+    source = emit_cpp_program(_matrix_free_program())
+    assert "pops::PreparedOperatorConcurrency::Independent" in source
+    assert "pops::PreparedOperatorConcurrency::Exclusive" not in source
+
+
+def test_matrix_free_owner_inference_refuses_conflicting_solve_consumers():
+    operator = SimpleNamespace(
+        op="matrix_free_operator", block=None, attrs={}, inputs=(), name="A")
+    first = SimpleNamespace(
+        op="solve_linear", inputs=(operator,), block=object(), attrs={}, name="left")
+    second = SimpleNamespace(
+        op="solve_linear", inputs=(operator,), block=object(), attrs={}, name="right")
+    program = SimpleNamespace(_values=(operator, first, second))
+
+    with pytest.raises(ValueError, match="conflicting owner blocks"):
+        _matrix_free_consumer_block(program, operator, where="test matrix-free owner")
 
 
 def test_subcycle_refreshes_both_matrix_free_dt_captures_inside_each_child_tick():
@@ -227,7 +309,7 @@ def test_subcycle_refreshes_both_matrix_free_dt_captures_inside_each_child_tick(
 def test_structured_regions_hoist_prepared_storage_and_emit_solve_in_region(
         kind, region_marker, solve_count):
     source = emit_cpp_program(_structured_region_krylov_program(kind))
-    install = source.index("ctx.install([=](double dt)")
+    install = source.index("state->step = [ctx_owner = state->ctx_owner](double dt)")
     region = source.index(region_marker, install)
     solution_owners = [match.start() for match in re.finditer(r"auto sf_sol\d+ =", source)]
     solve_calls = [

@@ -262,7 +262,7 @@ def _accepted_image(runtime):
         ),
         "program_state": bytes(native.program_accepted_state()),
         # The public manifest exposes the exact outgoing-dt bit patterns, fill counters and
-        # level/slot ownership independently of the opaque POPSAND4 image.
+        # level/slot ownership independently of the opaque POPSAND5 image.
         "history_manifest": tuple(
             tuple(map(str, row)) for row in native.program_accepted_state_manifest()
         ),
@@ -332,7 +332,7 @@ def _accepted_tagging_hysteresis(payload):
         cursor += size
         assert cursor <= len(encoded), "accepted-state string is truncated"
 
-    assert encoded[:8] == b"POPSAND4"
+    assert encoded[:8] == b"POPSAND5"
     cursor = 8
     cursor += 8  # native dimension
     skip_string()  # exact spatial contract
@@ -509,6 +509,7 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     restarted = _bind(artifact)
     rollback_image = _accepted_image(restarted)
     rollback_hysteresis = _runtime_tagging_hysteresis(restarted)
+    accepted_generation = restarted._executor._s.accepted_transaction_generation_()
     from pops.runtime import _amr_checkpoint_v3 as checkpoint_codec
 
     original_conservation_check = checkpoint_codec._require_restart_conservation
@@ -540,6 +541,7 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     _assert_same_accepted_image(restarted, rollback_image)
     assert _runtime_tagging_hysteresis(restarted) == rollback_hysteresis
     assert restarted._executor.last_restart_regrid_receipt() is None
+    assert restarted._executor._s.accepted_transaction_generation_() == accepted_generation
 
     monkeypatch.setattr(
         checkpoint_codec,
@@ -547,6 +549,7 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
         original_conservation_check,
     )
     restart_identity = restarted.restart(checkpoint)
+    assert restarted._executor._s.accepted_transaction_generation_() == accepted_generation + 1
     receipt = restarted._executor.last_restart_regrid_receipt()
     assert receipt["schema_version"] == 3
     assert tuple(row[0] for row in receipt["field_recompute_witness"]) == tuple(

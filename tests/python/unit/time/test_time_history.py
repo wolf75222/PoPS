@@ -31,7 +31,7 @@ mirrors this exactly (FE step 0, AB2 thereafter), so the comparison is to machin
 
 (C) Absent-history rejection (spec test 38): a Program that reads P.history("missing.R", lag=1) and is
     stepped WITHOUT ever storing it -> sim.step surfaces a RuntimeError containing
-    "ProgramContext history has not been initialized".
+    "ProgramExecutionServices history has not been initialized".
 """
 from tests.python.support.requirements import (
     default_cxx,
@@ -217,16 +217,15 @@ def test_ab2_flux_budget_retains_current_and_lagged_basis(t):
     assert budgets == ((2, 1),), budgets
 
 
-def test_ab3_flux_budget_materializes_three_live_bases(t):
+def test_ab3_flux_budget_is_carried_by_the_candidate_table(t):
     """AB3 retains both lags: 23/12, -16/12 and 5/12 share no disposable basis."""
-    from pops.codegen.program_emit_amr import _emit_flux_expression_budget, _flux_expression_budgets
+    from pops.codegen.program_emit_amr import _flux_expression_budgets
 
     program = _ab2_program(t, name="ab3", order=3)
     assert _flux_expression_budgets(program) == ((3, 1),)
-    emitted = _emit_flux_expression_budget(program)
-    assert "pops_program_flux_rhs_basis_bound" in emitted
-    assert "UINT64_C(3)" in emitted and "UINT64_C(1)" in emitted
     source = emit_cpp_program(program)
+    assert "kProgramCandidateFluxBudgets" in source
+    assert "UINT64_C(3)" in source and "UINT64_C(1)" in source
     assert 'ctx.history("plasma.rate", 1)' in source
     assert 'ctx.history("plasma.rate", 2)' in source
 
@@ -477,7 +476,7 @@ def _run_section_c(t):
         sim.step(0.01)
     except RuntimeError as exc:
         msg = str(exc)
-        assert "ProgramContext history has not been initialized" in msg, \
+        assert "ProgramExecutionServices history has not been initialized" in msg, \
             "the uninitialized-history read must fail loud with the spec message; got: %s" % msg
         print("  absent-history read raised as expected: %s" % msg.splitlines()[0][:120])
         return True

@@ -55,7 +55,7 @@ context at installation.
 The uniform native provider validates an `ExecutionContext` before launch, but it currently
 constructs `System(SystemConfig)` before passing that authority into C++. `SystemDomain` therefore
 builds its `DistributionMapping` from process-global rank queries, while `SystemFieldSolver`,
-`ProgramContext`, `SystemProgramDriver`, field publication, and global field gathers still use
+`ProgramExecutionServices`, `SystemProgramDriver`, field publication, and global field gathers still use
 argument-free world collectives. This is an incomplete authority flow, not a missing collective
 primitive: exact contract consensus already accepts a `CommunicatorView`, exact `SolveReport`
 consensus accepts an `ExecutionLane`, and `SolveOutcome` already exposes `collective_lane`.
@@ -76,7 +76,7 @@ The minimum native ABI cut is:
    fields.
 3. Materialize one deterministically named, owning field-execution lane from that authenticated
    communicator during construction. Pass it to `SystemFieldSolver`, its nested elliptic provider
-   registry, `ProgramContext`, `SystemProgramDriver`, field publication, and global gathers; none of
+   registry, `ProgramExecutionServices`, `SystemProgramDriver`, field publication, and global gathers; none of
    those consumers may create or rediscover a world lane in a solve/publication hot path.
 4. Replace every argument-free reduction, rank query, ordered-byte consensus, and `SolveReport`
    consensus in that graph with its lane-scoped overload. Return

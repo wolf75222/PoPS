@@ -177,15 +177,13 @@ def test_emit_requires_lowered_module_provider_authority():
     assert first == second, "the canonical Module route is stable and deterministic"
 
 
-def test_lowered_program_installs_a_local_provider_plan_before_its_context():
+def test_lowered_program_stages_a_local_provider_plan_through_its_preparation_context():
     model, _ = lower_and_validate(_facade_model(), facade=None)
     source = emit_cpp_program(_fe_program(model, "provider-plan"), model=model, target="system")
 
-    assert "install_auxiliary_consumer_plan(ConsumerPlan{" in source
+    assert "ctx.stage_auxiliary_consumer_plan(ConsumerPlan{" in source
     assert "ctx.template provider_values_view<2>(" in source
-    assert source.index("install_auxiliary_consumer_plan(ConsumerPlan{") < source.index(
-        "make_program_execution_provider"
-    )
+    assert "sys->install_auxiliary_consumer_plan" not in source
     assert "ctx.aux()" not in source
 
 

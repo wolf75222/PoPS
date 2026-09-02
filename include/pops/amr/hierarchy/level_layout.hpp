@@ -124,6 +124,19 @@ class LevelLayout {
                                     validation_budget_};
   }
 
+  /// Compare against a previously materialized exact identity without rebuilding its owning
+  /// vectors.  Accepted-step liveness checks use this path after the identity has been frozen at
+  /// preparation; constructing another identity would allocate once per level on every step.
+  bool matches_exact_identity(const LevelLayoutIdentity<Dim>& identity) const {
+    return level_ == identity.level && domain_ == identity.domain &&
+           ratio_from_parent_ == identity.ratio_from_parent &&
+           patches_.boxes() == identity.patches &&
+           distribution_.rank_space() == identity.rank_space &&
+           distribution_.mode() == identity.distribution_mode &&
+           distribution_.owners() == identity.owners &&
+           validation_budget_ == identity.validation_budget;
+  }
+
   bool operator==(const LevelLayout& other) const {
     return exact_identity() == other.exact_identity();
   }

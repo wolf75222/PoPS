@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "explicit_amr_program.hpp"
+#include "amr_runtime_authority.hpp"
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
@@ -106,29 +106,35 @@ TEST(test_amr_system_twoblock, AcceptedStatesRollbackTogether) {
   install(system, "b");
   system.set_conservative_state("a", std::vector<double>(cells(cfg), 2.0));
   system.set_conservative_state("b", std::vector<double>(cells(cfg), 5.0));
-  system.install_program_step([](double) {});
-  system.set_program_block_map({0, 1});
-  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
-  system.install_prepared_amr_program_flux_expression_budget(
-      "tests.amr.system-twoblock/manual-program", std::vector<FluxBudget>{{8, 16}, {0, 0}}, 0, 0);
+  system.install_program(POPS_TEST_AMR_V5_AB_PROGRAM);
   const auto& prepared_budget = system.prepared_amr_program_flux_expression_budget();
   ASSERT_EQ(prepared_budget.blocks.size(), 2U);
-  EXPECT_EQ(prepared_budget.blocks[1].rhs_basis_bound, 0U);
+  EXPECT_EQ(prepared_budget.blocks[0].rhs_basis_bound, 16U);
+  EXPECT_EQ(prepared_budget.blocks[1].rhs_basis_bound, 16U);
+  EXPECT_EQ(prepared_budget.interface_coupling_application_bound, 0U);
   EXPECT_EQ(prepared_budget.program_block_map.canonical_indices, (std::vector<std::size_t>{0, 1}));
 
-  pops::MultiFab<Dim> first(system.prepared_amr_block_state(0, 0));
-  pops::MultiFab<Dim> second(system.prepared_amr_block_state(1, 0));
+  pops::MultiFab<Dim> first = [&] {
+    auto accepted = system.prepared_amr_block_state(0, 0);
+    return pops::MultiFab<Dim>(*accepted);
+  }();
+  pops::MultiFab<Dim> second = [&] {
+    auto accepted = system.prepared_amr_block_state(1, 0);
+    return pops::MultiFab<Dim>(*accepted);
+  }();
   first.set_val(pops::Real(7));
   second.set_val(pops::Real(11));
   std::vector<pops::MultiFab<Dim>*> candidates{&first, &second};
 
   system.begin_step_transaction();
   system.publish_prepared_amr_program_candidates(0, candidates);
-  EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_block_state(0, 0)), pops::Real(7));
-  EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_block_state(1, 0)), pops::Real(11));
   system.rollback_step_transaction();
-  EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_block_state(0, 0)), pops::Real(2));
-  EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_block_state(1, 0)), pops::Real(5));
+  const auto accepted_min = [&](int block) {
+    auto accepted = system.prepared_amr_block_state(block, 0);
+    return pops::reduce_min_local(*accepted);
+  };
+  EXPECT_EQ(accepted_min(0), pops::Real(2));
+  EXPECT_EQ(accepted_min(1), pops::Real(5));
 }
 
 TEST(test_amr_system_twoblock, SingleBlockIsTheNEqualsOneCarrierCase) {
@@ -142,11 +148,15 @@ TEST(test_amr_system_twoblock, SingleBlockIsTheNEqualsOneCarrierCase) {
   system.set_program_block_map({0});
 
   ASSERT_EQ(system.prepared_amr_program_block_map().canonical_indices.size(), 1U);
-  pops::MultiFab<Dim> candidate(system.prepared_amr_block_state(0, 0));
+  pops::MultiFab<Dim> candidate = [&] {
+    auto accepted = system.prepared_amr_block_state(0, 0);
+    return pops::MultiFab<Dim>(*accepted);
+  }();
   candidate.set_val(pops::Real(4));
   std::vector<pops::MultiFab<Dim>*> candidates{&candidate};
   system.publish_prepared_amr_program_candidates(0, candidates);
-  EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_block_state(0, 0)), pops::Real(4));
+  auto accepted = system.prepared_amr_block_state(0, 0);
+  EXPECT_EQ(pops::reduce_min_local(*accepted), pops::Real(4));
 }
 
 TEST(test_amr_system_twoblock, MalformedConservationOwnerCannotPublishMaterialization) {

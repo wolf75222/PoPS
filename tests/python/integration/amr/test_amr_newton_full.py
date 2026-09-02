@@ -19,6 +19,7 @@ the clock.
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 import numpy as np
 import pops
@@ -36,6 +37,8 @@ from pops.amr import (
     Tag,
 )
 from pops.codegen import Production
+from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen.program_persistent_plan import get_program_resource_plan
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
@@ -192,6 +195,39 @@ def _bind(artifact):
     raise RuntimeError("unsupported AMR nonlinear Program communicator %r" % communicator)
 
 
+def test_nonlinear_local_imex_resource_plan_omits_inline_residual_expressions(
+    native_cxx,
+):
+    """Every retained symbolic AMR row has an install-time preparation owner."""
+
+    _, program = _resolved(native_cxx)
+    plan = get_program_resource_plan(program, target="amr_system")
+    local_solve = next(
+        node
+        for node in program.to_graph().nodes
+        if getattr(node, "op", None) == "solve_local_nonlinear"
+    )
+    residual_rows = local_solve.attrs.to_data()["attrs"]["residual_block"]
+    inline_ids = {int(row["id"]["scalar"]["value"]) for row in residual_rows}
+    assert inline_ids
+    assert inline_ids.isdisjoint({entry.key.value_id for entry in plan.entries})
+
+    frame = Rectangle(
+        "amr-nonlinear-reaction-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    model, *_ = _reaction_model(frame)
+    source = emit_cpp_program(program, model=model, target="amr_system")
+    prepared = {
+        int(slot)
+        for slot in re.findall(
+            r"ctx\.prepare_(?:rhs|state|scalar)_scratch\((\d+),", source
+        )
+    }
+    planned = {entry.slot for entry in plan.entries}
+    assert planned == prepared
+    assert list(sorted(planned)) == list(range(len(planned)))
+
+
 def _implicit_euler_root(values):
     coefficient = DT * REACTION_RATE
     return (
@@ -245,10 +281,23 @@ def _fine_valid_mask(simulation):
 
 
 def _coarse_uncovered_from_fine(fine_valid):
-    covered = fine_valid.reshape(N, 2, N, 2).any(axis=(1, 3))
+    refined_children = fine_valid.reshape(N, 2, N, 2)
+    covered = refined_children.all(axis=(1, 3))
+    np.testing.assert_array_equal(refined_children.any(axis=(1, 3)), covered)
     assert np.any(covered)
     assert np.any(~covered)
     return ~covered
+
+
+def _assert_local_refinement_tracks_tagging(coarse_values, fine_valid):
+    """Prove that the accepted fine layout is a local tagged region, not full refinement."""
+
+    covered = ~_coarse_uncovered_from_fine(fine_valid)
+    tagged = coarse_values > 0.2
+    assert np.any(tagged)
+    assert np.all(covered[tagged])
+    # ``Buffer(cells=1)`` must contribute a genuine halo around the threshold core.
+    assert np.any(covered & ~tagged)
 
 
 @pytest.fixture(scope="module")
@@ -277,6 +326,7 @@ def test_nonlinear_local_imex_executes_on_the_refined_amr_program(
     coarse_uncovered = _coarse_uncovered_from_fine(fine_valid)
     coarse_before = _level_values(simulation, 0).copy()
     fine_before = _level_values(simulation, 1).copy()
+    _assert_local_refinement_tracks_tagging(coarse_before, fine_valid)
     assert np.count_nonzero(fine_before[fine_valid]) > 0
 
     report = pops.run(
@@ -315,7 +365,10 @@ def test_nonlinear_local_imex_executes_on_the_refined_amr_program(
     )
     program_report = simulation.program_report()
     assert program_report.installed
-    assert tuple(sorted({int(row["level"]) for row in program_report.flux_ledger})) == (0, 1)
+    # The scheduled regrid publishes a new topology/materialization generation even when the
+    # physical fine coverage is unchanged.  Face-flux fragments belong to the prior generation
+    # and must not escape through the accepted report after that forward publication.
+    assert program_report.flux_ledger == []
 
 
 def test_nonlinear_local_imex_high_budget_covered_parent_failure_rolls_back(

@@ -5,7 +5,7 @@ A compiled time Program whose physics reads ``m.value(m.param(RuntimeParam(...))
 a per-PROGRAM-block ``pops::RuntimeParams`` owned by the System (not the .so closure), so the value can
 be changed at run time WITHOUT recompiling (Spec 5 C5). This module computes the param ROUTING (which
 program block reads which runtime parameter, at which stable index, with which default) and emits the
-``pops_program_param_*`` metadata table the .so exports. The SAME ``_program_param_entries`` drives the
+candidate parameter table carried by the single v5 install entry. The SAME ``_program_param_entries`` drives the
 C++ install-time seed (System::install_program), the Python bind-time route
 (System._install_program_params via the artifact BindSchema) and this metadata, so all
 three agree byte-for-byte. The per-cell read of the parameter (``params.get(index)`` bound from
@@ -13,7 +13,6 @@ three agree byte-for-byte. The per-cell read of the parameter (``params.get(inde
 """
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from pops.codegen.program_emit_kernels import _has_runtime_param
@@ -242,43 +241,3 @@ def _all_program_ops(program: Any) -> Any:
             blk = v.attrs.get(key)
             if isinstance(blk, (list, tuple)):
                 yield from blk
-
-
-def emit_program_params(program: Any, model: Any = None) -> str:
-    """C++ source of the RUNTIME-parameter metadata the .so exports (ADC-510, Spec 5 C5): per flat
-    parameter i, its PROGRAM block index, its stable WITHIN-block index (sorted-name order, the index
-    the lowered runtime read uses), its NAME and its declaration DEFAULT. install_program reads it to
-    SEED each block's RuntimeParams to the defaults; Python's _install_program_params reads the same
-    routing (via the carried Program + model) to map the bound values to set_program_params, rejecting an
-    unknown name. A Program reading no runtime parameter emits count 0 (no seed, the kernels read no
-    param). NOT called from any hot kernel."""
-    entries = program_param_entries(program, model)
-    blocks = ", ".join(str(b) for b, _, _, _ in entries)
-    indices = ", ".join(str(i) for _, _, i, _ in entries)
-    # Declaration defaults are bind-plan data, not generated-code identity.  The compiled carrier is
-    # seeded neutrally and the immutable BindSchema installs either the supplied value or its explicit
-    # declaration default before a kernel can run.
-    defaults = ", ".join("0.0" for _ in entries)
-    name_cases = "".join('    case %d: return %s;\n' % (k, json.dumps(nm))
-                         for k, (_, nm, _, _) in enumerate(entries))
-
-    def ival(accessor: Any, csv: Any) -> str:
-        return ('extern "C" int pops_program_param_%s(int i) {\n'
-                '  static const int v[] = {%s};\n'
-                '  return (i >= 0 && i < %d) ? v[i] : -1;\n}\n'
-                % (accessor, csv if entries else "0", len(entries)))
-
-    return (
-        "// RUNTIME-parameter metadata (ADC-510, Spec 5 C5): per flat parameter, its PROGRAM block\n"
-        "// index, its stable within-block index (sorted-name order, the index the lowered runtime read\n"
-        "// uses) and its name. Carrier values are neutral here; BindSchema installs defaults/values.\n"
-        "// NOT called from any hot kernel.\n"
-        'extern "C" int pops_program_param_count() { return %d; }\n' % len(entries) +
-        ival("block", blocks) +
-        ival("index", indices) +
-        'extern "C" const char* pops_program_param_name(int i) {\n'
-        '  switch (i) {\n%s    default: return "";\n  }\n}\n' % name_cases +
-        'extern "C" double pops_program_param_default(int i) {\n'
-        '  static const double v[] = {%s};\n'
-        '  return (i >= 0 && i < %d) ? v[i] : 0.0;\n}\n'
-        % (defaults if entries else "0.0", len(entries)))

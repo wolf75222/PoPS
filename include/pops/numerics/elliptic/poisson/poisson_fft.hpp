@@ -260,7 +260,7 @@ class PoissonFFT {
       if (diagnostic_.stage == diagnostic_stage && diagnostic_.fail_rank == rank_)
         throw std::runtime_error("injected rank-local PoissonFFT device-stage failure");
       std::forward<Operation>(operation)();
-      Kokkos::fence();
+      ::pops::device_fence();
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -276,7 +276,7 @@ class PoissonFFT {
     const int extent = cells_[axis];
     if (extent <= 1)
       return extent == 1;
-    Kokkos::fence();
+    ::pops::device_fence();
     auto host = Kokkos::create_mirror_view(values_);
     Kokkos::deep_copy(host, values_);
     int shape[3]{};

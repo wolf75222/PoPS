@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 import pops
+import pops.codegen.program_codegen as program_codegen
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.lib import time as libtime
 from pops.physics._facade import Model
@@ -67,13 +68,35 @@ def test_amr_codegen_selects_only_the_prepared_cell_local_driver() -> None:
     assert "ctx.prepare_same_level_cell_temporal_execution(" in source
     assert "SameLevelCellTemporalForwardEulerRoute, 1>" in source
     assert "{0, -1," in source
-    assert "pops.amr.same-level-transport-euler-stage-flux@2" in source
-    assert "pops_program_checkpoint_temporal_cells_per_topology_cell" in source
-    assert "return UINT64_C(1);" in source
+    assert "kProgramCandidateCheckpointShape" in source
+    assert "kProgramCandidateResourcePlan" in source
+    assert "ProgramAbiTable kProgramCandidateFluxBasisOccurrences{}" in source
+    assert "ProgramAbiTable kProgramCandidateFaceFluxStages{}" in source
     assert program.clock.qualified_id in source
     assert "ctx_owner->advance_same_level_cell_temporal(dt);" in source
+    assert "state->accepted_snapshot = [ctx_owner = state->ctx_owner]() {" in source
+    assert "return ctx_owner->create_accepted_context_snapshot();" in source
+    assert "_PopsAcceptedProgramExecutionServicesSnapshot" not in source
     assert "ctx.advance_hierarchy(dt" not in source
     assert "ctx.advance_synchronized_hierarchy(dt" not in source
+    assert "ctx.install(" not in source
+    assert "pops_register_program_provider_routes" not in source
+    assert "amr_program_context.hpp" not in source
+    assert "descriptor.provider_routes = kProgramCandidateProviderRoutes" in source
+    for token in (
+        'extern "C" bool pops_install_program(',
+        "ProgramRuntimeKind::amr",
+        "program_candidate_hierarchy_refresh",
+        "program_candidate_history_remap",
+        "program_candidate_restart_preflight",
+        "program_candidate_accepted_snapshot",
+        "descriptor.hierarchy_refresh =",
+        "descriptor.history_remap_accepted =",
+        "descriptor.restart_regrid_preflight =",
+        "descriptor.create_accepted_snapshot =",
+        "descriptor.destroy = &program_candidate_destroy;",
+    ):
+        assert token in source
 
 
 def test_amr_codegen_emits_one_typed_cell_local_route_per_block() -> None:
@@ -102,7 +125,29 @@ def test_amr_codegen_emits_one_typed_cell_local_route_per_block() -> None:
 
     assert "SameLevelCellTemporalForwardEulerRoute, 2>" in source
     assert "{0, -1," in source and "{1, -1," in source
-    assert "return UINT64_C(2);" in source
+    assert source.count("pops_program_install_abi_probe_v5") == 1
+    assert source.count('extern "C" bool pops_install_program(') == 1
+    assert "pops_install_program_amr" not in source
+    assert "ctx.install(" not in source
+    assert "pops_register_program_provider_routes" not in source
+    assert "amr_program_context.hpp" not in source
+
+
+def test_amr_codegen_types_exact_flux_metadata_for_public_facade() -> None:
+    program, model = _transport_program()
+
+    source = emit_cpp_program(program, model=model, target="amr_system")
+
+    exact_type = "std::initializer_list<pops::runtime::program::ExactCoefficientTerm>"
+    assert source.count("pops_program_install_abi_probe_v5") == 1
+    assert source.count('extern "C" bool pops_install_program(') == 1
+    assert source.count("ctx.axpy(") == 2
+    assert source.count(exact_type + "{{") == 2
+    assert ", dt, {{" not in source
+    assert "pops_install_program_amr" not in source
+    assert "ctx.install(" not in source
+    assert "pops_register_program_provider_routes" not in source
+    assert "amr_program_context.hpp" not in source
 
 
 def test_cell_local_codegen_refuses_non_euler_and_nondefault_cadence() -> None:
@@ -116,6 +161,18 @@ def test_cell_local_codegen_refuses_non_euler_and_nondefault_cadence() -> None:
     strided.cell_local_time(tick_denominator=100)
     with pytest.raises(ValueError, match="default Program cadence"):
         emit_cpp_program(strided, model=model, target="amr_system")
+
+
+def test_cell_local_codegen_refuses_unqualified_shape_before_body_lowering(monkeypatch) -> None:
+    program, model = _transport_program(libtime.SSPRK2)
+    program.cell_local_time(tick_denominator=100)
+
+    def body_must_not_run(*_args, **_kwargs):
+        pytest.fail("an unqualified cell-local integrator must be refused before body lowering")
+
+    monkeypatch.setattr(program_codegen, "_emit_body", body_must_not_run)
+    with pytest.raises(ValueError, match="ForwardEuler"):
+        emit_cpp_program(program, model=model, target="amr_system")
 
 
 def test_cell_local_codegen_refuses_uniform_target() -> None:

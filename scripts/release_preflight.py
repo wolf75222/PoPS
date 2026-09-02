@@ -350,6 +350,15 @@ def _wheel_native_contract(
                 "release wheel Dim=%d version/backend facts disagree with its lane"
                 % row["dimension"]
             )
+        # The wheel lane promises Kokkos Serial.  ``has_kokkos`` alone is not enough: an
+        # OpenMP (or another Kokkos) leaf can satisfy that boolean while carrying a different
+        # execution-space ABI.  The writer obtains this identity from the loaded extension's
+        # native runtime report; authenticate the exact value again from the retained manifest.
+        if row["kokkos_execution_space"] != "Serial":
+            raise PreflightError(
+                "release wheel Dim=%d Kokkos execution space is %r, expected 'Serial'"
+                % (row["dimension"], row["kokkos_execution_space"])
+            )
         match = re.fullmatch(r"(.+);dim=([123])", row["abi_key"])
         if match is None or int(match.group(2)) != row["dimension"]:
             raise PreflightError(

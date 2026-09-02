@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import os
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,7 +13,10 @@ from pops._bootstrap import StepAttemptRejected
 from pops.output._consumer_contracts import ConsumerCursorSet, ScheduleCursor
 from pops.output._writers.common import _OutputRecoveryRequired, _StagedOutputFile
 from pops.runtime._consumer_transaction import ConsumerTransactionReport
-from pops.runtime._multi_layout_executor import _CompositeTemporalRestartState
+from pops.runtime._multi_layout_executor import (
+    _CompositeTemporalRestartState,
+    _MultiLayoutUniformExecutor,
+)
 from pops.runtime._runtime_instance import RuntimeInstance
 from pops.runtime._step_strategy import prepare_program_run
 from pops.runtime._temporal_restart import TemporalRestartState
@@ -33,6 +37,8 @@ class _Native:
         fail_begin: bool = False,
         fail_commit: bool = False,
         fault_phase: str | None = None,
+        fail_finalize: bool = False,
+        fail_stop: bool = False,
     ):
         self.t = 0.0
         self.step_index = 0
@@ -40,7 +46,11 @@ class _Native:
         self._committed = False
         self.fail_begin = fail_begin
         self.fail_commit = fail_commit
+        self.fail_finalize = fail_finalize
+        self.fail_stop = fail_stop
         self.events = []
+        self.scope_events = []
+        self.scope_active = False
         self._step_transaction_plan = SimpleNamespace(stores=ALL_PROVISIONAL_STORES)
         self._step_controller = None
         self._last_step_transaction_report = None
@@ -57,6 +67,19 @@ class _Native:
     def macro_step(self):
         return self.step_index
 
+    @contextmanager
+    def _provisional_read_scope(self):
+        self.scope_events.append("enter")
+        self.scope_active = True
+        try:
+            yield
+        finally:
+            self.scope_active = False
+            self.scope_events.append("exit")
+
+    def _accepted_transaction_fail_stop_(self):
+        return self.fail_stop
+
     def _consume_step_projections(self):
         result = tuple(self._executed_step_projections)
         self._executed_step_projections.clear()
@@ -69,6 +92,7 @@ class _Native:
             "cache": self.cache,
             "history": self.history,
             "diagnostics": self.diagnostics,
+            "executed_step_projections": self._executed_step_projections,
         })
 
     def _mutate_provisional_stores(self, dt):
@@ -121,6 +145,10 @@ class _Native:
         if self._accepted is None or not self._committed:
             raise RuntimeError("missing committed transaction")
         self.events.append("finalize")
+        if self.fail_finalize:
+            self._accepted = None
+            self._committed = False
+            raise RuntimeError("fault injected during native finalization")
         self._accepted = None
         self._committed = False
 
@@ -133,9 +161,24 @@ class _Native:
         self.cache = accepted["cache"]
         self.history = accepted["history"]
         self.diagnostics = accepted["diagnostics"]
+        self._executed_step_projections = accepted["executed_step_projections"]
         self._accepted = None
         self._committed = False
         self.events.append("rollback")
+
+
+class _ScopedChild:
+    def __init__(self, name, events):
+        self.name = name
+        self.events = events
+
+    @contextmanager
+    def _provisional_read_scope(self):
+        self.events.append(("enter", self.name))
+        try:
+            yield
+        finally:
+            self.events.append(("exit", self.name))
 
 
 class _EffectTransaction:
@@ -144,8 +187,10 @@ class _EffectTransaction:
         self.report = (at_start, at_end)
         self.state = "staged"
         owner.temporaries.add("sample.tmp")
+        owner.scope_observations.append(("stage", owner._executor.scope_active))
 
     def accept(self):
+        self.owner.scope_observations.append(("accept", self.owner._executor.scope_active))
         self.owner._executor.events.append("publish")
         self.owner.temporaries.discard("sample.tmp")
         self.owner.artifacts.add("sample.out")
@@ -203,6 +248,7 @@ class _Runtime(RuntimeInstance):
         self.finalize_calls = 0
         self.saw_retained_finalizer = False
         self.recovery_authorities = tuple(recoveries)
+        self.scope_observations = []
         self.temporaries = set()
         self.artifacts = set()
 
@@ -227,6 +273,145 @@ def test_effect_failure_restores_native_and_python_envelopes_and_reports_phase()
     report = native._last_step_transaction_report
     assert (report.status, report.phase, report.action) == ("failed", "effect", "fail_run")
     assert report.rolled_back_effects == tuple(store.value for store in ALL_PROVISIONAL_STORES)
+
+
+def test_accepted_step_freezes_consumer_payload_before_hidden_publish_without_late_native_reads():
+    native = _Native()
+    runtime = _Runtime(native)
+
+    runtime._accepted_step_transaction(lambda: (native.step(0.25), 1))
+
+    assert runtime.scope_observations == [("stage", True), ("accept", False)]
+    assert native.scope_events == ["enter", "exit", "enter", "exit"]
+
+
+def test_accepted_step_refuses_a_native_executor_without_provisional_read_scope():
+    native = _Native()
+    native._provisional_read_scope = None
+    runtime = _Runtime(native)
+
+    with pytest.raises(RuntimeError, match="_provisional_read_scope"):
+        runtime._accepted_step_transaction(lambda: (native.step(0.25), 1))
+
+    assert native.events == ["begin", "rollback"]
+    assert native.time() == 0.0
+    assert runtime.consumer_cursors.rows == ()
+
+
+def test_accepted_controller_scopes_pre_and_post_attempt_clock_reads() -> None:
+    class CandidateClockNative(_Native):
+        def __init__(self) -> None:
+            super().__init__()
+            self.candidate_active = False
+
+        def time(self):
+            if self.candidate_active and not self.scope_active:
+                raise RuntimeError("candidate clock read requires an explicit provisional scope")
+            return super().time()
+
+        def macro_step(self):
+            if self.candidate_active and not self.scope_active:
+                raise RuntimeError("candidate clock read requires an explicit provisional scope")
+            return super().macro_step()
+
+        def _begin_step_transaction(self):
+            super()._begin_step_transaction()
+            self.candidate_active = True
+
+        def _finalize_step_transaction(self):
+            super()._finalize_step_transaction()
+            self.candidate_active = False
+
+        def _rollback_step_transaction(self):
+            super()._rollback_step_transaction()
+            self.candidate_active = False
+
+    native = CandidateClockNative()
+    runtime = _Runtime(native)
+
+    report = runtime._accepted_controller_step(
+        native, native, FixedDt(0.125), t_end=0.125, controls={}
+    )
+
+    assert report.attempts == 1
+    assert (native.time(), native.macro_step()) == (0.125, 1)
+    # The first pair covers ``_native_attempt`` pre/post reads; the second is consumer staging.
+    assert native.scope_events == ["enter", "exit", "enter", "exit"]
+
+    standalone = CandidateClockNative()
+    standalone_strategy = FixedDt(0.125)
+    standalone._step_strategy = standalone_strategy
+    standalone._step_transaction_plan.strategy = standalone_strategy
+    direct = prepare_program_run(standalone).run_step(standalone, t_end=0.125)
+    assert direct.attempts == 1
+    assert standalone.scope_events == []
+    assert (standalone.time(), standalone.macro_step()) == (0.125, 1)
+
+
+@pytest.mark.parametrize("scope", (None, lambda: object()))
+def test_accepted_controller_fails_closed_for_missing_or_malformed_candidate_scope(scope) -> None:
+    native = _Native()
+    native._provisional_read_scope = scope
+    runtime = _Runtime(native)
+
+    with pytest.raises((RuntimeError, TypeError), match="_provisional_read_scope"):
+        runtime._accepted_controller_step(
+            native, native, FixedDt(0.125), t_end=0.125, controls={}
+        )
+
+    assert native.events == ["begin", "rollback"]
+    assert (native.time(), native.macro_step()) == (0.0, 0)
+
+
+def test_multi_layout_provisional_scopes_enter_in_layout_order_and_unwind_in_reverse():
+    events = []
+    executor = object.__new__(_MultiLayoutUniformExecutor)
+    executor._plan = SimpleNamespace(artifact=SimpleNamespace(layout_programs=(
+        SimpleNamespace(layout_id="layout-left"),
+        SimpleNamespace(layout_id="layout-right"),
+    )))
+    executor._engines = {
+        "layout-left": _ScopedChild("layout-left", events),
+        "layout-right": _ScopedChild("layout-right", events),
+    }
+
+    with executor._provisional_read_scope():
+        events.append(("body", None))
+
+    assert events == [
+        ("enter", "layout-left"),
+        ("enter", "layout-right"),
+        ("body", None),
+        ("exit", "layout-right"),
+        ("exit", "layout-left"),
+    ]
+
+
+def test_native_finalize_fail_stop_keeps_accepted_consumers_and_never_rolls_back():
+    native = _Native(fail_finalize=True, fail_stop=True)
+    runtime = _Runtime(native, fail_finalize=True)
+
+    with pytest.raises(RuntimeError, match="native finalization"):
+        runtime._accepted_step_transaction(lambda: (native.step(0.25), 1))
+
+    assert native.events == ["begin", "commit", "publish", "finalize"]
+    assert (native.time(), native.macro_step()) == (0.25, 1)
+    assert runtime.consumer_cursors.for_consumer("sample").committed_samples == 1
+    assert len(runtime._consumer_reports) == 1
+    assert any("fail-stop" in value for value in runtime._consumer_reports[0].diagnostics)
+    assert runtime._consumer_finalize_pending
+    assert runtime._native_fail_stop is True
+
+    runtime._retry_consumer_finalizers()
+    assert not runtime._consumer_finalize_pending
+    assert any("fail-stop" in value for value in runtime._consumer_reports[0].diagnostics)
+
+
+def test_missing_native_finalize_witness_fails_closed_without_authorizing_rollback():
+    error = RuntimeError("native finalization failed after seal")
+
+    assert RuntimeInstance._native_finalize_fail_stop(SimpleNamespace(), error) is True
+    assert any("witness is missing" in note for note in getattr(error, "__notes__", ()))
 
 
 def test_success_commits_native_clock_cursors_and_attempt_counter_together():
@@ -292,7 +477,7 @@ def test_controller_report_carries_only_the_executed_projection_identity():
     assert report.to_data()["projections"] == ["realizability"]
 
 
-def test_rejected_projection_is_reported_while_its_state_rolls_back():
+def test_rejected_projection_rolls_back_without_hot_report_materialization():
     class RejectingProjectedNative(_Native):
         def step(self, dt):
             self._executed_step_projections.append("realizability")
@@ -328,7 +513,43 @@ def test_rejected_projection_is_reported_while_its_state_rolls_back():
         "guard",
         "reject_attempt",
     )
+    assert report.projections == ()
+
+
+def test_outer_envelope_materializes_projection_report_only_after_native_finalize():
+    class ProjectingNative(_Native):
+        def step(self, dt):
+            self._executed_step_projections.append("realizability")
+            return super().step(dt)
+
+        def _consume_step_projections(self):
+            assert self.events[-1] == "finalize"
+            self.events.append("consume-projections")
+            return super()._consume_step_projections()
+
+    native = ProjectingNative()
+    native._step_transaction_plan = SimpleNamespace(
+        stores=ALL_PROVISIONAL_STORES,
+        guards=(
+            SimpleNamespace(
+                name="realizability",
+                action=ProjectAndRecheck(BlockProjection()),
+            ),
+        ),
+    )
+    runtime = _Runtime(native)
+
+    report = runtime._accepted_controller_step(
+        native,
+        native,
+        FixedDt(0.125),
+        t_end=0.125,
+        controls={},
+    )
+
     assert report.projections == ("realizability",)
+    assert native._last_step_transaction_report.projections == ("realizability",)
+    assert native.events[-2:] == ["finalize", "consume-projections"]
 
 
 def test_error_controlled_retry_rolls_back_before_opening_the_next_attempt():

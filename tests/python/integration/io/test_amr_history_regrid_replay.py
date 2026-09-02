@@ -36,6 +36,7 @@ from tests.python.support.requirements import (
     missing_native_compile_requirement,
     repo_include,
     require_native_or_skip,
+    run_process_test_cases,
 )
 from tests.python.support.amr_tagging import install_prepared_threshold_union
 
@@ -428,11 +429,15 @@ def test_d_corrupted_fingerprint_refused():
 
 
 def main():
-    test_a_in_window_regrid_bit_identical()
-    test_b_multiple_in_window_regrids_bit_identical()
-    test_c_clean_window_non_regression()
-    test_d_corrupted_fingerprint_refused()
-    print("PASS test_amr_history_regrid_replay")
+    cases = {
+        "test_a_in_window_regrid_bit_identical": test_a_in_window_regrid_bit_identical,
+        "test_b_multiple_in_window_regrids_bit_identical":
+            test_b_multiple_in_window_regrids_bit_identical,
+        "test_c_clean_window_non_regression": test_c_clean_window_non_regression,
+        "test_d_corrupted_fingerprint_refused": test_d_corrupted_fingerprint_refused,
+    }
+    executed = run_process_test_cases(cases)
+    print("PASS test_amr_history_regrid_replay (%d checks)" % len(executed))
 
 
 if __name__ == "__main__":

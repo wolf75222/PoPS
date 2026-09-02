@@ -274,7 +274,7 @@ void copy_scalar_valid(const MultiFab<Dim, SourceSpace>& source,
   for (std::size_t local = 0; local < source.local_size(); ++local)
     for_each_cell(source.box(local), detail::CopyScalarKernel<Dim>{
                                          destination.fab(local).view(), source.fab(local).view()});
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 /// Add one constant to every valid scalar cell.
@@ -285,7 +285,7 @@ void add_scalar_valid(MultiFab<Dim, MemorySpace>& values, Real increment) {
   for (std::size_t local = 0; local < values.local_size(); ++local)
     for_each_cell(values.box(local),
                   detail::AddScalarKernel<Dim>{values.fab(local).view(), increment});
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 /// Apply ``A u = -laplacian(u) + reaction*u`` after the caller has filled input ghosts.
@@ -307,7 +307,7 @@ void apply_poisson_operator_valid(const MultiFab<Dim, InputSpace>& input,
       kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
     for_each_cell(output.box(local), kernel);
   }
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 /// Compute ``rhs - A u`` after the caller has filled iterate ghosts.
@@ -332,7 +332,7 @@ void poisson_residual_valid(const MultiFab<Dim, IterateSpace>& iterate,
       kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
     for_each_cell(residual.box(local), kernel);
   }
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 /// Submit one allocation-free damped-Jacobi update after iterate ghosts are valid.
@@ -364,7 +364,7 @@ void damped_jacobi_update_valid(const MultiFab<Dim, IterateSpace>& iterate,
       kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
     for_each_cell(destination.box(local), kernel);
   }
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 template <int Dim, class MemorySpace>
@@ -400,7 +400,7 @@ void apply_weighted_poisson_operator_valid(
       kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
     for_each_cell(output.box(local), kernel);
   }
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 template <int Dim, class MemorySpace>
@@ -440,7 +440,7 @@ void weighted_poisson_residual_valid(const MultiFab<Dim, MemorySpace>& iterate,
       kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
     for_each_cell(residual.box(local), kernel);
   }
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 template <int Dim, class MemorySpace>
@@ -484,7 +484,7 @@ void damped_jacobi_weighted_update_valid(const MultiFab<Dim, MemorySpace>& itera
       kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
     for_each_cell(destination.box(local), kernel);
   }
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 }  // namespace pops::elliptic::mg

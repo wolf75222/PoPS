@@ -19,6 +19,9 @@
 #include <pops/runtime/config/spatial_domain.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/output_piece.hpp>
+#include <pops/runtime/program/program_abi.hpp>
+#include <pops/runtime/program/accepted_read_view.hpp>
+#include <pops/runtime/program/program_transaction.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
 #include <pops/runtime/system/auxiliary_checkpoint.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
@@ -34,6 +37,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -181,11 +185,18 @@ class Profiler;  // per-node wall-clock profiler (ADC-459); full type in program
 template <int Dim>
 class CacheManager;  // scheduler value cache (ADC-458); full type in program/cache_manager.hpp
 template <int Dim>
-class ProgramContext;
+class ProgramExecutionServices;
+template <int Dim>
+class ProgramExecutionPreparationImage;
+namespace detail {
+template <int Dim>
+class UniformStorageTopologyAdapter;
+}
 template <int Dim>
 class PreparedScalarBoundarySession;
 template <int Dim>
 struct ProgramRuntimeState;
+class PreparedProgramPersistentValueRestore;
 }  // namespace runtime::program
 
 namespace runtime::field {
@@ -198,6 +209,12 @@ struct BoundaryEvaluationPoint;
 }  // namespace runtime::multiblock
 
 class ExecutionLane;
+
+template <int Dim>
+using AcceptedMultiFabReadView = AcceptedReadView<const MultiFab<Dim>>;
+
+template <int Dim>
+using AcceptedCacheReadView = AcceptedReadView<const runtime::program::CacheManager<Dim>>;
 
 /// Exact compile-time-ranked mesh authority shared by every block of one uniform runtime.
 /// Shape, physical bounds, topology and decomposition are lowered once from the resolved layout;
@@ -718,7 +735,7 @@ class System {
   /// frequency contracts, in registration order, so a Program or a runtime report can enumerate the
   /// couplings as typed operators instead of reading raw bytecode. A raw add_coupled_source registers an
   /// "unchecked" entry (empty contract). Empty until the first coupling is added.
-  const std::vector<CouplingOperatorView>& coupled_operators() const;
+  std::vector<CouplingOperatorView> coupled_operators() const;
 
   /// Apply every registered coupling operator to one complete simultaneous candidate-state pack.
   /// The pack is indexed by System block identity and must match every block's exact distributed
@@ -745,7 +762,7 @@ class System {
   /// multi-stage compiled Program can re-solve the fields from each STAGE state -- the stages run
   /// sequentially, so stage k's RHS (called right after this) reads phi from stage k's own state
   /// before the next stage overwrites the aux. With block_idx 0 and U_stage = U^n (the first stage)
-  /// it is identical to solve_fields(). POPS_EXPORT: resolved by a compiled program .so (ProgramContext)
+  /// it is identical to solve_fields(). POPS_EXPORT: resolved by a compiled program .so (ProgramExecutionServices)
   /// across the dlopen boundary. @throws std::out_of_range if @p block_idx is not a valid block.
   [[nodiscard]] POPS_EXPORT SolveOutcome solve_fields_from_state(int block_idx,
                                                                  const MultiFab<Dim>& U_stage);
@@ -762,7 +779,7 @@ class System {
   /// live state. With every entry pointing at the corresponding live state it is bit-identical to
   /// solve_fields(). The codegen lowers P.solve_fields_from_blocks([...]) to this -- the seam a multi-
   /// species field-coupled step uses (the IR commit_many guarantee: no operator observes a partially
-  /// committed group). POPS_EXPORT: resolved by a compiled program .so (ProgramContext) across the
+  /// committed group). POPS_EXPORT: resolved by a compiled program .so (ProgramExecutionServices) across the
   /// dlopen boundary. @throws std::invalid_argument if @p U_stages is not sized to n_blocks().
   [[nodiscard]] POPS_EXPORT SolveOutcome
   solve_fields_from_blocks(const std::vector<const MultiFab<Dim>*>& U_stages);
@@ -780,7 +797,7 @@ class System {
                                                                  const MultiFab<Dim>& U_stage);
   /// Solve named @p field from the exact simultaneous stage states of all contributing blocks.
   /// @p U_stages is indexed by System block; nullptr keeps that block at its accepted live state.
-  /// Unlike the historical ProgramContext route, this contract never selects or mutates a
+  /// Unlike the historical ProgramExecutionServices route, this contract never selects or mutates a
   /// representative block.
   [[nodiscard]] POPS_EXPORT SolveOutcome solve_fields_from_blocks(
       const std::string& field, const std::vector<const MultiFab<Dim>*>& U_stages);
@@ -803,9 +820,10 @@ class System {
   void advance(double dt, int nsteps);
   /// RuntimeInstance-only outer transaction spanning native advancement and prepared consumers.
   void begin_step_transaction();
-  /// Seal the native state while retaining its accepted snapshot until external effects publish.
+  /// Prepare external effects and hidden-publish the candidate; the visible generation is sealed
+  /// only by finalize_step_transaction().
   void commit_step_transaction();
-  /// Release the accepted snapshot after every external effect has published successfully.
+  /// Atomically seal the hidden generation, finalize irreversible effects, and release the image.
   void finalize_step_transaction();
   /// Restore the accepted snapshot, including after commit but before finalize.
   void rollback_step_transaction();
@@ -815,8 +833,25 @@ class System {
   void commit_restart_transaction();
   void finalize_restart_transaction() noexcept;
   void rollback_restart_transaction();
-  /// Volume-weighted L2 norm of each block's accepted macro-step change. RuntimeInstance calls
-  /// this collective only while an outer transaction still retains U^n.
+  /// Internal architecture witness for the accepted-generation seal. This metadata accessor is
+  /// atomic and does not expose candidate state; scientific readers still require AcceptedReadLease.
+  [[nodiscard]] POPS_EXPORT std::uint64_t accepted_transaction_generation_() const noexcept;
+  /// Internal fail-stop witness for the irreversible-finalization boundary. A failed finalizer
+  /// keeps the sealed scientific generation visible and permanently rejects new transactions;
+  /// callers must consume this receipt instead of attempting a post-seal rollback.
+  [[nodiscard]] POPS_EXPORT bool accepted_transaction_fail_stop_() const noexcept;
+  /// Runtime-private candidate read scope used by accepted-step consumers. The returned move-only
+  /// scope is a true context capability: it is valid only on the writer thread during the
+  /// authenticated Candidate/SolveGuardEffectPrepare phases of the active external transaction.
+  [[nodiscard]] POPS_EXPORT runtime::program::ProvisionalReadLease _provisional_read_scope() const;
+  /// Allocation-free hot diagnostic for one named block's volume-weighted accepted macro-step
+  /// change. The name is only a borrowed lookup key; this call never materializes a named result
+  /// container. RuntimeInstance calls it only while an outer transaction still retains U^n.
+  POPS_EXPORT double step_change_l2_for_block(std::string_view block) const;
+  /// Internal test witness: prepared diagnostic dispatches performed by the last block query.
+  [[nodiscard]] POPS_EXPORT std::uint64_t _step_change_l2_last_dispatches() const noexcept;
+  /// Convenience compatibility API that materializes a named map. It is intentionally not a
+  /// zero-allocation hot-path API; use step_change_l2_for_block() for repeated diagnostics.
   POPS_EXPORT std::map<std::string, double> step_change_l2() const;
 
   /// Advances one step using the smallest prepared bound.  For an explicit Cartesian diffusive
@@ -840,12 +875,12 @@ class System {
   /// Structured solver/runtime diagnostic events (field solve traces, MG markers when enabled).
   /// Empty unless the relevant diagnostic path was exercised; no stdout/stderr scraping.
   std::vector<RuntimeDiagnosticEvent> solver_diagnostics() const;
-  /// The System-owned Profiler (a non-owning reference; lives as long as the System). A compiled time
-  /// Program reaches it through ProgramContext::profile_node to time each Program node into the SAME
+  /// A snapshot of the System-owned Profiler. A compiled time
+  /// Program reaches it through ProgramExecutionServices::profile_node to time each Program node into the SAME
   /// table sim.profile_report() renders -- so per-node scopes ("node:rhs2", ...) accumulate alongside
   /// the coarse "step" / "field_solve" phases. POPS_EXPORT: a generated problem.so resolves it across
-  /// the dlopen boundary like the other ProgramContext seam accessors (block_state, grid_context).
-  POPS_EXPORT runtime::program::Profiler& profiler();
+  /// the dlopen boundary like the other ProgramExecutionServices seam accessors (block_state, grid_context).
+  POPS_EXPORT runtime::program::Profiler profiler() const;
   /// @}
 
   /// @name Primitives for a time integrator written in Python
@@ -880,19 +915,10 @@ class System {
   double block_gamma(const std::string& name) const;
   /// @}
 
-  /// @name Compiled time-program seam (epic ADC-399 / ADC-401)
-  /// Lets a generated problem.so (via pops::runtime::program::ProgramContext) run a time Program during
-  /// sim.step(dt): install a macro-step body and reach per-block storage. The .so reimplements nothing
-  /// -- it composes these primitives (solve_fields(); ProgramContext::rhs_into(b, U, R, rate_id);
-  /// saxpy(U, dt, R)). The authored rate identity is mandatory at the native boundary.
+  /// @name Compiled time-program controls (epic ADC-399 / ADC-401)
+  /// A generated Program is installed only through install_program(). These controls configure or
+  /// inspect the artifact-backed temporal schedule without exposing a direct C++ step authority.
   /// @{
-  /// Install the mandatory macro-step body. System::step, advance and step_cfl reject before
-  /// mutation while it is absent. An empty std::function is rejected: there is no public temporal
-  /// route that silently clears the whole-system Program.
-  /// POPS_EXPORT: a generated problem.so resolves these across the dlopen boundary from the globally
-  /// promoted host; without default visibility the .so could not find them (_pops is built with
-  /// hidden visibility). The generated package itself remains RTLD_LOCAL.
-  POPS_EXPORT void install_program_step(std::function<void(double)> step);
   /// Set the compiled-Program macro-step cadence (ADC-411): SYSTEM-level @p substeps and @p stride
   /// around the installed program closure (cf. System::step). @p substeps subdivides each
   /// effective step into @p substeps calls program_.step_(eff_dt/substeps); @p stride runs the whole
@@ -924,25 +950,26 @@ class System {
                                                   double accepted_time, int macro_step);
   /// Number of blocks (species) installed.
   POPS_EXPORT int n_blocks() const;
-  /// The conservative state MultiFab<Dim> of block @p b (zero-copy, non-owning reference).
-  POPS_EXPORT MultiFab<Dim>& block_state(int b);
-  POPS_EXPORT const MultiFab<Dim>& block_state(int b) const;
+  /// The conservative state MultiFab<Dim> of block @p b. The move-only view owns an
+  /// AcceptedReadLease for as long as its pointer is used; it cannot implicitly become a reference.
+  POPS_EXPORT AcceptedMultiFabReadView<Dim> block_state(int b);
+  POPS_EXPORT AcceptedMultiFabReadView<Dim> block_state(int b) const;
   /// @name Compiled-Program NAME-based block binding (Spec 3 criterion 23, ADC-457)
   /// A compiled Program numbers its blocks in P.state declaration order (the .so's
-  /// pops_program_block_name table); the System numbers its blocks in add_block / add_equation order
+  /// candidate block table); the System numbers its blocks in add_block / add_equation order
   /// (block_names). They need NOT agree. install_program reads the .so's block names, matches each to
   /// the System block of that name, and stores the resulting program-index -> system-index map here so
-  /// ProgramContext::state / rhs_into / commit resolve a Program block index to the name-matched System
+  /// ProgramExecutionServices::state / rhs_into / commit resolve a Program block index to the name-matched System
   /// block -- NOT the positional index. An EMPTY map means no Program binding is installed;
-  /// ProgramContext fails closed instead of inferring positional identity, including for a single
+  /// ProgramExecutionServices fails closed instead of inferring positional identity, including for a single
   /// block. Lives in Impl (private to the _pops TU) so it survives the dlopen boundary; the seam is
-  /// POPS_EXPORT so the generated .so and ProgramContext resolve it from the globally promoted host.
+  /// POPS_EXPORT so the generated .so and ProgramExecutionServices resolve it from the globally promoted host.
   /// @{
   /// Install the program-index -> system-index map (entry p = the System block index of Program block
   /// p). Empty clears the binding. Set by install_program after matching the .so's block names.
   POPS_EXPORT void set_program_block_map(const std::vector<int>& prog_to_sys);
-  /// The installed program-index -> system-index map (empty = unbound). Read by ProgramContext.
-  POPS_EXPORT const std::vector<int>& program_block_map() const;
+  /// The installed program-index -> system-index map (empty = unbound). Read by ProgramExecutionServices.
+  POPS_EXPORT std::vector<int> program_block_map() const;
   /// @}
   /// R <- -div F(U) + S(U, aux) for block @p b (the block's frozen-Poisson residual closure).
   POPS_EXPORT void block_rhs_into(int b, MultiFab<Dim>& U, MultiFab<Dim>& R);
@@ -956,7 +983,7 @@ class System {
   /// -- only the source is dropped (with limiter='none'; the HLL wave-speed cache -- rejected for
   /// compiled Programs -- is the only path where cached cell-center speeds
   /// differ from the per-face reconstruction). A compiled time Program's hyperbolic stage
-  /// (ProgramContext::neg_div_flux_default_into) reads it so a Lie/Strang split assembles "flux but no
+  /// (ProgramExecutionServices::neg_div_flux_default_into) reads it so a Lie/Strang split assembles "flux but no
   /// source" without the default source leaking in (epic ADC-399 / ADC-425, spec criterion 17). FAILS
   /// LOUD (std::runtime_error) on an incomplete internal block provider -- never a silent source leak.
   /// POPS_EXPORT: resolved by the generated problem.so across the
@@ -1015,7 +1042,7 @@ class System {
   /// block's source-only closure evaluates m.source per cell into R (the SAME source term assemble_rhs
   /// adds), with NO numerical-flux dispatch -- so it is flux-template agnostic (unlike a zero-flux model
   /// adapter, which HLL/Roe would not zero) and bit-identical to the source term of rhs_into. A compiled
-  /// time Program's source stage (ProgramContext::source_default_into) reads it so a Lie/Strang split
+  /// time Program's source stage (ProgramExecutionServices::source_default_into) reads it so a Lie/Strang split
   /// assembles "the default source but no flux" -- P.rhs(flux=False, sources with "default") -- without
   /// the -div F base leaking in (epic ADC-399 / ADC-430, spec: rhs flux=False is source-only). FAILS
   /// LOUD (std::runtime_error) on an incomplete internal block provider -- never a silent flux leak.
@@ -1029,7 +1056,7 @@ class System {
   [[nodiscard]] POPS_EXPORT NewtonOptions block_newton_options(int b) const;
   [[nodiscard]] bool block_newton_diagnostics(int b) const;
   POPS_EXPORT void publish_newton_report(int b, const SolveReport& solve);
-  [[nodiscard]] const NewtonReport& last_newton_report() const;
+  [[nodiscard]] NewtonReport last_newton_report() const;
   /// Preflight one unqualified Cartesian generated Program operator.  Such kernels cannot evaluate
   /// inactive cells before zeroing their outputs, so an active embedded boundary is rejected before
   /// mutation.  Only unqualified Cartesian kernels use this seam; local_transform and
@@ -1044,7 +1071,7 @@ class System {
   POPS_EXPORT Real block_max_speed(int b, const MultiFab<Dim>& U) const;
   /// The minimum physical cell spacing across every compiled axis -- the same hmin the native CFL
   /// uses (System::step_cfl). A compiled time Program reads it
-  /// (ProgramContext::hmin) to express its own dt bound (epic ADC-399 / ADC-417, spec s18). POPS_EXPORT:
+  /// (ProgramExecutionServices::hmin) to express its own dt bound (epic ADC-399 / ADC-417, spec s18). POPS_EXPORT:
   /// resolved by the generated problem.so across the dlopen boundary.
   POPS_EXPORT Real cfl_min_dx() const;
   /// A collective scalar reduction over a NAMED block's state -- the native seam the Python diagnostics
@@ -1061,14 +1088,14 @@ class System {
   /// A fresh scalar field co-distributed with the System mesh: block 0's BoxArray and
   /// ranked ownership layout, @p n_comp components, @p n_ghost ghost layers, zero-initialized. Scratch a
   /// compiled time Program allocates for a matrix-free Krylov solve (the residual / search-direction
-  /// fields owned by a KrylovWorkspace and fed through ProgramContext::laplacian); shares the block
+  /// fields owned by a KrylovWorkspace and fed through ProgramExecutionServices::laplacian); shares the block
   /// (ba, dm) so a per-cell kernel pairs it with the state and aux by local fab index.
   POPS_EXPORT MultiFab<Dim> alloc_scalar_field(int n_comp, int n_ghost);
   /// @name Multistep history (epic ADC-399 / ADC-406a)
   /// SYSTEM-OWNED history ring buffers for multistep schemes (Adams-Bashforth and friends): a named
   /// field carried ACROSS macro-steps (e.g. the previous RHS R_{n-1}). The history lives in the System
   /// (a HistoryManager in Impl), NOT in the .so closure, so a later checkpoint slice (ADC-406b) can
-  /// serialize it. A generated problem.so reaches it through ProgramContext::history / store_history /
+  /// serialize it. A generated problem.so reaches it through ProgramExecutionServices::history / store_history /
   /// rotate_histories; these are POPS_EXPORT so the .so resolves them across the dlopen boundary.
   /// @{
   /// Register (idempotent) a history named @p name with maximum lag @p lag (>= 1): a ring buffer of
@@ -1089,10 +1116,12 @@ class System {
                                               const std::string& clock_identity = "",
                                               const std::string& interpolation_identity = "");
   /// The history slot @p lag macro-steps back (lag 0 = the current slot, lag 1 = the previous step's
-  /// stored value, ...). @throws if @p name is unknown, @p lag exceeds the registered depth, or the
-  /// history has not been stored yet ("history '<name>' with lag=<lag> was requested but not
-  /// initialized") -- a read before the first store is a fail-loud configuration error (spec error 17).
-  POPS_EXPORT MultiFab<Dim>& read_history(const std::string& name, int lag);
+  /// stored value, ...). The returned move-only view retains its AcceptedReadLease until destruction;
+  /// callers must use ``get()``/``operator->`` explicitly. @throws if @p name is unknown, @p lag
+  /// exceeds the registered depth, or the history has not been stored yet ("history '<name>' with
+  /// lag=<lag> was requested but not initialized") -- a read before the first store is a fail-loud
+  /// configuration error (spec error 17).
+  POPS_EXPORT AcceptedMultiFabReadView<Dim> read_history(const std::string& name, int lag);
   /// Copy @p value (valid cells) into the CURRENT slot [0] of history @p name and mark it initialized.
   /// On the FIRST store the value is also broadcast into EVERY deeper slot (the cold-start fill: a
   /// multistep scheme's step 0 then reads the same value at every lag, degenerating to a one-step
@@ -1183,16 +1212,28 @@ class System {
                                         const std::vector<int>& stored_slots);
   /// @}
   /// Load a generated problem.so and install its compiled time Program. dlopens @p so_path, checks
-  /// its ABI key against this module (fail-loud on mismatch), and calls its pops_install_program(this),
-  /// whose shared facade factory selects the Program execution provider and installs the macro-step
-  /// closure. The .so resolves the seam accessors above from the globally promoted host, while the
+  /// its ABI key against this module (fail-loud on mismatch), and calls its unique v5
+  /// `pops_install_program` entry with a detached host descriptor. The retained preparation image
+  /// selects the Program execution provider and publishes the macro-step closure only after collective
+  /// validation. The .so resolves the seam accessors above from the globally promoted host, while the
   /// package itself stays local so independent semantic artifacts cannot interpose. Mirrors
   /// add_native_block; the .so stays loaded for the process lifetime.
   POPS_EXPORT void install_program(const std::string& so_path);
-  /// IR hash of the installed compiled Program (the string returned by the .so's pops_program_hash),
+  /// IR hash of the installed compiled Program candidate,
   /// or "" if no program is installed. Recorded in the checkpoint (sim.checkpoint) so a restart against
   /// a DIFFERENT compiled Program is rejected fail-loud (the buffers / cadence would be meaningless).
   POPS_EXPORT std::string installed_program_hash() const;
+  /// Capture the complete bind-sealed Program persistent-value carrier, including cold/invalid
+  /// slot metadata, under an AcceptedReadLease.
+  POPS_EXPORT std::vector<std::uint8_t> capture_program_persistent_value_checkpoint() const;
+  /// Decode and allocate a detached restore against the exact currently installed resource plan.
+  /// This operation never mutates accepted state.
+  POPS_EXPORT runtime::program::PreparedProgramPersistentValueRestore
+  prepare_program_persistent_value_restore(const std::vector<std::uint8_t>& payload) const;
+  /// Consume a detached restore during the restart candidate phase.  All throwing identity checks
+  /// precede the final allocation-free store swap.
+  POPS_EXPORT void publish_program_persistent_value_restore(
+      runtime::program::PreparedProgramPersistentValueRestore& prepared);
 
   /// @name Runtime freeze lifecycle (ADC-592)
   /// The runtime lifecycle is EXPLICIT: assembly mutable BEFORE bind, composition FROZEN once
@@ -1215,13 +1256,18 @@ class System {
   /// @name Scheduler value cache (epic ADC-399 / ADC-458, Spec 3 section 17-18 + 30)
   /// The held-node value cache (every(N).hold / accumulate_dt) lives in the SYSTEM (one CacheManager
   /// per installed Program), NOT in the .so step closure -- so the checkpoint can reach it, exactly the
-  /// way the history rings do. Every ProgramContext (the step closure's copy and any fresh one) forwards
+  /// way the history rings do. Every ProgramExecutionServices (the step closure's copy and any fresh one) forwards
   /// its cache_* seam ops to this single manager. POPS_EXPORT so the generated problem.so resolves it
-  /// across the dlopen boundary like the other ProgramContext seam accessors.
+  /// across the dlopen boundary like the other ProgramExecutionServices seam accessors.
   /// @{
-  /// The System-owned scheduler cache (a non-owning reference; lives as long as the System). A compiled
-  /// Program's cache_store_aux / cache_restore_aux / cache_should_update reach it through ProgramContext.
-  POPS_EXPORT runtime::program::CacheManager<Dim>& program_cache();
+  /// The System-owned scheduler cache. A compiled Program's cache_store_aux / cache_restore_aux /
+  /// cache_should_update reach it through ProgramExecutionServices. The move-only view owns an
+  /// AcceptedReadLease and does not
+  /// expose a reference conversion, so a cache pointer cannot outlive the accepted read window.
+  POPS_EXPORT AcceptedCacheReadView<Dim> program_cache();
+  /// Internal v5 loader host view. It is available before any ProgramExecutionServices instance is
+  /// materialized and all service identities are owned by this runtime.
+  [[nodiscard]] POPS_EXPORT runtime::program::ProgramHostDescriptor program_host_descriptor();
   /// @name Scheduler-cache checkpoint/restart (Spec 3 section 30, ADC-458)
   /// SERIALIZE / RESTORE the System-owned cache across a checkpoint, mirroring the history seam: the
   /// facade (sim.checkpoint / sim.restart) gathers each VALID slot (gather_global, MPI-safe) and scatters
@@ -1229,45 +1275,54 @@ class System {
   /// (installed_program_hash) rejects a restart against a different compiled Program; a held scheduled
   /// node the checkpoint never recorded fails loud at restart (the facade compares the restored ids).
   /// @{
-  /// Node ids of every VALID cached slot (ascending). Empty when no schedule cached a value.
-  POPS_EXPORT std::vector<int> program_cache_nodes() const;
-  /// The scheduled node name of slot @p node_id ("fields_from_state"), or "node_<id>" if it was stored
-  /// without one (the current nameless codegen). Names a missing node verbatim at restart.
-  POPS_EXPORT std::string program_cache_name(int node_id) const;
-  /// The macro step at slot @p node_id's last recompute. @throws if absent.
-  POPS_EXPORT int program_cache_last_update_step(int node_id) const;
-  /// The accumulated skipped dt of slot @p node_id (accumulate_dt policy). 0 if none.
-  POPS_EXPORT double program_cache_accumulated_dt(int node_id) const;
-  /// The component count of slot @p node_id's cached value. @throws if absent.
-  POPS_EXPORT int program_cache_ncomp(int node_id) const;
-  /// The uniform ghost-cell width of slot @p node_id's cached value (1 for the aux, the block-state
+  /// Every bind-declared dense slot, including invalid/cold values whose accumulated window must
+  /// survive restart. Slots are exactly ``0..N-1`` in ProgramResourcePlan order.
+  POPS_EXPORT std::vector<std::size_t> program_cache_slots() const;
+  POPS_EXPORT std::string program_cache_plan_schema() const;
+  POPS_EXPORT std::string program_cache_plan_digest() const;
+  POPS_EXPORT bool program_cache_valid(std::size_t slot) const;
+  POPS_EXPORT bool program_cache_cold(std::size_t slot) const;
+  /// The complete plan-owned diagnostic identity for @p slot.
+  POPS_EXPORT std::string program_cache_name(std::size_t slot) const;
+  /// The macro step at @p slot's last recompute; ``-1`` for an invalid/cold slot.
+  POPS_EXPORT int program_cache_last_update_step(std::size_t slot) const;
+  /// The exact accumulated skipped interval, including for an invalid/cold slot.
+  POPS_EXPORT double program_cache_accumulated_dt(std::size_t slot) const;
+  /// The component count of a valid @p slot's cached value. @throws for an invalid slot.
+  POPS_EXPORT int program_cache_ncomp(std::size_t slot) const;
+  /// The uniform ghost-cell width of a valid @p slot's cached value (1 for the aux, the block-state
   /// width for a held scratch) -- serialized so restore rebuilds with the same width on every exact
   /// axis. @throws if absent or if an anisotropic extent cannot be represented by this checkpoint
   /// schema.
-  POPS_EXPORT int program_cache_ngrow(int node_id) const;
-  /// GLOBAL (collective, MPI-safe) gather of slot @p node_id's cached MultiFab<Dim> into a component-major
+  POPS_EXPORT int program_cache_ngrow(std::size_t slot) const;
+  /// GLOBAL (collective, MPI-safe) gather of valid @p slot's cached MultiFab<Dim> into a component-major
   /// buffer of size ncomp times the product of every exact spatial extent, EXACTLY like
   /// state_global / history_global. All ranks MUST call it.
-  /// @throws if @p node_id is absent.
-  POPS_EXPORT std::vector<double> program_cache_global(int node_id) const;
-  /// RESTORE (restart) slot @p node_id from a GLOBAL component-major buffer (same layout as
+  /// @throws if @p slot is invalid.
+  POPS_EXPORT std::vector<double> program_cache_global(std::size_t slot) const;
+  /// RESTORE (restart) valid @p slot from a GLOBAL component-major buffer (same layout as
   /// program_cache_global / set_state): allocate a value MultiFab<Dim> co-distributed with block 0 (@p ncomp
   /// components), scatter the buffer into it (owner rank writes, others no-op -- MPI-safe, all ranks
   /// call it), and re-key the slot with its bookkeeping (@p name may be empty). @throws if no block
   /// exists yet (the cache value is co-distributed with block 0's storage).
-  POPS_EXPORT void restore_program_cache(int node_id, int ncomp, int ngrow, int last_update_step,
-                                         double accumulated_dt, const std::string& name,
+  POPS_EXPORT void restore_program_cache(std::size_t slot, int ncomp, int ngrow,
+                                         int last_update_step, double accumulated_dt,
+                                         const std::string& name,
                                          const std::vector<double>& values);
+  /// Restore an invalid/cold slot carrying only its accumulated temporal window. No dummy field is
+  /// allocated and the next scheduled read is forced to recompute.
+  POPS_EXPORT void restore_program_cache_pending(std::size_t slot, double accumulated_dt,
+                                                 const std::string& name);
   /// @}
   /// @}
   /// Apply block @p b's post-step positivity projection to @p u in place (ADC-177): U <- project(U,
   /// aux) over the valid cells, the SAME closure the native per-step path runs (s.project). A compiled
-  /// time Program reaches it through ProgramContext::apply_projection (spec op 21). REUSES the block's
+  /// time Program reaches it through ProgramExecutionServices::apply_projection (spec op 21). REUSES the block's
   /// own projection (set at add_block time); a block without that capability is rejected.
   /// POPS_EXPORT so a generated problem.so resolves it across the dlopen boundary.
   POPS_EXPORT void block_project(int b, MultiFab<Dim>& u);
   /// @name Compiled-Program scalar diagnostics (epic ADC-399 / ADC-414, spec op 23)
-  /// A name -> Real map a compiled Program writes via P.record_scalar (ProgramContext::record_scalar),
+  /// A name -> Real map a compiled Program writes via P.record_scalar (ProgramExecutionServices::record_scalar),
   /// retrievable AFTER sim.step for inspection / logging. Lives in Impl (private to the _pops TU) so it
   /// survives across the dlopen boundary; the .so writes it through the POPS_EXPORT setter below.
   /// @{
@@ -1297,12 +1352,12 @@ class System {
   /// in a per-PROGRAM-block RuntimeParams owned HERE (not in the .so closure), so set_program_params
   /// changes it at run time WITHOUT recompiling. Mirrors the program diagnostics / history rings:
   /// System-owned state the step closure
-  /// reaches through ProgramContext. install_program seeds each block's defaults from the .so
-  /// pops_program_param_* metadata. The lowered source / linear-source kernels read the CURRENT value
-  /// via ProgramContext::program_params(block).get(index).
+  /// reaches through ProgramExecutionServices. install_program seeds each block's defaults from the .so
+  /// candidate parameter records. The lowered source / linear-source kernels read the CURRENT value
+  /// via ProgramExecutionServices::program_params(block).get(index).
   /// @{
   /// Overwrite block @p prog_block's RuntimeParams with @p values (the COMPLETE block, sorted-name
-  /// order matching the .so pops_program_param_* metadata). @p prog_block is the PROGRAM block index
+  /// order matching the candidate parameter records). @p prog_block is the PROGRAM block index
   /// (P.state declaration order). @throws std::out_of_range if the block was not seeded by a runtime-
   /// param Program, std::runtime_error on a size mismatch. POPS_EXPORT: a generated problem.so could
   /// reach it across the dlopen boundary (the runtime set comes from Python today). Effect on the next
@@ -1310,11 +1365,11 @@ class System {
   POPS_EXPORT void set_program_params(int prog_block, const std::vector<double>& values);
   /// Block @p prog_block's CURRENT RuntimeParams (a device-clean by-value copy: trivially copyable,
   /// readable in a kernel). An UNSEEDED block (no runtime param declared) returns a default-constructed
-  /// RuntimeParams (count 0), so a kernel that reads no param is unaffected. Read by ProgramContext for
+  /// RuntimeParams (count 0), so a kernel that reads no param is unaffected. Read by ProgramExecutionServices for
   /// the lowered per-cell source / linear-source kernels.
   POPS_EXPORT RuntimeParams program_params(int prog_block) const;
   /// Seed block @p prog_block's RuntimeParams to its DECLARATION defaults (@p count values, the .so
-  /// pops_program_param_default metadata), establishing the no-set baseline. Called by install_program
+  /// candidate parameter records), establishing the no-set baseline. Called by install_program
   /// once per runtime-param Program block; a later set_program_params overwrites only the supplied
   /// values. Idempotent (re-seeding resets to defaults).
   POPS_EXPORT void seed_program_params(int prog_block, const std::vector<double>& defaults);
@@ -1424,10 +1479,12 @@ class System {
                                                   /// @}
 
  private:
-  friend class runtime::program::ProgramContext<Dim>;
+  friend class runtime::program::ProgramExecutionServices<Dim>;
+  friend class runtime::program::ProgramExecutionPreparationImage<Dim>;
+  friend class runtime::program::detail::UniformStorageTopologyAdapter<Dim>;
   friend class PreparedSystemLayoutTransfer<Dim>;
   /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains
-  /// private to ProgramContext and is deliberately absent from Python bindings.
+  /// private to ProgramExecutionServices and is deliberately absent from Python bindings.
   POPS_EXPORT void record_program_balance_term(const std::string& route, const std::string& term,
                                                Real value);
   POPS_EXPORT bool program_balance_consumer_is_due(const std::string& contract,
@@ -1438,7 +1495,7 @@ class System {
   /// candidate is Cartesian or the embedded boundary is inactive.
   [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* validate_program_state_publication_candidate_(
       int block, const MultiFab<Dim>& candidate, const ExecutionLane& lane) const;
-  /// Exact-lane maximum-speed seam for generated ProgramContext. Local block/provider/allocation
+  /// Exact-lane maximum-speed seam for generated ProgramExecutionServices. Local block/provider/allocation
   /// failures converge before the closure's scalar reduction; no implicit WORLD lane is permitted.
   POPS_EXPORT Real block_max_speed_prepared_(int block, const MultiFab<Dim>& state,
                                              const ExecutionLane& lane) const;
@@ -1447,7 +1504,7 @@ class System {
   /// become a public publication route.
   [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_program_block_active_mask_(
       int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const;
-  /// Immediate provider calls are an exported implementation seam for generated ProgramContext
+  /// Immediate provider calls are an exported implementation seam for generated ProgramExecutionServices
   /// code, never a public publication route. Every public field solve and every Program solve wraps
   /// these methods in the same physical accepted/candidate transaction.
   POPS_EXPORT SolveReport solve_fields_in_place_();
@@ -1463,6 +1520,24 @@ class System {
   POPS_EXPORT SolveReport solve_fields_from_blocks_in_place_(
       const std::string& field, const std::vector<const MultiFab<Dim>*>& U_stages);
   POPS_EXPORT SolveReport solve_fields_from_blocks_at_in_place_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
+      const std::vector<const MultiFab<Dim>*>& U_stages);
+  /// Program-writer field-solve outcome seams. Generated Program callbacks already hold the
+  /// candidate visibility writer, so these retain the public publication/outcome contract without
+  /// recursively acquiring an AcceptedReadLease through the public solve APIs.
+  [[nodiscard]] POPS_EXPORT SolveOutcome program_solve_fields_();
+  [[nodiscard]] POPS_EXPORT SolveOutcome
+  program_solve_fields_from_state_(int block_idx, const MultiFab<Dim>& U_stage);
+  [[nodiscard]] POPS_EXPORT SolveOutcome program_solve_fields_from_state_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int block_idx, const MultiFab<Dim>& U_stage);
+  [[nodiscard]] POPS_EXPORT SolveOutcome
+  program_solve_fields_from_blocks_(const std::vector<const MultiFab<Dim>*>& U_stages);
+  [[nodiscard]] POPS_EXPORT SolveOutcome program_solve_fields_from_state_(
+      const std::string& field, int block_idx, const MultiFab<Dim>& U_stage);
+  [[nodiscard]] POPS_EXPORT SolveOutcome program_solve_fields_from_blocks_(
+      const std::string& field, const std::vector<const MultiFab<Dim>*>& U_stages);
+  [[nodiscard]] POPS_EXPORT SolveOutcome program_solve_fields_from_blocks_at_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
       const std::vector<const MultiFab<Dim>*>& U_stages);
   POPS_EXPORT void prepare_default_field_publication_storage_();
@@ -1483,10 +1558,51 @@ class System {
       std::shared_ptr<runtime::system::NativePackageCapabilityState<Dim>> capability,
       NativePackageKind kind);
   void seal_auxiliary_providers_(const CommunicatorView& communicator);
-  /// Read-only compiled-artifact capability check.  Kept private so only ProgramContext can issue
+  /// Read-only compiled-artifact capability check.  Kept private so only ProgramExecutionServices can issue
   /// an authenticated apply token; installation writes Impl directly and no public setter exists.
   POPS_EXPORT bool program_owns_operator_authority(
       const std::array<std::uint64_t, 4>& authority) const noexcept;
+  /// Internal Program-writer clock view.  Generated execution uses this seam while the Uniform
+  /// candidate holds the transaction visibility writer lease; public ``time()``/``macro_step()``
+  /// always acquire a real AcceptedReadLease and therefore cannot observe an unsealed candidate.
+  POPS_EXPORT int program_macro_step_() const;
+  POPS_EXPORT double program_time_() const;
+  /// Program-internal Uniform topology/state seams.  These are deliberately separate from the
+  /// public observers: generated execution runs while the candidate visibility writer is held and
+  /// must read the resident candidate directly, without recursively acquiring an accepted lease.
+  POPS_EXPORT int program_n_blocks_() const;
+  POPS_EXPORT const std::vector<int>& program_block_map_() const;
+  POPS_EXPORT MultiFab<Dim>& program_block_state_(int block);
+  POPS_EXPORT const MultiFab<Dim>& program_block_state_(int block) const;
+  POPS_EXPORT const ExecutionLane& program_prepared_boundary_execution_lane_() const;
+  POPS_EXPORT Geometry<Dim> program_prepared_block_geometry_() const;
+  POPS_EXPORT std::array<bool, Dim> program_prepared_block_periodicity_() const;
+  POPS_EXPORT const MultiFab<Dim>* program_prepared_block_auxiliary_storage_() const;
+  POPS_EXPORT std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<Dim>>
+  program_prepared_block_provider_storage_owner_() const;
+  POPS_EXPORT const runtime::system::AuxiliaryStorageGroups<Dim>*
+  program_prepared_block_provider_storage_groups_() const;
+  /// Exact accepted-registry witness used while constructing the detached Program image.  The
+  /// image may capture auxiliary state only after the registry has crossed its seal boundary;
+  /// malformed sealed state must propagate its error instead of being mistaken for absence.
+  [[nodiscard]] POPS_EXPORT bool program_auxiliary_registry_sealed_() const noexcept;
+  POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>*
+  program_prepared_auxiliary_consumer_plan_(std::string_view consumer_qid) const;
+  POPS_EXPORT runtime::program::CacheManager<Dim>& program_cache_();
+  POPS_EXPORT runtime::program::Profiler& program_profiler_();
+  POPS_EXPORT NewtonOptions program_block_newton_options_(int block) const;
+  POPS_EXPORT bool program_block_newton_diagnostics_(int block) const;
+  POPS_EXPORT bool program_requires_block_boundary_session_(int block) const;
+  POPS_EXPORT bool program_has_block_boundary_linearization_(int block) const;
+  POPS_EXPORT Real program_cfl_min_dx_() const;
+  POPS_EXPORT RuntimeParams program_params_(int program_block) const;
+  POPS_EXPORT MultiFab<Dim>& program_register_history_(
+      const std::string& name, int lag, int ncomp = -1, int owner = -1,
+      const std::string& state_identity = "", const std::string& space_identity = "",
+      const std::string& clock_identity = "", const std::string& interpolation_identity = "");
+  POPS_EXPORT MultiFab<Dim>& program_read_history_(const std::string& name, int lag);
+  POPS_EXPORT const NewtonReport& program_last_newton_report_() const;
+  POPS_EXPORT runtime::program::ProgramHostDescriptor program_host_descriptor_();
   void add_coupled_source_prepared_(const CoupledSourceProgram& program, double frequency,
                                     const std::string& label, CouplingOperatorView inspect);
   struct Impl;

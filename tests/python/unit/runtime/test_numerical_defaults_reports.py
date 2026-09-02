@@ -70,6 +70,7 @@ def test_numerical_defaults_report_classifies_every_constant():
     assert classification["kCartesianCGDefaultMaxIterations"] == "public_knob"
     assert classification["kWenoEpsilon"] == "public_knob"
     assert classification["kCflSpeedFloor"] == "public_knob"
+    assert classification["kRealIsBinary64"] == "diagnostic_only"
 
 
 def test_system_inspect_reports_effective_block_and_solver_options():

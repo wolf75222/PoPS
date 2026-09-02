@@ -23,7 +23,7 @@
 // WHO OWNS STEPPING: this state owns the one topology-independent cadence LOOP as well as its fields
 // (step_ / substeps_ / stride_ / dt_bound_). Uniform and AMR lend it only their accepted
 // `(physical_time, macro_step)` cursor by reference; no Impl, grid or hierarchy dependency crosses
-// this boundary. Exact-ranked ProgramContext<Dim> remains the sole implementation of operations
+// this boundary. Exact-ranked ProgramExecutionServices<Dim> remains the sole implementation of operations
 // invoked by the installed step closure, while runtime drivers merely enter this shared dispatcher.
 //
 // GRID BOUNDARY. The self-contained logic (cadence guards, diagnostics, block params, history-ring
@@ -46,6 +46,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -56,10 +57,14 @@
 #include <pops/core/foundation/types.hpp>  // Real
 #include <pops/mesh/storage/multifab.hpp>  // MultiFab (history ring element)
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
-#include <pops/runtime/config/runtime_params.hpp>    // RuntimeParams, kMaxRuntimeParams
+#include <pops/numerics/time/amr/levels/amr_clock.hpp>
+#include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams, kMaxRuntimeParams
+#include <pops/runtime/program/amr_program_checkpoint.hpp>
 #include <pops/runtime/program/cache_manager.hpp>    // CacheManager (held-node scheduler cache)
 #include <pops/runtime/program/module_metadata.hpp>  // frozen checkpoint-shape metadata
-#include <pops/runtime/program/profiler.hpp>         // Profiler (per-node / per-brick timing)
+#include <pops/runtime/program/owned_program_installation.hpp>
+#include <pops/runtime/program/program_persistent_value_store.hpp>
+#include <pops/runtime/program/profiler.hpp>  // Profiler (per-node / per-brick timing)
 
 namespace pops::runtime::program {
 
@@ -90,6 +95,11 @@ struct AmrProgramHistoryRemapDescriptor {
   /// numeric history slots and their FluxExpression provenance.
   bool child_physical_layout_changed = false;
   std::vector<AmrProgramHistoryRemapEntry> history_plan;
+  /// Exact deferred-lag markers prepared from the rematerialized HistoryManager before the
+  /// forward topology is published.  A detached accepted-context image deliberately cannot
+  /// inspect the live history rings (depth, slot dt, or initialization); carrying the canonical
+  /// result here lets it stage the same accepted marker map without a live callback or fallback.
+  std::vector<AmrProgramPendingHistoryRemap> prepared_pending_history_remaps;
   std::uint64_t prior_topology_epoch = 0;
   std::uint64_t prior_materialization_generation = 0;
   std::uint64_t published_topology_epoch = 0;
@@ -103,22 +113,344 @@ struct AmrProgramHistoryRemapDescriptor {
   bool operator==(const AmrProgramHistoryRemapDescriptor&) const = default;
 };
 
+/// Native-prepared authority for replacing every AMR history ring after a complete hierarchy
+/// rebuild.  Unlike a parent/child regrid remap, this is a detached total replacement: each entry
+/// carries the new exact key/level and the retained source provenance key for the same historical
+/// identity.  It is intentionally a C++ runtime DTO only; no public facade or component ABI is
+/// extended by this Candidate-time operation.
+struct AmrProgramFullHistoryReseedEntry {
+  std::string key;
+  std::string source_key;
+  std::string history_identity;
+  int level = -1;
+
+  bool operator==(const AmrProgramFullHistoryReseedEntry&) const = default;
+};
+
+struct AmrProgramFullHistoryReseedDescriptor {
+  std::vector<AmrProgramFullHistoryReseedEntry> history_plan;
+  std::uint64_t prior_topology_epoch = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t prior_materialization_generation = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t published_topology_epoch = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t published_materialization_generation = std::numeric_limits<std::uint64_t>::max();
+  std::int64_t accepted_macro_step = -1;
+  std::size_t level_count = 0;
+
+  bool operator==(const AmrProgramFullHistoryReseedDescriptor&) const = default;
+};
+
+/// Fully value-owned topology authority needed to rebuild a cell-local temporal provider while
+/// the next AMR hierarchy is still unpublished.  It deliberately carries only frozen forward
+/// facts; a detached Program snapshot must never consult the last accepted adapter to recover a
+/// layout, a lane, or an interface budget.
+struct PreparedForwardAmrTemporalAuthority {
+  std::uint64_t topology_epoch = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t materialization_generation = std::numeric_limits<std::uint64_t>::max();
+  /// Candidate revision of the freshly serialized POPSAND5 accepted image.  The detached
+  /// snapshot publishes this exact scalar with its pointer-only state exchange.
+  std::uint64_t accepted_state_revision = std::numeric_limits<std::uint64_t>::max();
+  std::string spatial_contract;
+  std::string lane_identity;
+  std::string collective_contract;
+  std::vector<::pops::amr::ParentChildClockRelation> temporal_relations;
+  std::size_t level_count = 0;
+  std::size_t block_count = 0;
+  /// Canonical ``block * level_count + level`` cell counts, derived from the staged hierarchy.
+  std::vector<std::uint64_t> block_level_cell_counts;
+  /// Canonical lower/upper entries for axes 0..Dim-1.
+  std::vector<bool> periodic_faces;
+  std::size_t coupling_count = 0;
+  bool has_interface_flux_provider = false;
+  std::string temporal_provider_identity;
+  std::string flux_budget_contract;
+  std::string coupling_contract;
+  ::pops::amr::InterfaceFluxLedgerBudget interface_flux_ledger_budget;
+};
+
+/// Opaque, candidate-owned AMR field prototypes used to rebuild finite Program scratch arenas
+/// against an unpublished forward topology.  The concrete carrier lives with the AMR adapter so
+/// this type-erased boundary cannot expose an accepted facade or a live runtime fallback.
+class PreparedForwardAmrScratchTopology {
+ public:
+  virtual ~PreparedForwardAmrScratchTopology() = default;
+};
+
+/// Type-erased, candidate-only portion of an AMR accepted checkpoint.  The regrid carrier owns
+/// the forward hierarchy and rematerialized numeric HistoryManager; the detached Program snapshot
+/// owns the complementary flux provenance, temporal authority and deferred markers.  Keeping this
+/// split explicit prevents Candidate preparation from ever asking the last sealed facade to
+/// serialize a checkpoint for an unpublished topology.
+struct PreparedForwardAmrAcceptedContext {
+  std::uint64_t topology_epoch = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t materialization_generation = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t accepted_state_revision = std::numeric_limits<std::uint64_t>::max();
+  std::map<std::string, std::int64_t> logical_clock_ticks;
+  std::vector<AmrProgramPendingHistoryRemap> pending_history_remaps;
+  std::vector<std::uint8_t> history_flux_payload;
+  CellTemporalPartitionAcceptedState temporal_partition;
+  std::string flux_budget_contract;
+  std::string coupling_contract;
+  /// Face fragments and synchronization events carry patch addresses.  Forward preparation
+  /// invalidates them and the carrier serializes empty collections until the next accepted step
+  /// prepares new topology-qualified effects.
+  bool topology_scoped_effects_invalidated = false;
+};
+
+/// Type-erased authority for a detached, topology-qualified AMR execution image.  This stays on
+/// the C++ side of the v5 boundary: artifacts see it only through an accepted snapshot virtual
+/// call, never through a new ABI callback or descriptor field.
+class PreparedForwardAmrExecutionAuthority {
+ public:
+  PreparedForwardAmrExecutionAuthority() = default;
+  PreparedForwardAmrExecutionAuthority(const PreparedForwardAmrExecutionAuthority&) = delete;
+  PreparedForwardAmrExecutionAuthority& operator=(
+      const PreparedForwardAmrExecutionAuthority&) = delete;
+  virtual ~PreparedForwardAmrExecutionAuthority() = default;
+
+  [[nodiscard]] virtual std::uint32_t native_dimension() const noexcept = 0;
+  [[nodiscard]] virtual std::uint64_t topology_epoch() const noexcept = 0;
+  [[nodiscard]] virtual std::uint64_t materialization_generation() const noexcept = 0;
+  [[nodiscard]] virtual std::size_t configured_level_count() const noexcept { return 0; }
+  [[nodiscard]] virtual std::size_t active_level_count() const noexcept { return 0; }
+};
+
 /// Type-erased, already allocated image of one artifact context's accepted state.  Runtime
 /// transactions capture it before entering scientific code and invoke only the noexcept publication
 /// after the carrier and Program storage have been restored.
-class AcceptedProgramContextSnapshot {
+class AcceptedProgramExecutionServicesSnapshot {
  public:
-  AcceptedProgramContextSnapshot() = default;
-  AcceptedProgramContextSnapshot(const AcceptedProgramContextSnapshot&) = delete;
-  AcceptedProgramContextSnapshot& operator=(const AcceptedProgramContextSnapshot&) = delete;
-  virtual ~AcceptedProgramContextSnapshot() = default;
+  AcceptedProgramExecutionServicesSnapshot() = default;
+  AcceptedProgramExecutionServicesSnapshot(const AcceptedProgramExecutionServicesSnapshot&) =
+      delete;
+  AcceptedProgramExecutionServicesSnapshot& operator=(
+      const AcceptedProgramExecutionServicesSnapshot&) = delete;
+  virtual ~AcceptedProgramExecutionServicesSnapshot() = default;
 
-  virtual std::unique_ptr<AcceptedProgramContextSnapshot> prepare_restore() const = 0;
+  virtual std::unique_ptr<AcceptedProgramExecutionServicesSnapshot> prepare_restore() const = 0;
+  /// Refresh this already allocated image from its bound owner. Implementations must reject a
+  /// changed composition/capacity before mutating any candidate-facing state; the accepted-step
+  /// carrier uses it to avoid rebuilding DSO-owned AMR history/clock images after warmup.
+  virtual void refresh_from_owner_preallocated() {
+    throw std::logic_error(
+        "Program accepted execution snapshot does not provide an in-place refresh image");
+  }
+  /// Produce a detached forward-topology image.  The opaque token is meaningful only to the
+  /// concrete snapshot and is returned to it at HiddenPublish for owner rebinding.
+  virtual std::unique_ptr<AcceptedProgramExecutionServicesSnapshot> detach_for_forward(
+      std::uint64_t, std::uint64_t, void*&) const {
+    throw std::logic_error("Program accepted execution snapshot cannot stage a forward topology");
+  }
+  virtual void rebind_after_forward_publish(void*) noexcept { std::terminate(); }
+  /// Installation-only publication into an adapter that is still exclusively candidate-owned.
+  /// Unlike a forward topology publication this transfers only the prepared temporal/contract
+  /// authority; checkpoint staging and topology-bound workspaces remain the host-primed image.
+  virtual void publish_prepared_installation_temporal_authority(void*) noexcept {
+    std::terminate();
+  }
+  virtual void prepare_forward_hierarchy_refresh(std::uint64_t, std::uint64_t) {
+    throw std::logic_error(
+        "Program accepted execution snapshot cannot prepare a forward hierarchy refresh");
+  }
+  virtual void prepare_forward_history_remap(const AmrProgramHistoryRemapDescriptor&) {
+    throw std::logic_error(
+        "Program accepted execution snapshot cannot prepare a forward history remap");
+  }
+  virtual void prepare_forward_full_history_reseed(const AmrProgramFullHistoryReseedDescriptor&) {
+    throw std::logic_error(
+        "Program accepted execution snapshot cannot prepare a forward full-history reseed");
+  }
+  /// Candidate-only cell-local provider rematerialization for a forward AMR hierarchy.  The
+  /// authority is host-owned by the regrid carrier and contains no facade pointer.
+  virtual void prepare_forward_temporal_partition(const PreparedForwardAmrTemporalAuthority&) {
+    throw std::logic_error(
+        "Program accepted execution snapshot cannot prepare a forward temporal partition");
+  }
+  /// Candidate-only rematerialization of bind-sealed transient Program resources. The concrete
+  /// topology carrier supplies only forward field prototypes; publication remains a no-throw
+  /// owner exchange after the AMR hierarchy itself is live.
+  virtual void prepare_forward_scratch_rematerialization(
+      const PreparedForwardAmrScratchTopology&) {
+    throw std::logic_error(
+        "Program accepted execution snapshot cannot prepare forward scratch resources");
+  }
+  /// Construct all DSO-private topology-bound execution resources while Candidate still owns the
+  /// detached forward authority.  Publication is deliberately separate and noexcept.
+  virtual void prepare_forward_execution_bundle(const PreparedForwardAmrExecutionAuthority&) {
+    throw std::logic_error(
+        "Program accepted execution snapshot cannot prepare a forward execution bundle");
+  }
+  /// Candidate-only checkpoint contribution for an unpublished forward AMR topology.  The result
+  /// is intentionally value-owned and contains no facade/adapter pointer.
+  virtual PreparedForwardAmrAcceptedContext prepare_forward_accepted_context(
+      std::int64_t accepted_macro_step) const {
+    (void)accepted_macro_step;
+    throw std::logic_error(
+        "Program accepted execution snapshot cannot prepare a forward accepted checkpoint");
+  }
+  /// Cold bind only.  Implementations use it to reserve finite accepted-image arenas before the
+  /// first candidate; refresh/finalize paths never call it.
+  virtual void prime_at_bind() {}
+  /// Cold bind only, for a snapshot freshly copied after the live owner was already primed.
+  /// Implementations restore copy-lost spare capacities without refreshing or republishing the
+  /// owner a second time.
+  virtual void prime_copied_image_at_bind() { prime_at_bind(); }
+  /// Finite diagnostics that live beside an accepted execution context participate in the same
+  /// Snapshot/Publish/Rollback authority.  Contexts without a separate provisional arena retain
+  /// their existing semantics through these no-op defaults.
+  virtual void snapshot_transaction_diagnostics_noexcept() noexcept {}
+  virtual void publish_transaction_diagnostics_noexcept() noexcept {}
+  virtual void restore_transaction_diagnostics_noexcept() noexcept {}
   virtual void publish_restore() noexcept = 0;
 };
 
-using AcceptedProgramContextSnapshotFactory =
-    std::function<std::unique_ptr<AcceptedProgramContextSnapshot>()>;
+using AcceptedProgramExecutionServicesSnapshotFactory =
+    std::function<std::unique_ptr<AcceptedProgramExecutionServicesSnapshot>()>;
+
+/// A host wrapper around a snapshot allocated by an artifact.  The owner is declared before the
+/// foreign snapshot so the latter is destroyed first; a retained snapshot can therefore outlive a
+/// replacement without ever dispatching its virtual destructor through an unloaded image.
+class RetainedAcceptedProgramExecutionServicesSnapshot final
+    : public AcceptedProgramExecutionServicesSnapshot {
+ public:
+  RetainedAcceptedProgramExecutionServicesSnapshot(
+      std::shared_ptr<OwnedProgramInstallation> artifact,
+      std::unique_ptr<AcceptedProgramExecutionServicesSnapshot> snapshot)
+      : artifact_(std::move(artifact)), snapshot_(std::move(snapshot)) {}
+
+  std::unique_ptr<AcceptedProgramExecutionServicesSnapshot> prepare_restore() const override {
+    auto restored = snapshot_->prepare_restore();
+    if (!restored)
+      return {};
+    return std::make_unique<RetainedAcceptedProgramExecutionServicesSnapshot>(artifact_,
+                                                                              std::move(restored));
+  }
+
+  void refresh_from_owner_preallocated() override {
+    if (!snapshot_)
+      throw std::logic_error("retained Program accepted snapshot is empty");
+    snapshot_->refresh_from_owner_preallocated();
+  }
+
+  std::unique_ptr<AcceptedProgramExecutionServicesSnapshot> detach_for_forward(
+      std::uint64_t topology_epoch, std::uint64_t materialization_generation,
+      void*& rebind_token) const override {
+    if (!snapshot_)
+      throw std::logic_error("retained Program accepted snapshot is empty");
+    auto detached =
+        snapshot_->detach_for_forward(topology_epoch, materialization_generation, rebind_token);
+    if (!detached)
+      throw std::logic_error("retained Program forward snapshot is empty");
+    return std::make_unique<RetainedAcceptedProgramExecutionServicesSnapshot>(artifact_,
+                                                                              std::move(detached));
+  }
+
+  void rebind_after_forward_publish(void* rebind_token) noexcept override {
+    if (!snapshot_)
+      std::terminate();
+    snapshot_->rebind_after_forward_publish(rebind_token);
+  }
+
+  void publish_prepared_installation_temporal_authority(void* rebind_token) noexcept override {
+    if (!snapshot_)
+      std::terminate();
+    snapshot_->publish_prepared_installation_temporal_authority(rebind_token);
+  }
+
+  void prepare_forward_hierarchy_refresh(std::uint64_t topology_epoch,
+                                         std::uint64_t materialization_generation) override {
+    if (!snapshot_)
+      throw std::logic_error("retained Program accepted snapshot is empty");
+    snapshot_->prepare_forward_hierarchy_refresh(topology_epoch, materialization_generation);
+  }
+
+  void prepare_forward_history_remap(const AmrProgramHistoryRemapDescriptor& descriptor) override {
+    if (!snapshot_)
+      throw std::logic_error("retained Program accepted snapshot is empty");
+    snapshot_->prepare_forward_history_remap(descriptor);
+  }
+
+  void prepare_forward_full_history_reseed(
+      const AmrProgramFullHistoryReseedDescriptor& descriptor) override {
+    if (!snapshot_)
+      throw std::logic_error("retained Program accepted snapshot is empty");
+    snapshot_->prepare_forward_full_history_reseed(descriptor);
+  }
+
+  void prepare_forward_temporal_partition(
+      const PreparedForwardAmrTemporalAuthority& authority) override {
+    if (!snapshot_)
+      throw std::logic_error("retained Program accepted snapshot is empty");
+    snapshot_->prepare_forward_temporal_partition(authority);
+  }
+
+  void prepare_forward_scratch_rematerialization(
+      const PreparedForwardAmrScratchTopology& topology) override {
+    if (!snapshot_)
+      throw std::logic_error("retained Program accepted snapshot is empty");
+    snapshot_->prepare_forward_scratch_rematerialization(topology);
+  }
+
+  void prepare_forward_execution_bundle(
+      const PreparedForwardAmrExecutionAuthority& authority) override {
+    if (!snapshot_)
+      throw std::logic_error("retained Program accepted snapshot is empty");
+    snapshot_->prepare_forward_execution_bundle(authority);
+  }
+
+  PreparedForwardAmrAcceptedContext prepare_forward_accepted_context(
+      std::int64_t accepted_macro_step) const override {
+    if (!snapshot_)
+      throw std::logic_error("retained Program accepted snapshot is empty");
+    return snapshot_->prepare_forward_accepted_context(accepted_macro_step);
+  }
+
+  void prime_at_bind() override {
+    if (!snapshot_)
+      throw std::logic_error("retained Program accepted snapshot is empty");
+    snapshot_->prime_at_bind();
+  }
+
+  void prime_copied_image_at_bind() override {
+    if (!snapshot_)
+      throw std::logic_error("retained Program accepted snapshot is empty");
+    snapshot_->prime_copied_image_at_bind();
+  }
+
+  void snapshot_transaction_diagnostics_noexcept() noexcept override {
+    if (!snapshot_)
+      std::terminate();
+    snapshot_->snapshot_transaction_diagnostics_noexcept();
+  }
+
+  void publish_transaction_diagnostics_noexcept() noexcept override {
+    if (!snapshot_)
+      std::terminate();
+    snapshot_->publish_transaction_diagnostics_noexcept();
+  }
+
+  void restore_transaction_diagnostics_noexcept() noexcept override {
+    if (!snapshot_)
+      std::terminate();
+    snapshot_->restore_transaction_diagnostics_noexcept();
+  }
+
+  void publish_restore() noexcept override { snapshot_->publish_restore(); }
+
+ private:
+  std::shared_ptr<OwnedProgramInstallation> artifact_;
+  std::unique_ptr<AcceptedProgramExecutionServicesSnapshot> snapshot_;
+};
+
+inline std::unique_ptr<AcceptedProgramExecutionServicesSnapshot>
+OwnedProgramInstallation::invoke_accepted_snapshot() const {
+  require_prepared_();
+  if (candidate_.create_accepted_snapshot == nullptr)
+    throw std::logic_error("Program installation has no accepted context snapshot candidate");
+  AcceptedProgramExecutionServicesSnapshot* snapshot = pops::dynlib::invoke_with_host_exception(
+      [&] { return candidate_.create_accepted_snapshot(candidate_.context); },
+      "Program candidate accepted context snapshot");
+  return std::unique_ptr<AcceptedProgramExecutionServicesSnapshot>(snapshot);
+}
 
 /// Multistep history ring buffers (ADC-406a), owned by the Program runtime state.
 ///
@@ -217,11 +549,18 @@ struct HistoryManager {
 /// operators know their qualified runtime block, hierarchy level and conservative component, while
 /// the route-to-quantity selector is a separate planning authority. Keeping both identities
 /// separate prevents a reflux correction from being silently relabelled as a complete balance.
+enum class AutomaticBalanceTerm : std::uint8_t {
+  outward_boundary_flux = 0,
+  sources = 1,
+  reflux = 2,
+  projection = 3,
+};
+
 struct AutomaticBalanceKey {
   int runtime_block = -1;
   int level = -1;
   int component = -1;
-  std::string term;
+  AutomaticBalanceTerm term = AutomaticBalanceTerm::outward_boundary_flux;
 
   friend bool operator<(const AutomaticBalanceKey& left, const AutomaticBalanceKey& right) {
     if (left.runtime_block != right.runtime_block)
@@ -266,11 +605,56 @@ struct ArtifactFieldBoundaryStage {
 template <int Dim>
 struct ProgramRuntimeState {
   static_assert(Dim >= 1 && Dim <= 3, "ProgramRuntimeState only supports dimensions 1, 2, and 3");
+  /// Immutable host-owned receipt retained with the accepted artifact. It ensures the copied
+  /// authority tables and bind-sealed resource plan survive after the temporary publication image
+  /// is gone, and participates in replacement rollback.
+  struct ArtifactPublicationReceipt final {
+    ProgramInstallationMetadata metadata;
+    ProgramInstallationTables tables;
+    ProgramResourcePlan resource_plan;
+  };
+
+  struct DiagnosticSlot final {
+    Real value = Real(0);
+    bool recorded = false;
+
+    friend bool operator==(const DiagnosticSlot&, const DiagnosticSlot&) = default;
+  };
+
+  struct BalanceRouteSlot final {
+    std::array<Real, 5> values{};
+    std::array<bool, 5> recorded{};
+
+    friend bool operator==(const BalanceRouteSlot&, const BalanceRouteSlot&) = default;
+  };
+
+  struct AutomaticBalanceSlot final {
+    Real value = Real(0);
+    bool recorded = false;
+
+    friend bool operator==(const AutomaticBalanceSlot&, const AutomaticBalanceSlot&) = default;
+  };
+
+  struct StepProjectionSlot final {
+    std::string identity;
+    bool executed = false;
+
+    friend bool operator==(const StepProjectionSlot&, const StepProjectionSlot&) = default;
+  };
+
+  using DiagnosticRegistry = std::map<std::string, DiagnosticSlot, std::less<>>;
+  using BalanceRouteRegistry = std::map<std::string, BalanceRouteSlot, std::less<>>;
+  using AutomaticBalanceRegistry = std::map<AutomaticBalanceKey, AutomaticBalanceSlot>;
   /// Static field-boundary authoring image captured before the first successful artifact overlay.
   std::optional<ArtifactFieldBoundaryAuthorityRegistry<Dim>> artifact_field_boundary_baseline_;
-  /// Candidate sink active only while pops_install_field_boundaries executes.
+  /// Candidate sink active only while the v5 boundary-route table is prepared.
   std::optional<ArtifactFieldBoundaryStage<Dim>> artifact_field_boundary_stage_;
   // --- fields read by the stepper (the ONLY Program state the stepper sees) -------------------------
+  /// Host-owned DSO image and candidate state for an installed artifact.  This deliberately
+  /// precedes the closures below: C++ destroys members in reverse declaration order, so every
+  /// DSO-backed closure dies before the candidate destroy callback and image close.
+  std::shared_ptr<OwnedProgramInstallation> artifact_installation_;
+  std::optional<ArtifactPublicationReceipt> artifact_publication_receipt_;
   /// Installed macro-step body (ADC-399); empty makes every public facade temporal operation fail
   /// before mutation.
   std::function<void(double)> step_;
@@ -293,12 +677,12 @@ struct ProgramRuntimeState {
   std::function<void()> restart_regrid_preflight_;
   std::function<void()> restart_regrid_;
   std::function<void()> restart_resync_;
-  AcceptedProgramContextSnapshotFactory accepted_context_snapshot_;
-  /// Monotone witness incremented only by install_unverified_step. Dynamic artifact loaders use it to
-  /// prove that one installer invocation actually replaced the whole-system Program step.
+  AcceptedProgramExecutionServicesSnapshotFactory accepted_context_snapshot_;
+  /// Monotone witness incremented by each validated manual or prepared-artifact replacement. Dynamic
+  /// artifact loaders use it to prove that one installer invocation replaced the whole-system step.
   std::uint64_t step_install_generation_ = 0;
   /// OPTIONAL compiled-Program dt bound (ADC-417). The target-specific loader stores a closure here
-  /// over ProgramContext (uniform) or AmrProgramContext (AMR); step_cfl tightens dt to
+  /// over ProgramExecutionServices (uniform) or ProgramExecutionServices (AMR); step_cfl tightens dt to
   /// min(native CFL, program bound). EMPTY when no Program exports a bound, so the native CFL is used
   /// unchanged. The closure owns no Python callback and executes entirely in the compiled module.
   std::function<Real(Real)> dt_bound_;
@@ -373,7 +757,7 @@ struct ProgramRuntimeState {
   };
 
   // --- checkpoint / binding identity ---------------------------------------------------------------
-  /// IR hash of the installed compiled Program (the .so's pops_program_hash, ADC-406b). Empty until
+  /// IR hash of the installed compiled Program candidate (ADC-406b). Empty until
   /// install records it; serialized in the checkpoint so a restart against a DIFFERENT Program is
   /// rejected fail-loud. Used by BOTH runtimes.
   std::string installed_hash_;
@@ -389,28 +773,28 @@ struct ProgramRuntimeState {
   /// exists before Program prelude allocation and therefore bounds every configured future level.
   ProgramCheckpointMetadata checkpoint_metadata_;
   /// True only after install_program has authenticated an artifact and its replay-authority table.
-  /// Direct C++ install_program_step remains a low-level composition seam for ordinary runtime tests,
-  /// but it is never authority to recompute omitted checkpoint history.
+  /// No direct step installer exists; omitted checkpoint history is replayable only from this
+  /// artifact-owned authority.
   bool artifact_backed_ = false;
   /// NAME-based block binding (ADC-457): program-index -> runtime-block-index map. Entry p holds the
   /// runtime block index the Program's block p names. EMPTY means no authenticated mapping; positional
-  /// identity is not inferred. Used by BOTH runtimes; read by the (Amr)ProgramContext.
+  /// identity is not inferred. Used by BOTH runtimes; read by the (Amr)ProgramExecutionServices.
   std::vector<int> block_map_;
 
   // --- runtime data owned across the step closure --------------------------------------------------
   /// COMPILED-PROGRAM SCALAR DIAGNOSTICS (ADC-414): name -> last value recorded via P.record_scalar.
   /// Lives here (not the .so) so it outlives the step closure and Python can read it. Used by BOTH.
-  std::map<std::string, Real> diagnostics_;
+  DiagnosticRegistry diagnostics_;
   /// Reserved balance records for the current native attempt only. Unlike diagnostics_, this
   /// mailbox is cleared before every public step and is never checkpointed. Accepted balance
   /// consumers read it while the facade's outer transaction still retains U^n, so a missing term
   /// cannot silently reuse the preceding step.
-  std::map<std::string, Real> step_balance_terms_;
+  BalanceRouteRegistry step_balance_terms_;
   /// Native operator contributions captured only for a due Balance attempt. These values are keyed
   /// by their physical runtime coordinate instead of a user ledger route and are therefore not read
   /// by accepted_balance_terms(). The owning facade snapshots this map with the rest of the attempt,
   /// so rejection cannot leak automatic evidence into a retry.
-  std::map<AutomaticBalanceKey, Real> automatic_balance_terms_;
+  AutomaticBalanceRegistry automatic_balance_terms_;
   /// Monotone attempt-local decision emitted by generated code before any Program operator runs.
   /// It is the OR of the exact ConsumerGraph-derived route decisions for this public step. Keeping
   /// this separate from step_balance_terms_ lets projection operators execute before their later
@@ -433,7 +817,11 @@ struct ProgramRuntimeState {
   /// Attempt-local identities of ProjectAndRecheck branches that actually executed. This report
   /// mailbox is cleared at attempt entry and consumed by the Python transaction coordinator before
   /// commit or rollback; it is deliberately not checkpoint or accepted scientific state.
-  std::vector<std::string> step_projections_;
+  std::vector<StepProjectionSlot> step_projections_;
+  /// Bind-sealed composition witness for the three attempt-local registries above. Declarations
+  /// are an installation/prelude operation; once sealed, every candidate write is a lookup into an
+  /// already-owned node and an unknown identity fails without growing a container.
+  bool transaction_authorities_bound_ = false;
   /// COMPILED-PROGRAM RUNTIME PARAMETERS (ADC-510 / ADC-508): program-block index -> current
   /// RuntimeParams for a Program that reads dsl.Param(..., kind="runtime"). Seeded to the declaration
   /// defaults at install, overwritten at run time; the step closure reads the CURRENT value each step
@@ -445,6 +833,13 @@ struct ProgramRuntimeState {
   /// uniform runtime System::step / solve_fields wrap themselves in a ProfileScope into it; on AMR the
   /// engine is wired to its address at build. Used by BOTH.
   Profiler profiler_;
+  /// One bind-sealed persistent-value authority for the whole runtime. Execution providers are
+  /// rematerializable implementation views, so they must never own this storage.
+  ProgramPersistentValueStore persistent_values_;
+  /// Uniform has no AMR hierarchy capability, but its ABI still publishes a stable one-level
+  /// hierarchy identity. This runtime-owned token survives provider rematerialization.
+  struct OneLevelHierarchyIdentity final {};
+  OneLevelHierarchyIdentity one_level_hierarchy_identity_;
   /// SCHEDULER VALUE CACHE (ADC-458), UNIFORM ONLY. The held-node cache (every(N).hold / accumulate_dt)
   /// keyed by IR node id; the uniform checkpoint serializes it. Empty on AMR (cache seam not wired).
   CacheManager<Dim> cache_;
@@ -453,28 +848,6 @@ struct ProgramRuntimeState {
   HistoryManager<Dim> hist_;
 
   // --- self-contained helpers (grid-free, Program-subsystem-worded errors) -------------------------
-
-  struct ArtifactStepInstallSnapshot {
-    std::function<void(double)> step;
-    std::function<void()> hierarchy_refresh;
-    std::function<void(const AmrProgramHistoryRemapDescriptor&)> history_remap_accepted;
-    std::function<void()> restart_regrid_preflight;
-    std::function<void()> restart_regrid;
-    std::function<void()> restart_resync;
-    AcceptedProgramContextSnapshotFactory accepted_context_snapshot;
-    std::function<Real(Real)> dt_bound;
-    std::uint64_t generation = 0;
-    std::string installed_hash;
-    std::vector<std::array<std::uint64_t, 4>> operator_authorities;
-    std::vector<std::pair<std::string, int>> history_replay_authorities;
-    ProgramCheckpointMetadata checkpoint_metadata;
-    std::vector<int> block_map;
-    std::map<int, RuntimeParams> block_params;
-    std::map<std::string, Real> diagnostics;
-    CacheManager<Dim> cache;
-    HistoryManager<Dim> history;
-    bool artifact_backed = false;
-  };
 
   /// Complete accepted-state rollback candidate. Static artifact closures and installation
   /// authorities deliberately remain live; only state that an accepted attempt may mutate is
@@ -512,7 +885,10 @@ struct ProgramRuntimeState {
           balance_replay_active_(accepted.balance_replay_active_),
           balance_step_completed_(accepted.balance_step_completed_),
           balance_program_was_due_(accepted.balance_program_was_due_),
+          step_projections_(accepted.step_projections_),
+          transaction_authorities_bound_(accepted.transaction_authorities_bound_),
           block_params_(accepted.block_params_),
+          persistent_values_(accepted.persistent_values_.clone()),
           cache_(accepted.cache_),
           hist_(accepted.hist_),
           profiler_restore_(owner.profiler_.prepare_restore(accepted.profiler_)) {}
@@ -530,16 +906,19 @@ struct ProgramRuntimeState {
     double cadence_clock_restore_accepted_time_ = 0.0;
     int cadence_clock_restore_macro_step_ = 0;
     Real last_dt_ = Real(0);
-    std::map<std::string, Real> diagnostics_;
-    std::map<std::string, Real> step_balance_terms_;
-    std::map<AutomaticBalanceKey, Real> automatic_balance_terms_;
+    DiagnosticRegistry diagnostics_;
+    BalanceRouteRegistry step_balance_terms_;
+    AutomaticBalanceRegistry automatic_balance_terms_;
     bool automatic_balance_due_ = false;
     bool balance_due_window_active_ = false;
     int balance_due_target_step_ = 0;
     bool balance_replay_active_ = false;
     bool balance_step_completed_ = false;
     bool balance_program_was_due_ = false;
+    std::vector<StepProjectionSlot> step_projections_;
+    bool transaction_authorities_bound_ = false;
     std::map<int, RuntimeParams> block_params_;
+    ProgramPersistentValueStore persistent_values_;
     CacheManager<Dim> cache_;
     HistoryManager<Dim> hist_;
     Profiler::PreparedRestore profiler_restore_;
@@ -549,6 +928,7 @@ struct ProgramRuntimeState {
     if (this == &accepted)
       throw std::invalid_argument(
           "Program accepted restore requires an independent accepted image");
+    require_transaction_authority_shape_(accepted);
     return PreparedProgramAcceptedRestore(*this, accepted);
   }
 
@@ -558,7 +938,9 @@ struct ProgramRuntimeState {
     static_assert(noexcept(diagnostics_.swap(prepared.diagnostics_)));
     static_assert(noexcept(step_balance_terms_.swap(prepared.step_balance_terms_)));
     static_assert(noexcept(automatic_balance_terms_.swap(prepared.automatic_balance_terms_)));
+    static_assert(noexcept(step_projections_.swap(prepared.step_projections_)));
     static_assert(noexcept(block_params_.swap(prepared.block_params_)));
+    static_assert(noexcept(persistent_values_.swap(prepared.persistent_values_)));
     static_assert(std::is_nothrow_swappable_v<CacheManager<Dim>>);
     static_assert(std::is_nothrow_swappable_v<HistoryManager<Dim>>);
     cadence_window_dt_ = prepared.cadence_window_dt_;
@@ -582,15 +964,190 @@ struct ProgramRuntimeState {
     balance_replay_active_ = prepared.balance_replay_active_;
     balance_step_completed_ = prepared.balance_step_completed_;
     balance_program_was_due_ = prepared.balance_program_was_due_;
+    step_projections_.swap(prepared.step_projections_);
+    transaction_authorities_bound_ = prepared.transaction_authorities_bound_;
     block_params_.swap(prepared.block_params_);
+    persistent_values_.swap(prepared.persistent_values_);
     std::swap(cache_, prepared.cache_);
     std::swap(hist_, prepared.hist_);
     profiler_.publish_prepared_restore(std::move(prepared.profiler_restore_));
   }
 
+  /// Refresh a bind-primed accepted Program image in place. Program installation and immutable
+  /// closures are deliberately excluded: they are an installation authority, not candidate state.
+  /// Every map/ring/Fab identity is checked before its first write, so a late registration or
+  /// layout change fails at the snapshot boundary instead of allocating in a transaction.
+  void copy_from_preallocated(const ProgramRuntimeState& source) {
+    if (this == &source)
+      return;
+    if (substeps_ != source.substeps_ || stride_ != source.stride_ ||
+        step_install_generation_ != source.step_install_generation_)
+      throw std::logic_error("Program accepted image composition changed after preparation");
+    require_transaction_authority_shape_(source);
+    require_same_map_shape_(block_params_, source.block_params_);
+    cadence_window_dt_ = source.cadence_window_dt_;
+    cadence_window_steps_ = source.cadence_window_steps_;
+    cadence_window_start_time_ = source.cadence_window_start_time_;
+    cadence_dispatch_active_ = source.cadence_dispatch_active_;
+    cadence_clock_restore_pending_ = source.cadence_clock_restore_pending_;
+    cadence_clock_restore_dt_ = source.cadence_clock_restore_dt_;
+    cadence_clock_restore_steps_ = source.cadence_clock_restore_steps_;
+    cadence_clock_restore_start_time_ = source.cadence_clock_restore_start_time_;
+    cadence_clock_restore_last_dt_ = source.cadence_clock_restore_last_dt_;
+    cadence_clock_restore_accepted_time_ = source.cadence_clock_restore_accepted_time_;
+    cadence_clock_restore_macro_step_ = source.cadence_clock_restore_macro_step_;
+    last_dt_ = source.last_dt_;
+    copy_scalar_map_(diagnostics_, source.diagnostics_);
+    copy_scalar_map_(step_balance_terms_, source.step_balance_terms_);
+    copy_scalar_map_(automatic_balance_terms_, source.automatic_balance_terms_);
+    automatic_balance_due_ = source.automatic_balance_due_;
+    balance_due_window_active_ = source.balance_due_window_active_;
+    balance_due_target_step_ = source.balance_due_target_step_;
+    balance_replay_active_ = source.balance_replay_active_;
+    balance_step_completed_ = source.balance_step_completed_;
+    balance_program_was_due_ = source.balance_program_was_due_;
+    for (std::size_t index = 0; index < step_projections_.size(); ++index)
+      step_projections_[index].executed = source.step_projections_[index].executed;
+    copy_scalar_map_(block_params_, source.block_params_);
+    persistent_values_.copy_from_preallocated(source.persistent_values_);
+    if (cache_.bound() != source.cache_.bound())
+      throw std::logic_error("Program accepted image cache binding changed after preparation");
+    if (cache_.bound())
+      cache_.copy_from_preallocated(source.cache_);
+    copy_history_from_preallocated_(hist_, source.hist_);
+    profiler_.copy_from_preallocated(source.profiler_);
+  }
+
+ private:
+  template <class Map>
+  static void require_same_map_shape_(const Map& destination, const Map& source) {
+    if (destination.size() != source.size())
+      throw std::logic_error("Program accepted image map composition changed after preparation");
+    for (const auto& [key, value] : source) {
+      (void)value;
+      if (destination.find(key) == destination.end())
+        throw std::logic_error("Program accepted image map key changed after preparation");
+    }
+  }
+
+  template <class Map>
+  static void copy_scalar_map_(Map& destination, const Map& source) {
+    require_same_map_shape_(destination, source);
+    for (const auto& [key, value] : source) {
+      const auto found = destination.find(key);
+      found->second = value;
+    }
+  }
+
+  void require_transaction_authority_shape_(const ProgramRuntimeState& source) const {
+    if (!transaction_authorities_bound_ || !source.transaction_authorities_bound_)
+      throw std::logic_error("Program transaction authorities were not sealed at bind");
+    require_same_map_shape_(diagnostics_, source.diagnostics_);
+    require_same_map_shape_(step_balance_terms_, source.step_balance_terms_);
+    require_same_map_shape_(automatic_balance_terms_, source.automatic_balance_terms_);
+    if (step_projections_.size() != source.step_projections_.size())
+      throw std::logic_error(
+          "Program accepted image projection composition changed after preparation");
+    for (std::size_t index = 0; index < step_projections_.size(); ++index)
+      if (step_projections_[index].identity != source.step_projections_[index].identity)
+        throw std::logic_error(
+            "Program accepted image projection identity changed after preparation");
+  }
+
+  static void copy_string_(std::string& destination, const std::string& source) {
+    if (source.size() > destination.capacity())
+      throw std::logic_error("Program accepted image string capacity was not primed");
+    destination.assign(source.data(), source.size());
+  }
+
+  static void copy_field_(MultiFab<Dim>& destination, const MultiFab<Dim>& source) {
+    if (destination.layout() != source.layout() ||
+        destination.distribution() != source.distribution() ||
+        destination.local_rank() != source.local_rank() || destination.ncomp() != source.ncomp() ||
+        destination.ghosts() != source.ghosts() || destination.local_size() != source.local_size())
+      throw std::logic_error("Program accepted image field layout changed after preparation");
+    for (std::size_t local = 0; local < source.local_size(); ++local) {
+      if (destination.global_index(local) != source.global_index(local) ||
+          destination.fab(local).size() != source.fab(local).size())
+        throw std::logic_error("Program accepted image field ownership changed after preparation");
+    }
+    if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace,
+                                             typename MultiFab<Dim>::memory_space>::accessible) {
+      // Kokkos::deep_copy constructs profiling labels on this host-to-host path.  Those labels
+      // allocate even though both resident images and their exact shape were already prepared.
+      // Synchronize prior kernels once, then copy directly between the sealed host-accessible
+      // views.  Device-only backends retain the asynchronous Kokkos copy below.
+      ::pops::device_fence();
+      for (std::size_t local = 0; local < source.local_size(); ++local) {
+        const auto& source_storage = source.fab(local).storage();
+        auto& destination_storage = destination.fab(local).storage();
+        std::copy_n(source_storage.data(), source_storage.extent(0), destination_storage.data());
+      }
+    } else {
+      for (std::size_t local = 0; local < source.local_size(); ++local)
+        Kokkos::deep_copy(destination.fab(local).storage(), source.fab(local).storage());
+    }
+  }
+
+  static void copy_string_map_(std::map<std::string, std::string>& destination,
+                               const std::map<std::string, std::string>& source) {
+    if (destination.size() != source.size())
+      throw std::logic_error("Program accepted image string-map composition changed");
+    for (const auto& [key, value] : source) {
+      const auto found = destination.find(key);
+      if (found == destination.end())
+        throw std::logic_error("Program accepted image string-map key changed");
+      copy_string_(found->second, value);
+    }
+  }
+
+  static void copy_history_from_preallocated_(HistoryManager<Dim>& destination,
+                                              const HistoryManager<Dim>& source) {
+    if (destination.histories.size() != source.histories.size())
+      throw std::logic_error("Program accepted image history composition changed");
+    for (const auto& [name, source_ring] : source.histories) {
+      const auto found = destination.histories.find(name);
+      if (found == destination.histories.end() || found->second.size() != source_ring.size())
+        throw std::logic_error("Program accepted image history ring changed");
+      for (std::size_t slot = 0; slot < source_ring.size(); ++slot)
+        copy_field_(found->second[slot], source_ring[slot]);
+    }
+    copy_scalar_map_(destination.depth, source.depth);
+    copy_scalar_map_(destination.initialized, source.initialized);
+    copy_scalar_map_(destination.fill_count, source.fill_count);
+    copy_scalar_map_(destination.store_pending, source.store_pending);
+    copy_scalar_map_(destination.owner, source.owner);
+    copy_string_map_(destination.state_identity, source.state_identity);
+    copy_string_map_(destination.space_identity, source.space_identity);
+    copy_string_map_(destination.clock_identity, source.clock_identity);
+    copy_string_map_(destination.interpolation_identity, source.interpolation_identity);
+    if (destination.slot_dt.size() != source.slot_dt.size())
+      throw std::logic_error("Program accepted image history dt composition changed");
+    for (const auto& [name, source_dts] : source.slot_dt) {
+      const auto found = destination.slot_dt.find(name);
+      if (found == destination.slot_dt.end() || source_dts.size() > found->second.capacity())
+        throw std::logic_error("Program accepted image history dt capacity was not primed");
+      found->second.assign(source_dts.begin(), source_dts.end());
+    }
+  }
+
+ public:
   const std::vector<int>& block_map() const noexcept { return block_map_; }
 
   Profiler& profiler() noexcept { return profiler_; }
+
+  ProgramPersistentValueStore& persistent_values() noexcept { return persistent_values_; }
+  const ProgramPersistentValueStore& persistent_values() const noexcept {
+    return persistent_values_;
+  }
+  [[nodiscard]] const std::optional<ArtifactPublicationReceipt>& artifact_publication_receipt()
+      const noexcept {
+    return artifact_publication_receipt_;
+  }
+  void* one_level_hierarchy_identity() noexcept { return &one_level_hierarchy_identity_; }
+  const void* one_level_hierarchy_identity() const noexcept {
+    return &one_level_hierarchy_identity_;
+  }
 
   /// Require the whole-system Program before a public facade may start a temporal operation.
   ///
@@ -604,152 +1161,378 @@ struct ProgramRuntimeState {
                              " requires an installed whole-system Program");
   }
 
-  /// Install an ordinary native step without granting artifact-only replay authority.
-  ///
-  /// The dynamic Program loader calls the same facade seam while its artifact install entry runs,
-  /// then publishes the validated `(ring, depth)` table and marks the completed install artifact
-  /// backed. A direct caller never reaches that completion step. Replacing an artifact-backed step
-  /// therefore revokes every artifact-derived authority before the new closure becomes usable.
-  void install_unverified_step(std::function<void(double)> step) {
-    if (!step)
-      throw std::invalid_argument("Program install requires a non-empty whole-system step");
+  /// Fully prepared replacement image. Every operation that can allocate, validate a resource
+  /// digest, or capture a DSO callback happens here, before it can mutate a live Program state.
+  /// The subsequent publish is a closed sequence of noexcept swaps/exchanges.
+  class PreparedArtifactPublication final {
+   public:
+    static PreparedArtifactPublication prepare(PreparedProgramInstallation installation,
+                                               std::uint64_t next_generation) {
+      if (!installation.prepared())
+        throw std::invalid_argument("Program artifact publication requires a prepared handle");
+      if (next_generation == 0 || installation.generation() != next_generation)
+        throw std::invalid_argument(
+            "Program artifact publication generation differs from its preparation image");
+      // Copy the immutable receipt while the complete handle is still inspectable.  The payload
+      // transfer below is then allocation-free apart from the shared owner control block, and all
+      // of it still happens before any live runtime state is exchanged.
+      ProgramInstallationMetadata metadata = installation.metadata();
+      ProgramInstallationTables tables = installation.tables();
+      auto payload = std::move(installation).release_publication_payload();
+      auto artifact = std::make_shared<OwnedProgramInstallation>(std::move(payload.owner));
+      return prepare_complete_(std::move(artifact), next_generation, std::move(metadata),
+                               std::move(tables), std::move(payload.resource_plan),
+                               std::move(payload.persistent_values));
+    }
+
+   private:
+    static PreparedArtifactPublication prepare_complete_(
+        std::shared_ptr<OwnedProgramInstallation> artifact, std::uint64_t next_generation,
+        ProgramInstallationMetadata metadata, ProgramInstallationTables tables,
+        ProgramResourcePlan resource_plan, ProgramPersistentValueStore persistent_values) {
+      PreparedArtifactPublication result(std::move(artifact));
+      result.next_generation_ = next_generation;
+      result.metadata_ = std::move(metadata);
+      result.tables_ = std::move(tables);
+      result.resource_plan_ = std::move(resource_plan);
+      result.persistent_values_ = std::move(persistent_values);
+      // Dense caches are an explicit resource-plan consumer.  Bind before the DSO owner can be
+      // published so no generated cache path can grow a node-id table after installation.
+      result.cache_.bind(result.resource_plan_);
+      result.receipt_.emplace(
+          ArtifactPublicationReceipt{result.metadata_, result.tables_, result.resource_plan_});
+      result.step_ = [artifact = result.artifact_](double dt) { artifact->invoke_step(dt); };
+      if (result.artifact_->candidate().dt_bound != nullptr) {
+        result.dt_bound_ = [artifact = result.artifact_](Real cfl) {
+          const std::optional<double> value = artifact->invoke_dt_bound(static_cast<double>(cfl));
+          if (!value)
+            throw std::logic_error("Program artifact lost its declared dt-bound callback");
+          return static_cast<Real>(*value);
+        };
+      }
+      if (result.artifact_->candidate().hierarchy_refresh != nullptr) {
+        result.hierarchy_refresh_ = [artifact = result.artifact_] {
+          artifact->invoke_hierarchy_refresh();
+        };
+        result.history_remap_accepted_ =
+            [artifact = result.artifact_](const AmrProgramHistoryRemapDescriptor& descriptor) {
+              artifact->invoke_history_remap_accepted(&descriptor);
+            };
+        result.restart_regrid_preflight_ = [artifact = result.artifact_] {
+          artifact->invoke_restart_regrid_preflight();
+        };
+        result.restart_regrid_ = [artifact = result.artifact_] {
+          artifact->invoke_restart_regrid();
+        };
+        result.restart_resync_ = [artifact = result.artifact_] {
+          artifact->invoke_restart_resync();
+        };
+        result.accepted_context_snapshot_ = [artifact = result.artifact_] {
+          auto snapshot = artifact->invoke_accepted_snapshot();
+          if (!snapshot)
+            return std::unique_ptr<AcceptedProgramExecutionServicesSnapshot>{};
+          return std::unique_ptr<AcceptedProgramExecutionServicesSnapshot>(
+              std::make_unique<RetainedAcceptedProgramExecutionServicesSnapshot>(
+                  artifact, std::move(snapshot)));
+        };
+      }
+      return result;
+    }
+
+   public:
+    /// Attach all host-resolved Program authority before publication.  The loader has already
+    /// validated these values against the frozen DSO tables; keeping them in this image prevents
+    /// an install prelude from borrowing the accepted ProgramRuntimeState as scratch storage.
+    void set_resolved_authority(std::string installed_hash,
+                                std::vector<std::array<std::uint64_t, 4>> operators,
+                                std::vector<std::pair<std::string, int>> history_replay,
+                                ProgramCheckpointMetadata checkpoint, std::vector<int> block_map,
+                                std::map<int, RuntimeParams> block_params, bool state_free) {
+      if (installed_hash.empty())
+        throw std::invalid_argument("Program artifact authority is incomplete");
+      if (state_free != tables_.blocks.empty())
+        throw std::invalid_argument(
+            "Program artifact state-free authority disagrees with its authenticated block table");
+      const bool has_block_owned_authority =
+          !operators.empty() || !history_replay.empty() || !checkpoint.histories.empty();
+      if (state_free) {
+        if (!block_map.empty() || !block_params.empty() || has_block_owned_authority)
+          throw std::invalid_argument(
+              "state-free Program artifact authority carries block-owned state");
+      } else if (block_map.empty()) {
+        throw std::invalid_argument("Program artifact authority is incomplete");
+      }
+      installed_hash_ = std::move(installed_hash);
+      operator_authorities_ = std::move(operators);
+      history_replay_authorities_ = std::move(history_replay);
+      checkpoint_metadata_ = std::move(checkpoint);
+      block_map_ = std::move(block_map);
+      block_params_ = std::move(block_params);
+      artifact_backed_ = true;
+    }
+
+    void adopt_prepared_transaction_authorities(ProgramRuntimeState& staged) {
+      staged.bind_transaction_authorities();
+      diagnostics_.swap(staged.diagnostics_);
+      step_balance_terms_.swap(staged.step_balance_terms_);
+      automatic_balance_terms_.swap(staged.automatic_balance_terms_);
+      step_projections_.swap(staged.step_projections_);
+      // The publication image receives the staged declaration nodes only here.  Its prior
+      // bound bit describes the empty construction image, not these swapped registries; reseal
+      // the final owner before any detached accepted transaction image can capture it.
+      transaction_authorities_bound_ = false;
+      bind_transaction_authorities_();
+    }
+
+    void adopt_prepared_execution_state(ProgramRuntimeState& staged) {
+      adopt_prepared_transaction_authorities(staged);
+      persistent_values_.swap(staged.persistent_values_);
+      // The staged Program can only replace the fresh bound cache when it inherited exactly the
+      // same finite table.  A legacy/unbound staging state must not erase the plan-bound image.
+      if (staged.cache_.has_same_bound_plan(cache_))
+        cache_.swap(staged.cache_);
+      using std::swap;
+      swap(hist_, staged.hist_);
+    }
+
+    /// Build the mutable Program portion of an accepted transaction image from this final
+    /// publication, without retaining the previously installed DSO copied into `staged`.
+    /// Installation callbacks and immutable receipts are deliberately absent: transaction
+    /// capture/restore only refreshes the finite scientific registries below, while the live
+    /// ProgramRuntimeState remains the sole installation authority.
+    [[nodiscard]] ProgramRuntimeState prepare_accepted_transaction_image(
+        const ProgramRuntimeState& staged) const {
+      ProgramRuntimeState image(staged);
+      image.artifact_installation_.reset();
+      image.artifact_publication_receipt_.reset();
+      image.artifact_field_boundary_baseline_.reset();
+      image.artifact_field_boundary_stage_.reset();
+      image.step_ = {};
+      image.hierarchy_refresh_ = {};
+      image.history_remap_accepted_ = {};
+      image.restart_regrid_preflight_ = {};
+      image.restart_regrid_ = {};
+      image.restart_resync_ = {};
+      image.accepted_context_snapshot_ = {};
+      image.dt_bound_ = {};
+      image.step_install_generation_ = next_generation_;
+      image.diagnostics_ = diagnostics_;
+      image.step_balance_terms_ = step_balance_terms_;
+      image.automatic_balance_terms_ = automatic_balance_terms_;
+      image.step_projections_ = step_projections_;
+      // This image is the resident Program portion of an AMR rollback carrier.  Seal the exact
+      // final registry shape it owns rather than inheriting a construction-state bit from either
+      // the detached staging state or the publication image.
+      image.transaction_authorities_bound_ = false;
+      image.bind_transaction_authorities();
+      image.block_map_ = block_map_;
+      image.block_params_ = block_params_;
+      image.persistent_values_ = persistent_values_.clone();
+      image.cache_ = cache_;
+      image.hist_ = hist_;
+      image.installed_hash_.clear();
+      image.operator_authorities_.clear();
+      image.history_replay_authorities_.clear();
+      image.checkpoint_metadata_ = {};
+      image.artifact_backed_ = false;
+      return image;
+    }
+
+    /// Installation-only cache materialization.  The finite slot table was bound in
+    /// prepare_complete_; this is the sole allocation boundary for scheduled values.
+    void prime_cache_slot(ProgramCacheSlot slot, const MultiFab<Dim>& prototype) {
+      cache_.prime_slot(slot, prototype);
+    }
+
+    /// Histories are built into a disconnected ProgramRuntimeState by System/AmrSystem before
+    /// publication.  The final exchange below is noexcept and cannot expose a half-registered ring.
+    void adopt_prepared_histories(HistoryManager<Dim> histories) noexcept {
+      using std::swap;
+      swap(hist_, histories);
+    }
+
+    void set_field_boundary_baseline(
+        std::optional<ArtifactFieldBoundaryAuthorityRegistry<Dim>> baseline) noexcept {
+      boundary_baseline_ = std::move(baseline);
+    }
+
+    /// Immutable evidence retained until the owner-last publication.  Installers use this rather
+    /// than a symbolic manifest when they authenticate the final all-rank publication decision.
+    [[nodiscard]] const ProgramResourcePlan& resource_plan() const noexcept {
+      return resource_plan_;
+    }
+    [[nodiscard]] const ProgramInstallationMetadata& metadata() const noexcept { return metadata_; }
+    [[nodiscard]] const ProgramInstallationTables& tables() const noexcept { return tables_; }
+    [[nodiscard]] const ProgramCheckpointMetadata& checkpoint_metadata() const noexcept {
+      return checkpoint_metadata_;
+    }
+
+    /// Invoke the artifact-owned accepted-context factory while this publication image still owns
+    /// the DSO but before the host swaps any live authority.  AMR uses the resulting detached
+    /// snapshot to serialize its initial POPSAND5 image during installation; doing that after
+    /// owner-last publication would turn a cold bootstrap into an observable live mutation.
+    [[nodiscard]] std::unique_ptr<AcceptedProgramExecutionServicesSnapshot>
+    prepare_accepted_context_snapshot() const {
+      if (!accepted_context_snapshot_)
+        throw std::logic_error(
+            "prepared Program artifact lacks its accepted context snapshot factory");
+      auto snapshot = accepted_context_snapshot_();
+      if (!snapshot)
+        throw std::logic_error(
+            "prepared Program artifact returned an empty accepted context snapshot");
+      return snapshot;
+    }
+
+   private:
+    explicit PreparedArtifactPublication(std::shared_ptr<OwnedProgramInstallation> artifact)
+        : artifact_(std::move(artifact)) {}
+    friend struct ProgramRuntimeState;
+
+    void bind_transaction_authorities_() {
+      for (const auto& [name, slot] : diagnostics_) {
+        (void)slot;
+        if (name.empty() || ProgramRuntimeState::has_reserved_balance_namespace(name))
+          throw std::logic_error("Program diagnostic registry is invalid at bind");
+      }
+      for (const auto& [route, slot] : step_balance_terms_) {
+        (void)slot;
+        ProgramRuntimeState::require_balance_route(
+            route,
+            "ProgramRuntimeState::PreparedArtifactPublication::bind_transaction_authorities");
+      }
+      for (const auto& slot : step_projections_)
+        if (slot.identity.empty())
+          throw std::logic_error("Program projection registry is invalid at bind");
+      transaction_authorities_bound_ = true;
+    }
+
+    std::shared_ptr<OwnedProgramInstallation> artifact_;
+    ProgramInstallationMetadata metadata_;
+    ProgramInstallationTables tables_;
+    ProgramResourcePlan resource_plan_;
+    std::optional<ArtifactPublicationReceipt> receipt_;
+    ProgramPersistentValueStore persistent_values_;
+    std::optional<ArtifactFieldBoundaryAuthorityRegistry<Dim>> boundary_baseline_;
+    DiagnosticRegistry diagnostics_;
+    BalanceRouteRegistry step_balance_terms_;
+    AutomaticBalanceRegistry automatic_balance_terms_;
+    std::vector<StepProjectionSlot> step_projections_;
+    bool transaction_authorities_bound_ = false;
+    CacheManager<Dim> cache_;
+    HistoryManager<Dim> hist_;
+    std::function<void(double)> step_;
+    std::function<void()> hierarchy_refresh_;
+    std::function<void(const AmrProgramHistoryRemapDescriptor&)> history_remap_accepted_;
+    std::function<void()> restart_regrid_preflight_, restart_regrid_, restart_resync_;
+    AcceptedProgramExecutionServicesSnapshotFactory accepted_context_snapshot_;
+    std::function<Real(Real)> dt_bound_;
+    std::uint64_t next_generation_ = 0;
+    std::string installed_hash_;
+    std::vector<std::array<std::uint64_t, 4>> operator_authorities_;
+    std::vector<std::pair<std::string, int>> history_replay_authorities_;
+    ProgramCheckpointMetadata checkpoint_metadata_;
+    std::vector<int> block_map_;
+    std::map<int, RuntimeParams> block_params_;
+    bool artifact_backed_ = false;
+  };
+
+  /// Install one already-prepared artifact owner through a prebuilt publication image. Candidate
+  /// state, callbacks, tables and persistent slots are all prepared before the first live mutation.
+  void install_prepared_artifact(PreparedProgramInstallation installation) {
     if (step_install_generation_ == std::numeric_limits<std::uint64_t>::max())
       throw std::overflow_error("Program step-install generation overflow");
-    step_ = std::move(step);
-    hierarchy_refresh_ = nullptr;
-    history_remap_accepted_ = nullptr;
-    restart_regrid_preflight_ = nullptr;
-    restart_regrid_ = nullptr;
-    restart_resync_ = nullptr;
-    accepted_context_snapshot_ = nullptr;
-    dt_bound_ = nullptr;
-    installed_hash_.clear();
-    operator_authorities_.clear();
-    history_replay_authorities_.clear();
-    checkpoint_metadata_ = {};
-    block_map_.clear();
-    block_params_.clear();
-    artifact_backed_ = false;
-    ++step_install_generation_;
+    auto prepared =
+        PreparedArtifactPublication::prepare(std::move(installation), step_install_generation_ + 1);
+    publish_prepared_artifact_(std::move(prepared));
   }
 
-  ArtifactStepInstallSnapshot capture_artifact_step_install() const {
-    return ArtifactStepInstallSnapshot{step_,
-                                       hierarchy_refresh_,
-                                       history_remap_accepted_,
-                                       restart_regrid_preflight_,
-                                       restart_regrid_,
-                                       restart_resync_,
-                                       accepted_context_snapshot_,
-                                       dt_bound_,
-                                       step_install_generation_,
-                                       installed_hash_,
-                                       operator_authorities_,
-                                       history_replay_authorities_,
-                                       checkpoint_metadata_,
-                                       block_map_,
-                                       block_params_,
-                                       diagnostics_,
-                                       cache_,
-                                       hist_,
-                                       artifact_backed_};
+  /// No-throw final half of a host aggregate publication.  The caller must have constructed the
+  /// image and closed its collective checks first; this method performs no validation/allocation.
+  void publish_prepared_artifact(PreparedArtifactPublication&& prepared) noexcept {
+    publish_prepared_artifact_(std::move(prepared));
   }
 
-  /// Start one isolated artifact candidate after its complete rollback image has been captured.
+ private:
+  void publish_prepared_artifact_(PreparedArtifactPublication&& prepared) noexcept {
+    static_assert(noexcept(step_.swap(prepared.step_)));
+    static_assert(noexcept(hierarchy_refresh_.swap(prepared.hierarchy_refresh_)));
+    static_assert(noexcept(history_remap_accepted_.swap(prepared.history_remap_accepted_)));
+    static_assert(noexcept(restart_regrid_preflight_.swap(prepared.restart_regrid_preflight_)));
+    static_assert(noexcept(restart_regrid_.swap(prepared.restart_regrid_)));
+    static_assert(noexcept(restart_resync_.swap(prepared.restart_resync_)));
+    static_assert(noexcept(accepted_context_snapshot_.swap(prepared.accepted_context_snapshot_)));
+    static_assert(noexcept(dt_bound_.swap(prepared.dt_bound_)));
+    static_assert(noexcept(persistent_values_.swap(prepared.persistent_values_)));
+    static_assert(noexcept(diagnostics_.swap(prepared.diagnostics_)));
+    static_assert(noexcept(step_balance_terms_.swap(prepared.step_balance_terms_)));
+    static_assert(noexcept(automatic_balance_terms_.swap(prepared.automatic_balance_terms_)));
+    static_assert(noexcept(step_projections_.swap(prepared.step_projections_)));
+    static_assert(std::is_nothrow_swappable_v<CacheManager<Dim>>);
+    static_assert(std::is_nothrow_swappable_v<HistoryManager<Dim>>);
+    static_assert(noexcept(artifact_publication_receipt_.swap(prepared.receipt_)));
+    static_assert(noexcept(artifact_field_boundary_baseline_.swap(prepared.boundary_baseline_)));
+    static_assert(noexcept(installed_hash_.swap(prepared.installed_hash_)));
+    static_assert(noexcept(operator_authorities_.swap(prepared.operator_authorities_)));
+    static_assert(noexcept(history_replay_authorities_.swap(prepared.history_replay_authorities_)));
+    static_assert(noexcept(std::swap(checkpoint_metadata_, prepared.checkpoint_metadata_)));
+    static_assert(noexcept(block_map_.swap(prepared.block_map_)));
+    static_assert(noexcept(block_params_.swap(prepared.block_params_)));
+    static_assert(noexcept(artifact_installation_.swap(prepared.artifact_)));
+    step_.swap(prepared.step_);
+    hierarchy_refresh_.swap(prepared.hierarchy_refresh_);
+    history_remap_accepted_.swap(prepared.history_remap_accepted_);
+    restart_regrid_preflight_.swap(prepared.restart_regrid_preflight_);
+    restart_regrid_.swap(prepared.restart_regrid_);
+    restart_resync_.swap(prepared.restart_resync_);
+    accepted_context_snapshot_.swap(prepared.accepted_context_snapshot_);
+    dt_bound_.swap(prepared.dt_bound_);
+    persistent_values_.swap(prepared.persistent_values_);
+    diagnostics_.swap(prepared.diagnostics_);
+    step_balance_terms_.swap(prepared.step_balance_terms_);
+    automatic_balance_terms_.swap(prepared.automatic_balance_terms_);
+    step_projections_.swap(prepared.step_projections_);
+    transaction_authorities_bound_ = prepared.transaction_authorities_bound_;
+    std::swap(cache_, prepared.cache_);
+    std::swap(hist_, prepared.hist_);
+    artifact_publication_receipt_.swap(prepared.receipt_);
+    artifact_field_boundary_baseline_.swap(prepared.boundary_baseline_);
+    installed_hash_.swap(prepared.installed_hash_);
+    operator_authorities_.swap(prepared.operator_authorities_);
+    history_replay_authorities_.swap(prepared.history_replay_authorities_);
+    std::swap(checkpoint_metadata_, prepared.checkpoint_metadata_);
+    block_map_.swap(prepared.block_map_);
+    block_params_.swap(prepared.block_params_);
+    artifact_backed_ = prepared.artifact_backed_;
+    step_install_generation_ = prepared.next_generation_;
+    // The old owner remains in ``prepared`` until its old closures have been destroyed at scope
+    // exit.  This preserves the candidate-destroy-before-dlclose ordering across replacements.
+    artifact_installation_.swap(prepared.artifact_);
+  }
+
+ public:
+  /// Start one isolated artifact candidate before the detached preparation image is populated.
   /// Histories, scheduled values and diagnostics are qualified by the installed Program: retaining
   /// any of them across A -> B could either expose removed names or let coincident node/ring ids read
   /// values produced by A. The dynamic loaders call this before the generated prelude; a failed
-  /// candidate restores the snapshot above.
+  /// candidate is discarded without publishing this state.
   void reset_artifact_candidate_state() {
     diagnostics_.clear();
+    step_balance_terms_.clear();
+    automatic_balance_terms_.clear();
+    step_projections_.clear();
+    transaction_authorities_bound_ = false;
     cache_.clear();
     hist_ = HistoryManager<Dim>{};
   }
 
-  void rollback_artifact_step_install(ArtifactStepInstallSnapshot&& snapshot) noexcept {
-    step_ = std::move(snapshot.step);
-    hierarchy_refresh_ = std::move(snapshot.hierarchy_refresh);
-    history_remap_accepted_ = std::move(snapshot.history_remap_accepted);
-    restart_regrid_preflight_ = std::move(snapshot.restart_regrid_preflight);
-    restart_regrid_ = std::move(snapshot.restart_regrid);
-    restart_resync_ = std::move(snapshot.restart_resync);
-    accepted_context_snapshot_ = std::move(snapshot.accepted_context_snapshot);
-    dt_bound_ = std::move(snapshot.dt_bound);
-    step_install_generation_ = snapshot.generation;
-    installed_hash_ = std::move(snapshot.installed_hash);
-    operator_authorities_ = std::move(snapshot.operator_authorities);
-    history_replay_authorities_ = std::move(snapshot.history_replay_authorities);
-    checkpoint_metadata_ = std::move(snapshot.checkpoint_metadata);
-    block_map_ = std::move(snapshot.block_map);
-    block_params_ = std::move(snapshot.block_params);
-    diagnostics_ = std::move(snapshot.diagnostics);
-    cache_ = std::move(snapshot.cache);
-    hist_ = std::move(snapshot.history);
-    artifact_backed_ = snapshot.artifact_backed;
-  }
-
-  void require_exact_artifact_step_install(const ArtifactStepInstallSnapshot& before,
-                                           const std::string& runtime) const {
-    if (!step_ || before.generation == std::numeric_limits<std::uint64_t>::max() ||
-        step_install_generation_ != before.generation + 1 || artifact_backed_)
-      throw std::runtime_error(runtime +
-                               " artifact installer must install exactly one new unverified "
-                               "whole-system Program step");
-  }
-
-  /// Attach the hierarchy callback emitted beside the installed AMR Program step. It remains part
-  /// of the artifact-install rollback image so no DSO-backed closure survives a failed install.
-  void install_hierarchy_refresh(std::function<void()> refresh, const std::string& runtime) {
-    if (!step_)
-      throw std::logic_error(runtime +
-                             "::install_program_hierarchy_refresh requires an installed Program");
-    if (!refresh)
-      throw std::invalid_argument(runtime +
-                                  "::install_program_hierarchy_refresh requires a non-empty hook");
-    hierarchy_refresh_ = std::move(refresh);
-  }
-
-  /// Attach the exact post-publication history-remap callback emitted beside an AMR Program.
-  void install_history_remap_accepted(
-      std::function<void(const AmrProgramHistoryRemapDescriptor&)> refresh,
-      const std::string& runtime) {
-    if (!step_)
-      throw std::logic_error(
-          runtime + "::install_program_history_remap_accepted requires an installed Program");
-    if (!refresh)
-      throw std::invalid_argument(
-          runtime + "::install_program_history_remap_accepted requires a non-empty hook");
-    history_remap_accepted_ = std::move(refresh);
-  }
-
-  /// Attach the restart-only callbacks emitted by the same authenticated AMR artifact.
-  /// They participate in artifact-install rollback, so a failed DSO candidate cannot leave a
-  /// callable stale context behind.
-  void install_restart_hooks(std::function<void()> preflight, std::function<void()> regrid,
-                             std::function<void()> resync,
-                             AcceptedProgramContextSnapshotFactory accepted_context_snapshot,
-                             const std::string& runtime) {
-    if (!step_)
-      throw std::logic_error(runtime +
-                             "::install_program_restart_hooks requires an installed Program");
-    if (!preflight || !regrid || !resync || !accepted_context_snapshot)
-      throw std::invalid_argument(
-          runtime +
-          "::install_program_restart_hooks requires complete accepted-state "
-          "hooks");
-    restart_regrid_preflight_ = std::move(preflight);
-    restart_regrid_ = std::move(regrid);
-    restart_resync_ = std::move(resync);
-    accepted_context_snapshot_ = std::move(accepted_context_snapshot);
-  }
-
-  std::unique_ptr<AcceptedProgramContextSnapshot> capture_accepted_context_snapshot(
+  std::unique_ptr<AcceptedProgramExecutionServicesSnapshot> capture_accepted_context_snapshot(
       const std::string& runtime) const {
     if (!artifact_backed_)
       return {};
     if (!accepted_context_snapshot_)
       throw std::logic_error(runtime + " artifact lacks its accepted context snapshot hook");
-    std::unique_ptr<AcceptedProgramContextSnapshot> snapshot = accepted_context_snapshot_();
+    std::unique_ptr<AcceptedProgramExecutionServicesSnapshot> snapshot =
+        accepted_context_snapshot_();
     if (!snapshot)
       throw std::logic_error(runtime + " artifact returned an empty accepted context snapshot");
     return snapshot;
@@ -781,8 +1564,7 @@ struct ProgramRuntimeState {
   }
 
   /// Requalify Program-owned accepted state for the hierarchy currently exposed by the AMR engine.
-  /// Direct low-level C++ steps have no artifact context and intentionally remain a no-op; an
-  /// authenticated artifact must always provide the hook.
+  /// An authenticated artifact always provides this hook; an uninstalled runtime remains a no-op.
   void refresh_hierarchy_state(const std::string& runtime) const {
     if (!hierarchy_refresh_) {
       if (artifact_backed_)
@@ -1052,6 +1834,20 @@ struct ProgramRuntimeState {
     }
   }
 
+  /// Replay one already-authenticated historical interval without constructing a second scheduler.
+  /// Selective checkpoint reconstruction has its own restored cursor; it therefore bypasses cadence
+  /// accounting but still uses this state-owned direct invocation so no runtime reaches `step_`
+  /// outside the sole Program dispatcher authority.
+  void replay_step(double dt, const std::string& runtime) {
+    if (!step_)
+      throw std::logic_error(runtime +
+                             " Program replay requires an installed whole-system Program");
+    if (!std::isfinite(dt) || !(dt > 0.0))
+      throw std::invalid_argument(runtime + " Program replay requires a finite positive interval");
+    last_dt_ = static_cast<Real>(dt);
+    run_balance_replay(runtime, [&] { step_(dt); });
+  }
+
   /// Stage an authenticated checkpoint window for one exact set_clock transaction. The accepted
   /// window is not mutated until the matching clock pair is consumed, and no historical duration is
   /// guessed.
@@ -1133,72 +1929,165 @@ struct ProgramRuntimeState {
           " set_clock cannot reuse an active stride window; restore its strict checkpoint image");
   }
 
-  static bool has_reserved_balance_namespace(const std::string& name) noexcept {
+  static bool has_reserved_balance_namespace(std::string_view name) noexcept {
     return name.rfind("pops.balance-term", 0) == 0;
   }
 
-  static void require_balance_route(const std::string& route, const std::string& runtime) {
+  static void require_balance_route(std::string_view route, std::string_view runtime) {
     static constexpr std::string_view kRoutePrefix = "pops.balance-ledger-route.v1:sha256:";
     if (route.size() != kRoutePrefix.size() + 64 ||
-        route.compare(0, kRoutePrefix.size(), kRoutePrefix.data(), kRoutePrefix.size()) != 0 ||
+        route.compare(0, kRoutePrefix.size(), kRoutePrefix) != 0 ||
         !std::all_of(route.begin() + static_cast<std::ptrdiff_t>(kRoutePrefix.size()), route.end(),
                      [](unsigned char value) {
                        return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
                      }))
-      throw std::invalid_argument(runtime + " requires a canonical balance-ledger-route identity");
+      throw std::invalid_argument(std::string(runtime) +
+                                  " requires a canonical balance-ledger-route identity");
   }
 
-  static void require_balance_due_contract(const std::string& contract,
-                                           const std::string& runtime) {
+  static void require_balance_due_contract(std::string_view contract, std::string_view runtime) {
     static constexpr std::string_view kContractPrefix = "pops.balance-due-contract.v1:sha256:";
     if (contract.size() != kContractPrefix.size() + 64 ||
-        contract.compare(0, kContractPrefix.size(), kContractPrefix.data(),
-                         kContractPrefix.size()) != 0 ||
+        contract.compare(0, kContractPrefix.size(), kContractPrefix) != 0 ||
         !std::all_of(contract.begin() + static_cast<std::ptrdiff_t>(kContractPrefix.size()),
                      contract.end(), [](unsigned char value) {
                        return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
                      }))
-      throw std::invalid_argument(runtime + " requires a canonical balance-due-contract identity");
+      throw std::invalid_argument(std::string(runtime) +
+                                  " requires a canonical balance-due-contract identity");
   }
 
-  static void require_balance_term(const std::string& term, const std::string& runtime) {
-    static constexpr std::array<std::string_view, 5> kTerms{
-        "storage_change", "outward_boundary_flux", "sources", "reflux", "projection"};
-    if (std::find(kTerms.begin(), kTerms.end(), std::string_view(term)) == kTerms.end())
-      throw std::invalid_argument(runtime + " requires one canonical five-term balance name");
+  static constexpr std::array<std::string_view, 5> kBalanceTerms{
+      "storage_change", "outward_boundary_flux", "sources", "reflux", "projection"};
+
+  static std::size_t balance_term_index_(std::string_view term, std::string_view runtime) {
+    const auto found = std::find(kBalanceTerms.begin(), kBalanceTerms.end(), term);
+    if (found == kBalanceTerms.end())
+      throw std::invalid_argument(std::string(runtime) +
+                                  " requires one canonical five-term balance name");
+    return static_cast<std::size_t>(found - kBalanceTerms.begin());
   }
 
-  static void require_automatic_balance_term(const std::string& term, const std::string& runtime) {
-    static constexpr std::array<std::string_view, 4> kTerms{"outward_boundary_flux", "sources",
-                                                            "reflux", "projection"};
-    if (std::find(kTerms.begin(), kTerms.end(), std::string_view(term)) == kTerms.end())
-      throw std::invalid_argument(runtime +
-                                  " requires one native operator balance contribution name");
+  static AutomaticBalanceTerm automatic_balance_term_(std::string_view term,
+                                                      std::string_view runtime) {
+    if (term == "outward_boundary_flux")
+      return AutomaticBalanceTerm::outward_boundary_flux;
+    if (term == "sources")
+      return AutomaticBalanceTerm::sources;
+    if (term == "reflux")
+      return AutomaticBalanceTerm::reflux;
+    if (term == "projection")
+      return AutomaticBalanceTerm::projection;
+    throw std::invalid_argument(std::string(runtime) +
+                                " requires one native operator balance contribution name");
+  }
+
+  void require_transaction_authorities_bound_(std::string_view operation) const {
+    if (!transaction_authorities_bound_)
+      throw std::logic_error(std::string(operation) +
+                             " requires bind-sealed Program transaction authorities");
+  }
+
+  void require_transaction_authorities_unbound_(std::string_view operation) const {
+    if (transaction_authorities_bound_)
+      throw std::logic_error(std::string(operation) +
+                             " cannot change Program transaction authorities after bind");
+  }
+
+  /// Installation/prelude declarations. Each call materializes at most one cold node; bind only
+  /// validates and seals the resulting finite shape. Duplicate declarations are idempotent.
+  void declare_diagnostic(std::string name) {
+    require_transaction_authorities_unbound_("ProgramRuntimeState::declare_diagnostic");
+    if (name.empty() || has_reserved_balance_namespace(name))
+      throw std::invalid_argument(
+          "Program diagnostic declaration requires a non-empty non-reserved identity");
+    diagnostics_.try_emplace(std::move(name), DiagnosticSlot{});
+  }
+
+  void declare_balance_route(std::string route) {
+    require_transaction_authorities_unbound_("ProgramRuntimeState::declare_balance_route");
+    require_balance_route(route, "ProgramRuntimeState::declare_balance_route");
+    step_balance_terms_.try_emplace(std::move(route), BalanceRouteSlot{});
+  }
+
+  void declare_automatic_balance_term(int runtime_block, int level, int component,
+                                      std::string_view term) {
+    require_transaction_authorities_unbound_("ProgramRuntimeState::declare_automatic_balance_term");
+    if (runtime_block < 0 || level < 0 || component < 0)
+      throw std::invalid_argument(
+          "Program automatic balance declaration requires non-negative coordinates");
+    const auto term_id =
+        automatic_balance_term_(term, "ProgramRuntimeState::declare_automatic_balance_term");
+    automatic_balance_terms_.try_emplace(
+        AutomaticBalanceKey{runtime_block, level, component, term_id}, AutomaticBalanceSlot{});
+  }
+
+  void declare_step_projection(std::string name) {
+    require_transaction_authorities_unbound_("ProgramRuntimeState::declare_step_projection");
+    if (name.empty())
+      throw std::invalid_argument("Program step projection identity cannot be empty");
+    const auto found =
+        std::find_if(step_projections_.begin(), step_projections_.end(),
+                     [&name](const StepProjectionSlot& slot) { return slot.identity == name; });
+    if (found == step_projections_.end())
+      step_projections_.push_back(StepProjectionSlot{std::move(name), false});
+  }
+
+  void bind_transaction_authorities() {
+    if (transaction_authorities_bound_)
+      return;
+    for (const auto& [name, slot] : diagnostics_) {
+      (void)slot;
+      if (name.empty() || has_reserved_balance_namespace(name))
+        throw std::logic_error("Program diagnostic registry is invalid at bind");
+    }
+    for (const auto& [route, slot] : step_balance_terms_) {
+      (void)slot;
+      require_balance_route(route, "ProgramRuntimeState::bind_transaction_authorities");
+    }
+    for (const auto& slot : step_projections_)
+      if (slot.identity.empty())
+        throw std::logic_error("Program projection registry is invalid at bind");
+    transaction_authorities_bound_ = true;
+  }
+
+  [[nodiscard]] bool transaction_authorities_bound() const noexcept {
+    return transaction_authorities_bound_;
   }
 
   /// Record a compiled-Program scalar. Ordinary P.record_scalar names remain inspectable after the
   /// step with last-write-wins semantics. The balance namespace has a separate typed sink.
-  void record_diagnostic(const std::string& name, Real value) {
+  void record_diagnostic(std::string_view name, Real value) {
+    require_transaction_authorities_bound_("ProgramRuntimeState::record_diagnostic");
     if (has_reserved_balance_namespace(name))
       throw std::invalid_argument(
           "ProgramRuntimeState::record_diagnostic: pops.balance-term is a reserved namespace");
-    diagnostics_[name] = value;
+    const auto found = diagnostics_.find(name);
+    if (found == diagnostics_.end())
+      throw std::logic_error(
+          "ProgramRuntimeState::record_diagnostic: diagnostic was not declared before bind");
+    found->second.value = value;
+    found->second.recorded = true;
   }
 
   /// Record one validated Program.record_balance term. Not exposed through the Python runtime
-  /// facade: only generated ProgramContext code reaches this sink.
-  void record_balance_term(const std::string& route, const std::string& term, Real value,
-                           const std::string& runtime) {
-    require_balance_route(route, runtime + "::record_balance_term");
-    require_balance_term(term, runtime + "::record_balance_term");
+  /// facade: only generated ProgramExecutionServices code reaches this sink.
+  void record_balance_term(std::string_view route, std::string_view term, Real value,
+                           std::string_view runtime) {
+    require_transaction_authorities_bound_("ProgramRuntimeState::record_balance_term");
+    require_balance_route(route, runtime);
+    const std::size_t term_index = balance_term_index_(term, runtime);
     if (!std::isfinite(static_cast<double>(value)))
-      throw std::invalid_argument(runtime + "::record_balance_term requires a finite value");
-    const std::string name = "pops.balance-term.v1:" + route + ":" + term;
+      throw std::invalid_argument(std::string(runtime) +
+                                  "::record_balance_term requires a finite value");
+    const auto route_slot = step_balance_terms_.find(route);
+    if (route_slot == step_balance_terms_.end())
+      throw std::logic_error(std::string(runtime) +
+                             "::record_balance_term route was not declared before bind");
     // A Program cadence may invoke the compiled body several times inside one public macro-step.
     // Terms are signed, time-integrated increments and therefore accumulate across invocations.
-    auto [entry, inserted] = step_balance_terms_.try_emplace(name, value);
-    if (!inserted)
-      entry->second += value;
+    route_slot->second.values[term_index] += value;
+    route_slot->second.recorded[term_index] = true;
   }
 
   /// Whether generated code proved that at least one Balance route is due in this attempt.
@@ -1234,42 +2123,63 @@ struct ProgramRuntimeState {
   /// it. The separation is fail-closed and lets boundary/source/projection producers join the same
   /// mailbox later without fabricating missing terms.
   void record_automatic_balance_term(int runtime_block, int level, int component,
-                                     const std::string& term, Real value,
-                                     const std::string& runtime) {
+                                     std::string_view term, Real value, std::string_view runtime) {
+    require_transaction_authorities_bound_("ProgramRuntimeState::record_automatic_balance_term");
     if (!automatic_balance_capture_due())
-      throw std::logic_error(runtime +
+      throw std::logic_error(std::string(runtime) +
                              "::record_automatic_balance_term requires a due authored balance");
     if (runtime_block < 0 || level < 0 || component < 0)
       throw std::invalid_argument(
-          runtime + "::record_automatic_balance_term requires non-negative coordinates");
-    require_automatic_balance_term(term, runtime + "::record_automatic_balance_term");
+          std::string(runtime) +
+          "::record_automatic_balance_term requires non-negative coordinates");
+    const auto term_id = automatic_balance_term_(term, runtime);
     if (!std::isfinite(static_cast<double>(value)))
-      throw std::invalid_argument(runtime +
+      throw std::invalid_argument(std::string(runtime) +
                                   "::record_automatic_balance_term requires a finite value");
-    auto [entry, inserted] = automatic_balance_terms_.try_emplace(
-        AutomaticBalanceKey{runtime_block, level, component, term}, value);
-    if (!inserted)
-      entry->second += value;
+    const auto entry = automatic_balance_terms_.find(
+        AutomaticBalanceKey{runtime_block, level, component, term_id});
+    if (entry == automatic_balance_terms_.end())
+      throw std::logic_error(
+          std::string(runtime) +
+          "::record_automatic_balance_term coordinate was not declared before bind");
+    entry->second.value += value;
+    entry->second.recorded = true;
   }
 
   /// Read the named diagnostic, FAIL-LOUD if the Program never recorded it. @p runtime names the
   /// Program subsystem setter in the message (not a generic getter). @throws std::out_of_range.
-  Real diagnostic(const std::string& name, const std::string& runtime) const {
+  Real diagnostic(std::string_view name, std::string_view runtime) const {
     auto it = diagnostics_.find(name);
-    if (it == diagnostics_.end())
+    if (it == diagnostics_.end() || !it->second.recorded)
       throw std::out_of_range(
-          runtime + "::program_diagnostic: no diagnostic named '" + name +
+          std::string(runtime) + "::program_diagnostic: no diagnostic named '" + std::string(name) +
           "' has been recorded (the installed Program must P.record_scalar it)");
-    return it->second;
+    return it->second.value;
   }
 
   /// The whole name -> value diagnostics map (checkpoint / inspection). By value: inert copy.
-  std::map<std::string, Real> diagnostics() const { return diagnostics_; }
+  std::map<std::string, Real> diagnostics() const {
+    std::map<std::string, Real> result;
+    for (const auto& [name, slot] : diagnostics_)
+      if (slot.recorded)
+        result.emplace(name, slot.value);
+    return result;
+  }
 
   void begin_step_projection_report() {
-    step_projections_.clear();
-    step_balance_terms_.clear();
-    automatic_balance_terms_.clear();
+    require_transaction_authorities_bound_("ProgramRuntimeState::begin_step_projection_report");
+    for (auto& projection : step_projections_)
+      projection.executed = false;
+    for (auto& [route, slot] : step_balance_terms_) {
+      (void)route;
+      slot.values.fill(Real(0));
+      slot.recorded.fill(false);
+    }
+    for (auto& [key, slot] : automatic_balance_terms_) {
+      (void)key;
+      slot.value = Real(0);
+      slot.recorded = false;
+    }
     automatic_balance_due_ = false;
     balance_due_window_active_ = false;
     balance_due_target_step_ = 0;
@@ -1285,30 +2195,36 @@ struct ProgramRuntimeState {
   /// Return exactly the five native Program scalars recorded for one typed balance route during the
   /// current attempt. The facade separately proves that an external accepted-step transaction is
   /// active. No zero, stale value, or array-derived Python fallback is permitted.
-  std::map<std::string, Real> accepted_balance_terms(const std::string& route,
-                                                     const std::string& runtime) const {
-    static constexpr std::array<const char*, 5> kTerms{"storage_change", "outward_boundary_flux",
-                                                       "sources", "reflux", "projection"};
-    require_balance_route(route, runtime + "::_accepted_balance_terms");
+  std::map<std::string, Real> accepted_balance_terms(std::string_view route,
+                                                     std::string_view runtime) const {
+    require_transaction_authorities_bound_("ProgramRuntimeState::accepted_balance_terms");
+    require_balance_route(route, runtime);
+    const auto route_slot = step_balance_terms_.find(route);
+    if (route_slot == step_balance_terms_.end())
+      throw std::logic_error(std::string(runtime) +
+                             "::_accepted_balance_terms route was not declared before bind");
     std::map<std::string, Real> result;
-    if (step_balance_terms_.empty() && balance_step_completed_ && !balance_program_was_due_) {
-      for (const char* term : kTerms)
-        result.emplace(term, Real(0));
+    const bool any_recorded =
+        std::any_of(route_slot->second.recorded.begin(), route_slot->second.recorded.end(),
+                    [](bool recorded) { return recorded; });
+    if (!any_recorded && balance_step_completed_ && !balance_program_was_due_) {
+      for (const std::string_view term : kBalanceTerms)
+        result.emplace(std::string(term), Real(0));
       return result;
     }
-    for (const char* term : kTerms) {
-      const std::string record = "pops.balance-term.v1:" + route + ":" + term;
-      const auto found = step_balance_terms_.find(record);
-      if (found == step_balance_terms_.end())
+    for (std::size_t index = 0; index < kBalanceTerms.size(); ++index) {
+      const std::string_view term = kBalanceTerms[index];
+      if (!route_slot->second.recorded[index])
         throw std::runtime_error(
-            runtime + "::_accepted_balance_terms: current native attempt omitted term '" + term +
+            std::string(runtime) +
+            "::_accepted_balance_terms: current native attempt omitted term '" + std::string(term) +
             "'; Program.record_balance must publish all five terms");
-      if (!std::isfinite(static_cast<double>(found->second)))
+      if (!std::isfinite(static_cast<double>(route_slot->second.values[index])))
         throw std::runtime_error(
-            runtime +
-            "::_accepted_balance_terms: current native attempt produced non-finite term '" + term +
-            "'");
-      result.emplace(term, found->second);
+            std::string(runtime) +
+            "::_accepted_balance_terms: current native attempt produced non-finite term '" +
+            std::string(term) + "'");
+      result.emplace(std::string(term), route_slot->second.values[index]);
     }
     return result;
   }
@@ -1322,81 +2238,96 @@ struct ProgramRuntimeState {
   /// coordinate; missing evidence and duplicate Program/native authority fail instead of becoming
   /// zero or reusing a stale value.
   std::map<std::string, Real> selected_accepted_balance_terms(
-      const std::string& route, int runtime_block, int component, const std::vector<int>& levels,
-      const std::vector<std::string>& automatic_terms, const std::string& runtime) const {
-    static constexpr std::array<const char*, 5> kTerms{"storage_change", "outward_boundary_flux",
-                                                       "sources", "reflux", "projection"};
-    require_balance_route(route, runtime + "::_selected_accepted_balance_terms");
+      std::string_view route, int runtime_block, int component, const std::vector<int>& levels,
+      const std::vector<std::string>& automatic_terms, std::string_view runtime) const {
+    require_transaction_authorities_bound_("ProgramRuntimeState::selected_accepted_balance_terms");
+    require_balance_route(route, runtime);
     if (runtime_block < 0 || component < 0)
       throw std::invalid_argument(
-          runtime + "::_selected_accepted_balance_terms requires non-negative coordinates");
+          std::string(runtime) +
+          "::_selected_accepted_balance_terms requires non-negative coordinates");
     if (levels.empty() || levels.front() < 0 ||
         std::adjacent_find(levels.begin(), levels.end(),
                            [](int left, int right) { return right != left + 1; }) != levels.end())
       throw std::invalid_argument(
-          runtime + "::_selected_accepted_balance_terms requires a non-empty contiguous hierarchy");
+          std::string(runtime) +
+          "::_selected_accepted_balance_terms requires a non-empty contiguous hierarchy");
     if (!std::is_sorted(automatic_terms.begin(), automatic_terms.end()) ||
         std::adjacent_find(automatic_terms.begin(), automatic_terms.end()) != automatic_terms.end())
       throw std::invalid_argument(
-          runtime + "::_selected_accepted_balance_terms requires sorted unique automatic terms");
+          std::string(runtime) +
+          "::_selected_accepted_balance_terms requires sorted unique automatic terms");
     for (const std::string& term : automatic_terms)
       if (term != "reflux" && term != "projection")
         throw std::invalid_argument(
-            runtime + "::_selected_accepted_balance_terms has no native producer for '" + term +
+            std::string(runtime) +
+            "::_selected_accepted_balance_terms has no native producer for '" + std::string(term) +
             "'");
 
+    const auto route_slot = step_balance_terms_.find(route);
+    if (route_slot == step_balance_terms_.end())
+      throw std::logic_error(
+          std::string(runtime) +
+          "::_selected_accepted_balance_terms route was not declared before bind");
     std::map<std::string, Real> result;
-    if (step_balance_terms_.empty() && balance_step_completed_ && !balance_program_was_due_) {
-      for (const char* term : kTerms)
-        result.emplace(term, Real(0));
+    const bool any_recorded =
+        std::any_of(route_slot->second.recorded.begin(), route_slot->second.recorded.end(),
+                    [](bool recorded) { return recorded; });
+    if (!any_recorded && balance_step_completed_ && !balance_program_was_due_) {
+      for (const std::string_view term : kBalanceTerms)
+        result.emplace(std::string(term), Real(0));
       return result;
     }
-    for (const char* term_value : kTerms) {
-      const std::string term = term_value;
+    for (std::size_t term_index = 0; term_index < kBalanceTerms.size(); ++term_index) {
+      const std::string_view term = kBalanceTerms[term_index];
       const bool automatic =
           std::binary_search(automatic_terms.begin(), automatic_terms.end(), term);
-      const std::string record = "pops.balance-term.v1:" + route + ":" + term;
-      const auto authored = step_balance_terms_.find(record);
+      const bool authored = route_slot->second.recorded[term_index];
       if (!automatic) {
-        if (authored == step_balance_terms_.end())
+        if (!authored)
           throw std::runtime_error(
-              runtime +
-              "::_selected_accepted_balance_terms: current native attempt omitted term '" + term +
+              std::string(runtime) +
+              "::_selected_accepted_balance_terms: current native attempt omitted term '" +
+              std::string(term) +
               "'; Program.record_balance must publish every non-automatic term");
-        if (!std::isfinite(static_cast<double>(authored->second)))
+        if (!std::isfinite(static_cast<double>(route_slot->second.values[term_index])))
           throw std::runtime_error(
-              runtime +
+              std::string(runtime) +
               "::_selected_accepted_balance_terms: current native attempt produced "
               "non-finite term '" +
-              term + "'");
-        result.emplace(term, authored->second);
+              std::string(term) + "'");
+        result.emplace(std::string(term), route_slot->second.values[term_index]);
         continue;
       }
-      if (authored != step_balance_terms_.end())
-        throw std::runtime_error(runtime + "::_selected_accepted_balance_terms: term '" + term +
+      if (authored)
+        throw std::runtime_error(std::string(runtime) +
+                                 "::_selected_accepted_balance_terms: term '" + std::string(term) +
                                  "' has both Program and native producer authority");
 
       Real value = Real(0);
       const std::size_t expected = term == "reflux" ? levels.size() - 1 : levels.size();
+      const auto automatic_term = automatic_balance_term_(term, runtime);
       for (std::size_t index = 0; index < expected; ++index) {
-        const AutomaticBalanceKey key{runtime_block, levels[index], component, term};
+        const AutomaticBalanceKey key{runtime_block, levels[index], component, automatic_term};
         const auto found = automatic_balance_terms_.find(key);
-        if (found == automatic_balance_terms_.end())
+        if (found == automatic_balance_terms_.end() || !found->second.recorded)
           throw std::runtime_error(
-              runtime + "::_selected_accepted_balance_terms: native producer omitted term '" +
-              term + "' at level " + std::to_string(levels[index]));
-        if (!std::isfinite(static_cast<double>(found->second)))
+              std::string(runtime) +
+              "::_selected_accepted_balance_terms: native producer omitted term '" +
+              std::string(term) + "' at level " + std::to_string(levels[index]));
+        if (!std::isfinite(static_cast<double>(found->second.value)))
           throw std::runtime_error(
-              runtime +
+              std::string(runtime) +
               "::_selected_accepted_balance_terms: native producer returned non-finite "
               "term '" +
-              term + "'");
-        value += found->second;
+              std::string(term) + "'");
+        value += found->second.value;
       }
       if (!std::isfinite(static_cast<double>(value)))
         throw std::runtime_error(
-            runtime + "::_selected_accepted_balance_terms: native term accumulation overflowed");
-      result.emplace(term, value);
+            std::string(runtime) +
+            "::_selected_accepted_balance_terms: native term accumulation overflowed");
+      result.emplace(std::string(term), value);
     }
     return result;
   }
@@ -1459,17 +2390,35 @@ struct ProgramRuntimeState {
     return balance_due_target_step_ % every_n == 0;
   }
 
-  void note_step_projection(const std::string& name) {
+  void note_step_projection(std::string_view name) {
+    require_transaction_authorities_bound_("ProgramRuntimeState::note_step_projection");
     if (name.empty())
       throw std::invalid_argument("Program step projection identity cannot be empty");
-    if (std::find(step_projections_.begin(), step_projections_.end(), name) ==
-        step_projections_.end())
-      step_projections_.push_back(name);
+    const auto found =
+        std::find_if(step_projections_.begin(), step_projections_.end(),
+                     [name](const StepProjectionSlot& slot) { return slot.identity == name; });
+    if (found == step_projections_.end())
+      throw std::logic_error(
+          "ProgramRuntimeState::note_step_projection identity was not declared before bind");
+    found->executed = true;
+  }
+
+  /// Allocation-free view used while an accepted-step transaction is hot. The view retains the
+  /// bind-frozen declaration order and exposes activity bits only; callers must not materialize a
+  /// string container until the native generation has sealed or rolled back.
+  [[nodiscard]] std::span<const StepProjectionSlot> step_projection_report_view() const noexcept {
+    return step_projections_;
   }
 
   std::vector<std::string> consume_step_projections() {
     std::vector<std::string> result;
-    result.swap(step_projections_);
+    const auto report = step_projection_report_view();
+    result.reserve(report.size());
+    for (auto& slot : step_projections_) {
+      if (slot.executed)
+        result.push_back(slot.identity);
+      slot.executed = false;
+    }
     return result;
   }
 
@@ -1477,7 +2426,7 @@ struct ProgramRuntimeState {
   /// (re-seeding resets to the baseline). Called by install. DEFENCE IN DEPTH (ADC-610): a block with
   /// more than kMaxRuntimeParams params is REJECTED here with a user-facing error instead of being
   /// SILENTLY TRUNCATED into the fixed-size device carrier -- the Python codegen enforces the same bound
-  /// upstream, so this only fires for a hand-built .so with bogus pops_program_param_* metadata.
+  /// upstream, so this only fires for a hand-built .so with bogus parameter-table records.
   void seed_params(int prog_block, const std::vector<double>& defaults) {
     const int count = static_cast<int>(defaults.size());
     if (count > kMaxRuntimeParams)

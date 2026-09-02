@@ -69,7 +69,13 @@ def _stores(engine: Any) -> tuple[str, ...]:
     return tuple(store.value for store in plan.stores) if plan is not None else ()
 
 
-def _projections(engine: Any) -> tuple[str, ...]:
+def _projections(engine: Any, *, sealed: bool = False) -> tuple[str, ...]:
+    # The native report mailbox belongs to the candidate generation until finalize seals it.
+    # Reading it from the outer envelope would materialize strings on the hot path and consume
+    # evidence that rollback still owns.  The coordinator calls back with sealed=True only after
+    # native finalize has crossed the irreversible accepted boundary.
+    if getattr(engine, "_collective_step_envelope_active", False) is True and not sealed:
+        return ()
     plan = getattr(engine, "_step_transaction_plan", None)
     declared = tuple(
         guard.name for guard in getattr(plan, "guards", ())

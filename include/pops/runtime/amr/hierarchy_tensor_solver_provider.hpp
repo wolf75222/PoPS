@@ -15,6 +15,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/numerics/elliptic/linear/vector_distribution.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
 
@@ -23,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -69,6 +71,61 @@ struct HierarchyTensorSolverBuildRequest {
   std::vector<std::string> assembly_field_slots;
   std::string solution_field_slot;
   PreparedProviderOptions options;
+};
+
+/// Immutable configured-topology envelope used to bound a hierarchy-tensor provider before a
+/// concrete AMR image is materialized.
+///
+/// The vectors are indexed by hierarchy level.  A candidate may use a prefix of the configured
+/// hierarchy, but can neither introduce a new level nor exceed one of the sealed per-level
+/// bounds.  ``parent_child_pair_bounds[l]`` bounds the Cartesian product of the two layouts on
+/// the edge ``l -> l + 1``.  The semantic identities and options are exact rather than maxima:
+/// they keep a capacity promise attached to one provider/operator authority instead of allowing
+/// an unrelated provider payload to consume it.
+template <int Dim>
+struct HierarchyTensorConfiguredStorageRequest {
+  static_assert(Dim >= 1 && Dim <= 3);
+
+  static constexpr int dimension = Dim;
+
+  std::vector<std::uint64_t> level_cell_bounds;
+  std::vector<std::uint64_t> patch_bounds;
+  std::vector<std::uint64_t> parent_child_pair_bounds;
+  std::uint64_t rank_bound = 0;
+  int components = 0;
+  std::string provider_identity;
+  std::uint64_t provider_interface_version = 0;
+  std::string execution_lane_identity;
+  std::string plan_identity;
+  std::string operator_contract_identity;
+  std::vector<std::string> assembly_field_slots;
+  std::string solution_field_slot;
+  PreparedProviderOptions options;
+};
+
+/// Result of a provider-owned configured-storage calculation.
+///
+/// ``exact`` means that ``maximum_bytes`` is a finite upper bound for the provider's sealed
+/// resident-storage receipt for every build request admitted by the paired configured envelope.
+/// It deliberately does not mean that every allowed topology consumes exactly that many bytes.
+/// ``unknown`` is fail-closed and must be rejected by an integrator that seals a hard ceiling.
+struct HierarchyTensorConfiguredStorageLimit {
+  enum class State : std::uint8_t {
+    unknown,
+    exact,
+  };
+
+  State state = State::unknown;
+  std::uint64_t maximum_bytes = 0;
+
+  [[nodiscard]] constexpr bool is_exact() const noexcept { return state == State::exact; }
+  [[nodiscard]] static constexpr HierarchyTensorConfiguredStorageLimit unknown() noexcept {
+    return {};
+  }
+  [[nodiscard]] static constexpr HierarchyTensorConfiguredStorageLimit exact(
+      std::uint64_t maximum_bytes) noexcept {
+    return {State::exact, maximum_bytes};
+  }
 };
 
 enum class HierarchyTensorSolverExecutionPath : std::uint8_t {
@@ -125,6 +182,125 @@ void validate_request(const HierarchyTensorSolverBuildRequest<Dim>& request) {
         throw std::invalid_argument("hierarchy tensor geometry is not the exact parent refinement");
     }
   }
+}
+
+template <int Dim>
+void validate_configured_storage_request(
+    const HierarchyTensorConfiguredStorageRequest<Dim>& request) {
+  const std::size_t levels = request.level_cell_bounds.size();
+  if (levels == 0 || request.patch_bounds.size() != levels ||
+      request.parent_child_pair_bounds.size() + 1U != levels || request.rank_bound == 0 ||
+      request.components < 1 || request.provider_identity.empty() ||
+      request.provider_interface_version == 0 || request.execution_lane_identity.empty() ||
+      request.plan_identity.empty() || request.operator_contract_identity.empty() ||
+      request.solution_field_slot.empty())
+    throw std::invalid_argument(
+        "hierarchy tensor configured storage request has an incomplete finite envelope");
+  if (std::any_of(request.level_cell_bounds.begin(), request.level_cell_bounds.end(),
+                  [](std::uint64_t cells) { return cells == 0; }) ||
+      std::any_of(request.patch_bounds.begin(), request.patch_bounds.end(),
+                  [](std::uint64_t patches) { return patches == 0; }) ||
+      std::any_of(request.parent_child_pair_bounds.begin(), request.parent_child_pair_bounds.end(),
+                  [](std::uint64_t pairs) { return pairs == 0; }))
+    throw std::invalid_argument(
+        "hierarchy tensor configured storage request has a zero topology bound");
+  if (request.assembly_field_slots.empty() ||
+      std::any_of(request.assembly_field_slots.begin(), request.assembly_field_slots.end(),
+                  [](const std::string& slot) { return slot.empty(); }))
+    throw std::invalid_argument(
+        "hierarchy tensor configured storage request has invalid assembly field slots");
+  std::vector<std::string> ordered_slots = request.assembly_field_slots;
+  std::sort(ordered_slots.begin(), ordered_slots.end());
+  if (std::adjacent_find(ordered_slots.begin(), ordered_slots.end()) != ordered_slots.end())
+    throw std::invalid_argument(
+        "hierarchy tensor configured storage request field slots must be unique");
+  // This validates both the schema identity and every option value without treating provider
+  // options as an untyped byte budget.
+  (void)request.options.exact_contract();
+}
+
+template <int Dim>
+std::string configured_storage_request_contract(
+    const HierarchyTensorConfiguredStorageRequest<Dim>& request) {
+  validate_configured_storage_request(request);
+  ExactContractBuilder contract;
+  contract.text("pops.hierarchy.tensor-configured-storage-request")
+      .scalar(std::uint32_t{1})
+      .scalar(std::int32_t{Dim})
+      .text(request.provider_identity)
+      .scalar(request.provider_interface_version)
+      .text(request.execution_lane_identity)
+      .text(request.plan_identity)
+      .text(request.operator_contract_identity)
+      .scalar(request.components)
+      .scalar(request.rank_bound)
+      .sequence(request.level_cell_bounds)
+      .sequence(request.patch_bounds)
+      .sequence(request.parent_child_pair_bounds)
+      .sequence(request.assembly_field_slots,
+                [](ExactContractBuilder& item, const std::string& slot) { item.text(slot); })
+      .text(request.solution_field_slot)
+      .bytes(request.options.exact_contract());
+  return std::move(contract).release();
+}
+
+template <int Dim>
+std::string configured_storage_limit_contract_from_request_contract(
+    std::string_view request_contract, const HierarchyTensorConfiguredStorageLimit& limit) {
+  if (request_contract.empty())
+    throw std::invalid_argument(
+        "hierarchy tensor configured storage limit requires an exact request contract");
+  ExactContractBuilder contract;
+  contract.text("pops.hierarchy.tensor-configured-storage-limit")
+      .scalar(std::uint32_t{1})
+      .scalar(std::int32_t{Dim})
+      .bytes(request_contract)
+      .scalar(static_cast<std::uint8_t>(limit.state))
+      .scalar(limit.maximum_bytes);
+  return std::move(contract).release();
+}
+
+template <int Dim>
+std::string configured_storage_limit_contract(
+    const HierarchyTensorConfiguredStorageRequest<Dim>& request,
+    const HierarchyTensorConfiguredStorageLimit& limit) {
+  return configured_storage_limit_contract_from_request_contract<Dim>(
+      configured_storage_request_contract(request), limit);
+}
+
+template <int Dim>
+bool request_fits_configured_storage(
+    const HierarchyTensorSolverBuildRequest<Dim>& candidate,
+    const HierarchyTensorConfiguredStorageRequest<Dim>& configured) {
+  validate_request(candidate);
+  validate_configured_storage_request(configured);
+  if (candidate.levels.size() > configured.level_cell_bounds.size() ||
+      candidate.components != configured.components ||
+      candidate.plan_identity != configured.plan_identity ||
+      candidate.operator_contract_identity != configured.operator_contract_identity ||
+      candidate.assembly_field_slots != configured.assembly_field_slots ||
+      candidate.solution_field_slot != configured.solution_field_slot ||
+      candidate.options.exact_contract() != configured.options.exact_contract())
+    return false;
+  for (std::size_t level = 0; level < candidate.levels.size(); ++level) {
+    const std::int64_t cells = candidate.levels[level].geometry.domain().numPts();
+    if (cells <= 0 || static_cast<std::uint64_t>(cells) > configured.level_cell_bounds[level] ||
+        candidate.levels[level].layout.size() > configured.patch_bounds[level] ||
+        candidate.levels[level].distribution.rank_space().size() > configured.rank_bound)
+      return false;
+  }
+  for (std::size_t parent = 0; parent + 1U < candidate.levels.size(); ++parent) {
+    const std::uint64_t parent_patches =
+        static_cast<std::uint64_t>(candidate.levels[parent].layout.size());
+    const std::uint64_t child_patches =
+        static_cast<std::uint64_t>(candidate.levels[parent + 1U].layout.size());
+    if (parent_patches != 0 &&
+        child_patches > std::numeric_limits<std::uint64_t>::max() / parent_patches)
+      return false;
+    if (parent_patches * child_patches > configured.parent_child_pair_bounds[parent])
+      return false;
+  }
+  return true;
 }
 
 template <int Dim>
@@ -211,7 +387,7 @@ void copy_allocated(MultiFab<Dim, MemorySpace>& destination,
       for_each_cell(destination.fab(local).grown_box(),
                     CopyAllocatedKernel<Dim>{output, input, component});
   }
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 }  // namespace hierarchy_tensor_detail
@@ -239,6 +415,31 @@ class PreparedHierarchyTensorSolver {
   }
   FieldView<Real, Dim> solution_view(int level, std::size_t local_patch) {
     return solution(level).fab(local_patch).view();
+  }
+
+  /// Logical storage retained by this prepared solver, including its dynamically allocated
+  /// concrete solver object.
+  ///
+  /// The result cannot become exact before `seal_preparation()`: that operation materializes the
+  /// two publication images owned by this base.  A derived provider contributes its concrete
+  /// object and the storage it owns below this base through `derived_resident_storage()`.  The
+  /// non-virtual entry point then adds the base publication storage, which prevents a provider from
+  /// omitting those mandatory rollback images or double-counting them in its derived hook.
+  /// `unknown` is a refusal signal for a capacity-limited integrator, never a zero-byte fallback.
+  [[nodiscard]] PreparedResidentStorage resident_storage() const {
+    if (!preparation_sealed_)
+      return PreparedResidentStorage::unknown();
+    const PreparedResidentStorage derived = derived_resident_storage();
+    if (!derived.is_exact())
+      return PreparedResidentStorage::unknown();
+    std::uint64_t total = derived.bytes;
+    checked_add_resident_storage_(total, vector_storage_bytes_(accepted_publication_));
+    checked_add_resident_storage_(total, vector_storage_bytes_(candidate_publication_));
+    for (const field_type& publication : accepted_publication_)
+      checked_add_resident_storage_(total, publication.resident_storage_bytes());
+    for (const field_type& publication : candidate_publication_)
+      checked_add_resident_storage_(total, publication.resident_storage_bytes());
+    return PreparedResidentStorage::exact(total);
   }
 
   /// Materialize both rollback images during preparation, never on the solve hot path.
@@ -343,7 +544,29 @@ class PreparedHierarchyTensorSolver {
   virtual SolveReport solve(const HierarchyTensorSolveControls& controls,
                             const ExecutionLane& lane) = 0;
 
+  /// Extension hook for the concrete solver object plus storage owned below this base.  Existing
+  /// providers remain source compatible, but return `unknown` and can therefore be rejected before
+  /// artifact publication by callers that require a strict logical capacity.
+  [[nodiscard]] virtual PreparedResidentStorage derived_resident_storage() const {
+    return PreparedResidentStorage::unknown();
+  }
+
+  [[nodiscard]] bool preparation_sealed() const noexcept { return preparation_sealed_; }
+
  private:
+  static void checked_add_resident_storage_(std::uint64_t& total, std::uint64_t value) {
+    if (value > std::numeric_limits<std::uint64_t>::max() - total)
+      throw std::overflow_error("hierarchy tensor resident storage size overflows uint64");
+    total += value;
+  }
+
+  template <class Value>
+  static std::uint64_t vector_storage_bytes_(const std::vector<Value>& values) {
+    if (values.capacity() > std::numeric_limits<std::uint64_t>::max() / sizeof(Value))
+      throw std::overflow_error("hierarchy tensor resident vector storage overflows uint64");
+    return static_cast<std::uint64_t>(values.capacity()) * sizeof(Value);
+  }
+
   bool collective_capture_(std::vector<field_type>& storage, const ExecutionLane& lane) {
     long failure = 0;
     try {
@@ -393,6 +616,7 @@ template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::m
 class HierarchyTensorSolverProvider {
  public:
   using request_type = HierarchyTensorSolverBuildRequest<Dim>;
+  using configured_storage_request_type = HierarchyTensorConfiguredStorageRequest<Dim>;
   using solver_type = PreparedHierarchyTensorSolver<Dim, MemorySpace>;
 
   virtual ~HierarchyTensorSolverProvider() = default;
@@ -406,6 +630,13 @@ class HierarchyTensorSolverProvider {
   virtual PreparedProviderSupport supports(const request_type& request) const noexcept = 0;
   virtual PreparedProviderSupport accepts_execution(
       const request_type& request, HierarchyTensorSolverExecutionPath execution) const noexcept = 0;
+  /// Return the finite configured-storage ceiling for this provider, or ``unknown`` when this
+  /// provider cannot prove one before materialization.  It is deliberately non-pure so existing
+  /// third-party providers fail closed until they implement their own accounting protocol.
+  [[nodiscard]] virtual HierarchyTensorConfiguredStorageLimit configured_storage_limit(
+      const configured_storage_request_type&) const {
+    return HierarchyTensorConfiguredStorageLimit::unknown();
+  }
   virtual std::string expected_prepared_contract(const request_type& request) const = 0;
   virtual std::unique_ptr<solver_type> prepare(const request_type& request,
                                                const ExecutionLane& lane) const = 0;

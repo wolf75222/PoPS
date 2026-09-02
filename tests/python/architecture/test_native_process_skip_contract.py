@@ -221,3 +221,38 @@ def test_optional_script_skip_uses_the_canonical_process_marker(
         helper("optional developer capability")
     assert stopped.value.code == 0
     assert capsys.readouterr().out == "POPS_SKIP: optional developer capability\n"
+
+
+def test_exact_process_case_executes_and_attests_only_the_requested_function(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    executed: list[str] = []
+    monkeypatch.setenv(requirements.PROCESS_TEST_FILTER_ENV, "test_selected")
+    result = requirements.run_process_test_cases(
+        {
+            "test_other": lambda: executed.append("other"),
+            "test_selected": lambda: executed.append("selected"),
+        }
+    )
+    assert result == ("test_selected",)
+    assert executed == ["selected"]
+    assert capsys.readouterr().out == "POPS_PROCESS_TEST_OK:test_selected\n"
+
+
+def test_exact_process_case_refuses_an_unknown_function(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(requirements.PROCESS_TEST_FILTER_ENV, "test_missing")
+    with pytest.raises(RuntimeError, match="unknown exact process test 'test_missing'"):
+        requirements.run_process_test_cases({"test_present": lambda: None})
+
+
+def test_all_native_authority_gates_enable_exact_process_nodeid_collection() -> None:
+    for relative in (
+        "scripts/run_m2_gate.py",
+        "scripts/run_m3_gate.py",
+        "scripts/run_runtime_authority_gate.py",
+    ):
+        source = (process_runner.REPO_ROOT / relative).read_text(encoding="utf-8")
+        assert 'environment["POPS_EXACT_PROCESS_NODEIDS"] = "1"' in source, relative

@@ -1,9 +1,8 @@
 """Temporal codegen (epic ADC-399 / ADC-401, ADC-407): compiler-owned emit_cpp_program.
 
 `emit_cpp_program` lowers the Program IR to the C++ source of a problem.so by a topological SSA walk.
-This test pins the generated source: the stable .so ABI (pops_program_abi_key via the
-POPS_ABI_KEY_LITERAL preprocessor literal -- never the interposable inline -- plus pops_program_name /
-pops_program_hash / pops_install_program), the Forward-Euler body, and that a multi-stage scheme
+This test pins the generated source: the stable v5 candidate entry, the Forward-Euler body, and that
+a multi-stage scheme
 (SSPRK2) now lowers (a scratch state + a second rhs + a lincomb commit). Multi-block (ADC-426) now
 lowers too -- N P.state / N P.commit, each op routed to its block index; the SIMULTANEOUS multi-target
 solve_fields_from_blocks lowers to ctx.solve_fields_from_blocks_at (Spec 3 crit 24, ADC-457/ADC-759).
@@ -12,7 +11,7 @@ the codegen still cannot lower -- named sources beyond 'default', a commit of an
 must be REFUSED with a clear error, never silently mis-lowered. Pure Python (no compile); skips if pops
 is unavailable.
 """
-from tests.python.support.requirements import require_native_or_skip
+from tests.python.support.requirements import require_native_or_skip, run_process_test_cases
 from pops.codegen.program_codegen import emit_cpp_program
 from types import SimpleNamespace
 
@@ -96,12 +95,30 @@ def test_forward_euler_abi(t):
     P = _forward_euler(t)
     src = _emit(P)
     for tok in ('extern "C"', "POPS_RUNTIME_SHARED_EXCEPTION_ABI", "POPS_ABI_KEY_LITERAL",
-                "pops_program_abi_key", "pops_program_name",
-                "pops_program_hash", "pops_install_program",
-                "make_program_execution_provider(sys)"):
+                "pops_program_install_abi_probe_v5", "make_program_install_abi_probe()",
+                "pops_install_program", "program_candidate_prepare",
+                "kProgramCandidateBlocks", "kProgramCandidateParameters",
+                "kProgramCandidateOperatorAuthorities", "kProgramCandidateResourcePlan",
+                "descriptor.boundary_routes = kProgramCandidateBoundaryRoutes"):
         assert tok in src, "generated source missing %r" % tok
+    prepare = src.split("bool program_candidate_prepare", 1)[1].split(
+        'extern "C" bool pops_install_program', 1
+    )[0]
+    inspect = src.split('extern "C" bool pops_install_program', 1)[1]
+    assert (
+        "make_program_execution_provider<pops::kNativeDimension>(host->preparation)"
+        in prepare
+    )
+    assert "make_program_execution_provider" not in inspect
     assert '"forward_euler_program"' in src, "program name not embedded"
     assert P._ir_hash() in src, "IR hash not embedded (cache/restart key)"
+    # Explicit negative assertions: retired dynamic Program names may not reappear in v5 codegen.
+    for retired in (
+        "pops_program_abi_key", "pops_program_name", "pops_program_hash",
+        "pops_program_block_count", "pops_program_param_count",
+        "pops_program_operator_authority_count", "pops_program_history_replay_authority_count",
+    ):
+        assert retired not in src, "v5 descriptor must replace auxiliary export %r" % retired
 
 
 def test_forward_euler_algorithm(t):
@@ -110,7 +127,7 @@ def test_forward_euler_algorithm(t):
     # exact provider/level/stage solve (ADC-409/ADC-759); for FE the stage state is the base U^n, so
     # it matches the historical solve_fields() semantics.
     src = _emit(_forward_euler(t))
-    for frag in ("const auto field_boundary_point_",
+    for frag in ("const auto& field_boundary_point_",
                  'ctx.solve_fields_from_state_at(field_boundary_point_',
                  '"potential", 0, ',
                  "= ctx.state(0);",
@@ -139,9 +156,19 @@ def test_multistage_lowers(t):
 def test_canonical_ssprk_amr_codegen_preserves_exact_distinct_ledger_weights(t):
     from pops.lib import time as lt
 
+    exact_coefficient_term = (
+        "std::initializer_list<pops::runtime::program::ExactCoefficientTerm>"
+    )
     expected = {
-        lt.SSPRK2: ("{{1, 1, 2}}", "{{1, 1, 2}}"),
-        lt.SSPRK3: ("{{1, 1, 6}}", "{{1, 1, 6}}", "{{1, 2, 3}}"),
+        lt.SSPRK2: (
+            exact_coefficient_term + "{{1, 1, 2}}",
+            exact_coefficient_term + "{{1, 1, 2}}",
+        ),
+        lt.SSPRK3: (
+            exact_coefficient_term + "{{1, 1, 6}}",
+            exact_coefficient_term + "{{1, 1, 6}}",
+            exact_coefficient_term + "{{1, 2, 3}}",
+        ),
     }
     for factory, stage_metadata in expected.items():
         src = emit_cpp_program(
@@ -153,11 +180,12 @@ def test_canonical_ssprk_amr_codegen_preserves_exact_distinct_ledger_weights(t):
         assert len(final_stage_axpy) == len(stage_metadata)
         for line, metadata in zip(final_stage_axpy, stage_metadata, strict=True):
             assert line.endswith(", dt, %s);" % metadata), line
+        assert ", dt, {{" not in src
 
 
 def test_includes_present(t):
     src = _emit(_forward_euler(t))
-    for inc in ("pops/runtime/program/program_context.hpp",
+    for inc in ("pops/runtime/program/program_execution_services.hpp",
                 "pops/runtime/dynamic/abi_key.hpp",
                 "pops/mesh/storage/multifab.hpp"):
         assert ("#include <%s>" % inc) in src, "missing #include <%s>" % inc
@@ -218,7 +246,7 @@ def test_multiblock_lowers(t):
     assert "ctx.state(0)" in src, "block a should bind ctx.state(0)"
     assert "ctx.state(1)" in src, "block b should bind ctx.state(1)"
     assert "ctx.rhs_group(" in src, "sibling residuals should execute as one native round"
-    assert "const auto field_boundary_point_" in src
+    assert "const auto& field_boundary_point_" in src
     assert "ctx.solve_fields_from_blocks_at(field_boundary_point_" in src, \
         "coupled blocks should publish one point-qualified simultaneous field solve"
 
@@ -278,11 +306,15 @@ def test_uncommitted_refused(t):
 
 def _run():
     t = _pops_time()
-    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    for fn in fns:
-        fn(t)
-        print("ok", fn.__name__)
-    print("PASS test_time_codegen (%d checks)" % len(fns))
+    functions = {
+        name: (lambda fn=fn: fn(t))
+        for name, fn in sorted(globals().items())
+        if name.startswith("test_") and callable(fn)
+    }
+    executed = run_process_test_cases(functions)
+    for name in executed:
+        print("ok", name)
+    print("PASS test_time_codegen (%d checks)" % len(executed))
 
 
 if __name__ == "__main__":

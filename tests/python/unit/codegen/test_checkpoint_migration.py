@@ -140,14 +140,21 @@ def _migration_provenance(mapping=None):
 
 def _strict_uniform_preflight_payload():
     return {
+        "pops_checkpoint_version": np.asarray(
+            UNIFORM_CHECKPOINT_PAYLOAD_VERSION, dtype=np.int64
+        ),
         "t": np.asarray(0.0, dtype=np.float64),
         "macro_step": np.asarray(0, dtype=np.int64),
         "pops_spatial_contract": np.asarray("{}"),
         "pops_embedded_boundary_contract": np.asarray("{}"),
         "program_hash": np.asarray("ab" * 32),
         "history_names": np.asarray([], dtype="U1"),
-        "cache_nodes": np.asarray([], dtype=np.int64),
+        "cache_slots": np.asarray([], dtype=np.int64),
+        "cache_plan_schema": np.asarray("program-resource-plan:v1"),
+        "cache_plan_digest": np.asarray("a" * 64),
         "cache_names": np.asarray([], dtype="U1"),
+        "cache_valid": np.asarray([], dtype=np.bool_),
+        "cache_cold": np.asarray([], dtype=np.bool_),
         "temporal_restart_state": np.asarray("{}"),
         "program_cadence_substeps": np.asarray(1, dtype=np.int64),
         "program_cadence_stride": np.asarray(1, dtype=np.int64),
@@ -231,7 +238,7 @@ def _write_authority(tmp_path, native_cxx, *, history_slot_dt=(0.01, 0.01)):
     report = pops.run(runtime, t_end=0.03, max_steps=3)
     assert report.accepted_steps == 3
     assert report.final_time == 3 * DT
-    path = Path(runtime.checkpoint(tmp_path / "authority-v8.npz"))
+    path = Path(runtime.checkpoint(tmp_path / "authority-v9.npz"))
     if history_slot_dt != (0.01, 0.01):
         with np.load(path, allow_pickle=False) as stored:
             payload = {
@@ -314,7 +321,7 @@ def _mapping(source_payload, owner, restart, authority):
     assert not isinstance(attestation["accepted_generation"], bool)
     assert 0 <= attestation["accepted_generation"] < (1 << 64) - 1
     return UniformV2MigrationMapping(
-        reviewed_mapping_id="ADC-667-frozen-uniform-v2-to-current-v8",
+        reviewed_mapping_id="ADC-667-frozen-uniform-v2-to-current-v9",
         source_content_sha256=FROZEN_UNIFORM_V2_SHA256,
         source_max_members=_REVIEWED_RESOURCE_LIMITS["max_members"],
         source_max_manifest_characters=_REVIEWED_RESOURCE_LIMITS["max_manifest_characters"],

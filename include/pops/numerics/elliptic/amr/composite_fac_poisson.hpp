@@ -1139,7 +1139,7 @@ class CompositeFacPoisson {
           kernel.periodic[axis] = periodic[axis];
         for_each_cell(patch.parent_staging.box(), kernel);
       }
-      Kokkos::fence();
+      ::pops::device_fence();
     }
 
     void interpolate_ghosts(field_type& destination) {
@@ -1152,7 +1152,7 @@ class CompositeFacPoisson {
           for_each_cell(region, ::pops::elliptic::mg::fac_detail::QuadraticInterpolationTransfer<Dim>{
                                     coarse, fine, region, ratio, mapping, child->geometry.domain()});
       }
-      Kokkos::fence();
+      ::pops::device_fence();
     }
 
     void prolong_valid(field_type& destination) {
@@ -1166,7 +1166,7 @@ class CompositeFacPoisson {
               parent->boundary.topology().is_periodic(Face<Dim>{axis, BoundarySide::lower});
         for_each_cell(destination.fab_global(patch.fine_patch).box(), kernel);
       }
-      Kokkos::fence();
+      ::pops::device_fence();
     }
 
     void apply_flux_mismatch(const field_type& parent_phi, const field_type& child_phi,
@@ -1229,7 +1229,7 @@ class CompositeFacPoisson {
           }
         }
       }
-      Kokkos::fence();
+      ::pops::device_fence();
       parent_scratch.set_val(Real(0));
       auto source_view = [this](const transfer_job& job) -> FieldView<const Real, Dim> {
         return std::as_const(scratch_for(job.source_patch).flux_increment).view();
@@ -1248,7 +1248,7 @@ class CompositeFacPoisson {
                           parent_residual.fab(local).view(),
                           std::as_const(parent->covered).fab(local).view()});
       }
-      Kokkos::fence();
+      ::pops::device_fence();
     }
 
     void restrict_into(const field_type& source, field_type& destination) {
@@ -1261,7 +1261,7 @@ class CompositeFacPoisson {
             fac_detail::RestrictionKernel<Dim>{fine, coarse, parent->geometry.domain(),
                                                child->geometry.domain(), ratio, inverse_children});
       }
-      Kokkos::fence();
+      ::pops::device_fence();
       auto source_view = [this](const transfer_job& job) -> FieldView<const Real, Dim> {
         return std::as_const(scratch_for(job.source_patch).restricted).view();
       };
@@ -1419,7 +1419,7 @@ class CompositeFacPoisson {
       for_each_cell(level.coefficient->fab(local).grown_box(),
                     ::pops::elliptic::mg::fac_detail::ExtrudeScalarValidToGhosts<Dim>{
                         level.coefficient->fab(local).view(), level.coefficient->box(local)});
-    Kokkos::fence();
+    ::pops::device_fence();
     fill_physical_boundary(*level.coefficient, level.coefficient_boundary);
   }
 
@@ -1435,7 +1435,7 @@ class CompositeFacPoisson {
           out(cell, component) = in(cell, component);
       });
     }
-    Kokkos::fence();
+    ::pops::device_fence();
   }
 
   void smooth_(std::size_t level_index, field_type& iterate, const field_type& rhs, int sweeps,
@@ -1480,7 +1480,7 @@ class CompositeFacPoisson {
             kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
           for_each_cell(iterate.box(local), kernel);
         }
-        Kokkos::fence();
+        ::pops::device_fence();
       }
       ::pops::elliptic::mg::copy_scalar_valid(level.scratch, iterate);
     }
@@ -1502,7 +1502,7 @@ class CompositeFacPoisson {
       for_each_cell(level.residual.box(local), fac_detail::MaskResidualKernel<Dim>{
                                                    level.residual.fab(local).view(),
                                                    std::as_const(level.covered).fab(local).view()});
-    Kokkos::fence();
+    ::pops::device_fence();
   }
 
   void compute_composite_residual_() {
@@ -1673,7 +1673,7 @@ class CompositeFacPoisson {
                     fac_detail::ActiveAddKernel<Dim>{
                         level.phi.fab(local).view(), correction.fab(local).view(),
                         std::as_const(level.active).fab(local).view()});
-    Kokkos::fence();
+    ::pops::device_fence();
   }
 
   void prolong_correction_tower_() {
@@ -1746,7 +1746,7 @@ class CompositeFacPoisson {
 
   void synchronize_boundary_failure_(FieldBoundaryExecutionContext<Dim>& context,
                                      const char* message) {
-    Kokkos::fence();
+    ::pops::device_fence();
     if (context.failure->synchronize_across_ranks(*lane_))
       throw std::runtime_error(message);
   }
@@ -1788,7 +1788,7 @@ class CompositeFacPoisson {
       for_each_cell(values.box(local),
                     fac_detail::MaskResidualKernel<Dim>{values.fab(local).view(), covered});
     }
-    Kokkos::fence();
+    ::pops::device_fence();
   }
 
   void stage_iterate_(const nonlinear_hierarchy_type& iterate) {

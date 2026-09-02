@@ -10,7 +10,7 @@ later lowered to C++ (other ADC-399 phases). This test exercises ONLY the IR con
   - IR values cannot be used as a Python bool (runtime values are not host booleans);
   - the IR hash is deterministic and sensitive to a coefficient change.
 
-It does NOT compile or run anything (no ProgramContext, no .so) -- that is Phase 2b/2c.
+It does NOT compile or run anything (no ProgramExecutionServices, no .so) -- that is Phase 2b/2c.
 Run with python3 (PYTHONPATH = built pops package).
 """
 from typed_program_support import commits_by_block, solve_field, typed_state

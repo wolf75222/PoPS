@@ -199,7 +199,7 @@ def test_authored_coupled_rate_node_is_self_contained_after_binding():
 
 
 def test_coupled_rate_codegen_emits_no_forbidden_cpp_tokens():
-    # Guard (mirrors test_time_local_newton): the emitted .cpp must use ProgramContext primitives only,
+    # Guard (mirrors test_time_local_newton): the emitted .cpp must use ProgramExecutionServices primitives only,
     # never raw std::vector / std::function / Eigen:: / new / malloc -- in code OR comments.
     _mod, P = _two_fluid_program()
     src = emit_cpp_program(P, model=None)

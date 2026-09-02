@@ -1123,7 +1123,7 @@ _COMPOSITE_PROVIDER = register_prepared_hierarchy_solver_provider(
             "pops.hierarchy.composite-tensor-fac",
             entry_headers=(
                 "pops/runtime/amr/amr_tensor_elliptic.hpp",
-                "pops/runtime/program/amr_program_context.hpp",
+                "pops/runtime/program/program_execution_services.hpp",
             ),
         ),
         option_validator=_validate_composite_options,

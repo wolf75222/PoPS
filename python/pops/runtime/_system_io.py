@@ -26,6 +26,7 @@ class _PreparedUniformRestart:
     temporal_state: Any
     cadence_state: Any
     auxiliary_checkpoint: bytes
+    program_persistent_restore: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,8 +37,9 @@ class _PreparedUniformCapture:
     field_slots: tuple[str, ...]
     spatial_shape: tuple[int, ...]
     history_plan: Any
-    cache_nodes: tuple[int, ...]
+    cache_slots: tuple[int, ...]
     capture_identity: str
+    persistent_carrier: bool = False
 
 
 _DEFAULT_FIELD_SLOT = "pops.system.default-field"
@@ -174,6 +176,10 @@ class _SystemIO(_System):
         )
         from pops.runtime._program_cadence_checkpoint import capture_program_cadence
         from pops.runtime._system_io_history import prepare_history_capture
+        from pops.output._checkpoint_contract import (
+            program_persistent_value_checkpoint_capture_available,
+            require_program_persistent_value_checkpoint_capture,
+        )
 
         target = canonical_checkpoint_path(path)
         temporal = getattr(self, "_temporal_restart_state", None)
@@ -226,6 +232,13 @@ class _SystemIO(_System):
         )
         if not prog_hash:
             raise RuntimeError("checkpoint requires the installed compiled Program hash")
+        # Capability probing is deliberately side-effect free. A native capture binding may be
+        # collective, so only the agreed capture phase is allowed to invoke it. The scheduler cache
+        # is a bind-sealed dense slot table; every slot is retained in the checkpoint, including a
+        # cold slot carrying only an accumulated temporal window.
+        persistent_carrier = program_persistent_value_checkpoint_capture_available(self._s)
+        if persistent_carrier:
+            require_program_persistent_value_checkpoint_capture(self._s)
         out["program_hash"] = prog_hash
         history_plan = prepare_history_capture(
             self._s,
@@ -234,18 +247,44 @@ class _SystemIO(_System):
         )
         if any(ring.stored_slots for ring in history_plan.rings):
             required_collectives.append("history_global")
-        cache_nodes = (
-            tuple(int(node) for node in self._s.program_cache_nodes())
-            if hasattr(self._s, "program_cache_nodes")
-            else ()
-        )
-        if cache_nodes != tuple(sorted(set(cache_nodes))) or any(node < 0 for node in cache_nodes):
-            raise ValueError(
-                "checkpoint scheduled-cache node ids must be unique non-negative canonical ids"
+        cache_slots_provider = getattr(self._s, "program_cache_slots", None)
+        cache_plan_schema_provider = getattr(self._s, "program_cache_plan_schema", None)
+        cache_plan_digest_provider = getattr(self._s, "program_cache_plan_digest", None)
+        if not callable(cache_slots_provider) or not callable(cache_plan_schema_provider) or not callable(
+            cache_plan_digest_provider
+        ):
+            raise TypeError(
+                "checkpoint Uniform engine lacks the bind-sealed dense scheduled-cache plan authority"
             )
-        if cache_nodes and macro_step == 0:
+        cache_slots = tuple(
+            int(slot) for slot in _require_iterable(
+                cache_slots_provider(), where="checkpoint cache native slot evidence"
+            )
+        )
+        if cache_slots != tuple(range(len(cache_slots))):
+            raise ValueError("checkpoint scheduled-cache slots must be a dense bind-sealed range")
+        cache_plan_schema = str(cache_plan_schema_provider())
+        cache_plan_digest = str(cache_plan_digest_provider())
+        if cache_plan_schema != "program-resource-plan:v1" or len(cache_plan_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in cache_plan_digest
+        ):
+            raise ValueError("checkpoint scheduled-cache plan authority is not a valid SHA-256 plan")
+        cache_valid_provider = getattr(self._s, "program_cache_valid", None)
+        cache_cold_provider = getattr(self._s, "program_cache_cold", None)
+        if cache_slots and (not callable(cache_valid_provider) or not callable(cache_cold_provider)):
+            raise TypeError(
+                "checkpoint Uniform engine lacks dense scheduled-cache validity accessors"
+            )
+        cache_valid = tuple(bool(cache_valid_provider(slot)) for slot in cache_slots) \
+            if callable(cache_valid_provider) else ()
+        cache_cold = tuple(bool(cache_cold_provider(slot)) for slot in cache_slots) \
+            if callable(cache_cold_provider) else ()
+        if any(valid == cold for valid, cold in zip(cache_valid, cache_cold, strict=True)):
+            raise ValueError("checkpoint scheduled-cache validity/cold state is incoherent")
+        valid_cache_slots = tuple(slot for slot, valid in zip(cache_slots, cache_valid, strict=True) if valid)
+        if valid_cache_slots and macro_step == 0:
             raise ValueError("checkpoint cannot carry a valid scheduled cache at step zero")
-        if cache_nodes:
+        if valid_cache_slots:
             required_collectives.append("program_cache_global")
         missing_collectives = sorted(
             {name for name in required_collectives if not callable(getattr(self._s, name, None))}
@@ -254,36 +293,39 @@ class _SystemIO(_System):
             raise TypeError(
                 "checkpoint Uniform engine lacks collective accessors %r" % missing_collectives
             )
-        out["cache_nodes"] = np.array(cache_nodes, dtype=np.int64)
+        out["cache_slots"] = np.array(cache_slots, dtype=np.int64)
+        out["cache_plan_schema"] = np.asarray(cache_plan_schema)
+        out["cache_plan_digest"] = np.asarray(cache_plan_digest)
+        out["cache_valid"] = np.array(cache_valid, dtype=np.bool_)
+        out["cache_cold"] = np.array(cache_cold, dtype=np.bool_)
         cache_evidence = []
         cache_names = []
-        for nid in cache_nodes:
-            name = str(self._s.program_cache_name(nid))
-            ncomp = int(self._s.program_cache_ncomp(nid))
-            ngrow = int(self._s.program_cache_ngrow(nid))
-            last_update = int(self._s.program_cache_last_update_step(nid))
-            accum_dt = float(self._s.program_cache_accumulated_dt(nid))
-            if (
-                not name
-                or ncomp <= 0
-                or ngrow < 0
-                or last_update < 0
-                or last_update >= macro_step
-                or not math.isfinite(accum_dt)
-                or accum_dt < 0.0
-            ):
-                raise ValueError("checkpoint scheduled-cache metadata is invalid for node %d" % nid)
+        for slot, valid, cold in zip(cache_slots, cache_valid, cache_cold, strict=True):
+            name = str(self._s.program_cache_name(slot))
+            last_update = int(self._s.program_cache_last_update_step(slot))
+            accum_dt = float(self._s.program_cache_accumulated_dt(slot))
+            if not name or not math.isfinite(accum_dt) or accum_dt < 0.0:
+                raise ValueError("checkpoint scheduled-cache metadata is invalid for slot %d" % slot)
+            if valid:
+                ncomp = int(self._s.program_cache_ncomp(slot))
+                ngrow = int(self._s.program_cache_ngrow(slot))
+                if ncomp <= 0 or ngrow < 0 or last_update < 0 or last_update >= macro_step:
+                    raise ValueError("checkpoint scheduled-cache metadata is invalid for slot %d" % slot)
+            elif not cold or last_update != -1:
+                raise ValueError("checkpoint cold scheduled-cache metadata is invalid for slot %d" % slot)
             cache_names.append(name)
-            out["cache_ncomp_%d" % nid] = ncomp
-            out["cache_ngrow_%d" % nid] = ngrow
-            out["cache_last_update_%d" % nid] = last_update
-            out["cache_accum_dt_%d" % nid] = accum_dt
+            out["cache_last_update_%d" % slot] = last_update
+            out["cache_accum_dt_%d" % slot] = accum_dt
+            out["cache_ncomp_%d" % slot] = ncomp if valid else 0
+            out["cache_ngrow_%d" % slot] = ngrow if valid else 0
             cache_evidence.append(
                 {
-                    "node": nid,
+                    "slot": slot,
                     "name": name,
-                    "ncomp": ncomp,
-                    "ngrow": ngrow,
+                    "valid": valid,
+                    "cold": cold,
+                    "ncomp": ncomp if valid else 0,
+                    "ngrow": ngrow if valid else 0,
                     "last_update": last_update,
                     "accumulated_dt": accum_dt.hex(),
                 }
@@ -306,6 +348,8 @@ class _SystemIO(_System):
                 "program_cadence": cadence.to_data(),
                 "histories": history_plan.to_data(),
                 "cache": cache_evidence,
+                "cache_plan_schema": cache_plan_schema,
+                "cache_plan_digest": cache_plan_digest,
                 "runtime_identities": runtime_identities,
                 "run_identity": run_identity,
             },
@@ -317,8 +361,9 @@ class _SystemIO(_System):
             field_slots=field_slots,
             spatial_shape=spatial.shape,
             history_plan=history_plan,
-            cache_nodes=cache_nodes,
+            cache_slots=cache_slots,
             capture_identity=capture_identity,
+            persistent_carrier=persistent_carrier,
         )
 
     def _capture_checkpoint(self, prepared: _PreparedUniformCapture) -> tuple[dict[str, Any], str]:
@@ -326,6 +371,15 @@ class _SystemIO(_System):
         if not isinstance(prepared, _PreparedUniformCapture):
             raise TypeError("Uniform checkpoint capture requires its exact prepared plan")
         import numpy as np
+        from pops.output._checkpoint_contract import (
+            PROGRAM_PERSISTENT_CHECKPOINT_KEY,
+            PROGRAM_PERSISTENT_CHECKPOINT_SCHEMA_KEY,
+            PROGRAM_PERSISTENT_PLAN_DIGEST_KEY,
+            PROGRAM_PERSISTENT_PLAN_MAXIMUM_BYTES_KEY,
+            PROGRAM_PERSISTENT_PLAN_SCHEMA_KEY,
+            PROGRAM_PERSISTENT_SLOT_COUNT_KEY,
+            capture_program_persistent_value_checkpoint,
+        )
         from pops.runtime._checkpoint_manifest import seal_checkpoint_payload
         from pops.runtime._system_io_history import capture_histories
 
@@ -347,9 +401,33 @@ class _SystemIO(_System):
             )
         out["auxiliary_checkpoint"] = np.frombuffer(auxiliary_checkpoint, dtype=np.uint8).copy()
         capture_histories(self._s, prepared.history_plan, out)
-        for node in prepared.cache_nodes:
-            out["cache_value_%d" % node] = np.asarray(
-                self._s.program_cache_global(node), dtype=np.float64
+        for slot in prepared.cache_slots:
+            if bool(self._s.program_cache_valid(slot)):
+                out["cache_value_%d" % slot] = np.asarray(
+                    self._s.program_cache_global(slot), dtype=np.float64
+                )
+        persistent = (
+            capture_program_persistent_value_checkpoint(self._s)
+            if prepared.persistent_carrier
+            else None
+        )
+        if prepared.persistent_carrier and persistent is None:
+            raise RuntimeError(
+                "native Program persistent checkpoint carrier disappeared after preparation"
+            )
+        if persistent is not None:
+            persistent_bytes, persistent_image = persistent
+            out[PROGRAM_PERSISTENT_CHECKPOINT_KEY] = np.frombuffer(
+                persistent_bytes, dtype=np.uint8
+            ).copy()
+            out[PROGRAM_PERSISTENT_CHECKPOINT_SCHEMA_KEY] = np.asarray(persistent_image.schema)
+            out[PROGRAM_PERSISTENT_PLAN_SCHEMA_KEY] = np.asarray(persistent_image.plan_schema)
+            out[PROGRAM_PERSISTENT_PLAN_DIGEST_KEY] = np.asarray(persistent_image.plan_digest)
+            out[PROGRAM_PERSISTENT_PLAN_MAXIMUM_BYTES_KEY] = np.asarray(
+                persistent_image.maximum_bytes, dtype=np.uint64
+            )
+            out[PROGRAM_PERSISTENT_SLOT_COUNT_KEY] = np.asarray(
+                persistent_image.slot_count, dtype=np.uint32
             )
         # Fabricating the wire-compatible field-free alias and validating its local byte image are
         # deliberately deferred until every planned native gather has completed.  A rank-local
@@ -455,6 +533,13 @@ class _SystemIO(_System):
         from pops.runtime._temporal_restart import TemporalRestartState
         from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
         from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
+        from pops.output._checkpoint_contract import (
+            PROGRAM_PERSISTENT_CHECKPOINT_KEY,
+            program_persistent_checkpoint_from_payload,
+            program_persistent_value_checkpoint_capture_available,
+            prepare_program_persistent_value_restore,
+            require_program_persistent_checkpoint_plan,
+        )
         from pops.time._history.persistence import HistoryPersistence
         from pops.runtime._system_io_history import (
             history_fill_count_from_payload,
@@ -462,7 +547,8 @@ class _SystemIO(_System):
         )
 
         require_restart_bit_identical(bit_identical, where="Uniform restart")
-        d = decode_checkpoint_bytes(payload, require_checkpoint_resource_budget(self))
+        budget = require_checkpoint_resource_budget(self)
+        d = decode_checkpoint_bytes(payload, budget)
         identity = authenticate_checkpoint_payload(self, d, runtime_kind="uniform")
         require_exact_payload_version(
             d,
@@ -533,6 +619,26 @@ class _SystemIO(_System):
         )
         if current_hash != checkpoint_hash:
             raise RuntimeError("checkpoint was created with a different compiled Program hash")
+        persistent_carrier = program_persistent_value_checkpoint_capture_available(self._s)
+        persistent_restore = None
+        if PROGRAM_PERSISTENT_CHECKPOINT_KEY in d:
+            if not persistent_carrier:
+                raise RuntimeError(
+                    "restart: checkpoint carries POPSPVS1 but the native Program persistent "
+                    "value carrier is unavailable"
+                )
+            persistent_bytes, persistent_image = program_persistent_checkpoint_from_payload(d)
+            require_program_persistent_checkpoint_plan(persistent_image, budget)
+            persistent_restore = prepare_program_persistent_value_restore(
+                self._s,
+                persistent_bytes,
+                mode="restore_recorded_hierarchy",
+            )
+        elif persistent_carrier:
+            raise ValueError(
+                "restart: checkpoint lacks the lossless ProgramPersistentValueCheckpoint image; "
+                "historical/incomplete archives require offline migration"
+            )
 
         history_names = [str(name) for name in d["history_names"]]
         current_histories = (
@@ -548,7 +654,21 @@ class _SystemIO(_System):
                 % (history_names, current_histories)
             )
         schedule = temporal.program_schedule
-        if (history_names or len(d["cache_nodes"])) and schedule is None:
+        cache_slots = [int(slot) for slot in d["cache_slots"]] if "cache_slots" in d else []
+        if cache_slots != list(range(len(cache_slots))):
+            raise ValueError("restart : scheduled cache slots are not a dense range")
+        if cache_slots or "cache_plan_schema" in d or "cache_plan_digest" in d:
+            checkpoint_cache_plan_schema = str(d.get("cache_plan_schema", ""))
+            checkpoint_cache_plan_digest = str(d.get("cache_plan_digest", ""))
+            cache_plan_schema_provider = getattr(self._s, "program_cache_plan_schema", None)
+            cache_plan_digest_provider = getattr(self._s, "program_cache_plan_digest", None)
+            if not callable(cache_plan_schema_provider) or not callable(cache_plan_digest_provider):
+                raise RuntimeError("runtime cannot authenticate the checkpoint's dense cache plan")
+            if checkpoint_cache_plan_schema != str(cache_plan_schema_provider()) or checkpoint_cache_plan_digest != str(
+                cache_plan_digest_provider()
+            ):
+                raise ValueError("restart : checkpoint scheduled cache plan differs from the installed plan")
+        if (history_names or cache_slots) and schedule is None:
             raise RuntimeError(
                 "checkpoint history/cache state requires an installed temporal Program schedule"
             )
@@ -639,30 +759,58 @@ class _SystemIO(_System):
                         "restart : history '%s' slot %d payload has the wrong size" % (name, slot)
                     )
 
-        cache_nodes = [int(node) for node in d["cache_nodes"]]
-        if cache_nodes and not hasattr(self._s, "restore_program_cache"):
-            raise RuntimeError("runtime cannot restore the checkpoint's scheduled value cache")
-        scheduled_cache_nodes = {
-            int(row["node_id"])
-            for row in (schedule or {}).get("schedules", ())
-            if bool(row["cache_required"])
-        }
-        unknown_cache_nodes = sorted(set(cache_nodes) - scheduled_cache_nodes)
-        if unknown_cache_nodes:
+        if cache_slots and (
+            not callable(getattr(self._s, "program_cache_slots", None))
+            or not callable(getattr(self._s, "program_cache_valid", None))
+            or not callable(getattr(self._s, "program_cache_cold", None))
+            or not callable(getattr(self._s, "restore_program_cache", None))
+            or not callable(getattr(self._s, "restore_program_cache_pending", None))
+        ):
+            raise RuntimeError("runtime cannot restore the checkpoint's dense scheduled cache")
+        installed_cache_slots = (
+            [int(slot) for slot in self._s.program_cache_slots()] if cache_slots else []
+        )
+        if installed_cache_slots != cache_slots:
             raise ValueError(
-                "restart : scheduled cache node(s) %r do not belong to the installed Program"
-                % unknown_cache_nodes
+                "restart : checkpoint scheduled cache slots %r != installed slots %r"
+                % (cache_slots, installed_cache_slots)
             )
-        for node in cache_nodes:
-            ncomp = int(d["cache_ncomp_%d" % node])
-            ngrow = int(d["cache_ngrow_%d" % node])
-            if ncomp <= 0 or ngrow < 0:
-                raise ValueError("restart : scheduled cache node %d has invalid metadata" % node)
-            if np.asarray(d["cache_value_%d" % node]).size != ncomp * cells:
-                raise ValueError(
-                    "restart : scheduled cache node %d has the wrong value size" % node
-                )
-        return _PreparedUniformRestart(d, identity, temporal, cadence, auxiliary_checkpoint_bytes)
+        if cache_slots and not callable(getattr(self._s, "program_cache_name", None)):
+            raise RuntimeError("runtime cannot authenticate dense scheduled-cache names")
+        checkpoint_names = [str(name) for name in d.get("cache_names", [])]
+        if len(checkpoint_names) != len(cache_slots):
+            raise ValueError("restart : scheduled cache names do not match its slots")
+        if any(
+            checkpoint_name != str(self._s.program_cache_name(slot))
+            for slot, checkpoint_name in zip(cache_slots, checkpoint_names, strict=True)
+        ):
+            raise ValueError("restart : checkpoint scheduled cache identities differ from the installed plan")
+        checkpoint_valid = np.asarray(d.get("cache_valid", []), dtype=np.bool_)
+        checkpoint_cold = np.asarray(d.get("cache_cold", []), dtype=np.bool_)
+        if checkpoint_valid.size != len(cache_slots) or checkpoint_cold.size != len(cache_slots):
+            raise ValueError("restart : scheduled cache validity rows do not match its slots")
+        for slot, valid, cold in zip(
+            cache_slots, checkpoint_valid.tolist(), checkpoint_cold.tolist(), strict=True
+        ):
+            if bool(valid) == bool(cold):
+                raise ValueError("restart : scheduled cache slot %d has incoherent state" % slot)
+            if bool(valid):
+                ncomp = int(d["cache_ncomp_%d" % slot])
+                ngrow = int(d["cache_ngrow_%d" % slot])
+                if ncomp <= 0 or ngrow < 0:
+                    raise ValueError("restart : scheduled cache slot %d has invalid metadata" % slot)
+                if np.asarray(d["cache_value_%d" % slot]).size != ncomp * cells:
+                    raise ValueError("restart : scheduled cache slot %d has the wrong value size" % slot)
+            elif int(d["cache_last_update_%d" % slot]) != -1:
+                raise ValueError("restart : cold scheduled cache slot %d has an update step" % slot)
+        return _PreparedUniformRestart(
+            d,
+            identity,
+            temporal,
+            cadence,
+            auxiliary_checkpoint_bytes,
+            persistent_restore,
+        )
 
     def _begin_checkpoint_restart(self) -> None:
         if "_checkpoint_restart_python_snapshot" in self.__dict__:
@@ -685,6 +833,7 @@ class _SystemIO(_System):
         import numpy as np
         from pops.runtime._program_cadence_checkpoint import restore_program_cadence
         from pops.runtime._system_io_history import restore_histories
+        from pops.output._checkpoint_contract import publish_program_persistent_value_restore
 
         d = prepared.payload
         for block in (str(value) for value in d["blocks"]):
@@ -712,20 +861,39 @@ class _SystemIO(_System):
         self._s.set_clock(float(d["t"]), macro_step)
         histories = [str(name) for name in d["history_names"]]
         self._last_restart_report = restore_histories(self._s, d) if histories else None
-        cache_names = [str(name) for name in d["cache_names"]]
-        for index, node in enumerate(int(value) for value in d["cache_nodes"]):
-            self._s.restore_program_cache(
-                node,
-                int(d["cache_ncomp_%d" % node]),
-                int(d["cache_ngrow_%d" % node]),
-                int(d["cache_last_update_%d" % node]),
-                float(d["cache_accum_dt_%d" % node]),
-                cache_names[index],
-                np.asarray(d["cache_value_%d" % node], dtype=np.float64),
-            )
+        cache_slots = [int(slot) for slot in d["cache_slots"]] if "cache_slots" in d else []
+        cache_names = [str(name) for name in d["cache_names"]] if "cache_names" in d else []
+        cache_valid = np.asarray(d.get("cache_valid", []), dtype=np.bool_).tolist()
+        cache_cold = np.asarray(d.get("cache_cold", []), dtype=np.bool_).tolist()
+        if len(cache_names) != len(cache_slots) or len(cache_valid) != len(cache_slots) \
+                or len(cache_cold) != len(cache_slots):
+            raise RuntimeError("restart: scheduled cache metadata does not match its slots")
+        for slot, name, valid, cold in zip(
+            cache_slots, cache_names, cache_valid, cache_cold, strict=True
+        ):
+            if bool(valid):
+                self._s.restore_program_cache(
+                    slot,
+                    int(d["cache_ncomp_%d" % slot]),
+                    int(d["cache_ngrow_%d" % slot]),
+                    int(d["cache_last_update_%d" % slot]),
+                    float(d["cache_accum_dt_%d" % slot]),
+                    name,
+                    np.asarray(d["cache_value_%d" % slot], dtype=np.float64),
+                )
+            elif bool(cold):
+                self._s.restore_program_cache_pending(
+                    slot, float(d["cache_accum_dt_%d" % slot]), name
+                )
+            else:
+                raise RuntimeError("restart: scheduled cache slot state is incoherent")
         self._temporal_restart_state = prepared.temporal_state
         self._step_controller = None
         self._last_restart_identity = prepared.restart_identity
+        if prepared.program_persistent_restore is not None:
+            # Publication is the final fallible boundary: the native callback swaps the detached
+            # store without throwing, after every Python/native field, history and cache write above.
+            publish_program_persistent_value_restore(prepared.program_persistent_restore)
         return prepared.restart_identity
 
     def _commit_checkpoint_restart(self) -> None:

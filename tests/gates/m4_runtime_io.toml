@@ -321,8 +321,8 @@ issue = "ADC-686"
 requirement = "diagnostics"
 polarity = "positive"
 kind = "ctest"
-target = "diagnostics@test_program_context_contract"
-test_regex = "^ProgramContextContract\\.AcceptedBalanceEvidenceIsCurrentAttemptExactAndFailClosed$"
+target = "diagnostics@test_program_execution_services_contract"
+test_regex = "^ProgramExecutionServicesContract\\.AcceptedBalanceEvidenceIsCurrentAttemptExactAndFailClosed$"
 
 [[check]]
 issue = "ADC-686"

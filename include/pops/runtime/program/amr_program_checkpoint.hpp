@@ -113,7 +113,7 @@ struct AmrProgramAcceptedState {
   std::vector<AmrProgramHistoryDescriptor> histories;
   std::vector<AmrProgramHistorySlotProvenance> history_slots;
   std::vector<AmrProgramPendingHistoryRemap> pending_history_remaps;
-  /// Opaque at the facade boundary but structured by AmrProgramContext: every level-qualified
+  /// Opaque at the facade boundary but structured by ProgramExecutionServices: every level-qualified
   /// history slot's exact FluxBasis samples and rational coefficients.  This deliberately lives
   /// beside (not inside) the numerical history image, whose MPI rematerialization is independent.
   std::vector<std::uint8_t> history_flux_payload;
@@ -130,7 +130,7 @@ struct AmrProgramAcceptedState {
 
 namespace checkpoint_detail {
 
-inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '4'};
+inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '5'};
 
 class Writer {
  public:
@@ -171,9 +171,69 @@ class Writer {
   std::vector<std::uint8_t> bytes_;
 };
 
+/// Allocation-free POPSAND5 writer for a caller-owned byte arena.  The caller first authenticates
+/// the exact encoded size, then this writer only advances within that already-resident extent.
+class PreallocatedWriter {
+ public:
+  explicit PreallocatedWriter(std::span<std::uint8_t> bytes) : bytes_(bytes) {}
+
+  void raw(std::span<const std::uint8_t> bytes) {
+    require_(bytes.size());
+    std::copy(bytes.begin(), bytes.end(), bytes_.data() + cursor_);
+    cursor_ += bytes.size();
+  }
+
+  void u64(std::uint64_t value) {
+    require_(sizeof(value));
+    for (int shift = 0; shift != 64; shift += 8)
+      bytes_[cursor_++] = static_cast<std::uint8_t>((value >> shift) & 0xffU);
+  }
+
+  void i64(std::int64_t value) { u64(static_cast<std::uint64_t>(value)); }
+  void i32(int value) { i64(static_cast<std::int64_t>(value)); }
+
+  void real(double value) {
+    static_assert(sizeof(double) == sizeof(std::uint64_t));
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    u64(bits);
+  }
+
+  void size(std::size_t value) {
+    if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t))
+      if (value > static_cast<std::size_t>(std::numeric_limits<std::uint64_t>::max()))
+        throw std::length_error("AMR Program checkpoint length exceeds uint64_t");
+    u64(static_cast<std::uint64_t>(value));
+  }
+
+  void string(std::string_view value) {
+    size(value.size());
+    raw({reinterpret_cast<const std::uint8_t*>(value.data()), value.size()});
+  }
+
+  void bytes(std::span<const std::uint8_t> value) {
+    size(value.size());
+    raw(value);
+  }
+
+  void require_complete() const {
+    if (cursor_ != bytes_.size())
+      throw std::logic_error("AMR Program checkpoint preallocated writer size differs from schema");
+  }
+
+ private:
+  void require_(std::size_t count) const {
+    if (count > bytes_.size() - cursor_)
+      throw std::length_error("AMR Program checkpoint exceeded its preallocated byte arena");
+  }
+
+  std::span<std::uint8_t> bytes_;
+  std::size_t cursor_ = 0;
+};
+
 /// Allocation-free twin of Writer used by the artifact checkpoint-capacity preflight.  Keeping the
 /// primitive surface identical lets the binary encoder itself remain the only wire-schema
-/// authority: a field added to POPSAND4 changes both serialization and capacity accounting in the
+/// authority: a field added to POPSAND5 changes both serialization and capacity accounting in the
 /// same function.
 class CountingWriter {
  public:
@@ -496,6 +556,33 @@ inline void write_interface_fragment(
     out.real(static_cast<double>(component));
 }
 
+/// Write a dense-ledger fragment view without materializing five strings and one payload vector.
+/// Callers own validation/order; this helper is used only by the prevalidated accepted staging
+/// path, whose source is the bind-sealed published ledger image.
+template <class Output, class FragmentView>
+inline void write_prevalidated_interface_fragment_view(Output& out, const FragmentView& fragment) {
+  out.string(fragment.key.interface_identity);
+  out.u64(fragment.key.topology_epoch);
+  out.i32(fragment.key.coarse_level);
+  out.i32(fragment.key.fine_level);
+  write_clock(out, fragment.key.clock);
+  out.string(fragment.key.stage_identity);
+  out.string(fragment.key.graph_identity);
+  out.string(fragment.key.rate_identity);
+  out.string(fragment.key.application_identity);
+  write_clock_window(out, fragment.key.interval);
+  out.u64(static_cast<std::uint64_t>(fragment.key.orientation));
+  out.u64(static_cast<std::uint64_t>(fragment.key.left_block));
+  out.u64(static_cast<std::uint64_t>(fragment.key.right_block));
+  write_rational(out, fragment.measure.stage_weight);
+  out.real(fragment.measure.face_measure);
+  out.real(fragment.measure.substep_duration);
+  out.u64(fragment.measure.stage_weight_resolved ? 1U : 0U);
+  out.size(fragment.payload.size());
+  for (Real component : fragment.payload)
+    out.real(static_cast<double>(component));
+}
+
 inline ::pops::amr::InterfaceFluxFragment<AmrProgramFacePayload> read_interface_fragment(
     Reader& in, std::size_t* remaining_payload_terms = nullptr) {
   ::pops::amr::InterfaceFluxFragment<AmrProgramFacePayload> fragment;
@@ -618,6 +705,15 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
   }
   if (slot_index != state.history_slots.size())
     throw std::invalid_argument("exact AMR Program checkpoint has foreign history-slot provenance");
+  struct PendingRemapEdge {
+    int parent_level = -1;
+    int child_level = -1;
+    std::uint64_t prior_topology_epoch = 0;
+    std::uint64_t prior_materialization_generation = 0;
+    std::uint64_t published_topology_epoch = 0;
+    std::uint64_t published_materialization_generation = 0;
+  };
+  std::map<int, PendingRemapEdge> pending_edges;
   std::string previous_pending;
   for (const auto& pending : state.pending_history_remaps) {
     constexpr std::string_view history_prefix = "pops.amr.level-history.v1/";
@@ -680,8 +776,6 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
         pending.prior_topology_epoch + 1 != pending.published_topology_epoch ||
         pending.prior_materialization_generation + 1 !=
             pending.published_materialization_generation ||
-        pending.published_topology_epoch != state.topology_epoch ||
-        pending.published_materialization_generation != state.materialization_generation ||
         pending.accepted_macro_step < 0 || pending.temporal_denominator != 1 ||
         (pending.temporal_numerator != 1 && pending.temporal_numerator != 2) ||
         !std::isfinite(pending.source_dt) || !std::isfinite(pending.target_dt) ||
@@ -689,8 +783,41 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
         pending.target_dt != pending.source_dt / static_cast<double>(pending.temporal_numerator))
       throw std::invalid_argument(
           "exact AMR Program checkpoint has an invalid pending history remap");
+    const PendingRemapEdge edge{pending.parent_level,
+                                pending.child_level,
+                                pending.prior_topology_epoch,
+                                pending.prior_materialization_generation,
+                                pending.published_topology_epoch,
+                                pending.published_materialization_generation};
+    const auto [position, inserted] = pending_edges.emplace(edge.child_level, edge);
+    if (!inserted && (position->second.parent_level != edge.parent_level ||
+                      position->second.prior_topology_epoch != edge.prior_topology_epoch ||
+                      position->second.prior_materialization_generation !=
+                          edge.prior_materialization_generation ||
+                      position->second.published_topology_epoch != edge.published_topology_epoch ||
+                      position->second.published_materialization_generation !=
+                          edge.published_materialization_generation))
+      throw std::invalid_argument(
+          "exact AMR Program checkpoint pending history remaps branch across one child level");
     previous_pending = pending.key;
   }
+  std::optional<PendingRemapEdge> previous_edge;
+  for (const auto& [child_level, edge] : pending_edges) {
+    (void)child_level;
+    if (previous_edge && (edge.parent_level != previous_edge->child_level ||
+                          edge.prior_topology_epoch != previous_edge->published_topology_epoch ||
+                          edge.prior_materialization_generation !=
+                              previous_edge->published_materialization_generation))
+      throw std::invalid_argument(
+          "exact AMR Program checkpoint pending history remaps have a discontinuous authority "
+          "chain");
+    previous_edge = edge;
+  }
+  if (previous_edge &&
+      (previous_edge->published_topology_epoch != state.topology_epoch ||
+       previous_edge->published_materialization_generation != state.materialization_generation))
+    throw std::invalid_argument(
+        "exact AMR Program checkpoint pending history remaps do not reach the accepted authority");
   if (!state.history_flux_payload.empty() &&
       state.history_flux_payload.size() < sizeof(std::uint64_t))
     throw std::invalid_argument(
@@ -744,8 +871,9 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
   }
 }
 
-template <int Dim, class Output>
-void write_state(Output& out, const AmrProgramAcceptedState<Dim>& state) {
+template <int Dim, class Output, class InterfaceWriter>
+void write_state_with_interface(Output& out, const AmrProgramAcceptedState<Dim>& state,
+                                std::size_t interface_count, InterfaceWriter&& write_interface) {
   out.raw(kMagic);
   out.i32(Dim);
   out.string(state.spatial_contract);
@@ -806,9 +934,8 @@ void write_state(Output& out, const AmrProgramAcceptedState<Dim>& state) {
     for (const auto& fragment : fragments)
       write_face_fragment(out, fragment);
   }
-  out.size(state.accepted_interface_flux.size());
-  for (const auto& fragment : state.accepted_interface_flux)
-    write_interface_fragment(out, fragment);
+  out.size(interface_count);
+  write_interface(out);
   out.size(state.synchronization_events.size());
   for (const AmrProgramSynchronizationEvent& event : state.synchronization_events) {
     out.i32(event.parent_level);
@@ -817,6 +944,15 @@ void write_state(Output& out, const AmrProgramAcceptedState<Dim>& state) {
     out.string(event.phase);
     write_clock(out, event.clock);
   }
+}
+
+template <int Dim, class Output>
+void write_state(Output& out, const AmrProgramAcceptedState<Dim>& state) {
+  write_state_with_interface<Dim>(out, state, state.accepted_interface_flux.size(),
+                                  [&](Output& destination) {
+                                    for (const auto& fragment : state.accepted_interface_flux)
+                                      write_interface_fragment(destination, fragment);
+                                  });
 }
 
 }  // namespace checkpoint_detail
@@ -838,7 +974,8 @@ AmrProgramAcceptedState<Dim> accepted_amr_program_state(
   state.temporal_partition = std::move(temporal_partition);
   for (int axis = 0; axis < Dim; ++axis) {
     auto& destination = state.accepted_face_flux[static_cast<std::size_t>(axis)];
-    destination = ledger.published_entries(axis);
+    const auto published = ledger.published_entries(axis);
+    destination.assign(published.begin(), published.end());
     std::sort(destination.begin(), destination.end(),
               [](const auto& left, const auto& right) { return left.key < right.key; });
   }
@@ -863,7 +1000,64 @@ std::size_t serialized_amr_program_accepted_state_size(const AmrProgramAcceptedS
   return out.count();
 }
 
-/// Artifact-derived maximum POPSAND4 shape.  It carries character and term counts only: computing a
+/// Encode into a previously reserved byte arena.  Unlike the convenience overload this retains
+/// the caller's capacity and is therefore safe in an accepted-step hot path after the bound check.
+template <int Dim>
+void serialize_amr_program_accepted_state_into(const AmrProgramAcceptedState<Dim>& state,
+                                               std::vector<std::uint8_t>& bytes) {
+  const std::size_t required = serialized_amr_program_accepted_state_size(state);
+  if (required > bytes.capacity())
+    throw std::length_error("AMR Program checkpoint preallocated byte arena was not primed");
+  bytes.resize(required);
+  checkpoint_detail::PreallocatedWriter out(std::span<std::uint8_t>(bytes.data(), bytes.size()));
+  checkpoint_detail::write_state(out, state);
+  out.require_complete();
+}
+
+/// Hot companion for trusted Program-owned state.  Public/restart serialization continues through
+/// the validating overload; the accepted adapter has already bound every source authority and
+/// must not allocate a temporary validation map merely to write its resident candidate bytes.
+template <int Dim>
+void serialize_prevalidated_amr_program_accepted_state_into(
+    const AmrProgramAcceptedState<Dim>& state, std::vector<std::uint8_t>& bytes) {
+  checkpoint_detail::CountingWriter count;
+  checkpoint_detail::write_state(count, state);
+  const std::size_t required = count.count();
+  if (required > bytes.capacity())
+    throw std::length_error("AMR Program checkpoint preallocated byte arena was not primed");
+  bytes.resize(required);
+  checkpoint_detail::PreallocatedWriter out(std::span<std::uint8_t>(bytes.data(), bytes.size()));
+  checkpoint_detail::write_state(out, state);
+  out.require_complete();
+}
+
+/// Prevalidated hot companion for a bind-sealed dense interface ledger.  `visit` must enumerate
+/// the same uniquely ordered published views on both passes; no `InterfaceFluxFragment` value is
+/// materialized and therefore no per-fragment string/vector capacity is required in staging.
+template <int Dim, class Visit>
+void serialize_prevalidated_amr_program_accepted_state_with_interface_views_into(
+    const AmrProgramAcceptedState<Dim>& state, std::size_t interface_count, Visit&& visit,
+    std::vector<std::uint8_t>& bytes) {
+  const auto write = [&](auto& output) {
+    checkpoint_detail::write_state_with_interface<Dim>(
+        output, state, interface_count, [&](auto& destination) {
+          visit([&](const auto& fragment) {
+            checkpoint_detail::write_prevalidated_interface_fragment_view(destination, fragment);
+          });
+        });
+  };
+  checkpoint_detail::CountingWriter count;
+  write(count);
+  const std::size_t required = count.count();
+  if (required > bytes.capacity())
+    throw std::length_error("AMR Program checkpoint preallocated byte arena was not primed");
+  bytes.resize(required);
+  checkpoint_detail::PreallocatedWriter out(std::span<std::uint8_t>(bytes.data(), bytes.size()));
+  write(out);
+  out.require_complete();
+}
+
+/// Artifact-derived maximum POPSAND5 shape.  It carries character and term counts only: computing a
 /// resource ceiling must never first allocate the potentially large scientific vectors it is meant
 /// to bound.
 template <int Dim>
@@ -886,13 +1080,186 @@ struct AmrProgramAcceptedStateCapacity {
   std::size_t face_stage_characters = 0;
   std::size_t face_payload_terms = 0;
   std::size_t interface_fragment_count = 0;
+  /// Per-fragment route identity bound supplied by the prepared interface scheduler.
+  std::size_t interface_identity_characters = 0;
+  /// Aggregate graph/rate/application identity arena bound supplied by the dense ledger.
+  std::size_t interface_program_identity_characters = 0;
+  /// Per-fragment generated stage identity bound.
+  std::size_t interface_stage_characters = 0;
+  std::size_t interface_payload_terms = 0;
+  std::size_t synchronization_event_count = 0;
+  std::size_t synchronization_phase_characters = 0;
+};
+
+template <int Dim>
+std::size_t serialized_amr_program_accepted_state_capacity(
+    const AmrProgramAcceptedStateCapacity<Dim>& capacity);
+
+/// Cold-only storage authority for the mutable POPSAND5 assembly image.  This deliberately
+/// preserves the configured wire bounds instead of deriving capacity from whichever accepted
+/// window happens to be nonempty at bind.  Face slots remain topology-routed by the prepared
+/// ledgers; their global count is retained only as a cross-check, never as an axis distribution.
+/// Authenticated count-only shape for the host-resident AMR forward peak.  This is deliberately
+/// a data carrier, rather than a second estimate hidden in a resource-plan caller: the same
+/// sealed counts are consumed by the materialization prototype and by the detached B gate.
+/// ``multifab_value_counts`` has one named entry for each retained field family (seven engine,
+/// two mutable rollback and four hot-workspace images), so a future change must add a family
+/// explicitly instead of silently changing an arithmetic multiplier.
+struct PreparedAmrForwardStorageCounts {
+  enum MultiFabFamily : std::size_t {
+    engine_candidate,
+    engine_older,
+    engine_staged,
+    engine_accepted_history_older,
+    engine_accepted_history_newer,
+    engine_candidate_history_older,
+    engine_candidate_history_newer,
+    mutable_accepted_history_older,
+    mutable_accepted_history_newer,
+    hot_workspace_primary,
+    hot_workspace_secondary,
+    hot_workspace_tertiary,
+    hot_workspace_quaternary,
+    multifab_family_count,
+  };
+
+  std::vector<std::uint64_t> level_cell_bounds;
+  std::vector<std::uint64_t> patch_bounds;
+  std::vector<std::uint64_t> parent_child_pair_bounds;
+  std::vector<std::uint64_t> route_bounds;
+  std::vector<std::uint64_t> event_bounds;
+  std::array<std::uint64_t, multifab_family_count> multifab_value_counts{};
+  std::uint64_t face_payload_values = 0;
+  std::uint64_t interface_payload_values = 0;
+  std::uint64_t rank_bound = 0;
+  std::uint64_t tensor_provider_bytes = 0;
+};
+
+/// Exact-family byte receipt paired with ``PreparedAmrForwardStorageCounts``.  Each field is a
+/// distinct resident owner family reported by the concrete walkers; no caller is allowed to use
+/// an opaque safety multiplier in place of one of these entries.
+struct PreparedAmrForwardStorageBytes {
+  std::uint64_t engine = 0;
+  std::uint64_t mutable_state = 0;
+  std::uint64_t hot_workspace = 0;
+  std::uint64_t prepared_coupling = 0;
+  std::uint64_t flux = 0;
+  std::uint64_t effects = 0;
+  std::uint64_t tensor = 0;
+
+  [[nodiscard]] std::uint64_t live_subcycling() const {
+    std::uint64_t total = 0;
+    for (const std::uint64_t value :
+         {engine, mutable_state, hot_workspace, flux, effects, tensor}) {
+      if (value > std::numeric_limits<std::uint64_t>::max() - total)
+        throw std::overflow_error("AMR configured forward storage bytes overflow uint64");
+      total += value;
+    }
+    return total;
+  }
+};
+
+template <int Dim>
+struct AmrProgramAcceptedStateStagingCapacity {
+  std::size_t checkpoint_byte_capacity = 0;
+  std::size_t spatial_contract_characters = 0;
+  std::size_t level_count = 0;
+  std::vector<std::string> logical_clock_identities;
+  std::vector<AmrProgramHistoryDescriptor> histories;
+  std::string temporal_provider_identity;
+  std::size_t temporal_cell_count = 0;
+  std::size_t tagging_hysteresis_bytes = 0;
+  std::size_t history_flux_payload_bytes = 0;
+  std::size_t pending_history_remap_count = 0;
+  std::size_t pending_history_remap_key_characters = 0;
+  std::size_t flux_budget_contract_characters = 0;
+  std::size_t coupling_contract_characters = 0;
+  std::size_t face_fragment_count = 0;
+  std::size_t face_owner_characters = 0;
+  std::size_t face_state_characters = 0;
+  std::size_t face_stage_characters = 0;
+  std::size_t face_payload_terms = 0;
+  std::size_t interface_fragment_count = 0;
   std::size_t interface_identity_characters = 0;
   std::size_t interface_program_identity_characters = 0;
   std::size_t interface_stage_characters = 0;
   std::size_t interface_payload_terms = 0;
   std::size_t synchronization_event_count = 0;
   std::size_t synchronization_phase_characters = 0;
+  /// Authenticated configured-topology storage envelope for the two host-resident images that
+  /// coexist during a forward regrid.  The level bounds deliberately retain both the full-domain
+  /// and unit-patch terms used to construct the byte ceiling; a later Candidate may therefore
+  /// prove its concrete B image without consulting the accepted A facade.
+  std::vector<std::uint64_t> configured_level_cell_bounds;
+  /// P_l: finite patch bound (one full-domain patch plus the unit-patch decomposition), Q_l:
+  /// parent/child patch-pair bound, R_l: route/ledger invocation bound and E_l: two accepted
+  /// synchronization events per block and transition.  Keep them explicit so every future
+  /// storage estimator uses the same authenticated shape instead of reconstructing a divergent
+  /// topology bound.
+  std::vector<std::uint64_t> configured_patch_bounds;
+  std::vector<std::uint64_t> configured_parent_child_pair_bounds;
+  std::vector<std::uint64_t> configured_route_bounds;
+  std::vector<std::uint64_t> configured_event_bounds;
+  std::vector<std::uint64_t> configured_hierarchy_contract_characters_by_level;
+  /// C(n): exact configured storage for one coupling-workspace hierarchy image at depth n.
+  /// It is a scalar receipt only; the concrete accepted/forward/inverse images remain owned by
+  /// PreparedMultiBlockAmrHierarchy and its regrid transactions.
+  std::vector<std::uint64_t> configured_coupling_workspace_bytes_by_level;
+  PreparedAmrForwardStorageCounts configured_forward_storage_counts;
+  PreparedAmrForwardStorageBytes configured_forward_storage_bytes;
+  std::uint64_t configured_live_subcycling_bytes = 0;
+  std::uint64_t configured_forward_snapshot_bytes = 0;
+  std::string configured_subcycling_storage_contract;
+  /// Maximum number of participating ranks accepted by the configured storage contract.  A
+  /// forward topology may shrink but cannot introduce a new rank-local arena shape after seal.
+  std::size_t configured_rank_bound = 0;
+  /// Tensor providers are type-erased; an active provider must declare this exact maximum before
+  /// the forward ceiling can be sealed.  Zero is the canonical inactive-provider value.
+  std::uint64_t configured_tensor_provider_bytes = 0;
+  /// Provider-owned semantic witnesses paired with ``configured_tensor_provider_bytes``.  Both
+  /// are empty for the canonical inactive case.  An active tensor selection must publish both
+  /// contracts before the host can include its bytes in the configured forward ceiling.
+  std::string configured_tensor_provider_request_contract;
+  std::string configured_tensor_provider_limit_contract;
 };
+
+/// Pure projection of the authenticated checkpoint shape into the mutable staging envelope.
+/// Keeping this next to the wire capacity calculation prevents the detached preparation path
+/// from reimplementing POPSAND5 arithmetic.
+template <int Dim>
+[[nodiscard]] AmrProgramAcceptedStateStagingCapacity<Dim>
+amr_program_accepted_state_staging_capacity(const AmrProgramAcceptedStateCapacity<Dim>& capacity,
+                                            std::size_t checkpoint_byte_capacity) {
+  if (checkpoint_byte_capacity < serialized_amr_program_accepted_state_capacity(capacity))
+    throw std::length_error("AMR Program staging capacity is smaller than its POPSAND5 ceiling");
+  AmrProgramAcceptedStateStagingCapacity<Dim> result;
+  result.checkpoint_byte_capacity = checkpoint_byte_capacity;
+  result.spatial_contract_characters = capacity.spatial_contract_characters;
+  result.level_count = capacity.level_count;
+  result.logical_clock_identities = capacity.logical_clock_identities;
+  result.histories = capacity.histories;
+  result.temporal_provider_identity = capacity.temporal_provider_identity;
+  result.temporal_cell_count = capacity.temporal_cell_count;
+  result.tagging_hysteresis_bytes = capacity.tagging_hysteresis_bytes;
+  result.history_flux_payload_bytes = capacity.history_flux_payload_bytes;
+  result.pending_history_remap_count = capacity.pending_history_remap_count;
+  result.pending_history_remap_key_characters = capacity.pending_history_remap_key_characters;
+  result.flux_budget_contract_characters = capacity.flux_budget_contract_characters;
+  result.coupling_contract_characters = capacity.coupling_contract_characters;
+  result.face_fragment_count = capacity.face_fragment_counts[0];
+  result.face_owner_characters = capacity.face_owner_characters;
+  result.face_state_characters = capacity.face_state_characters;
+  result.face_stage_characters = capacity.face_stage_characters;
+  result.face_payload_terms = capacity.face_payload_terms;
+  result.interface_fragment_count = capacity.interface_fragment_count;
+  result.interface_identity_characters = capacity.interface_identity_characters;
+  result.interface_program_identity_characters = capacity.interface_program_identity_characters;
+  result.interface_stage_characters = capacity.interface_stage_characters;
+  result.interface_payload_terms = capacity.interface_payload_terms;
+  result.synchronization_event_count = capacity.synchronization_event_count;
+  result.synchronization_phase_characters = capacity.synchronization_phase_characters;
+  return result;
+}
 
 template <int Dim>
 std::size_t serialized_amr_program_accepted_state_capacity(
@@ -989,14 +1356,17 @@ std::size_t serialized_amr_program_accepted_state_capacity(
   out.size(capacity.interface_fragment_count);
   out.repeated_bytes(capacity.interface_fragment_count,
                      checkpoint_detail::kMinInterfaceFragmentBytes);
-  std::size_t interface_characters = capacity.interface_identity_characters;
-  for (const std::size_t additional :
-       {capacity.interface_program_identity_characters, capacity.interface_stage_characters}) {
-    if (additional > std::numeric_limits<std::size_t>::max() - interface_characters)
-      throw std::length_error("AMR Program interface identity capacity exceeds size_t");
-    interface_characters += additional;
-  }
-  out.repeated_bytes(capacity.interface_fragment_count, interface_characters);
+  // Every interface fragment carries its graph/rate/application identities on the wire.  The
+  // dense ledger may retain these bytes in a shared arena, but POPSAND5 serializes them per
+  // fragment, so the wire ceiling must follow the repeated record shape exactly.
+  std::size_t interface_fragment_characters = capacity.interface_identity_characters;
+  if (capacity.interface_stage_characters >
+      std::numeric_limits<std::size_t>::max() - interface_fragment_characters)
+    throw std::length_error("AMR Program interface identity capacity exceeds size_t");
+  interface_fragment_characters += capacity.interface_stage_characters;
+  out.repeated_bytes(capacity.interface_fragment_count, interface_fragment_characters);
+  // graph/rate/application are already one aggregate arena bound across all fragments.
+  out.repeated_bytes(1, capacity.interface_program_identity_characters);
   out.repeated_bytes(capacity.interface_payload_terms, sizeof(double));
 
   out.size(capacity.synchronization_event_count);

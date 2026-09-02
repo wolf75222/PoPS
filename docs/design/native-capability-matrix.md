@@ -253,10 +253,10 @@ Supported native routes include:
   its separately qualified uniform periodic constant-coefficient route. `GeometricMG` is not an
   alias for the uniform CG backend.
 - Matrix-free Krylov descriptors: CG, BiCGStab, GMRES, Richardson.
-- ProgramContext install on System, and AMR program install when compiled for `target="amr_system"`.
+- ProgramExecutionServices install on System, and AMR program install when compiled for `target="amr_system"`.
 - A native C++ `amr:cell_local_temporal_transport` route partially proves scientific consumption of
   the prepared cell-local executor. `Program.cell_local_time(...)` and generated
-  `AmrProgramContext` code wire the exact bounded route. On an exact-rank host hierarchy it advances
+  `ProgramExecutionServices` code wire the exact bounded route. On an exact-rank host hierarchy it advances
   independent multi-block, multi-level and MPI-owned multi-box state packs with forward Euler and
   publishes one aggregated basis per route into the existing authoritative coarse/fine ledgers only
   at the synchronization barrier. The authored finest-level rung is lifted through integral
@@ -311,7 +311,8 @@ Supported native routes include:
   restored before the provider candidate can be consumed.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
   exact modes advertised by NPZ, ParaView and HDF5, with native Uniform/AMR piece ownership.
-- Runtime accepted-state checkpoint v8 for Uniform and v11 for AMR. The single-file MPI route captures
+- Runtime accepted-state checkpoint v9 for Uniform and v12 for AMR. Versions 8 and 11 are rejected at
+  the live runtime boundary; conversion remains an explicit offline operation. The single-file MPI route captures
   collectively only after every rank agrees on the exact gather-plan identity, agrees again on the
   sealed payload identity, and publishes once on rank 0 with atomic no-clobber semantics. The provider
   authority is resolved into the compiled plan, including the builtin v5 manual route. It persists
@@ -339,9 +340,9 @@ Explicit unsupported rows include:
 - `elliptic:fft_amr`: a global FFT Poisson over a sparse AMR hierarchy stays refused.
   GeometricMG/FAC may host PoissonFFT on the coarsest uniform periodic level only.
 - `checkpoint:parallel_hdf5`: parallel HDF5 is a scientific-output route, not a restartable checkpoint
-  encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use uniform v8 or AMR
-  v11 accepted-state payloads.
-- `checkpoint:amr_dynamic_regrid` is available through the strict v11 accepted-state route. The single
+  encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use Uniform v9 or AMR
+  v12 accepted-state payloads.
+- `checkpoint:amr_dynamic_regrid` is available through the strict v12 accepted-state route. The single
   authenticated artifact carries one exact DistributionMapping and compiled-Program accepted image
   per native rank. `bit_identical=True` therefore requires the recorded rank count. With the default
   non-bit-identical guarantee, `RestoreRecordedHierarchy()` may rematerialize hierarchy ownership and
@@ -471,7 +472,7 @@ incompatible evidence is refused before bind. Historical artifacts may only be c
 explicit offline migration tool that emits a complete current artifact. The one implemented
 checkpoint route accepts only the exact frozen Uniform-v2 schema through
 `pops.codegen.checkpoint_migration`: its schema-4 mapping requires a complete, separately
-authenticated v8 authority and an exhaustive reviewed mapping. The v2 artifact has no auxiliary
+authenticated v9 authority and an exhaustive reviewed mapping. The v2 artifact has no auxiliary
 authority; the authority supplies an empty POPSAUX2 image that the native specialization attests,
 and migration copies it byte-identically without fabricating it from v2. The mapping pins SHA-256
 digests of the exact auxiliary image bytes and binary registry-contract bytes. For the native

@@ -1,21 +1,17 @@
 #ifndef POPS_RUNTIME_PROGRAM_MODULE_METADATA_HPP
 #define POPS_RUNTIME_PROGRAM_MODULE_METADATA_HPP
 
-// GeneratedModule metadata (Spec 2 / ADC-442). A combined model+program ``problem.so`` carries,
-// alongside ``GeneratedProgram`` (the installed step), a ``GeneratedModule`` descriptor: the typed
-// operator registry the Python codegen emits (pops.time.Program._emit_module_metadata) as a set of
-// ``extern "C"`` accessors. This header reads that descriptor from an already-dlopen'd handle, for
-// INTROSPECTION and install-time requirement validation. It is read ONCE at install; the step body
-// never touches it, so operators stay inlined and there is NO string lookup in any hot kernel.
+// Candidate-table module metadata (Spec 2 / ADC-442). The v5 Program candidate carries typed,
+// owner-qualified module records that the host deep-copies before preparation. This header validates
+// those records once at install; the step body never performs a metadata lookup.
 //
-#include <pops/runtime/dynamic/dynlib.hpp>
+#include <pops/runtime/program/owned_program_installation.hpp>
 #include <pops/runtime/program/cell_temporal_partition.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -34,7 +30,7 @@ using OperatorId = std::uint32_t;
 /// Integer id of a state or field space within a module.
 using SpaceId = std::uint32_t;
 
-/// One operator's metadata, as exported by the .so.
+/// One operator's metadata carried by the prepared candidate tables.
 struct OperatorMetadata {
   OperatorId id = 0;
   std::string owner;  ///< canonical model owner
@@ -44,7 +40,7 @@ struct OperatorMetadata {
   std::string requirements;  ///< JSON, e.g. {"kind":"local_source","aux":["grad_x","grad_y"]}
 };
 
-/// The mandatory GeneratedModule descriptor read from a problem.so.
+/// The candidate-table module descriptor.
 struct ModuleMetadata {
   std::vector<OperatorMetadata> operators;
   std::vector<std::string> state_spaces;
@@ -76,137 +72,58 @@ struct ModuleMetadata {
   }
 };
 
-namespace detail {
-
-template <class Fn>
-inline Fn require_module_symbol(pops::dynlib::handle handle, const char* symbol) {
-  auto fn = reinterpret_cast<Fn>(pops::dynlib::sym(handle, symbol));
-  if (fn == nullptr)
-    throw std::runtime_error(std::string("compiled Program metadata symbol '") + symbol +
-                             "' is missing; regenerate the artifact");
-  return fn;
-}
-
-inline std::string require_module_string(const char* (*fn)(int), const char* symbol, int i) {
-  const char* s = fn(i);
-  if (s == nullptr || s[0] == '\0')
-    throw std::runtime_error(std::string("compiled Program metadata symbol '") + symbol +
-                             "' returned an empty value at index " + std::to_string(i));
-  return std::string(s);
-}
-
-inline int require_module_count(pops::dynlib::handle handle, const char* symbol) {
-  using CountFn = int (*)();
-  const CountFn count = require_module_symbol<CountFn>(handle, symbol);
-  const int n = count();
-  constexpr int kMaxMetadataRows = 1 << 20;
-  if (n < 0 || n > kMaxMetadataRows)
-    throw std::runtime_error(std::string("compiled Program metadata symbol '") + symbol +
-                             "' returned invalid count " + std::to_string(n));
-  return n;
-}
-
-/// Read one mandatory owner-qualified state/field-space table.
-inline std::pair<std::vector<std::string>, std::vector<std::string>> module_spaces(
-    pops::dynlib::handle handle, const char* count_symbol, const char* name_symbol,
-    const char* owner_symbol) {
-  using StringFn = const char* (*)(int);
-  const int n = require_module_count(handle, count_symbol);
-  const StringFn name = require_module_symbol<StringFn>(handle, name_symbol);
-  const StringFn owner = require_module_symbol<StringFn>(handle, owner_symbol);
-  std::vector<std::string> names;
-  std::vector<std::string> owners;
-  names.reserve(static_cast<std::size_t>(n));
-  owners.reserve(static_cast<std::size_t>(n));
-  std::set<std::pair<std::string, std::string>> identities;
-  for (int i = 0; i < n; ++i) {
-    std::string current_name = require_module_string(name, name_symbol, i);
-    std::string current_owner = require_module_string(owner, owner_symbol, i);
-    if (!identities.emplace(current_owner, current_name).second)
-      throw std::runtime_error(std::string("compiled Program metadata contains duplicate space '") +
-                               current_owner + "." + current_name + "'");
-    names.push_back(std::move(current_name));
-    owners.push_back(std::move(current_owner));
+/// v5 candidate-table adapter.  Program installation no longer performs per-field symbol lookup;
+/// these conversions consume the host-owned, deep-copied tables assembled before preparation.
+inline ModuleMetadata read_module_metadata(const ProgramInstallationTables& tables) {
+  ModuleMetadata meta;
+  meta.operators.reserve(tables.module_operators.size());
+  for (std::size_t i = 0; i != tables.module_operators.size(); ++i) {
+    const auto& row = tables.module_operators[i];
+    if (row.identity.empty() || row.owner.empty() || row.kind.empty() ||
+        row.requirements.size() < 2 || row.requirements.front() != '{' ||
+        row.requirements.back() != '}')
+      throw std::runtime_error("prepared Program module operator metadata is malformed");
+    meta.operators.push_back({static_cast<OperatorId>(i), row.owner, row.identity, row.kind,
+                              row.signature, row.requirements});
   }
-  return {std::move(names), std::move(owners)};
+  const auto copy_spaces = [](const std::vector<ProgramInstallationTables::Module>& rows,
+                              std::vector<std::string>& names, std::vector<std::string>& owners) {
+    names.reserve(rows.size());
+    owners.reserve(rows.size());
+    std::set<std::pair<std::string, std::string>> seen;
+    for (const auto& row : rows) {
+      if (row.identity.empty() || row.owner.empty() ||
+          !seen.emplace(row.owner, row.identity).second)
+        throw std::runtime_error("prepared Program module space metadata is malformed");
+      names.push_back(row.identity);
+      owners.push_back(row.owner);
+    }
+  };
+  copy_spaces(tables.module_state_spaces, meta.state_spaces, meta.state_space_owners);
+  copy_spaces(tables.module_field_spaces, meta.field_spaces, meta.field_space_owners);
+  return meta;
 }
-
-}  // namespace detail
 
 using ProgramOperatorAuthority = std::array<std::uint64_t, 4>;
 
-/// Read the exact prepared-operator authority table exported by the generated artifact. Both
-/// accessors are mandatory even for a Program with zero prepared operators; malformed, zero, or
-/// duplicate rows fail before the install entry can issue any trusted hot-apply capability.
-inline std::vector<ProgramOperatorAuthority> read_program_operator_authorities(
-    pops::dynlib::handle dl_handle) {
-  if (!pops::dynlib::valid(dl_handle))
-    throw std::runtime_error("compiled Program operator authorities require a valid module handle");
-  const int count =
-      detail::require_module_count(dl_handle, "pops_program_operator_authority_count");
-  using WordFn = std::uint64_t (*)(int, int);
-  const WordFn word =
-      detail::require_module_symbol<WordFn>(dl_handle, "pops_program_operator_authority_word");
-  std::vector<ProgramOperatorAuthority> authorities;
-  authorities.reserve(static_cast<std::size_t>(count));
-  std::set<ProgramOperatorAuthority> unique;
-  for (int index = 0; index < count; ++index) {
-    ProgramOperatorAuthority authority{};
-    for (int lane = 0; lane < 4; ++lane)
-      authority[static_cast<std::size_t>(lane)] = word(index, lane);
-    if (std::all_of(authority.begin(), authority.end(),
-                    [](std::uint64_t value) { return value == 0; }))
-      throw std::runtime_error("compiled Program contains a zero operator authority");
-    if (!unique.insert(authority).second)
-      throw std::runtime_error("compiled Program contains a duplicate operator authority");
-    authorities.push_back(authority);
-  }
-  return authorities;
-}
-
-/// Read the exact history rings whose selective replay was proved at Program validation time.
-/// Older or handcrafted modules without either accessor receive no authority (safe Dense-only
-/// behavior); a partial family, malformed count, empty name, or duplicate fails before install.
 using ProgramHistoryReplayAuthority = std::pair<std::string, int>;
 
+inline std::vector<ProgramOperatorAuthority> read_program_operator_authorities(
+    const ProgramInstallationTables& tables) {
+  std::vector<ProgramOperatorAuthority> result;
+  result.reserve(tables.operator_authorities.size());
+  for (const auto& row : tables.operator_authorities)
+    result.push_back({row.words[0], row.words[1], row.words[2], row.words[3]});
+  return result;
+}
+
 inline std::vector<ProgramHistoryReplayAuthority> read_program_history_replay_authorities(
-    pops::dynlib::handle dl_handle) {
-  if (!pops::dynlib::valid(dl_handle))
-    throw std::runtime_error(
-        "compiled Program history replay authorities require a valid module handle");
-  using CountFn = int (*)();
-  using NameFn = const char* (*)(int);
-  using DepthFn = int (*)(int);
-  const auto count = reinterpret_cast<CountFn>(
-      pops::dynlib::sym(dl_handle, "pops_program_history_replay_authority_count"));
-  const auto name = reinterpret_cast<NameFn>(
-      pops::dynlib::sym(dl_handle, "pops_program_history_replay_authority_name"));
-  const auto depth = reinterpret_cast<DepthFn>(
-      pops::dynlib::sym(dl_handle, "pops_program_history_replay_authority_depth"));
-  if (count == nullptr && name == nullptr && depth == nullptr)
-    return {};
-  if (count == nullptr || name == nullptr || depth == nullptr)
-    throw std::runtime_error(
-        "compiled Program history replay authority table is incomplete; regenerate the artifact");
-  const int n =
-      detail::require_module_count(dl_handle, "pops_program_history_replay_authority_count");
-  std::vector<ProgramHistoryReplayAuthority> authorities;
-  authorities.reserve(static_cast<std::size_t>(n));
-  std::set<ProgramHistoryReplayAuthority> unique;
-  for (int index = 0; index < n; ++index) {
-    std::string ring =
-        detail::require_module_string(name, "pops_program_history_replay_authority_name", index);
-    const int ring_depth = depth(index);
-    if (ring_depth < 2)
-      throw std::runtime_error("compiled Program history replay authority '" + ring +
-                               "' has invalid depth " + std::to_string(ring_depth));
-    ProgramHistoryReplayAuthority authority{std::move(ring), ring_depth};
-    if (!unique.insert(authority).second)
-      throw std::runtime_error("compiled Program contains duplicate history replay authority '" +
-                               authority.first + "' at depth " + std::to_string(authority.second));
-    authorities.push_back(std::move(authority));
-  }
-  return authorities;
+    const ProgramInstallationTables& tables) {
+  std::vector<ProgramHistoryReplayAuthority> result;
+  result.reserve(tables.history_authorities.size());
+  for (const auto& row : tables.history_authorities)
+    result.push_back({row.identity, static_cast<int>(row.depth)});
+  return result;
 }
 
 /// Frozen checkpoint shape exported by an AMR Program before its install-time prelude allocates a
@@ -237,167 +154,36 @@ struct ProgramCheckpointMetadata {
                          const ProgramCheckpointMetadata&) = default;
 };
 
-/// Read the mandatory, frozen POPSAND4 shape metadata.  Unlike selective-replay authority this
-/// family has no legacy-absence meaning: an AMR artifact without it cannot prove a pre-allocation
-/// checkpoint resource bound and is rejected before its installer runs.
-inline ProgramCheckpointMetadata read_program_checkpoint_metadata(pops::dynlib::handle dl_handle) {
-  if (!pops::dynlib::valid(dl_handle))
-    throw std::runtime_error("compiled Program checkpoint metadata requires a valid module handle");
-  using StringFn = const char* (*)(int);
-  using IntegerFn = int (*)(int);
-  const int history_count =
-      detail::require_module_count(dl_handle, "pops_program_checkpoint_history_count");
-  const StringFn history_name =
-      detail::require_module_symbol<StringFn>(dl_handle, "pops_program_checkpoint_history_name");
-  const IntegerFn history_owner =
-      detail::require_module_symbol<IntegerFn>(dl_handle, "pops_program_checkpoint_history_owner");
-  const StringFn history_state = detail::require_module_symbol<StringFn>(
-      dl_handle, "pops_program_checkpoint_history_state_identity");
-  const StringFn history_space = detail::require_module_symbol<StringFn>(
-      dl_handle, "pops_program_checkpoint_history_space_identity");
-  const StringFn history_clock = detail::require_module_symbol<StringFn>(
-      dl_handle, "pops_program_checkpoint_history_clock_identity");
-  const StringFn history_interpolation = detail::require_module_symbol<StringFn>(
-      dl_handle, "pops_program_checkpoint_history_interpolation_identity");
-  const IntegerFn history_depth =
-      detail::require_module_symbol<IntegerFn>(dl_handle, "pops_program_checkpoint_history_depth");
-  const IntegerFn history_components = detail::require_module_symbol<IntegerFn>(
-      dl_handle, "pops_program_checkpoint_history_components");
-
+inline ProgramCheckpointMetadata read_program_checkpoint_metadata(
+    const ProgramInstallationTables& tables) {
   ProgramCheckpointMetadata metadata;
-  metadata.histories.reserve(static_cast<std::size_t>(history_count));
-  std::set<std::string> history_names;
-  for (int index = 0; index < history_count; ++index) {
-    ProgramCheckpointHistoryMetadata row;
-    row.name =
-        detail::require_module_string(history_name, "pops_program_checkpoint_history_name", index);
-    row.program_owner = history_owner(index);
-    row.state_identity = detail::require_module_string(
-        history_state, "pops_program_checkpoint_history_state_identity", index);
-    row.space_identity = detail::require_module_string(
-        history_space, "pops_program_checkpoint_history_space_identity", index);
-    row.clock_identity = detail::require_module_string(
-        history_clock, "pops_program_checkpoint_history_clock_identity", index);
-    row.interpolation_identity = detail::require_module_string(
-        history_interpolation, "pops_program_checkpoint_history_interpolation_identity", index);
-    row.depth = history_depth(index);
-    row.components = history_components(index);
-    if (row.program_owner < 0 || row.depth < 2 || row.components == 0 || row.components < -1)
-      throw std::runtime_error(
-          "compiled Program checkpoint history metadata has an invalid owner/depth/components");
-    if (!history_names.insert(row.name).second)
-      throw std::runtime_error(
-          "compiled Program checkpoint metadata contains a duplicate history identity");
-    metadata.histories.push_back(std::move(row));
+  std::set<std::string> clocks;
+  std::set<std::string> identities;
+  for (const auto& row : tables.checkpoint_shape) {
+    if (row.identity.empty() || row.owner.empty() || row.space.empty() || row.clock.empty() ||
+        row.transfer.empty() || row.block < 0 || row.retained_images < 2 || row.components == 0 ||
+        row.components < -1 || !identities.emplace(row.identity).second)
+      throw std::runtime_error("prepared Program checkpoint metadata is malformed");
+    metadata.histories.push_back({row.identity, row.block, row.owner, row.space, row.clock,
+                                  row.transfer, static_cast<int>(row.retained_images),
+                                  row.components});
+    clocks.emplace(row.clock);
   }
+  // POPSAND5 serializes history descriptors in canonical identity order.  The ABI table is a
+  // set-valued declaration and may be emitted in authoring order, so normalize it once at the
+  // metadata boundary before it becomes the frozen capacity/shape authority.  Without this sort,
+  // equivalent Programs could prepare identical rings yet fail installation solely because the
+  // generated declaration order differed from the map-backed accepted runtime order.
   std::sort(metadata.histories.begin(), metadata.histories.end(),
-            [](const auto& left, const auto& right) { return left.name < right.name; });
-
-  const int clock_count =
-      detail::require_module_count(dl_handle, "pops_program_checkpoint_logical_clock_count");
-  if (clock_count < 1)
-    throw std::runtime_error(
-        "compiled Program checkpoint metadata requires at least one logical clock");
-  const StringFn logical_clock = detail::require_module_symbol<StringFn>(
-      dl_handle, "pops_program_checkpoint_logical_clock_identity");
-  metadata.logical_clock_identities.reserve(static_cast<std::size_t>(clock_count));
-  std::set<std::string> logical_clocks;
-  for (int index = 0; index < clock_count; ++index) {
-    std::string identity = detail::require_module_string(
-        logical_clock, "pops_program_checkpoint_logical_clock_identity", index);
-    if (!logical_clocks.insert(identity).second)
-      throw std::runtime_error(
-          "compiled Program checkpoint metadata contains a duplicate logical clock");
-    metadata.logical_clock_identities.push_back(std::move(identity));
-  }
-  std::sort(metadata.logical_clock_identities.begin(), metadata.logical_clock_identities.end());
-
-  using TemporalProviderFn = const char* (*)();
-  using TemporalCellCapacityFn = std::uint64_t (*)();
-  const TemporalProviderFn temporal_provider = detail::require_module_symbol<TemporalProviderFn>(
-      dl_handle, "pops_program_checkpoint_temporal_provider_identity");
-  const TemporalCellCapacityFn temporal_cells =
-      detail::require_module_symbol<TemporalCellCapacityFn>(
-          dl_handle, "pops_program_checkpoint_temporal_cell_capacity");
-  const TemporalCellCapacityFn temporal_cells_per_topology_cell =
-      detail::require_module_symbol<TemporalCellCapacityFn>(
-          dl_handle, "pops_program_checkpoint_temporal_cells_per_topology_cell");
-  const char* provider = temporal_provider();
-  if (provider == nullptr || provider[0] == '\0')
-    throw std::runtime_error("compiled Program checkpoint temporal provider identity is empty");
-  metadata.temporal_provider_identity = provider;
-  const std::uint64_t cells = temporal_cells();
-  if constexpr (sizeof(std::size_t) < sizeof(std::uint64_t))
-    if (cells > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
-      throw std::overflow_error(
-          "compiled Program checkpoint temporal cell capacity exceeds size_t");
-  metadata.temporal_cell_capacity = static_cast<std::size_t>(cells);
-  const std::uint64_t cells_per_topology_cell = temporal_cells_per_topology_cell();
-  if constexpr (sizeof(std::size_t) < sizeof(std::uint64_t))
-    if (cells_per_topology_cell >
-        static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
-      throw std::overflow_error("compiled Program temporal topology multiplier exceeds size_t");
-  metadata.temporal_cells_per_topology_cell = static_cast<std::size_t>(cells_per_topology_cell);
-  const bool global = metadata.temporal_provider_identity == kGlobalTemporalPartitionProvider;
-  if ((global &&
-       (metadata.temporal_cell_capacity != 0 || metadata.temporal_cells_per_topology_cell != 0)) ||
-      (!global && metadata.temporal_cells_per_topology_cell == 0))
-    throw std::runtime_error(
-        "compiled Program temporal checkpoint metadata has an inconsistent shape family");
+            [](const ProgramCheckpointHistoryMetadata& left,
+               const ProgramCheckpointHistoryMetadata& right) { return left.name < right.name; });
+  metadata.logical_clock_identities.assign(clocks.begin(), clocks.end());
+  // An empty checkpoint table still carries the global temporal partition.  Cell-local lowering
+  // will replace this with its explicit provider/capacity record in the candidate resource plan.
+  metadata.temporal_provider_identity = kGlobalTemporalPartitionProvider;
+  metadata.temporal_cell_capacity = 0;
+  metadata.temporal_cells_per_topology_cell = 0;
   return metadata;
-}
-
-/// Read and authenticate the complete GeneratedModule metadata from an already-open problem module.
-/// Every count/accessor family is mandatory; missing, empty, duplicated, or malformed metadata fails
-/// before the program can be installed.
-inline ModuleMetadata read_module_metadata(pops::dynlib::handle dl_handle) {
-  if (!pops::dynlib::valid(dl_handle))
-    throw std::runtime_error("compiled Program metadata requires a valid module handle");
-  ModuleMetadata meta;
-  using StringFn = const char* (*)(int);
-  const int n = detail::require_module_count(dl_handle, "pops_module_operator_count");
-  const StringFn owner =
-      detail::require_module_symbol<StringFn>(dl_handle, "pops_module_operator_owner");
-  const StringFn name =
-      detail::require_module_symbol<StringFn>(dl_handle, "pops_module_operator_name");
-  const StringFn kind =
-      detail::require_module_symbol<StringFn>(dl_handle, "pops_module_operator_kind");
-  const StringFn signature =
-      detail::require_module_symbol<StringFn>(dl_handle, "pops_module_operator_signature");
-  const StringFn requirements =
-      detail::require_module_symbol<StringFn>(dl_handle, "pops_module_operator_requirements");
-  if (n > 0) {
-    meta.operators.reserve(static_cast<std::size_t>(n));
-  }
-  std::set<std::pair<std::string, std::string>> operator_identities;
-  for (int i = 0; i < n; ++i) {
-    OperatorMetadata op;
-    op.id = static_cast<OperatorId>(i);
-    op.owner = detail::require_module_string(owner, "pops_module_operator_owner", i);
-    op.name = detail::require_module_string(name, "pops_module_operator_name", i);
-    op.kind = detail::require_module_string(kind, "pops_module_operator_kind", i);
-    op.signature = detail::require_module_string(signature, "pops_module_operator_signature", i);
-    op.requirements =
-        detail::require_module_string(requirements, "pops_module_operator_requirements", i);
-    if (op.requirements.front() != '{' || op.requirements.back() != '}')
-      throw std::runtime_error("compiled Program operator '" + op.owner + "." + op.name +
-                               "' has malformed requirements metadata");
-    if (!operator_identities.emplace(op.owner, op.name).second)
-      throw std::runtime_error("compiled Program metadata contains duplicate operator '" +
-                               op.owner + "." + op.name + "'");
-    meta.operators.push_back(std::move(op));
-  }
-  auto states =
-      detail::module_spaces(dl_handle, "pops_module_state_space_count",
-                            "pops_module_state_space_name", "pops_module_state_space_owner");
-  meta.state_spaces = std::move(states.first);
-  meta.state_space_owners = std::move(states.second);
-  auto fields =
-      detail::module_spaces(dl_handle, "pops_module_field_space_count",
-                            "pops_module_field_space_name", "pops_module_field_space_owner");
-  meta.field_spaces = std::move(fields.first);
-  meta.field_space_owners = std::move(fields.second);
-  return meta;
 }
 
 /// Collect the quoted tokens of a JSON string array keyed by @p key inside the operator's flat

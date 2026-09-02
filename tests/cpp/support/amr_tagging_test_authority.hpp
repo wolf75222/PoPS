@@ -98,7 +98,8 @@ template <int Dim>
 inline void install_prepared_refine_coarsen_threshold(
     AmrSystem<Dim>& system, const PreparedNamedThresholdTag& refine,
     const PreparedNamedThresholdTag& coarsen,
-    std::string provider_identity = "test::prepared-refine-coarsen-threshold@1") {
+    std::string provider_identity = "test::prepared-refine-coarsen-threshold@1",
+    int min_cycles = 0) {
   if (refine.relation != PreparedThresholdRelation::Above ||
       coarsen.relation != PreparedThresholdRelation::Below || refine.block != coarsen.block ||
       refine.variable != coarsen.variable)
@@ -110,7 +111,7 @@ inline void install_prepared_refine_coarsen_threshold(
       {"state", "state"}, {state, state}, {refine.block, coarsen.block},
       {refine.variable, coarsen.variable}, {-1, -1}, {POPS_TAGGING_ABOVE_V1, POPS_TAGGING_BELOW_V1},
       {refine.threshold, coarsen.threshold}, {-1, -1}, {}, {POPS_TAGGING_ABOVE_V1}, {0},
-      {POPS_TAGGING_BELOW_V1}, {1}, 0, "hold", "error", "test::prepared-tagging-clock",
+      {POPS_TAGGING_BELOW_V1}, {1}, min_cycles, "hold", "error", "test::prepared-tagging-clock",
       std::move(provider_identity));
 }
 

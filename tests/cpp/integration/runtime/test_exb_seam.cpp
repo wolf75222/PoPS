@@ -7,18 +7,22 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include "native_dso_compiler.hpp"
+#include "program_v5_fixture.hpp"
 #include "test_harness.hpp"  // pops::test::Checker
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/physics/bricks/bricks.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
-#include <pops/runtime/program/program_context.hpp>
+#include <pops/runtime/program/program_execution_services.hpp>
 #include <pops/runtime/system.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
 
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
+#include <functional>
 #include <memory>
 #include <numeric>
 #include <string>
@@ -47,6 +51,21 @@ constexpr const char* kFieldSlot = "tests.exb-seam/electric-field@1";
 constexpr const char* kFieldOutputOwner = "tests.exb-seam/electric-output@1";
 
 using ExbModel = CompositeModel<CartesianExBDriftND<kNativeDimension>, NoSource, BackgroundDensity>;
+using ExbProgramExecutionServices = runtime::program::ProgramExecutionServices<kNativeDimension>;
+using ExbProgramCallback = std::function<void(ExbProgramExecutionServices&, double)>;
+
+std::vector<ExbProgramCallback>& exb_program_callbacks() {
+  static std::vector<ExbProgramCallback> callbacks;
+  return callbacks;
+}
+
+extern "C" void pops_test_exb_program_callback(std::uint64_t identifier, void* opaque, double dt) {
+  auto& callbacks = exb_program_callbacks();
+  if (opaque == nullptr || identifier >= callbacks.size())
+    throw std::logic_error("ABI-v5 ExB callback received an invalid dispatch token");
+  callbacks.at(static_cast<std::size_t>(identifier))(
+      *static_cast<ExbProgramExecutionServices*>(opaque), dt);
+}
 
 // Smooth periodic density bump, matching the Python seam's perturbation around one.
 std::vector<double> seed_density(int n) {
@@ -165,26 +184,53 @@ ExbAuxiliaryAuthority install_exb_auxiliary_authority(System<kNativeDimension>& 
 }
 
 void install_exb_forward_euler_program(System<kNativeDimension>& system) {
-  std::vector<int> block_map(static_cast<std::size_t>(system.n_blocks()));
-  std::iota(block_map.begin(), block_map.end(), 0);
-  system.set_program_block_map(block_map);
-
-  runtime::program::ProgramContext<kNativeDimension> context(&system);
-  context.configure_primary_clock("test.clock.macro");
-  context.install([context](double dt) {
+  const auto state = system.block_state(0);
+  if (!state)
+    throw std::logic_error("ExB Program fixture requires one materialized state");
+  using Resource = test::program_v5::CallbackProgramResource;
+  const std::vector<Resource> resources{
+      {Resource::Kind::rhs, 0, 0, 0, -1, static_cast<std::uint32_t>(state->ncomp()),
+       static_cast<std::uint32_t>(state->ghosts()[0])},
+      {Resource::Kind::state, 1, 0, 0, -1, static_cast<std::uint32_t>(state->ncomp()),
+       static_cast<std::uint32_t>(state->ghosts()[0])},
+  };
+  auto& callbacks = exb_program_callbacks();
+  const auto callback_identifier = static_cast<std::uint64_t>(callbacks.size());
+  callbacks.emplace_back([](ExbProgramExecutionServices& context, double dt) {
     context.begin_step(dt);
     context.set_stage_time(0, 1);
     MultiFab<kNativeDimension>& state = context.state(0);
-    (void)consume_solve_outcome(context.solve_fields_from_blocks_at(
-        context.boundary_evaluation_point(900), 900, kFieldSlot, {{0, &state}}));
+    (void)consume_solve_outcome(context.solve_fields());
 
-    MultiFab<kNativeDimension>& residual = context.rhs_scratch(1000, 0, state);
-    MultiFab<kNativeDimension>& next = context.scratch_state(2000, 0, state);
+    MultiFab<kNativeDimension>& residual = context.rhs_scratch(0, 0, state);
+    MultiFab<kNativeDimension>& next = context.scratch_state(1, 0, state);
     context.rhs_into(0, state, residual, 3000);
     context.lincomb(next, Real(1), state, static_cast<Real>(dt), residual);
     context.lincomb(state, Real(0), state, Real(1), next);
   });
-  system.set_program_block_map(block_map);
+#if !defined(POPS_TEST_TMPDIR)
+  throw std::runtime_error("ABI-v5 ExB fixture requires POPS_TEST_TMPDIR");
+#else
+  static std::size_t fixture_index = 0;
+  const std::string prefix =
+      std::string(POPS_TEST_TMPDIR) + "/exb_program_callback_" + std::to_string(++fixture_index);
+  const std::string source_path = prefix + ".cpp";
+  const std::string library_path = prefix + ".so";
+  {
+    std::ofstream source(source_path);
+    if (!source)
+      throw std::runtime_error("cannot create ABI-v5 ExB fixture source");
+    source << test::program_v5::callback_program_source(
+        callback_identifier, "tests.exb-seam/forward-euler@1", "test.clock.macro", {kBlock},
+        resources, "pops_test_exb_program_callback", "uniform");
+  }
+  const auto compiled = test::native_dso::compile_shared(source_path, library_path);
+  if (!compiled.ok) {
+    test::native_dso::report_compile_failure("test_exb_seam", compiled);
+    throw std::runtime_error("ABI-v5 ExB fixture compilation failed");
+  }
+  system.install_program(library_path);
+#endif
 }
 
 }  // namespace
@@ -233,7 +279,11 @@ static int pops_run_test_exb_seam(int argc, char** argv) {
   // grad(phi), B provider image is visible both to this initial CFL query and to the Program RHS.
   sys.refresh_auxiliary({"tests.exb-seam", 0, 0, 0, 0, 0, 0,
                          runtime::system::AuxiliaryEvaluationEvent::initialization});
-  (void)consume_solve_outcome(sys.solve_fields_from_state(kField, 0, sys.block_state(0)));
+  const MultiFab<kNativeDimension> state = [&] {
+    const auto state_view = sys.block_state(0);
+    return MultiFab<kNativeDimension>(*state_view.get());
+  }();
+  (void)consume_solve_outcome(sys.solve_fields_from_state(kField, 0, state));
 
   const double m0 = sys.mass(kBlock);
   chk(std::isfinite(m0), "initial mass finite");

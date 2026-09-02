@@ -10,10 +10,12 @@
 #include <pops/mesh/storage/fab.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -161,6 +163,49 @@ class MultiFab {
   void set_val(Real value) {
     for (fab_type& local_fab : fabs_)
       local_fab.set_val(value);
+  }
+
+  /// Exact payload arena retained by the local Fabs.  Metadata vectors deliberately remain
+  /// outside this numeric payload query; callers that own those vectors account their capacities
+  /// under their own Program resident family.
+  [[nodiscard]] std::uint64_t resident_payload_bytes() const {
+    std::uint64_t result = 0;
+    for (const fab_type& local_fab : fabs_) {
+      const auto count = static_cast<std::uint64_t>(local_fab.storage().extent(0));
+      if (count > std::numeric_limits<std::uint64_t>::max() / sizeof(Real) ||
+          result > std::numeric_limits<std::uint64_t>::max() - count * sizeof(Real))
+        throw std::overflow_error("pops::MultiFab resident payload size overflows uint64");
+      result += count * sizeof(Real);
+    }
+    return result;
+  }
+
+  /// Dynamic storage retained by this field, excluding the MultiFab object itself.  This is the
+  /// companion to ``resident_payload_bytes()`` for owners that must account the copied layout,
+  /// distribution and local-index image as well as the local Fab arena.  A containing
+  /// ``vector<MultiFab>`` remains responsible for its own element array, so this method never
+  /// charges ``sizeof(MultiFab)``.  Kokkos/control-block allocator bookkeeping is intentionally
+  /// outside the logical resident-storage contract; RankSpace payload is represented by each Fab.
+  [[nodiscard]] std::uint64_t resident_storage_bytes() const {
+    const auto checked_add = [](std::uint64_t& total, std::uint64_t value) {
+      if (value > std::numeric_limits<std::uint64_t>::max() - total)
+        throw std::overflow_error("pops::MultiFab resident storage size overflows uint64");
+      total += value;
+    };
+    const auto vector_bytes = [](const auto& values) -> std::uint64_t {
+      using value_type = typename std::remove_reference_t<decltype(values)>::value_type;
+      if (values.capacity() > std::numeric_limits<std::uint64_t>::max() / sizeof(value_type))
+        throw std::overflow_error("pops::MultiFab resident metadata size overflows uint64");
+      return static_cast<std::uint64_t>(values.capacity()) * sizeof(value_type);
+    };
+    std::uint64_t result = resident_payload_bytes();
+    checked_add(result, vector_bytes(layout_.boxes()));
+    checked_add(result, vector_bytes(distribution_.layout().boxes()));
+    checked_add(result, vector_bytes(distribution_.owners()));
+    checked_add(result, vector_bytes(local_global_indices_));
+    checked_add(result, vector_bytes(global_to_local_));
+    checked_add(result, vector_bytes(fabs_));
+    return result;
   }
 
  private:

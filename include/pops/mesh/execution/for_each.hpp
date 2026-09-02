@@ -24,11 +24,15 @@
 #include <pops/mesh/index/box.hpp>
 #include <pops/mesh/index/entity_index.hpp>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>  // std::int64_t: cell counts (LLP64 portability, no-op on LP64)
 #include <cstdlib>  // getenv / strtol: overridable serial fallback threshold (#165)
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <type_traits>  // std::is_same_v: compile-time guard host vs device exec space (#165)
+#include <utility>
 
 #ifndef POPS_HAS_KOKKOS
 // PoPS is KOKKOS-ONLY: there is no longer a standalone OpenMP backend nor a manual host loop
@@ -70,6 +74,17 @@ namespace pops {
 // resweep the threshold without recompiling; default 4096 (same fork/join vs computation
 // trade-off as the old if() clause of the removed OpenMP path).
 namespace detail {
+
+// Kokkos' public launch overloads take ``const std::string&``.  Passing a string literal creates a
+// temporary label on every dispatch; some supported standard-library ABIs allocate even for these
+// short labels.  These process-lifetime labels are constructed before the runtime enters a prepared
+// Program step and are reused by every rank/dimension/backend invocation.
+inline const std::string kForEachKernelLabel{"pops_each"};
+inline const std::string kReduceSumKernelLabel{"pops_rsum"};
+inline const std::string kReduceSumPartialsLabel{"pops_rsum_partials"};
+inline const std::string kReduceMaxKernelLabel{"pops_rmax"};
+inline const std::string kReductionFenceLabel{"pops_reduce_fence"};
+
 inline std::int64_t foreach_serial_threshold() {
   static const std::int64_t thr = []() -> std::int64_t {
     if (const char* e = std::getenv("POPS_FOREACH_SERIAL_THRESHOLD")) {
@@ -84,6 +99,155 @@ inline std::int64_t foreach_serial_threshold() {
 }
 
 }  // namespace detail
+
+/// Cold-owned workspace for allocation-free prepared reductions.  The fixed, contiguous partition
+/// makes the result independent of Kokkos worker scheduling: each kernel iteration owns one partial,
+/// and the host combines partials in ascending ordinal order.  The partials live in the execution
+/// space's memory and the fold buffer lives in HostSpace, so the exact same prepared route works for
+/// Serial/OpenMP as well as Cuda/HIP.
+///
+/// A prepared workspace has one exact capacity witness.  It must be prepared before a hot path and
+/// rejects a non-empty box whose point count exceeds that witness instead of growing storage while a
+/// Program transaction is active.  SUM and MAX both use parallel_for (never parallel_reduce) on the
+/// prepared route, followed by a resident fence and a preallocated device-to-host copy.
+template <class ExecutionSpace>
+class PreparedCellSumReduction {
+ public:
+  static_assert(Kokkos::is_execution_space<ExecutionSpace>::value,
+                "PoPS reduction requires a Kokkos execution-space instance");
+
+  using execution_space = ExecutionSpace;
+  using memory_space = typename ExecutionSpace::memory_space;
+  using partial_view_type = Kokkos::View<Real*, memory_space>;
+  using host_fold_view_type = Kokkos::View<Real*, Kokkos::HostSpace>;
+
+  PreparedCellSumReduction() = default;
+  PreparedCellSumReduction(const PreparedCellSumReduction&) = default;
+  PreparedCellSumReduction& operator=(const PreparedCellSumReduction&) = default;
+
+  /// Moving a prepared workspace only transfers already-owned Kokkos view handles and scalar
+  /// witnesses.  It never creates storage; the explicit noexcept contract is required by the
+  /// aggregate transaction images, which publish by swapping their prepared workspaces.
+  PreparedCellSumReduction(PreparedCellSumReduction&& other) noexcept
+      : partials_(std::move(other.partials_)),
+        host_fold_(std::move(other.host_fold_)),
+        maximum_points_(std::exchange(other.maximum_points_, 0)),
+        partial_count_(std::exchange(other.partial_count_, 0)),
+        prepared_(std::exchange(other.prepared_, false)) {}
+
+  PreparedCellSumReduction& operator=(PreparedCellSumReduction&& other) noexcept {
+    if (this != &other) {
+      partials_ = std::move(other.partials_);
+      host_fold_ = std::move(other.host_fold_);
+      maximum_points_ = std::exchange(other.maximum_points_, 0);
+      partial_count_ = std::exchange(other.partial_count_, 0);
+      prepared_ = std::exchange(other.prepared_, false);
+    }
+    return *this;
+  }
+
+  friend void swap(PreparedCellSumReduction& left, PreparedCellSumReduction& right) noexcept {
+    using std::swap;
+    swap(left.partials_, right.partials_);
+    swap(left.host_fold_, right.host_fold_);
+    swap(left.maximum_points_, right.maximum_points_);
+    swap(left.partial_count_, right.partial_count_);
+    swap(left.prepared_, right.prepared_);
+  }
+
+  /// Allocate and bind the exact largest non-empty cell domain this workspace may reduce.
+  void prepare(const ExecutionSpace& execution, std::int64_t maximum_points) {
+    if (maximum_points <= 0)
+      throw std::invalid_argument("prepared cell reduction requires a non-empty capacity");
+    if (static_cast<std::uintmax_t>(maximum_points) >
+        static_cast<std::uintmax_t>(std::numeric_limits<std::size_t>::max()))
+      throw std::overflow_error("prepared cell reduction capacity exceeds size_t");
+    if (prepared_) {
+      if (maximum_points_ != maximum_points)
+        throw std::logic_error("prepared cell reduction capacity cannot change after preparation");
+      return;
+    }
+
+    detail::ensure_kokkos_initialized();
+    const int reported_concurrency = execution.concurrency();
+    const std::int64_t requested_partials =
+        reported_concurrency > 0 ? static_cast<std::int64_t>(reported_concurrency) : 1;
+    partial_count_ = std::min(maximum_points, requested_partials);
+    if (partial_count_ <= 0)
+      throw std::logic_error("prepared cell reduction computed an invalid partial count");
+
+    const auto count = static_cast<std::size_t>(partial_count_);
+    partials_ = partial_view_type(detail::kReduceSumPartialsLabel, count);
+    host_fold_ = host_fold_view_type(detail::kReduceSumPartialsLabel, count);
+    maximum_points_ = maximum_points;
+
+    // These cold fills warm the resident allocation/copy paths.  The prepared dispatch below uses
+    // the same execution instance and explicit fence label, so no default Kokkos operation can
+    // allocate an internal reducer or completion object in a candidate step.
+    Kokkos::deep_copy(execution, partials_, Real{0});
+    Kokkos::deep_copy(execution, host_fold_, Real{0});
+    const auto warm_partials = partials_;
+    Kokkos::parallel_for(
+        detail::kReduceSumPartialsLabel,
+        Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(execution, 0,
+                                                                             partial_count_),
+        KOKKOS_LAMBDA(const std::int64_t partial_ordinal) {
+          warm_partials(static_cast<std::size_t>(partial_ordinal)) = Real{0};
+        });
+    execution.fence(detail::kReductionFenceLabel);
+    Kokkos::deep_copy(execution, host_fold_, partials_);
+    execution.fence(detail::kReductionFenceLabel);
+    prepared_ = true;
+  }
+
+  [[nodiscard]] bool accepts(std::int64_t point_count) const noexcept {
+    return prepared_ && point_count >= 0 && point_count <= maximum_points_ && partial_count_ > 0 &&
+           partials_.extent(0) == static_cast<std::size_t>(partial_count_) &&
+           host_fold_.extent(0) == static_cast<std::size_t>(partial_count_);
+  }
+
+  [[nodiscard]] bool is_prepared() const noexcept { return prepared_; }
+
+  [[nodiscard]] std::int64_t maximum_points() const noexcept { return maximum_points_; }
+
+  [[nodiscard]] std::int64_t partial_count() const noexcept { return partial_count_; }
+
+  /// Exact logical resident arena owned by this prepared reduction: one execution-space partial
+  /// vector and one host fold vector.  Kokkos allocation headers are infrastructure overhead;
+  /// the Program receipt charges the payload capacity it explicitly requests.
+  [[nodiscard]] std::uint64_t resident_storage_bytes() const noexcept {
+    if (!prepared_ || partial_count_ <= 0)
+      return 0;
+    return static_cast<std::uint64_t>(partial_count_) * sizeof(Real) * 2U;
+  }
+
+ private:
+  template <class ES, int Dim, class F>
+  friend Real for_each_cell_reduce_sum(const ES&, const PreparedCellSumReduction<ES>&,
+                                       const Box<Dim>&, F);
+  template <class ES, int Dim, class F>
+  friend Real for_each_cell_reduce_max(const ES&, const PreparedCellSumReduction<ES>&,
+                                       const Box<Dim>&, F);
+
+  [[nodiscard]] const partial_view_type& partials() const noexcept { return partials_; }
+
+  [[nodiscard]] const host_fold_view_type& host_fold() const noexcept { return host_fold_; }
+
+  partial_view_type partials_{};
+  host_fold_view_type host_fold_{};
+  std::int64_t maximum_points_ = 0;
+  std::int64_t partial_count_ = 0;
+  bool prepared_ = false;
+};
+
+/// Generic spelling for code that does not care whether its prepared operation is SUM or MAX.
+/// Keep PreparedCellSumReduction as the ABI/source-compatible public name used by installed
+/// Program workspaces.
+template <class ExecutionSpace>
+using PreparedCellReduction = PreparedCellSumReduction<ExecutionSpace>;
+
+template <class ExecutionSpace>
+using PreparedCellMaxReduction = PreparedCellSumReduction<ExecutionSpace>;
 
 // ---------------------------------------------------------------------------
 // Data residency: sync_host() / sync_device(). The COHERENCE seam, the
@@ -178,8 +342,8 @@ POPS_HD CellIndex<Dim> cell_index_from_ordinal(const Index<Dim>& lower, const Ex
 }
 
 template <class ExecutionSpace, int Dim, class F>
-void launch_index_space(const ExecutionSpace& execution, const Box<Dim>& box, const char* label,
-                        F f) {
+void launch_index_space(const ExecutionSpace& execution, const Box<Dim>& box,
+                        const std::string& label, F f) {
   static_assert(Kokkos::is_execution_space<ExecutionSpace>::value,
                 "PoPS iteration requires a Kokkos execution-space instance");
   const Index<Dim> lower = box.lo;
@@ -218,16 +382,25 @@ Box<Dim> face_box(const Box<Dim>& cells) {
   return faces;
 }
 
-/// Submit a cell kernel to an explicit Kokkos execution-space instance.  Unlike the default host
-/// convenience overload, this path never substitutes a synchronous small-box loop, so task-graph
-/// and accelerator-stream ordering remain owned by the supplied instance.
+/// Submit a cell kernel to an explicit Kokkos execution-space instance.  Threaded and accelerator
+/// spaces always retain their supplied dispatch/stream ordering.  The synchronous Serial default
+/// is the sole exception: its one-worker ordinal loop is the same execution order and avoids
+/// constructing Kokkos policy/profiling state inside an accepted Program step.
 template <class ExecutionSpace, int Dim, class F>
 void for_each_cell(const ExecutionSpace& execution, const Box<Dim>& b, F f) {
   if (b.empty())
     return;
   detail::require_iterable_box(b);
   detail::ensure_kokkos_initialized();
-  detail::launch_index_space(execution, b, "pops_for_each_cell", f);
+#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::DefaultExecutionSpace>) {
+    const Extent<Dim> extent = b.extent();
+    for (std::int64_t ordinal = 0; ordinal < b.numPts(); ++ordinal)
+      f(detail::cell_index_from_ordinal(b.lo, extent, ordinal));
+    return;
+  }
+#endif
+  detail::launch_index_space(execution, b, detail::kForEachKernelLabel, f);
 }
 
 /// Applies @p f to every index of a compile-time-ranked box.  The functor is passed by value and
@@ -249,8 +422,7 @@ void for_each_cell(const Box<Dim>& b, F f) {
     }
   }
   detail::ensure_kokkos_initialized();
-  const Kokkos::DefaultExecutionSpace execution{};
-  for_each_cell(execution, b, f);
+  for_each_cell(detail::default_execution_space(), b, f);
 }
 
 /// Submit the product of a compile-time-ranked integer box.  This is the non-cell semantic facade
@@ -279,8 +451,11 @@ void for_each_face(const Box<Dim>& cells, F f) {
   for_each_cell(faces, detail::FaceKernelAdapter<Dim, Axis, F>{f});
 }
 
-/// SUM reduction on an explicit execution-space instance.  The returned scalar establishes the
-/// completion dependency for this reduction only; unrelated submitted work remains unfenced.
+/// Cold convenience SUM reduction on an explicit execution-space instance.
+///
+/// HostSpace callers on a prepared hot route must use the overload taking
+/// PreparedCellSumReduction.  This compatibility overload preserves the ordinary Kokkos reduction
+/// route for cold and non-prepared call sites, including the unchanged device path.
 template <class ExecutionSpace, int Dim, class F>
 Real for_each_cell_reduce_sum(const ExecutionSpace& execution, const Box<Dim>& b, F f) {
   static_assert(Kokkos::is_execution_space<ExecutionSpace>::value,
@@ -292,14 +467,97 @@ Real for_each_cell_reduce_sum(const ExecutionSpace& execution, const Box<Dim>& b
   Real result = 0;
   const Index<Dim> lower = b.lo;
   const Extent<Dim> extent = b.extent();
-  Kokkos::parallel_reduce(
-      "pops_reduce_sum_index",
-      Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(execution, 0,
-                                                                           b.numPts()),
-      KOKKOS_LAMBDA(const std::int64_t ordinal, Real& accumulator) {
-        accumulator += f(detail::cell_index_from_ordinal(lower, extent, ordinal));
-      },
-      Kokkos::Sum<Real>{result});
+#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::DefaultExecutionSpace>) {
+    for (std::int64_t ordinal = 0; ordinal < b.numPts(); ++ordinal)
+      result += f(detail::cell_index_from_ordinal(lower, extent, ordinal));
+    return result;
+  }
+#endif
+  const auto policy = Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(
+      execution, 0, b.numPts());
+  const auto kernel = KOKKOS_LAMBDA(const std::int64_t ordinal, Real& accumulator) {
+    accumulator += f(detail::cell_index_from_ordinal(lower, extent, ordinal));
+  };
+  if constexpr (std::is_same_v<typename ExecutionSpace::memory_space, Kokkos::HostSpace>) {
+    // Kokkos fences scalar reducer results with an internal long string literal, constructing an
+    // allocating ``std::string`` per dispatch.  A non-owning rank-zero result view suppresses that
+    // implicit fence; the resident label below provides the exact same completion boundary.
+    Kokkos::View<Real, Kokkos::HostSpace> result_view(&result);
+    Kokkos::parallel_reduce(detail::kReduceSumKernelLabel, policy, kernel,
+                            Kokkos::Sum<Real, Kokkos::HostSpace>{result_view});
+    execution.fence(detail::kReductionFenceLabel);
+  } else {
+    Kokkos::parallel_reduce(detail::kReduceSumKernelLabel, policy, kernel,
+                            Kokkos::Sum<Real>{result});
+  }
+  return result;
+}
+
+/// Allocation-free prepared SUM reduction on an explicit execution-space instance.  Every backend
+/// uses the same fixed partition and parallel_for route; the only host operation after the fence is
+/// the deterministic fold of the resident HostSpace buffer.
+template <class ExecutionSpace, int Dim, class F>
+Real for_each_cell_reduce_sum(const ExecutionSpace& execution,
+                              const PreparedCellSumReduction<ExecutionSpace>& prepared,
+                              const Box<Dim>& b, F f) {
+  static_assert(Kokkos::is_execution_space<ExecutionSpace>::value,
+                "PoPS reduction requires a Kokkos execution-space instance");
+  if (b.empty())
+    return Real(0);
+  if (!prepared.is_prepared())
+    throw std::logic_error("prepared cell SUM workspace is not prepared");
+  detail::require_iterable_box(b);
+  detail::ensure_kokkos_initialized();
+  const std::int64_t point_count = b.numPts();
+  if (!prepared.accepts(point_count))
+    throw std::logic_error(
+        "prepared cell SUM workspace capacity does not match the requested cell domain");
+
+  const Index<Dim> lower = b.lo;
+#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
+  // The Serial backend has exactly one ordered worker.  Reusing the prepared reduction's device
+  // arena would still construct a RangePolicy and profiled fence strings for every accepted
+  // reduction, although its result is the same scalar fold.  Keep device and threaded backends
+  // on the fixed-partition route below; only the synchronous default backend takes this direct,
+  // allocation-free fold.
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::DefaultExecutionSpace>) {
+    Real result = Real(0);
+    const Extent<Dim> serial_extent = b.extent();
+    for (std::int64_t ordinal = 0; ordinal < point_count; ++ordinal)
+      result += f(detail::cell_index_from_ordinal(lower, serial_extent, ordinal));
+    return result;
+  }
+#endif
+  // A one-point host reduction is already exact and has no ordering to preserve.  Dispatching it
+  // through Kokkos creates a RangePolicy and two profiled fence labels on Serial/OpenMP even
+  // though the prepared workspace is otherwise allocation-free.  Device spaces retain the
+  // explicit reduction path because their captured view may not be host-accessible.
+  if constexpr (std::is_same_v<typename ExecutionSpace::memory_space, Kokkos::HostSpace>) {
+    if (point_count == 1)
+      return f(lower);
+  }
+  const Extent<Dim> extent = b.extent();
+  const auto partials = prepared.partials();
+  const std::int64_t partial_count = prepared.partial_count();
+  const auto policy = Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(
+      execution, 0, partial_count);
+  Kokkos::parallel_for(
+      detail::kReduceSumKernelLabel, policy, KOKKOS_LAMBDA(const std::int64_t partial_ordinal) {
+        const std::int64_t begin = point_count * partial_ordinal / partial_count;
+        const std::int64_t end = point_count * (partial_ordinal + 1) / partial_count;
+        Real partial = Real(0);
+        for (std::int64_t ordinal = begin; ordinal < end; ++ordinal)
+          partial += f(detail::cell_index_from_ordinal(lower, extent, ordinal));
+        partials(static_cast<std::size_t>(partial_ordinal)) = partial;
+      });
+  execution.fence(detail::kReductionFenceLabel);
+  Kokkos::deep_copy(execution, prepared.host_fold(), partials);
+  execution.fence(detail::kReductionFenceLabel);
+
+  Real result = Real(0);
+  for (std::int64_t partial_ordinal = 0; partial_ordinal < partial_count; ++partial_ordinal)
+    result += prepared.host_fold()(static_cast<std::size_t>(partial_ordinal));
   return result;
 }
 
@@ -309,8 +567,7 @@ Real for_each_cell_reduce_sum(const Box<Dim>& b, F f) {
   if (b.empty())
     return Real(0);
   detail::ensure_kokkos_initialized();
-  const Kokkos::DefaultExecutionSpace execution{};
-  return for_each_cell_reduce_sum(execution, b, f);
+  return for_each_cell_reduce_sum(detail::default_execution_space(), b, f);
 }
 
 /// MAX reduction on an explicit execution-space instance.
@@ -325,16 +582,111 @@ Real for_each_cell_reduce_max(const ExecutionSpace& execution, const Box<Dim>& b
   Real result = std::numeric_limits<Real>::lowest();
   const Index<Dim> lower = b.lo;
   const Extent<Dim> extent = b.extent();
-  Kokkos::parallel_reduce(
-      "pops_reduce_max_index",
-      Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(execution, 0,
-                                                                           b.numPts()),
-      KOKKOS_LAMBDA(const std::int64_t ordinal, Real& accumulator) {
-        const Real value = f(detail::cell_index_from_ordinal(lower, extent, ordinal));
-        if (value > accumulator)
-          accumulator = value;
-      },
-      Kokkos::Max<Real>{result});
+#if defined(KOKKOS_ENABLE_OPENMP) && defined(_OPENMP)
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::OpenMP>) {
+#pragma omp parallel for reduction(max : result) schedule(static)
+    for (std::int64_t ordinal = 0; ordinal < b.numPts(); ++ordinal)
+      result = std::max(result, f(detail::cell_index_from_ordinal(lower, extent, ordinal)));
+    return result;
+  }
+#endif
+#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::DefaultExecutionSpace>) {
+    for (std::int64_t ordinal = 0; ordinal < b.numPts(); ++ordinal)
+      result = std::max(result, f(detail::cell_index_from_ordinal(lower, extent, ordinal)));
+    return result;
+  }
+#endif
+  const auto policy = Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(
+      execution, 0, b.numPts());
+  const auto kernel = KOKKOS_LAMBDA(const std::int64_t ordinal, Real& accumulator) {
+    const Real value = f(detail::cell_index_from_ordinal(lower, extent, ordinal));
+    if (value > accumulator)
+      accumulator = value;
+  };
+  if constexpr (std::is_same_v<typename ExecutionSpace::memory_space, Kokkos::HostSpace>) {
+    // Kokkos::parallel_reduce still builds an internal completion-label string for a host MAX,
+    // even when its result is an unmanaged view.  MAX is associative and exact, so use the
+    // public atomic path on the preallocated scalar and retain the explicit resident fence.
+    Kokkos::View<Real, Kokkos::HostSpace> result_view(&result);
+    Kokkos::parallel_for(
+        detail::kReduceMaxKernelLabel, policy, KOKKOS_LAMBDA(const std::int64_t ordinal) {
+          Kokkos::atomic_max(&result_view(),
+                             f(detail::cell_index_from_ordinal(lower, extent, ordinal)));
+        });
+    execution.fence(detail::kReductionFenceLabel);
+  } else {
+    Kokkos::parallel_reduce(detail::kReduceMaxKernelLabel, policy, kernel,
+                            Kokkos::Max<Real>{result});
+  }
+  return result;
+}
+
+/// Allocation-free prepared MAX reduction on an explicit execution-space instance.  MAX uses the
+/// same deterministic partition as SUM and an ordered host fold, so it never needs an atomic or a
+/// backend reducer temporary on the prepared route.
+template <class ExecutionSpace, int Dim, class F>
+Real for_each_cell_reduce_max(const ExecutionSpace& execution,
+                              const PreparedCellSumReduction<ExecutionSpace>& prepared,
+                              const Box<Dim>& b, F f) {
+  static_assert(Kokkos::is_execution_space<ExecutionSpace>::value,
+                "PoPS reduction requires a Kokkos execution-space instance");
+  if (b.empty())
+    return Real(0);
+  if (!prepared.is_prepared())
+    throw std::logic_error("prepared cell MAX workspace is not prepared");
+  detail::require_iterable_box(b);
+  detail::ensure_kokkos_initialized();
+  const std::int64_t point_count = b.numPts();
+  if (!prepared.accepts(point_count))
+    throw std::logic_error(
+        "prepared cell MAX workspace capacity does not match the requested cell domain");
+
+  const Index<Dim> lower = b.lo;
+#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
+  // See the prepared SUM route above.  With one Serial worker this is the same ordered MAX
+  // reduction, without per-call Kokkos policy/fence profiling allocations.
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::DefaultExecutionSpace>) {
+    Real result = std::numeric_limits<Real>::lowest();
+    const Extent<Dim> serial_extent = b.extent();
+    for (std::int64_t ordinal = 0; ordinal < point_count; ++ordinal)
+      result = std::max(result, f(detail::cell_index_from_ordinal(lower, serial_extent, ordinal)));
+    return result;
+  }
+#endif
+  const Extent<Dim> extent = b.extent();
+#if defined(KOKKOS_ENABLE_OPENMP) && defined(_OPENMP)
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::OpenMP>) {
+    Real result = std::numeric_limits<Real>::lowest();
+#pragma omp parallel for reduction(max : result) schedule(static)
+    for (std::int64_t ordinal = 0; ordinal < point_count; ++ordinal)
+      result = std::max(result, f(detail::cell_index_from_ordinal(lower, extent, ordinal)));
+    return result;
+  }
+#endif
+  const auto partials = prepared.partials();
+  const std::int64_t partial_count = prepared.partial_count();
+  const auto policy = Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(
+      execution, 0, partial_count);
+  Kokkos::parallel_for(
+      detail::kReduceMaxKernelLabel, policy, KOKKOS_LAMBDA(const std::int64_t partial_ordinal) {
+        const std::int64_t begin = point_count * partial_ordinal / partial_count;
+        const std::int64_t end = point_count * (partial_ordinal + 1) / partial_count;
+        Real partial = std::numeric_limits<Real>::lowest();
+        for (std::int64_t ordinal = begin; ordinal < end; ++ordinal) {
+          const Real value = f(detail::cell_index_from_ordinal(lower, extent, ordinal));
+          if (value > partial)
+            partial = value;
+        }
+        partials(static_cast<std::size_t>(partial_ordinal)) = partial;
+      });
+  execution.fence(detail::kReductionFenceLabel);
+  Kokkos::deep_copy(execution, prepared.host_fold(), partials);
+  execution.fence(detail::kReductionFenceLabel);
+
+  Real result = std::numeric_limits<Real>::lowest();
+  for (std::int64_t partial_ordinal = 0; partial_ordinal < partial_count; ++partial_ordinal)
+    result = std::max(result, prepared.host_fold()(static_cast<std::size_t>(partial_ordinal)));
   return result;
 }
 
@@ -344,8 +696,7 @@ Real for_each_cell_reduce_max(const Box<Dim>& b, F f) {
   if (b.empty())
     return Real(0);
   detail::ensure_kokkos_initialized();
-  const Kokkos::DefaultExecutionSpace execution{};
-  return for_each_cell_reduce_max(execution, b, f);
+  return for_each_cell_reduce_max(detail::default_execution_space(), b, f);
 }
 
 template <class ExecutionSpace, int Dim, class F>

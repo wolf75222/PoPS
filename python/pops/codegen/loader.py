@@ -23,7 +23,7 @@ class CompiledProblem(CompiledProblemDumpMixin):
     simulation from it with ``pops.bind(compiled, ...)`` (ADC-523). The concrete
     class stays off the top-level surface; callers consume the authenticated object returned by
     ``pops.compile`` through its inspection protocol. The bound Program drives
-    ``sim.step(dt)`` entirely in C++ via ``ProgramContext``.
+    ``sim.step(dt)`` entirely in C++ via ``ProgramExecutionServices``.
 
     The ``.so`` is compiled against the pops headers with the SAME Kokkos
     toolchain as the loaded _pops module (cf. ``pops_loader_build_flags``),

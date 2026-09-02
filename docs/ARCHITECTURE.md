@@ -61,7 +61,7 @@ flowchart TD
     timed["numerics/time<br/>SSPRK/IMEX/Lie/Strang IR,<br/>AMR reflux helpers"]
     amr["amr<br/>hierarchy, cluster,<br/>regrid, tag_box"]
     coupling["coupling<br/>AmrCouplerMP, AmrSystemCoupler,<br/>coupled sources"]
-    runtime["runtime<br/>System, AmrSystem,<br/>ProgramContext, loaders"]
+    runtime["runtime<br/>System, AmrSystem,<br/>ProgramExecutionServices, loaders"]
     diagnostics["diagnostics<br/>instance reports + fallback counters"]
   end
 
@@ -178,9 +178,13 @@ non-owning host/device view. `comm` ([`comm.hpp`](../include/pops/parallel/comm.
 provides rank/size and collectives. Halo exchange and field algebra orchestrate these seams.
 
 **Time / coupling.** Production composition is authored only through `pops.Program`. The
-immutable Python `ProgramGraph` is the sole temporal IR. C++ executes the lowered graph
-through [`ProgramContext<Dim>`](../include/pops/runtime/program/program_context.hpp) and
-[`AmrProgramContext<Dim>`](../include/pops/runtime/program/amr_program_context.hpp).
+immutable Python `ProgramGraph` is the sole temporal IR. C++ executes every Uniform and AMR
+lowering through the single
+[`ProgramExecutionServices<Dim>`](../include/pops/runtime/program/program_execution_services.hpp)
+authority.
+That is the only public Program execution root: its authenticated AMR backend and 23
+`detail/program_execution_services_amr_*.hpp` authorities are installed as private support headers,
+not as a second public AMR context.
 Exact-ranked SSPRK objects, IMEX, and low-level `lie_step` / `strang_step` helpers remain
 C++ bricks; they do not choose a production stepper. `System<Dim>` and `AmrSystem<Dim>` own
 field preparation, residual assembly, and state publication. There is no generic
@@ -286,7 +290,7 @@ same ranked domain over a hierarchy. `AmrSystemConfig<Dim>` adds:
 `Geometry::refine(r)` and `Box<Dim>::refine(r)` preserve the physical extent and refine the
 index space. A coarse cell becomes an `r`-block of fine indices; `coarsen(r)` is a floor
 division of each corner. Multi-block runs co-locate species on a shared hierarchy (same
-`BoxArray`, same distribution, same `dx` per level). `AmrProgramContext` compares the
+`BoxArray`, same distribution, same `dx` per level). `ProgramExecutionServices` compares the
 accepted macro-step with the prepared interval, then calls the spatial
 `AmrRuntime::regrid()` primitive when due. `AmrRuntime` does not decide cadence.
 
@@ -321,7 +325,7 @@ The mechanics live under
 [`amr_reflux_mf.hpp`](../include/pops/numerics/time/amr/reflux/amr_reflux_mf.hpp).
 [`amr_subcycling.hpp`](../include/pops/numerics/time/amr/levels/amr_subcycling.hpp)
 provides prepared hierarchy storage and spatial transfer/reflux helpers. Neither header
-owns a temporal loop. `ProgramGraph`, executed through `AmrProgramContext`, determines
+owns a temporal loop. `ProgramGraph`, executed through `ProgramExecutionServices`, determines
 every stage, substep, and catch-up.
 
 Three objects share the work:
@@ -336,7 +340,7 @@ Three objects share the work:
   edge strips. The Program flux ledger owns time integration of those strips.
 
 For a ratio-2 spatial interface, the restriction of a fine edge flux is the average of the
-two sub-faces. `AmrProgramContext` then accumulates that spatial result with the
+two sub-faces. `ProgramExecutionServices` then accumulates that spatial result with the
 graph-authored local time step and RK/IMEX coefficient. A rejected attempt discards the
 candidate state and the corresponding ledger together.
 
@@ -399,7 +403,7 @@ Strang and Lie composition are Program macros (`pops.lib.time.strang` / `lie`). 
 explicit sub-flows into the same IR.
 
 On the adaptive hierarchy, `AmrSystem::step` opens one accepted-step transaction and
-invokes the Program through `AmrProgramContext`. `AmrRuntime` owns layouts, states, field
+invokes the Program through `ProgramExecutionServices`. `AmrRuntime` owns layouts, states, field
 solves, residuals, tagging, transfers, and reflux services. It does not choose a temporal
 method. A due regrid rebuilds the shared topology from the union of tagging predicates.
 `advance_hierarchy` walks the authored parent/child clock relations, refluxes coarse/fine
@@ -440,9 +444,10 @@ numerical parity of catalog-selected templates on CPU/Serial.
 `test_amr_compiled_model` validates hierarchy installation. This is a test oracle, not a
 second public registration route.
 
-The repo-local scientific campaign under [`verification/`](../verification/README.md)
-measures orders, conservation, phase, symmetry, and AMR interface errors against external
-oracles. It is distinct from the fast-test catalogue.
+The source-owned executable inventory in [`tests/test_manifest.toml`](../tests/test_manifest.toml)
+and the closed manifests in [`tests/gates`](../tests/gates) authenticate runtime conformance.
+Scientific application campaigns remain in `adc_cases`; the repository-local performance
+protocols are catalogued by [`benchmarks/manifest.toml`](../benchmarks/manifest.toml).
 
 ## Backends
 
@@ -606,7 +611,7 @@ include/pops/
   coupling/source/    coupled sources and CouplingOperator
   coupling/system/    AmrSystemCoupler (shared hierarchy layout auth)
   coupling/amr/       AmrCouplerMP, AmrRegridCoupler
-  runtime/program/    ProgramContext / AmrProgramContext (native Program execution)
+  runtime/program/    ProgramExecutionServices (native Uniform + AMR Program execution)
   runtime/system/     System internals: blocks, field solvers, aux
   runtime/amr/        AmrRuntime, tensor FAC, tagging/reflux components
   runtime/config/     spatial_domain, manifests, generated catalog + ABI

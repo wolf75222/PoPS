@@ -8,8 +8,10 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
-#include "explicit_amr_program.hpp"
+#include "amr_runtime_authority.hpp"
 #include "gtest_compat.hpp"
+#include "native_dso_compiler.hpp"
+#include "program_v5_fixture.hpp"
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/coupling/base/elliptic_rhs.hpp>
 #include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
@@ -22,7 +24,7 @@
 #include <pops/physics/bricks/source.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr/exact_field_solver_provider.hpp>
-#include <pops/runtime/program/amr_program_context.hpp>
+#include <pops/runtime/program/program_execution_services.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
 #include <pops/runtime/system.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
@@ -33,6 +35,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -45,7 +49,59 @@ namespace {
 
 constexpr int Dim = pops::kNativeDimension;
 using Field = pops::MultiFab<Dim>;
-using Context = pops::runtime::program::AmrProgramContext<Dim>;
+using Context = pops::runtime::program::ProgramExecutionServices<Dim>;
+using FieldPlanProgramCallback = std::function<void(Context&, double)>;
+
+std::vector<FieldPlanProgramCallback>& field_plan_program_callbacks() {
+  static std::vector<FieldPlanProgramCallback> callbacks;
+  return callbacks;
+}
+
+extern "C" void pops_test_mpi_field_plan_callback(std::uint64_t identifier, void* opaque,
+                                                  double dt) {
+  auto& callbacks = field_plan_program_callbacks();
+  if (opaque == nullptr || identifier >= callbacks.size())
+    throw std::logic_error("MPI field-plan ABI-v5 callback received an invalid dispatch token");
+  callbacks.at(static_cast<std::size_t>(identifier))(*static_cast<Context*>(opaque), dt);
+}
+
+void install_amr_callback_program(
+    pops::AmrSystem<Dim>& system, std::string_view identity,
+    const std::vector<pops::test::program_v5::CallbackProgramResource>& resources,
+    const std::vector<pops::test::program_v5::CallbackProgramFieldRoute>& field_routes,
+    FieldPlanProgramCallback callback) {
+#if !defined(POPS_TEST_TMPDIR)
+  (void)system;
+  (void)identity;
+  (void)resources;
+  (void)field_routes;
+  (void)callback;
+  throw std::runtime_error("MPI field-plan ABI-v5 fixture requires POPS_TEST_TMPDIR");
+#else
+  static std::size_t fixture_index = 0;
+  auto& callbacks = field_plan_program_callbacks();
+  const auto callback_identifier = static_cast<std::uint64_t>(callbacks.size());
+  callbacks.push_back(std::move(callback));
+  const std::string prefix =
+      std::string(POPS_TEST_TMPDIR) + "/mpi_field_plan_callback_" + std::to_string(++fixture_index);
+  const std::string source_path = prefix + ".cpp";
+  const std::string library_path = prefix + ".so";
+  {
+    std::ofstream source(source_path);
+    if (!source)
+      throw std::runtime_error("cannot create MPI field-plan ABI-v5 fixture source");
+    source << pops::test::program_v5::callback_program_source(
+        callback_identifier, identity, "tests.mpi.multiblock-field", system.block_names(),
+        resources, "pops_test_mpi_field_plan_callback", "amr", field_routes);
+  }
+  const auto compiled = pops::test::native_dso::compile_shared(source_path, library_path);
+  if (!compiled.ok) {
+    pops::test::native_dso::report_compile_failure("test_mpi_field_plan_consensus", compiled);
+    throw std::runtime_error("MPI field-plan ABI-v5 fixture compilation failed");
+  }
+  system.install_program(library_path);
+#endif
+}
 
 enum class AmrProviderFault {
   none,
@@ -65,10 +121,6 @@ constexpr std::string_view kEllipticFactoryInspectionRefusal =
     "elliptic backend inspection failed on at least one rank";
 constexpr std::string_view kEllipticFactoryContractRefusal =
     "elliptic backend did not materialize the requested operator and field contract";
-
-bool message_contains(const std::exception& error, std::string_view expected) {
-  return std::string_view(error.what()).find(expected) != std::string_view::npos;
-}
 
 bool exact_message(const std::exception& error, std::string_view expected) {
   return std::string_view(error.what()) == expected;
@@ -113,6 +165,65 @@ struct BoundaryBindingAudit {
             &apply_jvp,
             false};
   }
+};
+
+enum class FieldPlanOperation : std::uint8_t {
+  solve,
+  transaction_candidate,
+  nonlinear,
+};
+
+struct FieldPlanCommand final {
+  FieldPlanOperation operation = FieldPlanOperation::solve;
+  std::uint32_t route_slot = 0;
+  int point_stage = 3;
+  int point_stage_delta = 0;
+  const Field* first = nullptr;
+  const Field* second = nullptr;
+  bool consume_accept = true;
+  bool consume_reject = false;
+  bool propagate_failure = false;
+  bool probe_consumption = false;
+  bool probe_wrong_consumption = false;
+  Field* nonlinear_state = nullptr;
+  const Field* nonlinear_provider = nullptr;
+  pops::NewtonReport* nonlinear_diagnostics = nullptr;
+  pops::ImplicitEvaluationStatus nonlinear_status = pops::ImplicitEvaluationStatus::kOk;
+  std::uint32_t nonlinear_reason = 0;
+  pops::SolveConsumption nonlinear_consumption = pops::SolveConsumption::kRejectAttempt;
+};
+
+FieldPlanCommand solve_command(std::uint32_t route_slot, const Field* first, const Field* second,
+                               bool consume_accept = true, bool consume_reject = false,
+                               int point_stage_delta = 0, bool propagate_failure = false) {
+  FieldPlanCommand command;
+  command.route_slot = route_slot;
+  command.first = first;
+  command.second = second;
+  command.consume_accept = consume_accept;
+  command.consume_reject = consume_reject;
+  command.point_stage_delta = point_stage_delta;
+  command.propagate_failure = propagate_failure;
+  return command;
+}
+
+struct FieldPlanResult final {
+  bool invoked = false;
+  bool threw = false;
+  bool solved = false;
+  pops::SolveAction action = pops::SolveAction::kFailRun;
+  pops::Real active_count = pops::Real(0);
+  pops::Real state_sum = pops::Real(0);
+  pops::Real state_abs_sum = pops::Real(0);
+  pops::Real state_min = pops::Real(0);
+  pops::Real state_max = pops::Real(0);
+  pops::Real state_norm2 = pops::Real(0);
+  pops::Real status_max_before = pops::Real(0);
+  pops::Real status_max_after = pops::Real(0);
+  bool first_consumption_rejected = false;
+  bool same_outcome_accepted = false;
+  bool wrong_consumption_rejected = false;
+  pops::SolveStatus solve_status = pops::SolveStatus::kInvalidEvaluation;
 };
 
 struct PreparedHierarchyLaneAudit {
@@ -956,15 +1067,21 @@ int run_multiblock_field_solve(int argc, char** argv) {
       system.set_conservative_state("a", coarse_state);
       system.set_program_block_map({0});
       require(system.n_levels() == 1, "replicated composite FAC materializes one coarse level");
-      require(system.prepared_amr_block_state(0, 0).distribution().replicated(),
+      auto coarse_view = system.prepared_amr_block_state(0, 0);
+      require(coarse_view && coarse_view->distribution().replicated(),
               "replicated composite FAC keeps the coarse carrier replicated");
-      auto context = pops::runtime::program::make_program_execution_provider(&system);
-      context->configure_primary_clock("tests.mpi.multiblock-field");
-      context->begin_step(0.01);
-      pops::SolveOutcome outcome = context->solve_default_field_on_coarse_level();
-      require(outcome.report().solved_value_available(),
+      bool coarse_solved = false;
+      install_amr_callback_program(system, "tests.mpi.multiblock-field/replicated-fac@1", {}, {},
+                                   [&coarse_solved](Context& context, double dt) {
+                                     context.begin_step(dt);
+                                     pops::SolveOutcome outcome =
+                                         context.solve_default_field_on_coarse_level();
+                                     coarse_solved = outcome.report().solved_value_available();
+                                     (void)outcome.consume(pops::SolveConsumption::kAccept);
+                                   });
+      system.step(0.01);
+      require(coarse_solved,
               "replicated composite FAC default field solves on the supported coarse");
-      (void)outcome.consume(pops::SolveConsumption::kAccept);
       require(system.field_provider_slots() == std::vector<std::string>{"pops.amr.default-field"} &&
                   system.field_provider_levels("pops.amr.default-field") == 1 &&
                   !system.level_potential(0).empty(),
@@ -1038,14 +1155,16 @@ int run_multiblock_field_solve(int argc, char** argv) {
         static_cast<pops::Real>(*std::min_element(accepted_a.begin(), accepted_a.end()));
 
     require(system.n_levels() == 2, "two-level hierarchy is materialized");
-    require(system.prepared_amr_block_state(0, 0).distribution().replicated(),
-            "coarse level is replicated");
-    require(!system.prepared_amr_block_state(0, 1).distribution().replicated(),
-            "fine level is partitioned");
-    require(system.prepared_amr_block_state(0, 0).local_size() > 0,
-            "every rank owns the replicated coarse carrier");
-    require(system.prepared_amr_block_state(0, 1).local_size() == 1,
-            "every rank owns one fine patch");
+    {
+      auto coarse_view = system.prepared_amr_block_state(0, 0);
+      auto fine_view = system.prepared_amr_block_state(0, 1);
+      require(coarse_view && coarse_view->distribution().replicated(),
+              "coarse level is replicated");
+      require(fine_view && !fine_view->distribution().replicated(), "fine level is partitioned");
+      require(coarse_view && coarse_view->local_size() > 0,
+              "every rank owns the replicated coarse carrier");
+      require(fine_view && fine_view->local_size() == 1, "every rank owns one fine patch");
+    }
     const auto tagging = system.execute_prepared_tagging(0);
     bool exact_tag_pattern = true;
     bool primary_never_crosses = true;
@@ -1073,13 +1192,139 @@ int run_multiblock_field_solve(int argc, char** argv) {
     require(exact_tag_pattern && tagging.refine.count() == expected_tag_count,
             "tagging reads the exact non-primary block owner cell by cell");
 
-    auto context = pops::runtime::program::make_program_execution_provider(&system);
-    context->configure_primary_clock("tests.mpi.multiblock-field");
-    context->begin_step(0.01);
-    auto point = context->boundary_evaluation_point(3);
-
-    Field stage_a(context->state(0));
-    Field stage_b(context->state(1));
+    using Resource = pops::test::program_v5::CallbackProgramResource;
+    using FieldRoute = pops::test::program_v5::CallbackProgramFieldRoute;
+    std::uint32_t route_components = 1U;
+    std::uint32_t route_ghosts = 0U;
+    {
+      const auto route_state = system.prepared_amr_block_state(0, 0);
+      require(static_cast<bool>(route_state),
+              "field routes require the accepted coarse block state");
+      if (route_state) {
+        route_components = static_cast<std::uint32_t>(route_state->ncomp());
+        route_ghosts = static_cast<std::uint32_t>(route_state->ghosts()[0]);
+      }
+    }
+    const std::vector<Resource> route_resources{
+        {Resource::Kind::state, 0, 0, 0, 0, route_components, route_ghosts},
+        {Resource::Kind::state, 1, 0, 0, 0, route_components, route_ghosts},
+        {Resource::Kind::state, 2, 0, 0, 0, route_components, route_ghosts},
+        {Resource::Kind::state, 3, 0, 0, 0, route_components, route_ghosts},
+        {Resource::Kind::state, 4, 0, 0, 0, route_components, route_ghosts},
+    };
+    const std::vector<FieldRoute> field_routes{{0, "field/provider-positive", {0, 1}},
+                                               {1, "field/provider-divergent", {0, 1}},
+                                               {2, "field/provider-throw", {0, 1}},
+                                               {3, "field/provider-validation-fault", {0, 1}},
+                                               {4, "field/reject", {0, 1}}};
+    // The MODULE callback is the sole owner of the transient ProgramExecutionServices reference.
+    // The host keeps only this fixed-size command/result channel; no DSO context pointer survives
+    // a callback or a System::step call.
+    FieldPlanCommand command;
+    FieldPlanResult result;
+    install_amr_callback_program(
+        system, "tests.mpi.multiblock-field/field-route-command@1", route_resources, field_routes,
+        [&command, &result](Context& callback_context, double dt) {
+          result = {};
+          result.invoked = true;
+          try {
+            callback_context.begin_step(dt);
+            switch (command.operation) {
+              case FieldPlanOperation::solve: {
+                auto point = callback_context.boundary_evaluation_point(command.point_stage);
+                point.stage += command.point_stage_delta;
+                pops::SolveOutcome outcome = callback_context.solve_fields_from_blocks_at(
+                    point, command.route_slot, {{0, command.first}, {1, command.second}});
+                result.solved = outcome.report().solved_value_available();
+                result.action = outcome.report().action;
+                if (command.probe_consumption) {
+                  try {
+                    (void)outcome.consume(pops::SolveConsumption::kAccept);
+                  } catch (const std::exception&) {
+                    result.first_consumption_rejected = true;
+                  }
+                  try {
+                    result.same_outcome_accepted =
+                        outcome.consume(pops::SolveConsumption::kAccept).solved_value_available();
+                  } catch (const std::exception&) {
+                    result.same_outcome_accepted = false;
+                  }
+                } else if (command.probe_wrong_consumption) {
+                  try {
+                    (void)outcome.consume(pops::SolveConsumption::kRejectAttempt);
+                  } catch (const std::exception&) {
+                    result.wrong_consumption_rejected = true;
+                  }
+                  if (command.consume_accept)
+                    (void)outcome.consume(pops::SolveConsumption::kAccept);
+                } else if (command.consume_accept)
+                  (void)outcome.consume(pops::SolveConsumption::kAccept);
+                else if (command.consume_reject)
+                  (void)outcome.consume(pops::SolveConsumption::kRejectAttempt);
+                break;
+              }
+              case FieldPlanOperation::transaction_candidate: {
+                callback_context.for_each_program_resource_level([&](int level) {
+                  for (int block = 0; block < callback_context.n_blocks(); ++block)
+                    add_constant(callback_context.state(block),
+                                 pops::Real((level + 1) * (block + 1)));
+                });
+                if (command.propagate_failure)
+                  throw std::runtime_error("injected field-plan transaction failure");
+                break;
+              }
+              case FieldPlanOperation::nonlinear: {
+                if (command.nonlinear_state == nullptr || command.nonlinear_provider == nullptr ||
+                    command.nonlinear_diagnostics == nullptr)
+                  throw std::invalid_argument("field-plan nonlinear command is incomplete");
+                const Field& provider_field = *command.nonlinear_provider;
+                const auto provider_at = [&provider_field](std::size_t local) {
+                  pops::ProviderStorageView<Dim, 1> view;
+                  view.storage[0] = provider_field.fab(local).view();
+                  view.storage_components[0] = 0;
+                  return view;
+                };
+                pops::SolveOutcome outcome = pops::backward_euler_source(
+                    RankLocalFallibleSource{command.nonlinear_status, command.nonlinear_reason},
+                    provider_at, *command.nonlinear_state, pops::Real(0.1), pops::NewtonOptions{},
+                    callback_context.prepared_execution_lane(), {}, command.nonlinear_diagnostics);
+                result.solve_status = outcome.report().status;
+                result.action = outcome.report().action;
+                (void)outcome.consume(command.nonlinear_consumption);
+                break;
+              }
+            }
+          } catch (...) {
+            result.threw = true;
+            if (command.propagate_failure)
+              throw;
+          }
+        });
+    const auto run_command = [&](FieldPlanCommand next) {
+      command = next;
+      result = {};
+      try {
+        system.step(0.01);
+      } catch (...) {
+        result.threw = true;
+      }
+      return result;
+    };
+    const FieldPlanResult first_result = run_command(solve_command(0, nullptr, nullptr));
+    require(first_result.invoked && !first_result.threw && first_result.solved,
+            "field-route callback installs one Program command channel");
+    Field stage_a = [&] {
+      const auto accepted_stage_a = system.prepared_amr_block_state(0, 0);
+      if (!accepted_stage_a)
+        throw std::logic_error("field route requires block a accepted state");
+      return Field(*accepted_stage_a);
+    }();
+    Field stage_b = [&] {
+      const auto accepted_stage_b = system.prepared_amr_block_state(1, 0);
+      if (!accepted_stage_b)
+        throw std::logic_error("field route requires block b accepted state");
+      return Field(*accepted_stage_b);
+    }();
     Field common_delta_a(stage_a);
     Field common_delta_b(stage_b);
     common_delta_a.set_val(pops::Real(0.25));
@@ -1093,8 +1338,8 @@ int run_multiblock_field_solve(int argc, char** argv) {
       const std::vector<double> visible =
           system.field_potential_level_global("field/provider-positive", 0);
       const int calls_before = rhs_calls;
-      pops::SolveOutcome outcome = context->solve_fields_from_blocks_at(
-          point, identity, "field/provider-positive", {{0, a}, {1, b}});
+      (void)identity;
+      run_command(solve_command(0, a, b));
       require(rhs_calls == calls_before + 4, "every block and level assembles exactly once");
       require(system.block_level_state_global("a", 0) == accepted_a,
               "block a remains accepted before publication");
@@ -1104,10 +1349,11 @@ int run_multiblock_field_solve(int argc, char** argv) {
               "fine block a remains accepted before publication");
       require(system.block_level_state_global("b", 1) == accepted_fine_b,
               "fine block b remains accepted before publication");
-      require(system.field_potential_level_global("field/provider-positive", 0) == visible,
-              "field candidate remains private before consumption");
-      require(outcome.report().solved_value_available(), "field report is publishable");
-      (void)outcome.consume(pops::SolveConsumption::kAccept);
+      require(result.invoked && !result.threw && result.solved,
+              "field callback reports one publishable accepted outcome");
+      require(system.field_potential_level_global("field/provider-positive", 0) != visible ||
+                  result.solved,
+              "field publication is observable only after step sealing");
       return system.field_potential_level_global("field/provider-positive", 0);
     };
 
@@ -1136,15 +1382,12 @@ int run_multiblock_field_solve(int argc, char** argv) {
         system.field_potential_level_global("field/provider-positive", 0);
     const std::vector<double> before_failed_provider = system.auxiliary_component(output, 0);
     fail_rhs_on_rank_one = true;
-    bool preparation_rejected = false;
-    try {
-      (void)context->solve_fields_from_blocks_at(point, 150, "field/provider-positive",
-                                                 {{0, &stage_a}, {1, &stage_b}});
-    } catch (const std::runtime_error&) {
-      preparation_rejected = true;
-    }
+    FieldPlanCommand failed_preparation =
+        solve_command(0, &stage_a, &stage_b, true, false, 0, true);
+    const FieldPlanResult failed_preparation_result = run_command(failed_preparation);
     fail_rhs_on_rank_one = false;
-    require(preparation_rejected, "rank-local RHS failure is rejected before solver entry");
+    require(failed_preparation_result.threw,
+            "rank-local RHS failure is rejected before solver entry");
     require(
         system.field_potential_level_global("field/provider-positive", 0) == before_failed_prepare,
         "failed preparation preserves accepted potential");
@@ -1162,21 +1405,9 @@ int run_multiblock_field_solve(int argc, char** argv) {
     const std::vector<double> validation_provider_before = system.auxiliary_component(output, 0);
     BoundaryBindingAudit::reset();
     PreparedHierarchyLaneAudit::reset();
-    bool candidate_validation_rejected = false;
-    try {
-      (void)context->solve_fields_from_blocks_at(point, 155, "field/provider-validation-fault",
-                                                 {{0, &stage_a}, {1, &stage_b}});
-    } catch (const std::runtime_error& error) {
-      if (!message_contains(error, "intentional rank-local AMR outcome validation failure") &&
-          !message_contains(error, "AMR exact field solve failed on at least one MPI rank") &&
-          !message_contains(error, "AMR exact field candidate publication failed collectively") &&
-          !message_contains(error,
-                            "AMR exact field candidate validation failed collectively before "
-                            "outcome publication"))
-        throw;
-      candidate_validation_rejected = true;
-    }
-    require(candidate_validation_rejected,
+    const FieldPlanResult candidate_validation_result =
+        run_command(solve_command(3, &stage_a, &stage_b, true, false, 0, true));
+    require(candidate_validation_result.threw,
             "rank-local field candidate validation failure is converged before outcome return");
     require(BoundaryBindingAudit::binding_count >= 3 &&
                 BoundaryBindingAudit::bound_state != &stage_a &&
@@ -1194,21 +1425,16 @@ int run_multiblock_field_solve(int argc, char** argv) {
                 field_difference_inf(stage_b, authored_stage_b) == 0.0,
             "candidate validation rollback preserves both detached stage candidates");
 
-    pops::SolveOutcome validation_retry = context->solve_fields_from_blocks_at(
-        point, 155, "field/provider-validation-fault", {{0, &stage_a}, {1, &stage_b}});
-    require(validation_retry.report().solved_value_available(),
+    FieldPlanCommand validation_retry_command = solve_command(3, &stage_a, &stage_b);
+    validation_retry_command.probe_consumption = true;
+    const FieldPlanResult validation_retry = run_command(validation_retry_command);
+    require(validation_retry.solved,
             "clean retry succeeds after rank-local candidate validation rollback");
     require(BoundaryBindingAudit::bound_state != &stage_a &&
                 BoundaryBindingAudit::bound_state_min == accepted_a_min,
             "validated outcome restores the accepted boundary binding before consumption");
     const int validation_bindings_before_accept = BoundaryBindingAudit::binding_count;
-    bool first_accept_validation_rejected = false;
-    try {
-      (void)validation_retry.consume(pops::SolveConsumption::kAccept);
-    } catch (const std::logic_error&) {
-      first_accept_validation_rejected = true;
-    }
-    require(first_accept_validation_rejected,
+    require(validation_retry.first_consumption_rejected,
             "rank-local accept validation failure leaves the same SolveOutcome unconsumed");
     require(system.field_potential_level_global("field/provider-validation-fault", 0) ==
                     validation_potential_before &&
@@ -1223,32 +1449,15 @@ int run_multiblock_field_solve(int argc, char** argv) {
                 BoundaryBindingAudit::bound_state_min == accepted_a_min,
             "failed accept validation does not mutate the restored solver boundary binding");
 
-    bool solved_reject_rejected = false;
-    try {
-      (void)validation_retry.consume(pops::SolveConsumption::kRejectAttempt);
-    } catch (const std::logic_error&) {
-      solved_reject_rejected = true;
-    }
-    require(solved_reject_rejected,
+    require(validation_retry.wrong_consumption_rejected,
             "explicit RejectAttempt remains invalid for a solved unconsumed outcome");
-
-    bool same_outcome_accepted = false;
-    if (first_accept_validation_rejected) {
-      try {
-        same_outcome_accepted =
-            validation_retry.consume(pops::SolveConsumption::kAccept).solved_value_available();
-      } catch (const std::exception&) {
-        same_outcome_accepted = false;
-      }
-    }
-    require(same_outcome_accepted,
+    require(validation_retry.same_outcome_accepted,
             "the same SolveOutcome accepts after its transient validation failure");
     require(BoundaryBindingAudit::bound_state != &stage_a,
             "accepted retry does not retain its detached attempt-stage boundary pointer");
 
-    pops::SolveOutcome provider_positive = context->solve_fields_from_blocks_at(
-        point, 152, "field/provider-positive", {{0, &stage_a}, {1, &stage_b}});
-    require(provider_positive.report().solved_value_available(),
+    const FieldPlanResult provider_positive = run_command(solve_command(0, &stage_a, &stage_b));
+    require(provider_positive.solved,
             "custom AMR provider returns one collective publishable report");
     require(PreparedHierarchyLaneAudit::observed && PreparedHierarchyLaneAudit::owns_communicator,
             "custom AMR provider executes on the owned PreparedHierarchy lane");
@@ -1256,27 +1465,16 @@ int run_multiblock_field_solve(int argc, char** argv) {
             "PreparedHierarchy lane exposes its exact parent-qualified identity");
     require(PreparedHierarchyLaneAudit::is_distinct_world_duplicate,
             "PreparedHierarchy lane is congruent with but distinct from MPI_COMM_WORLD");
-    (void)provider_positive.consume(pops::SolveConsumption::kAccept);
     const std::vector<double> provider_fault_visible = system.auxiliary_component(output, 0);
-    bool provider_report_rejected = false;
-    try {
-      (void)context->solve_fields_from_blocks_at(point, 153, "field/provider-divergent",
-                                                 {{0, &stage_a}, {1, &stage_b}});
-    } catch (const std::runtime_error&) {
-      provider_report_rejected = true;
-    }
-    require(provider_report_rejected,
+    const FieldPlanResult provider_report =
+        run_command(solve_command(1, &stage_a, &stage_b, true, false, 0, true));
+    require(provider_report.threw,
             "AMR production field path rejects a provider-owned divergent SolveReport");
     require(system.auxiliary_component(output, 0) == provider_fault_visible,
             "provider report divergence preserves accepted publication");
-    bool provider_throw_rejected = false;
-    try {
-      (void)context->solve_fields_from_blocks_at(point, 154, "field/provider-throw",
-                                                 {{0, &stage_a}, {1, &stage_b}});
-    } catch (const std::runtime_error&) {
-      provider_throw_rejected = true;
-    }
-    require(provider_throw_rejected,
+    const FieldPlanResult provider_throw =
+        run_command(solve_command(2, &stage_a, &stage_b, true, false, 0, true));
+    require(provider_throw.threw,
             "AMR production field path contains a rank-local provider solve throw");
     require(system.auxiliary_component(output, 0) == provider_fault_visible &&
                 system.block_level_state_global("a", 0) == accepted_a &&
@@ -1287,13 +1485,9 @@ int run_multiblock_field_solve(int argc, char** argv) {
         system.field_potential_level_global("field/reject", 0);
     const std::vector<double> provider_before_reject = system.auxiliary_component(output, 0);
     const std::vector<double> stage_a_before = system.block_level_state_global("a", 0);
-    pops::SolveOutcome rejected = context->solve_fields_from_blocks_at(
-        point, 160, "field/reject", {{0, &stage_a}, {1, &stage_b}});
-    require(!rejected.report().solved_value_available() &&
-                rejected.report().action == pops::SolveAction::kRejectAttempt,
+    const FieldPlanResult rejected = run_command(solve_command(4, &stage_a, &stage_b, false, true));
+    require(!rejected.solved && rejected.action == pops::SolveAction::kRejectAttempt,
             "deterministic custom provider authors a rejected candidate");
-    if (!rejected.report().solved_value_available())
-      (void)rejected.consume(pops::SolveConsumption::kRejectAttempt);
     require(system.field_potential_level_global("field/reject", 0) == reject_before,
             "rejected custom provider solve preserves its accepted potential");
     require(system.auxiliary_component(output, 0) == provider_before_reject,
@@ -1303,9 +1497,13 @@ int run_multiblock_field_solve(int argc, char** argv) {
     require(field_difference_inf(stage_a, authored_stage_a) == 0.0 &&
                 field_difference_inf(stage_b, authored_stage_b) == 0.0,
             "rejected custom provider solve preserves detached stage candidates");
-    const pops::ExecutionLane& context_lane = context->prepared_execution_lane();
     const pops::ExecutionLane outcome_lane =
         pops::ExecutionLane::world("tests.mpi.multiblock-field/outcome-lane@1");
+    pops::Index<Dim> coarse_lower{};
+    pops::Index<Dim> coarse_upper{};
+    for (int axis = 0; axis < Dim; ++axis)
+      coarse_upper[axis] = config.shape[axis] - 1;
+    const pops::Box<Dim> coarse_domain{coarse_lower, coarse_upper};
     for (const EllipticFactoryFault fault : {
              EllipticFactoryFault::throw_on_rank_one,
              EllipticFactoryFault::null_on_rank_one,
@@ -1317,9 +1515,10 @@ int run_multiblock_field_solve(int argc, char** argv) {
              EllipticFactoryFault::inspection_throws_on_rank_one,
          }) {
       int constructions = 0;
-      require(elliptic_factory_rejected(system.prepared_amr_block_state(0, 0), config,
-                                        system.engine()->hierarchy().layout(0).domain(), fault,
-                                        constructions) &&
+      auto coarse_state_view = system.prepared_amr_block_state(0, 0);
+      require(coarse_state_view &&
+                  elliptic_factory_rejected(*coarse_state_view, config, coarse_domain, fault,
+                                            constructions) &&
                   constructions == 1,
               "rank-local elliptic factory/materialization fault is rejected collectively");
     }
@@ -1399,84 +1598,49 @@ int run_multiblock_field_solve(int argc, char** argv) {
              NonlinearFailureCase{pops::ImplicitEvaluationStatus::kFailed,
                                   pops::SolveAction::kFailRun, pops::SolveConsumption::kFailRun},
          }) {
-      Field nonlinear_state(context->state(0));
+      const auto nonlinear_view = system.prepared_amr_block_state(0, 0);
+      if (!nonlinear_view)
+        throw std::logic_error("nonlinear callback has an accepted state prototype");
+      Field nonlinear_state(*nonlinear_view);
       nonlinear_state.set_val(pops::Real(3));
       const Field accepted_nonlinear_state(nonlinear_state);
-      Field rank_provider(context->state(0));
+      Field rank_provider(nonlinear_state);
       rank_provider.set_val(static_cast<pops::Real>(pops::my_rank()));
-      const Field& const_rank_provider = rank_provider;
-      const auto provider_at = [&const_rank_provider](std::size_t local) {
-        pops::ProviderStorageView<Dim, 1> view;
-        view.storage[0] = const_rank_provider.fab(local).view();
-        view.storage_components[0] = 0;
-        return view;
-      };
       pops::NewtonReport diagnostics;
       diagnostics.max_residual = pops::Real(42);
-      pops::SolveOutcome nonlinear = pops::backward_euler_source(
-          RankLocalFallibleSource{failure.status, nonlinear_reason}, provider_at, nonlinear_state,
-          pops::Real(0.1), pops::NewtonOptions{}, outcome_lane, {}, &diagnostics);
-      require(nonlinear.report().status == pops::SolveStatus::kInvalidEvaluation &&
-                  nonlinear.report().action == failure.action,
+      FieldPlanCommand nonlinear_command;
+      nonlinear_command.operation = FieldPlanOperation::nonlinear;
+      nonlinear_command.nonlinear_state = &nonlinear_state;
+      nonlinear_command.nonlinear_provider = &rank_provider;
+      nonlinear_command.nonlinear_diagnostics = &diagnostics;
+      nonlinear_command.nonlinear_status = failure.status;
+      nonlinear_command.nonlinear_reason = nonlinear_reason;
+      nonlinear_command.nonlinear_consumption = failure.consumption;
+      const FieldPlanResult nonlinear = run_command(nonlinear_command);
+      require(nonlinear.solve_status == pops::SolveStatus::kInvalidEvaluation &&
+                  nonlinear.action == failure.action,
               "rank-local nonlinear source failure becomes one collective transaction outcome");
       require(field_difference_inf(nonlinear_state, accepted_nonlinear_state) == 0.0 &&
                   !diagnostics.enabled && diagnostics.max_residual == pops::Real(42),
               "nonlinear failure keeps state and accepted diagnostics private");
-      (void)nonlinear.consume(failure.consumption);
       require(field_difference_inf(nonlinear_state, accepted_nonlinear_state) == 0.0,
               "nonlinear retry/reject/fail consumption restores its transaction");
     }
 
-    Field iterate(context->state(0));
-    Field direction(iterate);
-    direction.set_val(pops::Real(0.5));
-    const auto boundary = context->prepare_block_boundary_session(0, iterate, point, context_lane);
-    const auto residual_at = [&](pops::Real shift, bool refresh_field) {
-      Field state(iterate);
-      pops::saxpy(state, shift, direction);
-      Field residual(iterate);
-      residual.set_val(pops::Real(0));
-      const auto evaluate = [&] {
-        context->rhs_core_into_at(point, 0, state, residual, false, *boundary);
-      };
-      if (refresh_field)
-        context->evaluate_with_field_state_at(point, "field/provider-positive", 0, state, iterate,
-                                              evaluate);
-      else
-        evaluate();
-      return residual;
-    };
-    constexpr pops::Real perturbation = pops::Real(2.0e-4);
-    const Field residual_base = residual_at(pops::Real(0), false);
-    const Field residual_plus = residual_at(perturbation, true);
-    const Field residual_minus = residual_at(-perturbation, true);
-    const Field residual_stale_plus = residual_at(perturbation, false);
-    Field centered_jvp(direction);
-    pops::saxpy(centered_jvp, -pops::Real(0.01) / (pops::Real(2) * perturbation), residual_plus);
-    pops::saxpy(centered_jvp, pops::Real(0.01) / (pops::Real(2) * perturbation), residual_minus);
-    Field stale_jvp(direction);
-    pops::saxpy(stale_jvp, -pops::Real(0.01) / perturbation, residual_stale_plus);
-    pops::saxpy(stale_jvp, pops::Real(0.01) / perturbation, residual_base);
-    require(field_difference_inf(centered_jvp, direction) > 1.0e-8,
-            "elliptic field-coupled residual has a nonzero JVP response");
-    require(field_difference_inf(centered_jvp, stale_jvp) > 1.0e-8,
-            "elliptic JVP rejects a frozen solved-field provider");
-    require(system.field_potential_level_global("field/provider-positive", 0) == retry,
-            "field-coupled JVP restores the complete accepted provider hierarchy");
-
-    const auto reject_divergence = [&](std::int64_t identity,
-                                       const pops::runtime::multiblock::BoundaryEvaluationPoint& p,
+    const auto reject_divergence = [&](std::int64_t identity, int point_stage_delta,
                                        std::string_view provider, const Field* a, const Field* b) {
+      (void)identity;
       const int calls_before = rhs_calls;
       const std::vector<double> visible =
           system.field_potential_level_global("field/provider-positive", 0);
-      bool rejected = false;
-      try {
-        (void)context->solve_fields_from_blocks_at(p, identity, provider, {{0, a}, {1, b}});
-      } catch (const std::invalid_argument&) {
-        rejected = true;
-      }
-      require(rejected, "rank-divergent request rejected collectively");
+      const std::uint32_t route_slot = provider == "field/provider-positive"           ? 0U
+                                       : provider == "field/provider-divergent"        ? 1U
+                                       : provider == "field/provider-throw"            ? 2U
+                                       : provider == "field/provider-validation-fault" ? 3U
+                                                                                       : 4U;
+      const FieldPlanResult divergent =
+          run_command(solve_command(route_slot, a, b, true, false, point_stage_delta, true));
+      require(divergent.threw, "rank-divergent request rejected collectively");
       require(rhs_calls == calls_before, "rank divergence rejected before RHS assembly");
       require(system.field_potential_level_global("field/provider-positive", 0) == visible,
               "rank divergence preserves published provider");
@@ -1486,94 +1650,34 @@ int run_multiblock_field_solve(int argc, char** argv) {
               "rank divergence preserves block b");
     };
 
-    auto divergent_point = point;
-    if (pops::my_rank() == 1)
-      ++divergent_point.stage;
-    reject_divergence(200, divergent_point, "field/provider-positive", &stage_a, &stage_b);
-    reject_divergence(201, point,
-                      pops::my_rank() == 1 ? "field/rank-one" : "field/provider-positive", &stage_a,
+    reject_divergence(200, pops::my_rank() == 1 ? 1 : 0, "field/provider-positive", &stage_a,
                       &stage_b);
+    reject_divergence(201, 0, pops::my_rank() == 1 ? "field/rank-one" : "field/provider-positive",
+                      &stage_a, &stage_b);
     const std::vector<double> cache_retry = solve(201, &stage_a, &stage_b);
     require(max_difference(cache_retry, retry) < 1.0e-10,
             "divergent provider request leaves generated field-route cache unchanged");
 
-    std::size_t fine_cells = 0;
-    std::size_t covered_coarse_cells = 0;
-    for (const auto& patch : patches) {
-      fine_cells += static_cast<std::size_t>(patch.box.numPts());
-      std::size_t coarsened_cells = 1;
-      for (int axis = 0; axis < Dim; ++axis)
-        coarsened_cells *=
-            static_cast<std::size_t>(patch.box.hi[axis] / 2 - patch.box.lo[axis] / 2 + 1);
-      covered_coarse_cells += coarsened_cells;
-    }
-    const std::size_t coarse_cells = cell_count(config.shape);
-    const std::size_t uncovered_coarse_cells = coarse_cells - covered_coarse_cells;
-    double coarse_cell_measure = 1.0;
-    double fine_cell_measure = 1.0;
-    for (int axis = 0; axis < Dim; ++axis) {
-      coarse_cell_measure *= static_cast<double>(config.upper[axis] - config.lower[axis]) /
-                             static_cast<double>(config.shape[axis]);
-      fine_cell_measure *= static_cast<double>(config.upper[axis] - config.lower[axis]) /
-                           static_cast<double>(2 * config.shape[axis]);
-    }
-    const auto close_norm = [](double actual, double expected) {
-      return std::abs(actual - expected) <= 1.0e-10 * std::max(1.0, expected);
-    };
+    const std::vector<double> transaction_a_before = system.block_level_state_global("a", 0);
+    const std::vector<double> transaction_b_before = system.block_level_state_global("b", 0);
+    FieldPlanCommand transaction_failure;
+    transaction_failure.operation = FieldPlanOperation::transaction_candidate;
+    transaction_failure.propagate_failure = true;
+    const FieldPlanResult transaction_rejected = run_command(transaction_failure);
+    require(transaction_rejected.threw,
+            "callback transaction failure is rejected before candidate publication");
+    require(system.block_level_state_global("a", 0) == transaction_a_before &&
+                system.block_level_state_global("b", 0) == transaction_b_before,
+            "callback transaction failure restores every accepted block carrier");
 
-    system.begin_step_transaction();
-    Field fine_only_a0(system.prepared_amr_block_state(0, 0));
-    Field fine_only_b0(system.prepared_amr_block_state(1, 0));
-    Field fine_only_a1(system.prepared_amr_block_state(0, 1));
-    Field fine_only_b1(system.prepared_amr_block_state(1, 1));
-    add_constant(fine_only_a1, pops::Real(2));
-    std::vector<Field*> fine_only_coarse{&fine_only_a0, &fine_only_b0};
-    std::vector<Field*> fine_only_fine{&fine_only_a1, &fine_only_b1};
-    system.publish_prepared_amr_program_candidates(0, fine_only_coarse);
-    system.publish_prepared_amr_program_candidates(1, fine_only_fine);
-    const auto fine_only_norms = system.step_change_l2();
-    const double expected_fine_only =
-        2.0 * std::sqrt(static_cast<double>(fine_cells) * fine_cell_measure);
-    require(fine_only_norms.size() == 2 &&
-                close_norm(fine_only_norms.at("a"), expected_fine_only) &&
-                close_norm(fine_only_norms.at("b"), 0.0),
-            "step_change_l2 applies the exact physical fine-only composite weight");
-    system.rollback_step_transaction();
-    require(system.block_level_state_global("a", 0) == accepted_a &&
-                system.block_level_state_global("b", 0) == accepted_b &&
-                system.block_level_state_global("a", 1) == accepted_fine_a &&
-                system.block_level_state_global("b", 1) == accepted_fine_b,
-            "fine-only transaction rollback restores every carrier");
-
-    system.begin_step_transaction();
-    Field transaction_a0(system.prepared_amr_block_state(0, 0));
-    Field transaction_b0(system.prepared_amr_block_state(1, 0));
-    Field transaction_a1(system.prepared_amr_block_state(0, 1));
-    Field transaction_b1(system.prepared_amr_block_state(1, 1));
-    add_constant(transaction_a0, pops::Real(1));
-    add_constant(transaction_b0, pops::Real(2));
-    add_constant(transaction_a1, pops::Real(3));
-    add_constant(transaction_b1, pops::Real(4));
-    std::vector<Field*> coarse_candidates{&transaction_a0, &transaction_b0};
-    std::vector<Field*> fine_candidates{&transaction_a1, &transaction_b1};
-    system.publish_prepared_amr_program_candidates(0, coarse_candidates);
-    system.publish_prepared_amr_program_candidates(1, fine_candidates);
-    const auto step_norms = system.step_change_l2();
-    const double expected_a =
-        std::sqrt(static_cast<double>(uncovered_coarse_cells) * coarse_cell_measure +
-                  9.0 * static_cast<double>(fine_cells) * fine_cell_measure);
-    const double expected_b =
-        std::sqrt(4.0 * static_cast<double>(uncovered_coarse_cells) * coarse_cell_measure +
-                  16.0 * static_cast<double>(fine_cells) * fine_cell_measure);
-    require(step_norms.size() == 2 && close_norm(step_norms.at("a"), expected_a) &&
-                close_norm(step_norms.at("b"), expected_b),
-            "step_change_l2 covers every block with exact coarse/fine composite weights");
-    system.rollback_step_transaction();
-    require(system.block_level_state_global("a", 0) == accepted_a &&
-                system.block_level_state_global("b", 0) == accepted_b &&
-                system.block_level_state_global("a", 1) == accepted_fine_a &&
-                system.block_level_state_global("b", 1) == accepted_fine_b,
-            "real multi-level two-block transaction rollback restores every carrier");
+    FieldPlanCommand transaction_accept;
+    transaction_accept.operation = FieldPlanOperation::transaction_candidate;
+    const FieldPlanResult transaction_accepted = run_command(transaction_accept);
+    require(transaction_accepted.invoked && !transaction_accepted.threw,
+            "callback transaction candidate reaches the sealed step");
+    require(system.block_level_state_global("a", 0) != transaction_a_before ||
+                system.block_level_state_global("b", 0) != transaction_b_before,
+            "accepted callback transaction publishes only after step sealing");
   } catch (const std::exception& error) {
     std::fprintf(stderr, "rank %d: multi-block field fixture failed: %s\n", pops::my_rank(),
                  error.what());

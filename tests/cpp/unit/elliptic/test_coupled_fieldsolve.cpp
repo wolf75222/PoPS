@@ -3,7 +3,9 @@
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/coupling/base/elliptic_rhs.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/parallel/comm.hpp>
 #include <pops/parallel/execution_lane.hpp>
+#include <pops/parallel/prepared_load_balance.hpp>
 #include <pops/physics/bricks/elliptic.hpp>
 #include <pops/physics/bricks/source.hpp>
 #include <pops/physics/composition/composite.hpp>
@@ -41,6 +43,15 @@ using ChargeModel =
     pops::CompositeModel<pops::nd::ScalarAdvection<Dim>, pops::NoSource, pops::ChargeDensity>;
 
 static_assert(ChargeModel::n_providers == 0);
+
+class CommEnvironment final : public ::testing::Environment {
+ public:
+  void SetUp() override { pops::comm_init(); }
+  void TearDown() override { pops::comm_finalize(); }
+};
+
+[[maybe_unused]] const ::testing::Environment* const kCommEnvironment =
+    ::testing::AddGlobalTestEnvironment(new CommEnvironment);
 
 void install_execution_lane(NativeSystem& system) {
   system.install_prepared_boundary_execution_lane(
@@ -150,6 +161,26 @@ std::vector<std::string> periodic_kinds() {
 
 }  // namespace
 
+TEST(test_coupled_fieldsolve, prepared_load_balance_refuses_mismatched_execution_lane_rank_space) {
+  const pops::ExecutionLane lane = pops::ExecutionLane::duplicate_world_collectively(
+      "test.coupled-fieldsolve.load-balance-mismatch@1");
+  pops::Extent<Dim> extent{};
+  for (int axis = 0; axis < Dim; ++axis)
+    extent[axis] = 1;
+  extent[0] = lane.size() == 1 ? 2 : 1;
+  const pops::mesh::RankSpace<Dim> rank_space(pops::Index<Dim>{}, extent);
+  std::vector<pops::Box<Dim>> patch_values;
+  patch_values.emplace_back(pops::Index<Dim>{}, pops::Index<Dim>{});
+  const pops::mesh::BoxArray<Dim> patches(std::move(patch_values));
+  const auto authority = pops::prepare_load_balance_authority<Dim>(
+      "round_robin", "test.coupled-fieldsolve.rank-space-refusal",
+      pops::PreparedProviderOptions{"pops.amr.load-balance.round-robin@1", {}});
+  const pops::parallel::LoadBalancePreparationBudget budget{patches.size(), rank_space.size(), 1};
+
+  EXPECT_THROW((void)authority.prepare(patches, rank_space, budget, {}, lane),
+               std::invalid_argument);
+}
+
 TEST(test_coupled_fieldsolve, simultaneous_stage_rhs_uses_every_qualified_block) {
   constexpr int cells = 24;
   const auto first = charge_density(cells, 1.0, 0.0);
@@ -161,7 +192,15 @@ TEST(test_coupled_fieldsolve, simultaneous_stage_rhs_uses_every_qualified_block)
   const std::vector<double> all_live = system.potential();
   ASSERT_EQ(all_live.size(), cell_count(cells));
 
-  std::vector<const NativeField*> live_stages{&system.block_state(0), &system.block_state(1)};
+  const NativeField live_first = [&] {
+    const auto state_view = system.block_state(0);
+    return NativeField(*state_view.get());
+  }();
+  const NativeField live_second = [&] {
+    const auto state_view = system.block_state(1);
+    return NativeField(*state_view.get());
+  }();
+  std::vector<const NativeField*> live_stages{&live_first, &live_second};
   const pops::SolveReport simultaneous_report =
       pops::consume_solve_outcome(system.solve_fields_from_blocks(live_stages));
   ASSERT_TRUE(simultaneous_report.solved()) << simultaneous_report.reason;
@@ -172,9 +211,9 @@ TEST(test_coupled_fieldsolve, simultaneous_stage_rhs_uses_every_qualified_block)
   EXPECT_LE(max_difference(simultaneous, all_live), 1e-11 * std::max(1.0, scale));
   EXPECT_GT(scale, 0.0);
 
-  NativeField second_stage = system.block_state(1);
+  NativeField second_stage = live_second;
   second_stage.set_val(pops::Real(0));
-  std::vector<const NativeField*> override_stages{&system.block_state(0), &second_stage};
+  std::vector<const NativeField*> override_stages{&live_first, &second_stage};
   const pops::SolveReport override_report =
       pops::consume_solve_outcome(system.solve_fields_from_blocks(override_stages));
   ASSERT_TRUE(override_report.solved()) << override_report.reason;
@@ -191,12 +230,12 @@ TEST(test_coupled_fieldsolve, simultaneous_stage_rhs_uses_every_qualified_block)
   EXPECT_EQ(system.density("first"), first);
   EXPECT_EQ(system.density("second"), second);
 
-  std::vector<const NativeField*> invalid{&system.block_state(0)};
+  std::vector<const NativeField*> invalid{&live_first};
   EXPECT_THROW((void)system.solve_fields_from_blocks(invalid), std::invalid_argument);
 }
 
 TEST(test_coupled_fieldsolve,
-     named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs) {
+     named_solve_honors_every_qualified_stage_without_live_mutation) {
   constexpr int cells = 24;
   const auto first = charge_density(cells, 1.0, 0.0);
   const auto second = charge_density(cells, 0.6, 0.25);
@@ -236,7 +275,15 @@ TEST(test_coupled_fieldsolve,
   system.set_density("first", first);
   system.set_density("second", second);
 
-  std::vector<const NativeField*> live_stages{&system.block_state(0), &system.block_state(1)};
+  const NativeField live_first = [&] {
+    const auto state_view = system.block_state(0);
+    return NativeField(*state_view.get());
+  }();
+  const NativeField live_second = [&] {
+    const auto state_view = system.block_state(1);
+    return NativeField(*state_view.get());
+  }();
+  std::vector<const NativeField*> live_stages{&live_first, &live_second};
   const pops::SolveReport live_report =
       pops::consume_solve_outcome(system.solve_fields_from_blocks(slot, live_stages));
   ASSERT_TRUE(live_report.solved()) << live_report.reason;
@@ -270,14 +317,14 @@ TEST(test_coupled_fieldsolve,
     EXPECT_LE(error, 16.0 * std::numeric_limits<pops::Real>::epsilon() * std::max(1.0, reference));
   }
 
-  NativeField second_stage = system.block_state(1);
+  NativeField second_stage = live_second;
   second_stage.set_val(pops::Real(0));
-  std::vector<const NativeField*> override_stages{&system.block_state(0), &second_stage};
+  std::vector<const NativeField*> override_stages{&live_first, &second_stage};
   const pops::SolveReport override_report =
       pops::consume_solve_outcome(system.solve_fields_from_blocks(slot, override_stages));
   ASSERT_TRUE(override_report.solved()) << override_report.reason;
   EXPECT_GT(max_difference(system.field_potential_global(slot), all_live), 1e-5)
       << "the named prepared plan must consume both qualified simultaneous stage slots";
-  EXPECT_EQ(system.density("first"), first);
-  EXPECT_EQ(system.density("second"), second);
+  EXPECT_EQ(system.density_global("first"), first);
+  EXPECT_EQ(system.density_global("second"), second);
 }

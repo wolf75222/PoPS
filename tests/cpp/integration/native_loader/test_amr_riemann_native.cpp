@@ -74,8 +74,11 @@ std::shared_ptr<const component::PreparedExecutionContextV1> prepared_execution(
 
 ProdModel make_model() {
   // alpha=0 : elliptic_rhs nul -> phi=0, parite stricte.
-  return ProdModel{
-      {}, NativeEuler{static_cast<Real>(kGamma)}, NoSource{}, BackgroundDensity{Real(0), Real(0)}};
+  return ProdModel{{},
+                   {},
+                   NativeEuler{static_cast<Real>(kGamma)},
+                   NoSource{},
+                   BackgroundDensity{Real(0), Real(0)}};
 }
 
 template <int Dim>
@@ -167,8 +170,7 @@ Snap run(AmrSystem<Dim>& s, int nsteps) {
   s.set_temporal_relations({2}, {1}, {"integral_only"});
   s.set_poisson("charge_density", "geometric_mg");
   test::install_prepared_threshold_union(s, {{"gas", "rho", 1.2}});
-  auto context = test::install_forward_euler_program_context(s, true);
-  context->declare_clock_relation(kPrimaryClock, kFineClock, 2);
+  test::install_forward_euler_program_execution_services(s, true);
 
   // Installing the explicit Program materializes the engine and performs the automatic initial
   // hierarchy bootstrap.  The cadence witness must therefore advance strictly after this baseline,
@@ -186,7 +188,10 @@ Snap run(AmrSystem<Dim>& s, int nsteps) {
   snap.n_patches = s.n_patches();
   snap.n_levels = s.n_levels();
   if (snap.n_levels >= 2) {
-    for (const pops::Box<Dim>& patch : s.prepared_amr_block_state(0, 1).layout().boxes())
+    auto fine_view = s.prepared_amr_block_state(0, 1);
+    if (!fine_view)
+      throw std::logic_error("AMR accepted block view is invalid");
+    for (const pops::Box<Dim>& patch : fine_view->layout().boxes())
       snap.refined_cells += patch.numPts();
     snap.fine_domain_cells = s.prepared_amr_level_geometry(1).domain().numPts();
   }
@@ -306,10 +311,10 @@ extern "C" void pops_install_native_amr(void* sys, const char* name, const char*
   pops::PreparedNativeAmrPackage<pops_generated::Dim> package;
   package.block = pops::prepare_compiled_amr_system_block<pops_generated::Dim>(
       name,
-      pops_generated::ProdModel{
-          {},
-          pops::EulerND<pops_generated::Dim>{static_cast<pops::Real>(gamma)}, pops::NoSource{},
-          pops::BackgroundDensity{pops::Real(0), pops::Real(0)}},
+      pops_generated::ProdModel{{}, {},
+                                 pops::EulerND<pops_generated::Dim>{static_cast<pops::Real>(gamma)},
+                                 pops::NoSource{},
+                                 pops::BackgroundDensity{pops::Real(0), pops::Real(0)}},
       limiter, riemann, recon, time, gamma, substeps, stride, pos_floor, weno_epsilon,
       wave_speed_cache, "tests.amr-riemann-native/physical-flux", newton,
       newton_diagnostics != 0);

@@ -8,12 +8,11 @@ reductions + the geometry hmin + the per-block max wave speed); it is NOT run in
 SMALLER than the native CFL wins; a LARGER bound loses (native CFL wins); and a Program WITHOUT a dt
 bound leaves the native CFL UNCHANGED.
 
-The generated .so exports a SECOND ABI pair alongside the macro step: ``pops_program_has_dt_bound()``
-(true iff a bound was set) and a facade-typed ``pops_program_dt_bound(System*, cfl)`` (the lowered
-scalar, evaluated through the shared Program execution provider).
+The generated candidate carries an optional ``ProgramCandidateDescriptor::dt_bound`` callback beside
+the macro step; the lowered scalar is evaluated through the shared Program execution provider.
 
-Section (A) (pure Python) pins the IR + codegen: the bound is recorded, the two ABI functions are
-emitted, and a Program WITHOUT a dt bound emits ``has_dt_bound() -> false``. Section (B) is end-to-end
+Section (A) (pure Python) pins the IR + codegen: the bound is recorded in the candidate descriptor,
+and a Program WITHOUT a dt bound carries a null callback. Section (B) is end-to-end
 (needs _pops + a compiler + a visible Kokkos via POPS_KOKKOS_ROOT) and self-skips cleanly otherwise; it
 never fakes the engine.
 """
@@ -121,7 +120,7 @@ def chk(cond, label):
 
 
 # ====================================================================================================
-# Section (A): pure Python -- the dt bound is recorded in the IR and lowered to the two ABI functions.
+# Section (A): pure Python -- the dt bound is recorded in the IR and lowered to the candidate callback.
 # ====================================================================================================
 print("== (A) IR + codegen ==")
 
@@ -137,14 +136,11 @@ def _fe(name="fe_dtbound"):
     return P
 
 
-# (A1) a Program WITHOUT a dt bound emits has_dt_bound() -> false; the dt_bound function returns +inf.
+# (A1) a Program WITHOUT a dt bound carries a null callback.
 P_no = _fe("fe_no_bound")
 chk(not P_no.has_dt_bound(), "a fresh Program has no dt bound")
 src_no = _emit(P_no)
-chk("bool pops_program_has_dt_bound()" in src_no, "has_dt_bound ABI function emitted")
-chk("pops::Real pops_program_dt_bound(" in src_no, "dt_bound ABI function emitted")
-chk("return false;" in src_no, "no-bound Program: has_dt_bound() returns false")
-chk("std::numeric_limits<pops::Real>::infinity()" in src_no, "no-bound dt_bound returns +inf sentinel")
+chk("descriptor.dt_bound = nullptr;" in src_no, "no-bound Program carries a null dt-bound callback")
 
 # (A2) @P.dt_bound records a scalar sub-program (cfl * hmin / max_wave_speed); the codegen emits the
 # bound expression reading ctx.hmin() / ctx.max_wave_speed.
@@ -160,13 +156,13 @@ def _dt_bound(P, cfl):
 
 chk(P_dec.has_dt_bound(), "@P.dt_bound records the bound")
 src_dec = _emit(P_dec)
-chk("return true;" in src_dec, "Program with a bound: has_dt_bound() returns true")
+chk("descriptor.dt_bound" in src_dec, "Program with a bound emits the candidate callback slot")
 chk("ctx.hmin()" in src_dec, "dt_bound lowers P.hmin() -> ctx.hmin()")
 chk("ctx.max_wave_speed(0, " in src_dec, "dt_bound lowers P.max_wave_speed -> ctx.max_wave_speed(0, .)")
-chk("cfl" in src_dec.split("pops_program_dt_bound", 1)[1], "the cfl argument is used in the bound body")
+chk("cfl" in src_dec.split("descriptor.dt_bound", 1)[1], "the cfl argument is used in the bound body")
 src_amr = emit_cpp_program(
     P_dec, field_plans=codegen_field_plans(P_dec), target="amr_system")
-amr_bound = src_amr.split("pops_program_dt_bound_amr", 1)[1]
+amr_bound = src_amr.split("descriptor.dt_bound", 1)[1]
 chk("for_each_program_resource_level" in amr_bound,
     "AMR dt_bound evaluates the authored scalar on every live level")
 chk("std::min" in amr_bound,

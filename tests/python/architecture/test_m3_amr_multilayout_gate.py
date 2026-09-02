@@ -27,7 +27,90 @@ def _load_runner():
 def test_m3_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M3 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 43
+    assert len(data["check"]) == 57
+    corner_rows = [
+        row
+        for row in data["check"]
+        if row.get("test_regex") == r"^test_mpi_amr_program_3d_corner_authority_np8$"
+    ]
+    assert len(corner_rows) == 1
+    assert corner_rows[0]["dimensions"] == [3]
+
+
+def _mutated_manifest(tmp_path: Path, old: str, new: str) -> Path:
+    source = MANIFEST.read_text(encoding="utf-8")
+    assert old in source
+    path = tmp_path / "m3-amr-multilayout.toml"
+    path.write_text(source.replace(old, new, 1), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(
+    ("replacement", "message"),
+    (
+        ("dimensions = 3", "dimensions must be a list"),
+        ("dimensions = []", "dimensions must be non-empty"),
+        ("dimensions = [true]", "bool is not accepted"),
+        ("dimensions = [0]", "only supported values"),
+        ("dimensions = [3, 3]", "dimensions must contain unique values"),
+        ("dimensions = [3, 1]", "canonical sorted order"),
+    ),
+)
+def test_m3_rejects_invalid_row_dimension_qualifiers(tmp_path, replacement, message):
+    runner = _load_runner()
+    path = _mutated_manifest(tmp_path, "dimensions = [3]", replacement)
+
+    _data, errors = runner.validate_manifest(path)
+
+    assert any(message in error for error in errors)
+
+
+def test_m3_dimension_filter_separates_2d_public_proofs_and_the_3d_corner():
+    runner = _load_runner()
+    data, errors = runner.validate_manifest(MANIFEST)
+    assert not errors
+
+    selected_dim1 = runner._selected_checks(data["check"], dimension=1)
+    selected_dim2 = runner._selected_checks(data["check"], dimension=2)
+    selected_dim3 = runner._selected_checks(data["check"], dimension=3)
+    corner = "^test_mpi_amr_program_3d_corner_authority_np8$"
+    public_2d = {
+        row["nodeid"]
+        for row in data["check"]
+        if row.get("dimensions") == [2]
+    }
+
+    assert len(public_2d) == 9
+    assert len(selected_dim1) == len(data["check"]) - len(public_2d) - 1
+    assert len(selected_dim2) == len(data["check"]) - 1
+    assert len(selected_dim3) == len(data["check"]) - len(public_2d)
+    assert public_2d.isdisjoint({row.get("nodeid") for row in selected_dim1})
+    assert public_2d <= {row.get("nodeid") for row in selected_dim2}
+    assert public_2d.isdisjoint({row.get("nodeid") for row in selected_dim3})
+    assert corner not in {row.get("test_regex") for row in selected_dim1}
+    assert corner in {row.get("test_regex") for row in selected_dim3}
+
+
+def test_m3_selected_dimension_accepts_explicit_or_authenticated_environment_value(monkeypatch):
+    runner = _load_runner()
+    monkeypatch.delenv("POPS_NATIVE_DIM", raising=False)
+
+    assert runner._selected_native_dimension(2) == 2
+
+    monkeypatch.setenv("POPS_NATIVE_DIM", "3")
+    assert runner._selected_native_dimension(None) == 3
+    with pytest.raises(ValueError, match="conflicting native dimensions"):
+        runner._selected_native_dimension(1)
+
+    monkeypatch.setenv("POPS_NATIVE_DIM", "4")
+    with pytest.raises(ValueError, match="POPS_NATIVE_DIM"):
+        runner._selected_native_dimension(None)
+
+
+def test_m3_check_only_is_source_only_and_does_not_require_a_dimension(monkeypatch):
+    runner = _load_runner()
+    monkeypatch.delenv("POPS_NATIVE_DIM", raising=False)
+    assert runner.main(["--check-only"]) == 0
 
 
 def test_m3_gate_pins_exact_ranked_history_publication_and_rollback_proofs():
@@ -35,7 +118,7 @@ def test_m3_gate_pins_exact_ranked_history_publication_and_rollback_proofs():
     assert not errors
     expected = {
         "RetainsAndInterpolatesExactRankedState": "positive",
-        "FacadeTransactionRestoresAcceptedHistoryImage": "positive",
+        "RejectedFacadeAttemptRestoresTopologyStateHistoryAndClock": "positive",
         "RegisteredHistoryRejectsTopologyPublicationBeforeMutation": "refusal",
     }
     for case, polarity in expected.items():
@@ -97,6 +180,168 @@ def test_m3_gate_pins_exact_ranked_temporal_accepted_image_proof():
     ) in source.read_text(encoding="utf-8")
 
 
+def test_m3_adc677_clocks_reflux_history_rollback_and_retry_use_closed_proofs():
+    data, errors = _load_runner().validate_manifest(MANIFEST)
+    assert not errors
+    checks = {
+        (row["kind"], row["polarity"], row["target"], row.get("nodeid", row.get("test_regex")))
+        for row in data["check"]
+        if row["issue"] == "ADC-677" and row["requirement"] == "clocks_reflux"
+    }
+    assert checks == {
+        (
+            "ctest",
+            "positive",
+            "test_program_reflux_ledger",
+            r"^test_program_reflux_ledger\.CanonicalMetricLedgerAndAcceptedCheckpointAreExactInOneTwoAndThreeDimensions$",
+        ),
+        (
+            "ctest",
+            "refusal",
+            "test_program_reflux_ledger",
+            r"^test_program_reflux_ledger\.InvalidCheckpointAndDuplicateFacesRejectBeforeMutation$",
+        ),
+        (
+            "ctest",
+            "positive",
+            "test_mpi_amr_program_3d_corner_authority",
+            r"^test_mpi_amr_program_3d_corner_authority_np8$",
+        ),
+        (
+            "ctest",
+            "positive",
+            "test_mpi_amr_program_reflux",
+            r"^test_mpi_amr_program_reflux_np2$",
+        ),
+        (
+            "ctest",
+            "positive",
+            "test_mpi_amr_program_reflux",
+            r"^test_mpi_amr_program_reflux_np4$",
+        ),
+        (
+            "ctest",
+            "positive",
+            "test_nd_flux_ledger",
+            r"^test_nd_flux_ledger\.composite_reflux_conserves_accepted_transport_in_1d_2d_3d$",
+        ),
+        (
+            "ctest",
+            "positive",
+            "test_nd_flux_ledger",
+            r"^test_nd_flux_ledger\.exact_stage_weights_are_applied_before_metric_reflux$",
+        ),
+        (
+            "ctest",
+            "positive",
+            "test_nd_flux_ledger",
+            r"^test_nd_flux_ledger\.coarse_window_matches_two_exact_fine_substeps$",
+        ),
+        (
+            "ctest",
+            "refusal",
+            "test_nd_flux_ledger",
+            r"^test_nd_flux_ledger\.rejected_attempt_never_publishes_pending_faces$",
+        ),
+        (
+            "ctest",
+            "refusal",
+            "test_nd_flux_ledger",
+            r"^test_nd_flux_ledger\.failed_commit_preserves_accepted_and_pending_transactions$",
+        ),
+        (
+            "pytest",
+            "positive",
+            "accepted_state",
+            "tests/python/unit/time/test_time_codegen.py::"
+            "test_canonical_ssprk_amr_codegen_preserves_exact_distinct_ledger_weights",
+        ),
+        (
+            "pytest",
+            "positive",
+            "accepted_state",
+            "tests/python/integration/amr/test_amr_program_reflux.py::"
+            "test_multilevel_ssprk2_conserves_to_roundoff",
+        ),
+        (
+            "pytest",
+            "positive",
+            "accepted_state",
+            "tests/python/integration/amr/test_amr_program_reflux.py::"
+            "test_multilevel_midpoint_conserves_and_differs",
+        ),
+        (
+            "pytest",
+            "positive",
+            "accepted_state",
+            "tests/python/integration/amr/test_amr_rational_hierarchy_program.py::"
+            "test_public_generated_rational_three_level_two_block_program",
+        ),
+        (
+            "pytest",
+            "refusal",
+            "accepted_state",
+            "tests/python/integration/amr/test_amr_rational_hierarchy_program.py::"
+            "test_public_rational_hierarchy_rejects_implicit_fractional_remainder_before_mutation",
+        ),
+        (
+            "pytest",
+            "positive",
+            "restart_hierarchy_policy",
+            "tests/python/integration/io/test_amr_history_reflux_restart.py::"
+            "test_strict_restart_preserves_ab2_history_flux_and_reflux_continuation",
+        ),
+        (
+            "pytest",
+            "refusal",
+            "restart_hierarchy_policy",
+            "tests/python/integration/io/test_amr_history_regrid_replay.py::"
+            "test_d_corrupted_fingerprint_refused",
+        ),
+    }
+
+
+def test_m3_gate_pins_public_rational_three_level_two_block_program_proof():
+    data, errors = _load_runner().validate_manifest(MANIFEST)
+    assert not errors
+    source = (
+        ROOT / "tests/python/integration/amr/test_amr_rational_hierarchy_program.py"
+    ).read_text(encoding="utf-8")
+    expected = {
+        "issue": "ADC-677",
+        "requirement": "clocks_reflux",
+        "polarity": "positive",
+        "kind": "pytest",
+        "target": "accepted_state",
+        "nodeid": (
+            "tests/python/integration/amr/test_amr_rational_hierarchy_program.py::"
+            "test_public_generated_rational_three_level_two_block_program"
+        ),
+        "dimensions": [2],
+    }
+    assert expected in data["check"]
+    refusal = dict(expected)
+    refusal.pop("dimensions")
+    refusal["polarity"] = "refusal"
+    refusal["nodeid"] = (
+        "tests/python/integration/amr/test_amr_rational_hierarchy_program.py::"
+        "test_public_rational_hierarchy_rejects_implicit_fractional_remainder_before_mutation"
+    )
+    assert refusal in data["check"]
+    for needle in (
+        "pops.validate(case)",
+        "pops.resolve(",
+        "pops.compile(resolved)",
+        "pops.bind(",
+        "AMRHierarchy(max_levels=3, ratios=(2, 2))",
+        "Fraction(5, 2)",
+        "AMRRemainderPolicy.EXPLICIT_FINAL_SUBSTEP",
+        "StepAttemptRejected",
+        "transaction_stats",
+    ):
+        assert needle in source
+
+
 def test_m3_gate_pins_qualified_field_warm_start_restart_and_rollback():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors
@@ -111,6 +356,7 @@ def test_m3_gate_pins_qualified_field_warm_start_restart_and_rollback():
         "kind": "pytest",
         "target": "accepted_state",
         "nodeid": nodeid,
+        "dimensions": [2],
     } in data["check"]
 
     source = (ROOT / "tests/python/integration/amr/test_amr_composite_field_carrier.py").read_text(
@@ -137,6 +383,7 @@ def test_m3_gate_pins_transactional_persistent_hysteresis_proofs():
             "tests/python/integration/amr/test_amr_regrid_on_restart.py::"
             "test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault"
         ),
+        "dimensions": [2],
     } in checks
     assert {
         "issue": "ADC-678",
@@ -353,6 +600,7 @@ def test_m3_mpi_python_proof_is_exact_and_manifest_owned(monkeypatch):
             "tests/python/integration/runtime/test_multi_layout_runtime.py::"
             "test_multi_layout_checkpoint_restart_restores_every_layout_and_mapping_count"
         ),
+        "dimensions": [2],
     } in checks
     assert runner._python_mpi_orchestrators() == {
         "tests/python/integration/mpi/test_amr_rank_change_restart.py"
@@ -394,7 +642,10 @@ def test_m3_mpi_python_proof_is_exact_and_manifest_owned(monkeypatch):
 
 def test_m3_mpi_python_launch_is_explicit_required_and_check_only_safe(monkeypatch):
     runner = _load_runner()
-    relative = "tests/python/integration/mpi/test_amr_history_mpi.py"
+    nodeid = (
+        "tests/python/integration/mpi/test_amr_history_mpi.py::"
+        "test_amr_history_mpi_in_window_regrid_public_restart_and_distribution_parity"
+    )
 
     def launcher_or_fail(command):
         if command == "mpiexec":
@@ -405,13 +656,21 @@ def test_m3_mpi_python_launch_is_explicit_required_and_check_only_safe(monkeypat
     assert runner.main(["--check-only"]) == 0
     _, errors = runner.validate_manifest(MANIFEST)
     assert not errors
-    assert runner._mpi_python_command("mpiexec", 2, relative) == [
+    command = runner._mpi_python_command("mpiexec", 2, nodeid, dimension=2)
+    assert command[:5] == [
         "mpiexec",
         "-n",
         "2",
         sys.executable,
-        str(ROOT / relative),
+        "-c",
     ]
+    assert nodeid == command[-1]
+    assert str(ROOT / nodeid.split("::", 1)[0]) == command[-2]
+    compile(command[5], "<m3-mpi-bootstrap>", "exec")
+    assert "run_name='__m3_authority_node__'" in command[5]
+    assert "_run_all" not in command[5]
+    with pytest.raises(ValueError, match="exact file::function nodeid"):
+        runner._mpi_python_command("mpiexec", 2, nodeid.split("::", 1)[0], dimension=2)
     monkeypatch.setenv("POPS_REQUIRE_MPI_TESTS", "0")
     assert runner._required_mpi_environment()["POPS_REQUIRE_MPI_TESTS"] == "1"
     monkeypatch.setenv("POPS_REQUIRE_NATIVE_TESTS", "0")
@@ -419,7 +678,7 @@ def test_m3_mpi_python_launch_is_explicit_required_and_check_only_safe(monkeypat
 
     monkeypatch.setattr(runner.shutil, "which", lambda _command: None)
     with pytest.raises(RuntimeError, match="required MPI launcher"):
-        runner._mpi_python_command("mpiexec", 2, relative)
+        runner._mpi_python_command("mpiexec", 2, nodeid, dimension=2)
 
 
 def test_m3_required_pytest_execution_rejects_every_skip_or_xfail(tmp_path, monkeypatch):
@@ -449,3 +708,76 @@ def test_m3_required_pytest_execution_rejects_every_skip_or_xfail(tmp_path, monk
         runner._run_required_pytest(
             ["tests/python/unit/runtime/test_amr_checkpoint_contract.py::proof"]
         )
+
+
+def test_m3_topology_qualified_interface_budget_uses_detached_schedulers():
+    source = (ROOT / "src/runtime/amr/amr_system.cpp").read_text(encoding="utf-8")
+    topology_qualified_signature = (
+        "runtime::multiblock::InterfaceFluxProductionBudget "
+        "prepared_interface_flux_production_budget(\n"
+        "      std::size_t hierarchy_depth, const topology_view_type& topology,\n"
+        "      const AmrSystemConfig<Dim>& configuration) const"
+    )
+    authenticated_configuration_signature = (
+        "runtime::multiblock::InterfaceFluxProductionBudget "
+        "prepared_interface_flux_production_budget(\n"
+        "      std::size_t hierarchy_depth, const topology_view_type& topology) const"
+    )
+    topology_qualified_start = source.index(topology_qualified_signature)
+    authenticated_configuration_start = source.index(
+        authenticated_configuration_signature, topology_qualified_start
+    )
+    topology_qualified_body = source[
+        topology_qualified_start:authenticated_configuration_start
+    ]
+    authenticated_configuration_end = source.index(
+        "\n  /// Configured-depth capacity envelope.", authenticated_configuration_start
+    )
+    authenticated_configuration_body = source[
+        authenticated_configuration_start:authenticated_configuration_end
+    ]
+
+    assert (
+        "const ProgramCheckpointCapacityAuthority authority = checkpoint_capacity_authority();"
+        in authenticated_configuration_body
+    )
+    assert "if (authority.config == nullptr)" in authenticated_configuration_body
+    assert (
+        "return prepared_interface_flux_production_budget(hierarchy_depth, topology, "
+        "*authority.config);"
+        in authenticated_configuration_body
+    )
+    assert "interface_scheduler()" not in authenticated_configuration_body
+    assert "scheduler->production_budget" not in authenticated_configuration_body
+
+    accepted_fallback = "return prepared_interface_flux_production_budget(hierarchy_depth);"
+    forward_start = topology_qualified_body.index(
+        "if (const auto* forward = dynamic_cast<const ForwardRuntimeTopologyView*>(&topology))"
+    )
+    restore_start = topology_qualified_body.index(
+        "if (const auto* restore = dynamic_cast<const RestoreRuntimeTopologyView*>(&topology))",
+        forward_start,
+    )
+    external_refresh_start = topology_qualified_body.index(
+        "if (const auto* external = "
+        "dynamic_cast<const ExternalRefreshRuntimeTopologyView*>(&topology))",
+        restore_start,
+    )
+    accepted_fallback_start = topology_qualified_body.index(
+        accepted_fallback, external_refresh_start
+    )
+    forward_body = topology_qualified_body[forward_start:restore_start]
+    restore_body = topology_qualified_body[restore_start:external_refresh_start]
+    external_refresh_body = topology_qualified_body[
+        external_refresh_start:accepted_fallback_start
+    ]
+
+    for branch, scheduler_access in (
+        (forward_body, "forward->interface_scheduler()"),
+        (restore_body, "restore->interface_scheduler()"),
+        (external_refresh_body, "external->interface_scheduler()"),
+    ):
+        assert scheduler_access in branch
+        assert "return scheduler->production_budget" in branch
+
+    assert forward_start < restore_start < external_refresh_start < accepted_fallback_start

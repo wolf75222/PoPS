@@ -164,7 +164,7 @@ def _conda_command(
     ]
 
 
-def _resolve_ctest_dir(requested: Path | None) -> Path:
+def _resolve_ctest_dir(requested: Path | None, *, expected_dimension: int) -> Path:
     candidate = (ROOT / "build") if requested is None else requested.resolve()
     if not (candidate / "CTestTestfile.cmake").is_file() \
             or not (candidate / "CMakeCache.txt").is_file():
@@ -173,6 +173,22 @@ def _resolve_ctest_dir(requested: Path | None) -> Path:
     cache = (candidate / "CMakeCache.txt").read_text(encoding="utf-8", errors="replace")
     if "POPS_BUILD_TESTS:BOOL=ON" not in cache:
         raise FinalGateError("CTest tree was configured without POPS_BUILD_TESTS=ON: %s" % candidate)
+    dimensions = re.findall(r"(?m)^POPS_NATIVE_DIM:[^=]+=([^\n]*)$", cache)
+    if len(dimensions) != 1:
+        raise FinalGateError(
+            "CTest tree must define POPS_NATIVE_DIM exactly once: %s" % candidate
+        )
+    configured_dimension = dimensions[0].strip()
+    if configured_dimension not in {"1", "2", "3"}:
+        raise FinalGateError(
+            "CTest tree has invalid POPS_NATIVE_DIM=%r: %s" %
+            (configured_dimension, candidate)
+        )
+    if configured_dimension != str(expected_dimension):
+        raise FinalGateError(
+            "CTest tree POPS_NATIVE_DIM=%s, but --dim=%d: %s" %
+            (configured_dimension, expected_dimension, candidate)
+        )
     return candidate
 
 
@@ -700,7 +716,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         recorder.rows["codesign"]["evidence"] = _json_evidence(
             codesign_stdout, gate="codesign"
         )
-        recorder.run("official_build", _conda_command(["cmake", "--preset", "serial"]))
+        recorder.run("official_build", _conda_command([
+            "cmake", "--preset", "serial", f"-DPOPS_NATIVE_DIM={args.dim}"
+        ]))
         recorder.run("official_build", _conda_command(["cmake", "--build", "--preset", "serial"]))
         recorder.run("doctor", _conda_command([
             "python", "scripts/verify_installed_native.py",
@@ -716,7 +734,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ) % args.dim
         recorder.run("doctor", _conda_command(["python", "-c", doctor_code]))
 
-        ctest_dir = _resolve_ctest_dir(args.ctest_dir)
+        ctest_dir = _resolve_ctest_dir(args.ctest_dir, expected_dimension=args.dim)
         native_junit = evidence_root / "reports" / "native-conformance.xml"
         native_junit.parent.mkdir(parents=True, exist_ok=True)
         recorder.run("native_conformance", _conda_command([

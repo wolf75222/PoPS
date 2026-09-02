@@ -25,6 +25,9 @@
 #include <pops/runtime/amr/hierarchy_policy_authority.hpp>
 #include <pops/parallel/prepared_load_balance.hpp>
 #include <pops/runtime/output_piece.hpp>
+#include <pops/runtime/program/program_abi.hpp>
+#include <pops/runtime/program/accepted_read_view.hpp>
+#include <pops/runtime/program/profiler.hpp>
 #include <pops/runtime/system/system_poisson_options.hpp>
 #include <pops/runtime/system/auxiliary_checkpoint.hpp>
 #include <pops/runtime/system/exact_aux_registry.hpp>
@@ -37,6 +40,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 /// @file
@@ -68,8 +72,15 @@ struct AmrProgramHistoryRemapDescriptor;
 
 namespace pops {
 
+namespace test {
+template <int Dim>
+struct AmrSystemTestAccess;
+}  // namespace test
+
 template <int Dim>
 class FieldNullspaceProvider;
+template <int Dim>
+class AmrSystem;
 struct FieldLogicalTimePoint;
 struct AuxHaloPolicy;
 template <int Dim>
@@ -84,9 +95,19 @@ class PreparedExecutionContextV1;
 class ObserverMpiLane;
 class ExecutionLane;
 namespace runtime::program {
+template <int Dim>
+class ProgramExecutionServices;
+class ProvisionalReadLease;
+class PreparedProgramPersistentValueRestore;
+namespace detail {
 template <int Dim, class MemorySpace>
-class AmrProgramContext;
-class AcceptedProgramContextSnapshot;
+class AmrStorageTopologyAdapter;
+template <int Dim>
+void with_amr_interface_install_states(
+    AmrSystem<Dim>& system, int left_block, int right_block, int level,
+    const std::function<void(MultiFab<Dim>&, MultiFab<Dim>&)>& callback);
+}  // namespace detail
+class AcceptedProgramExecutionServicesSnapshot;
 }  // namespace runtime::program
 
 namespace runtime::field {
@@ -124,8 +145,6 @@ struct SharedAmrLayout;
 }
 namespace runtime {
 namespace program {
-class
-    Profiler;  // forward-declared so engine()/profiler_handle() do not pull profiler.hpp into this header
 template <int Dim>
 struct ProgramRuntimeState;
 }  // namespace program
@@ -274,6 +293,14 @@ class AmrSystem {
     std::string exact_contract;
   };
   static constexpr int dimension = Dim;
+  using AcceptedBlockStateReadView = AcceptedReadView<const MultiFab<Dim>>;
+  using AcceptedRuntimeReadView =
+      AcceptedReadView<const runtime::amr::AmrRuntime<Dim, memory_space>>;
+  using AcceptedLevelEvaluationReadView = AcceptedReadView<const PreparedLevelEvaluation>;
+  using AcceptedAuxiliaryPlanReadView =
+      AcceptedReadView<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>>;
+  using AcceptedAuxiliaryStorageGroupsReadView =
+      AcceptedReadView<const runtime::system::AuxiliaryStorageGroups<Dim>>;
 
   explicit AmrSystem(const AmrSystemConfig<Dim>& cfg);
   ~AmrSystem();
@@ -372,24 +399,28 @@ class AmrSystem {
   POPS_EXPORT void install_prepared_native_amr_package(PreparedNativePackage package);
 
   /// Borrow one accepted block/level carrier through its authenticated runtime identity.
-  POPS_EXPORT const MultiFab<Dim>& prepared_amr_block_state(int runtime_block, int level) const;
-  POPS_EXPORT MultiFab<Dim>& prepared_amr_block_state(int runtime_block, int level);
-  /// Borrow the exact prepared embedded-boundary active mask for one block/level, or null when
-  /// that level has no active embedded-boundary authority.
-  [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_amr_block_level_active_mask(
-      int runtime_block, int level) const;
+  /// The move-only view keeps the accepted-generation lease alive for every dereference; no raw
+  /// reference or mutable facade state can escape the sealed generation.
+  [[nodiscard]] POPS_EXPORT AcceptedBlockStateReadView prepared_amr_block_state(int runtime_block,
+                                                                                int level) const;
+  /// Borrow the exact prepared embedded-boundary active mask for one block/level, or an invalid
+  /// view when that level has no active embedded-boundary authority.  The named view keeps the
+  /// accepted-generation lease alive for every dereference; no raw pointer can escape a sealed
+  /// generation through the public facade.
+  [[nodiscard]] POPS_EXPORT AcceptedBlockStateReadView
+  prepared_amr_block_level_active_mask(int runtime_block, int level) const;
   POPS_EXPORT void install_prepared_amr_coupling_operator(std::string provider_contract,
                                                           CouplingOperatorView view,
                                                           PreparedCouplingOperator operation);
   POPS_EXPORT void install_prepared_amr_interface_flux_provider(
       std::string provider_contract,
       std::function<void(runtime::multiblock::InterfaceFluxScheduler<Dim>&)> installer);
-  POPS_EXPORT const ProgramBlockMap& prepared_amr_program_block_map() const;
-  POPS_EXPORT void install_prepared_amr_program_flux_expression_budget(
-      std::string program_hash, std::vector<PreparedAmrProgramFluxExpressionBlockBudget> blocks,
-      std::size_t interface_coupling_application_bound,
-      std::size_t interface_coupling_identity_character_bound);
-  POPS_EXPORT const PreparedAmrProgramFluxExpressionBudget&
+  /// Return a value snapshot of the accepted Program-to-AMR block map.  The public API never
+  /// exposes the mutable registry storage across a regrid or installation boundary.
+  POPS_EXPORT ProgramBlockMap prepared_amr_program_block_map() const;
+  /// Return a value snapshot of the accepted flux-expression budget; internal hot paths use the
+  /// private reference seam below while holding their transaction authority.
+  POPS_EXPORT PreparedAmrProgramFluxExpressionBudget
   prepared_amr_program_flux_expression_budget() const;
   POPS_EXPORT ::pops::amr::InterfaceFluxLedgerBudget prepared_amr_interface_flux_ledger_budget()
       const;
@@ -407,21 +438,21 @@ class AmrSystem {
 
   /// Evaluate the installed generated operator on one level and atomically publish its residual
   /// together with the exact face-integrated fluxes used to assemble it.
-  POPS_EXPORT const PreparedLevelEvaluation& evaluate_prepared_amr_level(
-      const runtime::multiblock::BoundaryEvaluationPoint& point);
+  POPS_EXPORT AcceptedLevelEvaluationReadView
+  evaluate_prepared_amr_level(const runtime::multiblock::BoundaryEvaluationPoint& point);
   /// Prepare/evaluate an exact stage candidate without replacing the hierarchy's accepted state.
   /// The candidate must retain the active level's complete layout/distribution/component contract.
   POPS_EXPORT void prepare_generated_amr_level_state(
       const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state);
-  POPS_EXPORT const PreparedLevelEvaluation& evaluate_prepared_amr_level_at(
+  POPS_EXPORT AcceptedLevelEvaluationReadView evaluate_prepared_amr_level_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state);
   POPS_EXPORT void prepare_generated_amr_block_level_state(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state);
-  POPS_EXPORT const PreparedLevelEvaluation& evaluate_prepared_amr_block_level_at(
+  POPS_EXPORT AcceptedLevelEvaluationReadView evaluate_prepared_amr_block_level_at(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state);
-  POPS_EXPORT const PreparedLevelEvaluation& evaluate_prepared_amr_block_level_flux_at(
+  POPS_EXPORT AcceptedLevelEvaluationReadView evaluate_prepared_amr_block_level_flux_at(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state);
   [[nodiscard]] POPS_EXPORT bool requires_prepared_amr_block_boundary_session(
@@ -446,10 +477,10 @@ class AmrSystem {
   [[nodiscard]] POPS_EXPORT NewtonOptions block_newton_options(int runtime_block) const;
   [[nodiscard]] bool block_newton_diagnostics(int runtime_block) const;
   POPS_EXPORT void publish_newton_report(int runtime_block, const SolveReport& solve);
-  [[nodiscard]] const NewtonReport& last_newton_report() const;
-  POPS_EXPORT const PreparedLevelEvaluation& prepared_amr_level_evaluation(int level) const;
-  POPS_EXPORT const PreparedLevelEvaluation* prepared_amr_level_evaluation_if_present(
-      int level) const noexcept;
+  [[nodiscard]] NewtonReport last_newton_report() const;
+  POPS_EXPORT AcceptedLevelEvaluationReadView prepared_amr_level_evaluation(int level) const;
+  POPS_EXPORT AcceptedLevelEvaluationReadView
+  prepared_amr_level_evaluation_if_present(int level) const noexcept;
   POPS_EXPORT void clear_prepared_amr_level_evaluations() const noexcept;
   POPS_EXPORT void bind_program_hierarchy_candidates(
       const std::vector<MultiFab<Dim>>* candidates) const;
@@ -560,8 +591,8 @@ class AmrSystem {
       const std::string& expected_model_identity, const std::string& expected_binary_identity,
       const std::string& limiter = "minmod", const std::string& riemann = "rusanov",
       const std::string& recon = "conservative", const std::string& time = "explicit",
-      double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
-      int stride = 1, const std::vector<double>& params = {}, double positivity_floor = 0.0,
+      double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1, int stride = 1,
+      const std::vector<double>& params = {}, double positivity_floor = 0.0,
       double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false,
       NewtonOptions newton = {}, bool newton_diagnostics = false);
 
@@ -824,15 +855,15 @@ class AmrSystem {
   [[nodiscard]] POPS_EXPORT std::vector<double> auxiliary_component(
       const runtime::system::AuxiliaryComponentKey& key, int level = 0) const;
   [[nodiscard]] POPS_EXPORT std::string auxiliary_registry_contract() const;
-  [[nodiscard]] POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
+  [[nodiscard]] POPS_EXPORT runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>
   prepared_auxiliary_consumer_plan(const std::string& consumer_qid) const;
   /// Level-qualified group and plan access for generated AMR Program contexts.  Every consumer
   /// binds its compact local view against the active hierarchy level; no shared auxiliary slab is
   /// exposed at this seam.  These are rank-local hot-path lookups: callers must first perform one
   /// collective ``refresh_prepared_amr_levels()`` for the enclosing Program resource traversal.
-  [[nodiscard]] POPS_EXPORT const runtime::system::AuxiliaryStorageGroups<Dim>*
+  [[nodiscard]] POPS_EXPORT AcceptedAuxiliaryStorageGroupsReadView
   prepared_amr_provider_storage_groups(int level) const;
-  [[nodiscard]] POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
+  [[nodiscard]] POPS_EXPORT runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>
   prepared_amr_auxiliary_consumer_plan(const std::string& consumer_qid, int level) const;
 
   /// Durable accepted metadata for each AMR hierarchy level.  The native checkpoint backend owns
@@ -931,8 +962,9 @@ class AmrSystem {
   /// Collectively authenticate that every rank retains one rollback-capable accepted snapshot.
   /// This seals the transaction for commit without releasing rollback authority.
   void commit_restart_transaction();
-  /// Release a collectively committed restart snapshot.  The commit precondition is established by
-  /// commit_restart_transaction(), so this phase performs only no-throw ownership release.
+  /// Atomically seal the accepted restart generation, then release its committed snapshot and
+  /// visibility writer. The commit precondition is established by commit_restart_transaction();
+  /// a failed collective seal is fail-stop and never exposes a partial restart image.
   void finalize_restart_transaction() noexcept;
   void rollback_restart_transaction();
   /// Force exactly one artifact-owned scientific regrid inside an active restart transaction.
@@ -954,13 +986,28 @@ class AmrSystem {
   void commit_step_transaction();
   void finalize_step_transaction();
   void rollback_step_transaction();
+  /// Atomic accepted-generation witness. Scientific readers take the internal accepted read lease;
+  /// this is intentionally metadata-only so it cannot expose a candidate image.
+  [[nodiscard]] POPS_EXPORT std::uint64_t accepted_transaction_generation_() const noexcept;
+  [[nodiscard]] POPS_EXPORT bool accepted_transaction_fail_stop_() const noexcept;
+  [[nodiscard]] POPS_EXPORT runtime::program::ProvisionalReadLease _provisional_read_scope() const;
+  /// Internal Program-writer clock view. Generated AMR execution uses this seam while the
+  /// transaction owns its visibility writer; public time()/macro_step() keep their read lease.
+  POPS_EXPORT int program_macro_step_() const;
+  POPS_EXPORT double program_time_() const;
   /// Internal rollback authority used by the installed Program context.  A Program nested in a
   /// public AmrSystem step borrows the facade's accepted image instead of taking a second full engine
   /// snapshot; a direct C++ Program context remains autonomous.
   POPS_EXPORT bool has_active_step_transaction() const noexcept;
   POPS_EXPORT void restore_active_step_transaction_for_program();
-  /// Volume-weighted L2 norm of each block's accepted AMR macro-step change. Collective and valid
-  /// while the retained outer transaction snapshot still owns U^n.
+  /// Allocation-free hot diagnostic for one named block's accepted AMR macro-step change.
+  /// Collective and valid while the retained outer transaction snapshot still owns U^n. The
+  /// borrowed lookup name does not materialize a named result container.
+  POPS_EXPORT double step_change_l2_for_block(std::string_view block) const;
+  /// Internal test witness: prepared diagnostic dispatches performed by the last block query.
+  [[nodiscard]] POPS_EXPORT std::uint64_t _step_change_l2_last_dispatches() const noexcept;
+  /// Convenience compatibility API that materializes a named map. It is intentionally not a
+  /// zero-allocation hot-path API; use step_change_l2_for_block() for repeated diagnostics.
   POPS_EXPORT std::map<std::string, double> step_change_l2() const;
   /// Advances using the smallest exact-ranked level/block bound.  Each explicit Cartesian
   /// diffusive candidate uses cfl * substeps / (stride * (max(speed, speed_floor) / h_min +
@@ -970,32 +1017,10 @@ class AmrSystem {
   double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor),
                   double max_dt = std::numeric_limits<double>::infinity(), double min_dt = 0.0);
 
-  /// @name Compiled time-program install seam on the AMR hierarchy (epic ADC-511 / ADC-508, Spec 6)
-  /// AMR counterpart of System::install_program: load a generated problem.so and install its compiled
-  /// time Program over the AMR hierarchy. Mirrors the System seam (install_program_step registers the
-  /// macro-step body; the cadence + per-block RuntimeParams stores live HERE on the Impl, NOT in the
-  /// .so closure, so a value change reaches the captured context and a later checkpoint can reach
-  /// them). A generated AMR Program .so resolves these POPS_EXPORT seams from the globally promoted
-  /// host while the generated package remains RTLD_LOCAL, exactly like the exact spatial-package
-  /// installation seam on the native AMR loader.
+  /// @name Compiled time-program installation on the AMR hierarchy
+  /// The sole public authority is install_program(): generated artifacts publish their complete
+  /// prepared callback bundle atomically through ABI-v5 metadata.
   /// @{
-  /// Install the mandatory macro-step body. AmrSystem::step, advance and step_cfl reject before lazy
-  /// hierarchy construction or any other mutation while it is absent. An empty std::function is
-  /// rejected: there is no public temporal route that silently clears the whole-system Program.
-  /// POPS_EXPORT: the generated AMR Program .so resolves it across the dlopen boundary. The closure
-  /// executes the normalized ProgramGraph on the hierarchy through
-  /// an AmrProgramContext (the AMR counterpart of ProgramContext).
-  POPS_EXPORT void install_program_step(std::function<void(double)> step);
-  /// Install the companion callback that republishes Program-owned accepted clocks/history whenever
-  /// explicit bootstrap commits a hierarchy level. Generated artifacts own this seam; direct
-  /// low-level steps may omit it because they have no authenticated checkpoint context.
-  POPS_EXPORT void install_program_hierarchy_refresh(std::function<void()> refresh);
-  /// Install the artifact-owned restart preflight, transform, forced resynchronization and
-  /// phase-safe accepted-context snapshot hooks.
-  POPS_EXPORT void install_program_restart_hooks(
-      std::function<void()> preflight, std::function<void()> regrid, std::function<void()> resync,
-      std::function<std::unique_ptr<runtime::program::AcceptedProgramContextSnapshot>()>
-          accepted_context_snapshot);
   /// Set the compiled-Program macro-step cadence (parity with System::set_program_cadence, ADC-411):
   /// GLOBAL @p substeps and @p stride around the installed program closure. @p substeps subdivides each
   /// effective step into @p substeps program closure calls; @p stride runs the program once per @p
@@ -1024,30 +1049,48 @@ class AmrSystem {
   /// Install the program-index -> AMR-block-index map (entry p = the AMR block index of Program block
   /// p), built by install_program after matching the .so's block names to the instantiated AMR blocks
   /// BY NAME (Spec 3 criterion 23, ADC-457). Empty clears it and is never an implicit positional
-  /// identity. Read by the AmrProgramContext to resolve a Program block index to the name-matched block.
+  /// identity. Read by the ProgramExecutionServices to resolve a Program block index to the name-matched block.
   POPS_EXPORT void set_program_block_map(const std::vector<int>& prog_to_sys);
-  /// The installed program-index -> AMR-block-index map. Empty means no authenticated mapping and is
-  /// rejected by AmrProgramContext.
-  POPS_EXPORT const std::vector<int>& program_block_map() const;
+  /// A value snapshot of the installed program-index -> AMR-block-index map. Empty means no
+  /// authenticated mapping and is rejected by ProgramExecutionServices. The public accessor never
+  /// exposes the mutable registry storage across an installation or regrid boundary.
+  POPS_EXPORT std::vector<int> program_block_map() const;
   /// Load a generated problem.so and install its compiled time Program on the AMR hierarchy. dlopens
   /// @p so_path, checks its ABI key against this module (fail-loud on mismatch), runs the section-24
   /// install-time requirement validation (aux / solver / block instance, verbatim spec messages), binds
   /// the Program's blocks to the AMR blocks BY NAME, seeds each block's RuntimeParams from the .so
-  /// pops_program_param_* metadata, then calls the .so's pops_install_program_amr(this), whose shared
-  /// facade factory selects the hierarchy provider and installs the macro-step closure. Mirrors
+  /// candidate parameter records, then calls the .so's unique v5 `pops_install_program` entry with a
+  /// detached AMR host descriptor. The retained preparation image selects the hierarchy provider and
+  /// publishes the macro-step closure only after collective validation. Mirrors
   /// add_native_block and System::install_program; the .so stays loaded for the process lifetime.
   POPS_EXPORT void install_program(const std::string& so_path);
-  /// IR hash of the installed compiled Program (the string returned by the .so's pops_program_hash), or
+  /// IR hash of the installed compiled Program candidate, or
   /// "" if no program is installed. Parity with System::installed_program_hash (checkpoint guard).
   POPS_EXPORT std::string installed_program_hash() const;
-  /// The last macro-step dt handed to the installed Program (ADC-631): the AmrProgramContext reads it
+  /// POPSPVS1 checkpoint carrier for the bind-sealed Program persistent values.  AMR keeps this
+  /// separate from the hierarchy image so a restart can validate/allocate the resource-plan store
+  /// before the restart transaction publishes its single accepted generation.
+  POPS_EXPORT std::vector<std::uint8_t> capture_program_persistent_value_checkpoint() const;
+  POPS_EXPORT runtime::program::PreparedProgramPersistentValueRestore
+  prepare_program_persistent_value_restore(const std::vector<std::uint8_t>& payload) const;
+  /// Prepare a rank-change image only when every bound resource explicitly permits exact
+  /// redistribution.  No fallback to ordinary same-layout restore is permitted.
+  POPS_EXPORT runtime::program::PreparedProgramPersistentValueRestore
+  prepare_program_persistent_value_redistribution(const std::vector<std::uint8_t>& payload) const;
+  /// Prepare a restart regrid image.  Qualified transfer rows refuse before mutation unless the
+  /// installed artifact has registered their transfer authority.
+  POPS_EXPORT runtime::program::PreparedProgramPersistentValueRestore
+  prepare_program_persistent_value_regrid(const std::vector<std::uint8_t>& payload) const;
+  POPS_EXPORT void publish_program_persistent_value_restore(
+      runtime::program::PreparedProgramPersistentValueRestore& prepared);
+  /// The last macro-step dt handed to the installed Program (ADC-631): the ProgramExecutionServices reads it
   /// so a pre-commit history sample records its outgoing interval (variable-dt replay). POPS_EXPORT
-  /// for the dlopen boundary (the generated AMR Program .so reads it via the AmrProgramContext).
+  /// for the dlopen boundary (the generated AMR Program .so reads it via the ProgramExecutionServices).
   /// Authenticated accepted-state image owned by the compiled AMR Program context.  This is distinct
   /// from the dense field/history arrays: it preserves exact level clocks, qualified history-slot
   /// identities and lagged effective-flux publications required for conservative multistep restart.
   POPS_EXPORT std::vector<std::uint8_t> program_accepted_state() const;
-  /// Artifact-authenticated upper bounds for the complete POPSAND4 image and its fixed-size
+  /// Artifact-authenticated upper bounds for the complete POPSAND5 image and its fixed-size
   /// source-rematerialization digest. The bound covers every configured hierarchy level, temporal
   /// execution, history slot, tagging cell and accepted flux publication.
   POPS_EXPORT std::pair<std::size_t, std::size_t> checkpoint_program_state_capacity() const;
@@ -1056,7 +1099,7 @@ class AmrSystem {
   /// vector on every macro-step; the returned-by-value accessor remains the public convenience API.
   POPS_EXPORT void copy_program_accepted_state_into(std::vector<std::uint8_t>& state) const;
   /// Replace the accepted image during strict restart.  Each replacement advances a revision observed
-  /// by the persistent AmrProgramContext before its next attempt; no stale context state is reused.
+  /// by the persistent ProgramExecutionServices before its next attempt; no stale context state is reused.
   POPS_EXPORT void restore_program_accepted_state(const std::vector<std::uint8_t>& state);
   /// Strict checkpoint counterpart: authenticate the complete accepted image and its runtime-owned
   /// tagging payload before atomically publishing either. A rejected payload changes neither bytes,
@@ -1102,35 +1145,33 @@ class AmrSystem {
   /// Per-PROGRAM-block RuntimeParams of a compiled time Program whose physics reads a
   /// dsl.Param(..., kind="runtime"), owned HERE so set_program_params changes it at run time WITHOUT
   /// recompiling (the same no-recompile contract as System). install_program seeds each block's defaults
-  /// from the .so pops_program_param_* metadata. The lowered kernels read the CURRENT value via the
-  /// AmrProgramContext.
+  /// from the candidate parameter records. The lowered kernels read the CURRENT value via the
+  /// ProgramExecutionServices.
   /// @{
   /// Overwrite block @p prog_block's RuntimeParams with @p values (the COMPLETE block, sorted-name order
-  /// matching the .so pops_program_param_* metadata). @p prog_block is the PROGRAM block index. @throws
+  /// matching the candidate parameter records). @p prog_block is the PROGRAM block index. @throws
   /// std::out_of_range if the block was not seeded by a runtime-param Program, std::runtime_error on a
   /// size mismatch. Effect on the next step.
   POPS_EXPORT void set_program_params(int prog_block, const std::vector<double>& values);
   /// Block @p prog_block's CURRENT RuntimeParams (a device-clean by-value copy). An UNSEEDED block
-  /// returns a default-constructed RuntimeParams (count 0). Read by the AmrProgramContext.
+  /// returns a default-constructed RuntimeParams (count 0). Read by the ProgramExecutionServices.
   POPS_EXPORT RuntimeParams program_params(int prog_block) const;
   /// Seed block @p prog_block's RuntimeParams to its DECLARATION defaults (@p count values, the .so
-  /// pops_program_param_default metadata). Called by install_program once per runtime-param Program
+  /// candidate parameter records). Called by install_program once per runtime-param Program
   /// block; a later set_program_params overwrites only the supplied values. Idempotent.
   POPS_EXPORT void seed_program_params(int prog_block, const std::vector<double>& defaults);
   /// @}
-  /// The built AMR spatial engine (the AmrRuntime the AmrProgramContext driver wraps), or nullptr
-  /// before the lazy build. install_program forces the build so the .so's pops_install_program_amr
-  /// receives a live engine. POPS_EXPORT: the generated AMR Program .so resolves it across the dlopen
-  /// boundary.
-  POPS_EXPORT runtime::amr::AmrRuntime<Dim, typename Kokkos::DefaultExecutionSpace::memory_space>*
-  engine() const;
-  /// Compatibility inspection seam. Once built, every resolved AMR system uses AmrRuntime, so this
-  /// returns true; before build engine() remains null. POPS_EXPORT for dlopen-boundary parity.
+  /// The built AMR spatial engine, borrowed from the last sealed accepted generation. The accessor
+  /// materializes the engine when needed and returns only a const lease-owned view.
+  [[nodiscard]] POPS_EXPORT AcceptedRuntimeReadView accepted_amr_runtime() const;
+  /// Internal v5 loader host view. This does not materialize the AMR engine or an execution provider.
+  [[nodiscard]] POPS_EXPORT runtime::program::ProgramHostDescriptor program_host_descriptor();
+  /// Compatibility inspection seam. Once built, every resolved AMR system uses AmrRuntime.
   POPS_EXPORT bool uses_runtime_engine() const;
-  /// The facade-owned Profiler (the AmrProgramContext forwards count_kernel / profile_record to it).
-  /// POPS_EXPORT for the dlopen boundary. Disabled by default -> zero hot-path cost.
-  POPS_EXPORT runtime::program::Profiler& profiler_handle();
-  /// Record a runtime Scalar diagnostic under @p name (the AmrProgramContext's record_scalar seam),
+  /// Return a value snapshot of the facade-owned profiler. ProgramExecutionServices uses the
+  /// private program_profiler_ seam for mutable instrumentation.
+  POPS_EXPORT runtime::program::Profiler::Snapshot profile_snapshot() const;
+  /// Record a runtime Scalar diagnostic under @p name (the ProgramExecutionServices's record_scalar seam),
   /// retrievable via program_diagnostic / program_diagnostics. A pure side effect (inspection / logging).
   POPS_EXPORT void record_program_diagnostic(const std::string& name, double value);
   /// The recorded diagnostic @p name (0 if absent) / the whole map. Exposed to Python for inspection.
@@ -1168,7 +1209,7 @@ class AmrSystem {
   /// ACCEPTED macro-step counter (0-indexed; incremented by step / advance / step_cfl), parity with
   /// System::macro_step. Required for checkpoint/restart because Program schedules and regrid cadence
   /// depend on accepted-step phase, not only on physical time. Persisted by accepted-state restart.
-  /// POPS_EXPORT: the AmrProgramContext (a generated AMR Program .so) reads it across the dlopen
+  /// POPS_EXPORT: the ProgramExecutionServices (a generated AMR Program .so) reads it across the dlopen
   /// boundary for the head-of-step regrid cadence, like the other program seam accessors (ADC-508).
   POPS_EXPORT int macro_step() const;
   /// RESTORES the AMR clock (t, macro_step) -- parity with System::set_clock. Sets the time AND the
@@ -1357,25 +1398,101 @@ class AmrSystem {
   std::vector<double> potential();
 
  private:
+  template <int TestDim>
+  friend struct test::AmrSystemTestAccess;
+  template <int ContextDim>
+  friend class runtime::program::ProgramExecutionServices;
   template <int ContextDim, class MemorySpace>
-  friend class runtime::program::AmrProgramContext;
-  /// Private DSO seam: only the generated AmrProgramContext may install the post-publication
-  /// prepared-history remap boundary. It is intentionally absent from the public facade surface.
-  POPS_EXPORT void install_program_history_remap_accepted(
-      std::function<void(const runtime::program::AmrProgramHistoryRemapDescriptor&)> refresh);
+  friend class runtime::program::detail::AmrStorageTopologyAdapter;
+  friend void runtime::program::detail::with_amr_interface_install_states<Dim>(
+      AmrSystem<Dim>&, int, int, int, const std::function<void(MultiFab<Dim>&, MultiFab<Dim>&)>&);
+  /// Program-only state seams. These are the sole mutable/borrowed access paths used by generated
+  /// execution and internal AMR lifecycle code; public readers receive an AcceptedReadView above.
+  POPS_EXPORT const MultiFab<Dim>& program_prepared_amr_block_state_(int runtime_block,
+                                                                     int level) const;
+  POPS_EXPORT MultiFab<Dim>& program_prepared_amr_block_state_(int runtime_block, int level);
+  POPS_EXPORT const MultiFab<Dim>* program_prepared_amr_block_level_active_mask_(int runtime_block,
+                                                                                 int level) const;
+  /// Candidate-only topology/read seams.  They deliberately bypass the public accepted-reader
+  /// lease because ProgramExecutionServices already owns the writer or an explicit provisional
+  /// scope.  Generated Programs must use these rather than public inspection APIs.
+  POPS_EXPORT int program_n_blocks_() const noexcept;
+  POPS_EXPORT Geometry<Dim> program_prepared_amr_level_geometry_(int level) const;
+  POPS_EXPORT BoundaryTopology<Dim> program_prepared_amr_boundary_topology_() const;
+  POPS_EXPORT Real program_prepared_amr_block_level_maximum_speed_(
+      int runtime_block, int level, const MultiFab<Dim>& state) const;
+  POPS_EXPORT bool program_requires_prepared_amr_block_boundary_session_(int runtime_block) const;
+  POPS_EXPORT bool program_has_prepared_amr_block_boundary_linearization_(int runtime_block) const;
+  POPS_EXPORT NewtonOptions program_block_newton_options_(int runtime_block) const;
+  POPS_EXPORT bool program_block_newton_diagnostics_(int runtime_block) const;
+  POPS_EXPORT bool program_balance_consumer_is_due_(const std::string& contract,
+                                                    const std::string& route, int every_n) const;
+  POPS_EXPORT RuntimeParams program_params_(int runtime_block) const;
+  POPS_EXPORT std::vector<std::uint8_t> program_accepted_state_() const;
+  POPS_EXPORT std::uint64_t program_accepted_state_revision_() const noexcept;
+  /// Private DSO seam: copy the current accepted tagging authority into a caller-owned,
+  /// bind-primed buffer.  It deliberately does not expose a compact vector to a hot Program
+  /// refresh.
+  POPS_EXPORT void program_copy_tagging_hysteresis_state_into_(
+      std::vector<std::uint8_t>& destination) const;
+  /// Borrow the immutable, prepared temporal-chain witness.  This private Program seam is
+  /// intentionally a view: constructing a vector here would allocate once per warmed Program
+  /// attempt and silently turn a prepared authority back into a live query.
+  POPS_EXPORT std::span<const ::pops::amr::ParentChildClockRelation>
+  program_prepared_temporal_relations_() const;
+  POPS_EXPORT ::pops::amr::InterfaceFluxLedgerBudget
+  program_prepared_amr_interface_flux_ledger_budget_() const;
+  POPS_EXPORT std::pair<std::size_t, std::size_t> program_checkpoint_state_capacity_() const;
+  /// Accepted-step publication of bytes which the friend Program adapter has already serialized,
+  /// capacity-checked and collectively authenticated.  This never decodes or re-encodes POPSAND5.
+  POPS_EXPORT void program_publish_prevalidated_accepted_state_(
+      const std::vector<std::uint8_t>& state);
+  POPS_EXPORT int program_configured_n_levels_() const noexcept;
+  POPS_EXPORT const std::vector<int>& program_block_map_() const;
+  POPS_EXPORT const std::string& program_installed_hash_() const noexcept;
+  POPS_EXPORT void program_clear_prepared_amr_level_evaluations_() const noexcept;
+  POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
+  program_prepared_auxiliary_consumer_plan_(const std::string& consumer_qid) const;
+  POPS_EXPORT const runtime::system::AuxiliaryStorageGroups<Dim>*
+  program_prepared_amr_provider_storage_groups_(int level) const;
+  POPS_EXPORT runtime::amr::AmrRuntime<Dim, memory_space>* program_engine_() const noexcept;
+  POPS_EXPORT runtime::program::Profiler& program_profiler_() noexcept;
+  POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
+  program_prepared_amr_auxiliary_consumer_plan_(std::string_view consumer_qid, int level) const;
+  POPS_EXPORT const ProgramBlockMap& program_prepared_amr_program_block_map_() const;
+  POPS_EXPORT const PreparedAmrProgramFluxExpressionBudget&
+  program_prepared_amr_program_flux_expression_budget_() const;
   std::vector<std::string> prepare_topology_field_order(
       std::string_view reason, const runtime::multiblock::BoundaryEvaluationPoint& accepted_point);
   std::vector<std::vector<std::string>> rematerialize_fields_after_topology_change(
       std::string_view reason, const runtime::multiblock::BoundaryEvaluationPoint& accepted_point);
   POPS_EXPORT PreparedMultiBlockHierarchy& prepared_amr_multiblock_hierarchy_();
   POPS_EXPORT const PreparedMultiBlockHierarchy& prepared_amr_multiblock_hierarchy_() const;
+  /// Borrow the exact generated-hierarchy lane retained by the accepted Program image.  This is
+  /// deliberately distinct from the multi-block carrier lane: generated providers are prepared
+  /// and collectively authenticated on the child graph lane and must keep using that same
+  /// authority after owner-last publication.
+  POPS_EXPORT const ExecutionLane& program_prepared_amr_execution_lane_() const;
   POPS_EXPORT void prepare_generated_amr_block_level_state(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
-  POPS_EXPORT const PreparedLevelEvaluation& evaluate_prepared_amr_block_level_at(
+  /// Program-only evaluation seams. They return references solely to friend adapters while the
+  /// caller owns the surrounding transaction/visibility authority; public callers receive the
+  /// lease-owned AcceptedLevelEvaluationReadView overloads above.
+  POPS_EXPORT const PreparedLevelEvaluation& program_evaluate_prepared_amr_level_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point);
+  POPS_EXPORT const PreparedLevelEvaluation& program_evaluate_prepared_amr_level_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state);
+  POPS_EXPORT const PreparedLevelEvaluation& program_evaluate_prepared_amr_block_level_at_(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state);
+  POPS_EXPORT const PreparedLevelEvaluation& program_evaluate_prepared_amr_block_level_flux_at_(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state);
+  POPS_EXPORT const PreparedLevelEvaluation& program_evaluate_prepared_amr_block_level_at_(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
-  POPS_EXPORT const PreparedLevelEvaluation& evaluate_prepared_amr_block_level_flux_at(
+  POPS_EXPORT const PreparedLevelEvaluation& program_evaluate_prepared_amr_block_level_flux_at_(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
   /// Friend-only transaction seam.  These evaluate into the hierarchy-owned candidate workspace
@@ -1392,8 +1509,9 @@ class AmrSystem {
   POPS_EXPORT const PreparedLevelEvaluation& prepare_prepared_amr_block_level_flux_at(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
-  /// The validation phase is collective and must complete before any caller publishes another
-  /// transaction member.  The companion publication only performs proven-noexcept swaps/stores.
+  /// Validate an attempt-local target span against the sealed prepared-hierarchy witness before
+  /// publication.  It performs no new collective or dynamic contract construction; the companion
+  /// publication only performs proven-noexcept swaps/stores.
   POPS_EXPORT void validate_prepared_amr_block_level_batch(
       std::span<const std::pair<int, int>> targets) const;
   POPS_EXPORT void publish_prepared_amr_block_level_batch(
@@ -1407,7 +1525,7 @@ class AmrSystem {
       MultiFab<Dim>& state, Real dt, const NewtonOptions& options, int parent_level,
       const MultiFab<Dim>* staged_parent);
   /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains
-  /// private to AmrProgramContext and is deliberately absent from Python bindings.
+  /// private to ProgramExecutionServices and is deliberately absent from Python bindings.
   POPS_EXPORT void record_program_balance_term(const std::string& route, const std::string& term,
                                                double value);
   POPS_EXPORT bool program_balance_consumer_is_due(const std::string& contract,

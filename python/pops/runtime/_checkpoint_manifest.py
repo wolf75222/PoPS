@@ -11,7 +11,12 @@ from pops._manifest_protocol import strict_json_loads
 from pops._generated_release_contract import (
     CHECKPOINT_ENVELOPE_SCHEMA_VERSION as CHECKPOINT_SCHEMA_VERSION,
 )
-from pops.output._checkpoint_contract import IDENTITY_KEY, MANIFEST_KEY
+from pops.output._checkpoint_contract import (
+    IDENTITY_KEY,
+    MANIFEST_KEY,
+    PROGRAM_PERSISTENT_CHECKPOINT_KEY,
+    program_persistent_checkpoint_manifest_from_payload,
+)
 
 
 def _payload_files(payload: Any) -> set[str]:
@@ -172,6 +177,12 @@ def _seal_checkpoint_payload_with_identities(
         },
         "arrays": arrays,
     }
+    persistent_manifest = program_persistent_checkpoint_manifest_from_payload(payload)
+    if persistent_manifest is not None:
+        # Keep the native carrier opaque in the archive, but bind its schema/plan identity into the
+        # signed envelope as a first-class field.  The raw bytes remain covered by ``arrays`` and
+        # are decoded again on inspection, so this is evidence rather than an alternate codec.
+        base[PROGRAM_PERSISTENT_CHECKPOINT_KEY] = persistent_manifest
     restart = make_identity("restart", base)
     manifest = dict(base, restart_identity=_identity_json(restart))
     payload[MANIFEST_KEY] = json.dumps(
@@ -223,7 +234,8 @@ def inspect_checkpoint_payload_integrity(
         "schema_version", "runtime_kind", "semantic_identity", "artifact_identity",
         "bind_identity", "run_identity", "clock", "arrays", "restart_identity",
     }
-    if set(manifest) != expected_keys:
+    persistent_manifest = PROGRAM_PERSISTENT_CHECKPOINT_KEY in manifest
+    if set(manifest) != expected_keys | ({PROGRAM_PERSISTENT_CHECKPOINT_KEY} if persistent_manifest else set()):
         raise ValueError("checkpoint manifest keys must be exactly %s" % sorted(expected_keys))
     version = manifest["schema_version"]
     if (isinstance(version, bool) or not isinstance(version, int)
@@ -252,7 +264,12 @@ def inspect_checkpoint_payload_integrity(
     for name, evidence in manifest["arrays"].items():
         if evidence != _array_evidence(payload[name]):
             raise ValueError("checkpoint payload digest mismatch for %r" % name)
-    base = {key: manifest[key] for key in expected_keys - {"restart_identity"}}
+    payload_persistent_manifest = program_persistent_checkpoint_manifest_from_payload(payload)
+    if persistent_manifest != (payload_persistent_manifest is not None):
+        raise ValueError("checkpoint Program persistent carrier is absent from its manifest")
+    if persistent_manifest and manifest[PROGRAM_PERSISTENT_CHECKPOINT_KEY] != payload_persistent_manifest:
+        raise ValueError("checkpoint Program persistent carrier manifest differs from its bytes")
+    base = {key: manifest[key] for key in manifest if key != "restart_identity"}
     restart = _identity_from_json(manifest["restart_identity"])
     expected = make_identity("restart", base)
     if restart.domain != "restart" or restart.token != expected.token:

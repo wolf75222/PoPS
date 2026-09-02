@@ -57,8 +57,8 @@ class KrylovWorkspace {
                         std::move(metric), false) {}
 
   /// Legacy generic materialization on an authenticated communicator. This overload intentionally
-  /// has no ProgramContext materialization token; generic callers retain their source-compatible
-  /// path, while ProgramContext/generated owners must use the explicit-token overload below.
+  /// has no ProgramExecutionServices materialization token; generic callers retain their source-compatible
+  /// path, while ProgramExecutionServices/generated owners must use the explicit-token overload below.
   KrylovWorkspace(const ExecutionCommunicator& execution_communicator,
                   std::string_view lane_identity, const MultiFab<Dim>& prototype,
                   PreparedKrylovMethod<Dim> method, KrylovFootprint<Dim> footprint,
@@ -86,7 +86,7 @@ class KrylovWorkspace {
 
  private:
   /// Internal materialization path. Generated/runtime owners must provide one stable token for
-  /// every workspace they expect a ProgramContext to select collectively; the legacy convenience
+  /// every workspace they expect a ProgramExecutionServices to select collectively; the legacy convenience
   /// constructor deliberately retains no such token and is therefore unavailable to that seam.
   KrylovWorkspace(const ExecutionCommunicator& execution_communicator,
                   std::string_view lane_identity, std::string_view materialization_token,

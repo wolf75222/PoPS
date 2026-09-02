@@ -309,16 +309,18 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
     )
     program, source = _build(solver)
 
-    amr = source.split('extern "C" void pops_install_program_amr', 1)[1]
+    # ABI-v5 puts candidate preparation (including hierarchy phase closures) before the single C
+    # entry point. Inspect the complete artifact so ordering is independent of entry placement.
+    amr = source
     configure = amr.index("ctx.configure_hierarchy_tensor_solver(")
     flat_phase = amr.index("ctx.solve_prepared_linear(")
     direct_phase = amr.index("ctx.solve_hierarchy_tensor(")
     hierarchy_advance = amr.index("auto _advance_hierarchy")
     branch = amr.index("if (ctx.uses_prepared_krylov_fallback())", hierarchy_advance)
-    refresh = amr.index("_refresh_level_programs();", hierarchy_advance)
+    refresh = amr.index("_refresh_level_programs(false);", hierarchy_advance)
     assert "if (ctx.level() != 0)" in amr[hierarchy_advance:branch]
     gather_call = amr.index(".gather(hierarchy_dt)", branch)
-    direct_call = amr.index("_level_programs->front().solve(hierarchy_dt)", gather_call)
+    direct_call = amr.index("_active_level_authority(ctx)->programs.front().solve(hierarchy_dt)", gather_call)
     publish_call = amr.index(".publish(hierarchy_dt)", direct_call)
     synchronized = amr.index("ctx.advance_synchronized_hierarchy", publish_call)
     assert configure < flat_phase < direct_phase < branch
@@ -379,19 +381,63 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
     assert "hierarchy_solver" not in solve.attrs
 
 
-def test_resolved_interface_pair_proof_reaches_every_hierarchy_phase():
+def test_hierarchy_pre_solve_commits_keep_their_local_producer_scope():
+    program, source = _build(CompositeTensorFAC())
+    hierarchy_solve = next(
+        value for value in program._values
+        if value.op == "solve_linear" and value.attrs.get("scope") == "hierarchy"
+    )
+    split = next(
+        index for index, value in enumerate(program._values)
+        if value is hierarchy_solve
+    )
+    pre_solve_commits = [
+        (state_ref, committed)
+        for state_ref, committed in program._commits.items()
+        if any(value is committed for value in program._values[:split])
+    ]
+    assert pre_solve_commits  # This fixture deliberately commits dummy before the hierarchy barrier.
+
+    bases = {
+        value.block: value
+        for value in program._values
+        if value.op == "state"
+    }
+    stage_initial_guess = source.index("ctx.stage_linear_initial_guess")
+    direct_solve = source.index("ctx.solve_hierarchy_tensor(", stage_initial_guess)
+    for state_ref, committed in pre_solve_commits:
+        base = bases[state_ref.block_ref]
+        declaration = (
+            "pops::MultiFab<pops::kNativeDimension>& u%d = ctx.scratch_state(" % committed.id
+        )
+        commit_pair = "{&u%d, &u%d}" % (base.id, committed.id)
+        assert declaration in source
+        gather_commit = source.index(commit_pair, stage_initial_guess, direct_solve)
+        assert source.rfind(declaration, 0, gather_commit) != -1
+        # The ordinary fallback owns another full-step commit.  In the hierarchy
+        # path the pre-solve pair appears only in gather, never in solve/publish.
+        assert source.count(commit_pair, stage_initial_guess, direct_solve) == 1
+
+
+def test_unconsumed_interface_pair_is_not_emitted_but_hierarchy_route_survives():
     _, source = _build(
         CompositeTensorFAC(),
         _with_interface_pair=True,
     )
 
-    amr = source.split('extern "C" void pops_install_program_amr', 1)[1]
-    assert source.count("ctx.rhs_jacvec_pair_into_at(") == 1
+    # The hierarchy fragments are emitted before the C ABI install entry in the complete source;
+    # inspect the full artifact so this witness remains independent of install-entry placement.
+    amr = source
+    # The auxiliary interface operator is intentionally never consumed by a solve in this fixture.
+    # Dead authoring declarations must not trigger owner inference, an ApplyFn, or plan-backed
+    # scratch preparation. The actual tensor solve route remains present in every hierarchy phase.
+    assert source.count("ctx.rhs_jacvec_pair_into_at(") == 0
+    assert "coupled_interface_jacobian" not in source
     assert "pops::kNativeDimension" in source
     assert "static_assert(pops::kNativeDimension == 2)" not in source
     assert "Box2D" not in source
     gather = amr.index(".gather(hierarchy_dt)")
-    solve = amr.index("_level_programs->front().solve(hierarchy_dt)", gather)
+    solve = amr.index("_active_level_authority(ctx)->programs.front().solve(hierarchy_dt)", gather)
     publish = amr.index(".publish(hierarchy_dt)", solve)
     assert gather < solve < publish
 
@@ -441,12 +487,13 @@ def test_omitted_fac_controls_emit_native_default_sentinels_only():
 def test_refined_solution_publishes_atomically_before_synchronized_advance():
     """Lock the complete refined-stage ordering without a wall-clock or legacy oracle."""
     _, source = _build(CompositeTensorFAC(max_iter=13, rel_tol=4.0e-8))
-    amr = source.split('extern "C" void pops_install_program_amr', 1)[1]
+    # The v5 candidate prepares hierarchy closures before the sole install entry.
+    amr = source
     hierarchy_advance = amr.index("auto _advance_hierarchy")
     branch = amr.index("if (ctx.uses_prepared_krylov_fallback())", hierarchy_advance)
     assert "if (ctx.level() != 0)" in amr[hierarchy_advance:branch]
     gather = amr.index(".gather(hierarchy_dt)", branch)
-    solve = amr.index("_level_programs->front().solve(hierarchy_dt)", gather)
+    solve = amr.index("_active_level_authority(ctx)->programs.front().solve(hierarchy_dt)", gather)
     publish = amr.index(".publish(hierarchy_dt)", solve)
     synchronize = amr.index("ctx.advance_synchronized_hierarchy", publish)
     assert gather < solve < publish < synchronize

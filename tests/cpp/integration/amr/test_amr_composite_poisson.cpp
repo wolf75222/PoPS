@@ -8,7 +8,7 @@
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/program/amr_program_context.hpp>
+#include <pops/runtime/program/program_execution_services.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
 
 #include <algorithm>
@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -214,7 +215,7 @@ pops::amr::tagging::ClusterResult<Dim> centered_cluster(
 }
 
 void publish_centered_fine_level(pops::AmrSystem<Dim>& system) {
-  auto* engine = system.engine();
+  auto* engine = pops::test::AmrSystemTestAccess<Dim>::engine(system);
   ASSERT_NE(engine, nullptr);
   const pops::amr::RefinementRatio<Dim> ratio(filled<std::array<int, Dim>>(2));
   const pops::amr::regridding::RegridPreparationBudget budget{
@@ -292,6 +293,7 @@ TEST(test_amr_composite_poisson,
   pops::AmrSystem<Dim> system(config);
   pops::test::install_amr_runtime_authority(system,
                                             "tests.amr.composite-poisson/exact-provider-runtime");
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
   const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
       "pops.field-hierarchy.composite", 1, {"pops.field-hierarchy.options.empty@1", {}}};
   pops::CompositeFacOptions fac_controls;
@@ -337,20 +339,49 @@ TEST(test_amr_composite_poisson,
   system.refresh_prepared_amr_levels();
   system.set_program_block_map({0});
 
-  auto context = pops::runtime::program::make_program_execution_provider(&system);
-  context->configure_primary_clock("test-clock");
-  context->begin_step(0.01);
-  pops::MultiFab<Dim> stage = context->scratch_state_like(context->state(0));
-  stage.set_val(pops::Real(1));
-  pops::SolveOutcome outcome =
-      context->solve_fields_from_state_at(evaluation_point(), slot, 0, stage);
-  const pops::SolveReport accepted =
-      outcome.consume(outcome.report().solved_value_available()
-                          ? pops::SolveConsumption::kAccept
-                          : (outcome.report().action == pops::SolveAction::kRejectAttempt
-                                 ? pops::SolveConsumption::kRejectAttempt
-                                 : pops::SolveConsumption::kFailRun));
-  ASSERT_TRUE(accepted.solved()) << accepted.reason;
+  using Resource = pops::test::program_v5::CallbackProgramResource;
+  std::uint32_t coarse_ncomp = 0;
+  std::uint32_t coarse_ghost_depth = 0;
+  {
+    const auto coarse_state = system.prepared_amr_block_state(0, 0);
+    ASSERT_TRUE(coarse_state);
+    coarse_ncomp = static_cast<std::uint32_t>(coarse_state->ncomp());
+    coarse_ghost_depth = static_cast<std::uint32_t>(coarse_state->ghosts()[0]);
+  }
+  const std::vector<Resource> resources{{
+      Resource::Kind::state,
+      0,
+      0,
+      0,
+      0,
+      coarse_ncomp,
+      coarse_ghost_depth,
+  }};
+  const std::vector<pops::test::program_v5::CallbackProgramFieldRoute> field_routes{{0, slot, {0}}};
+  struct SolveEvidence {
+    bool solved = false;
+    std::string reason;
+  };
+  auto evidence = std::make_shared<SolveEvidence>();
+  pops::test::install_explicit_amr_callback_program<Dim>(
+      system, "test.amr-composite-poisson/program@1", "test-clock", resources, field_routes,
+      [evidence, slot](auto& context, double macro_dt) {
+        context.begin_step(macro_dt);
+        auto& stage = context.scratch_state(0, 0, context.state(0));
+        stage.set_val(pops::Real(1));
+        pops::SolveOutcome outcome =
+            context.solve_fields_from_state_at(evaluation_point(), slot, 0, stage);
+        const pops::SolveReport accepted =
+            outcome.consume(outcome.report().solved_value_available()
+                                ? pops::SolveConsumption::kAccept
+                                : (outcome.report().action == pops::SolveAction::kRejectAttempt
+                                       ? pops::SolveConsumption::kRejectAttempt
+                                       : pops::SolveConsumption::kFailRun));
+        evidence->solved = accepted.solved();
+        evidence->reason = accepted.reason;
+      });
+  ASSERT_NO_THROW(system.step(0.01));
+  ASSERT_TRUE(evidence->solved) << evidence->reason;
 
   EXPECT_EQ(system.field_provider_slots(), std::vector<std::string>{slot});
   EXPECT_EQ(system.field_provider_levels(slot), 2);

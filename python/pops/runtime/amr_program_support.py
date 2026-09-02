@@ -74,8 +74,8 @@ class AMRProgramSupportContext:
 class AMRProgramSupportError(ValueError):
     """Resolved AMR execution facts are incompatible with a reachable Program operation."""
 
-# --- Capability groups: the ONE mirror of the AmrProgramContext deferral surface ----------------
-# Each group names (a) any representable AmrProgramContext C++ route that calls
+# --- Capability groups: the ONE mirror of the ProgramExecutionServices deferral surface ----------------
+# Each group names (a) any representable ProgramExecutionServices C++ route that calls
 # ``deferred_op("<name>", ...)`` and (b) the Python IR operations/attributes that route into the
 # group. ``status`` records a pre-artifact refusal which has no representable C++ call site. An
 # empty ``header_methods`` set therefore says only that there is no runtime deferral; it does not
@@ -89,7 +89,7 @@ class AMRProgramSupportError(ValueError):
 DEFERRED_GROUPS: dict = {
     "condensed": {
         # ADC-633 WIRED the condensed-implicit Program on the hierarchy and ADC-637 made the generic
-        # condensed_* ops the sole route: per-level assembly runs through AmrProgramContext::grid_context /
+        # condensed_* ops the sole route: per-level assembly runs through ProgramExecutionServices::grid_context /
         # assembly_target / assembly_source, and solve_prepared_linear dispatches flat->prepared BiCGStab
         # / refined->composite FAC. No throw stub remains, so header_methods is EMPTY -> the group is GREEN.
         "issue": "ADC-633",
@@ -178,7 +178,6 @@ DEFERRED_GROUPS: dict = {
     },
     "schedule_cache": {
         "issue": None,
-        "status": "pending:checkpointed_hierarchy_cache",
         "op_source": "program_emit_schedule scratch cache_* actions",
         "ir_ops": frozenset(),  # scheduling is an attr on an op node, not a distinct IR op
         "header_methods": frozenset(),
@@ -187,10 +186,11 @@ DEFERRED_GROUPS: dict = {
 
 
 def header_deferred_methods() -> frozenset:
-    """The FULL set of AmrProgramContext deferral method identifiers this mirror declares.
+    """The FULL set of ProgramExecutionServices deferral method identifiers this mirror declares.
 
     The union of every group's ``header_methods`` -- the mirror of the deferral surface in
-    ``amr_program_context.hpp``. ``test_amr_program_support_parity`` parses the header and asserts the
+    unified ``program_execution_services.hpp``. ``test_amr_program_support_parity`` parses the
+    exact AMR detail closure and asserts the
     parsed set equals this one, so the mirror cannot drift from the C++ source of truth.
     """
     methods: set = set()
@@ -304,7 +304,7 @@ def _used_groups(program: Any, *, context: AMRProgramSupportContext) -> set:
         if op == "rhs" and _has_named_fluxes(attrs):
             used.add("named_flux")
         # The canonical IR op is solve_fields; code generation alone lowers that operation to the
-        # exact C++ AmrProgramContext::solve_fields_from_state_at seam.
+        # exact C++ ProgramExecutionServices::solve_fields_from_state_at seam.
         if op == "solve_fields" and attrs.get("field"):
             used.add("named_field_solve")
     for value, ancestry in _scheduled_values(program, nodes):
@@ -355,9 +355,9 @@ def _schedule_groups(
     """Classify one validated scheduled value into exact due/domain/policy facets.
 
     Cache-free cadence, qualified domains, and off-cadence actions are deliberately separate so a
-    green due primitive cannot overclaim a pending persistence policy. Every scratch cache action
-    remains unavailable until the cache participates in hierarchy checkpoint/regrid state. Field
-    ``Hold`` retains its accepted ProviderPack and is a distinct capability. Scratch
+    green due primitive cannot overclaim an unrelated persistence policy. Every scratch cache action
+    is backed by the bind-sealed dense slot table and its accepted checkpoint image. Field ``Hold``
+    retains its accepted ProviderPack and is a distinct capability. Scratch
     ``Skip`` is not a cache hit: it requires prepared accepted scratch state and rollback. Field
     ``Skip`` is honest only on a resolved frozen hierarchy where the ProviderPack remains retained,
     and only a root-region AcceptedStep Every/AtStart proves that the first invocation prepares that

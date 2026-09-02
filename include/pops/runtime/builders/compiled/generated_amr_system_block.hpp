@@ -181,8 +181,29 @@ inline void append_variable_set_contract(ExactContractBuilder& contract,
                 [](ExactContractBuilder& item, const std::string& role) { item.text(role); });
 }
 
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
+class RuntimeTopologyView {
+ public:
+  using runtime_type = runtime::amr::AmrRuntime<Dim, MemorySpace>;
+  using hierarchy_type = typename runtime_type::hierarchy_type;
+  using field_type = MultiFab<Dim, MemorySpace>;
+
+  virtual ~RuntimeTopologyView() = default;
+  [[nodiscard]] virtual const hierarchy_type& hierarchy() const = 0;
+  [[nodiscard]] virtual std::string_view spatial_contract() const = 0;
+  [[nodiscard]] virtual std::uint64_t topology_epoch() const = 0;
+  [[nodiscard]] virtual std::uint64_t materialization_generation() const = 0;
+  [[nodiscard]] virtual const ExecutionLane& lane() const = 0;
+  [[nodiscard]] virtual std::size_t block_count() const = 0;
+  [[nodiscard]] virtual const field_type& state(std::size_t block, std::size_t level) const = 0;
+  /// Writable access is restricted to cold graph construction, where ghost-fill preparation binds
+  /// the exact target Fab.  Dependency routes use state() and never gain a candidate write path.
+  [[nodiscard]] virtual field_type& mutable_state(std::size_t block, std::size_t level) const = 0;
+  [[nodiscard]] virtual std::string_view collective_contract() const = 0;
+};
+
 template <int Dim, class MemorySpace>
-void require_level_context(const runtime::amr::AmrRuntime<Dim, MemorySpace>& runtime,
+void require_level_context(const RuntimeTopologyView<Dim, MemorySpace>& runtime,
                            const GeneratedAmrLevelContext<Dim, MemorySpace>& context,
                            int state_components, int provider_components,
                            const Extent<Dim>& required_ghosts,
@@ -311,7 +332,7 @@ void require_level_context(const runtime::amr::AmrRuntime<Dim, MemorySpace>& run
 }
 
 template <int Dim, class MemorySpace>
-std::string level_contract(const runtime::amr::AmrRuntime<Dim, MemorySpace>& runtime,
+std::string level_contract(const RuntimeTopologyView<Dim, MemorySpace>& runtime,
                            const GeneratedAmrLevelContext<Dim, MemorySpace>& context,
                            std::string_view provider_identity,
                            std::optional<Real> parabolic_frequency) {
@@ -500,11 +521,14 @@ Real all_component_norm_inf(const MultiFab<Dim>& field) {
 
 }  // namespace generated_amr_detail
 
-/// One exact generated spatial specialization bound to a live AMR level generation.
+/// One exact generated spatial specialization bound to an authenticated AMR topology view.  The
+/// view is either accepted or forward-staged; generated blocks must not retain a raw runtime that
+/// would silently switch a candidate graph back to the accepted hierarchy.
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 class PreparedGeneratedAmrLevelBlock {
  public:
   using runtime_type = runtime::amr::AmrRuntime<Dim, MemorySpace>;
+  using topology_view_type = generated_amr_detail::RuntimeTopologyView<Dim, MemorySpace>;
   using field_type = MultiFab<Dim, MemorySpace>;
   using evaluation_type = PreparedAmrLevelEvaluation<Dim, MemorySpace>;
   using point_type = runtime::multiblock::BoundaryEvaluationPoint;
@@ -516,21 +540,28 @@ class PreparedGeneratedAmrLevelBlock {
   using SourceEvaluator = std::function<void(const point_type&, field_type&, field_type&)>;
   using ImplicitSourceSolver =
       std::function<SolveOutcome(const point_type&, field_type&, Real, const NewtonOptions&)>;
+  using implicit_workspace_type = PreparedImplicitSourceWorkspace<Dim, MemorySpace>;
   using PointwiseProjection = std::function<void(field_type&)>;
   using Speed = std::function<Real(const field_type&)>;
   using PoissonRhs = std::function<void(const field_type&, field_type&)>;
 
   PreparedGeneratedAmrLevelBlock(
-      runtime_type& runtime, std::size_t level, field_type& state, std::string state_identity,
-      std::string provider_identity, std::string collective_contract, const ExecutionLane& lane,
-      StatePreparation prepare_state, PhysicalBoundaryPreparation prepare_physical,
-      Evaluator evaluator, Evaluator flux_evaluator, Evaluator core_evaluator,
-      Evaluator flux_core_evaluator, Evaluator boundary_evaluator, BoundaryJvp boundary_jvp,
-      SourceEvaluator source_evaluator, ImplicitSourceSolver implicit_source_solver,
+      const topology_view_type& runtime, std::size_t level, field_type& state,
+      std::string state_identity, std::string provider_identity, std::string collective_contract,
+      const ExecutionLane& lane, StatePreparation prepare_state,
+      PhysicalBoundaryPreparation prepare_physical, Evaluator evaluator, Evaluator flux_evaluator,
+      Evaluator core_evaluator, Evaluator flux_core_evaluator, Evaluator boundary_evaluator,
+      BoundaryJvp boundary_jvp, SourceEvaluator source_evaluator,
+      std::shared_ptr<implicit_workspace_type> implicit_workspace,
+      std::uint64_t implicit_workspace_generation, ImplicitSourceSolver implicit_source_solver,
       Speed maximum_speed, PoissonRhs poisson_rhs, PointwiseProjection pointwise_projection,
       Speed source_frequency, std::optional<Real> parabolic_frequency, Speed stability_dt)
-      : runtime_(&runtime),
-        level_(level),
+      // RuntimeTopologyView is a cold-build adapter and may itself live only for the duration of
+      // graph construction.  Retain the immutable generation witness by value; the owning
+      // PreparedHierarchy publishes or discards this block together with the fields it addresses.
+      : level_(level),
+        prepared_level_count_(runtime.hierarchy().num_levels()),
+        spatial_contract_(runtime.spatial_contract()),
         state_(&state),
         state_identity_(std::move(state_identity)),
         provider_identity_(std::move(provider_identity)),
@@ -545,6 +576,8 @@ class PreparedGeneratedAmrLevelBlock {
         boundary_evaluator_(std::move(boundary_evaluator)),
         boundary_jvp_(std::move(boundary_jvp)),
         source_evaluator_(std::move(source_evaluator)),
+        implicit_workspace_(std::move(implicit_workspace)),
+        implicit_workspace_generation_(implicit_workspace_generation),
         implicit_source_solver_(std::move(implicit_source_solver)),
         maximum_speed_(std::move(maximum_speed)),
         poisson_rhs_(std::move(poisson_rhs)),
@@ -554,11 +587,14 @@ class PreparedGeneratedAmrLevelBlock {
         stability_dt_(std::move(stability_dt)),
         topology_epoch_(runtime.topology_epoch()),
         materialization_generation_(runtime.materialization_generation()) {
-    if (level_ >= runtime.hierarchy().num_levels() || state_ == nullptr || lane_ == nullptr ||
+    if (level_ >= prepared_level_count_ || state_ == nullptr || lane_ == nullptr ||
         state_identity_.empty() || provider_identity_.empty() || collective_contract_.empty() ||
         !prepare_state_ || !prepare_physical_ || !evaluator_ || !flux_evaluator_ ||
         !core_evaluator_ || !flux_core_evaluator_ || !boundary_evaluator_ || !boundary_jvp_ ||
-        !source_evaluator_ || !implicit_source_solver_ || !maximum_speed_ || !poisson_rhs_)
+        !source_evaluator_ || !implicit_workspace_ || !implicit_workspace_->prepared() ||
+        implicit_workspace_->state_generation() != implicit_workspace_generation_ ||
+        implicit_workspace_generation_ != materialization_generation_ || !implicit_source_solver_ ||
+        !maximum_speed_ || !poisson_rhs_)
       throw std::invalid_argument("generated AMR level block preparation is incomplete");
   }
 
@@ -668,6 +704,9 @@ class PreparedGeneratedAmrLevelBlock {
                                                    Real dt, const NewtonOptions& options) const {
     require_live_();
     require_state_(point, state);
+    if (!implicit_workspace_ || !implicit_workspace_->prepared() ||
+        implicit_workspace_->state_generation() != implicit_workspace_generation_)
+      return SolveOutcome::collective_lane(SolveReport::capability_failure(), *lane_);
     return implicit_source_solver_(point, state, dt, options);
   }
 
@@ -804,7 +843,7 @@ class PreparedGeneratedAmrLevelBlock {
 
   void require_evaluation_contract_(const evaluation_type& evaluation) const {
     require_state_contract_(evaluation.residual);
-    if (evaluation.spatial_contract != runtime_->spatial_contract() ||
+    if (evaluation.spatial_contract != spatial_contract_ ||
         evaluation.topology_epoch != topology_epoch_ ||
         evaluation.materialization_generation != materialization_generation_ ||
         evaluation.integrated_face_fluxes.size() != state_->local_size())
@@ -818,15 +857,14 @@ class PreparedGeneratedAmrLevelBlock {
   }
 
   void require_live_() const {
-    if (runtime_ == nullptr || state_ == nullptr || level_ >= runtime_->hierarchy().num_levels() ||
-        topology_epoch_ != runtime_->topology_epoch() ||
-        materialization_generation_ != runtime_->materialization_generation())
+    if (state_ == nullptr || level_ >= prepared_level_count_)
       throw std::invalid_argument(
           "generated AMR level block is stale after a hierarchy topology mutation");
   }
 
-  runtime_type* runtime_ = nullptr;
   std::size_t level_ = 0;
+  std::size_t prepared_level_count_ = 0;
+  std::string spatial_contract_;
   field_type* state_ = nullptr;
   std::string state_identity_;
   std::string provider_identity_;
@@ -841,6 +879,11 @@ class PreparedGeneratedAmrLevelBlock {
   Evaluator boundary_evaluator_;
   BoundaryJvp boundary_jvp_;
   SourceEvaluator source_evaluator_;
+  /// One cold-primed source workspace for this exact (block, level, implicit-route) image.  Its
+  /// shape prototype is the materialized level state; Program candidates are checked against that
+  /// immutable contract before the workspace is reserved.
+  std::shared_ptr<implicit_workspace_type> implicit_workspace_;
+  std::uint64_t implicit_workspace_generation_ = 0;
   ImplicitSourceSolver implicit_source_solver_;
   Speed maximum_speed_;
   PoissonRhs poisson_rhs_;
@@ -860,9 +903,11 @@ struct PreparedAmrSystemBlock {
   static constexpr int dimension = Dim;
 
   using runtime_type = runtime::amr::AmrRuntime<Dim, MemorySpace>;
+  using topology_view_type = generated_amr_detail::RuntimeTopologyView<Dim, MemorySpace>;
   using context_type = GeneratedAmrLevelContext<Dim, MemorySpace>;
   using level_block_type = PreparedGeneratedAmrLevelBlock<Dim, MemorySpace>;
-  using LevelMaterializer = std::function<level_block_type(runtime_type&, context_type)>;
+  using LevelMaterializer =
+      std::function<level_block_type(const topology_view_type&, context_type)>;
 
   std::string name;
   std::string provider_identity;
@@ -888,7 +933,7 @@ struct PreparedAmrSystemBlock {
   std::function<RecoveryReport(const double*, double*)> conservative_to_primitive;
   UniformCellRecovery batch_conservative_to_primitive;
 
-  level_block_type prepare_level(runtime_type& runtime, context_type context) const {
+  level_block_type prepare_level(const topology_view_type& runtime, context_type context) const {
     if (!materialize_level)
       throw std::logic_error("prepared AMR system block has no level materializer");
     return materialize_level(runtime, std::move(context));
@@ -1010,14 +1055,15 @@ void materialize_cut_cell_patch(
 
 /// Generated AMR seam for the one uniform-ratio CutCellFractions restrict/prolong/reflux path.
 template <int Dim>
-void apply_generated_amr_cut_cell_fraction_transfer(
-    FieldView<const Real, Dim> fine_phi, FieldView<Real, Dim> coarse_volume,
-    FieldView<Real, Dim> fine_volume, FieldView<Real, Dim> coarse_aperture_residual,
-    const Box<Dim>& coarse_region, const amr::RefinementRatio<Dim>& ratio,
-    amr::transfer::IndexMapping<Dim> mapping = {}) {
+void apply_generated_amr_cut_cell_fraction_transfer(FieldView<const Real, Dim> fine_phi,
+                                                    FieldView<Real, Dim> coarse_volume,
+                                                    FieldView<Real, Dim> fine_volume,
+                                                    FieldView<Real, Dim> coarse_aperture_residual,
+                                                    const Box<Dim>& coarse_region,
+                                                    const amr::RefinementRatio<Dim>& ratio,
+                                                    amr::transfer::IndexMapping<Dim> mapping = {}) {
   nd::apply_cut_cell_fraction_amr_transfer(fine_phi, coarse_volume, fine_volume,
-                                           coarse_aperture_residual, coarse_region, ratio,
-                                           mapping);
+                                           coarse_aperture_residual, coarse_region, ratio, mapping);
 }
 
 template <int Dim, class Model, class Reconstruction, class Numerical,
@@ -1105,7 +1151,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
   result.materialize_level = [model, spatial_factory, reconstruction, numerical,
                               positivity_floor = request.routes.positivity_floor, required_ghosts,
                               provider_identity, staircase_provider_identity,
-                              cut_cell_provider_identity](runtime::amr::AmrRuntime<Dim>& runtime,
+                              cut_cell_provider_identity](const RuntimeTopologyView<Dim>& runtime,
                                                           GeneratedAmrLevelContext<Dim> context) {
     require_level_context(runtime, context, Model::n_vars, provider_count, required_ghosts,
                           staircase_provider_identity, cut_cell_provider_identity);
@@ -1124,6 +1170,12 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
     const Geometry<Dim> geometry = context.geometry;
     const std::size_t level = context.level;
     const ExecutionLane* const lane = context.lane;
+    // This is deliberately constructed while the generated hierarchy image is cold.  The
+    // workspace belongs to this exact block/level route and is never resized or rebound during a
+    // Program attempt; hierarchy materialization publishes a replacement bundle after regrid.
+    auto implicit_workspace = std::make_shared<PreparedImplicitSourceWorkspace<Dim>>();
+    const std::uint64_t implicit_workspace_generation = runtime.materialization_generation();
+    implicit_workspace->bind(*context.state, implicit_workspace_generation);
 
     struct EvaluationScratch {
       static PreparedAmrLevelEvaluation<Dim> make_evaluation(
@@ -1372,10 +1424,10 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
           "generated AMR source publication failed collectively");
     };
     auto implicit_source_solver = [model, provider_storage, provider_plan, prepare_state,
-                                   embedded_boundary, lane](
+                                   embedded_boundary, lane, implicit_workspace,
+                                   implicit_workspace_generation](
                                       const runtime::multiblock::BoundaryEvaluationPoint& point,
                                       MultiFab<Dim>& state, Real dt, const NewtonOptions& options) {
-      prepare_state(point, state);
       const auto provider_at = [provider_storage, provider_plan](std::size_t local) {
         if constexpr (provider_count == 0)
           return ProviderStorageView<Dim, 0>{};
@@ -1388,8 +1440,10 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
           embedded_boundary->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive)
         active_cells = &embedded_boundary->active_mask();
       if constexpr (generated_system_detail::GeneratedSourceModel<Dim, Model>) {
-        return backward_euler_source(model, provider_at, state, dt, options, *lane, {}, nullptr,
-                                     active_cells);
+        return detail::backward_euler_source_prepared(
+            model, provider_at, state, *implicit_workspace, implicit_workspace_generation, dt,
+            options, *lane, {}, active_cells, std::static_pointer_cast<void>(implicit_workspace),
+            [&prepare_state, &point, &state] { prepare_state(point, state); });
       } else {
         return SolveOutcome::collective_lane(SolveReport::capability_failure(), *lane);
       }
@@ -1595,8 +1649,9 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
         std::move(contract), *lane, std::move(prepare_state), std::move(prepare_physical),
         std::move(evaluator), std::move(flux_evaluator), std::move(core_evaluator),
         std::move(flux_core_evaluator), std::move(boundary_evaluator), std::move(boundary_jvp),
-        std::move(source_evaluator), std::move(implicit_source_solver), std::move(speed),
-        std::move(poisson_rhs), std::move(pointwise_projection), std::move(source_frequency_bound),
+        std::move(source_evaluator), std::move(implicit_workspace), implicit_workspace_generation,
+        std::move(implicit_source_solver), std::move(speed), std::move(poisson_rhs),
+        std::move(pointwise_projection), std::move(source_frequency_bound),
         std::move(parabolic_frequency_bound), std::move(stability_dt_bound));
   };
 

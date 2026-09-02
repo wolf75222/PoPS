@@ -78,6 +78,7 @@ def _mono_wheel(
         "abi_key": f"{abi_common};dim={dimension}",
         "has_mpi": has_mpi,
         "has_kokkos": has_kokkos,
+        "kokkos_execution_space": "Serial" if has_kokkos else "none",
     }
     payloads = {
         "pops/__init__.py": common_payload,
@@ -90,7 +91,7 @@ def _mono_wheel(
         ),
         MANIFEST: (
             json.dumps(
-                {"schema_version": 1, "variants": [row]},
+                {"schema_version": 2, "variants": [row]},
                 sort_keys=True,
                 indent=2,
             )

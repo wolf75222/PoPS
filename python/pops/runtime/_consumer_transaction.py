@@ -206,12 +206,58 @@ class ConsumerPublicationError(RuntimeError):
         self.report = report
 
 
+class ConsumerTransactionWorkspace:
+    """Bounded bind-time reservation for compensable consumer transactions.
+
+    The runtime owns one of these for the lifetime of its frozen ConsumerGraph.  It is a
+    deliberately small ownership registry, not a planner: a transaction must fit the exact
+    graph shape and retry budget that was authenticated at bind.  A retained finalizer keeps its
+    reservation, so repeated release failures cannot silently grow a per-step transaction
+    registry.
+    """
+
+    __slots__ = ("max_effects", "max_prepared", "_owners")
+
+    def __init__(self, *, max_effects: int, max_prepared: int, max_transactions: int) -> None:
+        for value, name in (
+            (max_effects, "max_effects"),
+            (max_prepared, "max_prepared"),
+            (max_transactions, "max_transactions"),
+        ):
+            if isinstance(value, bool) or type(value) is not int or value < 0:
+                raise TypeError("ConsumerTransactionWorkspace.%s must be an integer >= 0" % name)
+        if max_prepared < max_effects:
+            raise ValueError("ConsumerTransactionWorkspace.max_prepared is below max_effects")
+        self.max_effects = max_effects
+        self.max_prepared = max_prepared
+        # Slots are allocated once at bind and reused only after their transaction releases them.
+        self._owners: list[ConsumerTransaction | None] = [None] * max_transactions
+
+    def reserve(self, transaction: ConsumerTransaction, *, effects: int, prepared: int) -> None:
+        if effects > self.max_effects or prepared > self.max_prepared:
+            raise ValueError(
+                "consumer transaction exceeds its frozen bind-time effect/retry budget"
+            )
+        for index, owner in enumerate(self._owners):
+            if owner is None:
+                self._owners[index] = transaction
+                return
+        raise RuntimeError("consumer transaction workspace is retained by an unfinished finalizer")
+
+    def release(self, transaction: ConsumerTransaction) -> None:
+        for index, owner in enumerate(self._owners):
+            if owner is transaction:
+                self._owners[index] = None
+                return
+
+
 class ConsumerTransaction:
     """Own temporaries until a step controller explicitly accepts or rejects the attempt."""
 
     __slots__ = (
         "_plan", "_publisher", "_initial_cursors", "_prepared", "_accepted",
         "_cursor_updates", "_skipped", "_state", "_finalize_pending", "_recoveries",
+        "_workspace",
     )
 
     def __init__(
@@ -219,6 +265,8 @@ class ConsumerTransaction:
         plan: EffectPlan,
         cursors: ConsumerCursorSet,
         publisher: ConsumerPublisher,
+        *,
+        workspace: ConsumerTransactionWorkspace | None = None,
     ) -> None:
         if type(plan) is not EffectPlan:
             raise TypeError("ConsumerTransaction requires an exact EffectPlan")
@@ -242,9 +290,26 @@ class ConsumerTransaction:
             tuple[AcceptedSideEffect, PreparedPublication, PublicationReceipt]
         ] = []
         self._recoveries: list[Any] = []
+        if workspace is not None and type(workspace) is not ConsumerTransactionWorkspace:
+            raise TypeError("ConsumerTransaction workspace must be an exact ConsumerTransactionWorkspace")
+        self._workspace = workspace
+        if workspace is not None:
+            workspace.reserve(
+                self,
+                effects=len(plan.effects),
+                prepared=sum(self._attempt_limit(effect) for effect in plan.effects),
+            )
         self._state = "preparing"
-        self._prepare_all()
+        try:
+            self._prepare_all()
+        except BaseException:
+            self._release_workspace()
+            raise
         self._state = "staged"
+
+    def _release_workspace(self) -> None:
+        if self._workspace is not None:
+            self._workspace.release(self)
 
     def _attempt_limit(self, effect: AcceptedSideEffect) -> int:
         action = effect.failure_action
@@ -260,17 +325,29 @@ class ConsumerTransaction:
             raise ValueError("prepared publication does not authenticate its exact effect payload")
         return prepared
 
-    def _prepare_one(
-        self, effect: AcceptedSideEffect, start_attempt: int = 0,
-    ) -> tuple[PreparedPublication | None, int, Exception | None]:
-        attempts, last_error = start_attempt, None
-        while attempts < self._attempt_limit(effect):
-            attempts += 1
+    def _prepare_alternatives(
+        self, effect: AcceptedSideEffect,
+    ) -> tuple[tuple[tuple[AcceptedSideEffect, PreparedPublication, int], ...], Exception | None]:
+        """Prepare every bounded publication alternative before hidden publication.
+
+        A writer preparation may allocate a temporary artifact and therefore belongs to the
+        candidate phase.  In particular, publication retries must consume this frozen sequence;
+        calling ``prepare`` from ``accept`` would run scientific capture after native hidden
+        publication, when the native writer lock intentionally prevents ordinary reads.
+        """
+        alternatives = []
+        last_error = None
+        for attempt in range(1, self._attempt_limit(effect) + 1):
             try:
-                return self._validate_prepared(effect, self._publisher.prepare(effect)), attempts, None
+                prepared = self._validate_prepared(effect, self._publisher.prepare(effect))
             except Exception as exc:  # writer failures are classified by the typed action
                 last_error = exc
-        return None, attempts, last_error
+                continue
+            alternatives.append((effect, prepared, attempt))
+            # A successful final preparation means there is no preparation failure to report if
+            # publication later exhausts the frozen alternatives.
+            last_error = None
+        return tuple(alternatives), last_error
 
     @staticmethod
     def _reason(error: Exception | None) -> str:
@@ -312,16 +389,24 @@ class ConsumerTransaction:
             failure = recovery_failure if failure is None else failure + "; " + recovery_failure
         return failure
 
-    def _discard_staged(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    def _discard_rows(
+        self,
+        rows: tuple[tuple[AcceptedSideEffect, PreparedPublication, int], ...],
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
         rolled_back, diagnostics = [], []
-        for effect, prepared, _ in reversed(self._prepared):
+        for effect, prepared, _ in reversed(rows):
             failure = self._discard(prepared)
             if failure is None:
-                rolled_back.append(effect.identity.token)
+                if effect.identity.token not in rolled_back:
+                    rolled_back.append(effect.identity.token)
             else:
                 diagnostics.append("%s: %s" % (effect.consumer_id, failure))
-        self._prepared.clear()
         return tuple(rolled_back), tuple(diagnostics)
+
+    def _discard_staged(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        rows = tuple(self._prepared)
+        self._prepared.clear()
+        return self._discard_rows(rows)
 
     def _rollback_accepted(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
         rolled_back, diagnostics = [], []
@@ -344,17 +429,26 @@ class ConsumerTransaction:
         diagnostics: tuple[str, ...] = (),
         rolled_back: tuple[str, ...] = (),
     ) -> ConsumerPublicationError:
+        # Dispose every still-staged alternative before compensating accepted publications.  The
+        # preparation order is the ownership order, so this keeps the complete cleanup walk in
+        # exact reverse order even when a later effect fails after an earlier one was published.
         staged_rollback, cleanup = self._discard_staged()
+        accepted_rollback, accepted_cleanup = self._rollback_accepted()
+        rolled_back_effects = []
+        for token in rolled_back + staged_rollback + accepted_rollback:
+            if token not in rolled_back_effects:
+                rolled_back_effects.append(token)
         report = ConsumerTransactionReport(
             "failed",
             cursors,
             tuple(value.identity.token for value in self._plan.effects),
             (),
             tuple(self._skipped),
-            rolled_back + staged_rollback,
-            diagnostics + cleanup + (self._reason(error),),
+            tuple(rolled_back_effects),
+            diagnostics + cleanup + accepted_cleanup + (self._reason(error),),
         )
         self._state = "failed"
+        self._release_workspace()
         reason = self._reason(error)
         return ConsumerPublicationError(
             "consumer %s failed under %s: %s" % (
@@ -364,13 +458,13 @@ class ConsumerTransaction:
 
     def _prepare_all(self) -> None:
         for effect in self._plan.effects:
-            prepared, attempts, error = self._prepare_one(effect)
-            if prepared is not None:
-                self._prepared.append((effect, prepared, attempts))
+            alternatives, error = self._prepare_alternatives(effect)
+            if alternatives:
+                self._prepared.extend(alternatives)
                 continue
             if type(effect.failure_action) is SkipSampleReported:
                 self._skipped.append(SkippedSampleReport(
-                    effect.identity, effect.consumer_id, "prepare", attempts,
+                    effect.identity, effect.consumer_id, "prepare", self._attempt_limit(effect),
                     self._reason(error),
                 ))
                 continue
@@ -390,63 +484,89 @@ class ConsumerTransaction:
             diagnostics=diagnostics,
         )
         if diagnostics:
+            self._release_workspace()
             raise ConsumerPublicationError("consumer rollback left unremoved temporaries", report=report)
+        self._release_workspace()
         return report
 
     def accept(self) -> ConsumerTransactionReport:
         if self._state != "staged":
             raise RuntimeError("ConsumerTransaction is already resolved")
         cursors, published = self._initial_cursors, []
-        pending = list(self._prepared)
+        pending = tuple(self._prepared)
         self._prepared.clear()
-        while pending:
-            effect, prepared, attempts = pending.pop(0)
-            try:
-                receipt = prepared.publish()
-                if type(receipt) is not PublicationReceipt:
-                    raise TypeError("PreparedPublication.publish must return PublicationReceipt")
-                if receipt.effect_identity != effect.identity \
-                        or receipt.payload_identity != effect.payload.identity:
-                    raise ValueError("PublicationReceipt does not authenticate its exact effect payload")
-                if receipt.parallel_mode is not effect.target.parallel_mode:
-                    raise ValueError(
-                        "PublicationReceipt parallel mode differs from its accepted target")
-            except Exception as exc:
-                error = exc
-                cleanup = self._rollback(prepared)
-                rolled_back = (effect.identity.token,) if cleanup is None else ()
-                if cleanup is None and type(effect.failure_action) is Retry \
-                        and attempts < self._attempt_limit(effect):
-                    replacement, attempts, prepare_error = self._prepare_one(effect, attempts)
-                    if replacement is not None:
-                        pending.insert(0, (effect, replacement, attempts))
+        # ``_prepare_all`` appends alternatives contiguously for each effect.  Grouping here
+        # lets a publication retry consume the next frozen preparation for the same effect before
+        # moving to the next effect, while retaining one global creation order for cleanup.
+        row_index = 0
+        while row_index < len(pending):
+            effect = pending[row_index][0]
+            group_end = row_index + 1
+            while group_end < len(pending) and pending[group_end][0].identity == effect.identity:
+                group_end += 1
+            alternative_index = row_index
+            while alternative_index < group_end:
+                _, prepared, attempts = pending[alternative_index]
+                try:
+                    receipt = prepared.publish()
+                    if type(receipt) is not PublicationReceipt:
+                        raise TypeError("PreparedPublication.publish must return PublicationReceipt")
+                    if receipt.effect_identity != effect.identity \
+                            or receipt.payload_identity != effect.payload.identity:
+                        raise ValueError(
+                            "PublicationReceipt does not authenticate its exact effect payload")
+                    if receipt.parallel_mode is not effect.target.parallel_mode:
+                        raise ValueError(
+                            "PublicationReceipt parallel mode differs from its accepted target")
+                except Exception as exc:
+                    error = exc
+                    cleanup = self._rollback(prepared)
+                    rolled_back = (effect.identity.token,) if cleanup is None else ()
+                    # Every retry alternative was prepared before this method entered.  A failed
+                    # rollback is unsafe to retry, so leave the remaining frozen alternatives for
+                    # the exact reverse-order discard path below.
+                    if cleanup is None and alternative_index + 1 < group_end:
+                        alternative_index += 1
                         continue
-                    error = prepare_error
-                if type(effect.failure_action) is SkipSampleReported:
-                    self._skipped.append(SkippedSampleReport(
-                        effect.identity, effect.consumer_id, "publish", attempts,
-                        self._reason(error),
-                    ))
-                    if cleanup is not None:
-                        self._prepared.extend(pending)
-                        accepted_rollback, accepted_cleanup = self._rollback_accepted()
-                        raise self._failed(
-                            effect, error, cursors=self._initial_cursors,
-                            diagnostics=(cleanup,) + accepted_cleanup,
-                            rolled_back=accepted_rollback,
-                        ) from error
-                    continue
-                self._prepared.extend(pending)
-                accepted_rollback, accepted_cleanup = self._rollback_accepted()
-                diagnostics = ((cleanup,) if cleanup is not None else ()) + accepted_cleanup
-                raise self._failed(
-                    effect, error, cursors=self._initial_cursors,
-                    diagnostics=diagnostics,
-                    rolled_back=rolled_back + accepted_rollback,
-                ) from error
-            published.append(receipt)
-            self._accepted.append((effect, prepared, receipt))
-            cursors = cursors.replace(effect.cursor_after)
+                    if type(effect.failure_action) is SkipSampleReported:
+                        self._skipped.append(SkippedSampleReport(
+                            effect.identity, effect.consumer_id, "publish", attempts,
+                            self._reason(error),
+                        ))
+                        if cleanup is not None:
+                            self._prepared.extend(pending[alternative_index + 1:])
+                            raise self._failed(
+                                effect, error, cursors=self._initial_cursors,
+                                diagnostics=(cleanup,),
+                            ) from error
+                        break
+                    self._prepared.extend(pending[alternative_index + 1:])
+                    diagnostics = ((cleanup,) if cleanup is not None else ())
+                    raise self._failed(
+                        effect, error, cursors=self._initial_cursors,
+                        diagnostics=diagnostics,
+                        rolled_back=rolled_back,
+                    ) from error
+
+                published.append(receipt)
+                self._accepted.append((effect, prepared, receipt))
+                cursors = cursors.replace(effect.cursor_after)
+                # The successful alternative wins.  Discard all later alternatives for this
+                # effect immediately; they can never be published after its cursor advances.
+                _, unused_diagnostics = self._discard_rows(
+                    pending[alternative_index + 1:group_end]
+                )
+                if unused_diagnostics:
+                    self._prepared.extend(pending[group_end:])
+                    cleanup_error = RuntimeError(
+                        "unused consumer publication alternative cleanup failed"
+                    )
+                    raise self._failed(
+                        effect, cleanup_error, cursors=self._initial_cursors,
+                        diagnostics=unused_diagnostics,
+                    ) from cleanup_error
+                break
+            row_index = group_end
         self._state = "accepted"
         self._cursor_updates = tuple(effect.cursor_after for effect, _, _ in self._accepted)
         return ConsumerTransactionReport(
@@ -487,8 +607,10 @@ class ConsumerTransaction:
             diagnostics=diagnostics,
         )
         if diagnostics:
+            self._release_workspace()
             raise ConsumerPublicationError(
                 "accepted consumer publication could not be compensated", report=report)
+        self._release_workspace()
         return report
 
     def seal(self) -> tuple[str, ...]:
@@ -517,6 +639,8 @@ class ConsumerTransaction:
                     pending.append((effect, prepared, receipt))
                 failures.append("%s: %s" % (effect.consumer_id, recovery_failure))
         self._finalize_pending = pending
+        if not self._finalize_pending:
+            self._release_workspace()
         return tuple(failures)
 
     def abort(self) -> ConsumerTransactionReport | None:
@@ -530,6 +654,7 @@ class ConsumerTransaction:
 
 __all__ = [
     "ConsumerPublicationError", "ConsumerPublisher", "ConsumerTransaction",
+    "ConsumerTransactionWorkspace",
     "ConsumerTransactionReport", "PreparedPublication", "PublicationReceipt",
     "SkippedSampleReport",
 ]

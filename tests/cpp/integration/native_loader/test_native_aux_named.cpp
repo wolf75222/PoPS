@@ -249,7 +249,7 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
                                  "0000000000000000000000000000000000000000000000000000000000000000",
                                  binary_identity, "none", "rusanov", "conservative", "euler");
   system.finalize_native_packages();
-  const auto& consumer = system.prepared_auxiliary_consumer_plan("scalar");
+  const auto consumer = system.prepared_auxiliary_consumer_plan("scalar");
   const auto address = system.auxiliary_address(derived_key);
   bool route_valid = consumer.consumer_qid == "scalar" && consumer.values.size() == 1 &&
                      consumer.values[0].key.exact_key() == derived_key.exact_key() &&

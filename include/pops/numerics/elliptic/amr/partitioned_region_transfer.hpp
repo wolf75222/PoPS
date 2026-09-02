@@ -20,6 +20,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -207,6 +208,30 @@ class RegionTransferPlan {
   std::size_t receive_elements() const noexcept { return receive_elements_; }
   bool has_remote_jobs() const noexcept { return !send_.empty() || !receive_.empty(); }
 
+  /// Dynamic host storage retained by this immutable transfer plan, excluding the object itself.
+  [[nodiscard]] std::uint64_t resident_storage_bytes() const {
+    const auto add = [](std::uint64_t& total, std::uint64_t value) {
+      if (value > std::numeric_limits<std::uint64_t>::max() - total)
+        throw std::overflow_error("partitioned AMR transfer resident storage overflows uint64");
+      total += value;
+    };
+    const auto vector_bytes = [](const auto& values) {
+      using value_type = typename std::remove_reference_t<decltype(values)>::value_type;
+      if (values.capacity() > std::numeric_limits<std::uint64_t>::max() / sizeof(value_type))
+        throw std::overflow_error("partitioned AMR transfer vector storage overflows uint64");
+      return static_cast<std::uint64_t>(values.capacity()) * sizeof(value_type);
+    };
+    std::uint64_t total = 0;
+    add(total, vector_bytes(canonical_));
+    add(total, vector_bytes(local_));
+    for (const auto* plans : {&send_, &receive_}) {
+      add(total, vector_bytes(*plans));
+      for (const peer_plan_type& plan : *plans)
+        add(total, vector_bytes(plan.jobs));
+    }
+    return total;
+  }
+
   static RegionTransferBudget budget_from_jobs(const std::vector<job_type>& jobs) {
     std::size_t elements = 0;
     for (const job_type& job : jobs) {
@@ -312,6 +337,41 @@ class RegionTransport {
   const plan_type& plan() const noexcept { return plan_; }
   bool sealed() const noexcept { return sealed_; }
 
+  /// Dynamic resident storage of this transport and its owned plan, excluding the object itself.
+  [[nodiscard]] std::uint64_t resident_storage_bytes() const {
+    const auto add = [](std::uint64_t& total, std::uint64_t value) {
+      if (value > std::numeric_limits<std::uint64_t>::max() - total)
+        throw std::overflow_error("partitioned AMR transport resident storage overflows uint64");
+      total += value;
+    };
+    const auto vector_bytes = [](const auto& values) {
+      using value_type = typename std::remove_reference_t<decltype(values)>::value_type;
+      if (values.capacity() > std::numeric_limits<std::uint64_t>::max() / sizeof(value_type))
+        throw std::overflow_error("partitioned AMR transport vector storage overflows uint64");
+      return static_cast<std::uint64_t>(values.capacity()) * sizeof(value_type);
+    };
+    const auto view_bytes = [](const auto& view) {
+      if (view.extent(0) > std::numeric_limits<std::uint64_t>::max() / sizeof(Real))
+        throw std::overflow_error("partitioned AMR transport payload overflows uint64");
+      return static_cast<std::uint64_t>(view.extent(0)) * sizeof(Real);
+    };
+    std::uint64_t total = plan_.resident_storage_bytes();
+    add(total, view_bytes(local_buffer_));
+    add(total, vector_bytes(peers_));
+    for (const PeerStorage& peer : peers_) {
+      add(total, view_bytes(peer.device_send));
+      add(total, view_bytes(peer.device_receive));
+      add(total, view_bytes(peer.host_send));
+      add(total, view_bytes(peer.host_receive));
+    }
+#ifdef POPS_HAS_MPI
+    add(total, vector_bytes(receive_requests_));
+    add(total, vector_bytes(send_requests_));
+    add(total, vector_bytes(receive_statuses_));
+#endif
+    return total;
+  }
+
   template <class SourceAccessor, class DestinationAccessor>
   void execute(SourceAccessor&& source, DestinationAccessor&& destination) {
     require_attached_();
@@ -342,7 +402,7 @@ class RegionTransport {
           pack_jobs_(peer.send->jobs, peer.device_send, source);
           Kokkos::deep_copy(peer.host_send, peer.device_send);
         }
-      Kokkos::fence();
+      ::pops::device_fence();
     } catch (...) {
       packing_failure = 1;
     }
@@ -363,7 +423,7 @@ class RegionTransport {
       for (PeerStorage& peer : peers_)
         if (peer.receive != nullptr)
           unpack_jobs_(peer.receive->jobs, peer.device_receive, destination);
-      Kokkos::fence();
+      ::pops::device_fence();
     } catch (...) {
       publication_failure = 1;
     }
@@ -384,6 +444,33 @@ class RegionTransport {
     pinned_buffer_type host_receive{};
   };
 
+ public:
+  /// Fixed peer/request-vector portion of a configured transport receipt. Payload bounds remain
+  /// explicit at the caller because they depend on the exact source-region cell budget.
+  [[nodiscard]] static std::uint64_t configured_peer_metadata_storage_upper_bound(
+      std::uint64_t peer_bound) {
+    const auto product = [](std::uint64_t left, std::uint64_t right) {
+      if (left != 0 && right > std::numeric_limits<std::uint64_t>::max() / left)
+        throw std::overflow_error(
+            "partitioned AMR transport configured peer metadata overflows uint64");
+      return left * right;
+    };
+    const auto add = [](std::uint64_t& total, std::uint64_t value) {
+      if (value > std::numeric_limits<std::uint64_t>::max() - total)
+        throw std::overflow_error(
+            "partitioned AMR transport configured peer metadata overflows uint64");
+      total += value;
+    };
+    std::uint64_t total = product(product(2U, peer_bound), sizeof(PeerStorage));
+#ifdef POPS_HAS_MPI
+    add(total, product(peer_bound, sizeof(MPI_Request)));
+    add(total, product(peer_bound, sizeof(MPI_Request)));
+    add(total, product(peer_bound, sizeof(MPI_Status)));
+#endif
+    return total;
+  }
+
+ private:
   struct KernelJob {
     int source_lower[Dim]{};
     int destination_lower[Dim]{};
@@ -580,8 +667,9 @@ class RegionTransport {
       if (peer.receive != nullptr) {
         if (code == MPI_SUCCESS)
           code = MPI_Irecv(peer.host_receive.data(), static_cast<int>(peer.receive->elements),
-                           pops::mpi_real_datatype(), peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
-                           lane_->native_handle(), &receive_requests_[receive_index]);
+                           pops::mpi_real_datatype(), peer.mpi_rank,
+                           ExecutionLane::parallel_copy_message_tag, lane_->native_handle(),
+                           &receive_requests_[receive_index]);
         ++receive_index;
       }
     if (!gate_(code == MPI_SUCCESS ? 0L : 1L))
@@ -592,9 +680,10 @@ class RegionTransport {
     for (PeerStorage& peer : peers_)
       if (peer.send != nullptr) {
         if (code == MPI_SUCCESS)
-          code = MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send->elements), pops::mpi_real_datatype(),
-                           peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
-                           lane_->native_handle(), &send_requests_[send_index]);
+          code = MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send->elements),
+                           pops::mpi_real_datatype(), peer.mpi_rank,
+                           ExecutionLane::parallel_copy_message_tag, lane_->native_handle(),
+                           &send_requests_[send_index]);
         ++send_index;
       }
     if (!gate_(code == MPI_SUCCESS ? 0L : 1L))
@@ -628,7 +717,7 @@ class RegionTransport {
       for (PeerStorage& peer : peers_)
         if (peer.receive != nullptr)
           Kokkos::deep_copy(peer.device_receive, peer.host_receive);
-      Kokkos::fence();
+      ::pops::device_fence();
     } catch (...) {
       staging_failure = 1;
     }

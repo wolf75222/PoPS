@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
-#include "explicit_amr_program.hpp"
+#include "amr_runtime_authority.hpp"
 
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/amr/hierarchy/amr_hierarchy.hpp>
@@ -270,7 +270,7 @@ TEST(test_amr_seed_no_refine, AcceptedCadencePublishesTagDerivedRegridOnlyWhenDu
   config.regrid_every = 2;
   auto system = make_system(config, corner_bump(config.shape, false));
   pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.5}});
-  system.install_program_step([](double) {});
+  system.install_program(POPS_TEST_AMR_V5_TRACER_PROGRAM);
 
   const std::vector<pops::AmrPatch<Dim>> initial = system.patch_boxes();
   ASSERT_FALSE(initial.empty());

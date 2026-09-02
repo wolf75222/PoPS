@@ -759,12 +759,35 @@ production subcycling, holds, catch-up, and adaptive-step placement must be auth
 composition.
 
 The hardware-dependent cutover proof is deliberately not a routine conformance test. The ADC-700
-campaign under [`benchmarks/adc700/`](../benchmarks/adc700/) builds one AMR workload against the
-pinned pre-cutover native revision and the Program-only candidate, executes both in paired ABBA
-order on a real device, and emits a machine-readable candidate/pre-cutover throughput ratio. It
-rejects CPU runs, incomplete device inventories, incomparable parameters, failed numerical
-signatures, and a median ratio below `0.98`; no report from the campaign means no hardware
-performance proof.
+campaign under [`benchmarks/adc700/`](../benchmarks/adc700/) compiles a pinned pre-cutover native
+oracle and authors the candidate through the Python `Program` frontend, `compile(MODULE)`, and the
+authenticated `AmrSystem.install_program` binding seam. ROMEO executes the two routes in paired
+ABBA order (at least five complete blocks) on four MPI ranks in `MPI_COMM_WORLD` and four distinct
+GPUs. The batch preflight rejects dirty/untracked campaign files and archives all compilation and
+execution inputs; the baseline reference is accepted only when it resolves to the pinned SHA, and
+each run records the complete GPU-UUID map. The candidate records absolute extension and MODULE digests plus dimension/MPI/Kokkos/ABI/artifact provenance, exact
+NVCC-wrapper/MPI/Kokkos versions, flags, library/header hashes, wheel proof, and archived harness
+hashes. It must pass Uniform and planned refined-AMR probes proving zero allocation after the
+bind+warmup preparation boundary and dispatch complexity
+`O(operations*levels), never O(cells)` at two resolutions with fixed operation/level counts. The
+verifier recomputes medians, ratios, and parity from raw JSONL instead of trusting report aggregates;
+it rejects CPU runs, incomplete inventories, incomparable parameters, failed numerical
+signatures/probes, and a median ratio below `0.98`; no authenticated report from the campaign means
+no hardware performance proof.
+
+The extracted baseline and candidate trees are frozen after build and authenticated by immutable
+file-manifest/tree-digest receipts. The receipt helper is rerun immediately before each ABBA route,
+using one immutable helper copy outside both archives (the pinned baseline predates ADC-700), and
+`verify.py` requires the candidate receipt to name the exact commit SHA and read-only tree. The
+baseline C++ oracle emits the same complete compiler/NVCC-wrapper/MPI/Kokkos/flags/libs receipt as
+the candidate; comparison rejects any mismatch. Both routes also emit and compare the main AMR
+`PatchLayout` contract (`distribute_coarse=true`, `coarse_max_grid=n/2`) and coarse/fine box census.
+Before that oracle is compiled, a probe-only configure captures the actual target properties and
+header/library hashes, then the benchmark CMake project consumes the immutable receipt and compares
+its actual C++20 compiler, `MPI::MPI_CXX`, and `Kokkos::kokkos` include/options/definitions/libraries
+against the candidate contract; requested compile/link flags are compared exactly with those applied
+to the oracle target. `toolchain_build_attested=true` is emitted only after this preflight and is
+required in every raw row.
 
 **Intuition.** Not all species of a coupled system require the same time step.
 A stiff species (electrons) splits a macro-step into several substeps ($\text{substeps}$); a
@@ -1340,8 +1363,7 @@ remain available through their authenticated component contract.
 **Code.** The generic linear-solve protocol is in
 [`python/pops/codegen/program_emit_solve.py`](../python/pops/codegen/program_emit_solve.py), and the
 runtime providers in
-[`include/pops/runtime/program/program_context.hpp`](../include/pops/runtime/program/program_context.hpp),
-[`include/pops/runtime/program/amr_program_context.hpp`](../include/pops/runtime/program/amr_program_context.hpp),
+[`include/pops/runtime/program/program_execution_services.hpp`](../include/pops/runtime/program/program_execution_services.hpp),
 and [`include/pops/runtime/amr/amr_tensor_elliptic.hpp`](../include/pops/runtime/amr/amr_tensor_elliptic.hpp).
 
 **Constraints / remarks.** Stability: the theta-scheme is unconditionally stable for $\theta \geq 1/2$ ($\theta = 1$ pure implicit, the extrapolation is the identity; $\theta = 1/2$ Crank-Nicolson, extrapolation factor 2). The centered order-2 discretization fixes the Cartesian spatial order; polar emission uses the corresponding $1/r$ metric factors. The condensed sub-flow freezes $\rho$ and is composed explicitly with transport through `pops.lib.time.Strang` or `Lie`. Safeguard: $c = 0$ and $B_z = 0$ give $A = I$. The solver tolerance and iteration budget are authored controls, never hidden defaults in a native stage.
@@ -1668,7 +1690,7 @@ which breaks discrete conservation. Reflux corrects the bordering coarse cell by
 authority for parent/child clocks, stage points and catch-up order; `AmrRuntime` supplies hierarchy
 state, spatial evaluations, transfers and reflux primitives, but never chooses a time integrator.
 The prepared primitives below are implemented and qualified independently. Production
-`AmrSystem` / `AmrProgramContext` execute authored multi-level Programs (final IMEX-AMR
+`AmrSystem` / `ProgramExecutionServices` execute authored multi-level Programs (final IMEX-AMR
 example and the `AM-*` verification cases).
 
 **Formula / discretization.** Let a fine-coarse face in $x$ between the coarse cell $(I, J)$ and the
@@ -1709,11 +1731,13 @@ function execute_amr_program(program_graph, hierarchy, macro_dt):
 ```
 
 **Code.** `Program` is the authoring surface and its immutable `ProgramGraph` is the compiler/runtime
-temporal contract. [`AmrProgramContext`](../include/pops/runtime/program/amr_program_context.hpp)
+temporal contract. [`ProgramExecutionServices`](../include/pops/runtime/program/program_execution_services.hpp)
 executes its single-level route transactionally over
 [`AmrRuntime`](../include/pops/runtime/amr/amr_runtime.hpp) and fails closed before callbacks for a
 multi-level route. The latter exposes spatial hierarchy state and prepared transfer/reflux services
-only. The umbrella
+only. The root transitively authenticates one private AMR backend and 23
+`detail/program_execution_services_amr_*.hpp` authorities; no standalone public AMR context is
+recreated. The umbrella
 [`amr_reflux_mf.hpp`](../include/pops/numerics/time/amr/reflux/amr_reflux_mf.hpp) aggregates those
 spatial helpers; it is not an alternate stepper. Their named types live in
 [`amr_patch_range.hpp`](../include/pops/numerics/time/amr/levels/amr_patch_range.hpp):

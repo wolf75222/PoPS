@@ -965,7 +965,7 @@ void System<Dim>::stage_prepared_ghost_boundary_component(
               topology.emplace(BoundaryTopology<Dim>::axis_periodic(p_->periodicity));
             });
         // The RuntimeInstance lane was materialized from its authenticated communicator before
-        // plan publication. Each invocation borrows that exact lane through ProgramContext.
+        // plan publication. Each invocation borrows that exact lane through ProgramExecutionServices.
         auto prepared = prepare_system_boundary_component_candidate<Dim>(
             p_->periodicity, snapshot.blocks, snapshot.boundary_registry, snapshot.named_fields,
             component, selected->U, *geometry, *topology, lane,
@@ -1330,6 +1330,7 @@ void System<Dim>::discard_interface_flux_components() {
 
 template <int Dim>
 std::size_t System<Dim>::interface_evaluation_count(const std::string& identity, int level) const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   if (identity.empty() || level < 0)
     throw std::invalid_argument(
         "System interface evaluation query requires an identity and non-negative level");
@@ -1338,11 +1339,23 @@ std::size_t System<Dim>::interface_evaluation_count(const std::string& identity,
 
 template <int Dim>
 Geometry<Dim> System<Dim>::prepared_block_geometry() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return p_->geom;
+}
+
+template <int Dim>
+Geometry<Dim> System<Dim>::program_prepared_block_geometry_() const {
   return p_->geom;
 }
 
 template <int Dim>
 std::array<bool, Dim> System<Dim>::prepared_block_periodicity() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
+  return p_->periodicity;
+}
+
+template <int Dim>
+std::array<bool, Dim> System<Dim>::program_prepared_block_periodicity_() const {
   return p_->periodicity;
 }
 
@@ -1703,6 +1716,7 @@ void System<Dim>::add_dt_bound(const std::string& label, std::function<double()>
 
 template <int Dim>
 std::string System<Dim>::last_dt_bound() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->last_dt_reason_;
 }
 
@@ -2771,10 +2785,12 @@ void System<Dim>::install_prepared_coupling_operator(
           {{std::string_view("system-prepared-coupling"), exact}}, lane))
     throw std::invalid_argument("prepared System coupling contract differs between MPI ranks");
   p_->coupling_ = std::move(candidate);
+  p_->prepared_coupling_receipt_.reset();
 }
 
 template <int Dim>
-const std::vector<CouplingOperatorView>& System<Dim>::coupled_operators() const {
+std::vector<CouplingOperatorView> System<Dim>::coupled_operators() const {
+  [[maybe_unused]] auto accepted_read = p_->acquire_accepted_read_lease();
   return p_->coupling_.coupled_operators;
 }
 
@@ -2813,8 +2829,12 @@ template void System<kNativeDimension>::discard_interface_flux_components();
 template std::size_t System<kNativeDimension>::interface_evaluation_count(const std::string&,
                                                                           int) const;
 template Geometry<kNativeDimension> System<kNativeDimension>::prepared_block_geometry() const;
+template Geometry<kNativeDimension> System<kNativeDimension>::program_prepared_block_geometry_()
+    const;
 template std::array<bool, kNativeDimension> System<kNativeDimension>::prepared_block_periodicity()
     const;
+template std::array<bool, kNativeDimension>
+System<kNativeDimension>::program_prepared_block_periodicity_() const;
 template void System<kNativeDimension>::install_prepared_block(
     PreparedSystemBlock<kNativeDimension>);
 template void System<kNativeDimension>::register_elliptic_field(
@@ -2844,7 +2864,6 @@ template void System<kNativeDimension>::install_prepared_coupling_operator(
     const std::string&, const std::string&, CouplingOperatorView,
     std::function<void(Real, const std::vector<MultiFab<kNativeDimension>*>&)>, double,
     std::function<Real()>);
-template const std::vector<CouplingOperatorView>& System<kNativeDimension>::coupled_operators()
-    const;
+template std::vector<CouplingOperatorView> System<kNativeDimension>::coupled_operators() const;
 
 }  // namespace pops

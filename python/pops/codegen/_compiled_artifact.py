@@ -482,7 +482,7 @@ class CompiledLayoutProgram:
                 "CompiledLayoutProgram binary block route indices must be exact and contiguous")
         # ``block_names`` describes the authenticated LayoutPlan partition in plan order.  The
         # generated Program may declare the same blocks in a different order: its ABI exports that
-        # order explicitly and ProgramContext maps every index by name.  Require a bijection, never
+        # order explicitly and ProgramExecutionServices maps every index by name.  Require a bijection, never
         # positional equality, so a valid permutation is executable while any missing, duplicate,
         # or foreign route still fails before the component is sealed.
         if len(route_names) != len(set(route_names)) or set(route_names) != set(names):

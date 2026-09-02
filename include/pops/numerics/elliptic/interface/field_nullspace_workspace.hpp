@@ -4,16 +4,21 @@
 /// @brief Persistent allocation-free evaluator for one prepared field-nullspace plan.
 
 #include <pops/core/foundation/allocator.hpp>
+#include <pops/core/identity/prepared_provider.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
+#include <memory>
+#include <new>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -40,9 +45,29 @@ class FieldNullspaceWorkspace {
         layouts_(std::move(layouts)),
         distributions_(std::move(distributions)),
         first_level_(first_level) {
-    validate_field_nullspace_basis<Dim>(
-        layouts_, plan_, std::span<const PreparedVectorDistribution<Dim>>(distributions_), lane,
-        first_level_);
+    initialize_(true);
+  }
+
+ private:
+  struct CollectivelyPreflighted final {};
+
+  FieldNullspaceWorkspace(FieldNullspacePlan<Dim> plan, std::vector<const MultiFab<Dim>*> layouts,
+                          std::vector<PreparedVectorDistribution<Dim>> distributions,
+                          const ExecutionLane& lane, int first_level, CollectivelyPreflighted)
+      : lane_(&lane),
+        lane_borrow_(lane.borrow_immutably()),
+        plan_(std::move(plan)),
+        layouts_(std::move(layouts)),
+        distributions_(std::move(distributions)),
+        first_level_(first_level) {
+    initialize_(false);
+  }
+
+  void initialize_(bool validate_basis) {
+    if (validate_basis)
+      validate_field_nullspace_basis<Dim>(
+          layouts_, plan_, std::span<const PreparedVectorDistribution<Dim>>(distributions_), *lane_,
+          first_level_);
     basis_count_ = plan_.bases.size();
     if (basis_count_ == 0)
       return;
@@ -73,12 +98,63 @@ class FieldNullspaceWorkspace {
     } catch (...) {
       allocation_failed = 1;
     }
-    if (all_reduce_max(allocation_failed, lane) != 0) {
+    if (all_reduce_max(allocation_failed, *lane_) != 0) {
       clear_storage_();
       throw std::runtime_error(
           "field-nullspace workspace allocation failed on at least one communicator rank");
     }
     assemble_gram_factor_();
+  }
+
+ public:
+  /// Construct after a collective preflight and a collectively agreed raw allocation.
+  ///
+  /// A plain ``make_unique`` is unsafe here: one rank could fail allocating the object before
+  /// another enters the constructor's validation collectives.  This factory establishes the
+  /// allocation decision on every rank first, then lets every rank follow the same constructor
+  /// trace.  It is the required construction boundary for prepared runtime workspaces.
+  [[nodiscard]] static std::unique_ptr<FieldNullspaceWorkspace> prepare_collectively(
+      FieldNullspacePlan<Dim> plan, std::vector<const MultiFab<Dim>*> layouts,
+      std::vector<PreparedVectorDistribution<Dim>> distributions, const ExecutionLane& lane,
+      int first_level = 0) {
+    preflight_field_nullspace_fields(
+        layouts, plan, std::span<const PreparedVectorDistribution<Dim>>(distributions), first_level,
+        detail::FieldNullspaceCollectiveBoundary::BasisValidation, lane);
+
+    void* raw = nullptr;
+    long raw_allocation_failed = 0;
+    try {
+      raw = ::operator new(sizeof(FieldNullspaceWorkspace));
+    } catch (...) {
+      raw_allocation_failed = 1;
+    }
+    if (all_reduce_max(raw_allocation_failed, lane) != 0) {
+      ::operator delete(raw);
+      throw std::runtime_error(
+          "field-nullspace workspace object allocation failed on at least one communicator rank");
+    }
+
+    FieldNullspaceWorkspace* workspace = nullptr;
+    long construction_failed = 0;
+    try {
+      workspace = ::new (raw)
+          FieldNullspaceWorkspace(std::move(plan), std::move(layouts), std::move(distributions),
+                                  lane, first_level, CollectivelyPreflighted{});
+    } catch (...) {
+      construction_failed = 1;
+    }
+    // ``FieldNullspaceWorkspace`` performs only preflight-authenticated collective phases after
+    // the raw-allocation agreement above.  Converge its remaining local construction outcome
+    // before allowing a successfully constructed rank to retain the workspace; otherwise a
+    // following caller collective could strand a peer which saw an allocation/validation error.
+    if (all_reduce_max(construction_failed, lane) != 0) {
+      if (workspace != nullptr)
+        workspace->~FieldNullspaceWorkspace();
+      ::operator delete(raw);
+      throw std::runtime_error(
+          "field-nullspace workspace construction failed on at least one communicator rank");
+    }
+    return std::unique_ptr<FieldNullspaceWorkspace>(workspace);
   }
 
   FieldNullspaceWorkspace(const FieldNullspaceWorkspace&) = delete;
@@ -93,6 +169,81 @@ class FieldNullspaceWorkspace {
   }
   [[nodiscard]] std::size_t reduction_scratch_value_count() const noexcept {
     return reduction_scratch_.size();
+  }
+
+  /// Logical dynamic storage retained by this prepared evaluator, excluding the workspace object.
+  ///
+  /// The masks are shared through the plan, so each distinct materialized mask is charged once.
+  /// Allocator/control-block bookkeeping remains outside the logical resident-storage contract,
+  /// while each retained ``MultiFab`` object and its field metadata/payload are included.
+  [[nodiscard]] PreparedResidentStorage resident_storage() const {
+    const auto add = [](std::uint64_t& total, std::uint64_t value) {
+      if (value > std::numeric_limits<std::uint64_t>::max() - total)
+        throw std::overflow_error("field-nullspace workspace storage size overflows uint64");
+      total += value;
+    };
+    const auto vector_bytes = [](const auto& values) -> std::uint64_t {
+      using value_type = typename std::remove_reference_t<decltype(values)>::value_type;
+      if (values.capacity() > std::numeric_limits<std::uint64_t>::max() / sizeof(value_type))
+        throw std::overflow_error("field-nullspace workspace vector storage overflows uint64");
+      return static_cast<std::uint64_t>(values.capacity()) * sizeof(value_type);
+    };
+    const auto external_string_bytes = [](const std::string& value) -> std::uint64_t {
+      const auto object_begin = reinterpret_cast<std::uintptr_t>(&value);
+      const auto object_end = object_begin + sizeof(value);
+      const auto data = reinterpret_cast<std::uintptr_t>(value.data());
+      if (data >= object_begin && data < object_end)
+        return 0;
+      if (value.capacity() == std::numeric_limits<std::size_t>::max())
+        throw std::overflow_error("field-nullspace workspace string storage overflows size_t");
+      return static_cast<std::uint64_t>(value.capacity()) + 1U;
+    };
+
+    std::uint64_t total = 0;
+    add(total, external_string_bytes(plan_.identity));
+    add(total, external_string_bytes(plan_.layout_identity));
+    add(total, vector_bytes(plan_.bases));
+    add(total, vector_bytes(plan_.gauges));
+
+    std::vector<const MultiFab<Dim>*> unique_masks;
+    for (const FieldNullspaceBasis<Dim>& basis : plan_.bases) {
+      add(total, external_string_bytes(basis.identity));
+      add(total, external_string_bytes(basis.provenance));
+      add(total, external_string_bytes(basis.recipe_identity));
+      add(total, vector_bytes(basis.masks));
+      add(total, vector_bytes(basis.coverage));
+      add(total, vector_bytes(basis.cell_measure));
+      for (const auto& mask : basis.masks)
+        if (mask != nullptr &&
+            std::find(unique_masks.begin(), unique_masks.end(), mask.get()) == unique_masks.end())
+          unique_masks.push_back(mask.get());
+      for (const auto& coverage : basis.coverage)
+        if (coverage != nullptr && std::find(unique_masks.begin(), unique_masks.end(),
+                                             coverage.get()) == unique_masks.end())
+          unique_masks.push_back(coverage.get());
+    }
+    for (const FieldGaugeConstraint& gauge : plan_.gauges)
+      add(total, external_string_bytes(gauge.basis_identity));
+    for (const MultiFab<Dim>* mask : unique_masks) {
+      add(total, sizeof(MultiFab<Dim>));
+      add(total, mask->resident_storage_bytes());
+    }
+
+    add(total, vector_bytes(layouts_));
+    add(total, vector_bytes(distributions_));
+    for (const PreparedVectorDistribution<Dim>& distribution : distributions_) {
+      const PreparedResidentStorage storage = distribution.resident_storage();
+      if (!storage.is_exact())
+        return PreparedResidentStorage::unknown();
+      add(total, storage.bytes);
+    }
+    add(total, vector_bytes(level_values_));
+    add(total, vector_bytes(reduced_values_));
+    add(total, vector_bytes(gram_factor_));
+    add(total, vector_bytes(coefficients_));
+    add(total, vector_bytes(validation_scratch_));
+    add(total, vector_bytes(reduction_scratch_));
+    return PreparedResidentStorage::exact(total);
   }
 
   /// Returns the persistent witness [dot(rhs,b_0), abs(rhs*b_0), ...]. The span remains valid until

@@ -13,6 +13,23 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[3]
+PROGRAM_ROOT = PurePosixPath("pops/runtime/program/program_execution_services.hpp")
+PROGRAM_AMR_BACKEND = PurePosixPath(
+    "pops/runtime/program/detail/program_execution_services_amr_backend.hpp"
+)
+PROGRAM_AMR_DETAIL_PREFIX = "pops/runtime/program/detail/program_execution_services_amr_"
+RETIRED_AMR_PROGRAM_ROOT = PurePosixPath("pops/runtime/program/amr_program_context.hpp")
+PROGRAM_AMR_SPLIT_DETAILS = frozenset(
+    {
+        PurePosixPath("pops/runtime/program/detail/program_execution_services_amr_backend_preparation.hpp"),
+        PurePosixPath("pops/runtime/program/detail/program_execution_services_amr_backend_state.hpp"),
+        PurePosixPath("pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_forward.hpp"),
+        PurePosixPath("pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_history_reseed.hpp"),
+        PurePosixPath("pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_lifecycle.hpp"),
+        PurePosixPath("pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_snapshot.hpp"),
+        PurePosixPath("pops/runtime/program/detail/program_execution_services_amr_subcycling_interface_payload.hpp"),
+    }
+)
 
 
 def _load(relative: str, name: str):
@@ -28,9 +45,10 @@ packaging = _load("scripts/check_packaging_manifest.py", "_pops_packaging_manife
 toolchain = _load("python/pops/codegen/toolchain.py", "_pops_toolchain_manifest_test")
 
 
-def test_manifest_exactly_classifies_all_tracked_headers_and_include_fragments():
+def test_manifest_exactly_classifies_all_tracked_headers_without_include_fragments():
     manifest = packaging.read_manifest(ROOT)
     tracked = packaging.git_tracked_files(ROOT)
+    assert not {path for path in tracked if path.suffix == ".inc"}
     tracked_headers = {
         path.relative_to("include")
         for path in tracked
@@ -56,11 +74,35 @@ def test_manifest_exactly_classifies_all_tracked_headers_and_include_fragments()
         | set(manifest.sdk_support)
     )
     assert PurePosixPath(
-        "pops/runtime/config/generated_route_accessors.inc"
+        "pops/runtime/config/generated_route_accessors.hpp"
     ) in manifest.sdk_support
     assert PurePosixPath("pops/parallel/load_balance.hpp") in manifest.api
     assert PurePosixPath("pops/parallel/ownership_plan.hpp") in manifest.api
     assert PurePosixPath("pops/parallel/prepared_load_balance.hpp") in manifest.api
+
+
+def test_manifest_authenticates_the_unified_program_amr_closure():
+    """The installed contract carries one public root and the exact split AMR detail closure."""
+    manifest = packaging.read_manifest(ROOT)
+    details = {
+        path
+        for path in manifest.all_headers
+        if path.as_posix().startswith(PROGRAM_AMR_DETAIL_PREFIX)
+        and path.suffix == ".hpp"
+        and path != PROGRAM_AMR_BACKEND
+    }
+    physical_details = {
+        PurePosixPath(path.relative_to(ROOT / "include").as_posix())
+        for path in (ROOT / "include" / "pops" / "runtime" / "program" / "detail").glob(
+            "program_execution_services_amr_*.hpp"
+        )
+    }
+    assert PROGRAM_ROOT in manifest.sdk_root
+    assert PROGRAM_AMR_BACKEND in manifest.sdk_support
+    assert PROGRAM_AMR_SPLIT_DETAILS <= details
+    assert len(details) == 31
+    assert details | {PROGRAM_AMR_BACKEND} == physical_details
+    assert RETIRED_AMR_PROGRAM_ROOT not in manifest.all_headers
 
 
 def test_amr_layout_paths_require_one_prepared_load_balance_authority():
@@ -136,7 +178,7 @@ def _fixture_root(tmp_path: Path) -> Path:
                 "api pops/api_helper.hpp",
                 "abi pops/abi.h",
                 "sdk-root pops/generated_root.hpp",
-                "sdk-support pops/generated_support.inc",
+                "sdk-support pops/generated_support.hpp",
                 "test-only pops/test_support.hpp",
                 "",
             )
@@ -152,7 +194,7 @@ def _fixture_headers() -> set[PurePosixPath]:
         PurePosixPath("include/pops/api_helper.hpp"),
         PurePosixPath("include/pops/abi.h"),
         PurePosixPath("include/pops/generated_root.hpp"),
-        PurePosixPath("include/pops/generated_support.inc"),
+        PurePosixPath("include/pops/generated_support.hpp"),
         PurePosixPath("include/pops/test_support.hpp"),
     }
 
@@ -178,7 +220,7 @@ def test_tracked_only_preflight_accepts_an_exact_snapshot(tmp_path):
         PurePosixPath("python/pops/py.typed"),
     }
     manifest = packaging.validate_packaging_inputs(root, tracked=tracked, physical=tracked)
-    assert tuple(map(str, manifest.sdk_support)) == ("pops/generated_support.inc",)
+    assert tuple(map(str, manifest.sdk_support)) == ("pops/generated_support.hpp",)
     assert tuple(map(str, manifest.test_only)) == ("pops/test_support.hpp",)
 
 
@@ -195,7 +237,7 @@ def _write_fixture_contents(include: Path) -> None:
         "api_helper.hpp": "api-helper-v1",
         "abi.h": "abi-v1",
         "generated_root.hpp": "sdk-root-v1",
-        "generated_support.inc": "sdk-support-v1",
+        "generated_support.hpp": "sdk-support-v1",
         "test_support.hpp": "test-v1",
     }
     for name, content in contents.items():
@@ -208,7 +250,7 @@ def test_header_signature_authenticates_categories_paths_and_all_installed_bytes
     (include / "pops" / "api 2.hpp").write_text("duplicate-v1", encoding="utf-8")
     baseline = toolchain.pops_header_signature(include)
 
-    for name in ("api.hpp", "abi.h", "generated_root.hpp", "generated_support.inc"):
+    for name in ("api.hpp", "abi.h", "generated_root.hpp", "generated_support.hpp"):
         path = include / "pops" / name
         original = path.read_text(encoding="utf-8")
         path.write_text(original + "-changed", encoding="utf-8")
@@ -376,7 +418,7 @@ def test_wheel_style_staged_headers_compile_system_and_amr_generated_roots(tmp_p
         name="system_generated_loader",
         roots=(
             "pops/runtime/builders/compiled/dsl_block.hpp",
-            "pops/runtime/program/program_context.hpp",
+            "pops/runtime/program/program_execution_services.hpp",
         ),
     )
     _compile_staged_root(
@@ -387,7 +429,7 @@ def test_wheel_style_staged_headers_compile_system_and_amr_generated_roots(tmp_p
         name="amr_generated_loader",
         roots=(
             "pops/runtime/builders/compiled/amr_dsl_block.hpp",
-            "pops/runtime/program/amr_program_context.hpp",
+            "pops/runtime/program/program_execution_services.hpp",
         ),
     )
     _compile_staged_root(

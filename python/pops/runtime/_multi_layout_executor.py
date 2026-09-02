@@ -7,6 +7,7 @@ import math
 import os
 import shutil
 import tempfile
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -775,22 +776,58 @@ class _MultiLayoutUniformExecutor:
         except KeyError:
             raise KeyError("unknown RuntimeInstance block %s" % block) from None
 
+    @contextmanager
+    def _provisional_read_scope(self) -> Any:
+        """Compose each child native provisional-read lease in layout order.
+
+        A multi-layout runtime owns one native transaction per child engine.  Consumer candidate
+        staging and compensable-effect publication may read every child candidate only while all
+        corresponding native leases are held.  ``ExitStack`` enters children in authenticated
+        layout order and unwinds them in reverse order, so a partial capability failure cannot
+        strand an already-acquired child lease.
+        """
+        with ExitStack() as stack:
+            layout_programs = tuple(self._plan.artifact.layout_programs)
+            ordered_engines = self._ordered_layout_engines()
+            for layout_program, engine in zip(layout_programs, ordered_engines, strict=True):
+                layout_id = layout_program.layout_id
+                provider = getattr(engine, "_provisional_read_scope", None)
+                if not callable(provider):
+                    raise RuntimeError(
+                        "multi-layout child %s lacks native _provisional_read_scope()"
+                        % layout_id
+                    )
+                scope = provider()
+                if scope is None or not callable(getattr(scope, "__enter__", None)) \
+                        or not callable(getattr(scope, "__exit__", None)):
+                    raise TypeError(
+                        "multi-layout child %s _provisional_read_scope() must return a "
+                        "context manager" % layout_id
+                    )
+                stack.enter_context(scope)
+            yield
+
     def block_names(self) -> tuple[str, ...]:
         return tuple(self._block_layouts)
+
+    def _ordered_layout_engines(self) -> tuple[Any, ...]:
+        """Return child engines in the authenticated compiled-layout order."""
+        layout_programs = tuple(self._plan.artifact.layout_programs)
+        layout_ids = tuple(row.layout_id for row in layout_programs)
+        if layout_ids != tuple(self._engines):
+            raise RuntimeError(
+                "multi-layout child engines differ from the installed layout order"
+            )
+        return tuple(self._engines[layout_id] for layout_id in layout_ids)
 
     def _ordered_program_reports(self) -> tuple[tuple[Any, tuple[str, ...], Any], ...]:
         """Return one authenticated report for every independently installed Program."""
         from pops.runtime.program_report import ProgramRuntimeReport
 
         layout_programs = tuple(self._plan.artifact.layout_programs)
-        layout_ids = tuple(row.layout_id for row in layout_programs)
-        if layout_ids != tuple(self._engines):
-            raise RuntimeError(
-                "multi-layout Program reports differ from the installed layout order"
-            )
+        ordered_engines = self._ordered_layout_engines()
         rows = []
-        for layout_program in layout_programs:
-            engine = self._engines[layout_program.layout_id]
+        for layout_program, engine in zip(layout_programs, ordered_engines, strict=True):
             report = engine.program_report()
             if type(report) is not ProgramRuntimeReport:
                 raise TypeError("multi-layout child returned a non-canonical ProgramRuntimeReport")
@@ -831,11 +868,21 @@ class _MultiLayoutUniformExecutor:
         return tuple(rows)
 
     def program_report(self) -> Any:
-        """Aggregate every real child Program without inventing a single native engine."""
+        """Aggregate every real child Program from one stable generation-vector snapshot."""
+        from pops.runtime.program_report import _optimistic_multi_layout_read
+
+        ordered_engines = self._ordered_layout_engines()
+        return _optimistic_multi_layout_read(
+            ordered_engines,
+            lambda: self._compose_program_report(self._ordered_program_reports()),
+            where="multi-layout Program report",
+        )
+
+    def _compose_program_report(self, children: Any) -> Any:
+        """Compose an already materialized child-report set (never outside a snapshot)."""
         from pops.identity import make_identity
         from pops.runtime.program_report import ProgramRuntimeReport
 
-        children = self._ordered_program_reports()
         global_blocks = self.block_names()
         global_block_indices = {name: index for index, name in enumerate(global_blocks)}
         if len(global_block_indices) != len(global_blocks):
@@ -896,22 +943,22 @@ class _MultiLayoutUniformExecutor:
 
             for raw in report.cache:
                 row = dict(raw)
-                if "layout_id" in row or "layout_node_id" in row:
+                if "layout_id" in row or "layout_slot" in row:
                     raise RuntimeError(
                         "multi-layout child cache report contains reserved qualifiers"
                     )
-                local_node_id = row.get("node_id")
+                local_slot = row.get("slot")
                 if (
-                    isinstance(local_node_id, bool)
-                    or not isinstance(local_node_id, int)
-                    or local_node_id < 0
+                    isinstance(local_slot, bool)
+                    or not isinstance(local_slot, int)
+                    or local_slot < 0
                 ):
                     raise RuntimeError(
-                        "multi-layout child cache report has an invalid node identity"
+                        "multi-layout child cache report has an invalid dense slot"
                     )
                 row["layout_id"] = layout_id
-                row["layout_node_id"] = local_node_id
-                row["node_id"] = len(cache)
+                row["layout_slot"] = local_slot
+                row["slot"] = len(cache)
                 cache.append(row)
             program_offset += len(local_map)
 
@@ -975,10 +1022,21 @@ class _MultiLayoutUniformExecutor:
         )
 
     def _common_clock(self, method: str) -> Any:
-        values = tuple(getattr(engine, method)() for engine in self._engines.values())
-        if any(value != values[0] for value in values[1:]):
-            raise RuntimeError("multi-layout native clocks diverged at %s" % method)
-        return values[0]
+        from pops.runtime.program_report import _optimistic_multi_layout_read
+
+        ordered_engines = self._ordered_layout_engines()
+
+        def compose() -> Any:
+            values = tuple(getattr(engine, method)() for engine in ordered_engines)
+            if any(value != values[0] for value in values[1:]):
+                raise RuntimeError("multi-layout native clocks diverged at %s" % method)
+            return values[0]
+
+        return _optimistic_multi_layout_read(
+            ordered_engines,
+            compose,
+            where="multi-layout native clock %s" % method,
+        )
 
     def time(self) -> float:
         return float(self._common_clock("time"))
@@ -1178,6 +1236,26 @@ class _MultiLayoutUniformExecutor:
         self._transfer_attempt = 0
         if error is not None:
             raise error
+
+    def _accepted_transaction_fail_stop_(self) -> bool:
+        """Aggregate the child fail-stop witness without manufacturing rollback authority."""
+        layout_programs = tuple(self._plan.artifact.layout_programs)
+        ordered_engines = self._ordered_layout_engines()
+        fail_stop = False
+        for layout_program, engine in zip(layout_programs, ordered_engines, strict=True):
+            layout_id = layout_program.layout_id
+            witness = getattr(engine, "_accepted_transaction_fail_stop_", None)
+            if not callable(witness):
+                raise RuntimeError(
+                    "multi-layout child %s lacks native fail-stop witness" % layout_id
+                )
+            result = witness()
+            if type(result) is not bool:
+                raise TypeError(
+                    "multi-layout child %s fail-stop witness must return bool" % layout_id
+                )
+            fail_stop = fail_stop or result
+        return fail_stop
 
     def checkpoint_topology_epoch(self) -> int:
         return 0

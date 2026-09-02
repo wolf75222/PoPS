@@ -224,7 +224,7 @@ void execute_quadratic_interpolations(
     const std::vector<QuadraticInterpolationTransfer<Dim>>& transfers) {
   for (const QuadraticInterpolationTransfer<Dim>& transfer : transfers)
     for_each_cell(transfer.destination, transfer);
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 /// Add the conservative coarse/fine flux replacement to one uncovered parent cell.  The parent
@@ -331,14 +331,14 @@ template <int Dim>
 void execute_flux_mismatches(const std::vector<FluxMismatchTransfer<Dim>>& transfers) {
   for (const FluxMismatchTransfer<Dim>& transfer : transfers)
     for_each_cell(transfer.destination, transfer);
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 template <int Dim>
 void execute_transfers(const std::vector<CellTransfer<Dim>>& transfers) {
   for (const CellTransfer<Dim>& transfer : transfers)
     for_each_cell(transfer.destination_region(), transfer);
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 template <int Dim>

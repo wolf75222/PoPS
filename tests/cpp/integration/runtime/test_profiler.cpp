@@ -6,9 +6,12 @@
 
 #include <pops/runtime/program/profiler.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
+#include <new>
 #include <string>
 #include <thread>
 #include <vector>
@@ -17,6 +20,37 @@ using pops::runtime::program::Profiler;
 using pops::runtime::program::ProfileScope;
 
 namespace {
+
+std::atomic<bool> g_measure_heap_allocations{false};
+std::atomic<std::uint64_t> g_heap_allocations{0};
+
+void note_heap_allocation() noexcept {
+  if (g_measure_heap_allocations.load(std::memory_order_relaxed))
+    g_heap_allocations.fetch_add(1, std::memory_order_relaxed);
+}
+
+void* tracked_allocate(std::size_t size) {
+  void* pointer = std::malloc(size == 0 ? 1 : size);
+  if (pointer == nullptr)
+    throw std::bad_alloc();
+  note_heap_allocation();
+  return pointer;
+}
+
+class HeapAllocationWindow final {
+ public:
+  HeapAllocationWindow() : before_(g_heap_allocations.load(std::memory_order_relaxed)) {
+    g_measure_heap_allocations.store(true, std::memory_order_relaxed);
+  }
+
+  [[nodiscard]] std::uint64_t close() noexcept {
+    g_measure_heap_allocations.store(false, std::memory_order_relaxed);
+    return g_heap_allocations.load(std::memory_order_relaxed) - before_;
+  }
+
+ private:
+  std::uint64_t before_ = 0;
+};
 
 void busy_us(int micros) {
   // A real elapsed interval (steady_clock-measurable) without depending on sleep precision.
@@ -28,6 +62,25 @@ void busy_us(int micros) {
 }
 
 }  // namespace
+
+void* operator new(std::size_t size) {
+  return tracked_allocate(size);
+}
+void* operator new[](std::size_t size) {
+  return tracked_allocate(size);
+}
+void operator delete(void* pointer) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
 
 // Each TEST below builds its own fresh Profiler: these are genuinely independent sections, not
 // phases of one ordered pipeline.
@@ -231,11 +284,40 @@ TEST(Profiler, RuntimeSnapshotCopyAndRestorePreserveAccumulatedState) {
   EXPECT_TRUE(state.enabled);
 }
 
-TEST(Profiler, ResetClearsEverything) {
+TEST(Profiler, ResetRetainsPrimedIdentitiesAndClearsValuesWithoutHeapAllocation) {
   Profiler p;
   p.enable();
   p.record("a", 1.0);
-  p.count("c");
+  p.count("c", 3);
+
+  // The first accepted snapshot owns these maps.  A later reset must preserve their identity so
+  // the next hot snapshot can refresh it in-place.
+  Profiler accepted_image(p);
+  HeapAllocationWindow reset_heap;
   p.reset();
-  EXPECT_TRUE(p.entry("a") == nullptr && p.counter("c") == 0 && p.scope_count() == 0) << "reset";
+  p.copy_from_preallocated(accepted_image);
+  const std::uint64_t allocations = reset_heap.close();
+
+  EXPECT_EQ(allocations, 0U);
+  const auto reset = p.snapshot();
+  ASSERT_EQ(reset.scopes.size(), 1U);
+  EXPECT_EQ(reset.scopes[0].name, "a");
+  EXPECT_EQ(reset.scopes[0].count, 1U);
+  EXPECT_DOUBLE_EQ(reset.scopes[0].total_s, 1.0);
+  ASSERT_EQ(reset.counters.size(), 1U);
+  EXPECT_EQ(reset.counters[0].name, "c");
+  EXPECT_EQ(reset.counters[0].value, 3);
+
+  // Reset again, now testing the public values directly. `snapshot()` itself allocates, so it is
+  // intentionally outside the heap window.
+  HeapAllocationWindow clear_heap;
+  p.reset();
+  const std::uint64_t clear_allocations = clear_heap.close();
+  EXPECT_EQ(clear_allocations, 0U);
+  EXPECT_EQ(p.scope_count(), 1U);
+  const auto* scope = p.entry("a");
+  ASSERT_NE(scope, nullptr);
+  EXPECT_EQ(scope->count, 0U);
+  EXPECT_DOUBLE_EQ(scope->total_s, 0.0);
+  EXPECT_EQ(p.counter("c"), 0);
 }

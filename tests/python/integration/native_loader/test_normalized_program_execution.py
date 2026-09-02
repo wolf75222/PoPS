@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 import os
 from pathlib import Path
+import re
 from typing import Any
 
 import numpy as np
@@ -13,6 +14,10 @@ import pytest
 
 import pops.lib.time as libtime
 from pops.codegen.program_graph_lowering import emit_program_graph
+from pops.codegen.program_persistent_plan import (
+    get_program_resource_plan,
+    persistent_slot_token,
+)
 from pops.physics._facade import Model
 from pops.problem import Case
 from pops.solvers import DenseLU
@@ -140,6 +145,42 @@ def _normalize_and_lower(program: Program, model: Any) -> _NormalizedProgram:
     )
 
 
+def test_normalized_program_resource_plan_keeps_only_materialized_occurrences() -> None:
+    """Accepted-state aliases never become unprimed runtime-sized plan rows."""
+
+    model, state, explicit, implicit = _authoring()
+    programs = (
+        _manual_ssprk2(state, explicit),
+        _manual_imex_euler(state, explicit, implicit),
+    )
+    prepare_slots = re.compile(
+        r"ctx\.prepare_(?:rhs|state|scalar)_scratch\((\d+),"
+    )
+    for program in programs:
+        plan = get_program_resource_plan(program, target="system")
+        source = _normalize_and_lower(program, model).source
+        prepared = {int(slot) for slot in prepare_slots.findall(source)}
+        planned = {entry.slot for entry in plan.entries}
+        # These two authored values are read-only aliases: the state is owned
+        # by the accepted System and an outcome component aliases the prepared
+        # solve result.  Neither can be materialized as an independent slot.
+        aliases = [
+            value
+            for value in program._values
+            if value.op in {"state", "solve_outcome_component"}
+        ]
+        assert aliases
+        for alias in aliases:
+            assert alias.id not in {entry.key.value_id for entry in plan.entries}
+            with pytest.raises(KeyError):
+                persistent_slot_token(program, alias, target="system")
+        # The remaining symbolic rows are exactly the scratch owners emitted
+        # into the install-time prelude; there is no unresolved slot left for
+        # host materialization to guess or allocate during a step.
+        assert planned == prepared
+        assert list(sorted(planned)) == list(range(len(planned)))
+
+
 @dataclass(frozen=True)
 class _NativeResult:
     state: np.ndarray
@@ -198,11 +239,12 @@ def test_manual_preset_ssprk2_and_imex_execute_through_same_program_graph_pipeli
         assert value.detached._compiled_detached is True
         assert not value.detached._operator_registries
         assert type(value.graph) is ProgramGraph
-        assert value.source.count("ctx.install([=](double dt)") == 1
+        assert value.source.count("state->step = [ctx_owner = state->ctx_owner](double dt)") == 1
+        assert "ctx.install(" not in value.source
         assert value.source.count("ctx.begin_step(dt)") == 1
         assert value.source.count("ctx.commit_many(") == 1
         assert (
-            value.source.index("ctx.install([=](double dt)")
+            value.source.index("state->step = [ctx_owner = state->ctx_owner](double dt)")
             < value.source.index("ctx.begin_step(dt)")
             < value.source.index("ctx.commit_many(")
         )

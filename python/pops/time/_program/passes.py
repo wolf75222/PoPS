@@ -308,7 +308,10 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
     def validate(self) -> Any:
         """Structural validation of the IR. Raises ValueError on a malformed program."""
         from pops.time._program.region_validation import validate_program_regions
+        from pops.time._program.stochastic_validation import validate_stochastic_authority
+
         validate_program_regions(self)
+        validate_stochastic_authority(self)
         if not self._commits:
             raise ValueError("a time Program must commit each advanced block exactly once "
                              "(no block was committed)")

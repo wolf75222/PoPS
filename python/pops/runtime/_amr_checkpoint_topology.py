@@ -1,4 +1,4 @@
-"""Exact AMR distribution topology persisted by checkpoint payload v11."""
+"""Exact AMR distribution topology persisted by checkpoint payload v12."""
 
 from __future__ import annotations
 

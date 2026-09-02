@@ -30,10 +30,121 @@ pointer expressions like ``(*sf4)`` -- valid as MultiFab lvalues (``.local_size(
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from pops.codegen.program_emit_kernels import _cell_locals, _coeff_cpp, _deref, _model_impl
 from pops.codegen.program_emit_model_kernels import _linear_source_rows, _provider_binding
+from pops.codegen.program_persistent_plan import persistent_slot_token
+
+
+def _condensed_program(var: Any, where: str) -> Any:
+    """Return the immutable Program authority carried by the enclosing emission walk."""
+    program = var.get(("program",))
+    if program is None:
+        raise NotImplementedError(
+            "%s requires an authenticated Program resource plan; refusing unprimed step-local "
+            "scratch allocation" % where
+        )
+    return program
+
+
+def _condensed_slot_token(program: Any, value: Any, *, target: str, where: str) -> str:
+    """Resolve one condensed scratch slot by its complete sealed occurrence.
+
+    A detached/reconstructed resource plan intentionally has no Python object-id
+    bindings.  Condensed lowering still has the original Program occurrence in
+    hand, so recover its canonical lexical path from the executable graph and
+    pass both that path and its one sealed level to the plan.  This is not a
+    value-id fallback: an absent, duplicated, or multi-level-unqualified
+    occurrence is rejected before any prelude line is emitted.
+    """
+    from pops.codegen.program_persistent_plan import (
+        _reachable_program_occurrences,
+        get_program_resource_plan,
+    )
+
+    # Solve outcomes are typed, zero-storage projections of the solve-owned
+    # prepared result.  Follow only those two explicit aliases to the storage
+    # owner; neither projection is permitted to manufacture its own plan row.
+    alias_inputs = {"solve_outcome": 0, "solve_outcome_component": 0}
+    visited: set[int] = set()
+    while getattr(value, "op", None) in alias_inputs:
+        identity = id(value)
+        if identity in visited:
+            raise ValueError("%s contains a cyclic solve-result alias" % where)
+        visited.add(identity)
+        inputs = getattr(value, "inputs", ())
+        source_index = alias_inputs[value.op]
+        if len(inputs) <= source_index:
+            raise ValueError("%s contains an incomplete solve-result alias" % where)
+        value = inputs[source_index]
+
+    paths = [
+        path for candidate, path in _reachable_program_occurrences(program)
+        if candidate is value
+    ]
+    if len(paths) != 1:
+        raise ValueError(
+            "%s requires exactly one reachable static Program occurrence" % where
+        )
+    occurrence_path = paths[0]
+    value_id = getattr(value, "id", None)
+    plan = get_program_resource_plan(program, target=target)
+    rows = [
+        row for row in plan
+        if row.key.value_id == value_id and row.key.occurrence_path == occurrence_path
+    ]
+    if len(rows) > 1:
+        attrs = getattr(value, "attrs", {})
+        level = attrs.get("level") if isinstance(attrs, Mapping) else None
+        if level is None and isinstance(attrs, Mapping):
+            schedule = attrs.get("schedule")
+            if schedule is not None:
+                level = getattr(
+                    schedule.native_schedule_ir(
+                        where="condensed resource occurrence level resolution"
+                    ).domain,
+                    "level",
+                    None,
+                )
+        if level is not None:
+            rows = [row for row in rows if row.key.level == level]
+    if len(rows) != 1:
+        raise ValueError(
+            "%s requires exactly one sealed Program resource occurrence for path %r"
+            % (where, occurrence_path)
+        )
+    return persistent_slot_token(
+        program,
+        value,
+        target=target,
+        occurrence_path=occurrence_path,
+        level=rows[0].key.level,
+    )
+
+
+def _prime_condensed_scalar(
+        var: Any, prelude: Any, value: Any, *, subslot: int, ncomp: int,
+        ghost_depth: int, program_block: int, target: str, where: str) -> str:
+    """Register one condensed scalar scratch occurrence in the install-time prelude."""
+    from pops.codegen.program_emit_ops import _append_resource_preparation
+
+    program = _condensed_program(var, where)
+    if isinstance(program_block, bool) or not isinstance(program_block, int) or program_block < 0:
+        raise ValueError("%s requires an exact non-negative Program block index" % where)
+    slot = _condensed_slot_token(program, value, target=target, where=where)
+    _append_resource_preparation(
+        prelude,
+        var,
+        kind="scalar",
+        slot=slot,
+        subslot=subslot,
+        program_block=program_block,
+        ncomp=ncomp,
+        ghost_depth=ghost_depth,
+    )
+    return slot
 
 
 def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
@@ -43,6 +154,12 @@ def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
     inline emitter (ADC-637), keeping program_emit_ops.py a thin router. Records the op's C++ token in
     @p var and appends its kernel to @p lines (the coefficient bundle also allocates one persistent
     row-major tensor field in @p prelude, captured by the apply lambda)."""
+    if target == "system" and v.op in (
+            "condensed_coeffs", "condensed_rhs", "condensed_reconstruct"):
+        raise NotImplementedError(
+            "Uniform condensed stencil lowering requires a cold-bound scalar boundary session; "
+            "this Program artifact has no retained session authority"
+        )
     if v.op == "condensed_coeffs":
         if prelude is None:
             raise NotImplementedError(
@@ -51,10 +168,37 @@ def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
         (state_in,) = v.inputs
         dimension = len(v.attrs["subset"])
         tensor = "cond_tensor%d" % v.id
-        prelude.append(
-            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-            "ctx.alloc_scalar_field(%d, 1));" % (tensor, dimension * dimension)
+        slot = _prime_condensed_scalar(
+            var,
+            prelude,
+            v,
+            subslot=0,
+            ncomp=dimension * dimension,
+            ghost_depth=1,
+            program_block=program_block,
+            target=target,
+            where="condensed_coeffs %r" % v.name,
         )
+        if target == "amr_system":
+            prelude.append(
+                "auto %s = ctx.prepared_scalar_scratch_handle(%s, 0, %d, %d, 1);"
+                % (tensor, slot, program_block, dimension * dimension)
+            )
+            # The coefficient bundle has a distinct Dim*Dim component contract.  Bind its
+            # transport while the prelude still owns the preparation image; the generated step
+            # must only consume this retained session when it fills coefficient ghosts.
+            tensor_boundary = "cond_tensor_boundary%d" % v.id
+            prelude.append(
+                "auto %s = ctx.bind_mesh_boundary_session(*%s, ctx.prepared_execution_lane());"
+                % (tensor_boundary, tensor)
+            )
+        else:
+            tensor_boundary = None
+            prelude.append(
+                "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+                "ctx.scalar_scratch(%s, 0, ctx.state(%d), %d, 1));"
+                % (tensor, slot, program_block, dimension * dimension)
+            )
         var[v.id] = tensor
         lines += _emit_condensed_coeffs_kernel(
             v.id, model, v.attrs["linear_operator"], v.attrs["subset"], v.attrs["c"],
@@ -66,8 +210,32 @@ def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
         # periodic and zero-gradient (Foextrap) sides -- the whole sanctioned condensed envelope. A
         # Dirichlet transport side would differ (the brick forces Foextrap on the coefficients); lifting
         # that needs a ctx coefficient-BC seam, batched with the brick retirement (header change).
-        lines.append("ctx.fill_boundary(*%s);" % tensor)
+        if tensor_boundary is None:
+            lines.append("ctx.fill_boundary(*%s);" % tensor)
+        else:
+            lines.append("%s->fill(*%s);" % (tensor_boundary, tensor))
         if target == "amr_system":
+            scalar_boundary_prototype = "cond_tensor_scalar_boundary_prototype%d" % v.id
+            scalar_boundary = "cond_tensor_scalar_boundary%d" % v.id
+            _prime_condensed_scalar(
+                var,
+                prelude,
+                v,
+                subslot=1,
+                ncomp=1,
+                ghost_depth=1,
+                program_block=program_block,
+                target=target,
+                where="condensed_coeffs scalar assembly boundary %r" % v.name,
+            )
+            prelude.append(
+                "auto %s = ctx.prepared_scalar_scratch_handle(%s, 1, %d, 1, 1);"
+                % (scalar_boundary_prototype, slot, program_block)
+            )
+            prelude.append(
+                "auto %s = ctx.bind_mesh_boundary_session(*%s, ctx.prepared_execution_lane());"
+                % (scalar_boundary, scalar_boundary_prototype)
+            )
             lines.append("if (!ctx.uses_prepared_krylov_fallback()) {")
             for row in range(dimension):
                 for column in range(dimension):
@@ -80,21 +248,118 @@ def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
                     lines.append(
                         "  ctx.copy_grown_component_span(%s, 0, *%s, %d, 1);"
                         % (dest, tensor, row * dimension + column))
-                    lines.append("  ctx.fill_boundary(%s);" % dest)
+                    lines.append("  %s->fill(%s);" % (scalar_boundary, dest))
             lines.append("}")
     elif v.op == "condensed_rhs":
         out_in, phi_in, state_in = v.inputs
+        resource_slot = _prime_condensed_scalar(
+            var,
+            prelude,
+            v,
+            subslot=0,
+            ncomp=1,
+            ghost_depth=0,
+            program_block=program_block,
+            target=target,
+            where="condensed_rhs laplacian scratch %r" % v.name,
+        )
+        _prime_condensed_scalar(
+            var,
+            prelude,
+            v,
+            subslot=1,
+            ncomp=1,
+            ghost_depth=0,
+            program_block=program_block,
+            target=target,
+            where="condensed_rhs negated-laplacian scratch %r" % v.name,
+        )
+        _prime_condensed_scalar(
+            var,
+            prelude,
+            v,
+            subslot=2,
+            ncomp=len(v.attrs["subset"]),
+            ghost_depth=1,
+            program_block=program_block,
+            target=target,
+            where="condensed_rhs flux scratch %r" % v.name,
+        )
+        scalar_boundary = None
+        flux_boundary = None
+        if target == "amr_system":
+            # ``phi_n`` can be a history or a step-local field, neither of which is available to
+            # the installation prelude by address.  Prime one exact scalar/one-ghost prototype
+            # solely to bind the immutable transport; the hot Laplacian then authenticates the
+            # live field against that retained session.
+            _prime_condensed_scalar(
+                var,
+                prelude,
+                v,
+                subslot=3,
+                ncomp=1,
+                ghost_depth=1,
+                program_block=program_block,
+                target=target,
+                where="condensed_rhs scalar stencil boundary %r" % v.name,
+            )
+            scalar_boundary_prototype = "cond_rhs_boundary_prototype%d" % v.id
+            scalar_boundary = "cond_rhs_boundary%d" % v.id
+            prelude.append(
+                "auto %s = ctx.prepared_scalar_scratch_handle(%s, 3, %d, 1, 1);"
+                % (scalar_boundary_prototype, resource_slot, program_block)
+            )
+            prelude.append(
+                "auto %s = ctx.bind_mesh_boundary_session(*%s, ctx.prepared_execution_lane());"
+                % (scalar_boundary, scalar_boundary_prototype)
+            )
+            flux_boundary_prototype = "cond_rhs_flux_boundary_prototype%d" % v.id
+            flux_boundary = "cond_rhs_flux_boundary%d" % v.id
+            prelude.append(
+                "auto %s = ctx.prepared_scalar_scratch_handle(%s, 2, %d, %d, 1);"
+                % (flux_boundary_prototype, resource_slot, program_block, len(v.attrs["subset"]))
+            )
+            prelude.append(
+                "auto %s = ctx.bind_mesh_boundary_session(*%s, ctx.prepared_execution_lane());"
+                % (flux_boundary, flux_boundary_prototype)
+            )
         lines += _emit_condensed_rhs_kernel(
             v.id, model, v.attrs["linear_operator"], v.attrs["subset"], v.attrs["th_dt"],
             v.attrs["g"], var[out_in.id], var[phi_in.id], var[state_in.id],
-            provider_plans=provider_plans, consumer_qid=consumer_qid, program_block=program_block)
+            provider_plans=provider_plans, consumer_qid=consumer_qid, program_block=program_block,
+            resource_slot=resource_slot, scalar_boundary=scalar_boundary,
+            flux_boundary=flux_boundary)
         var[v.id] = var[out_in.id]
     elif v.op == "condensed_reconstruct":
         state_in, phi_in = v.inputs
+        scalar_boundary = None
+        if target == "amr_system":
+            slot = _prime_condensed_scalar(
+                var,
+                prelude,
+                phi_in,
+                subslot=4,
+                ncomp=1,
+                ghost_depth=1,
+                program_block=program_block,
+                target=target,
+                where="condensed_reconstruct scalar boundary %r" % v.name,
+            )
+            scalar_boundary_prototype = "cond_reconstruct_boundary_prototype%d" % v.id
+            scalar_boundary = "cond_reconstruct_boundary%d" % v.id
+            prelude.append(
+                "auto %s = ctx.prepared_scalar_scratch_handle(%s, 4, %d, 1, 1);"
+                % (scalar_boundary_prototype, slot, program_block)
+            )
+            prelude.append(
+                "auto %s = ctx.bind_mesh_boundary_session(*%s, ctx.prepared_execution_lane());"
+                % (scalar_boundary, scalar_boundary_prototype)
+            )
         lines += _emit_condensed_reconstruct_kernel(
             v.id, model, v.attrs["linear_operator"], v.attrs["subset"], v.attrs["th_dt"],
             v.attrs["c_rho"], var[state_in.id], var[phi_in.id],
-            provider_plans=provider_plans, consumer_qid=consumer_qid, program_block=program_block)
+            provider_plans=provider_plans, consumer_qid=consumer_qid, program_block=program_block,
+            scalar_boundary=scalar_boundary)
         var[v.id] = var[state_in.id]
     else:  # condensed_energy
         state_in, old_in = v.inputs
@@ -275,7 +540,9 @@ def _emit_condensed_flux_kernel(body: Any, uid: Any, impl: Any, jblock: Any, th_
 
 def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any, th_dt: Any,
                                g_coeff: Any, rhs_var: Any, phi_n_var: Any, state_var: Any,
-                               *, provider_plans: Any, consumer_qid: str, program_block: int) -> list:
+                               *, provider_plans: Any, consumer_qid: str, program_block: int,
+                               resource_slot: str, scalar_boundary: str | None = None,
+                               flux_boundary: str | None = None) -> list:
     """Emit ``rhs = -Lap(phi_n) - g*div(M^{-1} momentum)`` for the exact native rank."""
     impl = _model_impl(model)
     jblock = _subset_block_rows(impl, jblock_op, subset)
@@ -290,12 +557,17 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
     flux_write = "cond%s_fluxW" % uid
     rhs_write = "cond%s_rhsW" % uid
     dimension = len(subset)
+    laplacian = (
+        "ctx.laplacian(%s, %s, *%s);" % (lap, _deref(phi_n_var), scalar_boundary)
+        if scalar_boundary is not None
+        else "ctx.laplacian(%s, %s);" % (lap, _deref(phi_n_var))
+    )
     body = [
         "pops::MultiFab<pops::kNativeDimension>& %s = "
-        "ctx.scalar_scratch(%d, 0, %s, 1, 0);" % (lap, uid, _deref(phi_n_var)),
-        "ctx.laplacian(%s, %s);" % (lap, _deref(phi_n_var)),
+        "ctx.scalar_scratch(%s, 0, %s, 1, 0);" % (lap, resource_slot, _deref(phi_n_var)),
+        laplacian,
         "pops::MultiFab<pops::kNativeDimension>& %s = "
-        "ctx.scalar_scratch(%d, 1, %s, 1, 0);" % (negl, uid, _deref(phi_n_var)),
+        "ctx.scalar_scratch(%s, 1, %s, 1, 0);" % (negl, resource_slot, _deref(phi_n_var)),
         "for (int li = 0; li < %s.local_size(); ++li) {" % negl,
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> nlA = "
         "%s.fab(li).view();" % negl,
@@ -307,7 +579,8 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
         "  });",
         "}",
         "pops::MultiFab<pops::kNativeDimension>& %s = "
-        "ctx.scalar_scratch(%d, 2, %s, %d, 1);" % (fx, uid, _deref(phi_n_var), dimension),
+        "ctx.scalar_scratch(%s, 2, %s, %d, 1);"
+        % (fx, resource_slot, _deref(phi_n_var), dimension),
         "pops::MultiFab<pops::kNativeDimension>& %s = "
         'ctx.assembly_target(%s, "pops.tensor-elliptic.flux");'
         % (flux_write, fx),
@@ -319,7 +592,11 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
         body, uid, impl, jblock, th_dt_cpp, subset, flux_write, state_var, provider_binding,
         program_block,
     )
-    body.append("ctx.fill_boundary(%s);" % flux_write)
+    body.append(
+        "%s->fill(%s);" % (flux_boundary, flux_write)
+        if flux_boundary is not None
+        else "ctx.fill_boundary(%s);" % flux_write
+    )
     body += [
         "const pops::Geometry<pops::kNativeDimension> cond%s_geometry = ctx.geometry();" % uid,
         "const pops::Real cond%s_g = %s;" % (uid, g_cpp),
@@ -351,7 +628,8 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
 def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any,
                                        th_dt: Any, c_rho: Any, state_var: Any, phi_var: Any,
                                        *, provider_plans: Any, consumer_qid: str,
-                                       program_block: int) -> list:
+                                       program_block: int,
+                                       scalar_boundary: str | None = None) -> list:
     """Emit the exact-ranked velocity reconstruction and write momentum in place."""
     impl = _model_impl(model)
     jblock = _subset_block_rows(impl, jblock_op, subset)
@@ -366,7 +644,8 @@ def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, sub
         "pops::MultiFab<pops::kNativeDimension>& %s = "
         'ctx.assembly_source(%s, "pops.tensor-elliptic.solution");'
         % (phi_read, phi),
-        "ctx.fill_boundary(%s);" % phi_read,
+        ("%s->fill(%s);" % (scalar_boundary, phi_read)
+         if scalar_boundary is not None else "ctx.fill_boundary(%s);" % phi_read),
         "const pops::Geometry<pops::kNativeDimension> cond%s_geometry = ctx.geometry();" % uid,
         "for (int li = 0; li < %s.local_size(); ++li) {" % state,
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> stateA = "

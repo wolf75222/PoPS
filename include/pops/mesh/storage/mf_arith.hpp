@@ -10,6 +10,7 @@
 #include <pops/parallel/comm.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <limits>
 #include <stdexcept>
@@ -412,6 +413,36 @@ Real reduce_sum_local(const MultiFab<Dim, MemorySpace>& field, int component = 0
   return result;
 }
 
+/// Reduce one component with a bind-sealed SUM workspace.  Program execution uses this overload
+/// after its installation image has established the largest local Fab domain.  The workspace is
+/// deliberately supplied by the caller: a hot reduction cannot silently create a Kokkos scratch
+/// allocation or grow its capacity.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_sum_local(const MultiFab<Dim, MemorySpace>& field, const ExecutionSpace& execution,
+                      const PreparedCellSumReduction<ExecutionSpace>& prepared, int component = 0) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_sum_local");
+  Real result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    result += for_each_cell_reduce_sum(
+        execution, prepared, field.box(local),
+        mf_arith_detail::SumKernel<Dim>{field.fab(local).view(), component});
+  return result;
+}
+
+/// Prepared allocation-free absolute-value SUM over all local Fabs.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_abs_sum_local(const MultiFab<Dim, MemorySpace>& field, const ExecutionSpace& execution,
+                          const PreparedCellSumReduction<ExecutionSpace>& prepared,
+                          int component = 0) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_abs_sum_local");
+  Real result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    result += for_each_cell_reduce_sum(
+        execution, prepared, field.box(local),
+        mf_arith_detail::AbsSumKernel<Dim>{field.fab(local).view(), component});
+  return result;
+}
+
 template <int Dim, class MemorySpace>
 Real reduce_abs_sum_local(const MultiFab<Dim, MemorySpace>& field, int component = 0) {
   mf_arith_detail::require_component(field, component, "pops::reduce_abs_sum_local");
@@ -419,6 +450,19 @@ Real reduce_abs_sum_local(const MultiFab<Dim, MemorySpace>& field, int component
   for (std::size_t local = 0; local < field.local_size(); ++local)
     result += for_each_cell_reduce_sum(
         field.box(local), mf_arith_detail::AbsSumKernel<Dim>{field.fab(local).view(), component});
+  return result;
+}
+
+/// Prepared allocation-free maximum over all local Fabs.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_max_local(const MultiFab<Dim, MemorySpace>& field, const ExecutionSpace& execution,
+                      const PreparedCellSumReduction<ExecutionSpace>& prepared, int component = 0) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_max_local");
+  Real result = -std::numeric_limits<Real>::infinity();
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    result = std::max(result, for_each_cell_reduce_max(execution, prepared, field.box(local),
+                                                       mf_arith_detail::MaxKernel<Dim>{
+                                                           field.fab(local).view(), component}));
   return result;
 }
 
@@ -477,6 +521,70 @@ MaskedMaxLocalResult reduce_masked_max_local(
   return result;
 }
 
+/// Prepared allocation-free counterpart of reduce_masked_max_local.  The result remains a small
+/// value type; all cell traversal uses the caller's bind-sealed reduction workspace.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+MaskedMaxLocalResult reduce_masked_max_local(
+    const MultiFab<Dim, MemorySpace>& field, int component,
+    const MultiFab<Dim, MemorySpace>* active_cells, const ExecutionSpace& execution,
+    const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_masked_max_local");
+  if (active_cells != nullptr) {
+    if (field.layout() != active_cells->layout() ||
+        field.distribution() != active_cells->distribution() ||
+        field.local_rank() != active_cells->local_rank() ||
+        field.local_size() != active_cells->local_size())
+      throw std::invalid_argument(
+          "pops::reduce_masked_max_local requires the same exact valid-cell layout");
+    if (active_cells->ncomp() != 1)
+      throw std::invalid_argument("pops::reduce_masked_max_local mask requires one component");
+  }
+
+  MaskedMaxLocalResult result;
+  const bool has_mask = active_cells != nullptr;
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const FieldView<const Real, Dim> active =
+        has_mask ? std::as_const(active_cells->fab(local)).view() : FieldView<const Real, Dim>{};
+    const FieldView<const Real, Dim> values = std::as_const(field.fab(local)).view();
+    const Box<Dim>& box = field.box(local);
+    if (box.empty())
+      continue;
+    const bool local_has_active =
+        for_each_cell_reduce_max(execution, prepared, box,
+                                 mf_arith_detail::MaskedHasActiveKernel<Dim>{active, has_mask}) >
+        Real{0.5};
+    if (!local_has_active)
+      continue;
+    result.has_active = true;
+    result.has_invalid =
+        result.has_invalid ||
+        for_each_cell_reduce_max(execution, prepared, box,
+                                 mf_arith_detail::MaskedInvalidKernel<Dim>{
+                                     values, active, component, has_mask}) > Real{0.5};
+    result.maximum = std::max(result.maximum,
+                              for_each_cell_reduce_max(execution, prepared, box,
+                                                       mf_arith_detail::MaskedFiniteMaxKernel<Dim>{
+                                                           values, active, component, has_mask}));
+  }
+  return result;
+}
+
+/// Prepared allocation-free minimum.  The prepared MAX route is reused with a negated value so
+/// that no second workspace or operation-specific temporary is needed.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_min_local(const MultiFab<Dim, MemorySpace>& field, const ExecutionSpace& execution,
+                      const PreparedCellSumReduction<ExecutionSpace>& prepared, int component = 0) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_min_local");
+  Real result = std::numeric_limits<Real>::infinity();
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const Real negated = for_each_cell_reduce_max(
+        execution, prepared, field.box(local),
+        mf_arith_detail::NegatedKernel<Dim>{field.fab(local).view(), component});
+    result = std::min(result, -negated);
+  }
+  return result;
+}
+
 template <int Dim, class MemorySpace>
 Real reduce_min_local(const MultiFab<Dim, MemorySpace>& field, int component = 0) {
   mf_arith_detail::require_component(field, component, "pops::reduce_min_local");
@@ -489,6 +597,19 @@ Real reduce_min_local(const MultiFab<Dim, MemorySpace>& field, int component = 0
   return result;
 }
 
+/// Prepared allocation-free infinity norm over one component.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real norm_inf(const MultiFab<Dim, MemorySpace>& field, const ExecutionSpace& execution,
+              const PreparedCellSumReduction<ExecutionSpace>& prepared, int component = 0) {
+  mf_arith_detail::require_component(field, component, "pops::norm_inf");
+  Real result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    result = std::max(result, for_each_cell_reduce_max(execution, prepared, field.box(local),
+                                                       mf_arith_detail::NormInfKernel<Dim>{
+                                                           field.fab(local).view(), component}));
+  return result;
+}
+
 template <int Dim, class MemorySpace>
 Real norm_inf(const MultiFab<Dim, MemorySpace>& field, int component = 0) {
   mf_arith_detail::require_component(field, component, "pops::norm_inf");
@@ -497,6 +618,22 @@ Real norm_inf(const MultiFab<Dim, MemorySpace>& field, int component = 0) {
     result = std::max(result, for_each_cell_reduce_max(field.box(local),
                                                        mf_arith_detail::NormInfKernel<Dim>{
                                                            field.fab(local).view(), component}));
+  return result;
+}
+
+/// Prepared allocation-free dot product over one component.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real dot_local(const MultiFab<Dim, MemorySpace>& left, const MultiFab<Dim, MemorySpace>& right,
+               const ExecutionSpace& execution,
+               const PreparedCellSumReduction<ExecutionSpace>& prepared, int component = 0) {
+  mf_arith_detail::require_same_layout(left, right, "pops::dot_local");
+  mf_arith_detail::require_component(left, component, "pops::dot_local");
+  Real result = 0;
+  for (std::size_t local = 0; local < left.local_size(); ++local)
+    result +=
+        for_each_cell_reduce_sum(execution, prepared, left.box(local),
+                                 mf_arith_detail::DotKernel<Dim>{
+                                     left.fab(local).view(), right.fab(local).view(), component});
   return result;
 }
 
@@ -529,6 +666,27 @@ Real reduce_active_sum_local(const MultiFab<Dim, MemorySpace>& field, int compon
   for (std::size_t local = 0; local < field.local_size(); ++local)
     result += for_each_cell_reduce_sum(
         field.box(local),
+        mf_arith_detail::MeasuredValueKernel<Dim>{
+            field.fab(local).view(), active_cells->fab(local).view(), {}, component, false, false});
+  return result;
+}
+
+/// Workspace-aware counterpart of reduce_active_sum_local.  This is the only SUM route used by
+/// an owner-qualified Program reduction once its accepted image is bound.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_active_sum_local(const MultiFab<Dim, MemorySpace>& field, int component,
+                             const MultiFab<Dim, MemorySpace>* active_cells,
+                             const ExecutionSpace& execution,
+                             const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  if (active_cells == nullptr)
+    return reduce_sum_local(field, execution, prepared, component);
+  const RelativeCellMeasure<Dim, MemorySpace> measure{active_cells, nullptr};
+  mf_arith_detail::require_component(field, component, "pops::reduce_active_sum_local");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_active_sum_local");
+  Real result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    result += for_each_cell_reduce_sum(
+        execution, prepared, field.box(local),
         mf_arith_detail::MeasuredValueKernel<Dim>{
             field.fab(local).view(), active_cells->fab(local).view(), {}, component, false, false});
   return result;
@@ -643,6 +801,147 @@ Real dot_active_local(const MultiFab<Dim, MemorySpace>& left,
   return result;
 }
 
+/// Prepared allocation-free absolute SUM over the active valid-cell subset.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_active_abs_sum_local(const MultiFab<Dim, MemorySpace>& field, int component,
+                                 const MultiFab<Dim, MemorySpace>* active_cells,
+                                 const ExecutionSpace& execution,
+                                 const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  if (active_cells == nullptr)
+    return reduce_abs_sum_local(field, execution, prepared, component);
+  const RelativeCellMeasure<Dim, MemorySpace> measure{active_cells, nullptr};
+  mf_arith_detail::require_component(field, component, "pops::reduce_active_abs_sum_local");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_active_abs_sum_local");
+  Real result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    result += for_each_cell_reduce_sum(
+        execution, prepared, field.box(local),
+        mf_arith_detail::MeasuredValueKernel<Dim>{
+            field.fab(local).view(), active_cells->fab(local).view(), {}, component, true, false});
+  return result;
+}
+
+/// Prepared allocation-free maximum over active valid cells.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_active_max_local(const MultiFab<Dim, MemorySpace>& field, int component,
+                             const MultiFab<Dim, MemorySpace>* active_cells,
+                             const ExecutionSpace& execution,
+                             const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  if (active_cells == nullptr)
+    return reduce_max_local(field, execution, prepared, component);
+  const RelativeCellMeasure<Dim, MemorySpace> measure{active_cells, nullptr};
+  mf_arith_detail::require_component(field, component, "pops::reduce_active_max_local");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_active_max_local");
+  Real result = -std::numeric_limits<Real>::infinity();
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const Box<Dim>& box = field.box(local);
+    if (box.empty())
+      continue;
+    const bool local_has_active =
+        for_each_cell_reduce_max(execution, prepared, box,
+                                 mf_arith_detail::MaskedHasActiveKernel<Dim>{
+                                     active_cells->fab(local).view(), true}) > Real{0.5};
+    if (!local_has_active)
+      continue;
+    result = std::max(result, for_each_cell_reduce_max(
+                                  execution, prepared, box,
+                                  mf_arith_detail::ActiveMaxKernel<Dim>{
+                                      field.fab(local).view(), active_cells->fab(local).view(),
+                                      component, false, false}));
+  }
+  return result;
+}
+
+/// Prepared allocation-free minimum over active valid cells.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_active_min_local(const MultiFab<Dim, MemorySpace>& field, int component,
+                             const MultiFab<Dim, MemorySpace>* active_cells,
+                             const ExecutionSpace& execution,
+                             const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  if (active_cells == nullptr)
+    return reduce_min_local(field, execution, prepared, component);
+  const RelativeCellMeasure<Dim, MemorySpace> measure{active_cells, nullptr};
+  mf_arith_detail::require_component(field, component, "pops::reduce_active_min_local");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_active_min_local");
+  Real result = std::numeric_limits<Real>::infinity();
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const Box<Dim>& box = field.box(local);
+    if (box.empty())
+      continue;
+    const bool local_has_active =
+        for_each_cell_reduce_max(execution, prepared, box,
+                                 mf_arith_detail::MaskedHasActiveKernel<Dim>{
+                                     active_cells->fab(local).view(), true}) > Real{0.5};
+    if (!local_has_active)
+      continue;
+    const Real negated = for_each_cell_reduce_max(
+        execution, prepared, box,
+        mf_arith_detail::ActiveMaxKernel<Dim>{
+            field.fab(local).view(), active_cells->fab(local).view(), component, true, false});
+    result = std::min(result, -negated);
+  }
+  return result;
+}
+
+/// Prepared allocation-free infinity norm over active valid cells.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_active_norm_inf_local(const MultiFab<Dim, MemorySpace>& field, int component,
+                                  const MultiFab<Dim, MemorySpace>* active_cells,
+                                  const ExecutionSpace& execution,
+                                  const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  if (active_cells == nullptr)
+    return norm_inf(field, execution, prepared, component);
+  const RelativeCellMeasure<Dim, MemorySpace> measure{active_cells, nullptr};
+  mf_arith_detail::require_component(field, component, "pops::reduce_active_norm_inf_local");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_active_norm_inf_local");
+  Real result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    result = std::max(result, for_each_cell_reduce_max(
+                                  execution, prepared, field.box(local),
+                                  mf_arith_detail::ActiveMaxKernel<Dim>{
+                                      field.fab(local).view(), active_cells->fab(local).view(),
+                                      component, false, true}));
+  return result;
+}
+
+/// Prepared allocation-free active dot product over one component.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real dot_active_local(const MultiFab<Dim, MemorySpace>& left,
+                      const MultiFab<Dim, MemorySpace>& right, int component,
+                      const MultiFab<Dim, MemorySpace>* active_cells,
+                      const ExecutionSpace& execution,
+                      const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  if (active_cells == nullptr)
+    return dot_local(left, right, execution, prepared, component);
+  mf_arith_detail::require_same_layout(left, right, "pops::dot_active_local");
+  const RelativeCellMeasure<Dim, MemorySpace> measure{active_cells, nullptr};
+  mf_arith_detail::require_component(left, component, "pops::dot_active_local");
+  mf_arith_detail::validate_measure(left, measure, "pops::dot_active_local");
+  Real result = 0;
+  for (std::size_t local = 0; local < left.local_size(); ++local)
+    result += for_each_cell_reduce_sum(
+        execution, prepared, left.box(local),
+        mf_arith_detail::MeasuredDotKernel<Dim>{left.fab(local).view(),
+                                                right.fab(local).view(),
+                                                active_cells->fab(local).view(),
+                                                {},
+                                                component,
+                                                false});
+  return result;
+}
+
+/// Prepared allocation-free dot product over all components.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real dot_all_local(const MultiFab<Dim, MemorySpace>& left, const MultiFab<Dim, MemorySpace>& right,
+                   const ExecutionSpace& execution,
+                   const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  mf_arith_detail::require_same_layout(left, right, "pops::dot_all_local");
+  Real result = 0;
+  for (int component = 0; component < left.ncomp(); ++component)
+    result += dot_local(left, right, execution, prepared, component);
+  return result;
+}
+
 template <int Dim, class MemorySpace>
 Real dot_all_local(const MultiFab<Dim, MemorySpace>& left,
                    const MultiFab<Dim, MemorySpace>& right) {
@@ -662,6 +961,23 @@ Real difference_sum_sq_all_local(const MultiFab<Dim, MemorySpace>& current,
     for (int component = 0; component < current.ncomp(); ++component)
       result += for_each_cell_reduce_sum(
           current.box(local),
+          mf_arith_detail::DifferenceSqKernel<Dim>{current.fab(local).view(),
+                                                   previous.fab(local).view(), component});
+  return result;
+}
+
+/// Prepared allocation-free squared difference over all components.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real difference_sum_sq_all_local(const MultiFab<Dim, MemorySpace>& current,
+                                 const MultiFab<Dim, MemorySpace>& previous,
+                                 const ExecutionSpace& execution,
+                                 const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  mf_arith_detail::require_same_layout(current, previous, "pops::difference_sum_sq_all_local");
+  Real result = 0;
+  for (std::size_t local = 0; local < current.local_size(); ++local)
+    for (int component = 0; component < current.ncomp(); ++component)
+      result += for_each_cell_reduce_sum(
+          execution, prepared, current.box(local),
           mf_arith_detail::DifferenceSqKernel<Dim>{current.fab(local).view(),
                                                    previous.fab(local).view(), component});
   return result;
@@ -718,6 +1034,75 @@ Real difference_sum_sq_all(const MultiFab<Dim, MemorySpace>& current,
   mf_arith_detail::require_same_layout(current, previous, "pops::difference_sum_sq_all");
   mf_arith_detail::require_collective_identity(current, "pops::difference_sum_sq_all");
   return static_cast<Real>(all_reduce_sum(difference_sum_sq_all_local(current, previous)));
+}
+
+/// Prepared allocation-free collective reductions.  The caller owns the execution lane used for
+/// the local traversal; these convenience overloads retain the process-wide collective API of the
+/// historical helpers and are intended for single-communicator cold callers.  Program hot paths use
+/// the corresponding ``*_local`` overload and reduce on their authenticated lane.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_sum(const MultiFab<Dim, MemorySpace>& field, const ExecutionSpace& execution,
+                const PreparedCellSumReduction<ExecutionSpace>& prepared, int component = 0) {
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_sum(prepared)");
+  return static_cast<Real>(all_reduce_sum(reduce_sum_local(field, execution, prepared, component)));
+}
+
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_abs_sum(const MultiFab<Dim, MemorySpace>& field, const ExecutionSpace& execution,
+                    const PreparedCellSumReduction<ExecutionSpace>& prepared, int component = 0) {
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_abs_sum(prepared)");
+  return static_cast<Real>(
+      all_reduce_sum(reduce_abs_sum_local(field, execution, prepared, component)));
+}
+
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_max(const MultiFab<Dim, MemorySpace>& field, const ExecutionSpace& execution,
+                const PreparedCellSumReduction<ExecutionSpace>& prepared, int component = 0) {
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_max(prepared)");
+  return static_cast<Real>(all_reduce_max(reduce_max_local(field, execution, prepared, component)));
+}
+
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_min(const MultiFab<Dim, MemorySpace>& field, const ExecutionSpace& execution,
+                const PreparedCellSumReduction<ExecutionSpace>& prepared, int component = 0) {
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_min(prepared)");
+  return static_cast<Real>(all_reduce_min(reduce_min_local(field, execution, prepared, component)));
+}
+
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_norm_inf(const MultiFab<Dim, MemorySpace>& field, const ExecutionSpace& execution,
+                     const PreparedCellSumReduction<ExecutionSpace>& prepared, int component = 0) {
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_norm_inf(prepared)");
+  return static_cast<Real>(all_reduce_max(norm_inf(field, execution, prepared, component)));
+}
+
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real dot(const MultiFab<Dim, MemorySpace>& left, const MultiFab<Dim, MemorySpace>& right,
+         const ExecutionSpace& execution, const PreparedCellSumReduction<ExecutionSpace>& prepared,
+         int component = 0) {
+  mf_arith_detail::require_same_layout(left, right, "pops::dot(prepared)");
+  mf_arith_detail::require_collective_identity(left, "pops::dot(prepared)");
+  return static_cast<Real>(all_reduce_sum(dot_local(left, right, execution, prepared, component)));
+}
+
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real dot_all(const MultiFab<Dim, MemorySpace>& left, const MultiFab<Dim, MemorySpace>& right,
+             const ExecutionSpace& execution,
+             const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  mf_arith_detail::require_same_layout(left, right, "pops::dot_all(prepared)");
+  mf_arith_detail::require_collective_identity(left, "pops::dot_all(prepared)");
+  return static_cast<Real>(all_reduce_sum(dot_all_local(left, right, execution, prepared)));
+}
+
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real difference_sum_sq_all(const MultiFab<Dim, MemorySpace>& current,
+                           const MultiFab<Dim, MemorySpace>& previous,
+                           const ExecutionSpace& execution,
+                           const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  mf_arith_detail::require_same_layout(current, previous, "pops::difference_sum_sq_all(prepared)");
+  mf_arith_detail::require_collective_identity(current, "pops::difference_sum_sq_all(prepared)");
+  return static_cast<Real>(
+      all_reduce_sum(difference_sum_sq_all_local(current, previous, execution, prepared)));
 }
 
 template <int Dim, class MemorySpace>
@@ -894,6 +1279,236 @@ Real reduce_norm_inf(const MultiFab<Dim, MemorySpace>& field, int component,
                                   field.fab(local).view(), measure.active_cells->fab(local).view(),
                                   component, false, true}));
   return static_cast<Real>(all_reduce_max(local_result));
+}
+
+/// Prepared allocation-free measured reductions.  These overloads keep the existing argument
+/// order (field, component, measure) and append the prepared execution state, so existing callers
+/// remain source-compatible while prepared Program callers can select the no-reducer-temporary path.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_sum(const MultiFab<Dim, MemorySpace>& field, int component,
+                const RelativeCellMeasure<Dim, MemorySpace>& measure,
+                const ExecutionSpace& execution,
+                const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_sum(measure, prepared)");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_sum(measure, prepared)");
+  if (measure.active_cells == nullptr)
+    return reduce_sum(field, execution, prepared, component);
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_sum(measure, prepared)");
+  Real local_result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const FieldView<const Real, Dim> inverse =
+        measure.inverse_volume_fraction == nullptr
+            ? FieldView<const Real, Dim>{}
+            : measure.inverse_volume_fraction->fab(local).view();
+    local_result += for_each_cell_reduce_sum(
+        execution, prepared, field.box(local),
+        mf_arith_detail::MeasuredValueKernel<Dim>{
+            field.fab(local).view(), measure.active_cells->fab(local).view(), inverse, component,
+            false, measure.inverse_volume_fraction != nullptr});
+  }
+  return static_cast<Real>(all_reduce_sum(local_result));
+}
+
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_abs_sum(const MultiFab<Dim, MemorySpace>& field, int component,
+                    const RelativeCellMeasure<Dim, MemorySpace>& measure,
+                    const ExecutionSpace& execution,
+                    const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_abs_sum(measure, prepared)");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_abs_sum(measure, prepared)");
+  if (measure.active_cells == nullptr)
+    return reduce_abs_sum(field, execution, prepared, component);
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_abs_sum(measure, prepared)");
+  Real local_result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const FieldView<const Real, Dim> inverse =
+        measure.inverse_volume_fraction == nullptr
+            ? FieldView<const Real, Dim>{}
+            : measure.inverse_volume_fraction->fab(local).view();
+    local_result += for_each_cell_reduce_sum(
+        execution, prepared, field.box(local),
+        mf_arith_detail::MeasuredValueKernel<Dim>{
+            field.fab(local).view(), measure.active_cells->fab(local).view(), inverse, component,
+            true, measure.inverse_volume_fraction != nullptr});
+  }
+  return static_cast<Real>(all_reduce_sum(local_result));
+}
+
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real dot(const MultiFab<Dim, MemorySpace>& left, const MultiFab<Dim, MemorySpace>& right,
+         int component, const RelativeCellMeasure<Dim, MemorySpace>& measure,
+         const ExecutionSpace& execution,
+         const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  mf_arith_detail::require_same_layout(left, right, "pops::dot(measure, prepared)");
+  mf_arith_detail::require_component(left, component, "pops::dot(measure, prepared)");
+  mf_arith_detail::validate_measure(left, measure, "pops::dot(measure, prepared)");
+  if (measure.active_cells == nullptr)
+    return dot(left, right, execution, prepared, component);
+  mf_arith_detail::require_collective_identity(left, "pops::dot(measure, prepared)");
+  Real local_result = 0;
+  for (std::size_t local = 0; local < left.local_size(); ++local) {
+    const FieldView<const Real, Dim> inverse =
+        measure.inverse_volume_fraction == nullptr
+            ? FieldView<const Real, Dim>{}
+            : measure.inverse_volume_fraction->fab(local).view();
+    local_result +=
+        for_each_cell_reduce_sum(execution, prepared, left.box(local),
+                                 mf_arith_detail::MeasuredDotKernel<Dim>{
+                                     left.fab(local).view(), right.fab(local).view(),
+                                     measure.active_cells->fab(local).view(), inverse, component,
+                                     measure.inverse_volume_fraction != nullptr});
+  }
+  return static_cast<Real>(all_reduce_sum(local_result));
+}
+
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real dot_all(const MultiFab<Dim, MemorySpace>& left, const MultiFab<Dim, MemorySpace>& right,
+             const RelativeCellMeasure<Dim, MemorySpace>& measure, const ExecutionSpace& execution,
+             const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  mf_arith_detail::require_same_layout(left, right, "pops::dot_all(measure, prepared)");
+  mf_arith_detail::validate_measure(left, measure, "pops::dot_all(measure, prepared)");
+  if (measure.active_cells == nullptr)
+    return dot_all(left, right, execution, prepared);
+  mf_arith_detail::require_collective_identity(left, "pops::dot_all(measure, prepared)");
+  Real local_result = 0;
+  for (std::size_t local = 0; local < left.local_size(); ++local) {
+    const FieldView<const Real, Dim> inverse =
+        measure.inverse_volume_fraction == nullptr
+            ? FieldView<const Real, Dim>{}
+            : measure.inverse_volume_fraction->fab(local).view();
+    for (int component = 0; component < left.ncomp(); ++component)
+      local_result +=
+          for_each_cell_reduce_sum(execution, prepared, left.box(local),
+                                   mf_arith_detail::MeasuredDotKernel<Dim>{
+                                       left.fab(local).view(), right.fab(local).view(),
+                                       measure.active_cells->fab(local).view(), inverse, component,
+                                       measure.inverse_volume_fraction != nullptr});
+  }
+  return static_cast<Real>(all_reduce_sum(local_result));
+}
+
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real difference_sum_sq_all(const MultiFab<Dim, MemorySpace>& current,
+                           const MultiFab<Dim, MemorySpace>& previous,
+                           const RelativeCellMeasure<Dim, MemorySpace>& measure,
+                           const ExecutionSpace& execution,
+                           const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  mf_arith_detail::require_same_layout(current, previous,
+                                       "pops::difference_sum_sq_all(measure, prepared)");
+  mf_arith_detail::validate_measure(current, measure,
+                                    "pops::difference_sum_sq_all(measure, prepared)");
+  if (measure.active_cells == nullptr)
+    return difference_sum_sq_all(current, previous, execution, prepared);
+  mf_arith_detail::require_collective_identity(current,
+                                               "pops::difference_sum_sq_all(measure, prepared)");
+  Real local_result = 0;
+  for (std::size_t local = 0; local < current.local_size(); ++local) {
+    const FieldView<const Real, Dim> inverse =
+        measure.inverse_volume_fraction == nullptr
+            ? FieldView<const Real, Dim>{}
+            : measure.inverse_volume_fraction->fab(local).view();
+    for (int component = 0; component < current.ncomp(); ++component)
+      local_result +=
+          for_each_cell_reduce_sum(execution, prepared, current.box(local),
+                                   mf_arith_detail::MeasuredDifferenceSqKernel<Dim>{
+                                       current.fab(local).view(), previous.fab(local).view(),
+                                       measure.active_cells->fab(local).view(), inverse, component,
+                                       measure.inverse_volume_fraction != nullptr});
+  }
+  return static_cast<Real>(all_reduce_sum(local_result));
+}
+
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_max(const MultiFab<Dim, MemorySpace>& field, int component,
+                const RelativeCellMeasure<Dim, MemorySpace>& measure,
+                const ExecutionSpace& execution,
+                const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_max(measure, prepared)");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_max(measure, prepared)");
+  if (measure.active_cells == nullptr)
+    return reduce_max(field, execution, prepared, component);
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_max(measure, prepared)");
+  Real local_result = -std::numeric_limits<Real>::infinity();
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    local_result =
+        std::max(local_result, for_each_cell_reduce_max(execution, prepared, field.box(local),
+                                                        mf_arith_detail::ActiveMaxKernel<Dim>{
+                                                            field.fab(local).view(),
+                                                            measure.active_cells->fab(local).view(),
+                                                            component, false, false}));
+  return static_cast<Real>(all_reduce_max(local_result));
+}
+
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_min(const MultiFab<Dim, MemorySpace>& field, int component,
+                const RelativeCellMeasure<Dim, MemorySpace>& measure,
+                const ExecutionSpace& execution,
+                const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_min(measure, prepared)");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_min(measure, prepared)");
+  if (measure.active_cells == nullptr)
+    return reduce_min(field, execution, prepared, component);
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_min(measure, prepared)");
+  Real local_result = std::numeric_limits<Real>::infinity();
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const Real negated = for_each_cell_reduce_max(
+        execution, prepared, field.box(local),
+        mf_arith_detail::ActiveMaxKernel<Dim>{field.fab(local).view(),
+                                              measure.active_cells->fab(local).view(), component,
+                                              true, false});
+    local_result = std::min(local_result, -negated);
+  }
+  return static_cast<Real>(all_reduce_min(local_result));
+}
+
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real reduce_norm_inf(const MultiFab<Dim, MemorySpace>& field, int component,
+                     const RelativeCellMeasure<Dim, MemorySpace>& measure,
+                     const ExecutionSpace& execution,
+                     const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_norm_inf(measure, prepared)");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_norm_inf(measure, prepared)");
+  if (measure.active_cells == nullptr)
+    return reduce_norm_inf(field, execution, prepared, component);
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_norm_inf(measure, prepared)");
+  Real local_result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    local_result =
+        std::max(local_result, for_each_cell_reduce_max(execution, prepared, field.box(local),
+                                                        mf_arith_detail::ActiveMaxKernel<Dim>{
+                                                            field.fab(local).view(),
+                                                            measure.active_cells->fab(local).view(),
+                                                            component, false, true}));
+  return static_cast<Real>(all_reduce_max(local_result));
+}
+
+/// Euclidean norm of one component, with and without an active-cell measure.  This is deliberately
+/// expressed in terms of the prepared dot path so it inherits the same capacity/layout checks and
+/// deterministic partition.
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real norm2_local(const MultiFab<Dim, MemorySpace>& field, int component,
+                 const ExecutionSpace& execution,
+                 const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  const Real square_sum = dot_local(field, field, execution, prepared, component);
+  return std::sqrt(square_sum);
+}
+
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real norm2_local(const MultiFab<Dim, MemorySpace>& field, int component,
+                 const MultiFab<Dim, MemorySpace>* active_cells, const ExecutionSpace& execution,
+                 const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  const Real square_sum =
+      dot_active_local(field, field, component, active_cells, execution, prepared);
+  return std::sqrt(square_sum);
+}
+
+template <int Dim, class MemorySpace, class ExecutionSpace>
+Real norm2(const MultiFab<Dim, MemorySpace>& field, int component, const ExecutionSpace& execution,
+           const PreparedCellSumReduction<ExecutionSpace>& prepared) {
+  mf_arith_detail::require_collective_identity(field, "pops::norm2(prepared)");
+  const Real global_square =
+      static_cast<Real>(all_reduce_sum(dot_local(field, field, execution, prepared, component)));
+  return std::sqrt(global_square);
 }
 
 }  // namespace pops

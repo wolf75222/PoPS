@@ -7,7 +7,7 @@ counter lines appear with sane values. It builds a real NATIVE block (no DSL
 compile, so it needs only _pops) and steps it under profiling: the native step's elliptic field solve
 is the kernel-dispatch chokepoint (System::Impl::solve_fields counts "kernels"), so "kernels" moves on
 the host path. The cache hit/skip + nodes due/skipped counters only move under a COMPILED .so step body
-that emits a held schedule (ProgramContext::cache_should_update); that runtime is exercised on
+that emits a held schedule (ProgramExecutionServices::cache_should_update); that runtime is exercised on
 Kokkos/ROMEO, so here we assert those lines simply EXIST and read 0 on the native path -- never faked.
 
 Real engine only: it builds a real System and self-skips only if _pops/numpy is unavailable.

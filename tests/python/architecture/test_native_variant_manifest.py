@@ -24,6 +24,7 @@ CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 PYTEST_CONFTEST = ROOT / "tests" / "python" / "conftest.py"
 SERIAL_PARENT_MPI_SMOKE = ROOT / "tests" / "cmake" / "run_serial_parent_mpi_target.cmake"
 HDF5_WITHOUT_MPI_SMOKE = ROOT / "tests" / "cmake" / "expect_hdf5_without_mpi_rejected.cmake"
+ROOT_CMAKE = ROOT / "CMakeLists.txt"
 
 
 def _writer():
@@ -61,6 +62,7 @@ def _module(extension: Path, dimension: int) -> ModuleType:
     module.__has_mpi__ = dimension == 3
     module.__has_kokkos__ = True
     module.abi_key = lambda: f"abi-dim{dimension}"
+    module.runtime_environment_report = lambda: {"kokkos_backend": "Serial"}
     return module
 
 
@@ -85,6 +87,7 @@ def test_writer_extracts_compiled_facts_and_atomically_merges_dimensions(tmp_pat
         "abi_key": "abi-dim1",
         "has_mpi": False,
         "has_kokkos": True,
+        "kokkos_execution_space": "Serial",
     }
     assert not tuple(native_root.glob(".variants.*"))
 
@@ -100,7 +103,7 @@ def test_writer_extracts_compiled_facts_and_atomically_merges_dimensions(tmp_pat
 def test_manifest_rejects_escaping_or_mislabeled_paths(path, message):
     writer = _writer()
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "variants": [{
             "dimension": 2,
             "path": path,
@@ -109,6 +112,7 @@ def test_manifest_rejects_escaping_or_mislabeled_paths(path, message):
             "abi_key": "abi",
             "has_mpi": False,
             "has_kokkos": True,
+            "kokkos_execution_space": "Serial",
         }],
     }
 
@@ -129,17 +133,20 @@ def test_manifest_requires_unique_sorted_rows_and_exact_expected_set():
             "abi_key": f"abi-{dimension}",
             "has_mpi": False,
             "has_kokkos": True,
+            "kokkos_execution_space": "Serial",
         }
 
     with pytest.raises(writer.NativeVariantManifestError, match="unique and sorted"):
         writer.validate_manifest_payload(
-            {"schema_version": 1, "variants": [row(3), row(1)]}
+            {"schema_version": 2, "variants": [row(3), row(1)]}
         )
     with pytest.raises(writer.NativeVariantManifestError, match="explicit set"):
         writer.validate_manifest_payload(
-            {"schema_version": 1, "variants": [row(1), row(3)]},
+            {"schema_version": 2, "variants": [row(1), row(3)]},
             expected_dimensions=(1, 2, 3),
         )
+    with pytest.raises(writer.NativeVariantManifestError, match="schema version is unsupported"):
+        writer.validate_manifest_payload({"schema_version": 1, "variants": [row(1)]})
 
 
 def test_writer_cli_is_fully_explicit():
@@ -154,6 +161,11 @@ def test_writer_cli_is_fully_explicit():
 def test_cmake_authenticates_and_installs_the_exact_linked_leaf():
     source = PYTHON_CMAKE.read_text(encoding="utf-8")
 
+    assert "BUILD_WITH_INSTALL_RPATH TRUE" in source
+    assert "INSTALL_RPATH_USE_LINK_PATH TRUE" in source
+    assert source.index("BUILD_WITH_INSTALL_RPATH TRUE") < source.index(
+        "add_custom_command(TARGET _pops POST_BUILD"
+    )
     assert "add_custom_command(TARGET _pops POST_BUILD" in source
     assert '"$<TARGET_FILE:_pops>"' in source
     assert '--dimension "${POPS_NATIVE_DIM}"' in source
@@ -169,7 +181,7 @@ def test_process_harness_accepts_only_an_authenticated_selected_nested_leaf(tmp_
     manifest.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "variants": [
                     {
                         "dimension": 3,
@@ -179,6 +191,7 @@ def test_process_harness_accepts_only_an_authenticated_selected_nested_leaf(tmp_
                         "abi_key": "abi-dim3",
                         "has_mpi": False,
                         "has_kokkos": True,
+                        "kokkos_execution_space": "Serial",
                     }
                 ],
             }
@@ -301,6 +314,24 @@ def test_ctest_smokes_and_python_suites_preserve_the_exact_native_dimension():
         "function(pops_add_pytest_suite", 1
     )[0]
     assert '"POPS_NATIVE_DIM=${POPS_NATIVE_DIM}"' in pytest_environment
+
+
+def test_kokkos_contract_collects_and_serializes_the_finite_component_target_graph():
+    cmake = ROOT_CMAKE.read_text(encoding="utf-8")
+
+    assert "function(_pops_collect_kokkos_target_property" in cmake
+    assert "INTERFACE_LINK_LIBRARIES" in cmake
+    assert "INTERFACE_COMPILE_DEFINITIONS" in cmake
+    assert "INTERFACE_COMPILE_OPTIONS" in cmake
+    assert "list(POP_FRONT _pops_kokkos_pending" in cmake
+    assert "if(TARGET \"${_pops_kokkos_dependency}\")" in cmake
+    assert "non-replayable link expression" in cmake
+    assert "non-replayable include expression" in cmake
+    assert "non-replayable expression" in cmake
+    assert "POPS_NATIVE_KOKKOS_DEFINITIONS" in cmake
+    assert "POPS_NATIVE_KOKKOS_OPTIONS" in cmake
+    assert "Kokkos_Core.hpp KokkosCore_config.h" in cmake
+    assert "Kokkos::kokkos INTERFACE_INCLUDE_DIRECTORIES" in cmake
 
 
 def test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract():
@@ -426,12 +457,13 @@ def test_wheel_proof_accepts_an_explicit_fat_set_and_rejects_a_hidden_subset(tmp
             "abi_key": f"abi-{dimension}",
             "has_mpi": False,
             "has_kokkos": True,
+            "kokkos_execution_space": "Serial",
         })
         members["pops/_native/" + relative] = payload
         installed = distribution / "pops" / "_native" / relative
         installed.parent.mkdir(parents=True)
         installed.write_bytes(payload)
-    manifest_payload = {"schema_version": 1, "variants": rows}
+    manifest_payload = {"schema_version": 2, "variants": rows}
     manifest.write_text(json.dumps(manifest_payload), encoding="utf-8")
     metadata_payload = "Metadata-Version: 2.3\nName: PoPS\nVersion: 1.2.3\n"
     metadata = distribution / "pops-1.2.3.dist-info" / "METADATA"

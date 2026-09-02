@@ -33,7 +33,7 @@ name: CI
 #        key across up to 8 real native compiles).
 #      - generated-program compile + bind SMOKE -> gate-python-compile-cache (the 8 real DSL native
 #        compiles ARE the compile/bind smoke: emit -> .so -> load).
-#      - bind-RUN / ProgramContext execution SMOKE -> kokkos-openmp (the add_native_block route:
+#      - bind-RUN / Program execution-services SMOKE -> kokkos-openmp (the add_native_block route:
 #        test_native_abi_std / test_dsl_production / test_dsl_production_amr actually RUN a compiled
 #        Program). Fast lane carries the compile-BIND proof; the full lane carries the bind-RUN proof.
 #  (b) DEBUG ARTIFACTS ON CODEGEN FAILURE: the codegen-running jobs (gate-python-compile-cache and the
@@ -175,6 +175,12 @@ jobs:
               - 'tests/cpp/build_durations.json'
               - 'tests/cpp/test_durations.json'
               - 'tests/test_manifest.toml'
+              - 'tests/gates/m2_temporal_execution.toml'
+              - 'tests/gates/m3_amr_multilayout.toml'
+              - 'tests/gates/runtime_authority.toml'
+              - 'scripts/run_m2_gate.py'
+              - 'scripts/run_m3_gate.py'
+              - 'scripts/run_runtime_authority_gate.py'
               - 'scripts/generate_component_catalog.py'
               - 'scripts/generate_release_contract.py'
               - 'scripts/final_release_contract.py'
@@ -231,6 +237,29 @@ jobs:
               - 'tests/gates/m4_runtime_io.toml'
               - 'tests/python/architecture/test_m4_runtime_io_gate.py'
               - 'scripts/run_m4_gate.py'
+              # M2/M3 are composed into the final runtime authority and both own real MPI rows.
+              - 'tests/gates/m2_temporal_execution.toml'
+              - 'tests/gates/m3_amr_multilayout.toml'
+              - 'tests/python/architecture/test_m2_temporal_execution_gate.py'
+              - 'tests/python/architecture/test_m3_amr_multilayout_gate.py'
+              - 'scripts/run_m2_gate.py'
+              - 'scripts/run_m3_gate.py'
+              # Runtime authority is a closed ADC-700/702/720 ledger. Changes to its rows,
+              # source barriers, or launcher must exercise the real MPI lane on the same push.
+              - 'tests/gates/runtime_authority.toml'
+              - 'tests/python/architecture/test_runtime_authority_gate.py'
+              - 'scripts/run_runtime_authority_gate.py'
+              - 'tests/cpp/unit/runtime/test_program_execution_services_contract.cpp'
+              - 'tests/cpp/unit/runtime/test_program_execution_services_schur_free.cpp'
+              - 'tests/cpp/unit/runtime/test_program_transaction.cpp'
+              - 'tests/cpp/unit/runtime/test_program_host_descriptor.cpp'
+              - 'tests/cpp/integration/native_loader/test_program_abi_symbols.cpp'
+              - 'tests/cpp/integration/runtime/test_checkpoint_cache.cpp'
+              - 'tests/cpp/integration/amr/test_temporal_partition_restart.cpp'
+              - 'tests/cpp/integration/amr/test_program_reflux_ledger.cpp'
+              - 'tests/cpp/integration/amr/test_cell_temporal_program_route.cpp'
+              - 'tests/python/integration/io/test_scheduler_cache_checkpoint.py'
+              - 'tests/python/unit/runtime/test_amr_checkpoint_contract.py'
               - '.github/workflows/ci.yml'
               - 'cmake/**'
               - 'CMakeLists.txt'
@@ -740,6 +769,12 @@ jobs:
       - name: M4 native runtime and scientific I/O gate manifest
         run: python3 scripts/run_m4_gate.py --check-only
 
+      - name: Runtime authority gate manifest
+        run: |
+          for dim in 1 2 3; do
+            python3 scripts/run_runtime_authority_gate.py --check-only --dim "$dim"
+          done
+
       - name: Generated component catalog
         env:
           PYTHONPATH: ${{ github.workspace }}/python
@@ -1119,7 +1154,7 @@ jobs:
     name: ubuntu-latest / Kokkos Serial (Python) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     # Shards are independent (`fail-fast: false`) and must all report a result.  Native-loader
-    # tests can legitimately run for tens of minutes on a cold public runner.  Six measured-duration
+    # tests can legitimately run for tens of minutes on a cold public runner. Eight measured-duration
     # shards keep the test critical path below the watchdog; the remaining margin covers setup and
     # transient runner variance without turning a stalled test into an unbounded job.
     timeout-minutes: 50
@@ -1132,11 +1167,11 @@ jobs:
         # SHARD_TOTAL=strategy.job-total. ADC-623: files are packed by MEASURED DURATION
         # (scripts/ci_shard_binpack.py, greedy LPT over tests/python/test_durations.json), not by a
         # modulo of the file list, so the slowest shard -- the gate critical path -- is minimized.
-        # 7 shards: the measured 417-file universe packs to a 32.2-minute maximum test load, leaving
+        # 8 shards: the measured 430-file universe packs to a 30.9-minute maximum test load, leaving
         # setup and runner variance inside the unchanged 50-minute watchdog. To rebalance,
         # change the COUNT here only (job names stay "... shard N"; the required `gate` aggregates
         # them via a single matrix entry in its `needs`).
-        shard: [0, 1, 2, 3, 4, 5, 6]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
 
     env:
       POPS_NATIVE_DIM: "2"
@@ -1603,6 +1638,228 @@ jobs:
           compression-level: 0
           retention-days: 1
 
+  # FINAL NATIVE AUTHORITY MATRIX.  The ordinary fast/full lanes retain their measured Dim=2
+  # build because they cover the broad repository suite.  This smaller matrix is the explicit
+  # qualification boundary for the closed M2/runtime ledgers: every backend and every native
+  # dimension gets its own configure, native module, and executable gate.  Keeping the dimension
+  # in the Kokkos prefix prevents a matrix row from accidentally loading a different specialization
+  # or reusing an ABI-incompatible execution-space install; each matrix runner owns its preset's
+  # isolated build directory (build-kokkos or build-mpi).
+  final-authority-matrix:
+    name: final authority / ${{ matrix.backend }} / Dim=${{ matrix.dimension }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    needs: set-mode
+    # The complete source matrix is the release qualification lane.  PRs can opt into it with
+    # ci-full; push-master, nightly, dispatch, and release workflow_call all select full mode.
+    if: needs.set-mode.outputs.full == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: serial
+            dimension: 1
+            runner: ubuntu-latest
+            kokkos_space: serial
+          - backend: serial
+            dimension: 2
+            runner: ubuntu-latest
+            kokkos_space: serial
+          - backend: serial
+            dimension: 3
+            runner: ubuntu-latest
+            kokkos_space: serial
+          - backend: openmp
+            dimension: 1
+            runner: ubuntu-latest
+            kokkos_space: openmp
+          - backend: openmp
+            dimension: 2
+            runner: ubuntu-latest
+            kokkos_space: openmp
+          - backend: openmp
+            dimension: 3
+            runner: ubuntu-latest
+            kokkos_space: openmp
+          - backend: mpi
+            dimension: 1
+            runner: ubuntu-24.04
+            kokkos_space: serial
+          - backend: mpi
+            dimension: 2
+            runner: ubuntu-24.04
+            kokkos_space: serial
+          - backend: mpi
+            dimension: 3
+            runner: ubuntu-24.04
+            kokkos_space: serial
+
+    env:
+      POPS_NATIVE_DIM: '${{ matrix.dimension }}'
+      POPS_REQUIRE_NATIVE_TESTS: "1"
+      OMP_NUM_THREADS: "2"
+      OMP_PROC_BIND: "false"
+      POPS_RUNTIME_AUTHORITY_ALLOCATION: "1"
+      POPS_RUNTIME_AUTHORITY_OPENMP: "${{ matrix.backend == 'openmp' && '1' || '0' }}"
+      KOKKOS_VERSION: 4.4.01
+      KOKKOS_COMMIT: 15dc143e5f39949eece972a798e175c4b463d4b8
+      # Do not share Kokkos installations between dimensions or execution spaces.  The native
+      # manifest records the resulting exact DefaultExecutionSpace name.
+      KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-authority-${{ matrix.backend }}-dim${{ matrix.dimension }}
+      KOKKOS_SOURCE_DIR: /tmp/kokkos-authority-${{ matrix.backend }}-dim${{ matrix.dimension }}
+      KOKKOS_BUILD_DIR: /tmp/kbuild-authority-${{ matrix.backend }}-dim${{ matrix.dimension }}
+      POPS_BUILD_DIR: ${{ matrix.backend == 'mpi' && 'build-mpi' || 'build-kokkos' }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install authority dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ccache libeigen3-dev ninja-build mold pybind11-dev python3-dev \
+            $([[ "${{ matrix.backend }}" = mpi ]] && echo 'libhdf5-openmpi-dev libopenmpi-dev openmpi-bin python3-h5py python3-numpy python3-pytest python3-vtk9' || true)
+          python -m pip install --upgrade pip numpy pytest h5py
+
+      - name: Cache exact Kokkos authority install
+        id: authority-kokkos-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.KOKKOS_PREFIX }}
+          key: authority-kokkos-${{ matrix.backend }}-dim${{ matrix.dimension }}-${{ env.KOKKOS_VERSION }}-${{ env.KOKKOS_COMMIT }}-${{ hashFiles('.github/workflows/ci.yml') }}
+
+      - name: Build exact Kokkos execution-space install
+        if: steps.authority-kokkos-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$KOKKOS_SOURCE_DIR" "$KOKKOS_BUILD_DIR" "$KOKKOS_PREFIX"
+          git clone --depth 1 -b "$KOKKOS_VERSION" \
+            https://github.com/kokkos/kokkos.git "$KOKKOS_SOURCE_DIR"
+          test "$(git -C "$KOKKOS_SOURCE_DIR" rev-parse HEAD)" = "$KOKKOS_COMMIT"
+          execution_args=()
+          if [ "${{ matrix.kokkos_space }}" = openmp ]; then
+            execution_args+=("-DKokkos_ENABLE_OPENMP=ON")
+          fi
+          cmake -S "$KOKKOS_SOURCE_DIR" -B "$KOKKOS_BUILD_DIR" -G Ninja \
+            -DKokkos_ENABLE_SERIAL=ON "${execution_args[@]}" \
+            -DCMAKE_INSTALL_PREFIX="$KOKKOS_PREFIX" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build "$KOKKOS_BUILD_DIR" --parallel 4 --target install
+
+      - name: Configure exact native authority build
+        shell: bash
+        run: |
+          set -euo pipefail
+          export Kokkos_ROOT="$KOKKOS_PREFIX" POPS_KOKKOS_ROOT="$KOKKOS_PREFIX"
+          cmake_args=(
+            -DPOPS_NATIVE_DIM:STRING="$POPS_NATIVE_DIM"
+            -DPOPS_BUILD_PYTHON=ON
+            -DPython_EXECUTABLE="$(command -v python)"
+            -DPOPS_HEAVY_TEST_TU_POOL=2
+          )
+          if [ "${{ matrix.backend }}" = mpi ]; then
+            export OMPI_ALLOW_RUN_AS_ROOT=1 OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+            export OMPI_MCA_rmaps_base_oversubscribe=true
+            export PRTE_MCA_rmaps_default_mapping_policy=:oversubscribe
+            cmake --preset ci-mpi "${cmake_args[@]}" \
+              -DPOPS_USE_HDF5=ON
+          else
+            cmake --preset ci-kokkos "${cmake_args[@]}"
+          fi
+          test -f "${POPS_BUILD_DIR}/CMakeCache.txt"
+          grep -F "POPS_NATIVE_DIM:STRING=${POPS_NATIVE_DIM}" \
+            "${POPS_BUILD_DIR}/CMakeCache.txt"
+
+      - name: Build native authority targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.backend }}" = mpi ]; then
+            cmake --build --preset ci-mpi --parallel 2
+          else
+            cmake --build --preset ci-kokkos --parallel 2
+          fi
+
+      - name: Verify Python module for authority gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          native_root="${POPS_BUILD_DIR}/python/pops/_native/dim${POPS_NATIVE_DIM}"
+          test -d "${POPS_BUILD_DIR}/python/pops"
+          test -f "${POPS_BUILD_DIR}/python/pops/_native/variants.json"
+          native_module="$(find "$native_root" -maxdepth 1 -type f -name '_pops*.so' -print -quit)"
+          test -n "$native_module"
+
+      - name: Execute serial M2 and runtime authority (Dim=${{ matrix.dimension }})
+        if: matrix.backend == 'serial'
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build-kokkos/python:${{ github.workspace }}
+          POPS_INCLUDE: ${{ github.workspace }}/include
+          Kokkos_ROOT: ${{ env.KOKKOS_PREFIX }}
+          POPS_KOKKOS_ROOT: ${{ env.KOKKOS_PREFIX }}
+        run: |
+          python scripts/run_m2_gate.py \
+            --backend serial --dim "$POPS_NATIVE_DIM" --build-dir build-kokkos
+          python scripts/run_runtime_authority_gate.py \
+            --backend serial --dim "$POPS_NATIVE_DIM" --build-dir build-kokkos
+
+      - name: Execute OpenMP M2 and runtime authority (Dim=${{ matrix.dimension }})
+        if: matrix.backend == 'openmp'
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build-kokkos/python:${{ github.workspace }}
+          POPS_INCLUDE: ${{ github.workspace }}/include
+          Kokkos_ROOT: ${{ env.KOKKOS_PREFIX }}
+          POPS_KOKKOS_ROOT: ${{ env.KOKKOS_PREFIX }}
+        run: |
+          # M2 owns serial-labeled functional rows; this invocation executes those exact rows
+          # against the OpenMP-linked native module.  Runtime-authority's explicit OpenMP rows
+          # are then run under --openmp, while the complete serial row set is run as above.
+          python scripts/run_m2_gate.py \
+            --backend serial --dim "$POPS_NATIVE_DIM" --build-dir build-kokkos
+          python scripts/run_runtime_authority_gate.py \
+            --backend serial --dim "$POPS_NATIVE_DIM" --build-dir build-kokkos
+          python scripts/run_runtime_authority_gate.py \
+            --openmp --python-only --dim "$POPS_NATIVE_DIM" --build-dir build-kokkos
+          # The runtime-authority manifest currently reserves CTest rows for serial/MPI because
+          # its runner rejects an unclassified OpenMP CTest row.  Execute the complete configured
+          # OpenMP CTest graph here so this lane has a native functional proof as well as its
+          # OpenMP-specific Python authority rows; OMP_NUM_THREADS=2 is set at matrix-job scope.
+          ctest --test-dir build-kokkos --output-on-failure --no-tests=error
+
+      - name: Execute MPI M2, M3, and runtime authority (Dim=${{ matrix.dimension }})
+        if: matrix.backend == 'mpi'
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build-mpi/python:${{ github.workspace }}
+          POPS_INCLUDE: ${{ github.workspace }}/include
+          Kokkos_ROOT: ${{ env.KOKKOS_PREFIX }}
+          POPS_KOKKOS_ROOT: ${{ env.KOKKOS_PREFIX }}
+          POPS_REQUIRE_MPI_TESTS: "1"
+          OMPI_ALLOW_RUN_AS_ROOT: "1"
+          OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: "1"
+          OMPI_MCA_rmaps_base_oversubscribe: "true"
+          PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
+        run: |
+          # These are intentionally executable gate invocations, not --check-only source audits.
+          # M3 is MPI-only: there is no serial M3 command in this matrix.
+          python scripts/run_m2_gate.py \
+            --backend mpi --dim "$POPS_NATIVE_DIM" --build-dir build-mpi
+          python scripts/run_m3_gate.py \
+            --dim "$POPS_NATIVE_DIM" --build-dir build-mpi --mpi-exec mpiexec
+          python scripts/run_runtime_authority_gate.py \
+            --backend mpi --dim "$POPS_NATIVE_DIM" --build-dir build-mpi \
+            --mpi-exec mpiexec
+
   # Agregation REQUISE : l'UNIQUE check a referencer dans la branch protection (ADC-166). Resout
   # trois faiblesses structurelles du routage par chemins (findings revue ADC-171) :
   #  (1) GitHub traite un required check SKIPPED comme PASSANT -> sans agregateur, une PR touchant
@@ -1614,7 +1871,7 @@ jobs:
   gate:
     name: gate (agregation requise)
     runs-on: ubuntu-latest
-    needs: [changes, set-mode, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache, mpi, kokkos-openmp]
+    needs: [changes, set-mode, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache, mpi, kokkos-openmp, final-authority-matrix]
     if: always()
     steps:
       - uses: actions/checkout@v7
@@ -1622,7 +1879,7 @@ jobs:
           fetch-depth: 1
       - name: Verdict
         run: |
-          echo "changes=${{ needs.changes.result }} set-mode=${{ needs.set-mode.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }} gate-python-compile-cache=${{ needs.gate-python-compile-cache.result }} mpi=${{ needs.mpi.result }} kokkos-openmp=${{ needs.kokkos-openmp.result }}"
+          echo "changes=${{ needs.changes.result }} set-mode=${{ needs.set-mode.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }} gate-python-compile-cache=${{ needs.gate-python-compile-cache.result }} mpi=${{ needs.mpi.result }} kokkos-openmp=${{ needs.kokkos-openmp.result }} final-authority-matrix=${{ needs.final-authority-matrix.result }}"
           python3 scripts/ci_route_mode.py check \
             --gate changes "${{ needs.changes.result }}" true \
             --gate set-mode "${{ needs.set-mode.result }}" true \
@@ -1640,7 +1897,9 @@ jobs:
             --gate mpi "${{ needs.mpi.result }}" \
               "${{ needs.set-mode.outputs.mpi_required }}" \
             --gate kokkos-openmp "${{ needs.kokkos-openmp.result }}" \
-              "${{ needs.set-mode.outputs.openmp_required }}"
+              "${{ needs.set-mode.outputs.openmp_required }}" \
+            --gate final-authority-matrix "${{ needs.final-authority-matrix.result }}" \
+              "${{ needs.set-mode.outputs.full }}"
 
   mpi:
     name: ubuntu-24.04 / MPI + Kokkos Serial + collective HDF5
@@ -1836,6 +2095,11 @@ jobs:
             /usr/bin/python3 scripts/run_m4_gate.py --list-ctest-targets
           )
           test "${#m4_targets[@]}" -gt 0
+          mapfile -t runtime_authority_targets < <(
+            /usr/bin/python3 scripts/run_runtime_authority_gate.py \
+              --list-ctest-targets --backend mpi --dim "$POPS_NATIVE_DIM"
+          )
+          test "${#runtime_authority_targets[@]}" -gt 0
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           # The monolithic Python module link is memory-heavy. Keep it isolated
           # from test compilation/linking so a small hosted runner cannot evict
@@ -1846,6 +2110,8 @@ jobs:
             cmake --build --preset ci-mpi --parallel 4 --target "${mpi_targets[@]}"
           run_with_heartbeat "M4 native test build" 10m \
             cmake --build --preset ci-mpi --parallel 4 --target "${m4_targets[@]}"
+          run_with_heartbeat "Runtime authority native test build" 10m \
+            cmake --build --preset ci-mpi --parallel 4 --target "${runtime_authority_targets[@]}"
 
       - name: Installed package smoke (MPI-only + collective HDF5)
         run: |
@@ -2055,6 +2321,25 @@ jobs:
           /usr/bin/python3 scripts/run_m4_gate.py \
             --build-dir build-mpi \
             --mpi-exec mpiexec
+
+      - name: Runtime authority complete ADC-700/702/720 gate
+        timeout-minutes: 45
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build-mpi/python-package:${{ github.workspace }}
+          POPS_NATIVE_DIM: "2"
+          POPS_INCLUDE: ${{ github.workspace }}/include
+          POPS_KOKKOS_ROOT: ${{ github.workspace }}/.kokkos-install
+          Kokkos_ROOT: ${{ github.workspace }}/.kokkos-install
+          POPS_REQUIRE_MPI_TESTS: "1"
+          POPS_REQUIRE_NATIVE_TESTS: "1"
+          POPS_RUNTIME_AUTHORITY_ALLOCATION: "1"
+          OMPI_MCA_io: "^ompio"
+        run: |
+          /usr/bin/python3 scripts/run_runtime_authority_gate.py \
+            --backend mpi \
+            --build-dir build-mpi \
+            --mpi-exec mpiexec \
+            --dim "$POPS_NATIVE_DIM"
 
       - name: ccache stats (MPI)
         if: always()
@@ -2628,7 +2913,7 @@ jobs:
           python3 scripts/verify_installed_native.py
           --expect-dim "$POPS_NATIVE_DIM" --expect-serial
 
-      # ADC-548 (a): this add_native_block section is the bind-RUN / ProgramContext EXECUTION smoke --
+      # ADC-548 (a): this add_native_block section is the bind-RUN / Program execution-services smoke --
       # it compiles a production model at runtime and actually RUNS it (System + AMR) via
       # add_native_block, the counterpart to the compile/bind smoke carried on the fast gate
       # (gate-python-compile-cache). The full lane carries the bind-RUN proof; the gate lane the compile-BIND.
@@ -2668,6 +2953,22 @@ jobs:
             python3 -m pytest -q "${test_path}"
             echo "::endgroup::"
           done
+
+      - name: Runtime authority OpenMP/allocation gate
+        if: matrix.kind == 'python'
+        timeout-minutes: 20
+        env:
+          OMP_NUM_THREADS: "2"
+          OMP_PROC_BIND: "false"
+          POPS_REQUIRE_NATIVE_TESTS: "1"
+          POPS_RUNTIME_AUTHORITY_OPENMP: "1"
+          POPS_RUNTIME_AUTHORITY_ALLOCATION: "1"
+          POPS_KOKKOS_ROOT: ${{ env.KOKKOS_PREFIX }}
+          Kokkos_ROOT: ${{ env.KOKKOS_PREFIX }}
+        run: |
+          export PYTHONPATH="$PWD/build-kokkos-py/python:$PWD"
+          python3 scripts/run_runtime_authority_gate.py \
+            --openmp --python-only --dim "$POPS_NATIVE_DIM"
 
       - name: ccache stats (Kokkos OpenMP, ${{ matrix.lane }})
         if: ${{ always() && (matrix.kind != 'python' || steps.openmp-python-module-cache.outputs.cache-hit != 'true') }}

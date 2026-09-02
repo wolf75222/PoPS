@@ -7,6 +7,7 @@
 
 #include <pops/runtime/amr/prepared_tagging_execution.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
+#include <pops/runtime/program/program_persistent_value_checkpoint.hpp>
 
 #include <array>
 #include <cstdint>
@@ -228,21 +229,25 @@ void install_amr_interface_flux_provider(AmrSystem& system, const py::list& rows
               job.route.level < 0 || job.route.level >= system.n_levels())
             throw std::out_of_range(
                 "AMR shared-interface route lies outside the prepared block/level registry");
-          auto& left = system.prepared_amr_block_state(static_cast<int>(job.route.left_block),
-                                                       job.route.level);
-          auto& right = system.prepared_amr_block_state(static_cast<int>(job.route.right_block),
-                                                        job.route.level);
           const auto geometry = system.prepared_amr_level_geometry(job.route.level);
           const PopsExecutionContextV1 execution = job.spec.execution->view();
-          scheduler.install(
-              std::move(job.route), left, geometry, right, geometry, execution,
-              [spec = std::move(job.spec), component = std::move(job.component)]() mutable {
-                auto prepared =
-                    std::make_shared<PreparedComponent>(std::move(spec), std::move(component));
-                return pops::runtime::multiblock::InterfaceFluxEvaluator(
-                    [prepared](const pops::runtime::multiblock::BoundaryEvaluationPoint& point,
-                               const pops::runtime::multiblock::InterfaceFluxBatch& batch) {
-                      prepared->evaluate(point, batch);
+          pops::runtime::program::detail::with_amr_interface_install_states<
+              pops::kNativeDimension>(
+              system, static_cast<int>(job.route.left_block),
+              static_cast<int>(job.route.right_block), job.route.level,
+              [&](pops::MultiFab<pops::kNativeDimension>& left,
+                  pops::MultiFab<pops::kNativeDimension>& right) {
+                scheduler.install(
+                    std::move(job.route), left, geometry, right, geometry, execution,
+                    [spec = std::move(job.spec), component = std::move(job.component)]() mutable {
+                      auto prepared = std::make_shared<PreparedComponent>(std::move(spec),
+                                                                            std::move(component));
+                      return pops::runtime::multiblock::InterfaceFluxEvaluator(
+                          [prepared](
+                              const pops::runtime::multiblock::BoundaryEvaluationPoint& point,
+                              const pops::runtime::multiblock::InterfaceFluxBatch& batch) {
+                            prepared->evaluate(point, batch);
+                          });
                     });
               });
         }
@@ -536,13 +541,13 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       .def(
           "_install_native_block",
           [](AmrSystem& system, const std::string& name, const std::string& so_path,
-             const std::string& expected_model_identity, const std::string& expected_binary_identity,
-             const std::string& limiter, const std::string& riemann, const std::string& recon,
-             const std::string& time, double gamma, int substeps, int stride,
-             const std::vector<double>& params, double positivity_floor, double weno_epsilon,
-             bool wave_speed_cache, int newton_max_iters, double newton_rel_tol,
-             double newton_abs_tol, double newton_fd_eps, double newton_damping,
-             bool newton_diagnostics) {
+             const std::string& expected_model_identity,
+             const std::string& expected_binary_identity, const std::string& limiter,
+             const std::string& riemann, const std::string& recon, const std::string& time,
+             double gamma, int substeps, int stride, const std::vector<double>& params,
+             double positivity_floor, double weno_epsilon, bool wave_speed_cache,
+             int newton_max_iters, double newton_rel_tol, double newton_abs_tol,
+             double newton_fd_eps, double newton_damping, bool newton_diagnostics) {
             NewtonOptions newton = newton_options_from_abi(
                 newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);
             system.add_native_block(name, so_path, expected_model_identity,
@@ -558,8 +563,7 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("stride") = 1, py::arg("params") = std::vector<double>{},
           py::arg("positivity_floor") = 0.0,
           py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon),
-          py::arg("wave_speed_cache") = false,
-          py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
+          py::arg("wave_speed_cache") = false, py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
           py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
           py::arg("newton_fd_eps") = static_cast<double>(kNewtonDefaultFdEps),
@@ -848,7 +852,7 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
       .def(
           "_checkpoint_program_flux_capacity",
           [](const AmrSystem& s) {
-            const auto& budget = s.prepared_amr_program_flux_expression_budget();
+            const auto budget = s.prepared_amr_program_flux_expression_budget();
             std::size_t rhs = 0;
             std::size_t coefficients = 0;
             for (const auto& block : budget.blocks) {
@@ -865,7 +869,7 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
           },
           "Return the artifact-authenticated Program face/interface flux capacity.")
       .def("_checkpoint_program_state_capacity", &AmrSystem::checkpoint_program_state_capacity,
-           "Return the artifact-authenticated POPSAND4/source-authority byte capacities.")
+           "Return the artifact-authenticated POPSAND5/source-authority byte capacities.")
       .def(
           "restore_restart_auxiliary_checkpoint_accepted_state",
           [](AmrSystem& s, py::object payloads) {
@@ -968,6 +972,10 @@ void bind_amr_stepping(py::class_<AmrSystem>& cls) {
       .def("advance", &AmrSystem::advance, py::arg("dt"), py::arg("nsteps"))
       .def("_begin_step_transaction", &AmrSystem::begin_step_transaction)
       .def("_commit_step_transaction", &AmrSystem::commit_step_transaction)
+      .def("_provisional_read_scope", &AmrSystem::_provisional_read_scope)
+      .def("accepted_transaction_generation_", &AmrSystem::accepted_transaction_generation_)
+      .def("_accepted_transaction_fail_stop_", &AmrSystem::accepted_transaction_fail_stop_)
+      .def("_step_change_l2_for_block", &AmrSystem::step_change_l2_for_block, py::arg("block"))
       .def("_step_change_l2", &AmrSystem::step_change_l2)
       .def("_finalize_step_transaction", &AmrSystem::finalize_step_transaction)
       .def("_rollback_step_transaction", &AmrSystem::rollback_step_transaction)
@@ -995,7 +1003,7 @@ void bind_amr_stepping(py::class_<AmrSystem>& cls) {
            "Per-rank.")
       .def(
           "profile_snapshot",
-          [](AmrSystem& s) { return profile_snapshot_to_dict(s.profiler_handle().snapshot()); },
+          [](const AmrSystem& s) { return profile_snapshot_to_dict(s.profile_snapshot()); },
           "Structured AMR profiling snapshot: schema_version, enabled, scopes and counters.");
 }
 
@@ -1039,7 +1047,7 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       .def(
           "newton_report",
           [](const AmrSystem& system) {
-            const NewtonReport& report = system.last_newton_report();
+            const NewtonReport report = system.last_newton_report();
             py::dict out;
             out["enabled"] = report.enabled;
             out["converged"] = report.converged;
@@ -1070,6 +1078,38 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       // IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if none. Parity
       // System::installed_program_hash (the checkpoint guard).
       .def("installed_program_hash", &AmrSystem::installed_program_hash)
+      .def(
+          "capture_program_persistent_value_checkpoint",
+          [](const AmrSystem& s) {
+            const auto payload = s.capture_program_persistent_value_checkpoint();
+            return py::bytes(reinterpret_cast<const char*>(payload.data()), payload.size());
+          })
+      .def(
+          "prepare_program_persistent_value_restore",
+          [](const AmrSystem& s, py::bytes payload) {
+            const std::string bytes = payload;
+            return s.prepare_program_persistent_value_restore(
+                std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+          },
+          py::arg("payload"))
+      .def(
+          "prepare_program_persistent_value_redistribution",
+          [](const AmrSystem& s, py::bytes payload) {
+            const std::string bytes = payload;
+            return s.prepare_program_persistent_value_redistribution(
+                std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+          },
+          py::arg("payload"))
+      .def(
+          "prepare_program_persistent_value_regrid",
+          [](const AmrSystem& s, py::bytes payload) {
+            const std::string bytes = payload;
+            return s.prepare_program_persistent_value_regrid(
+                std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+          },
+          py::arg("payload"))
+      .def("publish_program_persistent_value_restore",
+           &AmrSystem::publish_program_persistent_value_restore, py::arg("prepared"))
       // Exact Program-index -> AMR-block-index map established by name at install.  Expose only
       // immutable report metadata, never a structural mutation route.
       .def("program_block_map", &AmrSystem::program_block_map)

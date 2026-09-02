@@ -120,11 +120,34 @@ def _load_static_report() -> dict:
 
 _CONSTEXPR_VALUE_RE = re.compile(
     r"inline\s+constexpr\s+(?:Real|int|double|float|bool|std::size_t|size_t|unsigned)\s+"
-    r"(k[A-Za-z0-9_]+)\s*=\s*(.+?);")
+    r"(k[A-Za-z0-9_]+)\s*=\s*(.+?);",
+    re.DOTALL,
+)
+
+_BINARY64_PRECISION_DEFAULT_RE = re.compile(
+    r"template\s*<>\s*struct\s+PrecisionDefaults<double>\s*\{(?P<body>.*?)\};",
+    re.DOTALL,
+)
+
+_PRECISION_VALUE_RE = re.compile(
+    r"static\s+constexpr\s+double\s+(?P<name>[A-Za-z0-9_]+)\s*=\s*(?P<value>[^;]+);"
+)
 
 
-def _parse_cpp_value(rhs: str):
+def _parse_cpp_value(rhs: str, *, binary64_precision_defaults: dict[str, float]):
     rhs = rhs.strip()
+    precision_default = re.fullmatch(
+        r"numerical_defaults_detail::PrecisionDefaults<Real>::([A-Za-z0-9_]+)", rhs
+    )
+    if precision_default:
+        return binary64_precision_defaults.get(precision_default.group(1))
+    precision_branch = re.fullmatch(
+        r"kRealIsBinary64\s*\?\s*Real\((.*?)\)\s*:\s*Real\((.*?)\)", rhs, re.DOTALL
+    )
+    if precision_branch:
+        rhs = precision_branch.group(1).strip()
+    if rhs == "std::is_same_v<Real, double>":
+        return True
     m = re.fullmatch(r"Real\((.*)\)", rhs)
     if m:
         rhs = m.group(1).strip()
@@ -142,14 +165,20 @@ def _parse_cpp_value(rhs: str):
 
 def _scan_constant_values() -> dict:
     values = {}
+    numerical_defaults = (_ROOT / "include/pops/runtime/numerical_defaults.hpp").read_text()
+    precision_block = _BINARY64_PRECISION_DEFAULT_RE.search(numerical_defaults)
+    assert precision_block is not None, "binary64 PrecisionDefaults specialization is missing"
+    binary64_precision_defaults = {
+        match.group("name"): float(match.group("value").strip())
+        for match in _PRECISION_VALUE_RE.finditer(precision_block.group("body"))
+    }
+    assert binary64_precision_defaults, "binary64 PrecisionDefaults values are missing"
     for rel in _SCANNED_HEADERS:
-        for line in (_ROOT / rel).read_text().splitlines():
-            stripped = line.strip()
-            if stripped.startswith("//") or stripped.startswith("*"):
-                continue
-            m = _CONSTEXPR_VALUE_RE.search(line)
-            if m:
-                values[m.group(1)] = _parse_cpp_value(m.group(2))
+        source = (_ROOT / rel).read_text()
+        for match in _CONSTEXPR_VALUE_RE.finditer(source):
+            values[match.group(1)] = _parse_cpp_value(
+                match.group(2), binary64_precision_defaults=binary64_precision_defaults
+            )
     return values
 
 

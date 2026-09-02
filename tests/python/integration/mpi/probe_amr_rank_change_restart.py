@@ -367,7 +367,7 @@ def _accepted_tagging_hysteresis_span(payload: Any) -> tuple[bytes, int]:
         if cursor > len(encoded):
             raise AssertionError("accepted-state string is truncated")
 
-    if encoded[:8] != b"POPSAND4":
+    if encoded[:8] != b"POPSAND5":
         raise AssertionError("checkpoint does not contain exact-ranked accepted-state v4")
     cursor = 8
     cursor += 8  # native dimension
@@ -426,7 +426,7 @@ def _accepted_tagging_hysteresis(payload: Any) -> bytes:
 
 
 def _replace_accepted_tagging_hysteresis(payload: Any, replacement: bytes) -> bytes:
-    """Return the same POPSAND4 image with only its final tagging payload replaced."""
+    """Return the same POPSAND5 image with only its final tagging payload replaced."""
     encoded = (
         bytes(payload)
         if isinstance(payload, (bytes, bytearray, memoryview))

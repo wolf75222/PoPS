@@ -8,10 +8,15 @@ import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import sys
 import threading
 from types import ModuleType
 from typing import Any, Literal, Protocol, cast, overload
+
+
+NATIVE_VARIANT_MANIFEST_SCHEMA_VERSION = 2
+_EXECUTION_SPACE = re.compile(r"[A-Za-z][A-Za-z0-9_.:+-]*")
 
 
 _UNSELECTED = "unselected"
@@ -35,6 +40,7 @@ class _Variant:
     abi_key: str
     has_mpi: bool
     has_kokkos: bool
+    kokkos_execution_space: str
 
 
 class _PopsPackage(Protocol):
@@ -86,10 +92,12 @@ def _variant_from_manifest(dimension: int) -> _Variant:
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise RuntimeError("cannot read native variants manifest %s" % manifest) from exc
     if type(document) is not dict or set(document) != {"schema_version", "variants"} \
-            or document["schema_version"] != 1 or type(document["variants"]) is not list:
+            or document["schema_version"] != NATIVE_VARIANT_MANIFEST_SCHEMA_VERSION \
+            or type(document["variants"]) is not list:
         raise RuntimeError("unsupported native variants manifest schema")
     expected_keys = {
         "dimension", "path", "sha256", "version", "abi_key", "has_mpi", "has_kokkos",
+        "kokkos_execution_space",
     }
     rows: dict[int, _Variant] = {}
     root = manifest.parent.resolve()
@@ -128,11 +136,18 @@ def _variant_from_manifest(dimension: int) -> _Variant:
             raise RuntimeError("native variant version and abi_key must be non-empty text")
         if type(raw["has_mpi"]) is not bool or type(raw["has_kokkos"]) is not bool:
             raise RuntimeError("native variant backend facts must be exact booleans")
+        execution_space = raw["kokkos_execution_space"]
+        if not isinstance(execution_space, str) or _EXECUTION_SPACE.fullmatch(execution_space) is None:
+            raise RuntimeError("native variant Kokkos execution space must be exact text")
+        if raw["has_kokkos"] and execution_space == "none":
+            raise RuntimeError("Kokkos-enabled native variant must name its execution space")
+        if not raw["has_kokkos"] and execution_space != "none":
+            raise RuntimeError("non-Kokkos native variant must use execution space 'none'")
         if row_dimension in rows:
             raise RuntimeError("native variants manifest repeats dimension %d" % row_dimension)
         rows[row_dimension] = _Variant(
             row_dimension, path, sha256, raw["version"], raw["abi_key"],
-            raw["has_mpi"], raw["has_kokkos"])
+            raw["has_mpi"], raw["has_kokkos"], execution_space)
     if dimension not in rows:
         raise RuntimeError(
             "installed PoPS distribution has no native specialization for Dim=%d" % dimension)
@@ -196,6 +211,12 @@ def _verify_module(module: ModuleType, variant: _Variant) -> None:
     if getattr(module, "__has_mpi__", None) is not variant.has_mpi \
             or getattr(module, "__has_kokkos__", None) is not variant.has_kokkos:
         raise RuntimeError("loaded native module backend differs from variants.json")
+    report_provider = getattr(module, "runtime_environment_report", None)
+    if not callable(report_provider):
+        raise RuntimeError("loaded native module has no runtime environment report")
+    report = report_provider()
+    if not isinstance(report, dict) or report.get("kokkos_backend") != variant.kokkos_execution_space:
+        raise RuntimeError("loaded native module Kokkos execution space differs from variants.json")
 
 
 def _verify_collective_identity(module: ModuleType, variant: _Variant) -> None:

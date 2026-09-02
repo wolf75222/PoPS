@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from copy import deepcopy
 import json
 from types import SimpleNamespace
@@ -1062,6 +1063,9 @@ def test_rank_change_restart_rolls_back_after_hierarchy_rebuild_failure(monkeypa
             if self.snapshot is not None:
                 raise RuntimeError("nested test restart transaction")
             self.snapshot = deepcopy(self.state)
+
+        def _provisional_read_scope(self):
+            return nullcontext()
 
         def rebuild_hierarchy(self, boxes, owners):
             self.state["hierarchy"] = tuple(boxes)

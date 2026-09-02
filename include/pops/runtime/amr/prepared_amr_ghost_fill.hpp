@@ -243,9 +243,10 @@ class PreparedAmrGhostFill {
   using peer_plan_type = CoarseFineGhostPeerPlan<Dim>;
   using device_buffer_type = Kokkos::View<Real*, MemorySpace>;
   using pinned_buffer_type = Kokkos::View<Real*, Kokkos::SharedHostPinnedSpace>;
+  using execution_space = Kokkos::DefaultExecutionSpace;
   using execution_index_type = std::int64_t;
   using execution_policy =
-      Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace, Kokkos::IndexType<execution_index_type>>;
+      Kokkos::RangePolicy<execution_space, Kokkos::IndexType<execution_index_type>>;
 
   struct KernelJob {
     int lower[Dim]{};
@@ -317,7 +318,16 @@ class PreparedAmrGhostFill {
     device_buffer_type local_buffer{};
     std::vector<PeerStorage> peers{};
     std::vector<const Real*> coarse_storage{};
+    std::vector<const Real*> bound_fine_storage{};
+    const execution_space* execution = nullptr;
     std::string exact_contract{};
+    // Kokkos' no-argument fence creates its default profiling label at every invocation.  This
+    // provider is resident, so keep the labels allocated during preparation and reuse them on
+    // each parent gather/publication sequence.
+    std::string execution_fence_label{"pops.prepared-amr-ghost-fill.fence"};
+    std::string pack_kernel_label{"pops_amr_parent_pack"};
+    std::string unpack_kernel_label{"pops_amr_parent_unpack"};
+    bool parent_interpolations_bound = false;
     bool sealed = false;
 #ifdef POPS_HAS_MPI
     std::vector<MPI_Request> receive_requests{};
@@ -344,6 +354,8 @@ class PreparedAmrGhostFill {
               static_cast<int>(coarse_field.rank_space().linear_rank(fine_field.local_rank())))
         throw std::invalid_argument(
             "prepared AMR ghost fill lane differs from the field process-coordinate space");
+      ::pops::detail::ensure_kokkos_initialized();
+      execution = &::pops::detail::default_execution_space();
       coarse = &coarse_field;
       lane = &requested_lane;
       preparation = std::move(requested);
@@ -355,8 +367,7 @@ class PreparedAmrGhostFill {
               ::pops::amr::transfer::TransferKind::CoarseFineGhostInterpolation &&
           preparation.interpolation_kind !=
               ::pops::amr::transfer::TransferKind::FifthOrderCoarseFineGhostInterpolation &&
-          preparation.interpolation_kind !=
-              ::pops::amr::transfer::TransferKind::ConstantInjection)
+          preparation.interpolation_kind != ::pops::amr::transfer::TransferKind::ConstantInjection)
         throw std::invalid_argument(
             "prepared AMR ghost fill requires an authenticated coarse/fine interpolation kind");
       coarse_fine.emplace(coarse_field, fine_field, preparation.coarse_domain,
@@ -411,6 +422,7 @@ class PreparedAmrGhostFill {
       local_buffer = device_buffer_type("pops_amr_parent_local", coarse_fine->local_elements());
       prepare_peers();
       coarse_storage = prepared_amr_ghost_detail::storage_identity(*coarse);
+      bound_fine_storage = prepared_amr_ghost_detail::storage_identity(fine_field);
     }
 
     void prepare_peers() {
@@ -475,12 +487,35 @@ class PreparedAmrGhostFill {
       return result;
     }
 
+    void fence() const {
+      if constexpr (!std::is_same_v<execution_space, Kokkos::DefaultHostExecutionSpace>)
+        execution->fence(execution_fence_label);
+    }
+
     void pack(const std::vector<job_type>& jobs, device_buffer_type buffer) const {
       for (const job_type& job : jobs) {
         const KernelJob lowered = lower(job);
-        Kokkos::parallel_for(
-            "pops_amr_parent_pack", execution_policy(0, lowered.elements),
-            PackKernel{buffer, coarse->fab_global(job.coarse_patch).view(), lowered});
+        const PackKernel kernel{buffer, coarse->fab_global(job.coarse_patch).view(), lowered};
+#if defined(KOKKOS_ENABLE_OPENMP) && defined(_OPENMP)
+        if constexpr (std::is_same_v<execution_space, Kokkos::OpenMP>) {
+#pragma omp parallel for schedule(static)
+          for (execution_index_type element = 0; element < lowered.elements; ++element)
+            kernel(element);
+          continue;
+        }
+#endif
+#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
+        if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, MemorySpace>::accessible) {
+          // Host-resident storage is consumed synchronously.  Calling the resident kernel
+          // directly preserves the same ordinal transfer and avoids constructing a profiled
+          // RangePolicy per route.
+          for (execution_index_type element = 0; element < lowered.elements; ++element)
+            kernel(element);
+          continue;
+        }
+#endif
+        Kokkos::parallel_for(pack_kernel_label, execution_policy(*execution, 0, lowered.elements),
+                             kernel);
       }
     }
 
@@ -490,8 +525,24 @@ class PreparedAmrGhostFill {
         if (scratch_index == no_scratch)
           throw std::logic_error("prepared AMR ghost receive has no local scratch owner");
         const KernelJob lowered = lower(job);
-        Kokkos::parallel_for("pops_amr_parent_unpack", execution_policy(0, lowered.elements),
-                             UnpackKernel{buffer, scratch[scratch_index].coarse.view(), lowered});
+        const UnpackKernel kernel{buffer, scratch[scratch_index].coarse.view(), lowered};
+#if defined(KOKKOS_ENABLE_OPENMP) && defined(_OPENMP)
+        if constexpr (std::is_same_v<execution_space, Kokkos::OpenMP>) {
+#pragma omp parallel for schedule(static)
+          for (execution_index_type element = 0; element < lowered.elements; ++element)
+            kernel(element);
+          continue;
+        }
+#endif
+#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
+        if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, MemorySpace>::accessible) {
+          for (execution_index_type element = 0; element < lowered.elements; ++element)
+            kernel(element);
+          continue;
+        }
+#endif
+        Kokkos::parallel_for(unpack_kernel_label, execution_policy(*execution, 0, lowered.elements),
+                             kernel);
       }
     }
 
@@ -548,12 +599,21 @@ class PreparedAmrGhostFill {
           std::rethrow_exception(binding_error);
         throw std::runtime_error("prepared AMR ghost interpolation rebinding failed collectively");
       }
+      parent_interpolations_bound = true;
     }
 
     void release_parent_interpolations() noexcept {
       for (ScratchPatch& patch : scratch)
         for (InterpolationSlot& slot : patch.interpolations)
           slot.transfer.reset();
+      parent_interpolations_bound = false;
+    }
+
+    void refresh_bound_fine_storage(const field_type& requested_fine) {
+      if (requested_fine.local_size() != bound_fine_storage.size())
+        throw std::logic_error("prepared AMR ghost candidate changed its local storage contract");
+      for (std::size_t local = 0; local < requested_fine.local_size(); ++local)
+        bound_fine_storage[local] = requested_fine.fab(local).view().data;
     }
 
     void gather_parent() {
@@ -561,11 +621,23 @@ class PreparedAmrGhostFill {
       try {
         pack(coarse_fine->local_jobs(), local_buffer);
         for (PeerStorage& peer : peers)
-          if (peer.send != nullptr) {
+          if (peer.send != nullptr)
             pack(peer.send->jobs, peer.device_send);
-            Kokkos::deep_copy(peer.host_send, peer.device_send);
-          }
-        Kokkos::fence();
+        if constexpr (std::is_same_v<execution_space, Kokkos::DefaultHostExecutionSpace>) {
+          // Host-resident MPI buffers are already allocated and accessible.  Wait once for all
+          // pack kernels, then copy their bytes directly instead of constructing a deep_copy
+          // profiling label for each peer.
+          fence();
+          for (PeerStorage& peer : peers)
+            if (peer.send != nullptr)
+              std::copy_n(peer.device_send.data(), peer.device_send.extent(0),
+                          peer.host_send.data());
+        } else {
+          for (PeerStorage& peer : peers)
+            if (peer.send != nullptr)
+              Kokkos::deep_copy(*execution, peer.host_send, peer.device_send);
+        }
+        fence();
       } catch (...) {
         staging_failure = 1;
       }
@@ -586,7 +658,7 @@ class PreparedAmrGhostFill {
         for (PeerStorage& peer : peers)
           if (peer.receive != nullptr)
             unpack(peer.receive->jobs, peer.device_receive);
-        Kokkos::fence();
+        fence();
       } catch (...) {
         unpack_failure = 1;
       }
@@ -634,10 +706,10 @@ class PreparedAmrGhostFill {
       for (PeerStorage& peer : peers)
         if (peer.receive != nullptr) {
           if (post_code == MPI_SUCCESS)
-            post_code =
-                MPI_Irecv(peer.host_receive.data(), static_cast<int>(peer.receive->elements),
-                          pops::mpi_real_datatype(), peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
-                          lane->native_handle(), &receive_requests[receive_index]);
+            post_code = MPI_Irecv(
+                peer.host_receive.data(), static_cast<int>(peer.receive->elements),
+                pops::mpi_real_datatype(), peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
+                lane->native_handle(), &receive_requests[receive_index]);
           ++receive_index;
         }
       if (!gate(post_code == MPI_SUCCESS ? 0L : 1L))
@@ -648,10 +720,10 @@ class PreparedAmrGhostFill {
       for (PeerStorage& peer : peers)
         if (peer.send != nullptr) {
           if (post_code == MPI_SUCCESS)
-            post_code =
-                MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send->elements), pops::mpi_real_datatype(),
-                          peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
-                          lane->native_handle(), &send_requests[send_index]);
+            post_code = MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send->elements),
+                                  pops::mpi_real_datatype(), peer.mpi_rank,
+                                  ExecutionLane::parallel_copy_message_tag, lane->native_handle(),
+                                  &send_requests[send_index]);
           ++send_index;
         }
       if (!gate(post_code == MPI_SUCCESS ? 0L : 1L))
@@ -682,10 +754,17 @@ class PreparedAmrGhostFill {
 
       long copy_failure = 0;
       try {
-        for (PeerStorage& peer : peers)
-          if (peer.receive != nullptr)
-            Kokkos::deep_copy(peer.device_receive, peer.host_receive);
-        Kokkos::fence();
+        if constexpr (std::is_same_v<execution_space, Kokkos::DefaultHostExecutionSpace>) {
+          for (PeerStorage& peer : peers)
+            if (peer.receive != nullptr)
+              std::copy_n(peer.host_receive.data(), peer.host_receive.extent(0),
+                          peer.device_receive.data());
+        } else {
+          for (PeerStorage& peer : peers)
+            if (peer.receive != nullptr)
+              Kokkos::deep_copy(*execution, peer.device_receive, peer.host_receive);
+        }
+        fence();
       } catch (...) {
         copy_failure = 1;
       }
@@ -707,7 +786,7 @@ class PreparedAmrGhostFill {
                   "prepared AMR ghost interpolation was not rebound to its destination");
             for_each_cell(slot.transfer->destination_region(), *slot.transfer);
           }
-        Kokkos::fence();
+        fence();
       } catch (...) {
         publication_failure = 1;
       }
@@ -721,7 +800,27 @@ class PreparedAmrGhostFill {
                  std::uint64_t materialization_generation, const ExecutionLane& requested_lane) {
       require_binding(requested_fine, topology_generation, materialization_generation,
                       requested_lane);
-      rebind_parent_interpolations(requested_fine);
+      // The accepted runtime stages into the same resident field that was bound during
+      // preparation.  Preserve those PreparedTransfer instances for that hot path.  An exact
+      // but distinct candidate (rollback/prototype execution) is still rebound collectively.
+      // A rank with no local destination Fab can otherwise decide that its storage still matches
+      // while an owner rank enters rebind_parent_interpolations().  That would shift the next
+      // collective gate (rebind versus parent gather) and deadlock the prepared AMR step.
+      const long invalid_storage_contract =
+          requested_fine.local_size() == bound_fine_storage.size() ? 0L : 1L;
+      if (!gate(invalid_storage_contract))
+        throw std::invalid_argument(
+            "prepared AMR ghost candidate changed its local storage contract");
+      const long local_needs_rebind =
+          !parent_interpolations_bound ||
+                  !prepared_amr_ghost_detail::storage_matches(requested_fine, bound_fine_storage)
+              ? 1L
+              : 0L;
+      const long needs_rebind = all_reduce_max(local_needs_rebind, lane->communicator());
+      if (needs_rebind != 0) {
+        rebind_parent_interpolations(requested_fine);
+        refresh_bound_fine_storage(requested_fine);
+      }
       try {
         gather_parent();
         if (same_level_exchange)
@@ -735,7 +834,6 @@ class PreparedAmrGhostFill {
         release_parent_interpolations();
         throw;
       }
-      release_parent_interpolations();
     }
   };
 
@@ -799,6 +897,9 @@ PreparedAmrGhostFill<Dim, MemorySpace> prepare_amr_ghost_fill(
       std::rethrow_exception(allocation_error);
     throw std::runtime_error("prepared AMR ghost reusable storage allocation failed collectively");
   }
+  // Bind the preparation field once, after all ranks have completed allocation.  Execute() keeps
+  // this resident transfer pack while the requested field storage remains identical.
+  state->rebind_parent_interpolations(fine);
 
   const long remote_same_level_any =
       all_reduce_max(state->same_level->has_remote_jobs() ? 1L : 0L, lane.communicator());

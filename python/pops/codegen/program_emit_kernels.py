@@ -217,7 +217,7 @@ class ProgramProviderPlans:
                     )
                 )
             lines.extend((
-                "  sys->install_auxiliary_consumer_plan(ConsumerPlan{%s, " % json.dumps(qid),
+                "  ctx.stage_auxiliary_consumer_plan(ConsumerPlan{%s, " % json.dumps(qid),
                 "      std::vector<ConsumerValue>{%s}});" % ", ".join(values),
             ))
         return "\n".join(lines)
@@ -684,9 +684,10 @@ def _emit_where_kernel(mask_var: Any, a_var: Any, b_var: Any, out_var: Any) -> l
     ]
 
 
-# Source of a generated problem.so. The includes + pops_install_program closure match the shape
-# tests/test_program_loader compiles+runs in CI; pops_program_hash is added per the spec .so ABI (a
-# cache/restart key) and is not yet consumed by System::install_program. {name} is a JSON-escaped C
+# Source of a generated problem.so. The ABI-v5 probe plus the single pops_install_program candidate
+# match the shape tests/test_program_loader compiles+runs in CI. The descriptor carries the
+# cache/restart identity.
+# {name} is a JSON-escaped C
 # string literal, {hash} the IR hash, {prelude} the INSTALL-TIME C++ (persistent scratch + matrix-free
 # apply lambdas, captured into the step closure by [=]), {body} the step-closure body (both already
 _PROGRAM_CPP_TEMPLATE = """\
@@ -697,7 +698,8 @@ _PROGRAM_CPP_TEMPLATE = """\
 #error "generated Program loaders require the shared runtime exception ABI consumer contract"
 #endif
 #include <pops/core/foundation/native_dimension.hpp>
-#include <pops/runtime/program/program_context.hpp>
+#include <pops/runtime/program/program_abi.hpp>
+#include <pops/runtime/program/program_execution_services.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 {prepared_native_component_includes}{block_inverse_include}#include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/mesh/storage/multifab.hpp>
@@ -719,23 +721,35 @@ _PROGRAM_CPP_TEMPLATE = """\
 #include <utility>                             // std::as_const (read-only field views)
 #include <vector>                              // pointer list for the coupled multi-block field-solve (ADC-457)
 
-{model_helpers}
-extern "C" const char* pops_program_abi_key() {{ return POPS_ABI_KEY_LITERAL; }}
-{route_manifest}extern "C" const char* pops_program_name() {{ return {name}; }}
-extern "C" const char* pops_program_hash() {{ return "{hash}"; }}
-{history_replay_authorities}
-{operator_authorities}
+namespace {{
 
-{block_names}
-{module_metadata}
-{program_params}
-{field_boundaries}
+void write_program_install_diagnostic(
+    pops::runtime::program::ProgramInstallDiagnostic* diagnostic,
+    pops::runtime::program::ProgramInstallErrorCode code,
+    const char* message) noexcept {{
+  if (diagnostic == nullptr) return;
+  diagnostic->code = code;
+  std::size_t size = 0;
+  if (message != nullptr) {{
+    for (; size + 1 < sizeof(diagnostic->message) && message[size] != '\\0'; ++size) {{
+      diagnostic->message[size] = message[size];
+    }}
+  }}
+  diagnostic->message[size] = '\\0';
+}}
+
+}}  // namespace
+
+// This probe is ABI identification only, not a second installation entry.  It is emitted once in
+// the common Uniform/AMR source container so the loader can reject a legacy
+// void(System*) ``pops_install_program`` before resolving that historic symbol.
+extern "C" pops::runtime::program::ProgramInstallAbiProbe
+pops_program_install_abi_probe_v5() noexcept {{
+  return pops::runtime::program::make_program_install_abi_probe();
+}}
+
+{model_helpers}
+{candidate_tables}
 {system_install}
 {amr_install}
-
-// OPTIONAL dt bound (spec s18 / ADC-417). pops_program_has_dt_bound() is true iff the Program set one.
-// The target-qualified entry receives the runtime facade, obtains the shared execution provider, and
-// returns the lowered scalar bound (min'd into native CFL). With no bound it returns +inf (unreached).
-extern "C" bool pops_program_has_dt_bound() {{ return {has_dt_bound}; }}
-{dt_bound}
 """

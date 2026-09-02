@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -92,7 +93,9 @@ void expect_covered_coarse_equals_fine_restriction(pops::AmrSystem<Dim>& system,
   const std::vector<double> coarse = system.block_level_state_global("heat", 0);
   const std::vector<double> fine = system.block_level_state_global("heat", 1);
   std::size_t covered_cells = 0;
-  for (const pops::Box<Dim>& fine_patch : system.prepared_amr_block_state(0, 1).layout().boxes()) {
+  auto fine_view = system.prepared_amr_block_state(0, 1);
+  ASSERT_TRUE(fine_view);
+  for (const pops::Box<Dim>& fine_patch : fine_view->layout().boxes()) {
     const pops::Box<Dim> covered = pops::coarsen(fine_patch, ratio);
     for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(covered.numPts()); ++ordinal) {
       const pops::Index<Dim> parent = index_from_ordinal(covered, ordinal);
@@ -206,8 +209,12 @@ void verify_refined_program_diffusion() {
   materialize_conservative_bootstrap(system, config, initial);
 
   ASSERT_EQ(system.n_levels(), 2);
-  const pops::MultiFab<Dim>& coarse = system.prepared_amr_block_state(0, 0);
-  const pops::MultiFab<Dim>& fine = system.prepared_amr_block_state(0, 1);
+  auto coarse_view = system.prepared_amr_block_state(0, 0);
+  auto fine_view = system.prepared_amr_block_state(0, 1);
+  ASSERT_TRUE(coarse_view);
+  ASSERT_TRUE(fine_view);
+  const pops::MultiFab<Dim>& coarse = *coarse_view;
+  const pops::MultiFab<Dim>& fine = *fine_view;
   const pops::mesh::BoxArray<Dim>& fine_boxes = fine.layout();
   const pops::mesh::Distribution<Dim>& fine_distribution = fine.distribution();
   ASSERT_TRUE(fine_distribution.matches_layout(fine_boxes));
@@ -233,40 +240,59 @@ void verify_refined_program_diffusion() {
 
   system.begin_step_transaction();
   system.step(dt);
-  pops::MultiFab<Dim> coarse_trial(system.prepared_amr_block_state(0, 0));
-  pops::MultiFab<Dim> fine_trial(system.prepared_amr_block_state(0, 1));
-  const double mass_trial = system.composite_reduce("heat", "sum", 0);
-  const auto trial_flux = system.program_flux_ledger_manifest();
+  std::optional<pops::MultiFab<Dim>> coarse_trial;
+  std::optional<pops::MultiFab<Dim>> fine_trial;
+  double mass_trial = 0.0;
+  std::vector<std::vector<std::string>> trial_flux;
   bool saw_coarse_flux = false;
   bool saw_fine_flux = false;
-  for (const auto& row : trial_flux) {
-    if (row.size() != 13)
-      continue;
-    saw_coarse_flux = saw_coarse_flux || row[10].ends_with("_coarse");
-    saw_fine_flux = saw_fine_flux || row[10].ends_with("_fine");
+  {
+    auto provisional = system._provisional_read_scope();
+    auto coarse_trial_view = system.prepared_amr_block_state(0, 0);
+    auto fine_trial_view = system.prepared_amr_block_state(0, 1);
+    ASSERT_TRUE(coarse_trial_view);
+    ASSERT_TRUE(fine_trial_view);
+    coarse_trial.emplace(*coarse_trial_view);
+    fine_trial.emplace(*fine_trial_view);
+    mass_trial = system.composite_reduce("heat", "sum", 0);
+    trial_flux = system.program_flux_ledger_manifest();
+    for (const auto& row : trial_flux) {
+      if (row.size() != 13)
+        continue;
+      saw_coarse_flux = saw_coarse_flux || row[10].ends_with("_coarse");
+      saw_fine_flux = saw_fine_flux || row[10].ends_with("_fine");
+    }
   }
   EXPECT_TRUE(saw_coarse_flux);
   EXPECT_TRUE(saw_fine_flux);
   system.rollback_step_transaction();
 
-  EXPECT_EQ(pops::difference_sum_sq_all(system.prepared_amr_block_state(0, 0), coarse_before),
+  auto coarse_after_rollback_view = system.prepared_amr_block_state(0, 0);
+  auto fine_after_rollback_view = system.prepared_amr_block_state(0, 1);
+  ASSERT_TRUE(coarse_after_rollback_view);
+  ASSERT_TRUE(fine_after_rollback_view);
+  EXPECT_EQ(pops::difference_sum_sq_all(*coarse_after_rollback_view, coarse_before),
             pops::Real(0));
-  EXPECT_EQ(pops::difference_sum_sq_all(system.prepared_amr_block_state(0, 1), fine_before),
-            pops::Real(0));
+  EXPECT_EQ(pops::difference_sum_sq_all(*fine_after_rollback_view, fine_before), pops::Real(0));
   EXPECT_DOUBLE_EQ(system.composite_reduce("heat", "sum", 0), mass_before);
   EXPECT_EQ(system.program_flux_ledger_manifest(), accepted_flux_before);
 
   system.step(dt);
-  EXPECT_EQ(pops::difference_sum_sq_all(system.prepared_amr_block_state(0, 0), coarse_trial),
-            pops::Real(0));
-  EXPECT_EQ(pops::difference_sum_sq_all(system.prepared_amr_block_state(0, 1), fine_trial),
-            pops::Real(0));
+  auto coarse_after_retry_view = system.prepared_amr_block_state(0, 0);
+  auto fine_after_retry_view = system.prepared_amr_block_state(0, 1);
+  ASSERT_TRUE(coarse_after_retry_view);
+  ASSERT_TRUE(fine_after_retry_view);
+  ASSERT_TRUE(coarse_trial.has_value());
+  ASSERT_TRUE(fine_trial.has_value());
+  EXPECT_EQ(pops::difference_sum_sq_all(*coarse_after_retry_view, *coarse_trial), pops::Real(0));
+  EXPECT_EQ(pops::difference_sum_sq_all(*fine_after_retry_view, *fine_trial), pops::Real(0));
   EXPECT_NEAR(system.composite_reduce("heat", "sum", 0), mass_before, 2.0e-12);
   EXPECT_DOUBLE_EQ(system.composite_reduce("heat", "sum", 0), mass_trial);
   EXPECT_EQ(system.program_flux_ledger_manifest(), trial_flux);
   expect_covered_coarse_equals_fine_restriction(system, config.transition_ratios.front());
-  EXPECT_LT(pops::reduce_max(system.prepared_amr_block_state(0, 1)),
-            peak_before - pops::Real(1e-7));
+  auto fine_final_view = system.prepared_amr_block_state(0, 1);
+  ASSERT_TRUE(fine_final_view);
+  EXPECT_LT(pops::reduce_max(*fine_final_view), peak_before - pops::Real(1e-7));
 }
 
 TEST(test_amr_program_diffusion,

@@ -10,6 +10,7 @@
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 #include <pops/runtime/multiblock/prepared_interface_flux_component.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
+#include <pops/runtime/program/program_persistent_value_checkpoint.hpp>
 
 #include <array>
 #include <cmath>
@@ -20,6 +21,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 
 // ADC-365: the System runtime-composition facade bindings.
 //
@@ -36,6 +38,8 @@ using System = pops::System<pops::kNativeDimension>;
 using SystemConfig = pops::SystemConfig<pops::kNativeDimension>;
 using SystemLayoutTransferSpec = pops::SystemLayoutTransferSpec<pops::kNativeDimension>;
 using PreparedSystemLayoutTransfer = pops::PreparedSystemLayoutTransfer<pops::kNativeDimension>;
+using PreparedProgramPersistentValueRestore =
+    pops::runtime::program::PreparedProgramPersistentValueRestore;
 
 void require_exact_keys(const py::dict& value, std::initializer_list<const char*> expected,
                         const char* where) {
@@ -243,8 +247,6 @@ void install_system_interface_provider(pops::System<Dim>& system, const py::list
       boundary_sessions;
   std::optional<pops::Geometry<Dim>> geometry;
   std::optional<pops::BoundaryTopology<Dim>> topology;
-  std::vector<pops::MultiFab<Dim>*> left_states;
-  std::vector<pops::MultiFab<Dim>*> right_states;
   std::exception_ptr storage_error;
   try {
     scheduler = std::make_shared<Scheduler>();
@@ -252,15 +254,11 @@ void install_system_interface_provider(pops::System<Dim>& system, const py::list
     topology.emplace(
         pops::BoundaryTopology<Dim>::axis_periodic(system.prepared_block_periodicity()));
     boundary_sessions.reserve(static_cast<std::size_t>(system.n_blocks()));
-    left_states.reserve(jobs.size());
-    right_states.reserve(jobs.size());
     for (const auto& job : jobs) {
       if (job.route.left_block >= static_cast<std::size_t>(system.n_blocks()) ||
           job.route.right_block >= static_cast<std::size_t>(system.n_blocks()))
         throw std::out_of_range(
             "System shared-interface endpoint lies outside the exact block registry");
-      left_states.push_back(&system.block_state(static_cast<int>(job.route.left_block)));
-      right_states.push_back(&system.block_state(static_cast<int>(job.route.right_block)));
     }
   } catch (...) {
     storage_error = std::current_exception();
@@ -272,17 +270,29 @@ void install_system_interface_provider(pops::System<Dim>& system, const py::list
         "System shared-interface storage preparation failed on another MPI rank");
   }
 
-  for (int block = 0; block < system.n_blocks(); ++block)
+  for (int block = 0; block < system.n_blocks(); ++block) {
+    auto state_view = system.block_state(block);
     boundary_sessions.push_back(pops::runtime::program::PreparedScalarBoundarySession<Dim>::prepare(
-        *geometry, *topology, system.block_state(block), *lane,
-        static_cast<std::uint64_t>(block) + 1));
+        *geometry, *topology, *state_view.get(), *lane, static_cast<std::uint64_t>(block) + 1));
+  }
 
   for (std::size_t index = 0; index < jobs.size(); ++index) {
     auto& job = jobs[index];
     const PopsExecutionContextV1 execution = job.spec.execution->view();
+    // Interface installation only consumes the field objects synchronously to materialize exact
+    // layout/face metadata.  Copy snapshots keep the lease-bearing public views out of the
+    // long-lived scheduler and avoid a raw pointer escaping the accepted read window.
+    auto left_state = [&] {
+      const auto state_view = system.block_state(static_cast<int>(job.route.left_block));
+      return pops::MultiFab<Dim>(*state_view.get());
+    }();
+    auto right_state = [&] {
+      const auto state_view = system.block_state(static_cast<int>(job.route.right_block));
+      return pops::MultiFab<Dim>(*state_view.get());
+    }();
     scheduler->install(
-        std::move(job.route), *left_states[index], *geometry, *right_states[index], *geometry,
-        execution, [spec = std::move(job.spec), component = std::move(job.component)]() mutable {
+        std::move(job.route), left_state, *geometry, right_state, *geometry, execution,
+        [spec = std::move(job.spec), component = std::move(job.component)]() mutable {
           auto prepared =
               std::make_shared<PreparedComponent>(std::move(spec), std::move(component));
           return pops::runtime::multiblock::InterfaceFluxEvaluator(
@@ -632,7 +642,7 @@ void bind_system_assembly(py::class_<System>& cls) {
       .def("_finalize_native_packages", &System::finalize_native_packages)
       // Compiled time Program (epic ADC-399 / ADC-401): dlopen a generated problem.so, verify its
       // ABI key against this module (fail-loud -> RuntimeError), and install its macro-step body. The
-      // block(s) must already exist (add_equation); the Program drives sim.step(dt) via ProgramContext.
+      // block(s) must already exist (add_equation); Program drives sim.step(dt) through the runtime-owned execution services.
       .def("install_program", &System::install_program, py::arg("so_path"))
       // Compiled-Program macro-step cadence (ADC-411): SYSTEM-level substeps + stride around the
       // installed program closure (cf. System::step). Separate from install_program so the .so
@@ -651,7 +661,7 @@ void bind_system_program(py::class_<System>& cls) {
       .def(
           "newton_report",
           [](const System& system) {
-            const NewtonReport& report = system.last_newton_report();
+            const NewtonReport report = system.last_newton_report();
             py::dict out;
             out["enabled"] = report.enabled;
             out["converged"] = report.converged;
@@ -791,36 +801,55 @@ void bind_system_checkpoint(py::class_<System>& cls) {
            py::arg("slot"), py::arg("dt"))
       .def("rebuild_history_slots", &System::rebuild_history_slots, py::arg("name"),
            py::arg("stored_slots"))
-      // Scheduler value-cache checkpoint/restart seam (ADC-458, Spec 3 section 30): the facade gathers/
-      // restores the System-owned held-node cache DIRECTLY (no .so checkpoint_extra ABI), mirroring the
-      // history seam. program_cache_global mirrors history_global (collective gather, component-major);
-      // restore_program_cache mirrors restore_history (owner-rank scatter + re-key). program_cache_nodes
-      // is empty unless a held schedule cached a value, so a program without one writes no cache keys.
-      .def("program_cache_nodes", &System::program_cache_nodes)
-      .def("program_cache_name", &System::program_cache_name, py::arg("node_id"))
+      // Dense scheduler-cache checkpoint/restart seam. Every bind-declared slot is visible, including
+      // invalid/cold slots with an accumulated window; no node-id lookup or fabricated field is used.
+      .def("program_cache_slots", &System::program_cache_slots)
+      .def("program_cache_plan_schema", &System::program_cache_plan_schema)
+      .def("program_cache_plan_digest", &System::program_cache_plan_digest)
+      .def("program_cache_valid", &System::program_cache_valid, py::arg("slot"))
+      .def("program_cache_cold", &System::program_cache_cold, py::arg("slot"))
+      .def("program_cache_name", &System::program_cache_name, py::arg("slot"))
       .def("program_cache_last_update_step", &System::program_cache_last_update_step,
-           py::arg("node_id"))
+           py::arg("slot"))
       .def("program_cache_accumulated_dt", &System::program_cache_accumulated_dt,
-           py::arg("node_id"))
-      .def("program_cache_ncomp", &System::program_cache_ncomp, py::arg("node_id"))
-      .def("program_cache_ngrow", &System::program_cache_ngrow, py::arg("node_id"))
+           py::arg("slot"))
+      .def("program_cache_ncomp", &System::program_cache_ncomp, py::arg("slot"))
+      .def("program_cache_ngrow", &System::program_cache_ngrow, py::arg("slot"))
       .def(
           "program_cache_global",
-          [](const System& s, int node_id) {
-            return to_ranked_state(s.program_cache_global(node_id), s.program_cache_ncomp(node_id),
+          [](const System& s, std::size_t slot) {
+            return to_ranked_state(s.program_cache_global(slot), s.program_cache_ncomp(slot),
                                    s.spatial_shape());
           },
-          py::arg("node_id"))
+          py::arg("slot"))
       .def(
           "restore_program_cache",
-          [](System& s, int node_id, int ncomp, int ngrow, int last_update_step,
+          [](System& s, std::size_t slot, int ncomp, int ngrow, int last_update_step,
              double accumulated_dt, const std::string& name,
              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-            s.restore_program_cache(node_id, ncomp, ngrow, last_update_step, accumulated_dt, name,
+            s.restore_program_cache(slot, ncomp, ngrow, last_update_step, accumulated_dt, name,
                                     flat(arr));
           },
-          py::arg("node_id"), py::arg("ncomp"), py::arg("ngrow"), py::arg("last_update_step"),
-          py::arg("accumulated_dt"), py::arg("name"), py::arg("values"));
+          py::arg("slot"), py::arg("ncomp"), py::arg("ngrow"), py::arg("last_update_step"),
+          py::arg("accumulated_dt"), py::arg("name"), py::arg("values"))
+      .def("restore_program_cache_pending", &System::restore_program_cache_pending,
+           py::arg("slot"), py::arg("accumulated_dt"), py::arg("name"))
+      .def(
+          "capture_program_persistent_value_checkpoint",
+          [](const System& s) {
+            const auto payload = s.capture_program_persistent_value_checkpoint();
+            return py::bytes(reinterpret_cast<const char*>(payload.data()), payload.size());
+          })
+      .def(
+          "prepare_program_persistent_value_restore",
+          [](const System& s, py::bytes payload) {
+            const std::string bytes = payload;
+            return s.prepare_program_persistent_value_restore(
+                std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+          },
+          py::arg("payload"))
+      .def("publish_program_persistent_value_restore",
+           &System::publish_program_persistent_value_restore, py::arg("prepared"));
 }
 
 // Physics wiring: inter-species couplings, Poisson/field config, geometry (disc),
@@ -916,7 +945,8 @@ void bind_system_physics(py::class_<System>& cls) {
       .def("coupled_operators",
            [](const System& s) {
              py::list out;
-             for (const CouplingOperatorView& v : s.coupled_operators()) {
+             const auto operators = s.coupled_operators();
+             for (const CouplingOperatorView& v : operators) {
                py::dict row;
                row["label"] = v.label;
                row["conserved_roles"] = v.conservation.conserved_roles;
@@ -1136,6 +1166,10 @@ void bind_system_stepping(py::class_<System>& cls) {
       .def("advance", &System::advance, py::arg("dt"), py::arg("nsteps"))
       .def("_begin_step_transaction", &System::begin_step_transaction)
       .def("_commit_step_transaction", &System::commit_step_transaction)
+      .def("_provisional_read_scope", &System::_provisional_read_scope)
+      .def("accepted_transaction_generation_", &System::accepted_transaction_generation_)
+      .def("_accepted_transaction_fail_stop_", &System::accepted_transaction_fail_stop_)
+      .def("_step_change_l2_for_block", &System::step_change_l2_for_block, py::arg("block"))
       .def("_step_change_l2", &System::step_change_l2)
       .def("_finalize_step_transaction", &System::finalize_step_transaction)
       .def("_rollback_step_transaction", &System::rollback_step_transaction)
@@ -1175,7 +1209,10 @@ void bind_system_stepping(py::class_<System>& cls) {
            "plus counters). Per-rank.")
       .def(
           "profile_snapshot",
-          [](System& s) { return profile_snapshot_to_dict(s.profiler().snapshot()); },
+          [](const System& s) {
+            const auto profiler = s.profiler();
+            return profile_snapshot_to_dict(profiler.snapshot());
+          },
           "Structured profiling snapshot: schema_version, enabled, scopes and counters.")
       .def(
           "solver_diagnostics",
@@ -1287,9 +1324,16 @@ void bind_system_data(py::class_<System>& cls) {
             const std::vector<std::string> names = system.block_names();
             std::vector<double> speeds;
             speeds.reserve(names.size());
-            for (int index = 0; index < static_cast<int>(names.size()); ++index)
-              speeds.push_back(static_cast<double>(
-                  system.block_max_speed(index, system.block_state(index))));
+            for (int index = 0; index < static_cast<int>(names.size()); ++index) {
+              // Do not call another public reader while the lease-bearing view is alive:
+              // block_max_speed acquires its own accepted lease.  The copied field is a
+              // diagnostic snapshot, so the second call has an independent lifetime.
+              const auto state = [&] {
+                const auto state_view = system.block_state(index);
+                return pops::MultiFab<pops::kNativeDimension>(*state_view.get());
+              }();
+              speeds.push_back(static_cast<double>(system.block_max_speed(index, state)));
+            }
             return speeds;
           },
           "Current per-block max wave speeds in registry order.")
@@ -1452,6 +1496,7 @@ void init_system(py::module_& m) {
   using NativePreparedSystemLayoutTransfer =
       pops::PreparedSystemLayoutTransfer<pops::kNativeDimension>;
   using NativeSystem = pops::System<pops::kNativeDimension>;
+  using NativeProvisionalReadLease = pops::runtime::program::ProvisionalReadLease;
   py::class_<SystemLayoutTransferReceipt>(m, "_SystemLayoutTransferReceipt")
       .def_readonly("applied", &SystemLayoutTransferReceipt::applied)
       .def_readonly("mapping_identity", &SystemLayoutTransferReceipt::mapping_identity)
@@ -1486,6 +1531,24 @@ void init_system(py::module_& m) {
            py::arg("generation"))
       .def("rollback_transaction", &NativePreparedSystemLayoutTransfer::rollback_transaction,
            py::arg("generation"));
+  py::class_<PreparedProgramPersistentValueRestore>(
+      m, "_PreparedProgramPersistentValueRestore");
+  py::class_<NativeProvisionalReadLease>(m, "_ProvisionalReadScope")
+      .def(
+          "__enter__",
+          [](NativeProvisionalReadLease& scope) -> NativeProvisionalReadLease& {
+            if (!scope.valid())
+              throw std::logic_error(
+                  "System._provisional_read_scope is not active on an authenticated writer phase");
+            return scope;
+          },
+          py::return_value_policy::reference_internal)
+      .def(
+          "__exit__",
+          [](NativeProvisionalReadLease& scope, py::object, py::object, py::object) {
+            scope.release();
+            return false;
+          });
   py::class_<NativeSystem> cls(m, "System");
   bind_system_assembly(cls);
   bind_system_program(cls);

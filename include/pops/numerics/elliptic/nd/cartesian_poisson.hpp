@@ -592,7 +592,7 @@ class CartesianPoissonSolver {
           candidate_.fab(local).grown_box(),
           detail::CopyComponentKernel<Dim>{candidate_.fab(local).view(), source.view(), 0, 0});
     }
-    Kokkos::fence();
+    ::pops::device_fence();
   }
 
   void fill_static_halo_(bool homogeneous) {
@@ -618,7 +618,7 @@ class CartesianPoissonSolver {
         kernel.spacing[axis] = spacing[axis];
       for_each_cell(halo_.fab(local).grown_box(), kernel);
     }
-    Kokkos::fence();
+    ::pops::device_fence();
   }
 
   FieldBoundaryExecutionContext<Dim> boundary_context_(int iteration) const {
@@ -630,7 +630,7 @@ class CartesianPoissonSolver {
 
   void synchronize_boundary_failure_(FieldBoundaryExecutionContext<Dim>& context,
                                      const char* message) {
-    Kokkos::fence();
+    ::pops::device_fence();
     if (context.failure->synchronize_across_ranks(*lane_))
       throw std::runtime_error(message);
   }
@@ -675,7 +675,7 @@ class CartesianPoissonSolver {
         kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
       for_each_cell(output.box(local), kernel);
     }
-    Kokkos::fence();
+    ::pops::device_fence();
   }
 
   void evaluate_residual_(const field_type& iterate, field_type& output, int iteration) {

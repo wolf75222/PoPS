@@ -33,6 +33,8 @@ EXPECTED_REQUIREMENTS = {
     "restart_hierarchy_policy",
     "lowering_coverage",
 }
+SUPPORTED_NATIVE_DIMENSIONS = (1, 2, 3)
+FULL_NODEID = re.compile(r"^[^:\n]+::[A-Za-z_][A-Za-z0-9_]*$")
 ALLOWED_PYTEST_TARGETS = {
     "accepted_state",
     "ghost_plan",
@@ -140,15 +142,18 @@ def _registered_gtest_cases(source: str) -> set[str]:
 
 def _registered_ctest_cases(target: str, suite: dict) -> set[str]:
     """Recover the exact configure-time CTest names owned by one manifest suite."""
+    mpi_counts = tuple(suite.get("mpi_nproc", ())) + tuple(suite.get("mpi_variants", ()))
+    is_no_discover_mpi = bool(suite.get("mpi_nproc")) or bool(suite.get("mpi_rank_parity"))
     cases: set[str] = set()
-    for relative in suite.get("sources", ()):
-        source = ROOT / relative
-        if not source.is_file():
-            continue
-        cases.update(_registered_gtest_cases(source.read_text(encoding="utf-8")))
+    if not is_no_discover_mpi:
+        for relative in suite.get("sources", ()):
+            source = ROOT / relative
+            if not source.is_file():
+                continue
+            cases.update(_registered_gtest_cases(source.read_text(encoding="utf-8")))
     cases.update(
         "%s_np%d" % (target, nproc)
-        for nproc in suite.get("mpi_nproc", ())
+        for nproc in mpi_counts
         if not isinstance(nproc, bool) and isinstance(nproc, int) and nproc > 0
     )
     if suite.get("mpi_rank_parity"):
@@ -239,6 +244,33 @@ def _validate_python_nodeid(nodeid: object, where: str, errors: list[str]) -> st
     return relative
 
 
+def _validate_row_dimensions(
+    value: object, where: str, errors: list[str]
+) -> tuple[int, ...] | None:
+    """Validate one optional row dimension qualifier and return canonical values."""
+    if not isinstance(value, list):
+        errors.append("%s dimensions must be a list" % where)
+        return None
+    if not value:
+        errors.append("%s dimensions must be non-empty" % where)
+        return None
+    if any(isinstance(dimension, bool) or not isinstance(dimension, int) for dimension in value):
+        errors.append("%s dimensions must contain integers; bool is not accepted" % where)
+        return None
+    if any(dimension not in SUPPORTED_NATIVE_DIMENSIONS for dimension in value):
+        errors.append(
+            "%s dimensions must contain only supported values 1, 2, or 3" % where
+        )
+        return None
+    if len(set(value)) != len(value):
+        errors.append("%s dimensions must contain unique values" % where)
+        return None
+    if value != sorted(value):
+        errors.append("%s dimensions must use canonical sorted order" % where)
+        return None
+    return tuple(value)
+
+
 def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     """Return the parsed manifest and every deterministic source-only error."""
     errors: list[str] = []
@@ -287,9 +319,15 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
             expected = base | {"nodeid", "nproc"}
         else:
             expected = base | {"test_regex"}
-        if set(row) != expected:
+        expected_with_optional_dimensions = expected | (
+            {"dimensions"} if "dimensions" in row else set()
+        )
+        if set(row) != expected_with_optional_dimensions:
             errors.append("%s has unknown or missing fields: %s" % (where, sorted(row)))
             continue
+
+        if "dimensions" in row:
+            _validate_row_dimensions(row["dimensions"], where, errors)
 
         issue = row.get("issue")
         requirement = row.get("requirement")
@@ -380,16 +418,67 @@ def _run(command: list[str], *, env: dict[str, str] | None = None) -> None:
     subprocess.run(command, cwd=ROOT, check=True, env=env)
 
 
-def _mpi_python_command(mpi_exec: str, nproc: int, relative: str) -> list[str]:
+def _mpi_python_command(
+    mpi_exec: str,
+    nproc: int,
+    nodeid: str,
+    *,
+    dimension: int,
+) -> list[str]:
+    """Build an MPI command that invokes exactly one manifest-owned file::function nodeid."""
+    if not isinstance(nodeid, str) or FULL_NODEID.fullmatch(nodeid) is None:
+        raise ValueError("MPI Python execution requires an exact file::function nodeid")
+    relative, function_name = nodeid.split("::", 1)
+    candidate = (ROOT / relative).resolve()
+    try:
+        candidate.relative_to(ROOT.resolve())
+    except ValueError as exc:
+        raise ValueError("MPI Python nodeid must stay inside the repository") from exc
+    if candidate.suffix != ".py":
+        raise ValueError("MPI Python nodeid must select a Python source file")
+    if (
+        isinstance(dimension, bool)
+        or not isinstance(dimension, int)
+        or dimension not in SUPPORTED_NATIVE_DIMENSIONS
+    ):
+        raise ValueError("native dimension must be exactly 1, 2, or 3")
     if shutil.which(mpi_exec) is None:
         raise RuntimeError("required MPI launcher %r is unavailable" % mpi_exec)
-    return [mpi_exec, "-n", str(nproc), sys.executable, str(ROOT / relative)]
+    bootstrap = (
+        "from pops._native_selector import select_native_dimension\n"
+        "from pathlib import Path\n"
+        "import runpy, sys\n"
+        "select_native_dimension(int(sys.argv[1]))\n"
+        "nodeid = sys.argv[3]\n"
+        "relative, separator, function_name = nodeid.partition('::')\n"
+        "expected_relative = Path(sys.argv[2]).resolve().relative_to(Path.cwd()).as_posix()\n"
+        "if not separator or function_name != %r or relative != expected_relative:\n"
+        "    raise SystemExit('MPI Python nodeid/path mismatch: ' + nodeid)\n"
+        "module = runpy.run_path(sys.argv[2], run_name='__m3_authority_node__')\n"
+        "test = module.get(function_name)\n"
+        "if not callable(test):\n"
+        "    raise SystemExit('MPI Python nodeid does not resolve to a function: ' + nodeid)\n"
+        "test()\n"
+        "raise SystemExit(int(module.get('_fails', 0)))\n" % function_name
+    )
+    return [
+        mpi_exec,
+        "-n",
+        str(nproc),
+        sys.executable,
+        "-c",
+        bootstrap,
+        str(dimension),
+        str(ROOT / relative),
+        nodeid,
+    ]
 
 
 def _required_mpi_environment() -> dict[str, str]:
     environment = os.environ.copy()
     environment["POPS_REQUIRE_MPI_TESTS"] = "1"
     environment["POPS_REQUIRE_NATIVE_TESTS"] = "1"
+    environment["POPS_EXACT_PROCESS_NODEIDS"] = "1"
     return environment
 
 
@@ -403,8 +492,10 @@ def _pytest_skip_count(report: Path) -> int:
     return len(root.findall(".//skipped"))
 
 
-def _run_required_pytest(nodeids: list[str]) -> None:
-    environment = _required_mpi_environment()
+def _run_required_pytest(
+    nodeids: list[str], *, environment: dict[str, str] | None = None
+) -> None:
+    environment = _required_mpi_environment() if environment is None else environment
     with tempfile.TemporaryDirectory(prefix="pops-m3-gate-") as temporary:
         report = Path(temporary) / "pytest.xml"
         command = [
@@ -444,10 +535,17 @@ def _chunks(values: list[str], size: int) -> Iterable[list[str]]:
         yield values[index : index + size]
 
 
-def _run_ctest(build_dir: Path, target: str, selector: str) -> None:
+def _run_ctest(
+    build_dir: Path,
+    target: str,
+    selector: str,
+    *,
+    environment: dict[str, str] | None = None,
+) -> None:
     listed = subprocess.run(
         ["ctest", "--test-dir", str(build_dir), "-N", "-R", selector],
         cwd=ROOT,
+        env=environment,
         check=True,
         text=True,
         capture_output=True,
@@ -456,7 +554,61 @@ def _run_ctest(build_dir: Path, target: str, selector: str) -> None:
         raise RuntimeError(
             "M3 CTest target %r (%s) is not built in %s" % (target, selector, build_dir)
         )
-    _run(["ctest", "--test-dir", str(build_dir), "--output-on-failure", "-R", selector])
+    _run(
+        ["ctest", "--test-dir", str(build_dir), "--output-on-failure", "-R", selector],
+        env=environment,
+    )
+
+
+def _validated_native_dimension(dimension: object) -> int:
+    """Return one supported native dimension, rejecting programmatic bypasses of argparse."""
+    if (
+        isinstance(dimension, bool)
+        or not isinstance(dimension, int)
+        or dimension not in SUPPORTED_NATIVE_DIMENSIONS
+    ):
+        raise ValueError("native dimension must be exactly 1, 2, or 3")
+    return dimension
+
+
+def _selected_native_dimension(explicit: object | None) -> int:
+    """Select a dimension from an explicit flag or an authenticated environment value."""
+    environment_value = os.environ.get("POPS_NATIVE_DIM")
+    environment_dimension: int | None = None
+    if environment_value:
+        if environment_value not in {str(value) for value in SUPPORTED_NATIVE_DIMENSIONS}:
+            raise ValueError(
+                "POPS_NATIVE_DIM must be exactly 1, 2, or 3, got %r" % environment_value
+            )
+        environment_dimension = int(environment_value)
+
+    if explicit is not None:
+        selected = _validated_native_dimension(explicit)
+        if environment_dimension is not None and environment_dimension != selected:
+            raise ValueError(
+                "conflicting native dimensions: --dim=%d but POPS_NATIVE_DIM=%d"
+                % (selected, environment_dimension)
+            )
+        return selected
+    if environment_dimension is None:
+        raise ValueError(
+            "native dimension is required for execution: pass --dim 1|2|3 or set "
+            "POPS_NATIVE_DIM=1|2|3"
+        )
+    return environment_dimension
+
+
+def _selected_checks(checks: Iterable[dict], *, dimension: int) -> list[dict]:
+    """Return all executable rows applicable to one selected native dimension."""
+    dimension = _validated_native_dimension(dimension)
+
+    def supports_dimension(row: dict) -> bool:
+        if "dimensions" not in row:
+            return True
+        dimensions = row["dimensions"]
+        return isinstance(dimensions, list) and dimension in dimensions
+
+    return [row for row in checks if supports_dimension(row)]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -465,6 +617,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check-only", action="store_true")
     parser.add_argument("--python-only", action="store_true")
     parser.add_argument("--build-dir", type=Path, default=ROOT / "build-mpi")
+    parser.add_argument("--dim", type=int, choices=SUPPORTED_NATIVE_DIMENSIONS)
     parser.add_argument("--mpi-exec", default="mpiexec")
     args = parser.parse_args(argv)
 
@@ -482,27 +635,45 @@ def main(argv: list[str] | None = None) -> int:
     if args.check_only:
         return 0
 
-    nodeids = [row["nodeid"] for row in checks if row["kind"] == "pytest"]
+    try:
+        dimension = _selected_native_dimension(args.dim)
+    except ValueError as exc:
+        parser.error(str(exc))
+    selected = _selected_checks(checks, dimension=dimension)
+    environment = _required_mpi_environment()
+    environment["POPS_NATIVE_DIM"] = str(dimension)
+
+    nodeids = [row["nodeid"] for row in selected if row["kind"] == "pytest"]
     for chunk in _chunks(nodeids, 24):
-        _run_required_pytest(chunk)
+        _run_required_pytest(chunk, environment=environment)
     mpi_entrypoints = sorted(
         {
-            (row["nodeid"].split("::", 1)[0], row["nproc"])
-            for row in checks
+            (row["nodeid"], row["nproc"])
+            for row in selected
             if row["kind"] == "mpi_python"
         }
     )
-    for relative, nproc in mpi_entrypoints:
+    for nodeid, nproc in mpi_entrypoints:
         _run(
-            _mpi_python_command(args.mpi_exec, nproc, relative),
-            env=_required_mpi_environment(),
+            _mpi_python_command(
+                args.mpi_exec,
+                nproc,
+                nodeid,
+                dimension=dimension,
+            ),
+            env=environment,
         )
     if not args.python_only:
         for row in sorted(
-            (row for row in checks if row["kind"] == "ctest"),
+            (row for row in selected if row["kind"] == "ctest"),
             key=lambda value: (value["target"], value["test_regex"]),
         ):
-            _run_ctest(args.build_dir, row["target"], row["test_regex"])
+            _run_ctest(
+                args.build_dir,
+                row["target"],
+                row["test_regex"],
+                environment=environment,
+            )
     return 0
 
 

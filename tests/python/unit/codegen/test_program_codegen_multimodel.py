@@ -59,5 +59,5 @@ def test_two_model_program_emits_each_models_own_source_kernel():
     assert "first_physics" in source and "second_physics" in source
     assert "pops::Real(-2) * u" in source
     assert "pops::Real(-7) * u" in source
-    assert "pops_module_operator_owner" in source
+    assert "kProgramCandidateModuleOperators" in source
     assert not hasattr(graph, "first_model")

@@ -1,15 +1,33 @@
-// Locks the GeneratedModule metadata reader (include/pops/runtime/program/module_metadata.hpp,
-// Spec 2 / ADC-442): the typed operator registry a problem.so exports for introspection and
-// install-time validation. OperatorId is the registration index; incomplete metadata is rejected
-// before installation. The loader-symbol integration test exercises a real shared object.
+// Locks the host-owned candidate-table metadata adapter
+// (include/pops/runtime/program/module_metadata.hpp, Spec 2 / ADC-442). OperatorId is the
+// registration index; the loader materializes these records before candidate preparation.
 #include <gtest/gtest.h>
 
 #include <pops/runtime/program/module_metadata.hpp>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace pops::runtime::program;
+
+namespace {
+
+ProgramAbiView abi_view(std::string_view value) {
+  return {value.data(), static_cast<std::uint64_t>(value.size())};
+}
+
+ProgramModuleRecord module_row(std::string_view owner, std::string_view identity,
+                               std::string_view kind = "module") {
+  return {abi_view(identity), abi_view(kind), abi_view("signature"), abi_view("{}"),
+          abi_view(owner)};
+}
+
+ProgramAbiTable module_table(const ProgramModuleRecord* rows, std::size_t count) {
+  return {rows, static_cast<std::uint64_t>(count), sizeof(ProgramModuleRecord)};
+}
+
+}  // namespace
 
 TEST(ModuleMetadata, DefaultDescriptorIsEmpty) {
   ModuleMetadata empty;
@@ -33,20 +51,69 @@ TEST(ModuleMetadata, HandBuiltDescriptorResolvesOperatorsByName) {
   EXPECT_TRUE(m.find("nope") == nullptr) << "find on an unknown operator returns nullptr";
 }
 
-TEST(ModuleMetadata, MissingModuleContractIsRejected) {
-  EXPECT_THROW((void)read_module_metadata(pops::dynlib::handle{}), std::runtime_error)
-      << "a null module handle is invalid";
-#if defined(_WIN32)
-  pops::dynlib::handle self = ::GetModuleHandleW(nullptr);
-#else
-  pops::dynlib::handle self = ::dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
-#endif
-  ASSERT_TRUE(pops::dynlib::valid(self));
-  EXPECT_THROW((void)read_module_metadata(self), std::runtime_error)
-      << "a module without the complete metadata family is rejected";
-#if !defined(_WIN32)
-  pops::dynlib::close(self);
-#endif
+TEST(ModuleMetadata, CandidateTablesRejectMalformedModuleRecords) {
+  ProgramInstallationTables tables;
+  tables.module_operators.push_back({"rhs", "local_rate", "", "not-json", "model/a"});
+  EXPECT_THROW((void)read_module_metadata(tables), std::runtime_error)
+      << "the host rejects malformed copied module records before candidate preparation";
+}
+
+TEST(ModuleMetadata, CandidateTablesKeepRepeatedNamesSeparatedByOwner) {
+  const ProgramModuleRecord operators[] = {
+      module_row("model/a", "rhs", "local_rate"),
+      module_row("model/b", "rhs", "local_rate"),
+  };
+  const ProgramModuleRecord state_spaces[] = {
+      module_row("model/a", "U", "state"),
+      module_row("model/b", "U", "state"),
+  };
+  const ProgramModuleRecord field_spaces[] = {
+      module_row("model/a", "fields", "field"),
+      module_row("model/b", "fields", "field"),
+  };
+  ProgramCandidateDescriptor descriptor{};
+  descriptor.module_operators = module_table(operators, std::size(operators));
+  descriptor.module_state_spaces = module_table(state_spaces, std::size(state_spaces));
+  descriptor.module_field_spaces = module_table(field_spaces, std::size(field_spaces));
+
+  std::size_t aggregate = 0;
+  const ProgramInstallationTables tables =
+      ProgramInstallationTables::materialize(descriptor, aggregate);
+  const ModuleMetadata metadata = read_module_metadata(tables);
+  ASSERT_EQ(metadata.operators.size(), 2U);
+  EXPECT_NE(metadata.find("model/a", "rhs"), nullptr);
+  EXPECT_NE(metadata.find("model/b", "rhs"), nullptr);
+  EXPECT_EQ(metadata.find("rhs"), nullptr) << "unqualified lookup remains ambiguous";
+  EXPECT_EQ(metadata.state_spaces, (std::vector<std::string>{"U", "U"}));
+  EXPECT_EQ(metadata.state_space_owners, (std::vector<std::string>{"model/a", "model/b"}));
+  EXPECT_EQ(metadata.field_spaces, (std::vector<std::string>{"fields", "fields"}));
+  EXPECT_EQ(metadata.field_space_owners, (std::vector<std::string>{"model/a", "model/b"}));
+
+  const auto expect_same_owner_duplicate = [&](ProgramAbiTable ProgramCandidateDescriptor::* table,
+                                               const ProgramModuleRecord* rows) {
+    ProgramCandidateDescriptor duplicate = descriptor;
+    duplicate.*table = module_table(rows, 2);
+    std::size_t duplicate_aggregate = 0;
+    EXPECT_THROW((void)ProgramInstallationTables::materialize(duplicate, duplicate_aggregate),
+                 std::invalid_argument);
+  };
+  const ProgramModuleRecord duplicate_operators[] = {operators[0], operators[0]};
+  const ProgramModuleRecord duplicate_state_spaces[] = {state_spaces[0], state_spaces[0]};
+  const ProgramModuleRecord duplicate_field_spaces[] = {field_spaces[0], field_spaces[0]};
+  expect_same_owner_duplicate(&ProgramCandidateDescriptor::module_operators, duplicate_operators);
+  expect_same_owner_duplicate(&ProgramCandidateDescriptor::module_state_spaces,
+                              duplicate_state_spaces);
+  expect_same_owner_duplicate(&ProgramCandidateDescriptor::module_field_spaces,
+                              duplicate_field_spaces);
+}
+
+TEST(ModuleMetadata, CheckpointMetadataDoesNotForgePrimaryClockWithoutHistory) {
+  ProgramInstallationTables tables;
+  const ProgramCheckpointMetadata metadata = read_program_checkpoint_metadata(tables);
+  EXPECT_TRUE(metadata.histories.empty());
+  EXPECT_TRUE(metadata.logical_clock_identities.empty())
+      << "the detached prepared schedule is the only primary-clock authority";
+  EXPECT_EQ(metadata.temporal_provider_identity, kGlobalTemporalPartitionProvider);
 }
 
 TEST(ModuleMetadata, RequiredAuxParsesAuxArray) {

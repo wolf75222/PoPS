@@ -123,19 +123,49 @@ class BatchedCellTemporalPartition {
   const CellTemporalPartitionAcceptedState& accepted_state() const noexcept { return accepted_; }
   bool attempt_active() const noexcept { return attempt_active_; }
 
+  /// Persistent payload of the accepted/pending clock authority.  The enclosing executor owns
+  /// its own device-ready record packs separately; this reports only this partition carrier.
+  [[nodiscard]] std::uint64_t resident_storage_bytes() const {
+    const auto checked_vector_bytes = [](std::size_t capacity,
+                                         std::size_t item_size) -> std::uint64_t {
+      if (item_size != 0 && capacity > std::numeric_limits<std::uint64_t>::max() / item_size)
+        throw std::overflow_error("cell-temporal partition resident storage overflows uint64");
+      return static_cast<std::uint64_t>(capacity) * item_size;
+    };
+    std::uint64_t total =
+        checked_vector_bytes(accepted_.cells.capacity(), sizeof(CellTemporalPartitionRecord));
+    const auto pending = checked_vector_bytes(pending_ticks_.capacity(), sizeof(std::int64_t));
+    if (pending > std::numeric_limits<std::uint64_t>::max() - total)
+      throw std::overflow_error("cell-temporal partition resident storage overflows uint64");
+    total += pending;
+    const auto object_begin = reinterpret_cast<std::uintptr_t>(&accepted_.provider_identity);
+    const auto object_end = object_begin + sizeof(accepted_.provider_identity);
+    const auto data = reinterpret_cast<std::uintptr_t>(accepted_.provider_identity.data());
+    if (!(data >= object_begin && data < object_end)) {
+      const auto external = static_cast<std::uint64_t>(accepted_.provider_identity.capacity()) + 1U;
+      if (external > std::numeric_limits<std::uint64_t>::max() - total)
+        throw std::overflow_error("cell-temporal partition resident storage overflows uint64");
+      total += external;
+    }
+    return total;
+  }
+
   void begin_attempt(std::int64_t target_tick) {
     if (attempt_active_)
       throw std::logic_error("temporal partition attempt is already active");
     if (target_tick <= accepted_.synchronization_tick)
       throw std::invalid_argument("temporal partition attempt target must advance accepted time");
-    pending_ticks_.clear();
-    pending_ticks_.reserve(accepted_.cells.size());
-    for (const CellTemporalPartitionRecord& cell : accepted_.cells) {
+    if (pending_ticks_.capacity() < accepted_.cells.size())
+      throw std::logic_error(
+          "temporal partition pending-clock arena was not primed before a hot attempt");
+    pending_ticks_.resize(accepted_.cells.size());
+    for (std::size_t index = 0; index < accepted_.cells.size(); ++index) {
+      const CellTemporalPartitionRecord& cell = accepted_.cells[index];
       const std::int64_t stride = std::int64_t{1} << cell.rung;
       if ((target_tick - cell.accepted_tick) % stride != 0)
         throw std::invalid_argument(
             "temporal partition attempt target is unreachable for one prepared rung");
-      pending_ticks_.push_back(cell.accepted_tick);
+      pending_ticks_[index] = cell.accepted_tick;
     }
     target_tick_ = target_tick;
     attempt_active_ = true;
@@ -169,12 +199,12 @@ class BatchedCellTemporalPartition {
       pending_ticks_[index] = target_tick;
   }
 
-  void require_barrier(const std::string& operation) const {
+  void require_barrier(std::string_view operation) const {
     if (!attempt_active_)
       return;
     if (std::any_of(pending_ticks_.begin(), pending_ticks_.end(),
                     [this](std::int64_t tick) { return tick != target_tick_; }))
-      throw std::logic_error(operation +
+      throw std::logic_error(std::string(operation) +
                              " requires every cell-local clock at the synchronization barrier");
   }
 
@@ -189,6 +219,21 @@ class BatchedCellTemporalPartition {
   }
 
   void rollback() noexcept { clear_attempt_(); }
+
+  /// Hot, topology-static accepted-boundary rebind used by resident executors between AMR level
+  /// groups.  The record vector was sealed at candidate preparation; only its common tick moves.
+  void reset_accepted_tick_noexcept(std::int64_t tick) noexcept {
+    if (attempt_active_ || tick < 0)
+      std::terminate();
+    for (CellTemporalPartitionRecord& cell : accepted_.cells) {
+      const std::int64_t stride = std::int64_t{1} << cell.rung;
+      if (tick % stride != 0)
+        std::terminate();
+      cell.accepted_tick = tick;
+    }
+    accepted_.synchronization_tick = tick;
+    clear_attempt_();
+  }
 
   CellTemporalPartitionAcceptedState checkpoint() const {
     if (attempt_active_)

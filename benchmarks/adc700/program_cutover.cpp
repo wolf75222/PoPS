@@ -1,25 +1,19 @@
-// ADC-700 out-of-CI campaign witness.
+// ADC-700 pre-cutover native oracle.
 //
-// One source is compiled twice against two pinned PoPS revisions:
-//   - the pre-cutover revision executes its native AmrSystem::step route;
-//   - the candidate revision installs the equivalent Forward-Euler Program.
-//
-// The mesh, initial state, model, refinement rule, number of kernels and timed region are otherwise
-// identical. This is intentionally a campaign executable, not a routine wall-clock CI assertion.
+// The candidate is intentionally not another C++ implementation.  It is authored by
+// benchmarks/adc700/program_cutover.py and reaches the runtime through the public Python
+// validate -> resolve -> compile(MODULE) -> bind -> AmrSystem.install_program path.  This source
+// remains a small native oracle compiled only from the pinned baseline revision, so the ABBA
+// comparison has one stable numerical reference and cannot accidentally compare two in-process
+// hand-written candidate implementations.
 
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/world_communicator.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-
-#if !POPS_ADC700_PRE_CUTOVER
-#include <pops/core/foundation/native_dimension.hpp>
-#include <pops/numerics/spatial/nd/conservation_laws.hpp>
-#include <pops/runtime/program/amr_program_context.hpp>
-#else
 #include <pops/physics/bricks/source.hpp>
 #include <pops/physics/composition/composite.hpp>
 #include <pops/physics/fluids/euler.hpp>
-#endif
 
 #include <Kokkos_Core.hpp>
 
@@ -28,8 +22,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <memory>
-#include <numeric>
+#include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -38,14 +32,26 @@
 #define POPS_ADC700_REVISION "unknown"
 #endif
 #ifndef POPS_ADC700_ROUTE_NAME
-#define POPS_ADC700_ROUTE_NAME "unknown"
+#define POPS_ADC700_ROUTE_NAME "pre_cutover_native"
+#endif
+
+#if !POPS_ADC700_PRE_CUTOVER
+#error "The ADC-700 C++ source is the pinned native oracle; use the Python driver for the candidate."
+#endif
+#ifndef POPS_ADC700_TOOLCHAIN_ATTESTED
+#error "The ADC-700 baseline must pass the CMake toolchain-contract preflight before compiling."
+#endif
+#ifndef POPS_ADC700_TOOLCHAIN_RECEIPT_SHA256
+#error "The ADC-700 baseline must bind the CMake-verified toolchain receipt digest."
+#endif
+#ifndef POPS_ADC700_TOOLCHAIN_REVISION
+#error "The ADC-700 baseline must bind the CMake-verified candidate revision."
 #endif
 
 namespace {
 
 using namespace pops;
 
-#if POPS_ADC700_PRE_CUTOVER
 struct ZeroElliptic {
   template <class State>
   POPS_HD Real rhs(const State&) const {
@@ -54,58 +60,6 @@ struct ZeroElliptic {
 };
 
 using GasModel = CompositeModel<Euler, NoSource, ZeroElliptic>;
-#else
-template <int Dim>
-struct GasModel {
-  using Law = nd::IdealGasEuler<Dim>;
-  using Schema = typename Law::Schema;
-  using State = typename Law::State;
-  using Primitive = typename Law::Primitive;
-  using Aux = AuxState<Dim>;
-  static constexpr int dimension = Dim;
-  static constexpr int n_vars = Law::n_vars;
-  static constexpr int n_aux = aux_comps_for<Law, Dim>();
-
-  Law law = Law::prepare(Real(1.4));
-
-  static PreparedProviderIdentity provider_identity() noexcept {
-    return {"benchmark.adc700.ideal-gas-euler", 1};
-  }
-  void serialize_exact_parameters(ExactContractBuilder& contract) const {
-    law.serialize_exact_parameters(contract);
-  }
-  static VariableSet conservative_vars() { return Law::conservative_vars(); }
-  static VariableSet primitive_vars() { return Law::primitive_vars(); }
-  POPS_HD nd::StateConversion<Primitive> recover(const State& state) const {
-    return law.recover(state);
-  }
-  POPS_HD nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
-    return law.make_conservative(primitive);
-  }
-  POPS_HD nd::StateConversionStatus admissibility(const State& state) const {
-    return law.admissibility(state);
-  }
-  template <int Axis>
-  POPS_HD State flux(const State& state) const {
-    return law.template flux<Axis>(state);
-  }
-  template <int Axis>
-  POPS_HD Real max_wave_speed(const State& state) const {
-    return law.template max_wave_speed<Axis>(state);
-  }
-  template <int Axis>
-  POPS_HD void wave_speeds(const State& state, Real& lower, Real& upper) const {
-    law.template wave_speeds<Axis>(state, lower, upper);
-  }
-  POPS_HD State source(const State&, const Aux&) const { return {}; }
-  POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
-};
-
-template <int Dim>
-GasModel<Dim> gas_model() {
-  return {nd::IdealGasEuler<Dim>::prepare(Real(1.4))};
-}
-#endif
 
 struct Config {
   int n = 128;
@@ -114,35 +68,85 @@ struct Config {
   double dt = 5.0e-4;
 };
 
-#if !POPS_ADC700_PRE_CUTOVER
-bool patch_less(const AmrPatch<kNativeDimension>& lhs, const AmrPatch<kNativeDimension>& rhs) {
+bool patch_less(const PatchBox& lhs, const PatchBox& rhs) {
   if (lhs.level != rhs.level)
     return lhs.level < rhs.level;
-  for (int axis = 0; axis < kNativeDimension; ++axis)
-    if (lhs.box.lo[axis] != rhs.box.lo[axis])
-      return lhs.box.lo[axis] < rhs.box.lo[axis];
-  for (int axis = 0; axis < kNativeDimension; ++axis)
-    if (lhs.box.hi[axis] != rhs.box.hi[axis])
-      return lhs.box.hi[axis] < rhs.box.hi[axis];
-  return false;
+  if (lhs.ilo != rhs.ilo)
+    return lhs.ilo < rhs.ilo;
+  if (lhs.jlo != rhs.jlo)
+    return lhs.jlo < rhs.jlo;
+  if (lhs.ihi != rhs.ihi)
+    return lhs.ihi < rhs.ihi;
+  return lhs.jhi < rhs.jhi;
 }
 
-std::string patch_signature(const AmrPatch<kNativeDimension>& patch) {
-  std::string signature = std::to_string(patch.level) + ':';
-  bool first_coordinate = true;
-  auto append = [&](int coordinate) {
-    if (!first_coordinate)
-      signature += ',';
-    signature += std::to_string(coordinate);
-    first_coordinate = false;
-  };
-  for (int axis = 0; axis < kNativeDimension; ++axis)
-    append(patch.box.lo[axis]);
-  for (int axis = 0; axis < kNativeDimension; ++axis)
-    append(patch.box.hi[axis]);
-  return signature;
+std::string patch_signature(const PatchBox& patch) {
+  return std::to_string(patch.level) + ':' + std::to_string(patch.ilo) + ',' +
+         std::to_string(patch.jlo) + ',' + std::to_string(patch.ihi) + ',' +
+         std::to_string(patch.jhi);
 }
-#endif
+
+std::string assigned_gpu_uuid() {
+  const char* value = std::getenv("POPS_ADC700_GPU_UUID");
+  if (value == nullptr || *value == '\0')
+    throw std::runtime_error("POPS_ADC700_GPU_UUID is missing for this measurement run");
+  const std::string uuid(value);
+  if (uuid.find_first_of("\"\\\n\r\t") != std::string::npos)
+    throw std::runtime_error("POPS_ADC700_GPU_UUID contains JSON-unsafe bytes");
+  return uuid;
+}
+
+std::string required_json_env(const char* name) {
+  const char* value = std::getenv(name);
+  if (value == nullptr || *value == '\0')
+    throw std::runtime_error(std::string(name) + " is missing from the toolchain receipt environment");
+  const std::string result(value);
+  if (result.find_first_of("\"\\\n\r\t") != std::string::npos)
+    throw std::runtime_error(std::string(name) + " contains JSON-unsafe bytes");
+  return result;
+}
+
+std::string toolchain_receipt_json() {
+  const std::string path = required_json_env("POPS_ADC700_TOOLCHAIN_RECEIPT");
+  if (path.front() != '/')
+    throw std::runtime_error("POPS_ADC700_TOOLCHAIN_RECEIPT must be absolute");
+  std::ifstream stream(path, std::ios::binary);
+  if (!stream)
+    throw std::runtime_error("cannot open the authenticated ADC-700 toolchain receipt");
+  std::string json((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+  while (!json.empty() && (json.back() == '\n' || json.back() == '\r' || json.back() == ' ' ||
+                           json.back() == '\t'))
+    json.pop_back();
+  if (json.size() < 2 || json.front() != '{' || json.back() != '}')
+    throw std::runtime_error("ADC-700 toolchain receipt is not one JSON object");
+  for (const unsigned char value : json)
+    if (value < 0x20)
+      throw std::runtime_error("ADC-700 toolchain receipt contains raw control bytes");
+  return json;
+}
+
+std::string gpu_assignments_json(const std::string& local_uuid) {
+  auto& world = WorldCommunicator::world();
+  world.require_active_mpi_world();
+  if (world.identity() != "MPI_COMM_WORLD" || world.size() != 4)
+    throw std::runtime_error("ADC-700 requires four ranks on MPI_COMM_WORLD");
+  const auto uuids = world.allgather_bytes(local_uuid);
+  if (uuids.size() != 4)
+    throw std::runtime_error("GPU identity allgather did not return four ranks");
+  std::string json;
+  for (std::size_t rank = 0; rank < uuids.size(); ++rank) {
+    if (uuids[rank].empty() || uuids[rank].find_first_of("\"\\\n\r\t") != std::string::npos)
+      throw std::runtime_error("GPU identity allgather returned an invalid UUID");
+    if (rank > 0)
+      json += ',';
+    json += "{\"rank\":" + std::to_string(rank) + ",\"uuid\":\"" + uuids[rank] + "\"}";
+  }
+  for (std::size_t left = 0; left < uuids.size(); ++left)
+    for (std::size_t right = left + 1; right < uuids.size(); ++right)
+      if (uuids[left] == uuids[right])
+        throw std::runtime_error("GPU identity allgather did not return four distinct UUIDs");
+  return json;
+}
 
 int parse_positive_int(const char* text, const char* option) {
   char* end = nullptr;
@@ -177,7 +181,7 @@ Config parse_config(int argc, char** argv) {
     else if (const char* raw = value("--dt="))
       config.dt = parse_positive_double(raw, "--dt");
     else
-      throw std::invalid_argument("unknown ADC-700 campaign option: " + argument);
+      throw std::invalid_argument("unknown ADC-700 oracle option: " + argument);
   }
   if (config.n < 16 || config.n % 4 != 0)
     throw std::invalid_argument("--n must be >= 16 and divisible by four");
@@ -185,7 +189,6 @@ Config parse_config(int argc, char** argv) {
 }
 
 std::vector<double> initial_state(int n) {
-#if POPS_ADC700_PRE_CUTOVER
   const std::size_t cells = static_cast<std::size_t>(n) * n;
   std::vector<double> state(4 * cells, 0.0);
   constexpr double gamma = 1.4;
@@ -208,75 +211,9 @@ std::vector<double> initial_state(int n) {
                                 0.5 * density * (velocity_x * velocity_x + velocity_y * velocity_y);
     }
   return state;
-#else
-  std::size_t cells = 1;
-  for (int axis = 0; axis < kNativeDimension; ++axis)
-    cells *= static_cast<std::size_t>(n);
-  std::vector<double> state(static_cast<std::size_t>(kNativeDimension + 2) * cells, 0.0);
-  constexpr double gamma = 1.4;
-  constexpr double pi = 3.141592653589793238462643383279502884;
-  for (std::size_t linear = 0; linear < cells; ++linear) {
-    std::size_t remainder = linear;
-    double radius_squared = 0.0;
-    double pressure_shape = 1.0;
-    for (int axis = 0; axis < kNativeDimension; ++axis) {
-      const int coordinate = static_cast<int>(remainder % static_cast<std::size_t>(n));
-      remainder /= static_cast<std::size_t>(n);
-      const double center = axis == 0 ? 0.37 : 0.41;
-      const double offset = (coordinate + 0.5) / static_cast<double>(n) - center;
-      radius_squared += offset * offset;
-      pressure_shape *= std::cos(2.0 * pi * (coordinate + 0.5) / static_cast<double>(n));
-    }
-    const double density = 1.0 + 0.35 * std::exp(-radius_squared / 0.008);
-    const double pressure = 2.0 + 0.1 * pressure_shape;
-    double speed_squared = 0.0;
-    state[linear] = density;
-    for (int axis = 0; axis < kNativeDimension; ++axis) {
-      const double velocity = axis == 0 ? 0.15 : (axis == 1 ? -0.07 : 0.03);
-      state[static_cast<std::size_t>(axis + 1) * cells + linear] = density * velocity;
-      speed_squared += velocity * velocity;
-    }
-    state[static_cast<std::size_t>(kNativeDimension + 1) * cells + linear] =
-        pressure / (gamma - 1.0) + 0.5 * density * speed_squared;
-  }
-  return state;
-#endif
 }
-
-#if !POPS_ADC700_PRE_CUTOVER
-void install_forward_euler_program(AmrSystem<kNativeDimension>& system) {
-  std::vector<int> block_map(static_cast<std::size_t>(system.n_blocks()));
-  std::iota(block_map.begin(), block_map.end(), 0);
-  if (system.engine() == nullptr)
-    throw std::runtime_error("ADC-700 candidate requires the materialized AMR runtime");
-
-  auto context = runtime::program::make_program_execution_provider(&system);
-  context->configure_primary_clock("adc700.performance.macro");
-  context->install([context](double macro_dt) {
-    context->advance_hierarchy(macro_dt, [context](double level_dt) {
-      context->set_stage_time(0, 1);
-
-      std::vector<MultiFab<kNativeDimension>*> states;
-      std::vector<MultiFab<kNativeDimension>*> residuals;
-      states.reserve(static_cast<std::size_t>(context->n_blocks()));
-      residuals.reserve(static_cast<std::size_t>(context->n_blocks()));
-      for (int block = 0; block < context->n_blocks(); ++block) {
-        MultiFab<kNativeDimension>& state = context->state(block);
-        MultiFab<kNativeDimension>& residual = context->rhs_scratch(1000 + block, 0, state);
-        context->rhs_into(block, state, residual, 3000 + block);
-        states.push_back(&state);
-        residuals.push_back(&residual);
-      }
-      for (std::size_t block = 0; block < states.size(); ++block)
-        context->axpy(*states[block], Real(level_dt), *residuals[block]);
-    });
-  });
-  system.set_program_block_map(block_map);
-}
-#endif
 
 int run(const Config& config) {
-#if POPS_ADC700_PRE_CUTOVER
   AmrSystemConfig native_config;
   native_config.n = config.n;
   native_config.L = 1.0;
@@ -288,43 +225,35 @@ int run(const Config& config) {
   system.set_temporal_relations({2}, {1}, {"integral_only"});
   add_compiled_model(system, "gas", GasModel{Euler{Real(1.4)}, NoSource{}, ZeroElliptic{}},
                      "minmod", "rusanov", "conservative", "euler", 1.4);
-#else
-  AmrSystemConfig<kNativeDimension> native_config;
-  native_config.shape = runtime_config_detail::filled_extent<kNativeDimension>(config.n);
-  native_config.level_count = 1;
-  native_config.transition_ratios.clear();
-  native_config.transition_buffers.clear();
-  native_config.transition_lookaheads.clear();
-  native_config.regrid_every = 0;
-  native_config.distribute_coarse = true;
-  native_config.coarse_max_grid =
-      runtime_config_detail::filled_extent<kNativeDimension>(config.n / 2);
-
-  AmrSystem<kNativeDimension> system(native_config);
-  system.install_block_state_route("gas", "state/gas");
-  add_compiled_model<kNativeDimension>(system, "gas", gas_model<kNativeDimension>(), "minmod",
-                                       "rusanov", "conservative", "euler", 1.4);
-#endif
   system.set_conservative_state("gas", initial_state(config.n));
+
+  const std::string gpu_uuid = assigned_gpu_uuid();
+  const std::string gpu_assignments = gpu_assignments_json(gpu_uuid);
+  const std::string toolchain_receipt_path = required_json_env("POPS_ADC700_TOOLCHAIN_RECEIPT");
+  const std::string toolchain_receipt_sha256 = required_json_env("POPS_ADC700_TOOLCHAIN_RECEIPT_SHA256");
+  const std::string toolchain_receipt_revision = required_json_env("POPS_ADC700_TOOLCHAIN_RECEIPT_REVISION");
+  if (toolchain_receipt_sha256.size() != 64 || toolchain_receipt_revision.size() != 40 ||
+      toolchain_receipt_sha256 != POPS_ADC700_TOOLCHAIN_RECEIPT_SHA256 ||
+      toolchain_receipt_revision != POPS_ADC700_TOOLCHAIN_REVISION)
+    throw std::runtime_error(
+        "ADC-700 toolchain receipt metadata does not match the CMake preflight binding");
+  const std::string toolchain = toolchain_receipt_json();
 
   const double initial_mass = system.mass();
   const int levels = system.n_levels();
   const int patches = system.n_patches();
+  const int coarse_local_boxes = system.coarse_local_boxes();
+  const int coarse_total_boxes = system.coarse_total_boxes();
+  if (coarse_local_boxes <= 0 || coarse_total_boxes <= 0 || coarse_local_boxes > coarse_total_boxes)
+    throw std::runtime_error("ADC-700 native oracle returned an invalid coarse box distribution");
   auto patch_boxes = system.patch_boxes();
-#if !POPS_ADC700_PRE_CUTOVER
   std::sort(patch_boxes.begin(), patch_boxes.end(), patch_less);
   std::string topology_boxes;
-  for (const AmrPatch<kNativeDimension>& patch : patch_boxes) {
+  for (const PatchBox& patch : patch_boxes) {
     if (!topology_boxes.empty())
       topology_boxes += ';';
     topology_boxes += patch_signature(patch);
   }
-#else
-  const std::string topology_boxes;
-#endif
-#if !POPS_ADC700_PRE_CUTOVER
-  install_forward_euler_program(system);
-#endif
 
   for (int step = 0; step < config.warmups; ++step)
     system.step(config.dt);
@@ -362,9 +291,17 @@ int run(const Config& config) {
     std::printf(
         "{\"schema\":\"pops.adc700.program_cutover.measurement.v1\","
         "\"route\":\"%s\",\"revision\":\"%s\",\"execution_space\":\"%s\","
-        "\"mpi_ranks\":%d,\"execution_concurrency\":%d,\"real_bytes\":%zu,"
+        "\"mpi_ranks\":%d,\"mpi_communicator\":\"MPI_COMM_WORLD\","
+        "\"toolchain_build_attested\":true,"
+        "\"execution_concurrency\":%d,\"real_bytes\":%zu,"
         "\"parameters\":{\"n\":%d,\"warmups\":%d,\"measured_steps\":%d,\"dt\":%.17g},"
-        "\"topology\":{\"levels\":%d,\"patches\":%d,\"boxes\":\"%s\"},"
+        "\"topology\":{\"levels\":%d,\"patches\":%d,\"boxes\":\"%s\","
+        "\"distribute_coarse\":true,\"coarse_max_grid\":%d,"
+        "\"coarse_local_boxes\":%d,\"coarse_total_boxes\":%d},"
+        "\"toolchain_receipt\":{\"path\":\"%s\",\"sha256\":\"%s\",\"revision\":\"%s\"},"
+        "\"toolchain\":%s,"
+        "\"gpu\":{\"rank\":%d,\"uuid\":\"%s\"},\"gpu_uuid\":\"%s\","
+        "\"gpu_assignments\":[%s],"
         "\"timing\":{\"seconds\":%.17g,\"per_step_seconds\":%.17g,"
         "\"rank_aggregation\":\"max\",\"device_fence\":\"before_and_after\","
         "\"mpi_barrier\":\"before_and_after\"},"
@@ -374,6 +311,9 @@ int run(const Config& config) {
         POPS_ADC700_ROUTE_NAME, POPS_ADC700_REVISION, Kokkos::DefaultExecutionSpace::name(),
         n_ranks(), Kokkos::DefaultExecutionSpace().concurrency(), sizeof(Real), config.n,
         config.warmups, config.measured_steps, config.dt, levels, patches, topology_boxes.c_str(),
+        config.n / 2, coarse_local_boxes, coarse_total_boxes, toolchain_receipt_path.c_str(),
+        toolchain_receipt_sha256.c_str(), toolchain_receipt_revision.c_str(), toolchain.c_str(),
+        my_rank(), gpu_uuid.c_str(), gpu_uuid.c_str(), gpu_assignments.c_str(),
         seconds, seconds / static_cast<double>(config.measured_steps), final_mass, initial_mass,
         mass_error, checksum, checksum_square, maximum, passed ? "true" : "false", mass_tolerance);
   }
@@ -390,7 +330,7 @@ int main(int argc, char** argv) {
     failed = run(parse_config(argc, argv));
   } catch (const std::exception& error) {
     if (pops::my_rank() == 0)
-      std::fprintf(stderr, "ADC-700 campaign failed: %s\n", error.what());
+      std::fprintf(stderr, "ADC-700 native oracle failed: %s\n", error.what());
     failed = 1;
   }
   const long collective_failure = pops::all_reduce_max(static_cast<long>(failed));
