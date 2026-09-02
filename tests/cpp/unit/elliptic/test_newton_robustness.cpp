@@ -68,8 +68,12 @@ void record_solve_release(void* context) noexcept {
   ++static_cast<SolveOutcomeHookTrace*>(context)->released;
 }
 
-pops::ExecutionLane test_execution_lane() {
-  return pops::ExecutionLane::world("pops.test.newton-robustness");
+const pops::ExecutionLane& test_execution_lane() {
+  // SolveOutcome retains this lane through explicit consumption, so the test authority must outlive
+  // each prepared outcome rather than returning a temporary world view.
+  static const pops::ExecutionLane lane =
+      pops::ExecutionLane::world("pops.test.newton-robustness");
+  return lane;
 }
 
 template <class Ranked, class Value>

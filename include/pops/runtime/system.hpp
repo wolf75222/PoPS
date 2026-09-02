@@ -1212,9 +1212,10 @@ class System {
                                         const std::vector<int>& stored_slots);
   /// @}
   /// Load a generated problem.so and install its compiled time Program. dlopens @p so_path, checks
-  /// its ABI key against this module (fail-loud on mismatch), and calls its pops_install_program(this),
-  /// whose shared facade factory selects the Program execution provider and installs the macro-step
-  /// closure. The .so resolves the seam accessors above from the globally promoted host, while the
+  /// its ABI key against this module (fail-loud on mismatch), and calls its unique v5
+  /// `pops_install_program` entry with a detached host descriptor. The retained preparation image
+  /// selects the Program execution provider and publishes the macro-step closure only after collective
+  /// validation. The .so resolves the seam accessors above from the globally promoted host, while the
   /// package itself stays local so independent semantic artifacts cannot interpose. Mirrors
   /// add_native_block; the .so stays loaded for the process lifetime.
   POPS_EXPORT void install_program(const std::string& so_path);
@@ -1586,7 +1587,7 @@ class System {
   /// malformed sealed state must propagate its error instead of being mistaken for absence.
   [[nodiscard]] POPS_EXPORT bool program_auxiliary_registry_sealed_() const noexcept;
   POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>*
-  program_prepared_auxiliary_consumer_plan_(const std::string& consumer_qid) const;
+  program_prepared_auxiliary_consumer_plan_(std::string_view consumer_qid) const;
   POPS_EXPORT runtime::program::CacheManager<Dim>& program_cache_();
   POPS_EXPORT runtime::program::Profiler& program_profiler_();
   POPS_EXPORT NewtonOptions program_block_newton_options_(int block) const;

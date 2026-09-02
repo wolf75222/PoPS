@@ -13,7 +13,7 @@ void neg_div_named_flux_into(int program_block, field_type& stage_state, field_t
 
   int runtime_block = -1;
   std::optional<Geometry<Dim>> prepared_geometry;
-  std::optional<runtime::multiblock::BoundaryEvaluationPoint> point;
+  runtime::multiblock::BoundaryEvaluationPoint* point = nullptr;
   std::optional<::pops::amr::ClockWindow> interval;
   FluxExpressionRegistry candidate_registry;
   std::vector<std::size_t> candidate_counts;
@@ -36,10 +36,14 @@ void neg_div_named_flux_into(int program_block, field_type& stage_state, field_t
           flux->ghosts()[axis] < 1)
         throw std::invalid_argument("AMR named flux differs from its exact residual layout");
     if (active_maximum != 0) {
-      candidate_registry = active_flux_expressions_;
-      candidate_counts = active_flux_basis_counts_;
-      candidate_identity = next_active_flux_basis_identity_;
-      point.emplace(boundary_evaluation_point(rate_id));
+      if (!static_flux_tables_.bound) {
+        candidate_registry = active_flux_expressions_;
+        candidate_counts = active_flux_basis_counts_;
+        candidate_identity = next_active_flux_basis_identity_;
+      }
+      hot_path_workspace_.require_bound(1, "AMR Program named-flux point");
+      point = std::addressof(hot_path_workspace_.rhs_points.front());
+      write_boundary_evaluation_point_into(*point, rate_id);
       interval.emplace(::pops::amr::ClockWindow{
           {active_level_, point->tick, current_interval_begin_phase_, current_interval_start_time_},
           {active_level_, point->tick, current_interval_end_phase_,
@@ -58,7 +62,9 @@ void neg_div_named_flux_into(int program_block, field_type& stage_state, field_t
     prepare_active_flux_basis_impl_(
         runtime_block, *point, rate_id, FluxBasisProvider::NamedCell, runtime_->topology_epoch(),
         runtime_->materialization_generation(), rhs, nullptr, nullptr, &fluxes, *interval,
-        candidate_registry, candidate_counts, candidate_identity);
+        candidate_registry,
+        static_flux_tables_.bound ? active_flux_basis_counts_ : candidate_counts,
+        static_flux_tables_.bound ? next_active_flux_basis_identity_ : candidate_identity);
 
   std::exception_ptr execution_error;
   try {
@@ -98,7 +104,7 @@ void neg_div_named_flux_into(int program_block, field_type& stage_state, field_t
     throw std::runtime_error("AMR named-flux divergence failed collectively");
   }
 
-  if (active_maximum != 0) {
+  if (active_maximum != 0 && !static_flux_tables_.bound) {
     static_assert(std::is_nothrow_swappable_v<FluxExpressionRegistry>);
     static_assert(std::is_nothrow_swappable_v<std::vector<std::size_t>>);
     active_flux_expressions_.swap(candidate_registry);
@@ -108,7 +114,7 @@ void neg_div_named_flux_into(int program_block, field_type& stage_state, field_t
 }
 
 void apply_projection(int program_block, field_type& detached_candidate) const {
-  const int runtime_block = sys_block(program_block);
+  const int runtime_block = prepared_projection_speed_route_(program_block);
   const int candidate_owner = projection_candidate_owner_(detached_candidate);
   facade_->project_prepared_amr_block_level_state(runtime_block, active_level_, candidate_owner,
                                                   detached_candidate);
@@ -116,7 +122,17 @@ void apply_projection(int program_block, field_type& detached_candidate) const {
 
 Real max_wave_speed(int program_block, const field_type& stage_state) const {
   return facade_->program_prepared_amr_block_level_maximum_speed_(
-      sys_block(program_block), active_level_, stage_state);
+      prepared_projection_speed_route_(program_block), active_level_, stage_state);
+}
+
+[[nodiscard]] int prepared_projection_speed_route_(int program_block) const {
+  if (!projection_speed_routes_bound_ || program_block < 0 ||
+      static_cast<std::size_t>(program_block) >= projection_speed_routes_.size())
+    throw std::logic_error("AMR projection/speed route is not bind-prepared");
+  const int runtime_block = projection_speed_routes_[static_cast<std::size_t>(program_block)];
+  if (runtime_block < 0)
+    throw std::logic_error("AMR projection/speed route is invalid");
+  return runtime_block;
 }
 
 Real hmin() const {
@@ -180,34 +196,46 @@ void commit_many(std::initializer_list<std::pair<field_type*, const field_type*>
   auto& workspace = hot_path_workspace_;
   workspace.require_bound(commits.size(), "AMR Program commit");
   const auto& commit_lane = facade_->prepared_amr_multiblock_hierarchy_().lane();
-  workspace.commit_targets.resize(commits.size());
-  workspace.commit_sources.resize(commits.size());
-  workspace.commit_runtime_blocks.resize(commits.size());
-  workspace.commit_snapshots.resize(commits.size());
-  std::vector<FluxExpression> snapshot_flux_expressions;
-  snapshot_flux_expressions.reserve(commits.size());
+  const bool static_flux_authority = static_flux_tables_.bound;
+  if (static_flux_authority) {
+    // A v5 static table is the complete flux-metadata authority.  Accepted-state publication is
+    // deliberately not a second hot path: the canonical caller must run through
+    // advance_hierarchy(), where detached attempt states and the resident subcycling publisher
+    // already provide the transaction boundary.  Refuse this before taking a field snapshot so a
+    // direct caller cannot mutate either a candidate image or static metadata first.
+    const long local_active_attempt = active_attempt_states_.empty() ? 0L : 1L;
+    const long minimum_active_attempt = all_reduce_min(local_active_attempt, commit_lane);
+    const long maximum_active_attempt = all_reduce_max(local_active_attempt, commit_lane);
+    if (minimum_active_attempt != maximum_active_attempt)
+      throw std::runtime_error("AMR Program static commit activity differs between MPI ranks");
+    if (maximum_active_attempt == 0)
+      throw std::logic_error(
+          "bound AMR Program commit requires advance_hierarchy detached candidate states");
+  }
+
+  // bind() fixes these logical vector sizes to block_capacity.  A commit can only consume that
+  // sealed prefix; resizing here would make a static v5 Program acquire heap storage on its hot
+  // path even though every pointer and rollback image is already resident.
   std::exception_ptr snapshot_error;
   try {
     std::size_t candidate = 0;
     for (const auto& [target, source] : commits) {
       if (target == nullptr || source == nullptr ||
-          std::find(workspace.commit_targets.begin(),
-                    workspace.commit_targets.begin() + candidate,
+          std::find(workspace.commit_targets.begin(), workspace.commit_targets.begin() + candidate,
                     target) != workspace.commit_targets.begin() + candidate)
         throw std::invalid_argument("AMR Program commit has null or duplicate storage");
       require_same_field_contract_(*target, *source, "AMR Program commit");
-      const std::optional<int> runtime_block = authenticated_runtime_block_for_state_target_(*target);
+      const std::optional<int> runtime_block =
+          authenticated_runtime_block_for_state_target_(*target);
       if (!runtime_block)
         throw std::invalid_argument(
             "AMR Program commit target is not an authenticated state carrier");
       workspace.commit_targets[candidate] = target;
       workspace.commit_sources[candidate] = source;
       workspace.commit_runtime_blocks[candidate] = runtime_block;
-      workspace.commit_snapshots[candidate] =
-          &workspace.commit_snapshot(static_cast<std::size_t>(active_level_),
-                                     static_cast<std::size_t>(*runtime_block));
+      workspace.commit_snapshots[candidate] = &workspace.commit_snapshot(
+          static_cast<std::size_t>(active_level_), static_cast<std::size_t>(*runtime_block));
       copy_full_(*source, *workspace.commit_snapshots[candidate]);
-      snapshot_flux_expressions.push_back(active_flux_expression_(*source));
       ++candidate;
     }
   } catch (...) {
@@ -224,10 +252,43 @@ void commit_many(std::initializer_list<std::pair<field_type*, const field_type*>
     throw std::runtime_error("AMR Program commit count differs between MPI ranks");
 
   if (!active_attempt_states_.empty()) {
+    if (static_flux_authority) {
+      std::exception_ptr static_commit_error;
+      try {
+        for (std::size_t candidate = 0; candidate < commits.size(); ++candidate) {
+          if (!is_live_attempt_candidate_(workspace.commit_targets[candidate]))
+            throw std::invalid_argument(
+                "active AMR Program commit target is not a detached group candidate");
+          for (int runtime_block = 0; runtime_block < n_blocks(); ++runtime_block)
+            if (workspace.commit_targets[candidate] ==
+                &facade_->program_prepared_amr_block_state_(runtime_block, active_level_))
+              throw std::invalid_argument(
+                  "active AMR Program commit cannot target an accepted block carrier");
+        }
+      } catch (...) {
+        static_commit_error = std::current_exception();
+      }
+      if (all_reduce_max(static_commit_error ? 1L : 0L, commit_lane) != 0) {
+        if (commit_lane.size() == 1 && static_commit_error)
+          std::rethrow_exception(static_commit_error);
+        throw std::runtime_error("active AMR Program static commit failed collectively");
+      }
+      for (std::size_t candidate = 0; candidate < commits.size(); ++candidate)
+        copy_full_(*workspace.commit_snapshots[candidate], *workspace.commit_targets[candidate]);
+      // static_flux_tables_ is sealed at installation; no registry copy, map insertion, or
+      // identity-string update is permitted while the candidate is active.
+      return;
+    }
+
+    std::vector<FluxExpression> snapshot_flux_expressions;
+    snapshot_flux_expressions.reserve(commits.size());
     std::map<const field_type*, FluxExpression> expression_candidate;
     std::exception_ptr active_commit_error;
     try {
       expression_candidate = active_flux_expressions_;
+      for (std::size_t candidate = 0; candidate < commits.size(); ++candidate)
+        snapshot_flux_expressions.push_back(
+            active_flux_expression_(*workspace.commit_sources[candidate]));
       for (std::size_t candidate = 0; candidate < commits.size(); ++candidate) {
         if (!is_live_attempt_candidate_(workspace.commit_targets[candidate]))
           throw std::invalid_argument(
@@ -298,7 +359,7 @@ void commit_many(std::initializer_list<std::pair<field_type*, const field_type*>
       const int runtime_block = sys_block(program_block);
       workspace.publication_program_candidates[static_cast<std::size_t>(program_block)] =
           &workspace.publication_candidates.at(static_cast<std::size_t>(active_level_) *
-                                               workspace.block_capacity +
+                                                   workspace.block_capacity +
                                                static_cast<std::size_t>(runtime_block));
     }
     facade_->publish_prepared_amr_program_candidates(

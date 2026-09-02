@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -46,7 +47,79 @@ def test_runtime_authority_manifest_is_closed_and_source_owned():
     assert errors == []
     assert data["issues"] == ["ADC-700", "ADC-702", "ADC-720"]
     assert data["deferred"] == []
-    assert len(data["check"]) == 58
+    assert len(data["check"]) == 73
+    corner_rows = [
+        row
+        for row in data["check"]
+        if row.get("test_regex") == r"^test_mpi_amr_program_3d_corner_authority_np8$"
+    ]
+    assert len(corner_rows) == 1
+    assert corner_rows[0]["dimensions"] == [3]
+    assert sum("dimensions" in row for row in data["check"]) == 4
+    assert {
+        (
+            row["polarity"],
+            row["target"],
+            row["backend"],
+            tuple(row.get("dimensions", ())),
+            row["test_regex"],
+        )
+        for row in data["check"]
+        if row["requirement"] == "cell_local_ordinary" and row["kind"] == "ctest"
+    } == {
+        (
+            "positive",
+            "cell_local_ordinary@test_mpi_cell_temporal_program",
+            "mpi",
+            (1, 2, 3),
+            r"^test_mpi_cell_temporal_program_np2$",
+        ),
+        (
+            "positive",
+            "cell_local_ordinary@test_mpi_cell_temporal_program_multibox",
+            "mpi",
+            (1, 2, 3),
+            r"^test_mpi_cell_temporal_program_multibox_np2$",
+        ),
+        (
+            "positive",
+            "cell_local_ordinary@test_mpi_cell_temporal_program_collective_rollback",
+            "mpi",
+            (1, 2, 3),
+            r"^test_mpi_cell_temporal_program_collective_rollback_np2$",
+        ),
+        (
+            "positive",
+            "cell_local_ordinary@test_cell_temporal_program_route",
+            "serial",
+            (),
+            r"^test_cell_temporal_program_route\.direct_prepared_subengine_executes_one_exact_algorithm_in_every_dimension$",
+        ),
+        (
+            "refusal",
+            "cell_local_ordinary@test_amr_system_contract",
+            "serial",
+            (),
+            r"^test_amr_system_contract\.RefusesCellLocalFluxTablesBeforeResourceMaterialization$",
+        ),
+        (
+            "refusal",
+            "cell_local_ordinary@test_mpi_cell_temporal_program_refusal",
+            "mpi",
+            (),
+            r"^test_mpi_cell_temporal_program_refusal_np2$",
+        ),
+    } == {
+        (
+            row["polarity"],
+            row["target"],
+            row["backend"],
+            tuple(row.get("dimensions", ())),
+            row["test_regex"],
+        )
+        for row in data["check"]
+        if row["requirement"] == "cell_local_ordinary" and row["kind"] == "ctest"
+    }
     assert {row["issue"] for row in data["check"]} == set(data["issues"])
     assert {row["backend"] for row in data["check"]} == {"serial", "mpi", "openmp"}
     assert all(row["allocation"] in {"none", "required"} for row in data["check"])
@@ -62,6 +135,7 @@ def test_runtime_authority_manifest_is_closed_and_source_owned():
         "solve_outcome",
         "transaction_authority",
         "prepared_installation",
+        "resource_plan_ceiling",
         "lowering_refusal",
     }
     assert {
@@ -96,6 +170,62 @@ def test_runtime_authority_manifest_is_closed_and_source_owned():
         (
             "positive",
             r"^AmrTransactionAuthority\.FieldCandidateSavepointAdoptsForwardTopologyWithoutPostSealAllocation$",
+        ),
+    }
+    assert {
+        (row["polarity"], row["target"], row["test_regex"])
+        for row in data["check"]
+        if row["requirement"] == "resource_plan_ceiling"
+    } == {
+        (
+            "positive",
+            "resource_plan_ceiling@test_nd_flux_ledger",
+            r"^test_nd_flux_ledger\.interface_ledger_resident_footprint_covers_dense_and_hot_carriers$",
+        ),
+        (
+            "refusal",
+            "resource_plan_ceiling@test_program_host_descriptor",
+            r"^PreparedProgramInstallation\.SealsAnEmptyValuePlanWithHostCapacityExactly$",
+        ),
+        (
+            "positive",
+            "resource_plan_ceiling@test_generated_amr_system_block",
+            r"^GeneratedAmrSystemBlock\.ForwardSubcyclingStorageCeilingAcceptsConfiguredAPlusB$",
+        ),
+        (
+            "refusal",
+            "resource_plan_ceiling@test_generated_amr_system_block",
+            r"^GeneratedAmrSystemBlock\.ForwardSubcyclingStorageCeilingRejectsOverflowWithoutClobber$",
+        ),
+        (
+            "positive",
+            "resource_plan_ceiling@test_generated_amr_system_block",
+            r"^test_generated_amr_system_block_np2$",
+        ),
+    }
+    amr_transaction_hot_path_rows = {
+        (row["polarity"], row["target"], row["test_regex"])
+        for row in data["check"]
+        if row["target"] == "hot_path_allocation@test_amr_transaction_authority"
+    }
+    # Keep the currently authenticated CTest witnesses mandatory while allowing this source-owned
+    # authority suite to grow with additional exact allocation proofs.  The runner still validates
+    # every extra row's target, source ownership, and exact selector.
+    assert amr_transaction_hot_path_rows >= {
+        (
+            "positive",
+            "hot_path_allocation@test_amr_transaction_authority",
+            r"^AmrTransactionAuthority\.AllCancelStaticFluxBasisIsHotAllocationFreeAndRetrySafeAfterResidentWriteFailure$",
+        ),
+        (
+            "refusal",
+            "hot_path_allocation@test_amr_transaction_authority",
+            r"^AmrTransactionAuthority\.StaticFluxCommitOutsideAdvanceHierarchyRefusesBeforeSnapshotOrMutation$",
+        ),
+        (
+            "positive",
+            "hot_path_allocation@test_amr_transaction_authority",
+            r"^AmrTransactionAuthority\.RefinedProgramCouplingIsHotAllocationFreeAndRollbackExactWithBoundedDispatch$",
         ),
     }
     assert {
@@ -151,6 +281,10 @@ def test_runtime_authority_manifest_is_closed_and_source_owned():
         (
             "refusal",
             r"^NewtonRobustnessTest\.publication_layout_failure_does_not_consume_the_outcome$",
+        ),
+        (
+            "refusal",
+            r"^StepAttemptRejectedHeaderOnly\.MailboxRejectsNonCanonicalRawRecordsBeforeAdoption$",
         ),
     }
     assert {
@@ -273,9 +407,257 @@ def test_runtime_authority_cli_is_closed_and_lists_the_mpi_targets():
 
     runner = _load_runner()
     data = tomllib.loads(MANIFEST.read_text(encoding="utf-8"))
-    required_targets = runner._required_ctest_targets(data["check"], backend="mpi")
+    required_targets = runner._required_ctest_targets(data["check"], backend="mpi", dimension=2)
     assert "test_program_execution_services_contract" in required_targets
     assert "test_mpi_cell_temporal_program_refusal" in required_targets
+
+
+def test_runtime_authority_dimension_qualification_filters_mpi_rows_and_targets():
+    runner = _load_runner()
+    data = tomllib.loads(MANIFEST.read_text(encoding="utf-8"))
+
+    selected = {
+        dimension: runner._selected_checks(
+            data["check"], backend="mpi", dimension=dimension
+        )
+        for dimension in (1, 2, 3)
+    }
+    assert len(selected[1]) == len(selected[2]) == len(selected[3]) - 1
+
+    corner_target = "test_mpi_amr_program_3d_corner_authority"
+    assert corner_target not in runner._required_ctest_targets(
+        data["check"], backend="mpi", dimension=1
+    )
+    assert corner_target in runner._required_ctest_targets(
+        data["check"], backend="mpi", dimension=3
+    )
+
+
+def test_runtime_authority_pins_all_cell_temporal_mpi_positive_selectors_in_every_dimension():
+    runner = _load_runner()
+    data = tomllib.loads(MANIFEST.read_text(encoding="utf-8"))
+    rows = {
+        row["target"].split("@", 1)[1]: row
+        for row in data["check"]
+        if row["kind"] == "ctest"
+        and row["backend"] == "mpi"
+        and row["requirement"] == "cell_local_ordinary"
+    }
+    expected_positive = {
+        "test_mpi_cell_temporal_program": "^test_mpi_cell_temporal_program_np2$",
+        "test_mpi_cell_temporal_program_multibox": "^test_mpi_cell_temporal_program_multibox_np2$",
+        "test_mpi_cell_temporal_program_collective_rollback": (
+            "^test_mpi_cell_temporal_program_collective_rollback_np2$"
+        ),
+    }
+    assert {
+        name: (row["polarity"], row["dimensions"], row["test_regex"])
+        for name, row in rows.items()
+        if name in expected_positive
+    } == {
+        name: ("positive", [1, 2, 3], selector)
+        for name, selector in expected_positive.items()
+    }
+
+    refusal = rows["test_mpi_cell_temporal_program_refusal"]
+    assert refusal["polarity"] == "refusal"
+    assert refusal["test_regex"] == "^test_mpi_cell_temporal_program_refusal_np2$"
+    assert "dimensions" not in refusal
+    assert data["deferred"] == []
+
+    suites = runner._cpp_suites()
+    for target, selector in expected_positive.items():
+        suite = suites[target]
+        assert suite["sources"] == [
+            "tests/cpp/integration/mpi/test_mpi_cell_temporal_program.cpp"
+        ]
+        assert suite["labels"] == ["backend", "mpi", "medium"]
+        assert suite["mpi_nproc"] == [2]
+        assert runner._registered_ctest_cases(target, suite) == {target + "_np2"}
+
+    expected_targets = set(expected_positive)
+    for dimension in (1, 2, 3):
+        selected = runner._selected_checks(
+            data["check"], backend="mpi", dimension=dimension
+        )
+        selected_rows = {
+            row["target"].split("@", 1)[1]: row
+            for row in selected
+            if row["kind"] == "ctest"
+            and row["backend"] == "mpi"
+            and row["requirement"] == "cell_local_ordinary"
+            and row["polarity"] == "positive"
+        }
+        assert set(selected_rows) == expected_targets
+        assert {
+            target: (row["dimensions"], row["test_regex"])
+            for target, row in selected_rows.items()
+        } == {
+            target: ([1, 2, 3], selector)
+            for target, selector in expected_positive.items()
+        }
+        assert expected_targets <= set(
+            runner._required_ctest_targets(
+                data["check"], backend="mpi", dimension=dimension
+            )
+        )
+
+
+def test_runtime_authority_check_only_is_source_only_and_does_not_require_a_dimension(
+    monkeypatch,
+):
+    runner = _load_runner()
+    monkeypatch.delenv("POPS_NATIVE_DIM", raising=False)
+
+    assert runner.main(["--check-only"]) == 0
+
+
+def test_runtime_authority_selected_dimension_accepts_explicit_or_authenticated_environment_value(
+    monkeypatch,
+):
+    runner = _load_runner()
+    monkeypatch.delenv("POPS_NATIVE_DIM", raising=False)
+
+    assert runner._selected_native_dimension(2) == 2
+
+    monkeypatch.setenv("POPS_NATIVE_DIM", "3")
+    assert runner._selected_native_dimension(None) == 3
+    with pytest.raises(ValueError, match="conflicting native dimensions"):
+        runner._selected_native_dimension(1)
+
+    monkeypatch.setenv("POPS_NATIVE_DIM", "4")
+    with pytest.raises(ValueError, match="POPS_NATIVE_DIM"):
+        runner._selected_native_dimension(None)
+
+
+def test_runtime_authority_composed_ctest_path_filters_rows_and_propagates_dimension(
+    monkeypatch, tmp_path
+):
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    build_dir = tmp_path / "build"
+    manifest = tmp_path / "tests/gates/m3.toml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("", encoding="utf-8")
+
+    calls = []
+
+    class FakeModule:
+        @staticmethod
+        def validate_manifest(path):
+            assert path == manifest
+            return {
+                "check": [
+                    {"kind": "ctest", "target": "all", "test_regex": "all"},
+                    {
+                        "kind": "ctest",
+                        "target": "dim1",
+                        "test_regex": "dim1",
+                        "dimensions": [1],
+                    },
+                    {
+                        "kind": "ctest",
+                        "target": "dim3",
+                        "test_regex": "dim3",
+                        "dimensions": [3],
+                    },
+                ]
+            }, []
+
+        @staticmethod
+        def _run_ctest(build, target, selector):
+            calls.append((build, target, selector, os.environ.get("POPS_NATIVE_DIM")))
+
+    monkeypatch.setattr(runner, "_load_composed_runner", lambda *_args: FakeModule)
+    environment = {"POPS_NATIVE_DIM": "1", "POPS_TEST_COMPOSED": "yes"}
+
+    runner._run_composed_gate(
+        "tests/gates/m3.toml",
+        "scripts/run_m3_gate.py",
+        build_dir=build_dir,
+        mpi_exec="mpiexec",
+        environment=environment,
+        python_only=False,
+        ctest_only=True,
+        dimension=1,
+    )
+
+    assert calls == [
+        (build_dir, "all", "all", "1"),
+        (build_dir, "dim1", "dim1", "1"),
+    ]
+    assert os.environ.get("POPS_TEST_COMPOSED") is None
+
+
+def test_runtime_authority_composed_m3_receives_explicit_dimension(monkeypatch, tmp_path):
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    manifest = tmp_path / "tests/gates/m3.toml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("", encoding="utf-8")
+    calls = []
+
+    class FakeModule:
+        @staticmethod
+        def validate_manifest(path):
+            assert path == manifest
+            return {"check": []}, []
+
+        @staticmethod
+        def main(argv):
+            calls.append((argv, os.environ.get("POPS_NATIVE_DIM")))
+            return 0
+
+    monkeypatch.setattr(runner, "_load_composed_runner", lambda *_args: FakeModule)
+    runner._run_composed_gate(
+        "tests/gates/m3.toml",
+        "scripts/run_m3_gate.py",
+        build_dir=tmp_path / "build",
+        mpi_exec="mpiexec",
+        environment={"POPS_NATIVE_DIM": "2"},
+        python_only=True,
+        ctest_only=False,
+        dimension=2,
+    )
+
+    assert calls == [
+        (
+            [
+                "--manifest",
+                str(manifest),
+                "--build-dir",
+                str(tmp_path / "build"),
+                "--dim",
+                "2",
+                "--mpi-exec",
+                "mpiexec",
+                "--python-only",
+            ],
+            "2",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("replacement", "message"),
+    (
+        ("dimensions = 3", "dimensions must be a list"),
+        ("dimensions = []", "dimensions must be non-empty"),
+        ("dimensions = [true]", "bool is not accepted"),
+        ("dimensions = [0]", "only supported values"),
+        ("dimensions = [3, 3]", "dimensions must contain unique values"),
+        ("dimensions = [3, 1]", "canonical sorted order"),
+    ),
+)
+def test_runtime_authority_rejects_invalid_dimension_qualifier(
+    tmp_path, replacement, message
+):
+    runner = _load_runner()
+    path = _mutated_manifest(tmp_path, "dimensions = [3]", replacement)
+
+    _data, errors = runner.audit_manifest(path)
+
+    assert any(message in error for error in errors)
 
 
 def test_runtime_authority_rejects_a_deferred_row(tmp_path):
@@ -327,6 +709,51 @@ def test_runtime_authority_rejects_lowering_selector_drift(tmp_path):
     )
     _data, errors = runner.audit_manifest(path)
     assert any("lowering_refusal must pin exactly" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("requirement", "old", "new"),
+    (
+        (
+            "legacy_context_barrier",
+            "tests/python/architecture/test_program_only_temporal_facades.py::test_system_temporal_facades_dispatch_only_through_an_installed_program",
+            "tests/python/architecture/test_program_only_temporal_facades.py::test_ssprk_semantics_have_only_typed_python_program_authority",
+        ),
+        (
+            "legacy_symbol_barrier",
+            "tests/python/architecture/test_no_legacy_runtime_routes.py::test_program_has_one_runtime_branch_spelling",
+            "tests/python/architecture/test_program_only_temporal_facades.py::test_ssprk_semantics_have_only_typed_python_program_authority",
+        ),
+        (
+            "legacy_fragment_barrier",
+            "tests/python/architecture/test_amr_program_support_parity.py::test_context_include_parser_authenticates_both_delimiters_and_hidden_fragments",
+            "tests/python/architecture/test_program_only_temporal_facades.py::test_ssprk_semantics_have_only_typed_python_program_authority",
+        ),
+        (
+            "pending_marker_barrier",
+            "tests/python/architecture/test_amr_program_support_parity.py::test_parser_finds_only_explicit_known_deferrals",
+            "tests/python/architecture/test_program_only_temporal_facades.py::test_ssprk_semantics_have_only_typed_python_program_authority",
+        ),
+    ),
+)
+def test_runtime_authority_rejects_semantic_barrier_nodeid_substitution(
+    tmp_path, requirement, old, new
+):
+    runner = _load_runner()
+    path = _mutated_manifest(tmp_path, old, new)
+    _data, errors = runner.audit_manifest(path)
+    assert any("%s must pin exactly" % requirement in error for error in errors)
+
+
+def test_runtime_authority_rejects_semantic_barrier_polarity_swap(tmp_path):
+    runner = _load_runner()
+    path = _mutated_manifest(
+        tmp_path,
+        'requirement = "legacy_context_barrier"\npolarity = "positive"',
+        'requirement = "legacy_context_barrier"\npolarity = "refusal"',
+    )
+    _data, errors = runner.audit_manifest(path)
+    assert any("legacy_context_barrier must pin each polarity" in error for error in errors)
 
 
 def test_runtime_authority_rejects_a_contract_wildcard_selector(tmp_path):
@@ -382,8 +809,28 @@ def test_runtime_authority_source_barriers_reject_retired_contexts(monkeypatch, 
             "retired context names",
         ),
         (
+            "include/pops/runtime/program/detail/runtime_context.hpp",
+            "struct RuntimeProgramContext {};\n",
+            "retired context names",
+        ),
+        (
             "src/runtime/amr/legacy.cpp",
             "extern void pops_install_program_amr();\n",
+            "retired runtime symbols",
+        ),
+        (
+            "src/runtime/amr/legacy_suffix.cpp",
+            "extern void pops_install_program_amr_v5_system();\n",
+            "retired runtime symbols",
+        ),
+        (
+            "src/runtime/amr/legacy_version_prefix.cpp",
+            "extern void pops_install_program_v5_system_amr_v7();\n",
+            "retired runtime symbols",
+        ),
+        (
+            "src/runtime/system/legacy_qualified_install.cpp",
+            "extern void pops_install_program_system_v5();\n",
             "retired runtime symbols",
         ),
         (
@@ -397,8 +844,54 @@ def test_runtime_authority_source_barriers_reject_retired_contexts(monkeypatch, 
             "forbids AMR runtime fragments",
         ),
         (
+            "src/runtime/amr/legacy.inc",
+            "// retired implementation fragment outside the program directory\n",
+            "forbids AMR runtime fragments",
+        ),
+        (
             "src/runtime/amr/fallback.cpp",
             "AmrRuntime<2>::step(dt);\n",
+            "AmrRuntime::step",
+        ),
+        (
+            "src/runtime/amr/legacy_engine.cpp",
+            "AmrEngine<2>::step_level(dt);\n",
+            "AmrRuntime::step",
+        ),
+        (
+            "src/runtime/amr/legacy_runtime_alias.cpp",
+            "Runtime<2>::advance_macro_step(dt);\n",
+            "AmrRuntime::step",
+        ),
+        (
+            "src/runtime/amr/legacy_level_engine_alias.cpp",
+            "LevelRuntime::step_level(dt);\n",
+            "AmrRuntime::step",
+        ),
+        (
+            "src/runtime/amr/legacy_level_runtime.cpp",
+            "amr_level_runtime->advance_level(dt);\n",
+            "AmrRuntime::step",
+        ),
+        (
+            "src/runtime/amr/legacy_runtime_member.cpp",
+            "amr_runtime_.step_level(dt);\n",
+            "AmrRuntime::step",
+        ),
+        (
+            "src/runtime/amr/legacy_subcycling.cpp",
+            "subcycling_engine.step(dt);\n",
+            "AmrRuntime::step",
+        ),
+        (
+            "src/runtime/amr/legacy_engine.cpp",
+            "engine.step(dt);\n",
+            "AmrRuntime::step",
+        ),
+        (
+            "src/runtime/amr/legacy_runtime_alias.cpp",
+            "using LegacyRuntime = pops::runtime::amr::AmrRuntime<2>;\n"
+            "LegacyRuntime::advance_macro_step(dt);\n",
             "AmrRuntime::step",
         ),
         (
@@ -417,14 +910,166 @@ def test_runtime_authority_source_barriers_reject_retired_contexts(monkeypatch, 
             "legacy Program install ABI",
         ),
         (
+            "python/pops/runtime/abi.py",
+            "kProgramInstallAbiVersion = 4\n",
+            "legacy Program install ABI",
+        ),
+        (
             "include/pops/runtime/program/checkpoint.hpp",
             'const char* old = "POPSAST4";\n',
             "legacy checkpoint/magic",
         ),
         (
+            "include/pops/runtime/amr/checkpoint_legacy.hpp",
+            "constexpr int checkpoint_version = 8;\n",
+            "legacy checkpoint/magic",
+        ),
+        (
+            "include/pops/runtime/amr/checkpoint_legacy.hpp",
+            "constexpr int amr_checkpoint_version = 11;\n",
+            "legacy checkpoint/magic",
+        ),
+        (
+            "include/pops/runtime/amr/checkpoint_legacy.hpp",
+            "const char canonical_magic[] = {'P', 'O', 'P', 'S', 'A', 'N', 'D', '5'};\n"
+            "const char old_magic[] = {'P', 'O', 'P', 'S', 'A', 'N', 'D', '4'};\n",
+            "legacy checkpoint/magic",
+        ),
+        (
+            "src/runtime/amr/parallel_table.cpp",
+            "std::unordered_map<int, PreparedProgram> parallel_program_table;\n",
+            "parallel runtime authority table",
+        ),
+        (
+            "src/runtime/amr/parallel_dispatch.cpp",
+            "void dispatch_parallel_program();\n",
+            "parallel runtime authority dispatch",
+        ),
+        (
+            "src/runtime/amr/generic_program_dispatch_table.cpp",
+            "ProgramDispatchTable table;\n",
+            "secondary Program runtime authority table",
+        ),
+        (
+            "src/runtime/amr/generic_program_table.cpp",
+            "int program_table;\n",
+            "secondary Program runtime authority table",
+        ),
+        (
+            "src/runtime/amr/generic_program_dispatch.cpp",
+            "void program_dispatch();\n",
+            "secondary Program runtime authority dispatch",
+        ),
+        (
+            "src/runtime/amr/generic_program_dispatch_variant.cpp",
+            "void program_dispatch_v2();\n",
+            "secondary Program runtime authority dispatch",
+        ),
+        (
+            "src/runtime/amr/generic_program_dispatch_table_variant.cpp",
+            "ProgramDispatchTable_v2 table;\n",
+            "secondary Program runtime authority table",
+        ),
+        (
+            "src/runtime/amr/cell_local_installer.cpp",
+            "void install_program_cell_local();\n",
+            "cell-local installer",
+        ),
+        (
+            "python/pops/runtime/cell_local_installer.py",
+            "def install_program_cell_local():\n    pass\n",
+            "cell-local installer",
+        ),
+        (
+            "src/runtime/amr/cell_program_installer.cpp",
+            "void pops_install_program_cell();\n",
+            "cell-local installer",
+        ),
+        (
+            "src/runtime/amr/cell_temporal_installer.cpp",
+            "void pops_install_cell_temporal();\n",
+            "cell-local installer",
+        ),
+        (
+            "src/runtime/amr/cell_temporal_installer.cpp",
+            "void install_cell_temporal();\n",
+            "cell-local installer",
+        ),
+        (
+            "src/runtime/amr/cell_temporal_installer.cpp",
+            "void register_cell_temporal_amr();\n",
+            "cell-local installer",
+        ),
+        (
+            "src/runtime/amr/cell_temporal_variant.cpp",
+            "void install_cell_temporal_cuda_amr_v2();\n",
+            "cell-local installer",
+        ),
+        (
+            "src/runtime/amr/cell_program_installer.cpp",
+            "void install_program_cell();\n",
+            "cell-local installer",
+        ),
+        (
+            "src/runtime/amr/cell_program_variant.cpp",
+            "void register_program_cell_backend_v2();\n",
+            "cell-local installer",
+        ),
+        (
+            "src/runtime/amr/amr_program_installer.cpp",
+            "void install_program_amr_v2();\n",
+            "retired Program AMR installer route(s)",
+        ),
+        (
             "include/pops/runtime/program/installer.hpp",
             "void pops_install_field_boundaries_amr();\n",
             "retired split installers",
+        ),
+        (
+            "include/pops/runtime/program/legacy_split.hpp",
+            "void pops_program_route_manifest();\n"
+            "void pops_program_dt_bound();\n"
+            "void pops_install_field_boundaries();\n",
+            "retired runtime symbols",
+        ),
+        (
+            "include/pops/runtime/program/legacy_split_variant.hpp",
+            "void pops_program_route_manifest_v7();\n"
+            "void pops_program_dt_bound_system();\n"
+            "void pops_install_field_boundaries_amr();\n",
+            "retired runtime symbols",
+        ),
+        (
+            "include/pops/runtime/program/legacy_short_split_variant.hpp",
+            "void pops_program_routes();\n"
+            "void pops_program_dt_cuda_amr_v2();\n"
+            "void pops_program_boundaries_system();\n"
+            "void pops_install_program_boundaries_amr();\n",
+            "retired runtime symbols",
+        ),
+        (
+            "include/pops/runtime/program/legacy_generic_program_amr.hpp",
+            "void pops_program_flux_amr_v2();\n"
+            "void pops_register_program_flux_amr();\n",
+            "retired runtime symbols",
+        ),
+        (
+            "include/pops/runtime/program/legacy_split_multi_suffix.hpp",
+            "void pops_program_route_manifest_amr_v7();\n"
+            "void pops_program_route_manifest_cuda_amr();\n"
+            "void pops_program_dt_bound_v2_system();\n"
+            "void pops_program_dt_bound_generated_cuda_amr();\n"
+            "void pops_install_field_boundaries_v3_amr();\n"
+            "void pops_register_program_provider_routes_uniform_v4();\n"
+            "void pops_program_route_manifest_cuda_legacy();\n"
+            "void pops_program_dt_bound_backend_v2();\n"
+            "void pops_install_field_boundaries_legacy_backend();\n",
+            "retired runtime symbols",
+        ),
+        (
+            "include/pops/runtime/program/legacy_program_install_variant.hpp",
+            "void pops_install_program_cuda_amr_v5();\n",
+            "retired runtime symbols",
         ),
         (
             "src/runtime/system/system_program.cpp",
@@ -473,20 +1118,192 @@ def test_runtime_authority_source_barriers_ignore_comments_and_docstrings(monkey
     assert errors == []
 
 
+def test_runtime_authority_allows_candidate_owned_generated_step(monkeypatch, tmp_path):
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    path = _write_synthetic_source(
+        tmp_path,
+        "src/runtime/amr/generated_program_candidate.cpp",
+        "void generated_program_candidate(ProgramCandidateState* state, double dt) {\n"
+        "  state->step(dt);\n"
+        "  context.advance_same_level_cell_temporal(dt);\n"
+        "}\n",
+    )
+    errors: list[str] = []
+    runner._scan_production_barriers(errors, (path,))
+    assert errors == []
+
+
+def test_runtime_authority_allows_candidate_owned_generated_level_authority_step(
+    monkeypatch, tmp_path
+):
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    path = _write_synthetic_source(
+        tmp_path,
+        "src/runtime/amr/generated_level_program_candidate.cpp",
+        "void generated_level_program_candidate(int level, double dt) {\n"
+        "  _PopsAmrLevelProgramAuthority::programs.at(level).step(dt);\n"
+        "}\n",
+    )
+    errors: list[str] = []
+    runner._scan_production_barriers(errors, (path,))
+    assert errors == []
+
+
+def test_runtime_authority_allows_the_canonical_program_dispatch(monkeypatch, tmp_path):
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    path = _write_synthetic_source(
+        tmp_path,
+        "src/runtime/amr/canonical_program_dispatch.cpp",
+        "void advance(ProgramRuntimeState& program, double dt) {\n"
+        "  program.dispatch_cadence_step(time, macro_step, dt, tag);\n"
+        "}\n",
+    )
+    errors: list[str] = []
+    runner._scan_production_barriers(errors, (path,))
+    assert errors == []
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    (
+        (
+            "def legacy(amr_engine, dt):\n"
+            "    amr_engine.step_level(dt)\n",
+            True,
+        ),
+        (
+            "def legacy(engine, dt):\n"
+            "    engine.step(dt)\n",
+            True,
+        ),
+        (
+            "def legacy(runtime, dt):\n"
+            "    runtime.step(dt)\n",
+            True,
+        ),
+        (
+            "def legacy(engine, dt):\n"
+            "    legacy_runtime = engine\n"
+            "    legacy_runtime.advance_level(dt)\n",
+            True,
+        ),
+        (
+            "def generated(candidate, dt):\n"
+            "    candidate.step(dt)\n",
+            False,
+        ),
+        (
+            "def documentation():\n"
+            "    return 'amr_engine.step_level(dt)'\n",
+            False,
+        ),
+    ),
+)
+def test_runtime_authority_scopes_python_amr_step_bypass_to_engine_names(
+    monkeypatch, tmp_path, source, expected
+):
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    path = _write_synthetic_source(
+        tmp_path,
+        "python/pops/runtime/amr_step_scope.py",
+        source,
+    )
+    errors: list[str] = []
+    runner._scan_production_barriers(errors, (path,))
+    assert any("AmrRuntime::step" in error for error in errors) is expected
+
+
+def test_runtime_authority_allows_only_the_audited_python_program_facade_step(
+    monkeypatch, tmp_path
+):
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    path = _write_synthetic_source(
+        tmp_path,
+        "python/pops/runtime/_cadence_install.py",
+        "def step_adaptive(engine, cfl):\n"
+        '    """Advance through the installed Program."""\n'
+        "    dt = float(cfl)\n"
+        "    engine.step(dt)\n",
+    )
+    errors: list[str] = []
+    runner._scan_production_barriers(errors, (path,))
+    assert errors == []
+
+    path.write_text(
+        "def step_adaptive(engine, cfl):\n"
+        '    """Advance through the installed Program."""\n'
+        "    dt = float(cfl)\n"
+        "    engine.step(cfl)\n",
+        encoding="utf-8",
+    )
+    errors = []
+    runner._scan_production_barriers(errors, (path,))
+    assert any("AmrRuntime::step" in error for error in errors)
+
+
+def test_runtime_authority_allows_non_authority_near_miss_names(monkeypatch, tmp_path):
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    path = _write_synthetic_source(
+        tmp_path,
+        "src/runtime/amr/generated_helpers.cpp",
+        "struct ProgramDispatchTableOwned {};\n"
+        "void program_dispatcher();\n"
+        "struct ProgramDispatchTableCandidate {};\n"
+        "void program_dispatch_candidate();\n"
+        "void install_program_cellular();\n"
+        "void pops_programmer_flux_amr();\n"
+        "void register_provider_routes_amr();\n",
+    )
+    neutral_context = _write_synthetic_source(
+        tmp_path,
+        "include/pops/runtime/program/runtime_program_contextual.hpp",
+        "",
+    )
+    errors: list[str] = []
+    runner._scan_production_barriers(errors, (path, neutral_context))
+    assert errors == []
+
+
 def test_runtime_authority_ignores_native_brick_abi_symbols(monkeypatch, tmp_path):
     runner = _load_runner()
     monkeypatch.setattr(runner, "ROOT", tmp_path)
     path = _write_synthetic_source(
         tmp_path,
         "src/runtime/amr/native_brick.cpp",
-        "extern void pops_install_native_amr();\n"
-        "extern void pops_register_provider_routes_amr();\n"
-        "extern void pops_brick_install_amr_v5();\n"
-        "extern void external_install_amr();\n",
+        "\n".join(
+            [
+                "extern void pops_install_native_amr();",
+                "extern void pops_register_provider_routes_amr();",
+                "extern void external_install_amr();",
+                *("extern void %s();" % symbol for symbol in runner.NATIVE_BRICK_ABI_SYMBOLS),
+                "",
+            ]
+        ),
     )
     errors: list[str] = []
     runner._scan_production_barriers(errors, (path,))
     assert errors == []
+
+
+def test_runtime_authority_rejects_an_unallowlisted_brick_looking_program_route(
+    monkeypatch, tmp_path
+):
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    path = _write_synthetic_source(
+        tmp_path,
+        "src/runtime/amr/brick_looking_program_route.cpp",
+        "extern void pops_brick_program_amr_v2();\n",
+    )
+    errors: list[str] = []
+    runner._scan_production_barriers(errors, (path,))
+    assert any("retired runtime symbols" in error for error in errors)
 
 
 def test_runtime_authority_rejects_each_program_amr_abi_symbol(monkeypatch, tmp_path):
@@ -508,17 +1325,198 @@ def test_runtime_authority_rejects_each_program_amr_abi_symbol(monkeypatch, tmp_
     assert all(token in symbol_errors[0] for token in runner.LEGACY_PROGRAM_AMR_SYMBOL_TOKENS)
 
 
-def test_runtime_authority_rejects_retired_context_filenames(monkeypatch, tmp_path):
+def test_runtime_authority_rejects_unversioned_and_targeted_program_split_abi_variants(
+    monkeypatch, tmp_path
+):
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    variants = (
+        *runner.LEGACY_PROGRAM_SPLIT_SYMBOL_TOKENS,
+        "pops_program_route_manifest_amr",
+        "pops_program_dt_bound_v7",
+        "pops_install_field_boundaries_system",
+        "pops_register_program_provider_routes_amr",
+        "pops_program_route_manifest_amr_v7",
+        "pops_program_route_manifest_cuda_amr",
+        "pops_program_dt_bound_v2_system",
+        "pops_program_dt_bound_generated_cuda_amr",
+        "pops_install_field_boundaries_v3_amr",
+        "pops_register_program_provider_routes_uniform_v4",
+        "pops_program_route_manifest_cuda_legacy",
+        "pops_program_dt_bound_backend_v2",
+        "pops_install_field_boundaries_legacy_backend",
+    )
+    path = _write_synthetic_source(
+        tmp_path,
+        "python/pops/codegen/legacy_program_split_variants.py",
+        "\n".join("SYMBOL_%d = %r" % (index, token) for index, token in enumerate(variants))
+        + "\n",
+    )
+    errors: list[str] = []
+    runner._scan_production_barriers(errors, (path,))
+    symbol_errors = [error for error in errors if "retired runtime symbols" in error]
+    assert len(symbol_errors) == 1
+    assert all(token in symbol_errors[0] for token in variants)
+
+    install_variant = _write_synthetic_source(
+        tmp_path,
+        "python/pops/codegen/legacy_program_install_variant.py",
+        "SYMBOL = 'pops_install_program_cuda_amr_v5'\n",
+    )
+    errors = []
+    runner._scan_production_barriers(errors, (install_variant,))
+    assert any(
+        "pops_install_program_cuda_amr_v5" in error
+        for error in errors
+        if "retired runtime symbols" in error
+    )
+
+
+@pytest.mark.parametrize(
+    "relative",
+    (
+        "include/pops/runtime/program/detail/program_context.hpp",
+        "include/pops/runtime/program/detail/amr_program_context.hpp",
+        "include/pops/runtime/program/detail/runtime_program_context.hpp",
+        "include/pops/runtime/program/detail/runtime_program_context_detail.hpp",
+        "include/pops/runtime/program/detail/runtime_program_context_v2.hpp",
+        "include/pops/runtime/program/detail/runtime-program-context-detail.hpp",
+        "include/pops/runtime/program/detail/AMR-Program-Context.hpp",
+        "include/pops/runtime/program/detail/RuntimeProgramContext.hpp",
+        "include/pops/runtime/program/detail/RuntimeProgramContextDetail.hpp",
+    ),
+)
+def test_runtime_authority_rejects_retired_context_filenames(monkeypatch, tmp_path, relative):
     runner = _load_runner()
     monkeypatch.setattr(runner, "ROOT", tmp_path)
     path = _write_synthetic_source(
         tmp_path,
-        "include/pops/runtime/program/detail/amr_program_context.hpp",
+        relative,
         "",
     )
     errors: list[str] = []
     runner._scan_production_barriers(errors, (path,))
     assert any("retired ProgramContext source remains present" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    (
+        (
+            "def serialize_cache(row):\n"
+            "    payload = {'node_id': row['node_id'], 'cache_nodes': [0]}\n"
+            "    return payload\n",
+            True,
+        ),
+        (
+            "def serialize_cache(row):\n"
+            "    return {'cache_node_id': row['node_id']}\n",
+            True,
+        ),
+        (
+            "def emit_cache(row):\n"
+            "    out = {}\n"
+            "    out['cache_nodes'] = row['cache_slots']\n"
+            "    return out\n",
+            True,
+        ),
+        (
+            "def emit(row):\n"
+            "    out = {}\n"
+            "    out.setdefault('cache_nodes', row['cache_slots'])\n"
+            "    return out\n",
+            True,
+        ),
+        (
+            "def emit(row):\n"
+            "    out = {}\n"
+            "    out.__setitem__('cache_node_id', row['node_id'])\n"
+            "    return out\n",
+            True,
+        ),
+        (
+            "def emit(row):\n"
+            "    temporary = {'cache_nodes': row['cache_slots']}\n"
+            "    return temporary\n",
+            True,
+        ),
+        (
+            "def emit(row):\n"
+            "    temporary = {}\n"
+            "    temporary.update({'cache_node_id': row['node_id']})\n"
+            "    return temporary\n",
+            True,
+        ),
+        (
+            "def serialize_cache_row(row):\n"
+            "    return {'node_id': row['node_id']}\n",
+            True,
+        ),
+        (
+            "def serialize(row):\n"
+            "    return {'node_id': row['node_id']}\n",
+            True,
+        ),
+        (
+            "def reject_legacy(row):\n"
+            "    if 'cache_nodes' in row or 'cache_node_id' in row:\n"
+            "        raise ValueError('legacy cache wire')\n"
+            "    return row.get('node_id')\n",
+            False,
+        ),
+        (
+            "def reject_legacy(row):\n"
+            "    raise ValueError({'cache_nodes': row['cache_nodes']})\n",
+            False,
+        ),
+        (
+            "def resolve_control_node(row):\n"
+            "    return {'node_id': row['node_id'], 'cache_slots': row['cache_slots']}\n",
+            False,
+        ),
+        (
+            "def emit_cache(row):\n"
+            "    return dict(node_id=row['node_id'], cache_nodes=row['cache_slots'])\n",
+            True,
+        ),
+        (
+            "def serialize_cache_id(row):\n"
+            "    return dict(node_id=row['node_id'])\n",
+            True,
+        ),
+        (
+            "def resolve_node(row):\n"
+            "    return dict(node_id=row['node_id'])\n",
+            False,
+        ),
+        (
+            "def build_cache_authority(row):\n"
+            "    return {'node_id': row['node_id']}\n",
+            True,
+        ),
+        (
+            "def reject_cache_authority(row):\n"
+            "    if 'node_id' in row:\n"
+            "        raise ValueError('legacy cache authority')\n"
+            "    return row\n",
+            False,
+        ),
+    ),
+)
+def test_runtime_authority_scopes_python_cache_wire_barrier_to_serialization(
+    monkeypatch, tmp_path, source, expected
+):
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    path = _write_synthetic_source(
+        tmp_path,
+        "python/pops/runtime/cache_wire_scope.py",
+        source,
+    )
+    errors: list[str] = []
+    runner._scan_production_barriers(errors, (path,))
+    cache_errors = [error for error in errors if "node-id-only scheduler cache wire" in error]
+    assert bool(cache_errors) is expected
 
 
 def test_runtime_authority_rejects_direct_facade_provider_construction(monkeypatch, tmp_path):
@@ -810,6 +1808,47 @@ def test_runtime_authority_rejects_public_amr_roots_and_include_fragments(monkey
     assert any("AmrProgramExecutionAdapter" in error for error in errors)
 
 
+def test_runtime_authority_scans_all_production_roots_for_duplicate_abi_and_roots(
+    monkeypatch, tmp_path
+):
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    generic = _write_synthetic_source(
+        tmp_path,
+        "include/pops/runtime/program/program_execution_services.hpp",
+        "constexpr int kProgramInstallAbiVersion = 5;\n"
+        "template <int Dim> class ProgramExecutionServices {};\n",
+    )
+    runtime_state = _write_synthetic_source(
+        tmp_path,
+        "include/pops/runtime/program/program_runtime_state.hpp",
+        "void dispatch_cadence_step(double) {}\n",
+    )
+    duplicate_abi = _write_synthetic_source(
+        tmp_path,
+        "src/runtime/parallel/program_installation.hpp",
+        "constexpr int kProgramInstallAbiVersion = 5;\n",
+    )
+    public_amr_root = _write_synthetic_source(
+        tmp_path,
+        "src/runtime/amr/program_execution_services_amr.hpp",
+        "struct AmrProgramExecutionAdapter {};\n",
+    )
+    monkeypatch.setattr(runner, "_authority_sources", lambda: (generic, runtime_state))
+    monkeypatch.setattr(
+        runner,
+        "_production_sources",
+        lambda: (generic, runtime_state, duplicate_abi, public_amr_root),
+    )
+
+    errors: list[str] = []
+    runner._validate_source_barriers(errors)
+
+    assert any("exactly one ABI version declaration (v5)" in error for error in errors)
+    assert any("forbidden public AMR execution-services root" in error for error in errors)
+    assert any("AmrProgramExecutionAdapter" in error for error in errors)
+
+
 def test_runtime_authority_authenticates_openmp_and_allocator_rows(monkeypatch, tmp_path):
     runner = _load_runner()
     monkeypatch.setenv("POPS_RUNTIME_AUTHORITY_OPENMP", "1")
@@ -834,7 +1873,8 @@ def test_runtime_authority_refuses_an_unavailable_mpi_launcher(monkeypatch):
         runner._mpi_python_command(
             "mpiexec",
             2,
-            "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py",
+            "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py::"
+            "test_public_mpi_explicit_and_preset_ssprk2_are_bit_identical",
             dimension=2,
         )
 
@@ -847,13 +1887,73 @@ def test_runtime_authority_mpi_bootstrap_selects_each_explicit_dimension(monkeyp
     command = runner._mpi_python_command(
         "mpiexec",
         2,
-        "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py",
+        "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py::"
+        "test_public_mpi_explicit_and_preset_ssprk2_are_bit_identical",
         dimension=dimension,
     )
 
     bootstrap_index = command.index("-c") + 1
     assert "select_native_dimension(int(sys.argv[1]))" in command[bootstrap_index]
+    compile(command[bootstrap_index], "<runtime-authority-mpi-bootstrap>", "exec")
     assert command[bootstrap_index + 1] == str(dimension)
+    assert command[-1].endswith(
+        "test_amr_clean_route_program_mpi.py::test_public_mpi_explicit_and_preset_ssprk2_are_bit_identical"
+    )
+    assert "run_name='__runtime_authority_node__'" in command[bootstrap_index]
+    assert "_run_all" not in command[bootstrap_index]
+
+
+def test_runtime_authority_mpi_executor_rejects_file_only_nodeid(monkeypatch):
+    runner = _load_runner()
+    monkeypatch.setattr(runner.shutil, "which", lambda _name: "/usr/bin/mpiexec")
+    with pytest.raises(ValueError, match="exact file::function nodeid"):
+        runner._mpi_python_command(
+            "mpiexec",
+            2,
+            "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py",
+            dimension=2,
+        )
+
+
+def test_runtime_authority_mpi_bootstrap_executes_only_exact_fixture_nodeid(
+    monkeypatch, tmp_path
+):
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    fixture = _write_synthetic_source(
+        tmp_path,
+        "tests/python/fixture_mpi.py",
+        "_fails = 0\n"
+        "def test_exact():\n"
+        "    print('EXACT_FIXTURE')\n"
+        "def test_other():\n"
+        "    print('OTHER_FIXTURE')\n"
+        "    raise RuntimeError('the non-selected function ran')\n"
+        "def _run_all():\n"
+        "    raise RuntimeError('the file-level runner ran')\n",
+    )
+    _write_synthetic_source(tmp_path, "pops/__init__.py", "")
+    _write_synthetic_source(
+        tmp_path,
+        "pops/_native_selector.py",
+        "def select_native_dimension(dimension):\n"
+        "    assert dimension == 2\n",
+    )
+    monkeypatch.setattr(runner.shutil, "which", lambda _name: "/usr/bin/mpiexec")
+    nodeid = "tests/python/fixture_mpi.py::test_exact"
+    command = runner._mpi_python_command("mpiexec", 2, nodeid, dimension=2)
+    bootstrap = command[command.index("-c") + 1]
+    completed = subprocess.run(
+        [sys.executable, "-c", bootstrap, "2", str(fixture), nodeid],
+        cwd=tmp_path,
+        env={"PYTHONPATH": str(tmp_path)},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "EXACT_FIXTURE" in completed.stdout
+    assert "OTHER_FIXTURE" not in completed.stdout
 
 
 def test_runtime_authority_refuses_ctest_build_dimension_mismatch(tmp_path):
@@ -893,8 +1993,12 @@ def test_runtime_authority_requires_ci_architecture_mpi_openmp_and_release_wirin
     assert "Runtime authority OpenMP/allocation gate" in ci
     assert "POPS_RUNTIME_AUTHORITY_OPENMP" in ci
     assert "POPS_RUNTIME_AUTHORITY_ALLOCATION" in ci
+    assert "final-authority-matrix:" in ci
+    assert "Execute serial M2 and runtime authority" in ci
+    assert "Execute OpenMP M2 and runtime authority" in ci
+    assert "Execute MPI M2, M3, and runtime authority" in ci
     assert "full-source-matrix" in release
-    assert "Runtime authority source ledger" in release
-    assert 'python scripts/run_runtime_authority_gate.py --check-only --dim "$dim"' in release
+    assert "Runtime authority source ledger" not in release
+    assert 'python scripts/run_runtime_authority_gate.py --check-only --dim "$dim"' not in release
     assert "runtime_authority.toml" in final_contract
     assert "runtime_authority_source_errors" in final_contract

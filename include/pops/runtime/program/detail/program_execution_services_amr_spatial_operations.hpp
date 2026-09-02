@@ -5,16 +5,13 @@ void apply_coupling_operators(std::string_view graph_identity, std::string_view 
   auto& workspace = hot_path_workspace_;
   workspace.require_bound(candidates.size(), "AMR Program coupling");
   std::fill(workspace.coupling_states.begin(), workspace.coupling_states.end(), nullptr);
-  std::optional<runtime::multiblock::BoundaryEvaluationPoint> prepared_point;
-  std::optional<runtime::multiblock::InterfaceFluxFragmentPublication> prepared_publication;
   std::exception_ptr local_error;
   try {
     if (graph_identity.empty() || graph_identity != facade_->program_installed_hash_() ||
         rate_identity.empty() || application_identity.empty())
       throw std::invalid_argument(
           "AMR Program coupling requires exact graph, rate, and application identities");
-    const auto& coupling_budget =
-        facade_->program_prepared_amr_program_flux_expression_budget_();
+    const auto& coupling_budget = facade_->program_prepared_amr_program_flux_expression_budget_();
     std::size_t identity_characters = graph_identity.size();
     if (rate_identity.size() > std::numeric_limits<std::size_t>::max() - identity_characters)
       throw std::length_error("AMR Program coupling identity characters exceed size_t");
@@ -26,21 +23,48 @@ void apply_coupling_operators(std::string_view graph_identity, std::string_view 
       throw std::length_error(
           "AMR Program coupling identities exceed the frozen artifact character bound");
     for (const CouplingStateOverride& candidate : candidates) {
+      if (candidate.program_block < 0 || candidate.program_block >= n_blocks())
+        throw std::out_of_range("AMR Program coupling candidate block is out of range");
+      const std::size_t program_block = static_cast<std::size_t>(candidate.program_block);
       const int runtime_block = sys_block(candidate.program_block);
-      if (candidate.state == nullptr ||
-          workspace.coupling_states[static_cast<std::size_t>(runtime_block)] != nullptr)
+      if (candidate.state == nullptr || workspace.coupling_states[program_block] != nullptr)
         throw std::invalid_argument(
             "AMR Program coupling candidates are incomplete, duplicate, or null");
-      require_same_field_contract_(*candidate.state,
-                                   facade_->program_prepared_amr_block_state_(runtime_block,
-                                                                                active_level_),
-                                   "AMR Program coupling candidate");
+      require_same_field_contract_(
+          *candidate.state,
+          facade_->program_prepared_amr_block_state_(runtime_block, active_level_),
+          "AMR Program coupling candidate");
       if (!active_attempt_states_.empty()) {
         const bool detached_group_candidate = is_live_attempt_candidate_(candidate.state);
-        const bool prepared_scratch =
+        const bool cold_prepared_scratch =
             std::any_of(scratches_.begin(), scratches_.end(),
                         [&](const auto& entry) { return &entry.second == candidate.state; });
-        if (!detached_group_candidate && !prepared_scratch)
+        bool bind_prepared_scratch = false;
+        for (std::size_t slot = 0; slot < prepared_scratch_.size() && !bind_prepared_scratch;
+             ++slot) {
+          const auto& fields =
+              prepared_scratch_[slot][static_cast<std::size_t>(ScratchKind::State)];
+          const auto& descriptors =
+              prepared_scratch_descriptors_[slot][static_cast<std::size_t>(ScratchKind::State)];
+          if (fields.size() != descriptors.size())
+            throw std::logic_error("AMR Program coupling scratch lost its descriptors");
+          for (std::size_t subslot = 0; subslot < fields.size(); ++subslot) {
+            if (!fields[subslot] || !descriptors[subslot])
+              continue;
+            const auto& declaration = *descriptors[subslot];
+            if ((declaration.declared_level >= 0 && declaration.declared_level != active_level_) ||
+                declaration.runtime_block != runtime_block)
+              continue;
+            const std::size_t level = declaration.declared_level < 0
+                                          ? static_cast<std::size_t>(active_level_)
+                                          : std::size_t{0};
+            if (level < fields[subslot]->size() && &fields[subslot]->at(level) == candidate.state) {
+              bind_prepared_scratch = true;
+              break;
+            }
+          }
+        }
+        if (!detached_group_candidate && !cold_prepared_scratch && !bind_prepared_scratch)
           throw std::invalid_argument(
               "active AMR Program coupling requires detached group candidates or prepared "
               "scratches");
@@ -50,7 +74,9 @@ void apply_coupling_operators(std::string_view graph_identity, std::string_view 
             throw std::invalid_argument(
                 "active AMR Program coupling cannot mutate an accepted block carrier");
       }
-      workspace.coupling_states[static_cast<std::size_t>(runtime_block)] = candidate.state;
+      // The hierarchy consumes Program order and applies the immutable Program-to-runtime map
+      // exactly once.  Storing by runtime block here would apply that permutation a second time.
+      workspace.coupling_states[program_block] = candidate.state;
     }
     if (std::find(workspace.coupling_states.begin(), workspace.coupling_states.end(), nullptr) !=
         workspace.coupling_states.end())
@@ -66,22 +92,16 @@ void apply_coupling_operators(std::string_view graph_identity, std::string_view 
     if (!std::isfinite(interval_duration) || !(interval_duration > 0.0) ||
         !std::isfinite(static_cast<double>(dt)) || !(dt > Real(0)))
       throw std::logic_error("AMR Program interface publication has an invalid exact interval");
-    prepared_point.emplace(runtime::multiblock::BoundaryEvaluationPoint{
-        primary_clock_, static_cast<std::int64_t>(facade_->program_macro_step_()), active_level_,
-        logical_substep_, 0, stage_time_, interval_duration, evaluation_time,
-        std::string(graph_identity), std::string(rate_identity),
-        std::string(application_identity)});
-    prepared_publication.emplace(runtime::multiblock::InterfaceFluxFragmentPublication{
-        interface_flux_ledger_.get(),
-        runtime_->topology_epoch(),
-        nlev(),
-        {active_level_, static_cast<std::int64_t>(facade_->program_macro_step_()), interval_phase,
-         evaluation_time},
-        "program-stage:" + std::to_string(stage_time_.numerator) + "/" +
-            std::to_string(stage_time_.denominator),
-        active_subcycling_window_,
-        exact_binary_rational_(dt / interval_duration),
-        true});
+    const auto& hierarchy = facade_->prepared_amr_multiblock_hierarchy_();
+    if (!workspace.prepare_coupling_invocation(
+            graph_identity, rate_identity, application_identity,
+            hierarchy.coupling_registry_contract(), primary_clock_, runtime_->topology_epoch(),
+            nlev(), active_level_, logical_substep_,
+            static_cast<std::int64_t>(facade_->program_macro_step_()), stage_time_, interval_phase,
+            interval_duration, evaluation_time, dt, active_subcycling_window_,
+            interface_flux_ledger_.get()))
+      throw std::length_error(
+          "AMR Program coupling identities exceed the bind-sealed resident carrier capacity");
   } catch (...) {
     local_error = std::current_exception();
   }
@@ -91,9 +111,13 @@ void apply_coupling_operators(std::string_view graph_identity, std::string_view 
       std::rethrow_exception(local_error);
     throw std::runtime_error("AMR Program coupling candidate pack failed collectively");
   }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          std::span<const ExactOrderedBytePair>(workspace.coupling_invocation_pairs), lane))
+    throw std::invalid_argument("AMR Program coupling invocation differs between execution ranks");
   count_kernel_(static_cast<std::int64_t>(facade_->apply_prepared_amr_program_candidates(
-      active_level_, dt, std::span<field_type* const>(workspace.coupling_states), *prepared_point,
-      interface_flux_ledger_->in_transaction() ? &*prepared_publication : nullptr)));
+      active_level_, dt, std::span<field_type* const>(workspace.coupling_states),
+      workspace.coupling_point,
+      interface_flux_ledger_->in_transaction() ? &workspace.coupling_publication : nullptr)));
 }
 
 private:
@@ -172,8 +196,7 @@ void for_each_owner_active_level_(int program_block, const field_type& left,
     }
     if (identity.family == Family::Unset) {
       for (int level = 0; level < levels; ++level) {
-        if (!same_layout(seed,
-                         facade_->program_prepared_amr_block_state_(runtime_block, level)))
+        if (!same_layout(seed, facade_->program_prepared_amr_block_state_(runtime_block, level)))
           continue;
         if (identity.direct_level >= 0)
           throw std::logic_error(std::string(role) + " matches multiple AMR Program owner levels");
@@ -189,8 +212,7 @@ void for_each_owner_active_level_(int program_block, const field_type& left,
 
   const auto resolve = [&](const field_type& seed, const Identity& identity, int level,
                            const char* role) -> const field_type& {
-    const field_type& accepted =
-        facade_->program_prepared_amr_block_state_(runtime_block, level);
+    const field_type& accepted = facade_->program_prepared_amr_block_state_(runtime_block, level);
     const field_type* current = nullptr;
     if (identity.family == Family::State) {
       current = live_attempt_state_(runtime_block, level);
@@ -250,8 +272,7 @@ void for_each_owner_active_level_(int program_block, const field_type& left,
       continue;
     if (right_identity && !covers_level(*right_identity, level))
       continue;
-    const field_type& accepted =
-        facade_->program_prepared_amr_block_state_(runtime_block, level);
+    const field_type& accepted = facade_->program_prepared_amr_block_state_(runtime_block, level);
     const field_type& left_field = resolve(left, left_identity, level, "AMR Program reduction");
     const field_type* right_field = nullptr;
     if (right_identity)
@@ -275,8 +296,12 @@ void converge_owner_reduction_(std::exception_ptr local_error, const ExecutionLa
 
 public:
 Real sum_component(const field_type& field, int component) const {
-  return static_cast<Real>(
-      all_reduce_sum(pops::reduce_sum_local(field, component), prepared_execution_lane()));
+  const auto& workspace = hot_path_workspace_;
+  workspace.require_sum_reduction("AMR Program sum reduction");
+  return static_cast<Real>(all_reduce_sum(
+      pops::reduce_sum_local(field, ::pops::detail::default_execution_space(),
+                             workspace.sum_reduction, component),
+      prepared_execution_lane()));
 }
 Real max_component(const field_type& field, int component) const {
   return static_cast<Real>(
@@ -292,13 +317,17 @@ Real min_component(const field_type& field, int component) const {
 /// weighting.  Empty active domains use sum/abs_sum/dot/norm2/norm_inf = 0, max = -inf, min = +inf.
 Real sum_component(int program_block, const field_type& field, int component) const {
   const ExecutionLane& lane = prepared_execution_lane();
+  const auto& workspace = hot_path_workspace_;
+  workspace.require_sum_reduction("AMR Program owner-qualified sum reduction");
   std::exception_ptr local_error;
   Real local = Real(0);
   try {
     for_each_owner_active_level_(
         program_block, field, nullptr,
         [&](const field_type& level_field, const field_type*, const field_type* active) {
-          local += pops::reduce_active_sum_local(level_field, component, active);
+          local += pops::reduce_active_sum_local(
+              level_field, component, active, ::pops::detail::default_execution_space(),
+              workspace.sum_reduction);
         });
   } catch (...) {
     local_error = std::current_exception();
@@ -423,8 +452,34 @@ Real dot(int program_block, const field_type& left, const field_type& right) con
 }
 
 Geometry<Dim> geometry() const {
+  if (preparation_view_ != nullptr) {
+    preparation_view_->validate();
+    if (active_level_ < 0 ||
+        static_cast<std::size_t>(active_level_) >= preparation_view_->level_geometries.size())
+      throw std::out_of_range("AMR detached Program geometry level is outside its topology image");
+    return preparation_view_->level_geometries[static_cast<std::size_t>(active_level_)];
+  }
   require_facade_execution_();
   return facade_->program_prepared_amr_level_geometry_(active_level_);
+}
+
+BoundaryTopology<Dim> prepared_boundary_topology_() const {
+  if (preparation_view_ != nullptr) {
+    preparation_view_->validate();
+    std::array<bool, Dim> periodic{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::size_t lower = static_cast<std::size_t>(2 * axis);
+      const std::size_t upper = lower + 1U;
+      if (preparation_view_->periodic_faces[lower] !=
+          preparation_view_->periodic_faces[upper])
+        throw std::invalid_argument(
+            "AMR detached Program boundary topology has asymmetric periodic faces");
+      periodic[static_cast<std::size_t>(axis)] = preparation_view_->periodic_faces[lower];
+    }
+    return BoundaryTopology<Dim>::axis_periodic(periodic);
+  }
+  require_facade_execution_();
+  return facade_->program_prepared_amr_boundary_topology_();
 }
 
 field_type& assembly_target(field_type& field, std::string_view identity) const {
@@ -459,8 +514,19 @@ std::shared_ptr<scalar_boundary_session_type> prepare_mesh_boundary_session(
     field_type& prototype, const ExecutionLane& lane) const {
   require_prepared_lane_(lane, "AMR scalar boundary preparation");
   return std::make_shared<scalar_boundary_session_type>(
-      geometry(), facade_->program_prepared_amr_boundary_topology_(), prototype, lane,
-      next_boundary_generation_());
+      geometry(), prepared_boundary_topology_(), prototype, lane, next_boundary_generation_());
+}
+
+/// Bind one scalar stencil transport while preparation is still cold.  Generated hot code must
+/// retain and pass the returned session; it may not recover by rebuilding a halo schedule from a
+/// field at the point of use.  Keep this a distinct public authority from the block evaluator:
+/// scalar stencils need only the immutable mesh transport, not its evaluator scratch image.
+std::shared_ptr<scalar_boundary_session_type> bind_mesh_boundary_session(
+    field_type& prototype, const ExecutionLane& lane) const {
+  if (!active_attempt_states_.empty())
+    throw std::logic_error(
+        "AMR scalar boundary binding is cold-only; pass the prepared session on the hot path");
+  return prepare_mesh_boundary_session(prototype, lane);
 }
 
 std::shared_ptr<block_boundary_session_type> prepare_block_boundary_session(
@@ -512,8 +578,7 @@ std::shared_ptr<tensor_boundary_session_type> prepare_tensor_boundary_session(
       if (prototype.ghosts()[axis] != 1)
         throw std::invalid_argument(
             "AMR tensor boundary prototype requires its exact one-cell ghost layout");
-    runtime_block_owner =
-        &facade_->program_prepared_amr_block_state_(runtime_block, active_level_);
+    runtime_block_owner = &facade_->program_prepared_amr_block_state_(runtime_block, active_level_);
     require_same_layout_(prototype, *runtime_block_owner,
                          "AMR tensor boundary prototype authority");
     if (facade_->program_prepared_amr_block_level_active_mask_(runtime_block, active_level_) !=
@@ -543,38 +608,23 @@ std::shared_ptr<tensor_boundary_session_type> prepare_tensor_boundary_session(
 }
 
 void fill_boundary(field_type& field) const {
-  fill_boundary(field, prepared_execution_lane());
+  (void)field;
+  throw std::logic_error(
+      "AMR boundary fill requires a cold-bound PreparedScalarBoundarySession");
 }
 
 void fill_boundary(field_type& field, const ExecutionLane& lane) const {
-  require_prepared_lane_(lane, "AMR boundary fill");
-  scalar_boundary_session_type session(geometry(), facade_->program_prepared_amr_boundary_topology_(), field,
-                                       lane, next_boundary_generation_());
-  session.fill(field);
+  (void)field;
+  (void)lane;
+  throw std::logic_error(
+      "AMR boundary fill requires a cold-bound PreparedScalarBoundarySession");
 }
 
 void laplacian(field_type& output, field_type& input) const {
-  require_scalar_stencil_(output, input, 1, "AMR Program Laplacian");
-  fill_boundary(input);
-  const Geometry<Dim> geom = geometry();
-  for (std::size_t local = 0; local < output.local_size(); ++local) {
-    const FieldView<Real, Dim> result = output.fab(local).view();
-    const FieldView<const Real, Dim> value = std::as_const(input).fab(local).view();
-    for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-      Real image = Real(0);
-      for (int axis = 0; axis < Dim; ++axis) {
-        Index<Dim> lower = cell;
-        Index<Dim> upper = cell;
-        --lower[axis];
-        ++upper[axis];
-        const Real spacing = geom.spacing(axis);
-        image +=
-            (value(upper, 0) - Real(2) * value(cell, 0) + value(lower, 0)) / (spacing * spacing);
-      }
-      result(cell, 0) = image;
-    });
-  }
-  count_kernel_();
+  (void)output;
+  (void)input;
+  throw std::logic_error(
+      "AMR Program Laplacian requires a cold-bound PreparedScalarBoundarySession");
 }
 
 void laplacian(field_type& output, field_type& input,
@@ -590,23 +640,10 @@ void laplacian(field_type& output, field_type& input, const scalar_boundary_sess
 }
 
 void gradient(field_type& output, field_type& input) const {
-  require_scalar_stencil_(output, input, Dim, "AMR Program gradient");
-  fill_boundary(input);
-  const Geometry<Dim> geom = geometry();
-  for (std::size_t local = 0; local < output.local_size(); ++local) {
-    const FieldView<Real, Dim> result = output.fab(local).view();
-    const FieldView<const Real, Dim> value = std::as_const(input).fab(local).view();
-    for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-      for (int axis = 0; axis < Dim; ++axis) {
-        Index<Dim> lower = cell;
-        Index<Dim> upper = cell;
-        --lower[axis];
-        ++upper[axis];
-        result(cell, axis) = (value(upper, 0) - value(lower, 0)) / (Real(2) * geom.spacing(axis));
-      }
-    });
-  }
-  count_kernel_();
+  (void)output;
+  (void)input;
+  throw std::logic_error(
+      "AMR Program gradient requires a cold-bound PreparedScalarBoundarySession");
 }
 
 void gradient(field_type& output, field_type& input,
@@ -622,8 +659,10 @@ void gradient(field_type& output, field_type& input, const scalar_boundary_sessi
 }
 
 void divergence(field_type& output, field_type& flux) const {
-  auto boundary = prepare_mesh_boundary_session(flux, prepared_execution_lane());
-  divergence(output, flux, *boundary);
+  (void)output;
+  (void)flux;
+  throw std::logic_error(
+      "AMR Program divergence requires a cold-bound PreparedScalarBoundarySession");
 }
 void divergence(field_type& output, field_type& flux,
                 const scalar_boundary_session_type& boundary) const {

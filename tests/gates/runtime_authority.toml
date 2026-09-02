@@ -112,6 +112,16 @@ issue = "ADC-700"
 requirement = "schedule_parity"
 polarity = "refusal"
 kind = "ctest"
+target = "schedule_parity@test_module_metadata"
+backend = "serial"
+allocation = "none"
+test_regex = "^ModuleMetadata\\.CheckpointMetadataDoesNotForgePrimaryClockWithoutHistory$"
+
+[[check]]
+issue = "ADC-700"
+requirement = "schedule_parity"
+polarity = "refusal"
+kind = "ctest"
 target = "schedule_parity@test_program_execution_services_schur_free"
 backend = "serial"
 allocation = "none"
@@ -156,6 +166,49 @@ target = "cell_local_ordinary@test_cell_temporal_program_route"
 backend = "serial"
 allocation = "none"
 test_regex = "^test_cell_temporal_program_route\\.direct_prepared_subengine_executes_one_exact_algorithm_in_every_dimension$"
+
+[[check]]
+issue = "ADC-720"
+requirement = "cell_local_ordinary"
+polarity = "positive"
+kind = "ctest"
+target = "cell_local_ordinary@test_mpi_cell_temporal_program"
+backend = "mpi"
+allocation = "none"
+dimensions = [1, 2, 3]
+test_regex = "^test_mpi_cell_temporal_program_np2$"
+
+[[check]]
+issue = "ADC-720"
+requirement = "cell_local_ordinary"
+polarity = "positive"
+kind = "ctest"
+target = "cell_local_ordinary@test_mpi_cell_temporal_program_multibox"
+backend = "mpi"
+allocation = "none"
+dimensions = [1, 2, 3]
+test_regex = "^test_mpi_cell_temporal_program_multibox_np2$"
+
+[[check]]
+issue = "ADC-720"
+requirement = "cell_local_ordinary"
+polarity = "positive"
+kind = "ctest"
+target = "cell_local_ordinary@test_mpi_cell_temporal_program_collective_rollback"
+backend = "mpi"
+allocation = "none"
+dimensions = [1, 2, 3]
+test_regex = "^test_mpi_cell_temporal_program_collective_rollback_np2$"
+
+[[check]]
+issue = "ADC-720"
+requirement = "cell_local_ordinary"
+polarity = "refusal"
+kind = "ctest"
+target = "cell_local_ordinary@test_amr_system_contract"
+backend = "serial"
+allocation = "none"
+test_regex = "^test_amr_system_contract\\.RefusesCellLocalFluxTablesBeforeResourceMaterialization$"
 
 [[check]]
 issue = "ADC-720"
@@ -261,6 +314,46 @@ test_regex = "^ProgramExecutionServicesContract\\.GeneratedScratchIsPersistentEx
 [[check]]
 issue = "ADC-702"
 requirement = "hot_path_allocation"
+polarity = "positive"
+kind = "ctest"
+target = "hot_path_allocation@test_amr_transaction_authority"
+backend = "serial"
+allocation = "required"
+test_regex = "^AmrTransactionAuthority\\.AllCancelStaticFluxBasisIsHotAllocationFreeAndRetrySafeAfterResidentWriteFailure$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "hot_path_allocation"
+polarity = "refusal"
+kind = "ctest"
+target = "hot_path_allocation@test_amr_transaction_authority"
+backend = "serial"
+allocation = "none"
+test_regex = "^AmrTransactionAuthority\\.StaticFluxCommitOutsideAdvanceHierarchyRefusesBeforeSnapshotOrMutation$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "hot_path_allocation"
+polarity = "positive"
+kind = "ctest"
+target = "hot_path_allocation@test_amr_transaction_authority"
+backend = "serial"
+allocation = "required"
+test_regex = "^AmrTransactionAuthority\\.RefinedProgramCouplingIsHotAllocationFreeAndRollbackExactWithBoundedDispatch$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "hot_path_allocation"
+polarity = "positive"
+kind = "pytest"
+target = "hot_path_allocation"
+backend = "serial"
+allocation = "none"
+nodeid = "tests/python/architecture/test_prepared_boundary_hot_path.py::test_condensed_amr_emission_captures_cold_bound_scalar_sessions"
+
+[[check]]
+issue = "ADC-702"
+requirement = "hot_path_allocation"
 polarity = "refusal"
 kind = "pytest"
 target = "hot_path_allocation"
@@ -307,6 +400,56 @@ target = "hot_path_allocation@test_step_change_l2_uniform_allocation"
 backend = "serial"
 allocation = "none"
 test_regex = "^StepChangeL2GlobalAllocationProbe\\.PreparedTwoLevelAmrSingleAndMultiBlockCallsAllocateNothing$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "resource_plan_ceiling"
+polarity = "positive"
+kind = "ctest"
+target = "resource_plan_ceiling@test_nd_flux_ledger"
+backend = "serial"
+allocation = "none"
+test_regex = "^test_nd_flux_ledger\\.interface_ledger_resident_footprint_covers_dense_and_hot_carriers$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "resource_plan_ceiling"
+polarity = "refusal"
+kind = "ctest"
+target = "resource_plan_ceiling@test_program_host_descriptor"
+backend = "serial"
+allocation = "none"
+test_regex = "^PreparedProgramInstallation\\.SealsAnEmptyValuePlanWithHostCapacityExactly$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "resource_plan_ceiling"
+polarity = "positive"
+kind = "ctest"
+target = "resource_plan_ceiling@test_generated_amr_system_block"
+backend = "serial"
+allocation = "none"
+test_regex = "^GeneratedAmrSystemBlock\\.ForwardSubcyclingStorageCeilingAcceptsConfiguredAPlusB$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "resource_plan_ceiling"
+polarity = "refusal"
+kind = "ctest"
+target = "resource_plan_ceiling@test_generated_amr_system_block"
+backend = "serial"
+allocation = "none"
+test_regex = "^GeneratedAmrSystemBlock\\.ForwardSubcyclingStorageCeilingRejectsOverflowWithoutClobber$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "resource_plan_ceiling"
+polarity = "positive"
+kind = "ctest"
+target = "resource_plan_ceiling@test_generated_amr_system_block"
+backend = "mpi"
+allocation = "none"
+test_regex = "^test_generated_amr_system_block_np2$"
 
 [[check]]
 issue = "ADC-702"
@@ -387,6 +530,16 @@ target = "transaction_authority@test_amr_transaction_authority"
 backend = "serial"
 allocation = "none"
 test_regex = "^AmrTransactionAuthority\\.FieldCandidateSavepointAdoptsForwardTopologyWithoutPostSealAllocation$"
+
+[[check]]
+issue = "ADC-702"
+requirement = "solve_outcome"
+polarity = "refusal"
+kind = "ctest"
+target = "solve_outcome@test_step_attempt_rejected_header_only"
+backend = "serial"
+allocation = "none"
+test_regex = "^StepAttemptRejectedHeaderOnly\\.MailboxRejectsNonCanonicalRawRecordsBeforeAdoption$"
 
 [[check]]
 issue = "ADC-700"
@@ -557,6 +710,7 @@ kind = "ctest"
 target = "gate_execution@test_mpi_amr_program_3d_corner_authority"
 backend = "mpi"
 allocation = "none"
+dimensions = [3]
 test_regex = "^test_mpi_amr_program_3d_corner_authority_np8$"
 
 [[check]]

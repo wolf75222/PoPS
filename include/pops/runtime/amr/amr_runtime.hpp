@@ -179,6 +179,10 @@ class AmrRuntime {
       return hierarchy_;
     }
     std::string_view spatial_contract() const noexcept { return exact_spatial_contract_; }
+    std::uint64_t topology_epoch() const noexcept { return topology_epoch_; }
+    std::uint64_t materialization_generation() const noexcept {
+      return materialization_generation_;
+    }
 
    private:
     friend class AmrRuntime;
@@ -510,6 +514,26 @@ class AmrRuntime {
     return PreparedRegridPublication(
         std::move(candidate), topology_epoch_, materialization_generation_, exact_spatial_contract_,
         next_topology, next_materialization, std::move(next_contract), changes);
+  }
+
+  /// Prepare a complete, externally qualified hierarchy replacement without exposing it through
+  /// the accepted runtime.  Direct hierarchy rebuild uses this same two-direction publication
+  /// object as ordinary regridding: all target bytes and the inverse are therefore available
+  /// before the enclosing transaction reaches HiddenPublish.
+  PreparedRegridPublication prepare_full_rebuild_publication(const Snapshot& target) const {
+    require_authentic_snapshot_(target, "AMR runtime full rebuild target");
+    const std::uint64_t next_topology =
+        detail::next_generation(topology_epoch_, "AMR runtime topology epoch");
+    const std::uint64_t next_materialization = detail::next_generation(
+        materialization_generation_, "AMR runtime materialization generation");
+    if (target.topology_epoch != next_topology ||
+        target.materialization_generation != next_materialization)
+      throw std::invalid_argument(
+          "AMR runtime full rebuild target does not carry the next exact generation");
+    return PreparedRegridPublication(hierarchy_type(target.hierarchy), topology_epoch_,
+                                     materialization_generation_, exact_spatial_contract_,
+                                     target.topology_epoch, target.materialization_generation,
+                                     target.exact_spatial_contract, true);
   }
 
   PreparedRegridPublication prepare_regrid_publication_from_snapshot(

@@ -8,6 +8,7 @@
 #include <pops/runtime/system/system_block_store.hpp>
 #include <pops/runtime/system/system_boundary_registry.hpp>
 #include <pops/runtime/system/system_coupling_registry.hpp>
+#include <pops/runtime/system/prepared_coupling_workspace.hpp>
 #include <pops/runtime/system/system_domain.hpp>
 #include <pops/runtime/system/exact_aux_registry.hpp>
 #include <pops/runtime/system/auxiliary_ghost_fill.hpp>
@@ -20,8 +21,11 @@
 #include <pops/numerics/elliptic/interface/field_nullspace_builtins.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_prepare.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <algorithm>
+#include <bit>
+#include <cstdint>
 #include <exception>
 #include <map>
 #include <memory>
@@ -156,8 +160,138 @@ struct System<Dim>::Impl {
   std::vector<PreparedBoundaryHookContract> prepared_boundary_hook_contracts_;
   boundary_registry_type boundary_registry_;
   runtime::system::SystemCouplingRegistry<Dim> coupling_;
+  /// Prepared once after the coupling registry freezes.  It is not accepted scientific state and
+  /// therefore stays resident across transaction snapshot/restore; it only owns candidate scratch
+  /// images and exact invocation/inspection arenas.
+  runtime::system::PreparedCouplingWorkspace<Dim> coupling_workspace_;
+  /// Fixed-width request expansion used by the simultaneous RHS authority.  The public request
+  /// pack is sparse, whereas the interface evaluator consumes one pointer slot per materialized
+  /// block.  Allocate those slots once at bind; candidate evaluation may only overwrite them.
+  struct PreparedRhsGroupWorkspace {
+    bool bound = false;
+    std::size_t block_count = 0;
+    std::vector<field_type*> states;
+    std::vector<field_type*> residuals;
+    std::vector<int> flux_only;
+
+    void bind(std::size_t count) {
+      if (bound) {
+        if (block_count != count)
+          throw std::logic_error("System RHS workspace shape changed after bind");
+        return;
+      }
+      block_count = count;
+      states.assign(count, nullptr);
+      residuals.assign(count, nullptr);
+      flux_only.assign(count, 0);
+      bound = true;
+    }
+
+    void clear_for_request(std::size_t count) {
+      if (!bound || block_count != count || states.size() != count || residuals.size() != count ||
+          flux_only.size() != count)
+        throw std::logic_error("System RHS workspace was not bind-sealed for this block shape");
+      std::fill(states.begin(), states.end(), nullptr);
+      std::fill(residuals.begin(), residuals.end(), nullptr);
+      std::fill(flux_only.begin(), flux_only.end(), 0);
+    }
+  } rhs_group_workspace_;
+  struct PreparedCouplingReceipt {
+    std::string contract;
+    std::uint64_t resident_bytes = 0;
+  };
+  /// Installation records the exact cold footprint while composition is still mutable.  The
+  /// receipt is re-derived before `mark_bound()` mutates any live coupling carrier; registry
+  /// writers explicitly clear it so a stale Program cannot silently bind a different workspace.
+  std::optional<PreparedCouplingReceipt> prepared_coupling_receipt_;
   runtime::system::SystemLifecycle lifecycle_;
   runtime::program::ProgramRuntimeState<Dim> program_;
+
+  [[nodiscard]] PreparedCouplingReceipt prepare_coupling_receipt(
+      const ExecutionLane& lane, const std::vector<int>& program_block_map) const {
+    ExactContractBuilder contract;
+    contract.text("pops.system.prepared-coupling-receipt")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .text(lane.identity())
+        .scalar(static_cast<std::uint64_t>(lane.size()))
+        .scalar(static_cast<std::uint64_t>(program_block_map.size()));
+    for (const int block : program_block_map)
+      contract.scalar(block);
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(std::bit_cast<std::uint64_t>(geom.lower()[axis]))
+          .scalar(std::bit_cast<std::uint64_t>(geom.upper()[axis]));
+    contract.scalar(static_cast<std::uint64_t>(sp.size()));
+    for (const Species& block : sp) {
+      const field_type& field = block.U;
+      contract.text(block.name).text(block.state_identity).scalar(field.ncomp());
+      for (int axis = 0; axis < Dim; ++axis)
+        contract.scalar(field.ghosts()[axis]).scalar(field.local_rank()[axis]);
+      const auto& rank_space = field.rank_space();
+      for (int axis = 0; axis < Dim; ++axis)
+        contract.scalar(rank_space.origin()[axis]).scalar(rank_space.extent()[axis]);
+      const auto& layout = field.layout();
+      contract.scalar(static_cast<std::uint64_t>(layout.size()));
+      for (const Box<Dim>& box : layout.boxes())
+        for (int axis = 0; axis < Dim; ++axis)
+          contract.scalar(box.lo[axis]).scalar(box.hi[axis]);
+      const auto& distribution = field.distribution();
+      contract.scalar(static_cast<std::uint8_t>(distribution.mode()))
+          .scalar(static_cast<std::uint64_t>(distribution.owners().size()));
+      for (const auto& owner : distribution.owners())
+        for (int axis = 0; axis < Dim; ++axis)
+          contract.scalar(owner[axis]);
+    }
+    if (coupling_.operator_contracts.size() != coupling_.operators.size() ||
+        coupling_.operators.size() != coupling_.coupled_operators.size())
+      throw std::logic_error("prepared System coupling receipt has an incoherent registry");
+    contract.scalar(static_cast<std::uint64_t>(coupling_.operators.size()));
+    for (std::size_t index = 0; index < coupling_.operators.size(); ++index) {
+      const auto& view = coupling_.coupled_operators[index];
+      const auto& groups = coupling_.operators[index].conservation_groups();
+      contract.bytes(coupling_.operator_contracts[index])
+          .text(view.label)
+          .scalar(std::bit_cast<std::uint64_t>(view.frequency.constant_mu))
+          .scalar(static_cast<std::uint8_t>(view.frequency.per_cell))
+          .sequence(view.conservation.conserved_roles,
+                    [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+          .sequence(view.conservation.created_roles,
+                    [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+          .scalar(static_cast<std::uint64_t>(groups.size()));
+      for (const auto& group : groups) {
+        contract.text(group.identity)
+            .scalar(std::bit_cast<std::uint64_t>(group.absolute_tolerance))
+            .scalar(std::bit_cast<std::uint64_t>(group.relative_tolerance))
+            .scalar(static_cast<std::uint64_t>(group.members.size()));
+        for (const auto& member : group.members)
+          contract.text(member.owner)
+              .scalar(static_cast<std::uint64_t>(member.canonical_block))
+              .scalar(member.component)
+              .text(member.state_role);
+      }
+    }
+
+    PreparedCouplingReceipt receipt;
+    if (!sp.empty()) {
+      std::vector<const field_type*> prototypes;
+      prototypes.reserve(sp.size());
+      for (const Species& block : sp)
+        prototypes.push_back(&block.U);
+      auto copied_registry = coupling_;
+      runtime::system::PreparedCouplingWorkspace<Dim> footprint;
+      copied_registry.bind_workspace(footprint, prototypes);
+      receipt.resident_bytes = footprint.resident_storage_bytes();
+    }
+    constexpr std::uint64_t kRhsSlotBytes = sizeof(field_type*) + sizeof(field_type*) + sizeof(int);
+    if (sp.size() > std::numeric_limits<std::uint64_t>::max() / kRhsSlotBytes ||
+        receipt.resident_bytes > std::numeric_limits<std::uint64_t>::max() -
+                                     static_cast<std::uint64_t>(sp.size()) * kRhsSlotBytes)
+      throw std::overflow_error("prepared System RHS workspace storage overflows uint64");
+    receipt.resident_bytes += static_cast<std::uint64_t>(sp.size()) * kRhsSlotBytes;
+    contract.scalar(receipt.resident_bytes);
+    receipt.contract = std::move(contract).release();
+    return receipt;
+  }
   using embedded_boundary_type = runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>;
   std::shared_ptr<const embedded_boundary_type> embedded_boundary_;
   std::optional<ExecutionLane> embedded_boundary_lane_;
@@ -677,7 +811,11 @@ struct System<Dim>::Impl {
       if (destination.global_index(local) != source.global_index(local) ||
           destination.fab(local).size() != source.fab(local).size())
         throw std::logic_error("System accepted transaction field ownership changed after bind");
-      Kokkos::deep_copy(destination.fab(local).storage(), source.fab(local).storage());
+      if constexpr (std::is_same_v<typename field_type::memory_space, Kokkos::HostSpace>)
+        std::copy_n(source.fab(local).storage().data(), source.fab(local).size(),
+                    destination.fab(local).storage().data());
+      else
+        Kokkos::deep_copy(destination.fab(local).storage(), source.fab(local).storage());
     }
   }
 
@@ -978,40 +1116,67 @@ struct System<Dim>::Impl {
     /// Materialize the reusable rollback image after composition and Program installation have
     /// settled. This is the bind-time cold path; every subsequent transaction only refreshes the
     /// already-owned buffers.
-    void prime() {
-      if (owner == nullptr || snapshot_active)
-        throw std::logic_error("System transaction carrier cannot be primed while active");
-      if (!accepted)
-        accepted.emplace();
+    void prime(const ExecutionLane& lane) {
       std::size_t required_terms = 0;
-      for (const Species& block : owner->sp) {
-        if (block.U.ncomp() <= 0)
-          throw std::logic_error("System transaction carrier block has no state components");
-        std::size_t block_terms = 0;
-        for (std::size_t local = 0; local < block.U.local_size(); ++local) {
-          const std::int64_t signed_cells = block.U.box(local).numPts();
-          if (signed_cells <= 0)
-            throw std::logic_error("System transaction carrier block has an empty valid patch");
-          const std::size_t cells = static_cast<std::size_t>(signed_cells);
-          const std::size_t components = static_cast<std::size_t>(block.U.ncomp());
-          if (cells > std::numeric_limits<std::size_t>::max() / components ||
-              block_terms > std::numeric_limits<std::size_t>::max() - cells * components)
-            throw std::overflow_error("System transaction carrier step-change workspace overflow");
-          block_terms += cells * components;
+      std::exception_ptr preflight_error;
+      try {
+        if (owner == nullptr || snapshot_active)
+          throw std::logic_error("System transaction carrier cannot be primed while active");
+        for (const Species& block : owner->sp) {
+          if (block.U.ncomp() <= 0)
+            throw std::logic_error("System transaction carrier block has no state components");
+          std::size_t block_terms = 0;
+          for (std::size_t local = 0; local < block.U.local_size(); ++local) {
+            const std::int64_t signed_cells = block.U.box(local).numPts();
+            if (signed_cells <= 0)
+              throw std::logic_error("System transaction carrier block has an empty valid patch");
+            const std::size_t cells = static_cast<std::size_t>(signed_cells);
+            const std::size_t components = static_cast<std::size_t>(block.U.ncomp());
+            if (cells > std::numeric_limits<std::size_t>::max() / components ||
+                block_terms > std::numeric_limits<std::size_t>::max() - cells * components)
+              throw std::overflow_error(
+                  "System transaction carrier step-change workspace overflow");
+            block_terms += cells * components;
+          }
+          required_terms = std::max(required_terms, block_terms);
         }
-        required_terms = std::max(required_terms, block_terms);
+      } catch (...) {
+        preflight_error = std::current_exception();
       }
+      if (all_reduce_max(preflight_error ? 1L : 0L, lane.communicator()) != 0) {
+        if (lane.size() == 1 && preflight_error)
+          std::rethrow_exception(preflight_error);
+        throw std::runtime_error("System transaction carrier preflight failed collectively");
+      }
+      // Uniform layouts may intentionally leave this rank without an owner.  Prime the one
+      // reusable reduction workspace to the exact-ranked maximum so every participant is ready
+      // before transactions start; no transaction path can resize it later.
+      required_terms = static_cast<std::size_t>(
+          all_reduce_max(static_cast<std::uint64_t>(required_terms), lane.communicator()));
       if (required_terms == 0)
         throw std::logic_error("System transaction carrier step-change workspace is empty");
-      if (step_change_terms.data() == nullptr || step_change_term_capacity != required_terms) {
-        step_change_terms =
-            decltype(step_change_terms)("pops_step_change_l2_terms", required_terms);
-        step_change_invalid = decltype(step_change_invalid)("pops_step_change_l2_invalid");
-        step_change_term_capacity = required_terms;
+      std::exception_ptr priming_error;
+      try {
+        if (!accepted)
+          accepted.emplace();
+        if (step_change_terms.data() == nullptr || step_change_term_capacity != required_terms) {
+          step_change_terms =
+              decltype(step_change_terms)("pops_step_change_l2_terms", required_terms);
+          step_change_invalid = decltype(step_change_invalid)("pops_step_change_l2_invalid");
+          step_change_term_capacity = required_terms;
+        }
+        step_change_invalid() = 0;
+        accepted->capture_from(*owner);
+        snapshot_active = false;
+      } catch (...) {
+        snapshot_active = false;
+        priming_error = std::current_exception();
       }
-      step_change_invalid() = 0;
-      accepted->capture_from(*owner);
-      snapshot_active = false;
+      if (all_reduce_max(priming_error ? 1L : 0L, lane.communicator()) != 0) {
+        if (lane.size() == 1 && priming_error)
+          std::rethrow_exception(priming_error);
+        throw std::runtime_error("System transaction carrier priming failed collectively");
+      }
     }
 
     bool publish() noexcept { return owner != nullptr; }
@@ -1027,6 +1192,10 @@ struct System<Dim>::Impl {
     }
     static void rollback_callback(void* object, const void* image, std::size_t bytes) noexcept {
       static_cast<StepTransactionCarrier*>(object)->restore(image, bytes);
+    }
+
+    static void abort_snapshot_callback(void* object) noexcept {
+      static_cast<StepTransactionCarrier*>(object)->discard_snapshot();
     }
 
     /// Keep the fully dimensioned image resident for the next step. Resetting the optional here
@@ -1085,7 +1254,9 @@ struct System<Dim>::Impl {
     return step_transaction_registry_.acquire_write();
   }
 
-  void prime_step_transaction_image() { step_transaction_carrier_.prime(); }
+  void prime_step_transaction_image(const ExecutionLane& lane) {
+    step_transaction_carrier_.prime(lane);
+  }
 
   explicit Impl(const SystemConfig<Dim>& config)
       : domain_(config),
@@ -1107,6 +1278,7 @@ struct System<Dim>::Impl {
     ops.publish = &StepTransactionCarrier::publish_callback;
     ops.rollback = &StepTransactionCarrier::rollback_callback;
     ops.candidate = [](void* object) noexcept -> void* { return object; };
+    ops.abort_snapshot = &StepTransactionCarrier::abort_snapshot_callback;
     step_transaction_participant_ = step_transaction_registry_.register_participant(
         step_transaction_carrier_, ops, runtime::program::ProgramParticipantBudget{1, 0});
     step_transaction_registry_.bind();

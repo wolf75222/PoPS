@@ -64,7 +64,7 @@ void copy_field_outputs_to_provider_candidate(
     elliptic::nd::detail::copy_component(outputs, static_cast<int>(slot), *destination,
                                          static_cast<int>(address.component));
   }
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 template <int Dim, class Implementation>
@@ -756,6 +756,9 @@ SolveOutcome System<Dim>::stage_field_publication_outcome_(SolveReport report) {
 
 template <int Dim>
 void System<Dim>::prepare_default_field_publication_storage_() {
+  if (p_->lifecycle_.frozen() && !p_->default_field_)
+    throw std::logic_error(
+        "System default field was not cold-primed before the bind-sealed transaction");
   const ExecutionLane& lane = program_prepared_boundary_execution_lane_();
   (void)prepare_default_field<Dim>(*p_, lane);
 }
@@ -981,7 +984,7 @@ void System<Dim>::stage_field_publication_candidate() {
         });
     std::exception_ptr fence_error;
     try {
-      Kokkos::fence();
+      ::pops::device_fence();
     } catch (...) {
       fence_error = std::current_exception();
     }
@@ -1202,17 +1205,16 @@ MultiFab<Dim>& System<Dim>::program_register_history_(
     histories.slot_dt[name].resize(found->second.size(), Real(0));
     return found->second.front();
   }
-  const int components =
-      ncomp < 0 ? p_->sp[qualified ? static_cast<std::size_t>(owner) : 0].ncomp : ncomp;
+  const MultiFab<Dim>& prototype =
+      p_->sp[qualified ? static_cast<std::size_t>(owner) : 0].U;
+  const int components = ncomp < 0 ? prototype.ncomp() : ncomp;
   if (components < 1)
     throw std::invalid_argument("System history component count must be positive");
-  Extent<Dim> ghosts{};
-  for (int axis = 0; axis < Dim; ++axis)
-    ghosts[axis] = 1;
   std::vector<MultiFab<Dim>> ring;
   ring.reserve(static_cast<std::size_t>(depth));
   for (int slot = 0; slot < depth; ++slot)
-    ring.emplace_back(p_->ba, p_->dm, p_->local_rank, components, ghosts);
+    ring.emplace_back(prototype.layout(), prototype.distribution(), prototype.local_rank(),
+                      components, prototype.ghosts());
   auto& stored = histories.histories.emplace(name, std::move(ring)).first->second;
   histories.depth[name] = depth;
   histories.initialized[name] = false;

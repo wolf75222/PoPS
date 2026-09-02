@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -55,7 +56,10 @@ constexpr char kProviderUnit[] = "length/time";
 constexpr char kProviderLayout[] = "amr-transport";
 constexpr char kProviderValueKind[] = "scalar";
 constexpr char kProviderIdentity[] = "test.amr.positivity.speed@1";
-constexpr char kProviderConsumer[] = "test.amr.positivity/physical-flux";
+// Deliberately exceeds the small-string buffer: the AMR Program hot provider lookup must borrow
+// this sealed qid through the private string_view seam rather than materializing a std::string.
+constexpr char kProviderConsumer[] =
+    "test.amr.positivity/physical-flux/provider-consumer-qualified-identity-v1";
 
 template <int Dim>
 struct DensityAdvection {
@@ -174,7 +178,7 @@ std::vector<double> contrast_state(const pops::Extent<Dim>& shape) {
 }
 
 template <int Dim>
-pops::runtime::system::AuxiliaryComponentKey install_transport_speed(pops::AmrSystem<Dim>& system) {
+pops::runtime::system::AuxiliaryConsumerProviderPlan<Dim> transport_speed_consumer_plan() {
   using namespace pops::runtime::system;
   AuxiliaryStorageShape<Dim> shape;
   for (int axis = 0; axis < Dim; ++axis)
@@ -183,14 +187,27 @@ pops::runtime::system::AuxiliaryComponentKey install_transport_speed(pops::AmrSy
                                   kProviderComponent};
   const AuxiliaryComponentContract contract{kProviderRepresentation, kProviderCentering,
                                             kProviderUnit, kProviderLayout, kProviderValueKind};
+  return AuxiliaryConsumerProviderPlan<Dim>{kProviderConsumer, {{{key, contract, shape}, 0}}};
+}
+
+template <int Dim>
+pops::runtime::system::AuxiliaryComponentKey install_transport_speed(pops::AmrSystem<Dim>& system) {
+  using namespace pops::runtime::system;
+  const auto plan = transport_speed_consumer_plan<Dim>();
+  const AuxiliaryComponentKey key = plan.values.front().dependency.key;
+  const AuxiliaryComponentContract contract = plan.values.front().dependency.contract;
+  const AuxiliaryStorageShape<Dim> shape = plan.values.front().dependency.shape;
   system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<Dim>{
       kProviderIdentity,
       AuxiliaryProviderKind::input,
       {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
       {{key, contract, shape}},
       {}});
-  system.install_auxiliary_consumer_plan(
-      AuxiliaryConsumerProviderPlan<Dim>{kProviderConsumer, {{{key, contract, shape}, 0}}});
+  // Native block preparation precedes Program installation and therefore needs an A-side plan
+  // to bind its immutable provider view.  The Program candidate later rebuilds every per-level
+  // registry from providers only and installs the generated B plan, so this bootstrap plan is
+  // never retained as a second accepted consumer authority after cutover.
+  system.install_auxiliary_consumer_plan(plan);
   system.seal_auxiliary_providers();
   return key;
 }
@@ -208,24 +225,56 @@ std::shared_ptr<ProgramEvidence> install_program(pops::AmrSystem<Dim>& system) {
   if (block_count != 2 || level_count < 1)
     throw std::logic_error("positivity test requires two prepared AMR blocks and one level");
   using Resource = pops::test::program_v5::CallbackProgramResource;
+  const std::string program_identity = "test.amr.positivity/program@1";
+  const std::string program_clock = "test.amr.positivity.clock";
+  const std::vector<std::string> program_blocks = system.block_names();
+  if (program_blocks.size() != static_cast<std::size_t>(block_count))
+    throw std::logic_error("positivity test Program block authority is incomplete");
   std::vector<Resource> resources;
   resources.reserve(static_cast<std::size_t>(block_count * level_count));
+  std::vector<pops::test::program_v5::CallbackProgramFluxBasisOccurrence> flux_basis_occurrences;
+  std::vector<pops::test::program_v5::CallbackProgramFaceFluxStage> face_flux_stages;
+  flux_basis_occurrences.reserve(resources.capacity());
+  face_flux_stages.reserve(resources.capacity());
   for (int level = 0; level < level_count; ++level) {
     for (int block = 0; block < block_count; ++block) {
       const auto state = system.prepared_amr_block_state(block, level);
       if (!state)
         throw std::logic_error("positivity test Program resource has no prepared block state");
-      resources.push_back({Resource::Kind::rhs,
-                           static_cast<std::size_t>(level * block_count + block),
-                           0,
-                           block,
-                           level,
-                           static_cast<std::uint32_t>(state->ncomp()),
-                           static_cast<std::uint32_t>(state->ghosts()[0])});
+      const std::size_t slot = resources.size();
+      const int rhs_identity = 3000 + block;
+      const std::string resource_identity =
+          "test.amr.positivity/rhs/" + std::to_string(block) + "/level/" + std::to_string(level);
+      Resource resource{Resource::Kind::rhs,
+                        slot,
+                        0,
+                        block,
+                        level,
+                        static_cast<std::uint32_t>(state->ncomp()),
+                        static_cast<std::uint32_t>(state->ghosts()[0])};
+      resource.value_id = static_cast<std::uint64_t>(rhs_identity);
+      resource.identity = resource_identity;
+      resource.occurrence_path = resource_identity + "/occurrence";
+      resource.owner = program_blocks.at(static_cast<std::size_t>(block));
+      resource.clock = program_clock;
+      resources.push_back(std::move(resource));
+
+      const auto dense_slot = static_cast<std::uint32_t>(slot);
+      flux_basis_occurrences.push_back(
+          {dense_slot, dense_slot, block, level, rhs_identity, 0, 0, 1,
+           resource_identity + "/flux-basis", resource_identity + "/flux-basis/occurrence",
+           program_blocks.at(static_cast<std::size_t>(block)), program_clock});
+      face_flux_stages.push_back(
+          {dense_slot, dense_slot, dense_slot, 1, 1, 1, resource_identity + "/face-flux",
+           resource_identity + "/face-flux/occurrence",
+           program_blocks.at(static_cast<std::size_t>(block)), program_clock});
     }
   }
+  const std::optional<std::vector<pops::runtime::program::ProgramFluxBudgetRecord>> flux_budgets{
+      std::vector<pops::runtime::program::ProgramFluxBudgetRecord>(
+          static_cast<std::size_t>(block_count), {1, 1, 0, 0})};
   pops::test::install_explicit_amr_callback_program<Dim>(
-      system, "test.amr.positivity/program@1", "test.amr.positivity.clock", resources, {},
+      system, program_identity, program_clock, program_blocks, resources, {},
       [evidence, block_count](pops::test::explicit_amr_program_detail::context_type& context,
                               double macro_dt) {
         context.advance_hierarchy(macro_dt, [&context, evidence, block_count](double level_dt) {
@@ -240,13 +289,22 @@ std::shared_ptr<ProgramEvidence> install_program(pops::AmrSystem<Dim>& system) {
             if (selected > 0) {
               const auto provider_at = [&context, block](std::size_t local_patch) {
                 return context.template provider_values_view<1>(kProviderConsumer, block,
-                                                                 local_patch);
+                                                                local_patch);
               };
               if (block != 0)
                 ++evidence->nonzero_block_provider_binds;
               pops::SolveOutcome source = pops::backward_euler_source(
                   DensityAdvection<Dim>{}, provider_at, state, pops::Real(level_dt),
                   pops::NewtonOptions{}, context.prepared_execution_lane());
+              if (!source.report().solved_value_available()) {
+                const pops::SolveConsumption disposition =
+                    source.report().action == pops::SolveAction::kRejectAttempt
+                        ? pops::SolveConsumption::kRejectAttempt
+                        : pops::SolveConsumption::kFailRun;
+                const pops::SolveReport rejected = source.consume(disposition);
+                throw std::runtime_error("positivity test Program source solve failed: " +
+                                         rejected.reason);
+              }
               const pops::SolveReport accepted = source.consume(pops::SolveConsumption::kAccept);
               if (!accepted.solved())
                 throw std::runtime_error("positivity test Program source solve failed: " +
@@ -263,8 +321,9 @@ std::shared_ptr<ProgramEvidence> install_program(pops::AmrSystem<Dim>& system) {
           for (std::size_t block = 0; block < states.size(); ++block)
             context.axpy(*states[block], pops::Real(level_dt), *residuals[block]);
         });
-      });
-  system.set_program_block_map({0, 1});
+      },
+      {}, {}, flux_budgets, {}, std::nullopt, flux_basis_occurrences, face_flux_stages,
+      std::nullopt, {transport_speed_consumer_plan<Dim>()});
   return evidence;
 }
 
@@ -305,6 +364,7 @@ RunResult advance_with_floor(double positivity_floor) {
   const pops::AmrSystemConfig<Dim> system_config = config<Dim>();
   pops::AmrSystem<Dim> system(system_config);
   pops::test::install_amr_runtime_authority(system, "test.amr.positivity/runtime@1");
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
   const auto speed_key = install_transport_speed(system);
   system.install_block_state_route("density", "test.amr.positivity/state/density");
   system.install_block_state_route("density_peer", "test.amr.positivity/state/density-peer");
@@ -363,7 +423,8 @@ RunResult advance_with_floor(double positivity_floor) {
   RunResult result;
   result.levels = system.n_levels();
   auto* runtime = pops::test::AmrSystemTestAccess<Dim>::engine(system);
-  ASSERT_NE(runtime, nullptr);
+  if (runtime == nullptr)
+    throw std::runtime_error("AMR runtime is unexpectedly null");
   const pops::MultiFab<Dim>& fine = runtime->hierarchy().state(1);
   result.fine_patches = static_cast<int>(fine.layout().size());
   const pops::Box<Dim>& fine_domain = runtime->hierarchy().layout(1).domain();
@@ -409,8 +470,11 @@ RunResult advance_with_floor(double positivity_floor) {
 
   system.begin_step_transaction();
   system.step(2e-4);
-  result.mass_trial = system.mass("density");
-  result.fine_trial = system.block_level_state_global("density", 1);
+  {
+    auto provisional = system._provisional_read_scope();
+    result.mass_trial = system.mass("density");
+    result.fine_trial = system.block_level_state_global("density", 1);
+  }
   system.rollback_step_transaction();
   result.mass_rolled_back = system.mass("density");
   result.fine_rolled_back = system.block_level_state_global("density", 1);
@@ -444,10 +508,10 @@ void verify_exact_ranked_trajectory() {
   EXPECT_EQ(floored.fine_rolled_back, floored.fine_before);
   EXPECT_EQ(unfloored.fine_after, unfloored.fine_trial);
   EXPECT_EQ(floored.fine_after, floored.fine_trial);
-  EXPECT_EQ(unfloored.accepted_source_solves, 4);
-  EXPECT_EQ(floored.accepted_source_solves, 4);
-  EXPECT_EQ(unfloored.nonzero_block_provider_binds, 2);
-  EXPECT_EQ(floored.nonzero_block_provider_binds, 2);
+  EXPECT_EQ(unfloored.accepted_source_solves, 8);
+  EXPECT_EQ(floored.accepted_source_solves, 8);
+  EXPECT_EQ(unfloored.nonzero_block_provider_binds, 4);
+  EXPECT_EQ(floored.nonzero_block_provider_binds, 4);
 
   EXPECT_TRUE(all_finite(unfloored.fine_after));
   EXPECT_TRUE(all_finite(floored.fine_after));

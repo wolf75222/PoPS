@@ -2785,6 +2785,7 @@ void System<Dim>::install_prepared_coupling_operator(
           {{std::string_view("system-prepared-coupling"), exact}}, lane))
     throw std::invalid_argument("prepared System coupling contract differs between MPI ranks");
   p_->coupling_ = std::move(candidate);
+  p_->prepared_coupling_receipt_.reset();
 }
 
 template <int Dim>

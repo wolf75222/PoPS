@@ -53,7 +53,9 @@ from pops.time import (
     Every,
     ExternalTimeGrid,
     FixedDt,
+    Hold,
     Schedule,
+    TimePoint,
     When,
     every_dt,
 )
@@ -702,6 +704,23 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
     with pytest.raises(TypeError, match="cache_slots must be a list"):
         budget(SimpleNamespace(_s=Native()), NodeIdOnlyProgram(cache_required=True))
 
+    class CacheNodesAliasProgram(Program):
+        def temporal_manifest(self):
+            return {
+                "schedules": [
+                    {
+                        "cache_nodes": [0],
+                        "schedule": {"kind": "hold"},
+                        "cache_required": True,
+                    }
+                ],
+                "resource_plan_schema": "program-resource-plan:v1",
+                "resource_plan_digest": "a" * 64,
+            }
+
+    with pytest.raises(TypeError, match="cache_slots must be a list"):
+        budget(SimpleNamespace(_s=Native()), CacheNodesAliasProgram(cache_required=True))
+
     class MixedSlotProgram(Program):
         def temporal_manifest(self):
             return {
@@ -787,6 +806,8 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
 
     with pytest.raises(ValueError, match="non-dense"):
         budget(SimpleNamespace(_s=Native((0, 2))), Program(cache_required=True))
+    with pytest.raises(ValueError, match="duplicate exact slot indices"):
+        budget(SimpleNamespace(_s=Native((0, 0))), Program(cache_required=True))
     with pytest.raises(ValueError, match="differs from the temporal manifest"):
         budget(
             SimpleNamespace(_s=Native(plan_digest="b" * 64)),
@@ -805,6 +826,202 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
                     }
                 },
             )(cache_required=True),
+        )
+
+
+def test_checkpoint_cache_budget_derives_dense_slots_from_codegen_manifest():
+    """Authoring data is enriched and remains authenticated across native materialization."""
+    from pops.codegen.temporal_manifest import build_temporal_manifest
+    from pops.runtime._checkpoint_resource_budget import _cache_capacity
+    from pops.codegen.program_persistent_plan import (
+        ProgramPersistentValueKey,
+        ProgramResourcePlan,
+        ProgramResourcePlanEntry,
+    )
+
+    class Value:
+        id = 37
+        op = "rhs"
+        vtype = "scalar_field"
+        block = "owner"
+        space = "space"
+        inputs = ()
+        state_ref = None
+        name = "scheduled"
+
+        def __init__(self, clock):
+            self.clock = clock
+            self.point = TimePoint(clock)
+            self.attrs = {
+                "schedule": Schedule(Every(AcceptedStep(clock), 2), off=Hold()),
+                "components": 1,
+                "resolved_levels": (0, 1),
+                "bytes": (8, 16),
+                "maximum_bytes": (8, 16),
+                "cells": (1, 2),
+                "itemsize": 8,
+            }
+
+    class Program:
+        def __init__(self):
+            self.clock = Clock("cache-budget")
+            self._values = (Value(self.clock),)
+            self._histories = {}
+            self._histories_ncomp = {}
+            self._history_blocks = {}
+            self._history_state_refs = {}
+            self._history_spaces = {}
+            self._history_contracts = {}
+            self._history_persistence = {}
+            self._time_states = {}
+
+        def temporal_manifest(self):
+            from pops.time._program.temporal_manifest import build_temporal_manifest as build_base
+
+            return build_base(self)
+
+    program = Program()
+    manifest = build_temporal_manifest(program, target="system")
+    symbolic_plan = ProgramResourcePlan.from_data(manifest["resource_plan"])
+    symbolic_names = tuple(row.identity for row in symbolic_plan.abi_rows())
+
+    class Native:
+        @staticmethod
+        def program_cache_slots():
+            return [0, 1]
+
+        @staticmethod
+        def program_cache_name(slot):
+            return symbolic_names[slot]
+
+        @staticmethod
+        def program_cache_plan_schema():
+            return "program-resource-plan:v1"
+
+        @staticmethod
+        def program_cache_plan_digest():
+            return manifest["resource_plan_digest"]
+
+    names, cache_bytes, evidence = _cache_capacity(
+        SimpleNamespace(_s=Native()),
+        (2, 3),
+        program=program,
+        block_nvars_by_name={"owner": 1},
+    )
+
+    assert cache_bytes == 2 * 6 * 8
+    assert "cache_value_0" in names and "cache_value_1" in names
+    assert [slot for slot, _name, _width in evidence["slots"]] == [0, 1]
+
+    class MaterializedNative(Native):
+        @staticmethod
+        def program_cache_plan_digest():
+            # Host materialization changes this digest by sealing runtime-sized row footprints.
+            return "b" * 64
+
+    names, cache_bytes, evidence = _cache_capacity(
+        SimpleNamespace(_s=MaterializedNative()),
+        (2, 3),
+        program=program,
+        block_nvars_by_name={"owner": 1},
+    )
+    assert cache_bytes == 2 * 6 * 8
+    assert names.count("cache_value_0") == 1 and names.count("cache_value_1") == 1
+    assert [slot for slot, _name, _width in evidence["slots"]] == [0, 1]
+    assert evidence["compiler_plan_digest"] == manifest["resource_plan_digest"]
+    assert evidence["plan_digest"] == "b" * 64
+
+    exact_plan = ProgramResourcePlan(
+        [
+            ProgramResourcePlanEntry(
+                key=ProgramPersistentValueKey(
+                    value_id=73,
+                    occurrence_path="root/exact",
+                    owner="owner",
+                    space="space",
+                    clock="clock",
+                ),
+                components=1,
+                component_names=("u",),
+                bytes=8,
+                maximum_bytes=8,
+            )
+        ]
+    )
+    exact_manifest = {
+        "schedules": [
+            {
+                "cache_slots": [0],
+                "schedule": {"kind": "hold"},
+                "cache_required": True,
+            }
+        ],
+        "resource_plan": exact_plan.to_data(),
+        "resource_plan_schema": exact_plan.schema,
+        "resource_plan_digest": exact_plan.digest,
+    }
+
+    class ExactManifestProgram:
+        def temporal_manifest(self):
+            return exact_manifest
+
+    exact_names = tuple(row.identity for row in exact_plan.abi_rows())
+
+    class ExactMaterializedNative:
+        @staticmethod
+        def program_cache_slots():
+            return [0]
+
+        @staticmethod
+        def program_cache_name(slot):
+            return exact_names[slot]
+
+        @staticmethod
+        def program_cache_plan_schema():
+            return exact_plan.schema
+
+        @staticmethod
+        def program_cache_plan_digest():
+            # Host-resident materialization may alter the final digest even when exact value rows
+            # retain their byte footprint; the compiler ABI-row identity remains the continuity
+            # witness.
+            return "c" * 64
+
+    _names, exact_cache_bytes, exact_evidence = _cache_capacity(
+        SimpleNamespace(_s=ExactMaterializedNative()),
+        (1,),
+        program=ExactManifestProgram(),
+        block_nvars_by_name={"owner": 1},
+    )
+    assert exact_cache_bytes == 1 * 1 * 8
+    assert exact_evidence["compiler_plan_digest"] == exact_plan.digest
+    assert exact_evidence["plan_digest"] == "c" * 64
+
+    class ForgedNameNative(ExactMaterializedNative):
+        @staticmethod
+        def program_cache_name(slot):
+            return "forged-cache-name" if slot == 0 else exact_names[slot]
+
+    with pytest.raises(ValueError, match="compiler temporal plan"):
+        _cache_capacity(
+            SimpleNamespace(_s=ForgedNameNative()),
+            (1,),
+            program=ExactManifestProgram(),
+            block_nvars_by_name={"owner": 1},
+        )
+
+    class ForgedDigestProgram:
+        def temporal_manifest(self):
+            forged = dict(manifest)
+            forged["resource_plan_digest"] = "f" * 64
+            return forged
+
+    with pytest.raises(ValueError, match="identity disagrees with its plan"):
+        _cache_capacity(
+            SimpleNamespace(_s=MaterializedNative()),
+            (2, 3),
+            program=ForgedDigestProgram(),
+            block_nvars_by_name={"owner": 1},
         )
 
 

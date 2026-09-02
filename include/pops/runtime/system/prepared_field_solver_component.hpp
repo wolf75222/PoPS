@@ -113,7 +113,7 @@ class PreparedFieldSolverComponent final {
                   "FieldSolver ABI v2 requires the binary64 PoPS backend");
     collective_preflight_([&] { validate_solve_layout_(rhs, solution, geometry); },
                           "external FieldSolver layout validation failed collectively");
-    Kokkos::fence();
+    ::pops::device_fence();
     prepare_topology_once_(rhs, geometry, periodicity);
 
     std::exception_ptr request_error;
@@ -175,7 +175,7 @@ class PreparedFieldSolverComponent final {
                            "native FieldSolver v2 marked a non-finite active solution as solved");
         return report;
       }
-      Kokkos::fence();
+      ::pops::device_fence();
       report.mark_solved(native.reason);
       return report;
     }

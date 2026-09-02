@@ -7,11 +7,14 @@
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 
+#include <array>
 #include <cmath>
+#include <cstring>
 #include <cstdint>
 #include <exception>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -87,23 +90,33 @@ class PreparedTensorBoundarySession {
 
   /// Collectively refresh the exact solve point without exposing a partially published value.
   void refresh_point(const point_type& point) {
-    std::optional<point_type> candidate;
-    std::string candidate_contract;
     std::exception_ptr local_error;
     try {
-      candidate.emplace(point);
-      require_point_(*candidate);
-      if (candidate->clock != point_.clock || candidate->level != point_.level ||
-          candidate->stage != point_.stage || candidate->stage_fraction != point_.stage_fraction ||
-          candidate->graph_identity != point_.graph_identity ||
-          candidate->rate_identity != point_.rate_identity ||
-          candidate->application_identity != point_.application_identity)
+      require_point_(point);
+      if (point.clock != point_.clock || point.level != point_.level ||
+          point.stage != point_.stage || point.stage_fraction != point_.stage_fraction ||
+          point.graph_identity != point_.graph_identity ||
+          point.rate_identity != point_.rate_identity ||
+          point.application_identity != point_.application_identity)
         throw std::invalid_argument(
             "Program tensor boundary refresh changed its exact evaluation identity");
-      ExactContractBuilder contract;
-      contract.text("pops.program.tensor-boundary-point-refresh").scalar(std::uint32_t{1});
-      append_point_contract_(contract, *candidate);
-      candidate_contract = std::move(contract).release();
+      require_point_capacity_(point);
+      std::memset(&refresh_numeric_, 0, sizeof(refresh_numeric_));
+      refresh_numeric_ = {point.tick,
+                          point.level,
+                          point.substep,
+                          point.stage,
+                          point.stage_fraction.numerator,
+                          point.stage_fraction.denominator,
+                          point.dt,
+                          point.physical_time};
+      std::memcpy(refresh_numeric_bytes_.data(), &refresh_numeric_, sizeof(refresh_numeric_));
+      refresh_pairs_[0].second = point.clock;
+      refresh_pairs_[1].second = point.graph_identity;
+      refresh_pairs_[2].second = point.rate_identity;
+      refresh_pairs_[3].second = point.application_identity;
+      refresh_pairs_[4].second =
+          std::string_view(refresh_numeric_bytes_.data(), refresh_numeric_bytes_.size());
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -113,15 +126,10 @@ class PreparedTensorBoundarySession {
       throw std::runtime_error("Program tensor boundary point refresh failed collectively");
     }
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("program-tensor-boundary-point-refresh"),
-              std::string_view(candidate_contract)}},
-            *lane_))
+            std::span<const ExactOrderedBytePair>(refresh_pairs_), *lane_))
       throw std::invalid_argument(
           "Program tensor boundary point refresh differs between prepared-lane ranks");
-
-    static_assert(std::is_nothrow_swappable_v<point_type>);
-    using std::swap;
-    swap(point_, *candidate);
+    copy_point_into_prepared_(point);
   }
 
   /// Rank-local, allocation-free validation used before the owning context enters consensus.
@@ -152,7 +160,64 @@ class PreparedTensorBoundarySession {
         point_(point),
         lane_(&lane),
         lane_borrow_(lane.borrow_immutably()),
-        generation_(generation) {}
+        generation_(generation) {
+    // The copied value may retain only its logical size.  The session is a cold object, so prime
+    // the complete externally prepared envelope before it can be refreshed by a candidate step.
+    prime_point_capacity_(point);
+    refresh_pairs_[0].first = "program-tensor-boundary-clock-v1";
+    refresh_pairs_[1].first = "program-tensor-boundary-graph-v1";
+    refresh_pairs_[2].first = "program-tensor-boundary-rate-v1";
+    refresh_pairs_[3].first = "program-tensor-boundary-application-v1";
+    refresh_pairs_[4].first = "program-tensor-boundary-numeric-v1";
+  }
+
+  struct RefreshNumericWitness {
+    std::int64_t tick = 0;
+    std::int32_t level = 0;
+    std::int32_t substep = 0;
+    std::int32_t stage = 0;
+    std::int64_t stage_numerator = 0;
+    std::int64_t stage_denominator = 1;
+    double dt = 0.0;
+    double physical_time = 0.0;
+  };
+
+  static void require_string_capacity_(const std::string& destination, std::string_view source) {
+    if (destination.capacity() < source.size())
+      throw std::logic_error("Program tensor boundary point exceeds its prepared capacity");
+  }
+
+  void prime_point_capacity_(const point_type& source) {
+    const auto prime = [](std::string& destination, const std::string& input) {
+      if (destination.capacity() < input.capacity())
+        destination.reserve(input.capacity());
+    };
+    prime(point_.clock, source.clock);
+    prime(point_.graph_identity, source.graph_identity);
+    prime(point_.rate_identity, source.rate_identity);
+    prime(point_.application_identity, source.application_identity);
+  }
+
+  void require_point_capacity_(const point_type& source) const {
+    require_string_capacity_(point_.clock, source.clock);
+    require_string_capacity_(point_.graph_identity, source.graph_identity);
+    require_string_capacity_(point_.rate_identity, source.rate_identity);
+    require_string_capacity_(point_.application_identity, source.application_identity);
+  }
+
+  void copy_point_into_prepared_(const point_type& source) noexcept {
+    point_.clock.assign(source.clock);
+    point_.tick = source.tick;
+    point_.level = source.level;
+    point_.substep = source.substep;
+    point_.stage = source.stage;
+    point_.stage_fraction = source.stage_fraction;
+    point_.dt = source.dt;
+    point_.physical_time = source.physical_time;
+    point_.graph_identity.assign(source.graph_identity);
+    point_.rate_identity.assign(source.rate_identity);
+    point_.application_identity.assign(source.application_identity);
+  }
 
   void initialize_(const field_type& prototype) {
     std::exception_ptr local_error;
@@ -295,6 +360,9 @@ class PreparedTensorBoundarySession {
   ExecutionLane::ImmutableBorrow lane_borrow_;
   std::uint64_t generation_ = 0;
   mutable std::optional<HaloExchange<Dim>> exchange_;
+  RefreshNumericWitness refresh_numeric_{};
+  std::array<char, sizeof(RefreshNumericWitness)> refresh_numeric_bytes_{};
+  std::array<ExactOrderedBytePair, 5> refresh_pairs_{};
 };
 
 }  // namespace pops::runtime::program

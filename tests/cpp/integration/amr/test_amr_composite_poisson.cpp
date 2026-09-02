@@ -293,6 +293,7 @@ TEST(test_amr_composite_poisson,
   pops::AmrSystem<Dim> system(config);
   pops::test::install_amr_runtime_authority(system,
                                             "tests.amr.composite-poisson/exact-provider-runtime");
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
   const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
       "pops.field-hierarchy.composite", 1, {"pops.field-hierarchy.options.empty@1", {}}};
   pops::CompositeFacOptions fac_controls;
@@ -339,16 +340,22 @@ TEST(test_amr_composite_poisson,
   system.set_program_block_map({0});
 
   using Resource = pops::test::program_v5::CallbackProgramResource;
-  const auto coarse_state = system.prepared_amr_block_state(0, 0);
-  ASSERT_TRUE(coarse_state);
+  std::uint32_t coarse_ncomp = 0;
+  std::uint32_t coarse_ghost_depth = 0;
+  {
+    const auto coarse_state = system.prepared_amr_block_state(0, 0);
+    ASSERT_TRUE(coarse_state);
+    coarse_ncomp = static_cast<std::uint32_t>(coarse_state->ncomp());
+    coarse_ghost_depth = static_cast<std::uint32_t>(coarse_state->ghosts()[0]);
+  }
   const std::vector<Resource> resources{{
       Resource::Kind::state,
       0,
       0,
       0,
       0,
-      static_cast<std::uint32_t>(coarse_state->ncomp()),
-      static_cast<std::uint32_t>(coarse_state->ghosts()[0]),
+      coarse_ncomp,
+      coarse_ghost_depth,
   }};
   const std::vector<pops::test::program_v5::CallbackProgramFieldRoute> field_routes{{0, slot, {0}}};
   struct SolveEvidence {

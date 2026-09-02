@@ -389,7 +389,7 @@ void copy_valid(MultiFab<Dim, MemorySpace>& destination, const MultiFab<Dim, Mem
   for (std::size_t local = 0; local < destination.local_size(); ++local)
     copy_region<Dim>(destination.fab(local).view(), std::as_const(source.fab(local)).view(),
                      destination.box(local));
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 inline void validate_controls(const Controls& controls) {
@@ -467,6 +467,10 @@ class FullTensorCompositeFac {
         throw std::invalid_argument(
             "dimension-generic tensor FAC coarse/fine schedule differs between MPI ranks");
 
+    // Singularity is a property of the authenticated boundary contract. Materialize its
+    // nullspace workspace only after that contract has agreed, so no rank can enter a different
+    // collective trace and no first solve can grow the resident footprint.
+    prepare_nullspace_();
     for (auto& connection : connections_)
       connection->attach_lane(lane);
     for (std::size_t level = 0; level < levels_.size(); ++level) {
@@ -512,6 +516,23 @@ class FullTensorCompositeFac {
                        [](const auto& connection) { return connection->replicated_parent; });
   }
 
+  /// Logical storage retained by the native FAC preparation, excluding this object itself.
+  /// A singular nullspace workspace is materialized at bind and included in the exact receipt.
+  [[nodiscard]] PreparedResidentStorage resident_storage() const;
+
+  /// Conservative finite bound for a not-yet-materialized FAC image.
+  ///
+  /// This is intentionally expressed in configured topology terms rather than accepting an
+  /// already-built ``LevelBinding``.  It is used by the type-erased tensor-provider boundary to
+  /// seal capacity before a forward hierarchy exists.  The result covers every allocation
+  /// represented by ``resident_storage()`` plus the prepared transfer arenas which the latter
+  /// deliberately treats as transport implementation detail.  Arithmetic overflow is a refusal,
+  /// never a wraparound capacity promise.
+  [[nodiscard]] static std::uint64_t configured_resident_storage_upper_bound(
+      std::span<const std::uint64_t> level_cell_bounds, std::span<const std::uint64_t> patch_bounds,
+      std::span<const std::uint64_t> parent_child_pair_bounds, std::uint64_t rank_bound,
+      std::string_view execution_lane_identity);
+
   SolveReport solve(const Controls& controls, const ExecutionLane& lane) {
     if (all_reduce_max(&lane == lane_ ? 0L : 1L, *lane_) != 0)
       throw std::invalid_argument(
@@ -521,7 +542,6 @@ class FullTensorCompositeFac {
       detail::copy_valid<Dim>(*levels_[level]->binding.solution,
                               *levels_[level]->binding.initial_guess);
     try {
-      ensure_nullspace_();
       if (nullspace_workspace_) {
         nullspace_workspace_->require_compatible(nullspace_rhs_);
         nullspace_workspace_->apply_gauge(nullspace_candidates_);
@@ -843,7 +863,7 @@ class FullTensorCompositeFac {
                                 std::as_const(source.fab_global(parent_patch)).view(), region);
           }
         }
-        Kokkos::fence();
+        ::pops::device_fence();
         return;
       }
       auto source_view = [&source](const transfer_job& job) -> FieldView<const Real, Dim> {
@@ -866,7 +886,7 @@ class FullTensorCompositeFac {
                                     coarse, fine, parent->binding.geometry->domain(),
                                     child->binding.geometry->domain(), ratio});
       }
-      Kokkos::fence();
+      ::pops::device_fence();
     }
 
     void prolong_valid(field_type& destination) {
@@ -880,7 +900,7 @@ class FullTensorCompositeFac {
             detail::LinearInterpolationKernel<Dim>{coarse, fine, parent->binding.geometry->domain(),
                                                    child->binding.geometry->domain(), ratio});
       }
-      Kokkos::fence();
+      ::pops::device_fence();
     }
 
     void restrict_into(const field_type& source, field_type& destination) {
@@ -894,7 +914,7 @@ class FullTensorCompositeFac {
                           patch.restricted.view(), parent->binding.geometry->domain(),
                           child->binding.geometry->domain(), ratio, inverse_children});
       }
-      Kokkos::fence();
+      ::pops::device_fence();
       if (replicated_parent) {
         broadcast_and_publish_restriction_(destination);
         return;
@@ -935,8 +955,8 @@ class FullTensorCompositeFac {
 #ifdef POPS_HAS_MPI
         if (lane->size() > 1) {
           const int code = MPI_Bcast(patch.broadcast_buffer.data(),
-                                     static_cast<int>(patch.broadcast_buffer.size()), pops::mpi_real_datatype(),
-                                     root, lane->native_handle());
+                                     static_cast<int>(patch.broadcast_buffer.size()),
+                                     pops::mpi_real_datatype(), root, lane->native_handle());
           if (all_reduce_max(code == MPI_SUCCESS ? 0L : 1L, *lane) != 0)
             throw std::runtime_error(
                 "dimension-generic tensor replicated restriction broadcast failed collectively");
@@ -956,7 +976,7 @@ class FullTensorCompositeFac {
             detail::copy_region(destination.fab_global(parent_patch).view(),
                                 std::as_const(patch.restricted).view(), region);
           }
-          Kokkos::fence();
+          ::pops::device_fence();
         } catch (...) {
           publication_failure = 1;
         }
@@ -1068,6 +1088,9 @@ class FullTensorCompositeFac {
         .text(lane_->identity())
         .scalar(static_cast<std::uint64_t>(bindings_.size()));
     for (const auto& binding : bindings_) {
+      const auto& rank_space = binding.solution->rank_space();
+      for (int axis = 0; axis < Dim; ++axis)
+        contract.scalar(rank_space.origin()[axis]).scalar(rank_space.extent()[axis]);
       for (int axis = 0; axis < Dim; ++axis)
         contract.scalar(binding.geometry->domain().lo[axis])
             .scalar(binding.geometry->domain().hi[axis])
@@ -1084,6 +1107,16 @@ class FullTensorCompositeFac {
                       for (int axis = 0; axis < Dim; ++axis)
                         item.scalar(owner[axis]);
                     });
+      for (int axis = 0; axis < Dim; ++axis)
+        for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
+          const Face<Dim> face{axis, side};
+          const PhysicalBoundaryFace& law = binding.boundary->at(face);
+          contract.scalar(binding.boundary->topology().is_periodic(face))
+              .scalar(law.kind)
+              .scalar(law.value)
+              .scalar(law.alpha)
+              .scalar(law.beta);
+        }
     }
     contract.scalar(static_cast<std::uint64_t>(ratios_.size()));
     for (const auto& ratio : ratios_)
@@ -1107,7 +1140,7 @@ class FullTensorCompositeFac {
         }
       }
     }
-    Kokkos::fence();
+    ::pops::device_fence();
   }
 
   void same_level_fill_(Level& level, field_type& field) {
@@ -1190,7 +1223,7 @@ class FullTensorCompositeFac {
             Kokkos::Max<long>(patch_invalid));
         local_invalid = std::max(local_invalid, patch_invalid);
       }
-    Kokkos::fence();
+    ::pops::device_fence();
     return all_reduce_max(local_invalid, *lane_) == 0;
   }
 
@@ -1226,7 +1259,7 @@ class FullTensorCompositeFac {
                             iterate.fab(local).view(), std::as_const(rhs.fab(local)).view(),
                             std::as_const(level.covered.fab(local)).view(),
                             stencil_(level, local, iterate), colour, Real(1), mask_covered});
-        Kokkos::fence();
+        ::pops::device_fence();
       }
     }
   }
@@ -1241,7 +1274,7 @@ class FullTensorCompositeFac {
                                                 std::as_const(level.binding.rhs->fab(local)).view(),
                                                 std::as_const(level.covered.fab(local)).view(),
                                                 stencil_(level, local, solution), true});
-    Kokkos::fence();
+    ::pops::device_fence();
   }
 
   void compute_composite_residual_() {
@@ -1274,7 +1307,7 @@ class FullTensorCompositeFac {
                                           std::as_const(coarse.residual.fab(local)).view(),
                                           std::as_const(coarse.covered.fab(local)).view(),
                                           stencil_(coarse, local, coarse.correction), false});
-        Kokkos::fence();
+        ::pops::device_fence();
         if (global_norm_inf_(coarse.scratch) <= stop)
           break;
       }
@@ -1287,7 +1320,7 @@ class FullTensorCompositeFac {
                     detail::ActiveAddKernel<Dim>{level.binding.solution->fab(local).view(),
                                                  std::as_const(correction.fab(local)).view(),
                                                  std::as_const(level.active.fab(local)).view()});
-    Kokkos::fence();
+    ::pops::device_fence();
   }
 
   void prolong_correction_tower_() {
@@ -1344,47 +1377,61 @@ class FullTensorCompositeFac {
       return;
     const Real shift = static_cast<Real>(all_reduce_sum(local_sum, *lane_) / volume);
     for (std::size_t local = 0; local < field.local_size(); ++local)
-      for_each_cell(field.box(local),
-                    detail::ActiveShiftKernel<Dim>{field.fab(local).view(),
-                                                   std::as_const(level.active).fab(local).view(),
-                                                   shift});
-    Kokkos::fence();
+      for_each_cell(field.box(local), detail::ActiveShiftKernel<Dim>{
+                                          field.fab(local).view(),
+                                          std::as_const(level.active).fab(local).view(), shift});
+    ::pops::device_fence();
   }
 
-  void ensure_nullspace_() {
+  void prepare_nullspace_() {
     if (nullspace_workspace_ || !singular_())
       return;
-    FieldNullspacePlan<Dim> plan = constant_mean_zero_nullspace<Dim>(
-        "pops.runtime.amr.tensor-composite-fac.nullspace", "tensor-fac-composite", Real(1));
-    plan.bases[0].masks.clear();
-    plan.bases[0].cell_measure.clear();
+    std::optional<FieldNullspacePlan<Dim>> plan;
     std::vector<PreparedVectorDistribution<Dim>> distributions;
-    distributions.reserve(levels_.size());
-    for (const auto& level : levels_) {
-      auto mask = std::make_shared<MultiFab<Dim>>(level->active.layout(),
-                                                 level->active.distribution(),
-                                                 level->active.local_rank(), 1, Extent<Dim>{});
-      ::pops::elliptic::mg::copy_scalar_valid(level->active, *mask);
-      plan.bases[0].masks.emplace_back(std::move(mask));
-      Real measure = Real(1);
-      for (int axis = 0; axis < Dim; ++axis)
-        measure *= level->binding.geometry->spacing(axis);
-      plan.bases[0].cell_measure.push_back(measure);
-      distributions.push_back(level->binding.solution->distribution().replicated()
-                                  ? PreparedVectorDistribution<Dim>::replicated()
-                                  : PreparedVectorDistribution<Dim>::distributed());
-    }
     std::vector<const MultiFab<Dim>*> rhs_layouts;
+    std::vector<const MultiFab<Dim>*> retained_rhs;
     std::vector<MultiFab<Dim>*> candidates;
-    rhs_layouts.reserve(levels_.size());
-    candidates.reserve(levels_.size());
-    for (const auto& level : levels_) {
-      rhs_layouts.push_back(level->binding.rhs);
-      candidates.push_back(level->binding.solution);
+    std::exception_ptr local_error;
+    try {
+      plan.emplace(constant_mean_zero_nullspace<Dim>(
+          "pops.runtime.amr.tensor-composite-fac.nullspace", "tensor-fac-composite", Real(1)));
+      plan->bases[0].masks.clear();
+      plan->bases[0].cell_measure.clear();
+      plan->bases[0].masks.reserve(levels_.size());
+      plan->bases[0].cell_measure.reserve(levels_.size());
+      distributions.reserve(levels_.size());
+      rhs_layouts.reserve(levels_.size());
+      retained_rhs.reserve(levels_.size());
+      candidates.reserve(levels_.size());
+      for (const auto& level : levels_) {
+        auto mask =
+            std::make_shared<MultiFab<Dim>>(level->active.layout(), level->active.distribution(),
+                                            level->active.local_rank(), 1, Extent<Dim>{});
+        ::pops::elliptic::mg::copy_scalar_valid(level->active, *mask);
+        plan->bases[0].masks.emplace_back(std::move(mask));
+        Real measure = Real(1);
+        for (int axis = 0; axis < Dim; ++axis)
+          measure *= level->binding.geometry->spacing(axis);
+        plan->bases[0].cell_measure.push_back(measure);
+        distributions.push_back(level->binding.solution->distribution().replicated()
+                                    ? PreparedVectorDistribution<Dim>::replicated()
+                                    : PreparedVectorDistribution<Dim>::distributed());
+        rhs_layouts.push_back(level->binding.rhs);
+        retained_rhs.push_back(level->binding.rhs);
+        candidates.push_back(level->binding.solution);
+      }
+    } catch (...) {
+      local_error = std::current_exception();
     }
-    nullspace_workspace_ = std::make_unique<FieldNullspaceWorkspace<Dim>>(
-        std::move(plan), rhs_layouts, std::move(distributions), *lane_);
-    nullspace_rhs_ = std::move(rhs_layouts);
+    if (all_reduce_max(local_error ? 1L : 0L, *lane_) != 0) {
+      if (lane_->size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error(
+          "dimension-generic tensor FAC nullspace materialization failed collectively");
+    }
+    nullspace_workspace_ = FieldNullspaceWorkspace<Dim>::prepare_collectively(
+        std::move(*plan), std::move(rhs_layouts), std::move(distributions), *lane_);
+    nullspace_rhs_ = std::move(retained_rhs);
     nullspace_candidates_ = std::move(candidates);
   }
 
@@ -1408,5 +1455,402 @@ class FullTensorCompositeFac {
   std::vector<MultiFab<Dim>*> nullspace_candidates_{};
   std::unique_ptr<FieldNullspaceWorkspace<Dim>> nullspace_workspace_{};
 };
+
+template <int Dim, class MemorySpace>
+PreparedResidentStorage FullTensorCompositeFac<Dim, MemorySpace>::resident_storage() const {
+  // The singular nullspace workspace is materialized during preparation and contributes its exact
+  // receipt below; it must never be omitted from a hard resident-storage decision.
+
+  const auto add = [](std::uint64_t& total, std::uint64_t value) {
+    if (value > std::numeric_limits<std::uint64_t>::max() - total)
+      throw std::overflow_error("tensor FAC resident storage size overflows uint64");
+    total += value;
+  };
+  const auto vector_bytes = [](const auto& values) -> std::uint64_t {
+    using value_type = typename std::remove_reference_t<decltype(values)>::value_type;
+    if (values.capacity() > std::numeric_limits<std::uint64_t>::max() / sizeof(value_type))
+      throw std::overflow_error("tensor FAC resident vector storage overflows uint64");
+    return static_cast<std::uint64_t>(values.capacity()) * sizeof(value_type);
+  };
+  const auto external_string_bytes = [](const std::string& value) -> std::uint64_t {
+    const auto object_begin = reinterpret_cast<std::uintptr_t>(&value);
+    const auto object_end = object_begin + sizeof(value);
+    const auto data = reinterpret_cast<std::uintptr_t>(value.data());
+    if (data >= object_begin && data < object_end)
+      return 0;
+    if (value.capacity() == std::numeric_limits<std::size_t>::max())
+      throw std::overflow_error("tensor FAC resident string storage overflows uint64");
+    return static_cast<std::uint64_t>(value.capacity()) + 1U;
+  };
+  const auto fab_bytes = [&add](const Fab<Dim, MemorySpace>& fab) -> std::uint64_t {
+    const std::uint64_t values = static_cast<std::uint64_t>(fab.size());
+    if (values > std::numeric_limits<std::uint64_t>::max() / sizeof(Real))
+      throw std::overflow_error("tensor FAC resident Fab storage overflows uint64");
+    std::uint64_t result = 0;
+    add(result, values * sizeof(Real));
+    return result;
+  };
+
+  std::uint64_t total = 0;
+  add(total, vector_bytes(bindings_));
+  add(total, vector_bytes(ratios_));
+  add(total, vector_bytes(levels_));
+  for (const auto& level : levels_) {
+    add(total, sizeof(Level));
+    for (const field_type* field :
+         {&level->residual, &level->scratch, &level->correction, &level->covered, &level->active})
+      add(total, field->resident_storage_bytes());
+    add(total, level->halo_schedule.resident_storage_bytes());
+    add(total, level->physical_boundary.resident_storage_bytes());
+    add(total, level->homogeneous_boundary.resident_storage_bytes());
+    add(total, level->coefficient_boundary.resident_storage_bytes());
+    if (level->halo_exchange)
+      add(total, sizeof(HaloExchange<Dim, MemorySpace>));
+    if (level->halo_exchange)
+      add(total, level->halo_exchange->resident_storage_bytes());
+  }
+  add(total, vector_bytes(connections_));
+  for (const auto& connection : connections_) {
+    add(total, sizeof(Connection));
+    add(total, vector_bytes(connection->scratch));
+    add(total, vector_bytes(connection->scratch_by_fine_patch));
+    add(total, external_string_bytes(connection->gather_contract));
+    add(total, external_string_bytes(connection->restriction_contract));
+    for (const auto& patch : connection->scratch) {
+      add(total, fab_bytes(patch.parent_staging));
+      add(total, fab_bytes(patch.restricted));
+      add(total, vector_bytes(patch.ghost_regions));
+      add(total, vector_bytes(patch.broadcast_buffer));
+      if (patch.restricted_host) {
+        const std::uint64_t values = static_cast<std::uint64_t>(patch.restricted_host->size());
+        if (values > std::numeric_limits<std::uint64_t>::max() / sizeof(Real))
+          throw std::overflow_error("tensor FAC resident host mirror storage overflows uint64");
+        add(total, values * sizeof(Real));
+      }
+    }
+    if (connection->gather) {
+      add(total, sizeof(typename Connection::transport_type));
+      add(total, connection->gather->resident_storage_bytes());
+    }
+    if (connection->restriction) {
+      add(total, sizeof(typename Connection::transport_type));
+      add(total, connection->restriction->resident_storage_bytes());
+    }
+  }
+  add(total, external_string_bytes(exact_contract_));
+  add(total, vector_bytes(nullspace_rhs_));
+  add(total, vector_bytes(nullspace_candidates_));
+  if (nullspace_workspace_) {
+    const PreparedResidentStorage workspace_storage = nullspace_workspace_->resident_storage();
+    if (!workspace_storage.is_exact())
+      return PreparedResidentStorage::unknown();
+    add(total, sizeof(*nullspace_workspace_));
+    add(total, workspace_storage.bytes);
+  }
+  return PreparedResidentStorage::exact(total);
+}
+
+template <int Dim, class MemorySpace>
+std::uint64_t FullTensorCompositeFac<Dim, MemorySpace>::configured_resident_storage_upper_bound(
+    std::span<const std::uint64_t> level_cell_bounds, std::span<const std::uint64_t> patch_bounds,
+    std::span<const std::uint64_t> parent_child_pair_bounds, std::uint64_t rank_bound,
+    std::string_view execution_lane_identity) {
+  const std::size_t levels = level_cell_bounds.size();
+  if (levels < 2 || patch_bounds.size() != levels ||
+      parent_child_pair_bounds.size() + 1U != levels || rank_bound == 0 ||
+      execution_lane_identity.empty())
+    throw std::invalid_argument("tensor FAC configured storage bounds are incomplete");
+  if (std::any_of(level_cell_bounds.begin(), level_cell_bounds.end(),
+                  [](std::uint64_t value) { return value == 0; }) ||
+      std::any_of(patch_bounds.begin(), patch_bounds.end(),
+                  [](std::uint64_t value) { return value == 0; }) ||
+      std::any_of(parent_child_pair_bounds.begin(), parent_child_pair_bounds.end(),
+                  [](std::uint64_t value) { return value == 0; }))
+    throw std::invalid_argument("tensor FAC configured storage bounds contain zero capacity");
+
+  const auto add = [](std::uint64_t& total, std::uint64_t value) {
+    if (value > std::numeric_limits<std::uint64_t>::max() - total)
+      throw std::overflow_error("tensor FAC configured storage size overflows uint64");
+    total += value;
+  };
+  const auto product = [](std::uint64_t left, std::uint64_t right) {
+    if (left != 0 && right > std::numeric_limits<std::uint64_t>::max() / left)
+      throw std::overflow_error("tensor FAC configured storage product overflows uint64");
+    return left * right;
+  };
+  const auto power = [&product](std::uint64_t base, int exponent) {
+    std::uint64_t result = 1;
+    for (int index = 0; index < exponent; ++index)
+      result = product(result, base);
+    return result;
+  };
+  const auto vector_bytes = [&product](std::uint64_t count, std::size_t element_size) {
+    return product(count, static_cast<std::uint64_t>(element_size));
+  };
+  const auto vector_capacity_bytes = [&product, &vector_bytes](std::uint64_t count,
+                                                               std::size_t element_size) {
+    return vector_bytes(product(2U, count), element_size);
+  };
+  const auto external_string_bytes = [&add](std::uint64_t characters) {
+    std::uint64_t result = characters;
+    add(result, 1U);
+    return result;
+  };
+  const auto decimal_digits = [](std::uint64_t value) {
+    std::uint64_t digits = 1;
+    while (value >= 10) {
+      value /= 10;
+      ++digits;
+    }
+    return digits;
+  };
+  const std::uint64_t scalar_frame_bytes = 20;
+  const std::uint64_t frame_bytes = 9;
+  const std::uint64_t sequence_count_bytes = 8;
+  const std::uint64_t ghost_growth = power(3, Dim);
+  const std::uint64_t staging_growth = power(5, Dim);
+  const std::uint64_t boundary_entries = ghost_growth - 1U;
+
+  const auto multifab_bytes = [&](std::uint64_t cells, std::uint64_t patches, int components,
+                                  bool ghosts) {
+    if (components < 1)
+      throw std::invalid_argument("tensor FAC configured field has invalid components");
+    std::uint64_t result = 0;
+    // A configured request owns only a cell bound and a patch bound.  Treat each admitted patch
+    // as a full-domain image so this remains a bound before the concrete disjoint layout is
+    // materialized (and therefore dominates the resident field receipt).
+    const std::uint64_t patch_cells = product(cells, patches);
+    const std::uint64_t values =
+        product(product(patch_cells, ghosts ? ghost_growth : std::uint64_t{1}),
+                static_cast<std::uint64_t>(components));
+    add(result, product(values, static_cast<std::uint64_t>(sizeof(Real))));
+    // MultiFab::resident_storage_bytes() charges two BoxArray images, the owner image, two index
+    // maps, and the local Fab vector.  A configured rank may own every patch, which is the
+    // conservative local shape.
+    add(result, vector_bytes(patches, sizeof(Box<Dim>)));
+    add(result, vector_bytes(patches, sizeof(Box<Dim>)));
+    add(result, vector_bytes(patches, sizeof(Index<Dim>)));
+    add(result, vector_bytes(patches, sizeof(std::size_t)));
+    add(result, vector_bytes(patches, sizeof(std::size_t)));
+    add(result, vector_bytes(patches, sizeof(Fab<Dim, MemorySpace>)));
+    return result;
+  };
+
+  std::uint64_t total = 0;
+  add(total,
+      vector_bytes(static_cast<std::uint64_t>(levels), sizeof(LevelBinding<Dim, MemorySpace>)));
+  add(total, vector_bytes(static_cast<std::uint64_t>(levels - 1U),
+                          sizeof(::pops::amr::RefinementRatio<Dim>)));
+  add(total, vector_bytes(static_cast<std::uint64_t>(levels), sizeof(std::unique_ptr<Level>)));
+  for (std::size_t level = 0; level < levels; ++level) {
+    const std::uint64_t cells = level_cell_bounds[level];
+    const std::uint64_t patches = patch_bounds[level];
+    add(total, sizeof(Level));
+    // residual, scratch, covered, and active have no ghosts; correction carries one ghost layer.
+    for (int field = 0; field < 4; ++field)
+      add(total, multifab_bytes(cells, patches, 1, false));
+    add(total, multifab_bytes(cells, patches, 1, true));
+
+    // The halo/boundary components retain their copied layout, classified job/peer vectors and
+    // fixed region schedules.  Charge growth capacity rather than only final work cardinality.
+    const std::uint64_t halo_jobs = product(product(product(4U, patches), patches), ghost_growth);
+    add(total, vector_capacity_bytes(product(2U, patches), sizeof(Box<Dim>)));
+    add(total, vector_capacity_bytes(patches, sizeof(Index<Dim>)));
+    add(total, vector_capacity_bytes(product(3U, halo_jobs), sizeof(HaloJob<Dim>)));
+    add(total, vector_capacity_bytes(product(2U, rank_bound), sizeof(HaloPeerPlan<Dim>)));
+    add(total,
+        vector_capacity_bytes(product(3U, boundary_entries), sizeof(BoundaryRegionPlan<Dim>)));
+
+    // Every configured level may be remote.  The exchange owns a local arena, four peer mirrors,
+    // peer/request vectors, active-field pointers and its persistent fence label.
+    const std::uint64_t halo_elements = product(halo_jobs, cells);
+    add(total, sizeof(HaloExchange<Dim, MemorySpace>));
+    add(total, product(5U, product(halo_elements, static_cast<std::uint64_t>(sizeof(Real)))));
+    add(total, HaloExchange<Dim, MemorySpace>::configured_metadata_storage_upper_bound(rank_bound,
+                                                                                       patches));
+    add(total, external_string_bytes(static_cast<std::uint64_t>(
+                   std::string_view{"pops.halo-exchange.fence"}.size())));
+  }
+
+  // The detached configured envelope does not yet contain physical boundary kinds. Reserve the
+  // complete constant-mode nullspace image unconditionally so a later periodic materialization
+  // cannot exceed the sealed ceiling. This mirrors prepare_nullspace_() with the same STL growth
+  // operations and charges the provider-erased distributions, masks, and dense reduction arenas.
+  FieldNullspacePlan<Dim> nullspace_plan = constant_mean_zero_nullspace<Dim>(
+      "pops.runtime.amr.tensor-composite-fac.nullspace", "tensor-fac-composite", Real(1));
+  nullspace_plan.bases[0].masks.clear();
+  nullspace_plan.bases[0].cell_measure.clear();
+  nullspace_plan.bases[0].masks.reserve(levels);
+  nullspace_plan.bases[0].cell_measure.reserve(levels);
+  for (std::size_t level = 0; level < levels; ++level) {
+    nullspace_plan.bases[0].masks.emplace_back();
+    nullspace_plan.bases[0].cell_measure.push_back(Real(1));
+  }
+  const auto string_capacity_bytes = [&add](const std::string& value) {
+    std::uint64_t result = static_cast<std::uint64_t>(value.capacity());
+    add(result, 1U);
+    return result;
+  };
+  add(total, sizeof(FieldNullspaceWorkspace<Dim>));
+  add(total, string_capacity_bytes(nullspace_plan.identity));
+  add(total, string_capacity_bytes(nullspace_plan.layout_identity));
+  add(total, vector_bytes(static_cast<std::uint64_t>(nullspace_plan.bases.capacity()),
+                          sizeof(FieldNullspaceBasis<Dim>)));
+  add(total, vector_bytes(static_cast<std::uint64_t>(nullspace_plan.gauges.capacity()),
+                          sizeof(FieldGaugeConstraint)));
+  for (const FieldNullspaceBasis<Dim>& basis : nullspace_plan.bases) {
+    add(total, string_capacity_bytes(basis.identity));
+    add(total, string_capacity_bytes(basis.provenance));
+    add(total, string_capacity_bytes(basis.recipe_identity));
+    add(total, vector_bytes(static_cast<std::uint64_t>(basis.masks.capacity()),
+                            sizeof(std::shared_ptr<const MultiFab<Dim>>)));
+    add(total, vector_bytes(static_cast<std::uint64_t>(basis.coverage.capacity()),
+                            sizeof(std::shared_ptr<const MultiFab<Dim>>)));
+    add(total,
+        vector_bytes(static_cast<std::uint64_t>(basis.cell_measure.capacity()), sizeof(Real)));
+  }
+  for (const FieldGaugeConstraint& gauge : nullspace_plan.gauges)
+    add(total, string_capacity_bytes(gauge.basis_identity));
+  for (std::size_t level = 0; level < levels; ++level) {
+    add(total, sizeof(MultiFab<Dim>));
+    add(total, multifab_bytes(level_cell_bounds[level], patch_bounds[level], 1, false));
+  }
+
+  std::vector<const MultiFab<Dim>*> nullspace_layouts;
+  nullspace_layouts.reserve(levels);
+  nullspace_layouts.resize(levels, nullptr);
+  const std::uint64_t nullspace_pointer_capacity =
+      static_cast<std::uint64_t>(nullspace_layouts.capacity());
+  // Workspace layouts plus the FAC-owned RHS and candidate pointer vectors.
+  add(total, vector_bytes(nullspace_pointer_capacity, sizeof(const MultiFab<Dim>*)));
+  add(total, vector_bytes(nullspace_pointer_capacity, sizeof(const MultiFab<Dim>*)));
+  add(total, vector_bytes(nullspace_pointer_capacity, sizeof(MultiFab<Dim>*)));
+
+  const PreparedVectorDistribution<Dim> distributed =
+      PreparedVectorDistribution<Dim>::distributed();
+  const PreparedVectorDistribution<Dim> replicated = PreparedVectorDistribution<Dim>::replicated();
+  const PreparedResidentStorage distributed_storage = distributed.resident_storage();
+  const PreparedResidentStorage replicated_storage = replicated.resident_storage();
+  if (!distributed_storage.is_exact() || !replicated_storage.is_exact())
+    throw std::logic_error("native nullspace distribution has no configured storage receipt");
+  std::vector<PreparedVectorDistribution<Dim>> distributions;
+  distributions.reserve(levels);
+  for (std::size_t level = 0; level < levels; ++level)
+    distributions.push_back(distributed);
+  add(total, vector_bytes(static_cast<std::uint64_t>(distributions.capacity()),
+                          sizeof(PreparedVectorDistribution<Dim>)));
+  add(total, product(static_cast<std::uint64_t>(levels),
+                     std::max(distributed_storage.bytes, replicated_storage.bytes)));
+
+  constexpr std::uint64_t basis_count = 1;
+  constexpr std::uint64_t value_capacity = 2;
+  add(total,
+      vector_bytes(product(static_cast<std::uint64_t>(levels), value_capacity), sizeof(double)));
+  add(total, vector_bytes(value_capacity, sizeof(double)));
+  add(total, vector_bytes(basis_count, sizeof(double)));
+  add(total, vector_bytes(basis_count, sizeof(double)));
+  add(total, static_cast<std::uint64_t>(replicated.validation_scratch_byte_count()));
+  add(total, vector_bytes(static_cast<std::uint64_t>(replicated.reduction_scratch_value_count(
+                              static_cast<std::size_t>(value_capacity))),
+                          sizeof(double)));
+
+  add(total,
+      vector_bytes(static_cast<std::uint64_t>(levels - 1U), sizeof(std::unique_ptr<Connection>)));
+  std::uint64_t fac_contract = 0;
+  add(fac_contract,
+      frame_bytes + static_cast<std::uint64_t>(
+                        std::string_view{"pops.runtime.amr.nd-tensor-composite-fac"}.size()));
+  add(fac_contract, product(3, scalar_frame_bytes));
+  add(fac_contract, frame_bytes + static_cast<std::uint64_t>(execution_lane_identity.size()));
+  add(fac_contract, scalar_frame_bytes);
+  for (std::size_t level = 0; level < levels; ++level) {
+    const std::uint64_t patches = patch_bounds[level];
+    add(fac_contract, product(static_cast<std::uint64_t>(4 * Dim + 1), scalar_frame_bytes));
+    // sequence(Box): outer frame + count plus one nested frame containing 2*Dim scalar frames.
+    add(fac_contract, frame_bytes + sequence_count_bytes);
+    add(fac_contract, product(patches, frame_bytes + product(static_cast<std::uint64_t>(2 * Dim),
+                                                             scalar_frame_bytes)));
+    // sequence(Index): outer frame + count plus one nested frame containing Dim scalar frames.
+    add(fac_contract, frame_bytes + sequence_count_bytes);
+    add(fac_contract, product(patches, frame_bytes + product(static_cast<std::uint64_t>(Dim),
+                                                             scalar_frame_bytes)));
+  }
+  add(fac_contract, scalar_frame_bytes);
+  add(fac_contract,
+      product(static_cast<std::uint64_t>((levels - 1U) * static_cast<std::size_t>(Dim)),
+              scalar_frame_bytes));
+  add(total, external_string_bytes(fac_contract));
+
+  constexpr std::string_view gather_prefix = "pops.nd-tensor-fac.replicated-parent-gather/";
+  constexpr std::string_view restriction_prefix =
+      "pops.nd-tensor-fac.replicated-parent-restriction/";
+  for (std::size_t parent = 0; parent + 1U < levels; ++parent) {
+    const std::uint64_t parent_cells = level_cell_bounds[parent];
+    const std::uint64_t child_cells = level_cell_bounds[parent + 1U];
+    const std::uint64_t child_patches = patch_bounds[parent + 1U];
+    const std::uint64_t pairs = parent_child_pair_bounds[parent];
+    add(total, sizeof(Connection));
+    add(total, vector_bytes(child_patches, sizeof(typename Connection::ScratchPatch)));
+    add(total, vector_bytes(child_patches, sizeof(std::size_t)));
+    const std::uint64_t ordinal_digits = decimal_digits(static_cast<std::uint64_t>(parent));
+    add(total,
+        external_string_bytes(static_cast<std::uint64_t>(gather_prefix.size()) + ordinal_digits));
+    add(total, external_string_bytes(static_cast<std::uint64_t>(restriction_prefix.size()) +
+                                     ordinal_digits));
+
+    // A partitioned parent owns two serialized RegionTransferPlan contracts.  Each records the
+    // exact rank-space and every overlap row; the short replicated labels above are not a bound.
+    constexpr std::string_view transfer_contract_prefix =
+        "pops.elliptic.amr.partitioned-region-transfer";
+    const std::uint64_t transfer_identity_bytes =
+        static_cast<std::uint64_t>(
+            std::max(std::string_view{"nd-tensor-parent-gather/"}.size(),
+                     std::string_view{"nd-tensor-fine-restriction/"}.size())) +
+        ordinal_digits;
+    const std::uint64_t transfer_row_bytes = 24U + product(48U, static_cast<std::uint64_t>(Dim));
+    std::uint64_t transfer_contract_bytes = 0;
+    add(transfer_contract_bytes, 8U + static_cast<std::uint64_t>(transfer_contract_prefix.size()));
+    add(transfer_contract_bytes, 8U * 4U);
+    add(transfer_contract_bytes, 8U + transfer_identity_bytes);
+    add(transfer_contract_bytes, product(16U, static_cast<std::uint64_t>(Dim)));
+    add(transfer_contract_bytes, 16U);
+    add(transfer_contract_bytes, product(pairs, transfer_row_bytes));
+    add(total, external_string_bytes(transfer_contract_bytes));
+    add(total, external_string_bytes(transfer_contract_bytes));
+
+    // Every fine patch can induce one complete parent-domain staging/restriction image.  The
+    // coarsened staging box is clipped to that parent domain, so ``parent_cells`` is the exact
+    // per-patch ceiling; 5^Dim covers the surrounding-growth form, and the remaining three
+    // images cover restriction plus replicated host/broadcast mirrors.  Charge all P admitted
+    // fine patches because configured capacity precedes the disjoint-layout proof.
+    const std::uint64_t scratch_cells = product(parent_cells, child_patches);
+    add(total, product(product(staging_growth + 3U, scratch_cells),
+                       static_cast<std::uint64_t>(sizeof(Real))));
+    // A disjoint collection of P boxes induces at most (2P+1)^Dim grid cells in the complement
+    // of one grown fine patch.  This bounds every ScratchPatch::ghost_regions vector without
+    // relying on the order in which ``subtract_from`` splits it.
+    std::uint64_t grid_extent = product(2U, child_patches);
+    add(grid_extent, 1U);
+    const std::uint64_t ghost_regions_per_patch = power(grid_extent, Dim);
+    add(total, vector_bytes(product(child_patches, ghost_regions_per_patch), sizeof(Box<Dim>)));
+
+    // The two RegionTransport instances retain canonical/local/peer job records and device/host
+    // staging buffers.  Pairs and fine cells are explicit configured authorities, so no live
+    // topology or implicit rank count is consulted here.  Four payload mirrors plus one local
+    // arena cover a transport; there are gather and restriction transports on each edge.
+    using transfer_job = typename Connection::transfer_job;
+    using transfer_plan = typename Connection::transfer_plan;
+    using transfer_peer_plan = typename transfer_plan::peer_plan_type;
+    using transport_type = typename Connection::transport_type;
+    add(total, vector_capacity_bytes(product(4U, pairs), sizeof(transfer_job)));
+    add(total, vector_capacity_bytes(product(2U, rank_bound), sizeof(transfer_peer_plan)));
+    add(total, product(product(product(10U, pairs), child_cells),
+                       static_cast<std::uint64_t>(sizeof(Real))));
+    add(total, product(2U, static_cast<std::uint64_t>(sizeof(transport_type))));
+    add(total,
+        product(2U, transport_type::configured_peer_metadata_storage_upper_bound(rank_bound)));
+  }
+  return total;
+}
 
 }  // namespace pops::runtime::program::tensor_fac

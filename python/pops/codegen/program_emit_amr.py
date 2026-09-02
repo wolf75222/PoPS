@@ -470,10 +470,33 @@ def _emit_amr_candidate_support(artifact_identity: str, route_manifest: str, pro
         "      pops::kNativeDimension>> ctx_owner;\n"
         "  std::function<void(double)> step;\n"
         "  std::function<void()> hierarchy_resource_refresh;\n"
+        "  std::function<std::unique_ptr<pops::runtime::program::AcceptedProgramExecutionServicesSnapshot>()>\n"
+        "      accepted_snapshot;\n"
         "};\n"
         "\n"
+        "struct ProgramStepRejectSentinel final : pops::runtime::program::ProgramStepRejectSignal {\n"
+        "  using ProgramStepRejectSignal::ProgramStepRejectSignal;\n"
+        "};\n"
+        "struct ProgramStepRejectPublishFailure final {};\n"
+        "template <class Context>\n"
+        "[[noreturn]] void program_reject_step(Context& ctx, pops::SolveStatus status,\n"
+        "                                      pops::runtime::program::StepAttemptDisposition disposition,\n"
+        "                                      std::uint32_t reason_code, std::string_view phase,\n"
+        "                                      std::string_view detail = {}) {\n"
+        "  pops::runtime::program::ProgramStepRejectRecord record{};\n"
+        "  if (!ctx.publish_step_attempt_rejection(status, disposition, reason_code, phase, detail, record))\n"
+        "    throw ProgramStepRejectPublishFailure{};\n"
+        "  throw ProgramStepRejectSentinel{record};\n"
+        "}\n"
+        "\n"
         "void program_candidate_step(void* opaque, double dt) {\n"
-        "  static_cast<ProgramCandidateState*>(opaque)->step(dt);\n"
+        "  try {\n"
+        "    static_cast<ProgramCandidateState*>(opaque)->step(dt);\n"
+        "  } catch (const pops::runtime::program::ProgramStepRejectSignal& signal) {\n"
+        "    auto* state = static_cast<ProgramCandidateState*>(opaque);\n"
+        "    if (!state->ctx_owner->adopt_step_attempt_rejection(signal.record))\n"
+        "      throw ProgramStepRejectPublishFailure{};\n"
+        "  }\n"
         "}\n"
         "void program_candidate_hierarchy_refresh(void* opaque) {\n"
         "  auto& state = *static_cast<ProgramCandidateState*>(opaque);\n"
@@ -496,8 +519,10 @@ def _emit_amr_candidate_support(artifact_identity: str, route_manifest: str, pro
         "}\n"
         "pops::runtime::program::AcceptedProgramExecutionServicesSnapshot*\n"
         "program_candidate_accepted_snapshot(void* opaque) {\n"
-        "  return static_cast<ProgramCandidateState*>(opaque)->ctx_owner\n"
-        "      ->create_accepted_context_snapshot().release();\n"
+        "  auto& state = *static_cast<ProgramCandidateState*>(opaque);\n"
+        "  if (!state.accepted_snapshot)\n"
+        "    throw std::logic_error(\"AMR Program candidate has no accepted snapshot factory\");\n"
+        "  return state.accepted_snapshot().release();\n"
         "}\n"
         "void program_candidate_destroy(void* opaque) noexcept {\n"
         "  delete static_cast<ProgramCandidateState*>(opaque);\n"
@@ -578,6 +603,10 @@ def _emit_amr_candidate_entry_suffix(maximum_bytes: int | None = None) -> str:
     )
     return (
         "    return true;\n"
+        "  } catch (const std::exception& exc) {\n"
+        "    write_program_install_diagnostic(diagnostic, ProgramInstallErrorCode::artifact_rejected,\n"
+        "                                     exc.what());\n"
+        "    return false;\n"
         "  } catch (...) {\n"
         "    write_program_install_diagnostic(diagnostic, ProgramInstallErrorCode::artifact_rejected,\n"
         "                                     \"AMR Program candidate preparation failed\");\n"
@@ -629,6 +658,8 @@ def _emit_amr_candidate_entry_suffix(maximum_bytes: int | None = None) -> str:
         "    descriptor.history_authorities = kProgramCandidateHistoryAuthorities;\n"
         "    descriptor.checkpoint_shape = kProgramCandidateCheckpointShape;\n"
         "    descriptor.flux_budgets = kProgramCandidateFluxBudgets;\n"
+        "    descriptor.flux_basis_occurrences = kProgramCandidateFluxBasisOccurrences;\n"
+        "    descriptor.face_flux_stages = kProgramCandidateFaceFluxStages;\n"
         "    descriptor.resource_plan = kProgramCandidateResourcePlan;\n"
         "    descriptor.boundary_routes = kProgramCandidateBoundaryRoutes;\n"
         "    descriptor.provider_routes = kProgramCandidateProviderRoutes;\n"
@@ -712,6 +743,13 @@ def _emit_amr_install(
     cell_local_time = _require_bounded_cell_local_program(program, target, hierarchy_bodies)
     if target != "amr_system":
         return ""
+    if not all(hasattr(prelude, name) for name in (
+        "render_global_install", "render_level_install", "render_bindings"
+    )):
+        raise TypeError(
+            "AMR installation requires explicit PreludeSections; a flat prelude would "
+            "replay cold preparation through an accepted topology"
+        )
     body = _rewrite_amr_public_exact_coefficient_calls(body)
     if hierarchy_bodies is not None:
         hierarchy_bodies = tuple(
@@ -721,6 +759,9 @@ def _emit_amr_install(
     candidate_support = _emit_amr_candidate_support(artifact_identity, route_manifest, program_name)
     candidate_entry_prefix = _emit_amr_candidate_entry_prefix()
     candidate_entry_suffix = _emit_amr_candidate_entry_suffix(maximum_bytes)
+    global_install = prelude.render_global_install(4)
+    level_install = prelude.render_level_install(6)
+    bindings = prelude.render_bindings(4)
     # Cell-local time is a Program execution operation, not a second installation ABI.  Keep its
     # typed route preparation in the common candidate prepare callback and select the provider-owned
     # executor as the common candidate step.  In particular, do not return a separate source shape
@@ -729,6 +770,7 @@ def _emit_amr_install(
     cell_local_prepare = ""
     cell_local_step = ""
     cell_local_refresh = ""
+    cell_local_accepted_snapshot = ""
     if cell_local_time is not None:
         cell_local_contract, cell_local_routes = cell_local_time
         clock_identity = json.dumps(program.clock.qualified_id)
@@ -753,6 +795,15 @@ def _emit_amr_install(
         # The executor owns topology requalification and accepted-state refresh.  The common AMR
         # candidate hook still needs a callable, but there is no per-level Program bundle to rebuild.
         cell_local_refresh = "    state->hierarchy_resource_refresh = []() {};\n"
+        # Cell-local time still enters through the common v5 Program candidate.  It has no ordinary
+        # level-resource bundle, but transaction/replacement/restart authority still requires the
+        # accepted service image.  Capture the retained provider directly; do not route this through
+        # a second installer or manufacture an empty level authority.
+        cell_local_accepted_snapshot = (
+            "    state->accepted_snapshot = [ctx_owner = state->ctx_owner]() {\n"
+            "      return ctx_owner->create_accepted_context_snapshot();\n"
+            "    };\n"
+        )
 
     def walk(values: Any) -> Any:
         for value in values:
@@ -790,7 +841,7 @@ def _emit_amr_install(
         "    const int _nlev_post = ctx.program_resource_topology().levels;\n"
         "    for (int _k = 0; _k < _nlev_post; ++_k) {\n"
         "      ctx.with_program_resource_level(_k, [&]() {\n"
-        "        _level_programs->at(static_cast<std::size_t>(_k))"
+        "        _active_level_authority(ctx)->programs.at(static_cast<std::size_t>(_k))"
         ".post_synchronization(dt);\n"
         "      });\n"
         "    }\n"
@@ -830,8 +881,8 @@ def _emit_amr_install(
         )
         installed_driver = (
             "    auto _advance_level = [&](double level_dt) {\n"
-            "      _refresh_level_programs();\n"
-            "      _level_programs->at(static_cast<std::size_t>(ctx.level())).step(level_dt);\n"
+            "      _refresh_level_programs(false);\n"
+            "      _active_level_authority(ctx)->programs.at(static_cast<std::size_t>(ctx.level())).step(level_dt);\n"
             "    };\n"
             "    ctx.advance_hierarchy(dt, _advance_level);\n"
             + post_sync_driver
@@ -866,7 +917,7 @@ def _emit_amr_install(
         )
         installed_driver = (
             "    auto _advance_hierarchy = [&](double hierarchy_dt) {\n"
-            "      _refresh_level_programs();\n"
+            "      _refresh_level_programs(false);\n"
             "      // The subcycling engine invokes this body once per level. The candidate tower\n"
             "      // is complete before the root callback, so gather/solve/publish run there once.\n"
             "      if (ctx.level() != 0)\n"
@@ -875,23 +926,23 @@ def _emit_amr_install(
             "      if (ctx.uses_prepared_krylov_fallback()) {\n"
             "        for (int _k = 0; _k < _nlev; ++_k) {\n"
             "          ctx.with_program_resource_level(_k, [&]() {\n"
-            "            _level_programs->at(static_cast<std::size_t>(_k)).step(hierarchy_dt);\n"
+            "            _active_level_authority(ctx)->programs.at(static_cast<std::size_t>(_k)).step(hierarchy_dt);\n"
             "          });\n"
             "        }\n"
             "      } else {\n"
             "        // Gather every level before the unique hierarchy-scoped solve.\n"
             "        for (int _k = 0; _k < _nlev; ++_k) {\n"
             "          ctx.with_program_resource_level(_k, [&]() {\n"
-            "            _level_programs->at(static_cast<std::size_t>(_k)).gather(hierarchy_dt);\n"
+            "            _active_level_authority(ctx)->programs.at(static_cast<std::size_t>(_k)).gather(hierarchy_dt);\n"
             "          });\n"
             "        }\n"
             "        ctx.with_program_resource_level(0, [&]() {\n"
-            "          _level_programs->front().solve(hierarchy_dt);\n"
+            "          _active_level_authority(ctx)->programs.front().solve(hierarchy_dt);\n"
             "        });\n"
             "        // The composite solution is complete before any level reconstructs or commits.\n"
             "        for (int _k = 0; _k < _nlev; ++_k) {\n"
             "          ctx.with_program_resource_level(_k, [&]() {\n"
-            "            _level_programs->at(static_cast<std::size_t>(_k)).publish(hierarchy_dt);\n"
+            "            _active_level_authority(ctx)->programs.at(static_cast<std::size_t>(_k)).publish(hierarchy_dt);\n"
             "          });\n"
             "        }\n"
             "      }\n"
@@ -900,42 +951,156 @@ def _emit_amr_install(
             + post_sync_driver
         )
 
-    # Every generated prelude allocation is layout-bound. Materialize one complete closure bundle
+    # Every generated binding is layout-bound.  The install collector separates
+    # candidate-only preparation from bindings, so requalification rebuilds a
+    # lexically complete closure bundle without invoking any ``prepare_*`` API
+    # through the accepted service image.
     # per level before the first advance, and rebuild the set exactly once after a topology epoch or
     # process-local materialization-generation change. This is deliberately generic: scalar scratch,
     # condensed coefficients, matrix-free
     # apply captures, prepared problems and Krylov workspaces all follow the same lifetime protocol.
     level_resources = (
         "  struct _PopsAmrLevelProgram {\n" + phase_fields + "  };\n"
-        "  auto _make_level_program = [ctx_owner]() {\n"
-        "    auto& ctx = *ctx_owner;\n" + prelude + "\n"
+        "  auto _make_level_program = [](auto ctx_owner, auto& ctx, bool prepare_resources) {\n"
+        "    if (!ctx_owner)\n"
+        "      throw std::logic_error(\"AMR Program level owner is empty\");\n"
+        "    if (prepare_resources) {\n" + level_install + "\n"
+        "    }\n"
+        + bindings + "\n"
         "    return _PopsAmrLevelProgram{\n" + phase_initializers + "    };\n"
         "  };\n"
-        "  auto _level_programs = std::make_shared<std::vector<_PopsAmrLevelProgram>>();\n"
-        "  auto _level_program_epoch = std::make_shared<std::uint64_t>(\n"
-        "      std::numeric_limits<std::uint64_t>::max());\n"
-        "  auto _level_program_generation = std::make_shared<std::uint64_t>(\n"
-        "      std::numeric_limits<std::uint64_t>::max());\n"
-        "  auto _refresh_level_programs = [=]() {\n"
+        "  // Keep the complete topology-bound level tower in one immutable authority.  Separating\n"
+        "  // the vector from its epoch/generation made a failed forward rebuild observable as a\n"
+        "  // mixed authority; Candidate now replaces this single image only after every level\n"
+        "  // resource has been cold-prepared.\n"
+        "  struct _PopsAmrLevelProgramAuthority final {\n"
+        "    std::vector<_PopsAmrLevelProgram> programs;\n"
+        "    std::uint64_t topology_epoch = std::numeric_limits<std::uint64_t>::max();\n"
+        "    std::uint64_t materialization_generation = std::numeric_limits<std::uint64_t>::max();\n"
+        "  };\n"
+        "  struct _PopsAmrLevelProgramAuthoritySlot final {\n"
+        "    std::shared_ptr<const _PopsAmrLevelProgramAuthority> active;\n"
+        "  };\n"
+        "  auto _level_program_authority_slot =\n"
+        "      std::make_shared<_PopsAmrLevelProgramAuthoritySlot>();\n"
+        "  auto _refresh_level_programs = [=](bool prepare_resources) {\n"
         "    auto& ctx = *ctx_owner;\n"
         "    const auto topology = ctx.program_resource_topology();\n"
         "    const std::uint64_t epoch = topology.epoch;\n"
         "    const std::uint64_t generation = topology.generation;\n"
         "    const int levels = topology.levels;\n"
         + transform_refresh_guard
-        + "    if (*_level_program_epoch == epoch &&\n"
-        "        *_level_program_generation == generation &&\n"
-        "        _level_programs->size() == static_cast<std::size_t>(levels))\n"
+        + "    const auto active_authority = _level_program_authority_slot->active;\n"
+        "    if (active_authority && active_authority->topology_epoch == epoch &&\n"
+        "        active_authority->materialization_generation == generation &&\n"
+        "        active_authority->programs.size() == static_cast<std::size_t>(levels))\n"
         "      return;\n"
-        "    _level_programs->clear();\n"
-        "    _level_programs->reserve(static_cast<std::size_t>(levels));\n"
+        "    auto next_level_authority = std::make_shared<_PopsAmrLevelProgramAuthority>();\n"
+        "    next_level_authority->programs.reserve(static_cast<std::size_t>(levels));\n"
         "    ctx.for_each_program_resource_level([&](int) {\n"
-        "      _level_programs->emplace_back(_make_level_program());\n"
+        "      next_level_authority->programs.emplace_back(\n"
+        "          _make_level_program(ctx_owner, ctx, prepare_resources));\n"
         "    });\n"
-        "    *_level_program_epoch = epoch;\n"
-        "    *_level_program_generation = generation;\n"
+        "    next_level_authority->topology_epoch = epoch;\n"
+        "    next_level_authority->materialization_generation = generation;\n"
+        "    // Terminal no-throw publication: a failed candidate build leaves the entire\n"
+        "    // accepted authority untouched; vector and generation can never diverge.\n"
+        "    _level_program_authority_slot->active = std::move(next_level_authority);\n"
         "  };\n"
-        "  _refresh_level_programs();\n"
+        "  _refresh_level_programs(true);\n"
+        "  auto _active_level_authority = [=](const auto& active_ctx) {\n"
+        "    const auto authority = _level_program_authority_slot->active;\n"
+        "    const auto topology = active_ctx.program_resource_topology();\n"
+        "    if (!authority || authority->topology_epoch != topology.epoch ||\n"
+        "        authority->materialization_generation != topology.generation ||\n"
+        "        authority->programs.size() != static_cast<std::size_t>(topology.levels))\n"
+        "      throw std::logic_error(\"AMR Program level authority is absent or stale\");\n"
+        "    return authority;\n"
+        "  };\n"
+        "  auto _build_forward_level_authority = [=](const auto& owner) {\n"
+        "    auto next = std::make_shared<_PopsAmrLevelProgramAuthority>();\n"
+        "    const auto topology = owner->program_resource_topology();\n"
+        "    if (topology.levels <= 0)\n"
+        "      throw std::logic_error(\"AMR Program forward authority has no levels\");\n"
+        "    next->programs.reserve(static_cast<std::size_t>(topology.levels));\n"
+        "    owner->for_each_program_resource_level([&](int) {\n"
+        "      next->programs.emplace_back(_make_level_program(ctx_owner, *owner, true));\n"
+        "    });\n"
+        "    next->topology_epoch = topology.epoch;\n"
+        "    next->materialization_generation = topology.generation;\n"
+        "    return std::shared_ptr<const _PopsAmrLevelProgramAuthority>(std::move(next));\n"
+        "  };\n"
+        "  class _PopsAcceptedProgramExecutionServicesSnapshot final\n"
+        "      : public pops::runtime::program::AcceptedProgramExecutionServicesSnapshot {\n"
+        "   public:\n"
+        "    using _Authority = _PopsAmrLevelProgramAuthority;\n"
+        "    using _Slot = _PopsAmrLevelProgramAuthoritySlot;\n"
+        "    using _Services = pops::runtime::program::ProgramExecutionServices<pops::kNativeDimension>;\n"
+        "    using _Builder = std::function<std::shared_ptr<const _Authority>(std::shared_ptr<_Services>)>;\n"
+        "    _PopsAcceptedProgramExecutionServicesSnapshot(\n"
+        "        std::unique_ptr<pops::runtime::program::AcceptedProgramExecutionServicesSnapshot> inner,\n"
+        "        std::shared_ptr<_Services> owner, std::shared_ptr<_Slot> slot,\n"
+        "        std::shared_ptr<const _Authority> accepted, _Builder builder)\n"
+        "        : inner_(std::move(inner)), owner_(std::move(owner)), slot_(std::move(slot)),\n"
+        "          accepted_(std::move(accepted)), builder_(std::move(builder)) {\n"
+        "      if (!inner_ || !owner_ || !slot_ || !accepted_ || !builder_)\n"
+        "        throw std::logic_error(\"AMR Program accepted bundle snapshot is incomplete\");\n"
+        "    }\n"
+        "    std::unique_ptr<pops::runtime::program::AcceptedProgramExecutionServicesSnapshot>\n"
+        "    prepare_restore() const override {\n"
+        "      auto restored = inner_->prepare_restore();\n"
+        "      if (!restored) throw std::logic_error(\"AMR Program accepted service restore is empty\");\n"
+        "      return std::make_unique<_PopsAcceptedProgramExecutionServicesSnapshot>(\n"
+        "          std::move(restored), owner_, slot_, staged_ ? staged_ : accepted_, builder_);\n"
+        "    }\n"
+        "    void refresh_from_owner_preallocated() override { inner_->refresh_from_owner_preallocated(); }\n"
+        "    std::unique_ptr<pops::runtime::program::AcceptedProgramExecutionServicesSnapshot>\n"
+        "    detach_for_forward(std::uint64_t epoch, std::uint64_t generation, void*& token) const override {\n"
+        "      auto detached = inner_->detach_for_forward(epoch, generation, token);\n"
+        "      if (!detached) throw std::logic_error(\"AMR Program detached service image is empty\");\n"
+        "      return std::make_unique<_PopsAcceptedProgramExecutionServicesSnapshot>(\n"
+        "          std::move(detached), owner_, slot_, accepted_, builder_);\n"
+        "    }\n"
+        "    void rebind_after_forward_publish(void* token) noexcept override { inner_->rebind_after_forward_publish(token); }\n"
+        "    void prepare_forward_hierarchy_refresh(std::uint64_t e, std::uint64_t g) override { inner_->prepare_forward_hierarchy_refresh(e, g); }\n"
+        "    void prepare_forward_history_remap(const pops::runtime::program::AmrProgramHistoryRemapDescriptor& d) override { inner_->prepare_forward_history_remap(d); }\n"
+        "    void prepare_forward_full_history_reseed(const pops::runtime::program::AmrProgramFullHistoryReseedDescriptor& d) override { inner_->prepare_forward_full_history_reseed(d); }\n"
+        "    void prepare_forward_temporal_partition(const pops::runtime::program::PreparedForwardAmrTemporalAuthority& a) override { inner_->prepare_forward_temporal_partition(a); }\n"
+        "    void prepare_forward_scratch_rematerialization(const pops::runtime::program::PreparedForwardAmrScratchTopology& t) override { inner_->prepare_forward_scratch_rematerialization(t); }\n"
+        "    void prepare_forward_execution_bundle(const pops::runtime::program::PreparedForwardAmrExecutionAuthority& erased) override {\n"
+        "      const auto* typed = dynamic_cast<const pops::runtime::program::PreparedForwardAmrExecutionAuthorityView<pops::kNativeDimension>*>(&erased);\n"
+        "      if (typed == nullptr) throw std::logic_error(\"AMR Program forward bundle has the wrong dimension\");\n"
+        "      inner_->prepare_forward_execution_bundle(erased);\n"
+        "      staged_ = owner_->with_forward_execution_overlay(*typed, *inner_, [&](auto overlay) {\n"
+        "        return builder_(std::move(overlay));\n"
+        "      });\n"
+        "    }\n"
+        "    pops::runtime::program::PreparedForwardAmrAcceptedContext\n"
+        "    prepare_forward_accepted_context(std::int64_t step) const override { return inner_->prepare_forward_accepted_context(step); }\n"
+        "    void prime_at_bind() override { inner_->prime_at_bind(); }\n"
+        "    void prime_copied_image_at_bind() override { inner_->prime_copied_image_at_bind(); }\n"
+        "    void snapshot_transaction_diagnostics_noexcept() noexcept override { inner_->snapshot_transaction_diagnostics_noexcept(); }\n"
+        "    void publish_transaction_diagnostics_noexcept() noexcept override { inner_->publish_transaction_diagnostics_noexcept(); }\n"
+        "    void restore_transaction_diagnostics_noexcept() noexcept override { inner_->restore_transaction_diagnostics_noexcept(); }\n"
+        "    void publish_restore() noexcept override {\n"
+        "      inner_->publish_restore();\n"
+        "      if (staged_) { using std::swap; swap(slot_->active, staged_); accepted_ = slot_->active; }\n"
+        "    }\n"
+        "   private:\n"
+        "    std::unique_ptr<pops::runtime::program::AcceptedProgramExecutionServicesSnapshot> inner_;\n"
+        "    std::shared_ptr<_Services> owner_;\n"
+        "    std::shared_ptr<_Slot> slot_;\n"
+        "    std::shared_ptr<const _Authority> accepted_;\n"
+        "    std::shared_ptr<const _Authority> staged_;\n"
+        "    _Builder builder_;\n"
+        "  };\n"
+        "  state->accepted_snapshot = [=]() {\n"
+        "    const auto accepted = _level_program_authority_slot->active;\n"
+        "    if (!accepted) throw std::logic_error(\"AMR Program has no initial level authority\");\n"
+        "    return std::make_unique<_PopsAcceptedProgramExecutionServicesSnapshot>(\n"
+        "        ctx_owner->create_accepted_context_snapshot(), ctx_owner,\n"
+        "        _level_program_authority_slot, accepted, _build_forward_level_authority);\n"
+        "  };\n"
     )
     if cell_local_time is not None:
         # The temporary ordinary bundle above is intentionally not emitted for this operation.  The
@@ -952,14 +1117,17 @@ def _emit_amr_install(
         + candidate_support
         + candidate_entry_prefix
         + (provider_plan_install + "\n" if provider_plan_install else "")
+        + (global_install + "\n" if global_install else "")
         + cell_local_prepare
         + transform_guard
         + level_resources
-        + (cell_local_refresh or "\n    state->hierarchy_resource_refresh = _refresh_level_programs;\n")
+        + cell_local_accepted_snapshot
+        + (cell_local_refresh or
+           "\n    state->hierarchy_resource_refresh = [=]() { _refresh_level_programs(false); };\n")
         + (cell_local_step or (
             "    state->step = [=](double dt) {\n"
             "    auto& ctx = *ctx_owner;\n"
-            "    _refresh_level_programs();\n"
+            "    _refresh_level_programs(false);\n"
             + installed_driver
             + "    };\n"
         ))

@@ -1,9 +1,10 @@
 void register_hierarchy_tensor_solver_provider(
     std::shared_ptr<const hierarchy_tensor_provider_type> provider) const {
-  require_facade_execution_();
+  if (preparation_view_ == nullptr)
+    throw std::logic_error("AMR hierarchy tensor provider registration is preparation-only");
   if (!hierarchy_tensor_solver_registry_)
     throw std::logic_error("AMR hierarchy tensor-solver registry is unavailable");
-  facade_->register_program_hierarchy_tensor_solver_provider(std::move(provider));
+  hierarchy_tensor_solver_registry_->add(std::move(provider), prepared_execution_lane());
 }
 
 void configure_hierarchy_tensor_solver(int program_block, int components,
@@ -13,7 +14,8 @@ void configure_hierarchy_tensor_solver(int program_block, int components,
                                        const std::vector<std::string>& assembly_field_slots,
                                        const std::string& solution_field_slot,
                                        const PreparedProviderOptions& options) const {
-  require_facade_execution_();
+  if (preparation_view_ == nullptr)
+    throw std::logic_error("AMR hierarchy tensor solver configuration is preparation-only");
   if (!hierarchy_tensor_solver_registry_)
     throw std::logic_error("AMR hierarchy tensor-solver registry is unavailable");
 
@@ -75,8 +77,128 @@ void configure_hierarchy_tensor_solver(int program_block, int components,
   hierarchy_tensor_selection_ = std::move(staged);
   hierarchy_tensor_solver_ = std::move(prepared.solver);
   hierarchy_tensor_boundaries_ = std::move(prepared.boundaries);
-  hierarchy_tensor_topology_epoch_ = runtime_->topology_epoch();
-  hierarchy_tensor_materialization_generation_ = runtime_->materialization_generation();
+  hierarchy_tensor_topology_epoch_ =
+      preparation_view_ != nullptr ? preparation_view_->topology_epoch : runtime_->topology_epoch();
+  hierarchy_tensor_materialization_generation_ = preparation_view_ != nullptr
+                                                     ? preparation_view_->materialization_generation
+                                                     : runtime_->materialization_generation();
+}
+
+/// Seal the provider-owned configured storage ceiling while the Program image is still detached.
+///
+/// The configured envelope belongs to the selected provider, not to the generic AMR checkpoint
+/// arithmetic.  In particular, a provider which cannot prove a nonzero exact limit is rejected
+/// before the host can publish a forward-storage ceiling.  The concrete preparation request is
+/// rebuilt from the detached topology and must fit that envelope, closing the gap between the
+/// capacity promise and the materialized candidate that selected the provider.
+[[nodiscard]] HierarchyTensorConfiguredStorageReceipt<Dim>
+configured_hierarchy_tensor_storage_receipt(std::span<const std::uint64_t> level_cell_bounds,
+                                            std::span<const std::uint64_t> patch_bounds,
+                                            std::span<const std::uint64_t> parent_child_pair_bounds,
+                                            std::uint64_t rank_bound) const {
+  const ExecutionLane& lane = prepared_execution_lane();
+  HierarchyTensorConfiguredStorageReceipt<Dim> candidate;
+  std::string collective_contract;
+  std::exception_ptr local_error;
+  try {
+    if (hierarchy_tensor_selection_) {
+      if (preparation_view_ == nullptr || hierarchy_tensor_solver_registry_ == nullptr)
+        throw std::logic_error(
+            "AMR hierarchy tensor storage receipt has no detached provider authority");
+      const HierarchyTensorSelection& selection = *hierarchy_tensor_selection_;
+      const int runtime_block = sys_block(selection.program_block);
+      if (runtime_block < 0 ||
+          static_cast<std::size_t>(runtime_block) >= preparation_view_->block_prototypes.size())
+        throw std::logic_error("AMR hierarchy tensor storage receipt has an invalid block route");
+      const auto provider = hierarchy_tensor_solver_registry_->resolve(selection.provider_identity);
+      if (!provider || provider->identity() != selection.provider_identity)
+        throw std::logic_error("AMR hierarchy tensor storage receipt resolved a foreign provider");
+
+      HierarchyTensorConfiguredStorageRequest<Dim> configured;
+      configured.level_cell_bounds.assign(level_cell_bounds.begin(), level_cell_bounds.end());
+      configured.patch_bounds.assign(patch_bounds.begin(), patch_bounds.end());
+      configured.parent_child_pair_bounds.assign(parent_child_pair_bounds.begin(),
+                                                 parent_child_pair_bounds.end());
+      configured.rank_bound = rank_bound;
+      configured.components = selection.components;
+      configured.provider_identity = selection.provider_identity;
+      configured.provider_interface_version = provider->interface_version();
+      configured.execution_lane_identity = std::string(lane.identity());
+      configured.plan_identity = selection.plan_identity;
+      configured.operator_contract_identity = selection.operator_contract_identity;
+      configured.assembly_field_slots = selection.assembly_field_slots;
+      configured.solution_field_slot = selection.solution_field_slot;
+      configured.options = selection.options;
+      hierarchy_tensor_detail::validate_configured_storage_request(configured);
+
+      HierarchyTensorSolverBuildRequest<Dim> concrete;
+      concrete.block = static_cast<std::size_t>(runtime_block);
+      concrete.components = selection.components;
+      concrete.plan_identity = selection.plan_identity;
+      concrete.operator_contract_identity = selection.operator_contract_identity;
+      concrete.assembly_field_slots = selection.assembly_field_slots;
+      concrete.solution_field_slot = selection.solution_field_slot;
+      concrete.options = selection.options;
+      const auto& levels =
+          preparation_view_->block_prototypes.at(static_cast<std::size_t>(runtime_block));
+      if (levels.empty() || levels.size() != preparation_view_->level_geometries.size() ||
+          preparation_view_->spatial_refinement_ratios.size() + 1U != levels.size())
+        throw std::logic_error(
+            "AMR hierarchy tensor storage receipt has an incomplete detached topology");
+      concrete.ratios = preparation_view_->spatial_refinement_ratios;
+      concrete.levels.reserve(levels.size());
+      for (std::size_t level = 0; level < levels.size(); ++level) {
+        const Geometry<Dim>& geometry = preparation_view_->level_geometries.at(level);
+        const field_type& state = levels.at(level);
+        concrete.levels.push_back({geometry, hierarchy_tensor_boundary_(geometry), state.layout(),
+                                   state.distribution(), state.local_rank()});
+      }
+      if (!hierarchy_tensor_detail::request_fits_configured_storage(concrete, configured))
+        throw std::length_error(
+            "AMR hierarchy tensor concrete request exceeds its configured storage envelope");
+
+      const HierarchyTensorConfiguredStorageLimit limit =
+          provider->configured_storage_limit(configured);
+      if (!limit.is_exact() || limit.maximum_bytes == 0)
+        throw std::length_error(
+            "AMR hierarchy tensor provider has no finite nonzero configured storage ceiling");
+      candidate.active = true;
+      candidate.maximum_bytes = limit.maximum_bytes;
+      candidate.configured_request_contract =
+          hierarchy_tensor_detail::configured_storage_request_contract(configured);
+      candidate.configured_limit_contract =
+          hierarchy_tensor_detail::configured_storage_limit_contract(configured, limit);
+    }
+    if (!candidate.active && !candidate.is_canonical_inactive())
+      throw std::logic_error("AMR hierarchy tensor inactive storage receipt is non-canonical");
+    if (candidate.active &&
+        (candidate.maximum_bytes == 0 || candidate.configured_request_contract.empty() ||
+         candidate.configured_limit_contract.empty()))
+      throw std::logic_error("AMR hierarchy tensor active storage receipt is incomplete");
+    ExactContractBuilder receipt;
+    receipt.text("pops.amr-program.hierarchy-tensor-configured-storage-receipt")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .scalar(static_cast<std::uint8_t>(candidate.active ? 1U : 0U))
+        .scalar(candidate.maximum_bytes)
+        .bytes(candidate.configured_request_contract)
+        .bytes(candidate.configured_limit_contract);
+    collective_contract = std::move(receipt).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error(
+        "AMR hierarchy tensor configured storage receipt preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-hierarchy-tensor-configured-storage"), collective_contract}},
+          lane))
+    throw std::runtime_error(
+        "AMR hierarchy tensor configured storage receipt differs between MPI ranks");
+  return candidate;
 }
 
 SolveOutcome solve_hierarchy_tensor(int program_block, int components, Real relative_tolerance,
@@ -143,8 +265,8 @@ Real physical_time() const {
   return static_cast<Real>(facade_->program_time_());
 }
 
-void record_scalar(const std::string& name, Real value) const {
-  facade_->record_program_diagnostic(name, static_cast<double>(value));
+void record_scalar(std::string_view name, Real value) const {
+  runtime_state().record_diagnostic(name, value);
 }
 void record_balance_term(const std::string& route, const std::string& term, Real value) const {
   facade_->record_program_balance_term(route, term, static_cast<double>(value));
@@ -161,7 +283,7 @@ void note_step_projection(const std::string& name) const {
 }
 void profile_record(const std::string& name, std::chrono::steady_clock::time_point start) const {
   const auto elapsed = std::chrono::steady_clock::now() - start;
-    facade_->program_profiler_().record(name, std::chrono::duration<double>(elapsed).count());
+  facade_->program_profiler_().record(name, std::chrono::duration<double>(elapsed).count());
 }
 
 runtime_state_type& runtime_state() const {
@@ -170,19 +292,22 @@ runtime_state_type& runtime_state() const {
       throw std::logic_error("AMR Program preparation has no detached runtime-state image");
     return *preparation_view_->program_state;
   }
-  if (facade_ == nullptr)
+  if (accepted_runtime_state_ == nullptr)
     throw std::logic_error("AMR Program execution has no accepted runtime-state authority");
-  return facade_->program_runtime_state_();
+  return *accepted_runtime_state_;
 }
 
 const PreparedVectorDistribution<Dim>& program_resource_vector_distribution() const {
-  refresh_resources_();
-  vector_distribution_ = runtime_->hierarchy()
-                                 .layout(static_cast<std::size_t>(active_level_))
-                                 .distribution()
-                                 .replicated()
-                             ? PreparedVectorDistribution<Dim>::replicated()
-                             : PreparedVectorDistribution<Dim>::distributed();
+  const int runtime_block = sys_block(0);
+  const auto& distribution =
+      preparation_view_ != nullptr
+          ? preparation_view_->block_prototypes.at(static_cast<std::size_t>(runtime_block))
+                .at(static_cast<std::size_t>(active_level_))
+                .distribution()
+          : (refresh_resources_(),
+             runtime_->hierarchy().layout(static_cast<std::size_t>(active_level_)).distribution());
+  vector_distribution_ = distribution.replicated() ? PreparedVectorDistribution<Dim>::replicated()
+                                                   : PreparedVectorDistribution<Dim>::distributed();
   return vector_distribution_;
 }
 int program_resource_field_level() const noexcept {
@@ -193,7 +318,8 @@ std::string program_resource_materialization_identity(std::string_view owner_ide
   std::string identity;
   std::exception_ptr local_error;
   try {
-    refresh_resources_();
+    if (preparation_view_ == nullptr)
+      refresh_resources_();
     if (owner_identity.empty() || active_level_ < 0 || active_level_ >= nlev())
       throw std::invalid_argument(
           "AMR Program resource materialization requires an active exact owner identity");
@@ -201,9 +327,12 @@ std::string program_resource_materialization_identity(std::string_view owner_ide
     contract.text("pops.amr-program-resource-materialization")
         .scalar(std::uint32_t{1})
         .text(owner_identity)
-        .text(runtime_->spatial_contract())
-        .scalar(runtime_->topology_epoch())
-        .scalar(runtime_->materialization_generation())
+        .text(preparation_view_ != nullptr ? std::string_view(preparation_view_->spatial_contract)
+                                           : std::string_view(runtime_->spatial_contract()))
+        .scalar(preparation_view_ != nullptr ? preparation_view_->topology_epoch
+                                             : runtime_->topology_epoch())
+        .scalar(preparation_view_ != nullptr ? preparation_view_->materialization_generation
+                                             : runtime_->materialization_generation())
         .scalar(std::int32_t{active_level_})
         .text(lane.identity());
     identity = std::move(contract).release();
@@ -326,9 +455,15 @@ void set_field_logical_timepoint(const std::string& provider_slot,
 
 bool has_boundary_linearization(int program_block) const noexcept {
   try {
+    const int runtime_block = sys_block(program_block);
+    if (preparation_view_ != nullptr)
+      return runtime_block >= 0 &&
+             static_cast<std::size_t>(runtime_block) <
+                 preparation_view_->runtime_block_boundary_linearizations.size() &&
+             preparation_view_
+                 ->runtime_block_boundary_linearizations[static_cast<std::size_t>(runtime_block)];
     return facade_ != nullptr &&
-           facade_->program_has_prepared_amr_block_boundary_linearization_(
-               sys_block(program_block));
+           facade_->program_has_prepared_amr_block_boundary_linearization_(runtime_block);
   } catch (...) {
     return false;
   }
@@ -380,19 +515,17 @@ void rhs_jacvec_pair_into_at(const runtime::multiblock::BoundaryEvaluationPoint&
   second_candidate.set_val(Real(0));
   copy_full_(first_state, first_coupled);
   copy_full_(second_state, second_coupled);
-  const auto& first_evaluation =
-      first_flux_only
-          ? facade_->program_evaluate_prepared_amr_block_level_flux_at_(first_runtime, point,
-                                                                         first_state)
-          : facade_->program_evaluate_prepared_amr_block_level_at_(first_runtime, point,
-                                                                    first_state);
+  const auto& first_evaluation = first_flux_only
+                                     ? facade_->program_evaluate_prepared_amr_block_level_flux_at_(
+                                           first_runtime, point, first_state)
+                                     : facade_->program_evaluate_prepared_amr_block_level_at_(
+                                           first_runtime, point, first_state);
   copy_valid_(first_evaluation.residual, first_candidate);
-  const auto& second_evaluation =
-      second_flux_only
-          ? facade_->program_evaluate_prepared_amr_block_level_flux_at_(second_runtime, point,
-                                                                          second_state)
-          : facade_->program_evaluate_prepared_amr_block_level_at_(second_runtime, point,
-                                                                     second_state);
+  const auto& second_evaluation = second_flux_only
+                                      ? facade_->program_evaluate_prepared_amr_block_level_flux_at_(
+                                            second_runtime, point, second_state)
+                                      : facade_->program_evaluate_prepared_amr_block_level_at_(
+                                            second_runtime, point, second_state);
   copy_valid_(second_evaluation.residual, second_candidate);
 
   std::array<field_type*, 2> candidates{};
@@ -405,8 +538,8 @@ void rhs_jacvec_pair_into_at(const runtime::multiblock::BoundaryEvaluationPoint&
       interface_flux_ledger_.get(),
       runtime_->topology_epoch(),
       nlev(),
-      {active_level_, static_cast<std::int64_t>(facade_->program_macro_step_()), point.stage_fraction,
-       point.physical_time},
+      {active_level_, static_cast<std::int64_t>(facade_->program_macro_step_()),
+       point.stage_fraction, point.physical_time},
       "program-jacvec-pair",
       active_subcycling_window_,
       exact_binary_rational_(static_cast<Real>(point.dt) /
@@ -581,8 +714,7 @@ void prepare_generated_field_route(std::uint32_t slot, std::string_view field,
   if (preparation_view_ == nullptr &&
       (resource_epoch_ != runtime_->topology_epoch() ||
        resource_generation_ != runtime_->materialization_generation()))
-    throw std::logic_error(
-        "AMR Program field route is stale; refresh resources before begin_step");
+    throw std::logic_error("AMR Program field route is stale; refresh resources before begin_step");
   require_boundary_point_(point, "AMR Program simultaneous field solve");
   if (slot >= generated_field_routes_.size() || !generated_field_routes_[slot].prepared)
     throw std::logic_error(

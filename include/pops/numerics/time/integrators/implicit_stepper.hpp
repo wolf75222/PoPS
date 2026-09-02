@@ -18,16 +18,18 @@
 #include <pops/numerics/nonlinear/newton_options.hpp>
 #include <pops/numerics/nonlinear/prepared_local_nonlinear.hpp>
 #include <pops/numerics/spatial/primitives/state_access.hpp>
+#include <pops/numerics/time/integrators/prepared_implicit_source_workspace.hpp>
 #include <pops/parallel/execution_lane.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
-#include <sstream>
 #include <stdexcept>
-#include <string>
+#include <type_traits>
 #include <utility>
 
 namespace pops {
@@ -346,6 +348,24 @@ struct LocalStatValue {
   POPS_HD Real operator()(const Index<Dim>& index) const { return values(index, component); }
 };
 
+template <int Dim, class MemorySpace, class Functor>
+inline void prepared_implicit_for_each(const Box<Dim>& box, const Functor& functor) {
+  if constexpr (std::is_same_v<MemorySpace, Kokkos::HostSpace>) {
+    const Extent<Dim> extent = box.extent();
+    for (std::int64_t ordinal = 0; ordinal < box.numPts(); ++ordinal) {
+      std::int64_t remainder = ordinal;
+      Index<Dim> index{};
+      for (int axis = 0; axis < Dim; ++axis) {
+        index[axis] = box.lo[axis] + static_cast<int>(remainder % extent[axis]);
+        remainder /= extent[axis];
+      }
+      functor(index);
+    }
+  } else {
+    for_each_cell(box, functor);
+  }
+}
+
 template <int Dim>
 struct LocalStatReasonForLocation {
   FieldView<const Real, Dim> values{};
@@ -365,38 +385,43 @@ struct LocalStatReasonForLocation {
   }
 };
 
-template <int Dim, class MemorySpace>
+template <int Dim, class MemorySpace, class ExecutionSpace>
 Real collective_max_component(const MultiFab<Dim, MemorySpace>& statistics, int component,
-                              const ExecutionLane& lane) {
+                              const ExecutionLane& lane, const ExecutionSpace& execution,
+                              const PreparedCellSumReduction<ExecutionSpace>& reduction) {
   Real local = Real(0);
   for (std::size_t local_index = 0; local_index < statistics.local_size(); ++local_index)
     local =
         std::max(local, for_each_cell_reduce_max(
-                            statistics.box(local_index),
+                            execution, reduction, statistics.box(local_index),
                             LocalStatValue<Dim>{statistics.fab(local_index).view(), component}));
   return static_cast<Real>(all_reduce_max(static_cast<double>(local), lane));
 }
 
-template <int Dim, class MemorySpace>
+template <int Dim, class MemorySpace, class ExecutionSpace>
 double collective_sum_component(const MultiFab<Dim, MemorySpace>& statistics, int component,
-                                const ExecutionLane& lane) {
+                                const ExecutionLane& lane, const ExecutionSpace& execution,
+                                const PreparedCellSumReduction<ExecutionSpace>& reduction) {
   Real local = Real(0);
   for (std::size_t local_index = 0; local_index < statistics.local_size(); ++local_index)
     local += for_each_cell_reduce_sum(
-        statistics.box(local_index),
+        execution, reduction, statistics.box(local_index),
         LocalStatValue<Dim>{statistics.fab(local_index).view(), component});
   return all_reduce_sum(static_cast<double>(local), lane);
 }
 
-template <int Dim, class MemorySpace>
+template <int Dim, class MemorySpace, class ExecutionSpace>
 Real collective_reason(const MultiFab<Dim, MemorySpace>& statistics, int status,
                        const Index<Dim>& selected, int component, const ExecutionLane& lane,
+                       const ExecutionSpace& execution,
+                       const PreparedCellSumReduction<ExecutionSpace>& reduction,
                        int required_high = -1) {
   Real local = Real(0);
   for (std::size_t local_index = 0; local_index < statistics.local_size(); ++local_index)
-    local = std::max(local, for_each_cell_reduce_max(statistics.box(local_index),
-                                                     LocalStatReasonForLocation<Dim>{
-                                                         statistics.fab(local_index).view(), status,
+    local = std::max(local,
+                     for_each_cell_reduce_max(
+                         execution, reduction, statistics.box(local_index),
+                         LocalStatReasonForLocation<Dim>{statistics.fab(local_index).view(), status,
                                                          selected, component, required_high}));
   return static_cast<Real>(all_reduce_max(static_cast<double>(local), lane));
 }
@@ -420,54 +445,6 @@ inline SolveAction implicit_failure_action(LocalNonlinearStatus status) {
   return SolveAction::kFailRun;
 }
 
-inline NewtonReport staged_report(const NewtonReport* current, const SolveReport& solve,
-                                  double failed_cells) {
-  NewtonReport staged = current != nullptr ? *current : NewtonReport{};
-  staged.enabled = true;
-  staged.solve = solve;
-  staged.max_residual = std::max(staged.max_residual, solve.residual_norm);
-  staged.max_iters_used = std::max(staged.max_iters_used, static_cast<Real>(solve.iters));
-  staged.n_failed += failed_cells;
-  if (!solve.solved()) {
-    staged.converged = false;
-    staged.failure = solve.failure;
-  }
-  return staged;
-}
-
-template <int Dim, class MemorySpace>
-struct ImplicitSourcePublication {
-  MultiFab<Dim, MemorySpace>* destination = nullptr;
-  std::unique_ptr<MultiFab<Dim, MemorySpace>> candidate;
-  NewtonReport* diagnostics = nullptr;
-  NewtonReport staged_diagnostics{};
-
-  bool layout_matches() const noexcept {
-    return destination != nullptr && candidate != nullptr &&
-           destination->layout() == candidate->layout() &&
-           destination->distribution() == candidate->distribution() &&
-           destination->local_rank() == candidate->local_rank() &&
-           destination->ncomp() == candidate->ncomp() &&
-           destination->ghosts() == candidate->ghosts() &&
-           destination->local_size() == candidate->local_size();
-  }
-
-  static void validate_accept(void* context) {
-    const auto& publication = *static_cast<const ImplicitSourcePublication*>(context);
-    if (!publication.layout_matches())
-      throw std::logic_error(
-          "cannot accept a local implicit SolveOutcome after its destination layout changed");
-  }
-
-  static void accept(void* context) noexcept {
-    auto& publication = *static_cast<ImplicitSourcePublication*>(context);
-    lincomb(*publication.destination, Real(1), *publication.candidate, Real(0),
-            *publication.candidate);
-    if (publication.diagnostics != nullptr)
-      *publication.diagnostics = publication.staged_diagnostics;
-  }
-};
-
 }  // namespace detail
 
 /// Host-side binder for the exact provider slots of one local patch.
@@ -482,7 +459,277 @@ concept ImplicitProviderPatchBinding =
       { provider_at(local_patch) } -> std::same_as<ProviderStorageView<Dim, Count>>;
     };
 
-/// Prepare a local backward-Euler source solve without publishing its ranked candidate.
+namespace detail {
+
+inline bool prepared_implicit_newton_options_valid(const NewtonOptions& options) noexcept {
+  return options.max_iters >= 1 && std::isfinite(options.rel_tol) &&
+         std::isfinite(options.abs_tol) && std::isfinite(options.fd_eps) &&
+         options.rel_tol >= Real(0) && options.abs_tol >= Real(0) &&
+         (options.rel_tol > Real(0) || options.abs_tol > Real(0)) && options.fd_eps > Real(0) &&
+         std::isfinite(options.damping) && options.damping > Real(0) && options.damping <= Real(1);
+}
+
+inline SolveReport prepared_implicit_failure(SolveStatus status, SolveAction action,
+                                             const char* reason) {
+  SolveReport report;
+  report.mark_failed(status, action, reason);
+  return report;
+}
+
+inline SolveReport prepared_implicit_report(int status_code, int iterations, int evaluations,
+                                            Real reference_residual, Real residual, Real step,
+                                            Real condition, int safeguard_steps,
+                                            SolveFailureLocation failure, SolveAction action) {
+  const LocalNonlinearStatus status = static_cast<LocalNonlinearStatus>(status_code);
+  SolveReport report;
+  report.iters = iterations;
+  report.evaluations = evaluations;
+  report.reference_residual_norm = reference_residual;
+  report.residual_norm = residual;
+  const Real largest_finite = std::numeric_limits<Real>::max();
+  report.rel_residual =
+      reference_residual > Real(0)
+          ? (reference_residual >= residual / largest_finite ? residual / reference_residual
+                                                             : largest_finite)
+          : residual;
+  report.step_norm = step;
+  report.condition_evidence = condition;
+  report.safeguard_steps = safeguard_steps;
+  report.failure = failure;
+  if (status == LocalNonlinearStatus::kConverged)
+    report.mark_solved("ok");
+  else
+    report.mark_failed(solve_status(status), action, "failed");
+  return report;
+}
+
+template <int Dim, class Model, class MemorySpace, class ProviderAt, class PrepareState>
+SolveOutcome backward_euler_source_prepared(
+    const Model& model, const ProviderAt& provider_at, MultiFab<Dim, MemorySpace>& state,
+    PreparedImplicitSourceWorkspace<Dim, MemorySpace>& workspace, std::uint64_t state_generation,
+    Real dt, const NewtonOptions& options, const ExecutionLane& lane,
+    const ImplicitMask<Model::n_vars>& mask, const MultiFab<Dim, MemorySpace>* active_cells,
+    std::shared_ptr<void> lifetime, PrepareState&& prepare_state) {
+  using Workspace = PreparedImplicitSourceWorkspace<Dim, MemorySpace>;
+  using Access = PreparedImplicitSourceWorkspaceAccess<Dim, MemorySpace>;
+  constexpr int provider_count = provider_count_for<Model, Dim>();
+  const auto fail = [&](SolveStatus status, SolveAction action, const char* reason) {
+    return SolveOutcome::collective_lane(prepared_implicit_failure(status, action, reason), lane);
+  };
+  const auto layout_matches = [&](const MultiFab<Dim, MemorySpace>& other) {
+    return state.layout() == other.layout() && state.distribution() == other.distribution() &&
+           state.local_rank() == other.local_rank() && state.local_size() == other.local_size();
+  };
+
+  if (!lane.active())
+    return SolveOutcome::serial(
+        prepared_implicit_failure(SolveStatus::kInvalidInput, SolveAction::kFailRun, "lane"));
+
+  int local_preflight_code = 0;
+  if (!prepared_implicit_newton_options_valid(options))
+    local_preflight_code = 1;
+  else if (state.ncomp() != Model::n_vars)
+    local_preflight_code = 2;
+  else if (active_cells != nullptr &&
+           (active_cells->ncomp() != 1 || !layout_matches(*active_cells)))
+    local_preflight_code = 3;
+  else if (state.rank_space().size() != static_cast<std::size_t>(lane.size()) ||
+           state.rank_space().linear_rank(state.local_rank()) !=
+               static_cast<std::size_t>(lane.rank()))
+    local_preflight_code = 4;
+  else if (!Access::matches(workspace, state, state_generation))
+    local_preflight_code = 5;
+  else if (!Access::diagnostics_capacity_valid(workspace))
+    local_preflight_code = 6;
+  const long preflight_min = all_reduce_min(static_cast<long>(local_preflight_code), lane);
+  const long preflight_max = all_reduce_max(static_cast<long>(local_preflight_code), lane);
+  if (preflight_min != 0 || preflight_max != 0) {
+    const char* reason = "preflight";
+    if (preflight_min == preflight_max) {
+      switch (preflight_min) {
+        case 1:
+          reason = "options";
+          break;
+        case 2:
+          reason = "state";
+          break;
+        case 3:
+          reason = "mask";
+          break;
+        case 4:
+          reason = "rank";
+          break;
+        case 5:
+          reason = "stale";
+          break;
+        case 6:
+          reason = "diagnostic";
+          break;
+        default:
+          break;
+      }
+    }
+    return fail(SolveStatus::kInvalidInput, SolveAction::kFailRun, reason);
+  }
+
+  const bool locally_reserved = Access::try_reserve(workspace);
+  if (all_reduce_min(locally_reserved ? 1L : 0L, lane) == 0) {
+    if (locally_reserved)
+      Access::release(workspace);
+    return fail(SolveStatus::kCapabilityFailure, SolveAction::kFailRun, "busy");
+  }
+
+  struct PendingRelease final {
+    Workspace* workspace = nullptr;
+    bool armed = true;
+    ~PendingRelease() {
+      if (armed)
+        Access::release(*workspace);
+    }
+  } pending{&workspace};
+
+  auto& candidate = Access::candidate(workspace);
+  auto& statistics = Access::statistics(workspace);
+  const auto& execution = Access::execution(workspace);
+  const auto& reduction = Access::reduction(workspace);
+  long local_candidate_fault = 0;
+  try {
+    std::forward<PrepareState>(prepare_state)();
+    Access::copy_from_state(workspace, state);
+    for (std::size_t local_index = 0; local_index < state.local_size(); ++local_index) {
+      FieldView<const Real, Dim> active{};
+      ProviderStorageView<Dim, provider_count> provider_view{};
+      if (active_cells != nullptr)
+        active = active_cells->fab(local_index).view();
+      if constexpr (provider_count > 0)
+        provider_view = provider_at(local_index);
+      detail::prepared_implicit_for_each<Dim, MemorySpace>(
+          state.box(local_index), detail::PreparedImplicitSourceKernel<Dim, Model>{
+                                      model,
+                                      std::as_const(state).fab(local_index).view(),
+                                      provider_view,
+                                      active,
+                                      active_cells != nullptr,
+                                      candidate.fab(local_index).view(),
+                                      statistics.fab(local_index).view(),
+                                      dt,
+                                      options,
+                                      mask,
+                                  });
+    }
+  } catch (...) {
+    local_candidate_fault = 1;
+  }
+  if (all_reduce_max(local_candidate_fault, lane) != 0)
+    return fail(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun, "kernel");
+
+  const int status_priority =
+      static_cast<int>(collective_max_component(statistics, 12, lane, execution, reduction));
+  const LocalNonlinearStatus status = local_nonlinear_status_from_priority(status_priority);
+  const int status_code = local_nonlinear_status_code(status);
+  const int iterations =
+      static_cast<int>(collective_max_component(statistics, 1, lane, execution, reduction));
+  const int evaluations =
+      static_cast<int>(collective_max_component(statistics, 2, lane, execution, reduction));
+  const Real reference_residual =
+      collective_max_component(statistics, 3, lane, execution, reduction);
+  const Real residual = collective_max_component(statistics, 4, lane, execution, reduction);
+  const Real step = collective_max_component(statistics, 5, lane, execution, reduction);
+  const Real condition = collective_max_component(statistics, 6, lane, execution, reduction);
+  const int safeguard_steps =
+      static_cast<int>(collective_max_component(statistics, 7, lane, execution, reduction));
+  const double failed_cells = collective_sum_component(statistics, 9, lane, execution, reduction);
+
+  LocalNonlinearFailureLocation<Dim> failure{};
+  std::uint32_t reason_code = 0;
+  if (failed_cells > 0) {
+    failure = collective_first_local_nonlinear_failure(
+        statistics, Access::failure_buffer(workspace), status_priority, 12, 8, lane);
+    if (!failure.found || failure.priority != status_priority)
+      return fail(SolveStatus::kInvalidInput, SolveAction::kFailRun, "rank");
+    const int reason_high = static_cast<int>(
+        collective_reason(statistics, status_code, failure.index, 10, lane, execution, reduction));
+    const int reason_low = static_cast<int>(collective_reason(
+        statistics, status_code, failure.index, 11, lane, execution, reduction, reason_high));
+    reason_code =
+        (static_cast<std::uint32_t>(reason_high) << 16) | static_cast<std::uint32_t>(reason_low);
+  }
+
+  const SolveFailureLocation solve_failure =
+      failure.found ? SolveFailureLocation::from<Dim>(failure.index, failure.component)
+                    : SolveFailureLocation{};
+  SolveReport solve = prepared_implicit_report(
+      status_code, iterations, evaluations, reference_residual, residual, step, condition,
+      safeguard_steps, solve_failure, implicit_failure_action(status));
+  // The prepared workspace transports the selected local failure as fixed-width statistics so
+  // the kernel itself stays allocation-free.  Reconstruct its public diagnostic only after the
+  // collective winner (status, reason and location) has been authenticated.  This is deliberately
+  // failure-only: the converged report keeps its short bind-safe reason from
+  // prepared_implicit_report().
+  if (!solve.solved()) {
+    solve.reason = std::string("implicit_source_") + local_nonlinear_status_name(status);
+    if (reason_code != 0)
+      solve.reason += "_reason_" + std::to_string(reason_code);
+    if (failure.found) {
+      solve.reason += "_index";
+      for (int axis = 0; axis < Dim; ++axis)
+        solve.reason += "_" + std::to_string(failure.index[axis]);
+    }
+  }
+  if (all_reduce_max(!solve_report_is_publishable(solve, options.max_iters) ? 1L : 0L, lane) != 0)
+    return fail(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun, "malformed");
+  const bool staged = Access::stage_report(workspace, solve, failed_cells);
+  if (all_reduce_min(staged ? 1L : 0L, lane) == 0)
+    return fail(SolveStatus::kInvalidInput, SolveAction::kFailRun, "diagnostic");
+  Access::arm_publication(workspace, state, state_generation, reason_code);
+  pending.armed = false;
+  return SolveOutcome::collective_lane(
+      std::move(solve), lane,
+      SolveOutcome::PublicationHooks{
+          &workspace,
+          [](void* context) noexcept { Access::publish(*static_cast<Workspace*>(context)); },
+          nullptr,
+          [](void* context) noexcept { Access::release(*static_cast<Workspace*>(context)); },
+          std::move(lifetime),
+          [](void* context) { Access::validate_publication(*static_cast<Workspace*>(context)); },
+          nullptr,
+      });
+}
+
+}  // namespace detail
+
+/// Execute a cold-bound local backward-Euler source solve without allocating after `bind`.
+template <int Dim, class Model, class MemorySpace, class ProviderAt>
+  requires ImplicitProviderPatchBinding<ProviderAt, Dim, provider_count_for<Model, Dim>()>
+[[nodiscard]] SolveOutcome backward_euler_source(
+    const Model& model, const ProviderAt& provider_at, MultiFab<Dim, MemorySpace>& state,
+    PreparedImplicitSourceWorkspace<Dim, MemorySpace>& workspace, std::uint64_t state_generation,
+    Real dt, const NewtonOptions& options, const ExecutionLane& lane,
+    const ImplicitMask<Model::n_vars>& mask = {},
+    const MultiFab<Dim, MemorySpace>* active_cells = nullptr) {
+  return detail::backward_euler_source_prepared(model, provider_at, state, workspace,
+                                                state_generation, dt, options, lane, mask,
+                                                active_cells, {}, []() noexcept {});
+}
+
+/// Same prepared solve with an explicit cold-owned workspace lifetime. Generated Program blocks
+/// use this to retain a resident workspace if a hierarchy refresh retires the originating block
+/// before its returned outcome is consumed.
+template <int Dim, class Model, class MemorySpace, class ProviderAt>
+  requires ImplicitProviderPatchBinding<ProviderAt, Dim, provider_count_for<Model, Dim>()>
+[[nodiscard]] SolveOutcome backward_euler_source(
+    const Model& model, const ProviderAt& provider_at, MultiFab<Dim, MemorySpace>& state,
+    PreparedImplicitSourceWorkspace<Dim, MemorySpace>& workspace, std::uint64_t state_generation,
+    Real dt, const NewtonOptions& options, const ExecutionLane& lane,
+    const ImplicitMask<Model::n_vars>& mask, const MultiFab<Dim, MemorySpace>* active_cells,
+    std::shared_ptr<void> lifetime) {
+  return detail::backward_euler_source_prepared(
+      model, provider_at, state, workspace, state_generation, dt, options, lane, mask, active_cells,
+      std::move(lifetime), []() noexcept {});
+}
+
+/// Compatibility entry point. New runtime bindings must own and reuse a
+/// PreparedImplicitSourceWorkspace; this wrapper retains the historical direct-native API only.
 template <int Dim, class Model, class MemorySpace, class ProviderAt>
   requires ImplicitProviderPatchBinding<ProviderAt, Dim, provider_count_for<Model, Dim>()>
 [[nodiscard]] SolveOutcome backward_euler_source(
@@ -495,7 +742,6 @@ template <int Dim, class Model, class MemorySpace, class ProviderAt>
     return state.layout() == other.layout() && state.distribution() == other.distribution() &&
            state.local_rank() == other.local_rank() && state.local_size() == other.local_size();
   };
-  constexpr int provider_count = provider_count_for<Model, Dim>();
   if (state.ncomp() != Model::n_vars)
     throw std::invalid_argument("Implicit source state component count differs from its Model");
   if (active_cells != nullptr && (active_cells->ncomp() != 1 || !layout_matches(*active_cells)))
@@ -505,104 +751,11 @@ template <int Dim, class Model, class MemorySpace, class ProviderAt>
       state.rank_space().linear_rank(state.local_rank()) != static_cast<std::size_t>(lane.rank()))
     throw std::logic_error(
         "backward_euler_source: ND rank space does not match its prepared execution lane");
-
-  auto candidate = std::make_unique<MultiFab<Dim, MemorySpace>>(
-      state.layout(), state.distribution(), state.local_rank(), state.ncomp(), state.ghosts());
-  lincomb(*candidate, Real(1), state, Real(0), state);
-  MultiFab<Dim, MemorySpace> statistics(state.layout(), state.distribution(), state.local_rank(),
-                                        13, Extent<Dim>{});
-  for (std::size_t local_index = 0; local_index < state.local_size(); ++local_index) {
-    FieldView<const Real, Dim> active{};
-    ProviderStorageView<Dim, provider_count> provider_view{};
-    if (active_cells != nullptr)
-      active = active_cells->fab(local_index).view();
-    if constexpr (provider_count > 0)
-      provider_view = provider_at(local_index);
-    for_each_cell(state.box(local_index), detail::PreparedImplicitSourceKernel<Dim, Model>{
-                                              model,
-                                              std::as_const(state).fab(local_index).view(),
-                                              provider_view,
-                                              active,
-                                              active_cells != nullptr,
-                                              candidate->fab(local_index).view(),
-                                              statistics.fab(local_index).view(),
-                                              dt,
-                                              options,
-                                              mask,
-                                          });
-  }
-
-  const int status_priority =
-      static_cast<int>(detail::collective_max_component(statistics, 12, lane));
-  const LocalNonlinearStatus status = local_nonlinear_status_from_priority(status_priority);
-  const int status_code = local_nonlinear_status_code(status);
-  const int iterations = static_cast<int>(detail::collective_max_component(statistics, 1, lane));
-  const int evaluations = static_cast<int>(detail::collective_max_component(statistics, 2, lane));
-  const Real reference_residual = detail::collective_max_component(statistics, 3, lane);
-  const Real residual = detail::collective_max_component(statistics, 4, lane);
-  const Real step = detail::collective_max_component(statistics, 5, lane);
-  const Real condition = detail::collective_max_component(statistics, 6, lane);
-  const int safeguard_steps =
-      static_cast<int>(detail::collective_max_component(statistics, 7, lane));
-  const double failed_cells = detail::collective_sum_component(statistics, 9, lane);
-
-  LocalNonlinearFailureLocation<Dim> failure{};
-  std::uint32_t reason_code = 0;
-  if (failed_cells > 0) {
-    failure = collective_first_local_nonlinear_failure(statistics, status_priority, 12, 8, lane);
-    if (!failure.found || failure.priority != status_priority)
-      throw std::runtime_error("implicit source collective status/location precedence mismatch");
-    const int reason_high = static_cast<int>(
-        detail::collective_reason(statistics, status_code, failure.index, 10, lane));
-    const int reason_low = static_cast<int>(
-        detail::collective_reason(statistics, status_code, failure.index, 11, lane, reason_high));
-    reason_code =
-        (static_cast<std::uint32_t>(reason_high) << 16) | static_cast<std::uint32_t>(reason_low);
-  }
-
-  const SolveFailureLocation solve_failure =
-      failure.found ? SolveFailureLocation::from<Dim>(failure.index, failure.component)
-                    : SolveFailureLocation{};
-  SolveReport solve = local_nonlinear_solve_report(
-      status_code, iterations, evaluations, reference_residual, residual, step, condition,
-      safeguard_steps, solve_failure, detail::implicit_failure_action(status));
-  if (!solve.solved()) {
-    solve.reason = std::string("implicit_source_") + local_nonlinear_status_name(status);
-    if (reason_code != 0)
-      solve.reason += "_reason_" + std::to_string(reason_code);
-    if (failure.found) {
-      solve.reason += "_index";
-      for (int axis = 0; axis < Dim; ++axis)
-        solve.reason += "_" + std::to_string(failure.index[axis]);
-    }
-  } else {
-    solve.reason = "implicit_source_converged";
-  }
-  if (!solve_report_is_publishable(solve, options.max_iters)) {
-    std::ostringstream message;
-    message << "implicit source produced a malformed SolveReport: status=" << solve.status_name()
-            << " action=" << solve.action_name() << " iterations=" << solve.iters
-            << " evaluations=" << solve.evaluations
-            << " reference_residual=" << solve.reference_residual_norm
-            << " residual=" << solve.residual_norm << " relative_residual=" << solve.rel_residual
-            << " step=" << solve.step_norm << " condition=" << solve.condition_evidence;
-    throw std::runtime_error(message.str());
-  }
-
-  const NewtonReport staged = detail::staged_report(diagnostics, solve, failed_cells);
-  using Publication = detail::ImplicitSourcePublication<Dim, MemorySpace>;
-  auto publication =
-      std::make_shared<Publication>(Publication{&state, std::move(candidate), diagnostics, staged});
-  return SolveOutcome::collective_lane(std::move(solve), lane,
-                                       SolveOutcome::PublicationHooks{
-                                           publication.get(),
-                                           &Publication::accept,
-                                           nullptr,
-                                           nullptr,
-                                           std::static_pointer_cast<void>(publication),
-                                           &Publication::validate_accept,
-                                           nullptr,
-                                       });
+  auto workspace = std::make_shared<PreparedImplicitSourceWorkspace<Dim, MemorySpace>>();
+  workspace->bind(state, 0, diagnostics);
+  return detail::backward_euler_source_prepared(
+      model, provider_at, state, *workspace, 0, dt, options, lane, mask, active_cells,
+      std::static_pointer_cast<void>(workspace), []() noexcept {});
 }
 
 }  // namespace pops

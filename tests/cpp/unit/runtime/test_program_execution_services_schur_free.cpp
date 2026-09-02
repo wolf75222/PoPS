@@ -13,6 +13,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <functional>
 #include <vector>
@@ -24,7 +25,8 @@ concept ExactRankedFieldProgramRoutes = requires(
     const pops::CompiledFieldBoundaryKernel<Dim>& boundary_kernel,
     const pops::FieldLogicalTimePoint& logical_point,
     const std::vector<const pops::MultiFab<Dim>*>& stages,
-    std::initializer_list<typename pops::runtime::program::ProgramExecutionServices<Dim>::FieldStageOverride>
+    std::initializer_list<
+        typename pops::runtime::program::ProgramExecutionServices<Dim>::FieldStageOverride>
         overrides,
     const std::string& identity, const std::vector<double>& parameters) {
   { context.solve_fields() } -> std::same_as<pops::SolveOutcome>;
@@ -42,7 +44,8 @@ concept ExactRankedFieldProgramRoutes = requires(
 static_assert(std::is_class_v<pops::runtime::program::ProgramExecutionServices<1>>);
 static_assert(std::is_class_v<pops::runtime::program::ProgramExecutionServices<2>>);
 static_assert(std::is_class_v<pops::runtime::program::ProgramExecutionServices<3>>);
-static_assert(!std::is_trivially_constructible_v<pops::runtime::program::ProgramExecutionServices<2>>);
+static_assert(
+    !std::is_trivially_constructible_v<pops::runtime::program::ProgramExecutionServices<2>>);
 static_assert(ExactRankedFieldProgramRoutes<1>);
 static_assert(ExactRankedFieldProgramRoutes<2>);
 static_assert(ExactRankedFieldProgramRoutes<3>);
@@ -54,24 +57,52 @@ class TestPreparationImage final : public pops::runtime::program::ProgramPrepara
   TestPreparationImage(std::uint32_t dimension, pops::runtime::program::ProgramRuntimeKind kind,
                        pops::runtime::program::ProgramExecutionServicesRef services,
                        std::uint64_t generation = 1)
-      : ProgramPreparationImage(dimension, kind, services, generation) {}
+      : ProgramPreparationImage(dimension, kind, services, generation) {
+    bind_image_services(services);
+  }
 };
 
 }  // namespace
 
 namespace {
 
+const std::string& exact_empty_resource_manifest(std::uint64_t maximum_bytes = 0) {
+  using namespace pops::runtime::program;
+  static const std::string zero_manifest = [] {
+    ProgramInstallationTables tables;
+    const std::string payload = tables.canonical_resource_digest_payload(0);
+    const std::string digest =
+        pops::identity::sha256_hex(std::vector<std::uint8_t>(payload.begin(), payload.end()));
+    return "{\"resource_plan\":" + tables.canonical_resource_manifest(0, digest) +
+           ",\"resource_plan_digest\":\"" + digest + "\"}";
+  }();
+  if (maximum_bytes == 0)
+    return zero_manifest;
+  static const std::string one_byte_manifest = [] {
+    ProgramInstallationTables tables;
+    const std::string payload = tables.canonical_resource_digest_payload(1);
+    const std::string digest =
+        pops::identity::sha256_hex(std::vector<std::uint8_t>(payload.begin(), payload.end()));
+    return "{\"resource_plan\":" + tables.canonical_resource_manifest(1, digest) +
+           ",\"resource_plan_digest\":\"" + digest + "\"}";
+  }();
+  if (maximum_bytes == 1)
+    return one_byte_manifest;
+  throw std::invalid_argument("synthetic fixture only materializes exact empty ceilings 0 or 1");
+}
+
 struct CadenceSyntheticCandidate final {
   std::function<void(double)> on_step;
 };
 
-class CadencePreparationImage final
-    : public pops::runtime::program::ProgramPreparationImage {
+class CadencePreparationImage final : public pops::runtime::program::ProgramPreparationImage {
  public:
   CadencePreparationImage(std::uint32_t dimension, std::uint64_t generation,
                           pops::runtime::program::ProgramExecutionServicesRef services)
       : ProgramPreparationImage(dimension, pops::runtime::program::ProgramRuntimeKind::uniform,
-                                 services, generation) {}
+                                services, generation) {
+    bind_image_services(services);
+  }
 };
 
 void cadence_synthetic_step(void* opaque, double dt) {
@@ -80,9 +111,8 @@ void cadence_synthetic_step(void* opaque, double dt) {
     candidate.on_step(dt);
 }
 
-bool cadence_synthetic_prepare(
-    void*, const pops::runtime::program::ProgramHostDescriptor*,
-    pops::runtime::program::ProgramInstallDiagnostic*) noexcept {
+bool cadence_synthetic_prepare(void*, const pops::runtime::program::ProgramHostDescriptor*,
+                               pops::runtime::program::ProgramInstallDiagnostic*) noexcept {
   return true;
 }
 
@@ -114,6 +144,8 @@ pops::runtime::program::PreparedProgramInstallation prepared_cadence_artifact(
   descriptor.prepare = &cadence_synthetic_prepare;
   descriptor.step = &cadence_synthetic_step;
   descriptor.destroy = &cadence_synthetic_destroy;
+  const std::string& resource_manifest = exact_empty_resource_manifest();
+  descriptor.persistent_resource_manifest = {resource_manifest.data(), resource_manifest.size()};
   ProgramExecutionServicesRef services{&candidate, &candidate, &candidate, &candidate, &candidate,
                                        &candidate, &candidate, &candidate, &candidate};
   ProgramHostDescriptor host{};
@@ -123,21 +155,22 @@ pops::runtime::program::PreparedProgramInstallation prepared_cadence_artifact(
   host.services = services;
   auto image = std::make_shared<CadencePreparationImage>(Dim, generation, services);
   bind_program_preparation_image(host, image);
-  OwnedProgramInstallation owner(pops::dynlib::UniqueHandle{nullptr}, descriptor,
-                                 ProgramInstallationMetadata{"cadence-synthetic", "abi", "route",
-                                                             "boundary", "persistent", "checkpoint"});
+  OwnedProgramInstallation owner(
+      pops::dynlib::UniqueHandle{nullptr}, descriptor,
+      ProgramInstallationMetadata{"cadence-synthetic", "abi", "route", "boundary",
+                                  exact_empty_resource_manifest(), "checkpoint",
+                                  "cadence-synthetic"});
   owner.set_preparation_image(image);
   owner.prepare(host);
-  return PreparedProgramInstallation(std::move(owner));
+  PreparedProgramInstallation artifact(std::move(owner));
+  artifact.seal_resource_plan(std::vector<ProgramInstallationTables::ResourcePrototype>{});
+  return artifact;
 }
 
 }  // namespace
 
 TEST(ProgramExecutionServicesSchurFree, ExactRankedHeaderRequiresTaggedPreparationImage) {
   pops::runtime::program::ProgramPreparationHostRef unbound{};
-  unbound.native_dimension = 2;
-  unbound.runtime_kind = pops::runtime::program::ProgramRuntimeKind::uniform;
-  unbound.capability_bits = pops::runtime::program::kKnownProgramCapabilityBits;
   EXPECT_THROW((void)pops::runtime::program::make_program_execution_provider<2>(unbound),
                std::invalid_argument);
 }
@@ -149,6 +182,7 @@ TEST(ProgramPreparationImage, BindsOneStableTypedImageWithoutFacadeRecovery) {
   services.state_store = &token;
   services.field_store = &token;
   services.spatial_executor = &token;
+  services.hierarchy_executor = &token;
   services.history_store = &token;
   services.clock_service = &token;
   services.reduction_service = &token;
@@ -162,8 +196,8 @@ TEST(ProgramPreparationImage, BindsOneStableTypedImageWithoutFacadeRecovery) {
   host.services = services;
 
   bind_program_preparation_image(host, image);
-  const auto& bound = require_program_preparation_image(
-      host.preparation, 2, ProgramRuntimeKind::uniform);
+  const auto& bound =
+      require_program_preparation_image(host.preparation, 2, ProgramRuntimeKind::uniform);
   EXPECT_EQ(&bound, image.get());
   EXPECT_EQ(host.preparation.image, image.get());
   EXPECT_TRUE(valid_program_host_descriptor(host));
@@ -171,13 +205,11 @@ TEST(ProgramPreparationImage, BindsOneStableTypedImageWithoutFacadeRecovery) {
   ProgramPreparationHostRef forged = host.preparation;
   int other_service = 0;
   forged.services.clock_service = &other_service;
-  EXPECT_THROW((void)require_program_preparation_image(
-                   forged, 2, ProgramRuntimeKind::uniform),
+  EXPECT_THROW((void)require_program_preparation_image(forged, 2, ProgramRuntimeKind::uniform),
                std::invalid_argument);
 
-  EXPECT_THROW(bind_program_preparation_image(
-                   host, std::make_shared<TestPreparationImage>(3, ProgramRuntimeKind::uniform,
-                                                                 services)),
+  EXPECT_THROW(bind_program_preparation_image(host, std::make_shared<TestPreparationImage>(
+                                                        3, ProgramRuntimeKind::uniform, services)),
                std::invalid_argument);
 }
 
@@ -192,8 +224,7 @@ TEST(ProgramRuntimeStateCadence, SharedDispatcherOwnsHoldSubstepAndCursorCommit)
   double physical_time = 2.0;
   int macro_step = 4;
   CadenceSyntheticCandidate candidate;
-  candidate.on_step =
-      [&](double dt) { dispatches.push_back({physical_time, dt, macro_step}); };
+  candidate.on_step = [&](double dt) { dispatches.push_back({physical_time, dt, macro_step}); };
   state.install_prepared_artifact(
       prepared_cadence_artifact<2>(candidate, state.step_install_generation_ + 1));
   state.set_cadence(/*substeps=*/2, /*stride=*/2, "Fixture");
@@ -279,7 +310,9 @@ struct SyntheticProgramCandidate {
 int stateless_step_calls = 0;
 int stateless_dt_bound_calls = 0;
 
-void stateless_program_step(void*, double) { ++stateless_step_calls; }
+void stateless_program_step(void*, double) {
+  ++stateless_step_calls;
+}
 bool stateless_program_prepare(void*, const pops::runtime::program::ProgramHostDescriptor*,
                                pops::runtime::program::ProgramInstallDiagnostic*) noexcept {
   return true;
@@ -297,8 +330,7 @@ void synthetic_program_step(void* opaque, double dt) {
     candidate.on_step(dt);
 }
 
-bool synthetic_program_prepare(void* opaque,
-                               const pops::runtime::program::ProgramHostDescriptor*,
+bool synthetic_program_prepare(void* opaque, const pops::runtime::program::ProgramHostDescriptor*,
                                pops::runtime::program::ProgramInstallDiagnostic*) noexcept {
   ++static_cast<SyntheticProgramCandidate*>(opaque)->prepare_calls;
   return true;
@@ -317,11 +349,12 @@ void synthetic_program_destroy(void* opaque) noexcept {
 class SyntheticAcceptedSnapshot final
     : public pops::runtime::program::AcceptedProgramExecutionServicesSnapshot {
  public:
-  explicit SyntheticAcceptedSnapshot(SyntheticProgramCandidate& candidate) : candidate_(&candidate) {}
+  explicit SyntheticAcceptedSnapshot(SyntheticProgramCandidate& candidate)
+      : candidate_(&candidate) {}
   ~SyntheticAcceptedSnapshot() override { ++candidate_->snapshot_destroy_calls; }
 
-  std::unique_ptr<pops::runtime::program::AcceptedProgramExecutionServicesSnapshot> prepare_restore()
-      const override {
+  std::unique_ptr<pops::runtime::program::AcceptedProgramExecutionServicesSnapshot>
+  prepare_restore() const override {
     return std::make_unique<SyntheticAcceptedSnapshot>(*candidate_);
   }
   void publish_restore() noexcept override {}
@@ -352,7 +385,8 @@ void synthetic_restart_resync(void* opaque) {
   ++static_cast<SyntheticProgramCandidate*>(opaque)->restart_resync_calls;
 }
 
-pops::runtime::program::AcceptedProgramExecutionServicesSnapshot* synthetic_snapshot_create(void* opaque) {
+pops::runtime::program::AcceptedProgramExecutionServicesSnapshot* synthetic_snapshot_create(
+    void* opaque) {
   auto& candidate = *static_cast<SyntheticProgramCandidate*>(opaque);
   ++candidate.snapshot_create_calls;
   return new SyntheticAcceptedSnapshot(candidate);
@@ -366,7 +400,7 @@ pops::runtime::program::ProgramCandidateDescriptor synthetic_descriptor(
   descriptor.prepare = &stateless_program_prepare;
   descriptor.struct_size = sizeof(ProgramCandidateDescriptor);
   descriptor.abi_version = kProgramInstallAbiVersion;
-  descriptor.native_dimension = 2;
+  descriptor.native_dimension = static_cast<std::uint32_t>(pops::kNativeDimension);
   descriptor.runtime_kind = with_lifecycle ? ProgramRuntimeKind::amr : ProgramRuntimeKind::uniform;
   descriptor.provided_capability_bits =
       with_lifecycle ? kProgramCapabilityHierarchy | kProgramCapabilityTransactions : 0;
@@ -383,6 +417,8 @@ pops::runtime::program::ProgramCandidateDescriptor synthetic_descriptor(
   descriptor.step = &synthetic_program_step;
   descriptor.dt_bound = with_dt_bound ? &synthetic_program_dt_bound : nullptr;
   descriptor.destroy = &synthetic_program_destroy;
+  const std::string& resource_manifest = exact_empty_resource_manifest();
+  descriptor.persistent_resource_manifest = {resource_manifest.data(), resource_manifest.size()};
   if (with_lifecycle) {
     descriptor.hierarchy_refresh = &synthetic_hierarchy_refresh;
     descriptor.history_remap_accepted = &synthetic_history_remap;
@@ -401,13 +437,16 @@ pops::runtime::program::OwnedProgramInstallation make_synthetic_owner(
   OwnedProgramInstallation artifact(
       pops::dynlib::UniqueHandle{nullptr},
       synthetic_descriptor(candidate, with_dt_bound, with_lifecycle),
-      ProgramInstallationMetadata{"artifact", "abi", "route", "boundary", "persistent", "checkpoint"});
+      ProgramInstallationMetadata{"artifact", "abi", "route", "boundary",
+                                  exact_empty_resource_manifest(), "checkpoint"});
   ProgramHostDescriptor host{};
-  host.native_dimension = 2;
-  host.services = {&candidate, &candidate, &candidate, &candidate, &candidate, &candidate,
-                   &candidate, &candidate, &candidate};
-  auto preparation_image = std::make_shared<TestPreparationImage>(
-      2, ProgramRuntimeKind::uniform, host.services, generation);
+  host.native_dimension = static_cast<std::uint32_t>(pops::kNativeDimension);
+  host.runtime_kind = with_lifecycle ? ProgramRuntimeKind::amr : ProgramRuntimeKind::uniform;
+  host.services = {&candidate, &candidate, &candidate, &candidate, &candidate,
+                   &candidate, &candidate, &candidate, &candidate};
+  auto preparation_image =
+      std::make_shared<TestPreparationImage>(static_cast<std::uint32_t>(pops::kNativeDimension),
+                                             host.runtime_kind, host.services, generation);
   bind_program_preparation_image(host, preparation_image);
   artifact.set_preparation_image(preparation_image);
   artifact.prepare(host);
@@ -417,8 +456,13 @@ pops::runtime::program::OwnedProgramInstallation make_synthetic_owner(
 pops::runtime::program::PreparedProgramInstallation prepared_synthetic_artifact(
     SyntheticProgramCandidate& candidate, std::uint64_t generation, bool with_dt_bound = true,
     bool with_lifecycle = false) {
-  return pops::runtime::program::PreparedProgramInstallation(
+  using namespace pops::runtime::program;
+  PreparedProgramInstallation artifact(
       make_synthetic_owner(candidate, with_dt_bound, with_lifecycle, generation));
+  // The synthetic descriptor declares no runtime resources, but ABI-v5 publication still needs
+  // the host to seal that exact empty resource plan before it becomes an artifact receipt.
+  artifact.seal_resource_plan(std::vector<ProgramInstallationTables::ResourcePrototype>{});
+  return artifact;
 }
 
 pops::runtime::program::OwnedProgramInstallation make_synthetic_owner_with_unplanned_ceiling(
@@ -428,13 +472,15 @@ pops::runtime::program::OwnedProgramInstallation make_synthetic_owner_with_unpla
   descriptor.maximum_bytes = 1;
   OwnedProgramInstallation artifact(
       pops::dynlib::UniqueHandle{nullptr}, descriptor,
-      ProgramInstallationMetadata{"artifact", "abi", "route", "boundary", "persistent", "checkpoint"});
+      ProgramInstallationMetadata{"artifact", "abi", "route", "boundary",
+                                  exact_empty_resource_manifest(1), "checkpoint", "artifact"});
   ProgramHostDescriptor host{};
-  host.native_dimension = 2;
-  host.services = {&candidate, &candidate, &candidate, &candidate, &candidate, &candidate,
-                   &candidate, &candidate, &candidate};
+  host.native_dimension = static_cast<std::uint32_t>(pops::kNativeDimension);
+  host.services = {&candidate, &candidate, &candidate, &candidate, &candidate,
+                   &candidate, &candidate, &candidate, &candidate};
   auto preparation_image = std::make_shared<TestPreparationImage>(
-      2, ProgramRuntimeKind::uniform, host.services, generation);
+      static_cast<std::uint32_t>(pops::kNativeDimension), ProgramRuntimeKind::uniform,
+      host.services, generation);
   bind_program_preparation_image(host, preparation_image);
   artifact.set_preparation_image(preparation_image);
   artifact.prepare(host);
@@ -462,17 +508,18 @@ TEST(OwnedProgramInstallation, DispatchesSyntheticCallbacksWhileOwnerIsResident)
 TEST(OwnedProgramInstallation, RefusesDispatchBeforeAndPreparationTwice) {
   using namespace pops::runtime::program;
   SyntheticProgramCandidate candidate;
-  OwnedProgramInstallation artifact(pops::dynlib::UniqueHandle{nullptr}, synthetic_descriptor(candidate),
-                                    ProgramInstallationMetadata{});
+  OwnedProgramInstallation artifact(pops::dynlib::UniqueHandle{nullptr},
+                                    synthetic_descriptor(candidate), ProgramInstallationMetadata{});
   EXPECT_THROW(artifact.invoke_step(0.25), std::logic_error);
   ProgramHostDescriptor host{};
-  host.native_dimension = 2;
-  host.services = {&candidate, &candidate, &candidate, &candidate, &candidate, &candidate,
-                   &candidate, &candidate, &candidate};
+  host.native_dimension = static_cast<std::uint32_t>(pops::kNativeDimension);
+  host.services = {&candidate, &candidate, &candidate, &candidate, &candidate,
+                   &candidate, &candidate, &candidate, &candidate};
   EXPECT_THROW(artifact.prepare(host), std::invalid_argument);
   EXPECT_EQ(candidate.prepare_calls, 0);
-  auto preparation_image = std::make_shared<TestPreparationImage>(
-      2, ProgramRuntimeKind::uniform, host.services);
+  auto preparation_image =
+      std::make_shared<TestPreparationImage>(static_cast<std::uint32_t>(pops::kNativeDimension),
+                                             ProgramRuntimeKind::uniform, host.services);
   bind_program_preparation_image(host, preparation_image);
   artifact.set_preparation_image(preparation_image);
   artifact.prepare(host);
@@ -505,12 +552,13 @@ TEST(OwnedProgramInstallation, InvokesStatelessNullContextCandidates) {
   OwnedProgramInstallation artifact(pops::dynlib::UniqueHandle{nullptr}, descriptor,
                                     ProgramInstallationMetadata{});
   ProgramHostDescriptor host{};
-  host.native_dimension = 2;
+  host.native_dimension = static_cast<std::uint32_t>(pops::kNativeDimension);
   int service = 0;
-  host.services = {&service, &service, &service, &service, &service, &service, &service,
-                   &service, &service};
-  auto preparation_image = std::make_shared<TestPreparationImage>(
-      2, ProgramRuntimeKind::uniform, host.services);
+  host.services = {&service, &service, &service, &service, &service,
+                   &service, &service, &service, &service};
+  auto preparation_image =
+      std::make_shared<TestPreparationImage>(static_cast<std::uint32_t>(pops::kNativeDimension),
+                                             ProgramRuntimeKind::uniform, host.services);
   bind_program_preparation_image(host, preparation_image);
   artifact.set_preparation_image(preparation_image);
   artifact.prepare(host);
@@ -545,14 +593,21 @@ TEST(ProgramInstallationTables, MaterializesEveryDsoViewBeforePreparation) {
   char resource_components[] = "[]";
   char resource_shape[] = "[]";
   ProgramBlockRecord blocks[] = {{{block_name, sizeof(block_name) - 1}}};
-  ProgramParameterRecord parameters[] = {{0, 0, 1.25, {parameter_name, sizeof(parameter_name) - 1}}};
+  ProgramParameterRecord parameters[] = {
+      {0, 0, 1.25, {parameter_name, sizeof(parameter_name) - 1}}};
   ProgramAuthorityRecord authorities[] = {{{1, 2, 3, 4}}};
   ProgramHistoryAuthorityRecord histories[] = {{{history_name, sizeof(history_name) - 1}, 2, 0}};
-  ProgramCheckpointRecord checkpoints[] = {{
-      {checkpoint_name, sizeof(checkpoint_name) - 1}, {owner_name, sizeof(owner_name) - 1},
-      {space_name, sizeof(space_name) - 1}, {clock_name, sizeof(clock_name) - 1},
-      {transfer_name, sizeof(transfer_name) - 1}, 0, 1, 2}};
-  ProgramFluxBudgetRecord flux[] = {{1, 2, 3, 4}};
+  ProgramCheckpointRecord checkpoints[] = {{{checkpoint_name, sizeof(checkpoint_name) - 1},
+                                            {owner_name, sizeof(owner_name) - 1},
+                                            {space_name, sizeof(space_name) - 1},
+                                            {clock_name, sizeof(clock_name) - 1},
+                                            {transfer_name, sizeof(transfer_name) - 1},
+                                            0,
+                                            1,
+                                            2}};
+  // This DSO-view fixture has no flux-basis or stage rows, so its final per-block active budget
+  // is exactly empty.  Non-zero values would claim unmaterialized active basis authority.
+  ProgramFluxBudgetRecord flux[] = {{0, 0, 0, 0}};
   ProgramResourcePlanRecord resources[1]{};
   resources[0].slot = 0;
   resources[0].value_id = 7;
@@ -576,7 +631,8 @@ TEST(ProgramInstallationTables, MaterializesEveryDsoViewBeforePreparation) {
   resources[0].restart_provider = {resource_off_policy, sizeof(resource_off_policy) - 1};
   resources[0].component_names = {resource_components, sizeof(resource_components) - 1};
   resources[0].shape = {resource_shape, sizeof(resource_shape) - 1};
-  ProgramRouteRecord routes[] = {{{route_name, sizeof(route_name) - 1}, {route_kind, sizeof(route_kind) - 1}, 0}};
+  ProgramRouteRecord routes[] = {
+      {{route_name, sizeof(route_name) - 1}, {route_kind, sizeof(route_kind) - 1}, 0}};
   descriptor.blocks = {blocks, 1, sizeof(ProgramBlockRecord)};
   descriptor.parameters = {parameters, 1, sizeof(ProgramParameterRecord)};
   descriptor.operator_authorities = {authorities, 1, sizeof(ProgramAuthorityRecord)};
@@ -610,8 +666,8 @@ TEST(ProgramInstallationTables, MaterializesEveryDsoViewBeforePreparation) {
   tables.resource_plan.at(0).plan_digest = pops::identity::sha256_hex(
       std::vector<std::uint8_t>(resource_payload.begin(), resource_payload.end()));
   metadata.persistent_resource_manifest =
-      "{\"resource_plan\":" + tables.canonical_resource_manifest(
-          64, tables.resource_plan.at(0).plan_digest) +
+      "{\"resource_plan\":" +
+      tables.canonical_resource_manifest(64, tables.resource_plan.at(0).plan_digest) +
       ",\"resource_plan_digest\":\"" + tables.resource_plan.at(0).plan_digest + "\"}";
   EXPECT_NO_THROW(tables.validate_resource_authority(metadata, 64));
   const auto resource_plan = make_program_resource_plan(tables, 64);
@@ -620,10 +676,10 @@ TEST(ProgramInstallationTables, MaterializesEveryDsoViewBeforePreparation) {
   EXPECT_EQ(resource_plan.entries().front().communication, "none");
   metadata.persistent_resource_manifest = "{\"resource_plan\":{}}";
   EXPECT_THROW(tables.validate_resource_authority(metadata, 64), std::invalid_argument);
-  const std::string forged_text = "\"resource_plan\":" + tables.canonical_resource_manifest(
-                                      64, tables.resource_plan.at(0).plan_digest) +
-                                  ",\"resource_plan_digest\":\"" +
-                                  tables.resource_plan.at(0).plan_digest + "\"";
+  const std::string forged_text =
+      "\"resource_plan\":" +
+      tables.canonical_resource_manifest(64, tables.resource_plan.at(0).plan_digest) +
+      ",\"resource_plan_digest\":\"" + tables.resource_plan.at(0).plan_digest + "\"";
   metadata.persistent_resource_manifest =
       "{\"note\":" + pops::runtime::program::detail::resource_json_string(forged_text) + "}";
   EXPECT_THROW(tables.validate_resource_authority(metadata, 64), std::invalid_argument);
@@ -633,8 +689,7 @@ TEST(ProgramInstallationTables, MaterializesEveryDsoViewBeforePreparation) {
                std::invalid_argument);
   auto malformed_shape = tables;
   malformed_shape.resource_plan.at(0).shape = "[0]";
-  EXPECT_THROW((void)malformed_shape.canonical_resource_digest_payload(64),
-               std::invalid_argument);
+  EXPECT_THROW((void)malformed_shape.canonical_resource_digest_payload(64), std::invalid_argument);
 
   descriptor.maximum_bytes = 63;
   bytes = 0;
@@ -652,6 +707,101 @@ TEST(ProgramInstallationTables, MaterializesEveryDsoViewBeforePreparation) {
                std::invalid_argument);
 }
 
+TEST(ProgramInstallationTables, FluxRowsKeepQualifiedResourceOwnersSeparateFromDisplayBlocks) {
+  using namespace pops::runtime::program;
+  SyntheticProgramCandidate candidate;
+  auto descriptor = synthetic_descriptor(candidate, true, true);
+  constexpr std::string_view display_block = "tracer";
+  constexpr std::string_view qualified_owner = "pops.handle.v1::case:fixture::block::tracer";
+  constexpr std::string_view forged_owner = "pops.handle.v1::case:fixture::block::forged";
+  constexpr std::string_view clock = "clock.macro";
+  constexpr std::string_view schema = "program-resource-plan:v1";
+  constexpr std::string_view digest =
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const auto view = [](std::string_view value) {
+    return ProgramAbiView{value.data(), static_cast<std::uint64_t>(value.size())};
+  };
+  const ProgramBlockRecord blocks[] = {{view(display_block)}};
+  const ProgramFluxBudgetRecord budgets[] = {{1, 1, 0, 0}};
+  ProgramResourcePlanRecord resources[2]{};
+  const auto resource = [&](std::size_t slot, std::uint64_t value_id, std::string_view identity,
+                            std::string_view occurrence_path) {
+    auto& row = resources[slot];
+    row.slot = static_cast<std::uint32_t>(slot);
+    row.value_id = value_id;
+    row.occurrence_path_id = 100 + slot;
+    row.level = -1;
+    row.components = 1;
+    row.bytes = 8;
+    row.maximum_bytes = 8;
+    row.schema = view(schema);
+    row.plan_digest = view(digest);
+    row.identity = view(identity);
+    row.occurrence_path = view(occurrence_path);
+    row.owner = view(qualified_owner);
+    row.space = view("cell");
+    row.clock = view(clock);
+    row.lifetime = view("transient");
+    row.centering = view("cell");
+    row.off_policy = view("none");
+    row.communication = view("none");
+    row.transfer_provider = view("none");
+    row.restart_provider = view("none");
+    row.component_names = view("[]");
+    row.shape = view("[]");
+  };
+  resource(0, 7, "resource:rhs", "root/rhs");
+  resource(1, 8, "resource:commit", "root/commit");
+
+  ProgramFluxBasisOccurrenceRecord basis{};
+  basis.basis_slot = 0;
+  basis.expression_slot = 0;
+  basis.block = 0;
+  basis.level = -1;
+  basis.rhs_identity = 7;
+  basis.provider = 1;
+  basis.stage_numerator = 0;
+  basis.stage_denominator = 1;
+  basis.identity = view("basis:rhs");
+  basis.occurrence_path = view("root/rhs:basis");
+  basis.owner = view(qualified_owner);
+  basis.clock = view(clock);
+  ProgramFaceFluxStageRecord term{};
+  term.slot = 0;
+  term.basis_slot = 0;
+  term.expression_slot = 1;
+  term.dt_power = 1;
+  term.coefficient_numerator = 1;
+  term.coefficient_denominator = 1;
+  term.identity = view("term:commit");
+  term.occurrence_path = view("root/rhs:basis/final");
+  term.owner = view(qualified_owner);
+  term.clock = view(clock);
+
+  descriptor.blocks = {blocks, 1, sizeof(ProgramBlockRecord)};
+  descriptor.flux_budgets = {budgets, 1, sizeof(ProgramFluxBudgetRecord)};
+  descriptor.resource_plan = {resources, 2, sizeof(ProgramResourcePlanRecord)};
+  descriptor.flux_basis_occurrences = {&basis, 1, sizeof(ProgramFluxBasisOccurrenceRecord)};
+  descriptor.face_flux_stages = {&term, 1, sizeof(ProgramFaceFluxStageRecord)};
+  descriptor.maximum_bytes = 16;
+  ASSERT_TRUE(valid_program_candidate_descriptor(descriptor));
+
+  std::size_t bytes = 0;
+  EXPECT_NO_THROW((void)ProgramInstallationTables::materialize(descriptor, bytes));
+
+  const ProgramFluxBudgetRecord forged_budgets[] = {{0, 1, 0, 0}};
+  descriptor.flux_budgets = {forged_budgets, 1, sizeof(ProgramFluxBudgetRecord)};
+  bytes = 0;
+  EXPECT_THROW((void)ProgramInstallationTables::materialize(descriptor, bytes),
+               std::invalid_argument);
+  descriptor.flux_budgets = {budgets, 1, sizeof(ProgramFluxBudgetRecord)};
+
+  basis.owner = view(forged_owner);
+  bytes = 0;
+  EXPECT_THROW((void)ProgramInstallationTables::materialize(descriptor, bytes),
+               std::invalid_argument);
+}
+
 TEST(ProgramInstallationTables, RejectsMalformedAbiTableShapesAndContents) {
   using namespace pops::runtime::program;
   SyntheticProgramCandidate candidate;
@@ -660,14 +810,16 @@ TEST(ProgramInstallationTables, RejectsMalformedAbiTableShapesAndContents) {
   descriptor.blocks = malformed;
   EXPECT_FALSE(valid_program_candidate_descriptor(descriptor));
   descriptor = synthetic_descriptor(candidate);
-  descriptor.blocks = {reinterpret_cast<const void*>(1), (1u << 20) + 1, sizeof(ProgramBlockRecord)};
+  descriptor.blocks = {reinterpret_cast<const void*>(1), (1u << 20) + 1,
+                       sizeof(ProgramBlockRecord)};
   EXPECT_FALSE(valid_program_candidate_descriptor(descriptor));
   char nul_name[] = {'a', '\0', 'b'};
   ProgramBlockRecord nul_blocks[] = {{{nul_name, sizeof(nul_name)}}};
   descriptor = synthetic_descriptor(candidate);
   descriptor.blocks = {nul_blocks, 1, sizeof(ProgramBlockRecord)};
   std::size_t bytes = 0;
-  EXPECT_THROW((void)ProgramInstallationTables::materialize(descriptor, bytes), std::invalid_argument);
+  EXPECT_THROW((void)ProgramInstallationTables::materialize(descriptor, bytes),
+               std::invalid_argument);
 }
 
 TEST(ProgramInstallationTables, RejectsDuplicateAndOutOfRangeRecords) {
@@ -678,14 +830,16 @@ TEST(ProgramInstallationTables, RejectsDuplicateAndOutOfRangeRecords) {
   ProgramBlockRecord duplicate_blocks[] = {{{name, sizeof(name) - 1}}, {{name, sizeof(name) - 1}}};
   descriptor.blocks = {duplicate_blocks, 2, sizeof(ProgramBlockRecord)};
   std::size_t bytes = 0;
-  EXPECT_THROW((void)ProgramInstallationTables::materialize(descriptor, bytes), std::invalid_argument);
+  EXPECT_THROW((void)ProgramInstallationTables::materialize(descriptor, bytes),
+               std::invalid_argument);
   descriptor = synthetic_descriptor(candidate);
   ProgramBlockRecord blocks[] = {{{name, sizeof(name) - 1}}};
   ProgramParameterRecord parameter[] = {{1, 0, 0.0, {name, sizeof(name) - 1}}};
   descriptor.blocks = {blocks, 1, sizeof(ProgramBlockRecord)};
   descriptor.parameters = {parameter, 1, sizeof(ProgramParameterRecord)};
   bytes = 0;
-  EXPECT_THROW((void)ProgramInstallationTables::materialize(descriptor, bytes), std::invalid_argument);
+  EXPECT_THROW((void)ProgramInstallationTables::materialize(descriptor, bytes),
+               std::invalid_argument);
 }
 
 TEST(ProgramRuntimeStateArtifactOwner, PreparedArtifactDispatchesStepAndDtBound) {
@@ -717,7 +871,8 @@ TEST(ProgramRuntimeStateArtifactOwner, PreparedArtifactDispatchesStepAndDtBound)
   EXPECT_TRUE(state.artifact_publication_receipt()->resource_plan.entries().empty());
 }
 
-TEST(ProgramRuntimeStateArtifactOwner, FailedPublicationPreparationLeavesAcceptedArtifactUntouched) {
+TEST(ProgramRuntimeStateArtifactOwner,
+     FailedPublicationPreparationLeavesAcceptedArtifactUntouched) {
   using State = pops::runtime::program::ProgramRuntimeState<2>;
   SyntheticProgramCandidate accepted_candidate;
   SyntheticProgramCandidate refused_candidate;
@@ -727,11 +882,16 @@ TEST(ProgramRuntimeStateArtifactOwner, FailedPublicationPreparationLeavesAccepte
   const auto generation = state.step_install_generation_;
   const auto receipt = state.artifact_publication_receipt()->metadata.artifact_identity;
 
-  EXPECT_THROW(
-      (void)pops::runtime::program::PreparedProgramInstallation(
-          make_synthetic_owner_with_unplanned_ceiling(
-              refused_candidate, state.step_install_generation_ + 1)),
-               std::invalid_argument);
+  pops::runtime::program::PreparedProgramInstallation refused(
+      make_synthetic_owner_with_unplanned_ceiling(refused_candidate,
+                                                  state.step_install_generation_ + 1));
+  const std::vector<pops::runtime::program::ProgramInstallationTables::ResourcePrototype>
+      over_budget{
+          {0,
+           0,
+           {2, 1, 1, 0, 2, 2},
+           pops::runtime::program::ProgramInstallationTables::ResourcePrototypeKind::hot_snapshot}};
+  EXPECT_THROW(refused.seal_resource_plan(over_budget), std::invalid_argument);
   EXPECT_EQ(state.step_install_generation_, generation);
   ASSERT_TRUE(state.artifact_publication_receipt());
   EXPECT_EQ(state.artifact_publication_receipt()->metadata.artifact_identity, receipt);
@@ -745,8 +905,8 @@ TEST(ProgramRuntimeStateArtifactOwner, PreparedAmrArtifactDispatchesEveryLifecyc
   using Remap = pops::runtime::program::AmrProgramHistoryRemapDescriptor;
   SyntheticProgramCandidate candidate;
   State state;
-  state.install_prepared_artifact(prepared_synthetic_artifact(
-      candidate, state.step_install_generation_ + 1, true, true));
+  state.install_prepared_artifact(
+      prepared_synthetic_artifact(candidate, state.step_install_generation_ + 1, true, true));
   state.artifact_backed_ = true;
 
   Remap descriptor;
@@ -830,13 +990,17 @@ TEST(ProgramRuntimeStateArtifactOwner, SuccessfulReplacementReleasesOldOwnerAfte
       prepared_synthetic_artifact(old_candidate, state.step_install_generation_ + 1);
   state.install_prepared_artifact(std::move(old_artifact));
 
-  auto replacement =
-      prepared_synthetic_artifact(replacement_candidate, state.step_install_generation_ + 1, false);
-  auto publication = State::PreparedArtifactPublication::prepare(
-      std::move(replacement), state.step_install_generation_ + 1);
-  EXPECT_EQ(old_candidate.destroy_calls, 0);
-  state.publish_prepared_artifact(std::move(publication));
-
+  {
+    auto replacement = prepared_synthetic_artifact(replacement_candidate,
+                                                   state.step_install_generation_ + 1, false);
+    auto publication = State::PreparedArtifactPublication::prepare(
+        std::move(replacement), state.step_install_generation_ + 1);
+    EXPECT_EQ(old_candidate.destroy_calls, 0);
+    state.publish_prepared_artifact(std::move(publication));
+    // The noexcept exchange keeps the retired owner in the caller's publication image until all
+    // of its retired closures are destroyed at this scope boundary.
+    EXPECT_EQ(old_candidate.destroy_calls, 0);
+  }
   EXPECT_EQ(old_candidate.destroy_calls, 1);
   state.step_(0.2);
   EXPECT_EQ(replacement_candidate.step_calls, 1);
@@ -847,8 +1011,7 @@ TEST(ProgramRuntimeStateArtifactOwner, TeardownDestroysCandidateBeforeReleasingI
   SyntheticProgramCandidate candidate;
   {
     pops::runtime::program::ProgramRuntimeState<2> state;
-    auto artifact = prepared_synthetic_artifact(
-        candidate, state.step_install_generation_ + 1);
+    auto artifact = prepared_synthetic_artifact(candidate, state.step_install_generation_ + 1);
     state.install_prepared_artifact(std::move(artifact));
     EXPECT_EQ(candidate.destroy_calls, 0);
   }
@@ -905,9 +1068,10 @@ TEST(ProgramPersistentValueStore, BindIsAtomicAndInvalidSlotsRetainTheirTemporal
 
   auto malformed = row;
   malformed.slot = 1;
-  EXPECT_THROW((void)ProgramResourcePlan({malformed}, 16, "program-resource-plan:v1",
-                                          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
-               std::invalid_argument);
+  EXPECT_THROW(
+      (void)ProgramResourcePlan({malformed}, 16, "program-resource-plan:v1",
+                                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+      std::invalid_argument);
   // The rejected preparation did not clobber the accepted image.
   EXPECT_TRUE(store.bound());
   EXPECT_DOUBLE_EQ(store.metadata(0).accumulated_dt, 0.125);
@@ -940,8 +1104,7 @@ TEST(ProgramPersistentValueCheckpoint, LosslessRoundTripAndNoAllocationAfterPrep
   row.shape = "[4,1]";
   row.cells = 4;
   row.itemsize = 8;
-  const std::string digest =
-      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const std::string digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
   const ProgramResourcePlan plan({row}, 16, "program-resource-plan:v1", digest);
 
   ProgramPersistentValueStore source;
@@ -979,10 +1142,12 @@ TEST(ProgramPersistentValueCheckpoint, LosslessRoundTripAndNoAllocationAfterPrep
 
   auto tampered = encoded;
   tampered[10] ^= 1U;
-  EXPECT_THROW((void)deserialize_program_persistent_value_checkpoint(tampered), std::invalid_argument);
+  EXPECT_THROW((void)deserialize_program_persistent_value_checkpoint(tampered),
+               std::invalid_argument);
   auto malformed = image;
   malformed.offsets[1] = 8;
-  EXPECT_THROW((void)serialize_program_persistent_value_checkpoint(malformed), std::invalid_argument);
+  EXPECT_THROW((void)serialize_program_persistent_value_checkpoint(malformed),
+               std::invalid_argument);
 }
 
 TEST(ProgramPersistentValueCheckpoint, QualifiedRegridRequiresProviderBeforePublication) {
@@ -1021,8 +1186,7 @@ TEST(ProgramPersistentValueCheckpoint, QualifiedRegridRequiresProviderBeforePubl
 
 TEST(ProgramPersistentValueCheckpoint, RejectsCollisionUnknownBytesOverflowAndDigestMismatch) {
   using namespace pops::runtime::program;
-  const std::string digest =
-      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const std::string digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
   auto valid_row = [](std::uint32_t slot, std::uint64_t value_id, std::uint64_t path_id,
                       std::string path) {
     ProgramResourcePlanEntry row;
@@ -1056,8 +1220,9 @@ TEST(ProgramPersistentValueCheckpoint, RejectsCollisionUnknownBytesOverflowAndDi
   auto unknown_bytes = image;
   unknown_bytes.rows[0].bytes = 0;
   EXPECT_THROW(validate_program_persistent_value_checkpoint(unknown_bytes), std::invalid_argument);
-  const ProgramResourcePlan different_plan({row}, 8, "program-resource-plan:v1",
-                                           "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789");
+  const ProgramResourcePlan different_plan(
+      {row}, 8, "program-resource-plan:v1",
+      "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789");
   EXPECT_THROW((void)prepare_program_persistent_value_restore(image, different_plan),
                std::invalid_argument);
 
@@ -1080,8 +1245,8 @@ TEST(ProgramInstallationTables, EmptyPlanStillAuthenticatesItsManifestAndDigest)
   using namespace pops::runtime::program;
   ProgramInstallationTables tables;
   const std::string payload = tables.canonical_resource_digest_payload(0);
-  const std::string digest = pops::identity::sha256_hex(
-      std::vector<std::uint8_t>(payload.begin(), payload.end()));
+  const std::string digest =
+      pops::identity::sha256_hex(std::vector<std::uint8_t>(payload.begin(), payload.end()));
   ProgramInstallationMetadata metadata;
   metadata.persistent_resource_manifest =
       "{\"resource_plan\":" + tables.canonical_resource_manifest(0, digest) +

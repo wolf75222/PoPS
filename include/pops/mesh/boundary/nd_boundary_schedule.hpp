@@ -306,6 +306,14 @@ class BoundarySchedule {
   const std::vector<BoundaryRegionPlan<Dim>>& entries() const noexcept { return entries_; }
   std::size_t size() const noexcept { return entries_.size(); }
 
+  /// Dynamic host storage retained by this immutable schedule, excluding the object itself.
+  [[nodiscard]] std::uint64_t resident_storage_bytes() const {
+    if (entries_.capacity() >
+        std::numeric_limits<std::uint64_t>::max() / sizeof(BoundaryRegionPlan<Dim>))
+      throw std::overflow_error("pops::BoundarySchedule resident storage overflows uint64");
+    return static_cast<std::uint64_t>(entries_.capacity()) * sizeof(BoundaryRegionPlan<Dim>);
+  }
+
  private:
   Box<Dim> domain_{};
   Extent<Dim> ghosts_{};

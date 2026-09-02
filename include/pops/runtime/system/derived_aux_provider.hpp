@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <map>
 #include <stdexcept>
@@ -455,14 +456,14 @@ struct ResolvedAuxiliaryConsumerPlan {
 /// cell pointer.
 template <int Dim>
 struct AuxiliaryStorageGroups {
-  std::map<std::string, MultiFab<Dim>> groups;
+  std::map<std::string, MultiFab<Dim>, std::less<>> groups;
 
   [[nodiscard]] const MultiFab<Dim>* find(std::string_view group) const {
-    const auto found = groups.find(std::string(group));
+    const auto found = groups.find(group);
     return found == groups.end() ? nullptr : &found->second;
   }
   [[nodiscard]] MultiFab<Dim>* find(std::string_view group) {
-    const auto found = groups.find(std::string(group));
+    const auto found = groups.find(group);
     return found == groups.end() ? nullptr : &found->second;
   }
 };

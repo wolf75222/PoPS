@@ -193,13 +193,19 @@ class Profiler {
 
   bool enabled() const noexcept { return enabled_.load(std::memory_order_acquire); }
 
-  // Drop all accumulated timings and counters (kept across enable/disable; cleared explicitly).
+  // Drop accumulated values while retaining the bind-primed identities.  Accepted-step snapshots
+  // copy the profiler into an already allocated image: clearing the maps here would make the next
+  // snapshot either allocate or reject a perfectly valid reset as an identity drift.
   void reset() {
     std::lock_guard<std::mutex> lock(mutex_);
-    order_.clear();
-    entries_.clear();
-    counters_.clear();
-    counter_order_.clear();
+    for (auto& [name, entry] : entries_) {
+      (void)name;
+      entry = {};
+    }
+    for (auto& [name, value] : counters_) {
+      (void)name;
+      value = 0;
+    }
   }
 
   // Record one timed sample of `name`, in seconds. No-op when disabled.

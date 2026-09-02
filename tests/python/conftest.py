@@ -18,6 +18,9 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 test environments
     import tomli as tomllib
 
 from tests.python.support.requirements import (
+    EXACT_PROCESS_NODEIDS_ENV,
+    PROCESS_TEST_FILTER_ENV,
+    PROCESS_TEST_RESULT_PREFIX,
     native_tests_required,
     require_mpi_or_skip,
     require_native_or_skip,
@@ -44,6 +47,22 @@ class PythonProcessFailure(Exception):
 
 class PythonProcessFile(pytest.File):
     def collect(self) -> Iterator[pytest.Item]:
+        if os.environ.get(EXACT_PROCESS_NODEIDS_ENV) == "1":
+            tree = ast.parse(self.path.read_text(encoding="utf-8"), filename=str(self.path))
+            names = [
+                node.name
+                for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name.startswith("test_")
+            ]
+            if not names:
+                raise pytest.UsageError(
+                    "exact process-nodeid collection requires top-level test_* functions in %s"
+                    % self.path
+                )
+            for name in names:
+                yield PythonProcessItem.from_parent(self, name=name)
+            return
         yield PythonProcessItem.from_parent(self, name=self.path.name)
 
 
@@ -51,6 +70,11 @@ class PythonProcessItem(pytest.Item):
     def runtest(self) -> None:
         path = Path(str(self.path))
         env = os.environ.copy()
+        exact_process_nodeid = env.get(EXACT_PROCESS_NODEIDS_ENV) == "1"
+        if exact_process_nodeid:
+            env[PROCESS_TEST_FILTER_ENV] = self.name
+        else:
+            env.pop(PROCESS_TEST_FILTER_ENV, None)
         env["POPS_PYTEST_PROCESS"] = "1"
         env["PYTHONUNBUFFERED"] = "1"
         env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -98,6 +122,20 @@ class PythonProcessItem(pytest.Item):
             if missing:
                 _require_process_or_skip(missing, path)
             raise PythonProcessFailure(path, result.returncode, result.stdout)
+        if exact_process_nodeid:
+            expected = PROCESS_TEST_RESULT_PREFIX + self.name
+            markers = [
+                line.strip()
+                for line in result.stdout.splitlines()
+                if line.startswith(PROCESS_TEST_RESULT_PREFIX)
+            ]
+            if markers != [expected]:
+                raise PythonProcessFailure(
+                    path,
+                    1,
+                    result.stdout
+                    + "\nexact process-nodeid did not emit its unique success marker: %s" % expected,
+                )
 
     def repr_failure(self, excinfo: pytest.ExceptionInfo[BaseException]) -> str:
         if isinstance(excinfo.value, PythonProcessFailure):

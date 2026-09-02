@@ -117,7 +117,8 @@ def test_apply_captures_point_and_only_conditionally_allocates_boundary_scratch(
     apply_declaration = source.index(
         "pops::ApplyFn<pops::kNativeDimension> apply =", factory)
     begin_step = source.index("ctx.begin_step(dt)")
-    point_refresh = source.index("*%s = ctx.boundary_evaluation_point(" % names["point"])
+    point_refresh = source.index(
+        "ctx.write_boundary_evaluation_point_into(*%s," % names["point"])
     assert point_allocation < apply_declaration < begin_step < point_refresh
     assert names["point"] in apply_source.splitlines()[0]
     assert "const bool %s = ctx.has_boundary_linearization(0);" % names["has_boundary"] in source
@@ -165,7 +166,8 @@ def test_metric_reduction_storage_is_install_primed_without_hot_vector_or_shape_
 def test_step_refresh_uses_r0_exact_explicit_stage_and_separates_boundary_residual():
     source, operator, jacvec, r0 = _emit(sources=None)
     names = _names(operator, jacvec)
-    refresh = "*%s = ctx.boundary_evaluation_point(%d);" % (names["point"], r0.id)
+    refresh = "ctx.write_boundary_evaluation_point_into(*%s, %d);" % (
+        names["point"], r0.id)
     refresh_index = source.index(refresh)
     preceding = source[:refresh_index]
     assert preceding.rfind("ctx.set_stage_time(1, 3);") > preceding.rfind("ctx.begin_step(dt)")
@@ -314,7 +316,8 @@ def test_reused_operator_session_refreshes_private_state_time_and_point_before_b
         "*%s = *template_%s;" % (names["cdt"], names["cdt"])
     )
     refresh_point = (
-        "*%s = *template_%s;" % (names["point"], names["point"])
+        "ctx_owner->copy_boundary_evaluation_point_into(*%s, *template_%s);"
+        % (names["point"], names["point"])
     )
     boundary_prepare = "ctx.boundary_residual_into_at(*%s" % names["point"]
     assert prepare.index(refresh_state) < prepare.index(refresh_dt)
@@ -328,7 +331,7 @@ def test_reused_operator_session_refreshes_private_state_time_and_point_before_b
         r"auto session_(\w+) = std::make_shared<pops::Real>\(\*\1\);", source)
     private_points = re.findall(
         r"auto session_(\w+) = std::make_shared<"
-        r"pops::runtime::multiblock::BoundaryEvaluationPoint>\(\*\1\);",
+        r"pops::runtime::multiblock::BoundaryEvaluationPoint>\(\);",
         source,
     )
     assert private_fields and private_scalars and private_points
@@ -337,13 +340,40 @@ def test_reused_operator_session_refreshes_private_state_time_and_point_before_b
             f"pops::PureFieldAlgebra::copy_allocated(*{name}, *template_{name});"
             in prepare
         )
-    for name in (*private_scalars, *private_points):
+    for name in private_scalars:
         assert f"*{name} = *template_{name};" in prepare
+    for name in private_points:
+        cold_reserve = (
+            f"ctx_owner->prepare_boundary_evaluation_point(*session_{name}, *{name});"
+        )
+        # The generated session reserves all four strings from the authored point itself before
+        # the closure owns a template.  In particular this is the only valid cold path for a
+        # graph/rate/application identity longer than SSO; a clock-only prepare is insufficient.
+        # It deliberately does not copy the source scalar coordinates: their dt/time may be
+        # uninitialized until the first write in the step callback.
+        assert cold_reserve in source
+        assert source.count(cold_reserve) == 1
+        assert source.index(cold_reserve) < prepare_start
+        assert (
+            f"ctx_owner->copy_boundary_evaluation_point_into(*session_{name}, *{name});"
+            not in source
+        )
+        assert (
+            f"ctx_owner->copy_boundary_evaluation_point_into(*{name}, *template_{name});"
+            in prepare
+        )
 
     apply_start = source.index(
         "pops::ApplyFn<pops::kNativeDimension> apply =", prepare_end)
     apply_capture = source[apply_start:source.index("](", apply_start)]
     assert "template_" not in apply_capture
+
+    # The factory can be created before a step has a finite dt.  Therefore the template point is
+    # only copied by its private prepare callback, after the outer solve body has written the
+    # current stage point and before it invokes the native prepared problem.
+    point_write = "ctx.write_boundary_evaluation_point_into(*%s," % names["point"]
+    write_index = source.index(point_write, prepare_end)
+    assert write_index < source.index("->prepare(*operator_snapshot", write_index)
 
 
 def test_codegen_refuses_to_invent_a_missing_r0_stage_point():

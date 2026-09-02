@@ -169,6 +169,52 @@ class InterfaceFluxScheduler {
   using ghost_type = typename field_type::ghost_type;
   using memory_space = typename field_type::memory_space;
 
+  static constexpr std::size_t generated_program_stage_identity_characters() noexcept {
+    // "program-stage:" + signed int64 numerator + '/' + signed int64 denominator.
+    return std::string_view("program-stage:").size() + 2U * (sizeof(std::int64_t) * 3U - 4U) + 1U;
+  }
+
+  /// Bind-owned transient bytes for one interface invocation.  The scheduler never owns this
+  /// carrier: a prepared hierarchy has one per active level, so accepted, forward, and inverse
+  /// topology images cannot share mutable consensus buffers.
+  struct InterfaceInvocationWorkspace {
+    std::string point_bytes;
+    std::string publication_bytes;
+    std::vector<ExactOrderedBytePair> registry_pairs;
+    std::array<ExactOrderedBytePair, 2> invocation_pairs{};
+    std::size_t route_capacity = 0;
+    bool bound = false;
+    bool in_use = false;
+
+    InterfaceInvocationWorkspace() = default;
+    InterfaceInvocationWorkspace(const InterfaceInvocationWorkspace&) = delete;
+    InterfaceInvocationWorkspace& operator=(const InterfaceInvocationWorkspace&) = delete;
+    InterfaceInvocationWorkspace(InterfaceInvocationWorkspace&&) noexcept = default;
+    InterfaceInvocationWorkspace& operator=(InterfaceInvocationWorkspace&&) noexcept = default;
+
+    [[nodiscard]] std::uint64_t resident_storage_bytes() const {
+      const auto string_bytes = [](const std::string& value) -> std::uint64_t {
+        const auto begin = reinterpret_cast<std::uintptr_t>(std::addressof(value));
+        const auto end = begin + sizeof(value);
+        const auto data = reinterpret_cast<std::uintptr_t>(value.data());
+        return data >= begin && data < end ? 0U : static_cast<std::uint64_t>(value.capacity()) + 1U;
+      };
+      if (registry_pairs.capacity() >
+          std::numeric_limits<std::uint64_t>::max() / sizeof(ExactOrderedBytePair))
+        throw std::overflow_error("multi-block interface invocation workspace overflows uint64");
+      std::uint64_t total = string_bytes(point_bytes);
+      const auto add = [&total](std::uint64_t value) {
+        if (value > std::numeric_limits<std::uint64_t>::max() - total)
+          throw std::overflow_error("multi-block interface invocation workspace overflows uint64");
+        total += value;
+      };
+      add(string_bytes(publication_bytes));
+      add(static_cast<std::uint64_t>(registry_pairs.capacity()) *
+          sizeof(ExactOrderedBytePair));
+      return total;
+    }
+  };
+
   void install(route_type route, field_type& left_state, const geometry_type& left_geometry,
                field_type& right_state, const geometry_type& right_geometry,
                const PopsExecutionContextV1& execution,
@@ -368,6 +414,56 @@ class InterfaceFluxScheduler {
   void apply(const BoundaryEvaluationPoint& point, std::span<field_type* const> states,
              std::span<field_type* const> rhs,
              InterfaceFluxFragmentPublication* publication = nullptr) {
+    apply_impl_(point, states, rhs, publication, nullptr);
+  }
+
+  /// Cold bind for a Program-owned scheduler.  The supplied bounds are an authenticated Program
+  /// authority, not a run-time observation: the hot overload below refuses any larger identity.
+  void bind_invocation_workspace(InterfaceInvocationWorkspace& workspace,
+                                 std::size_t clock_characters,
+                                 std::size_t graph_rate_application_characters,
+                                 std::size_t stage_characters) const {
+    if (interfaces_.empty())
+      throw std::logic_error("cannot bind an invocation workspace for an empty interface registry");
+    const std::size_t point_bytes =
+        point_identity_capacity_(clock_characters, graph_rate_application_characters);
+    const std::size_t publication_bytes = publication_identity_capacity_(stage_characters);
+    if (workspace.bound) {
+      if (workspace.route_capacity != interfaces_.size() ||
+          workspace.point_bytes.capacity() < point_bytes ||
+          workspace.publication_bytes.capacity() < publication_bytes ||
+          workspace.registry_pairs.capacity() < interfaces_.size())
+        throw std::logic_error(
+            "prepared multi-block interface invocation workspace capacity changed after bind");
+      return;
+    }
+    workspace.point_bytes.reserve(point_bytes);
+    workspace.publication_bytes.reserve(publication_bytes);
+    workspace.registry_pairs.resize(interfaces_.size());
+    workspace.invocation_pairs[0].first = "point";
+    workspace.invocation_pairs[1].first = "publication";
+    workspace.route_capacity = interfaces_.size();
+    workspace.bound = true;
+  }
+
+  void apply(const BoundaryEvaluationPoint& point, std::span<field_type* const> states,
+             std::span<field_type* const> rhs, InterfaceInvocationWorkspace& workspace,
+             InterfaceFluxFragmentPublication* publication = nullptr) {
+    if (!workspace.bound || workspace.route_capacity != interfaces_.size() || workspace.in_use)
+      throw std::logic_error(
+          "prepared multi-block interface invocation workspace is not an available bound image");
+    struct ResetInUse {
+      InterfaceInvocationWorkspace& workspace;
+      ~ResetInUse() { workspace.in_use = false; }
+    } reset{workspace};
+    workspace.in_use = true;
+    apply_impl_(point, states, rhs, publication, &workspace);
+  }
+
+ private:
+  void apply_impl_(const BoundaryEvaluationPoint& point, std::span<field_type* const> states,
+                   std::span<field_type* const> rhs, InterfaceFluxFragmentPublication* publication,
+                   InterfaceInvocationWorkspace* workspace) {
     if (interfaces_.empty()) {
       validate_point_(point);
       if (publication != nullptr)
@@ -391,18 +487,46 @@ class InterfaceFluxScheduler {
       if (minimum != maximum)
         throw std::runtime_error(
             "multi-block interface fragment publication presence differs across MPI ranks");
-      if (!registry_agrees_across_ranks_(communicator))
+      if (!registry_agrees_across_ranks_(communicator, workspace))
         throw std::runtime_error(
             "multi-block interface prepared registry differs across MPI ranks");
-      const std::string point_identity = collective_point_identity_(point);
-      if (!all_ranks_agree_exact_ordered_byte_pairs(
-              {{std::string_view("point"), std::string_view(point_identity)}}, communicator))
+      std::string point_identity;
+      std::string publication_identity;
+      std::string_view point_bytes;
+      std::string_view publication_bytes;
+      if (workspace != nullptr) {
+        collective_point_identity_into_(workspace->point_bytes, point);
+        point_bytes = workspace->point_bytes;
+        workspace->invocation_pairs[0].second = point_bytes;
+      } else {
+        point_identity = collective_point_identity_(point);
+        point_bytes = point_identity;
+      }
+      const std::array<ExactOrderedBytePair, 1> local_point_pair{{{"point", point_bytes}}};
+      const std::span<const ExactOrderedBytePair> point_pairs =
+          workspace != nullptr
+              ? std::span<const ExactOrderedBytePair>(workspace->invocation_pairs.data(), 1)
+              : std::span<const ExactOrderedBytePair>(local_point_pair);
+      if (!all_ranks_agree_exact_ordered_byte_pairs(point_pairs, communicator))
         throw std::runtime_error(
             "multi-block interface BoundaryEvaluationPoint differs across MPI ranks");
       if (publication != nullptr) {
-        const std::string identity = collective_fragment_publication_identity_(*publication);
-        if (!all_ranks_agree_exact_ordered_byte_pairs(
-                {{std::string_view("publication"), std::string_view(identity)}}, communicator))
+        if (workspace != nullptr) {
+          collective_fragment_publication_identity_into_(workspace->publication_bytes,
+                                                         *publication);
+          publication_bytes = workspace->publication_bytes;
+          workspace->invocation_pairs[1].second = publication_bytes;
+        } else {
+          publication_identity = collective_fragment_publication_identity_(*publication);
+          publication_bytes = publication_identity;
+        }
+        const std::array<ExactOrderedBytePair, 1> local_publication_pair{
+            {{"publication", publication_bytes}}};
+        const std::span<const ExactOrderedBytePair> publication_pairs =
+            workspace != nullptr
+                ? std::span<const ExactOrderedBytePair>(workspace->invocation_pairs.data() + 1, 1)
+                : std::span<const ExactOrderedBytePair>(local_publication_pair);
+        if (!all_ranks_agree_exact_ordered_byte_pairs(publication_pairs, communicator))
           throw std::runtime_error(
               "multi-block interface fragment publication differs across MPI ranks");
       }
@@ -448,7 +572,16 @@ class InterfaceFluxScheduler {
     }
   }
 
+ public:
   std::size_t size() const noexcept { return interfaces_.size(); }
+
+  [[nodiscard]] std::uint64_t invocation_workspace_storage_bytes(
+      const InterfaceInvocationWorkspace& workspace) const {
+    if (!workspace.bound || workspace.route_capacity != interfaces_.size())
+      throw std::logic_error(
+          "multi-block interface invocation workspace is not bound to scheduler");
+    return workspace.resident_storage_bytes();
+  }
 
   InterfaceFluxProductionBudget production_budget(int active_level_count) const {
     if (active_level_count < 1)
@@ -1294,49 +1427,112 @@ class InterfaceFluxScheduler {
   }
 
   static void pack_(PreparedInterface& prepared, const field_type& left, const field_type& right) {
-    Kokkos::deep_copy(prepared.device_traces, Real(0));
     const std::size_t packed =
         prepared.face_count * static_cast<std::size_t>(prepared.component_count);
-    for (const LocalFacePlan& plan : prepared.left_plans) {
-      const std::int64_t elements =
-          static_cast<std::int64_t>(plan.jobs.extent(0)) * prepared.component_count;
-      Kokkos::parallel_for(
-          "pops_interface_pack_left", Kokkos::RangePolicy<>(0, elements),
-          PackKernel{left.fab(plan.local_box).view(), plan.jobs, prepared.device_traces,
-                     prepared.device_right_components, 0, prepared.component_count, false});
+    if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, memory_space>::accessible) {
+      std::fill_n(prepared.device_traces.data(), prepared.device_traces.extent(0), Real(0));
+      for (const LocalFacePlan& plan : prepared.left_plans) {
+        const std::int64_t elements =
+            static_cast<std::int64_t>(plan.jobs.extent(0)) * prepared.component_count;
+        const PackKernel kernel{left.fab(plan.local_box).view(),
+                                plan.jobs,
+                                prepared.device_traces,
+                                prepared.device_right_components,
+                                0,
+                                prepared.component_count,
+                                false};
+        for (std::int64_t element = 0; element < elements; ++element)
+          kernel(element);
+      }
+      for (const LocalFacePlan& plan : prepared.right_plans) {
+        const std::int64_t elements =
+            static_cast<std::int64_t>(plan.jobs.extent(0)) * prepared.component_count;
+        const PackKernel kernel{right.fab(plan.local_box).view(),
+                                plan.jobs,
+                                prepared.device_traces,
+                                prepared.device_right_components,
+                                packed,
+                                prepared.component_count,
+                                true};
+        for (std::int64_t element = 0; element < elements; ++element)
+          kernel(element);
+      }
+      std::copy_n(prepared.device_traces.data(), prepared.device_traces.extent(0),
+                  prepared.host_traces.data());
+    } else {
+      Kokkos::deep_copy(prepared.device_traces, Real(0));
+      for (const LocalFacePlan& plan : prepared.left_plans) {
+        const std::int64_t elements =
+            static_cast<std::int64_t>(plan.jobs.extent(0)) * prepared.component_count;
+        Kokkos::parallel_for(
+            "pops_interface_pack_left", Kokkos::RangePolicy<>(0, elements),
+            PackKernel{left.fab(plan.local_box).view(), plan.jobs, prepared.device_traces,
+                       prepared.device_right_components, 0, prepared.component_count, false});
+      }
+      for (const LocalFacePlan& plan : prepared.right_plans) {
+        const std::int64_t elements =
+            static_cast<std::int64_t>(plan.jobs.extent(0)) * prepared.component_count;
+        Kokkos::parallel_for(
+            "pops_interface_pack_right", Kokkos::RangePolicy<>(0, elements),
+            PackKernel{right.fab(plan.local_box).view(), plan.jobs, prepared.device_traces,
+                       prepared.device_right_components, packed, prepared.component_count, true});
+      }
+      Kokkos::deep_copy(prepared.host_traces, prepared.device_traces);
     }
-    for (const LocalFacePlan& plan : prepared.right_plans) {
-      const std::int64_t elements =
-          static_cast<std::int64_t>(plan.jobs.extent(0)) * prepared.component_count;
-      Kokkos::parallel_for(
-          "pops_interface_pack_right", Kokkos::RangePolicy<>(0, elements),
-          PackKernel{right.fab(plan.local_box).view(), plan.jobs, prepared.device_traces,
-                     prepared.device_right_components, packed, prepared.component_count, true});
-    }
-    Kokkos::deep_copy(prepared.host_traces, prepared.device_traces);
   }
 
   static void scatter_(PreparedInterface& prepared, field_type& left, field_type& right) {
-    Kokkos::deep_copy(prepared.device_flux, prepared.host_flux);
-    for (const LocalFacePlan& plan : prepared.left_plans) {
-      const std::int64_t elements =
-          static_cast<std::int64_t>(plan.jobs.extent(0)) * prepared.component_count;
-      Kokkos::parallel_for(
-          "pops_interface_scatter_left", Kokkos::RangePolicy<>(0, elements),
-          ScatterKernel{left.fab(plan.local_box).view(), plan.jobs, prepared.device_flux,
-                        prepared.device_right_components, Real(-1) / prepared.left_normal_spacing,
-                        prepared.component_count, false});
+    if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, memory_space>::accessible) {
+      std::copy_n(prepared.host_flux.data(), prepared.host_flux.extent(0),
+                  prepared.device_flux.data());
+      for (const LocalFacePlan& plan : prepared.left_plans) {
+        const std::int64_t elements =
+            static_cast<std::int64_t>(plan.jobs.extent(0)) * prepared.component_count;
+        const ScatterKernel kernel{left.fab(plan.local_box).view(),
+                                   plan.jobs,
+                                   prepared.device_flux,
+                                   prepared.device_right_components,
+                                   Real(-1) / prepared.left_normal_spacing,
+                                   prepared.component_count,
+                                   false};
+        for (std::int64_t element = 0; element < elements; ++element)
+          kernel(element);
+      }
+      for (const LocalFacePlan& plan : prepared.right_plans) {
+        const std::int64_t elements =
+            static_cast<std::int64_t>(plan.jobs.extent(0)) * prepared.component_count;
+        const ScatterKernel kernel{right.fab(plan.local_box).view(),
+                                   plan.jobs,
+                                   prepared.device_flux,
+                                   prepared.device_right_components,
+                                   Real(1) / prepared.right_normal_spacing,
+                                   prepared.component_count,
+                                   true};
+        for (std::int64_t element = 0; element < elements; ++element)
+          kernel(element);
+      }
+    } else {
+      Kokkos::deep_copy(prepared.device_flux, prepared.host_flux);
+      for (const LocalFacePlan& plan : prepared.left_plans) {
+        const std::int64_t elements =
+            static_cast<std::int64_t>(plan.jobs.extent(0)) * prepared.component_count;
+        Kokkos::parallel_for(
+            "pops_interface_scatter_left", Kokkos::RangePolicy<>(0, elements),
+            ScatterKernel{left.fab(plan.local_box).view(), plan.jobs, prepared.device_flux,
+                          prepared.device_right_components, Real(-1) / prepared.left_normal_spacing,
+                          prepared.component_count, false});
+      }
+      for (const LocalFacePlan& plan : prepared.right_plans) {
+        const std::int64_t elements =
+            static_cast<std::int64_t>(plan.jobs.extent(0)) * prepared.component_count;
+        Kokkos::parallel_for(
+            "pops_interface_scatter_right", Kokkos::RangePolicy<>(0, elements),
+            ScatterKernel{right.fab(plan.local_box).view(), plan.jobs, prepared.device_flux,
+                          prepared.device_right_components, Real(1) / prepared.right_normal_spacing,
+                          prepared.component_count, true});
+      }
     }
-    for (const LocalFacePlan& plan : prepared.right_plans) {
-      const std::int64_t elements =
-          static_cast<std::int64_t>(plan.jobs.extent(0)) * prepared.component_count;
-      Kokkos::parallel_for(
-          "pops_interface_scatter_right", Kokkos::RangePolicy<>(0, elements),
-          ScatterKernel{right.fab(plan.local_box).view(), plan.jobs, prepared.device_flux,
-                        prepared.device_right_components, Real(1) / prepared.right_normal_spacing,
-                        prepared.component_count, true});
-    }
-    Kokkos::fence();
+    ::pops::device_fence();
   }
 
   static void apply_one_(PreparedInterface& prepared, const BoundaryEvaluationPoint& point,
@@ -1651,8 +1847,60 @@ class InterfaceFluxScheduler {
     return bytes;
   }
 
-  static std::string collective_point_identity_(const BoundaryEvaluationPoint& point) {
-    std::string bytes;
+  static std::size_t checked_identity_bytes_(std::initializer_list<std::size_t> values,
+                                             const char* what) {
+    std::size_t total = 0;
+    for (const std::size_t value : values) {
+      if (value > std::numeric_limits<std::size_t>::max() - total)
+        throw std::length_error(what);
+      total += value;
+    }
+    return total;
+  }
+
+  static std::size_t point_identity_capacity_(std::size_t clock_characters,
+                                              std::size_t graph_rate_application_characters) {
+    return checked_identity_bytes_(
+        {sizeof(std::uint64_t) + std::string_view("pops.multiblock.evaluation-point.v2").size(),
+         sizeof(std::uint64_t) + clock_characters, sizeof(std::int64_t), sizeof(int), sizeof(int),
+         sizeof(int), sizeof(std::int64_t), sizeof(std::int64_t), sizeof(double), sizeof(double),
+         3U * sizeof(std::uint64_t), graph_rate_application_characters},
+        "multi-block interface point identity capacity exceeds size_t");
+  }
+
+  static std::size_t publication_identity_capacity_(std::size_t stage_characters) {
+    constexpr std::size_t clock_bytes =
+        sizeof(int) + sizeof(std::int64_t) + 2U * sizeof(std::int64_t) + sizeof(double);
+    return checked_identity_bytes_(
+        {sizeof(std::uint64_t) +
+             std::string_view("pops.multiblock.interface-fragment-publication.nd.v1").size(),
+         sizeof(std::uint64_t), sizeof(int), clock_bytes, sizeof(std::uint64_t) + stage_characters,
+         clock_bytes, clock_bytes, sizeof(std::int64_t), sizeof(std::int64_t), sizeof(std::uint8_t),
+         sizeof(std::uint64_t), sizeof(std::uint64_t), sizeof(std::uint64_t),
+         sizeof(std::uint64_t)},
+        "multi-block interface publication identity capacity exceeds size_t");
+  }
+
+  static std::size_t point_identity_size_(const BoundaryEvaluationPoint& point) {
+    return point_identity_capacity_(
+        point.clock.size(),
+        checked_identity_bytes_({point.graph_identity.size(), point.rate_identity.size(),
+                                 point.application_identity.size()},
+                                "multi-block interface point identity exceeds size_t"));
+  }
+
+  static std::size_t publication_identity_size_(
+      const InterfaceFluxFragmentPublication& publication) {
+    return publication_identity_capacity_(publication.stage_identity.size());
+  }
+
+  static void collective_point_identity_into_(std::string& bytes,
+                                              const BoundaryEvaluationPoint& point) {
+    const std::size_t required = point_identity_size_(point);
+    if (required > bytes.capacity())
+      throw std::length_error(
+          "multi-block interface point exceeds its bind-sealed invocation workspace");
+    bytes.clear();
     append_text_(bytes, "pops.multiblock.evaluation-point.v2");
     append_text_(bytes, point.clock);
     append_scalar_(bytes, point.tick);
@@ -1666,6 +1914,14 @@ class InterfaceFluxScheduler {
     append_text_(bytes, point.graph_identity);
     append_text_(bytes, point.rate_identity);
     append_text_(bytes, point.application_identity);
+    if (bytes.size() != required)
+      throw std::logic_error("multi-block interface point identity size accounting drifted");
+  }
+
+  static std::string collective_point_identity_(const BoundaryEvaluationPoint& point) {
+    std::string bytes;
+    bytes.reserve(point_identity_size_(point));
+    collective_point_identity_into_(bytes, point);
     return bytes;
   }
 
@@ -1677,9 +1933,13 @@ class InterfaceFluxScheduler {
     append_scalar_(bytes, clock.physical_time);
   }
 
-  static std::string collective_fragment_publication_identity_(
-      const InterfaceFluxFragmentPublication& publication) {
-    std::string bytes;
+  static void collective_fragment_publication_identity_into_(
+      std::string& bytes, const InterfaceFluxFragmentPublication& publication) {
+    const std::size_t required = publication_identity_size_(publication);
+    if (required > bytes.capacity())
+      throw std::length_error(
+          "multi-block interface publication exceeds its bind-sealed invocation workspace");
+    bytes.clear();
     append_text_(bytes, "pops.multiblock.interface-fragment-publication.nd.v1");
     append_scalar_(bytes, publication.topology_epoch);
     append_scalar_(bytes, publication.active_level_count);
@@ -1694,10 +1954,29 @@ class InterfaceFluxScheduler {
     append_scalar_(bytes, static_cast<std::uint64_t>(publication.ledger->transaction_depth()));
     append_scalar_(bytes, static_cast<std::uint64_t>(publication.ledger->pending_size()));
     append_scalar_(bytes, static_cast<std::uint64_t>(publication.ledger->published_size()));
+    if (bytes.size() != required)
+      throw std::logic_error("multi-block interface publication identity size accounting drifted");
+  }
+
+  static std::string collective_fragment_publication_identity_(
+      const InterfaceFluxFragmentPublication& publication) {
+    std::string bytes;
+    bytes.reserve(publication_identity_size_(publication));
+    collective_fragment_publication_identity_into_(bytes, publication);
     return bytes;
   }
 
-  bool registry_agrees_across_ranks_(const CommunicatorView& communicator) const {
+  bool registry_agrees_across_ranks_(const CommunicatorView& communicator,
+                                     InterfaceInvocationWorkspace* workspace = nullptr) const {
+    if (workspace != nullptr) {
+      if (!workspace->bound || workspace->registry_pairs.size() != interfaces_.size())
+        throw std::logic_error(
+            "multi-block interface registry invocation workspace is not bound to scheduler");
+      for (std::size_t index = 0; index < interfaces_.size(); ++index)
+        workspace->registry_pairs[index] = {interfaces_[index].route.identity,
+                                            interfaces_[index].collective_identity};
+      return all_ranks_agree_exact_ordered_byte_pairs(workspace->registry_pairs, communicator);
+    }
     std::vector<std::pair<std::string_view, std::string_view>> identities;
     std::exception_ptr allocation_failure;
     try {

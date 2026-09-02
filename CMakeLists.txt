@@ -308,10 +308,70 @@ set(POPS_HAS_KOKKOS ON)
 # use an environment variable to let CMake find Kokkos, but that shell state does not survive the
 # script.  Bake the concrete, authenticated include tree selected by Kokkos::kokkos into _pops so a
 # later ``pops.compile()`` can reproduce the native backend without guessing a conda/sys.prefix.
-get_target_property(_pops_kokkos_include_dirs Kokkos::kokkos INTERFACE_INCLUDE_DIRECTORIES)
+#
+# ``Kokkos::kokkos`` is an interface facade when Kokkos is brought in with
+# FetchContent.  Its include directories are carried by finite component
+# targets (notably ``kokkoscore``), whereas an installed Kokkos package often
+# exposes them directly.  Traverse the target graph rather than assuming one
+# of those representations.  Include expressions and link expressions must be
+# replayable exactly: accepting a conditional generator expression here would
+# make the runtime compiler silently use a different Kokkos contract.
+function(_pops_collect_kokkos_target_property
+         _pops_kokkos_root _pops_kokkos_property _pops_kokkos_out)
+  set(_pops_kokkos_pending "${_pops_kokkos_root}")
+  set(_pops_kokkos_seen_targets "")
+  set(_pops_kokkos_collected_includes "")
+
+  while(_pops_kokkos_pending)
+    list(POP_FRONT _pops_kokkos_pending _pops_kokkos_target)
+    if("${_pops_kokkos_target}" IN_LIST _pops_kokkos_seen_targets)
+      continue()
+    endif()
+    if(NOT TARGET "${_pops_kokkos_target}")
+      message(FATAL_ERROR
+        "Kokkos target graph contains a non-target component: ${_pops_kokkos_target}")
+    endif()
+    list(APPEND _pops_kokkos_seen_targets "${_pops_kokkos_target}")
+
+    get_target_property(_pops_kokkos_target_values
+      "${_pops_kokkos_target}" "${_pops_kokkos_property}")
+    if(NOT _pops_kokkos_target_values STREQUAL
+       "_pops_kokkos_target_values-NOTFOUND")
+      list(APPEND _pops_kokkos_collected_includes ${_pops_kokkos_target_values})
+    endif()
+
+    get_target_property(_pops_kokkos_target_dependencies
+      "${_pops_kokkos_target}" INTERFACE_LINK_LIBRARIES)
+    if(_pops_kokkos_target_dependencies STREQUAL
+       "_pops_kokkos_target_dependencies-NOTFOUND")
+      continue()
+    endif()
+    foreach(_pops_kokkos_dependency IN LISTS _pops_kokkos_target_dependencies)
+      # LINK_ONLY preserves a concrete target name; every other generator
+      # expression could select a different include graph at runtime.
+      if(_pops_kokkos_dependency MATCHES "^\\$<LINK_ONLY:([^<>]+)>$")
+        set(_pops_kokkos_dependency "${CMAKE_MATCH_1}")
+      elseif(_pops_kokkos_dependency MATCHES "\\$<")
+        message(FATAL_ERROR
+          "Kokkos target graph exposes a non-replayable link expression: "
+          "${_pops_kokkos_dependency}")
+      endif()
+      # Plain libraries cannot contribute a CMake usage requirement.  Targets
+      # are the only finite source of transitive include directories.
+      if(TARGET "${_pops_kokkos_dependency}")
+        list(APPEND _pops_kokkos_pending "${_pops_kokkos_dependency}")
+      endif()
+    endforeach()
+  endwhile()
+
+  set(${_pops_kokkos_out} "${_pops_kokkos_collected_includes}" PARENT_SCOPE)
+endfunction()
+
+_pops_collect_kokkos_target_property(
+  Kokkos::kokkos INTERFACE_INCLUDE_DIRECTORIES _pops_kokkos_include_dirs)
 if(NOT _pops_kokkos_include_dirs)
   message(FATAL_ERROR
-    "Kokkos::kokkos exposes no include directories; runtime-compiled PoPS components cannot "
+    "Kokkos target graph exposes no include directories; runtime-compiled PoPS components cannot "
     "reproduce the host Kokkos contract.")
 endif()
 set(_pops_kokkos_normalized_includes "")
@@ -334,6 +394,46 @@ foreach(_pops_kokkos_include IN LISTS _pops_kokkos_include_dirs)
   list(APPEND _pops_kokkos_normalized_includes "${_pops_kokkos_include_normalized}")
 endforeach()
 list(REMOVE_DUPLICATES _pops_kokkos_normalized_includes)
+
+# The test-native DSO compiler must replay the same finite target graph as the
+# host executable.  Kokkos's in-tree facade carries these usage requirements
+# through component targets, while installed Kokkos commonly exposes them on
+# the facade itself.  Normalize the one conditional C++ wrapper that is exact
+# for this C++-only project and reject every other unresolved expression.
+function(_pops_normalize_kokkos_replay_records
+         _pops_kokkos_property _pops_kokkos_records _pops_kokkos_out)
+  set(_pops_kokkos_normalized_records "")
+  foreach(_pops_kokkos_record IN LISTS _pops_kokkos_records)
+    if(_pops_kokkos_record MATCHES "^\\$<\\$<COMPILE_LANGUAGE:CXX>:(.*)>$")
+      set(_pops_kokkos_record "${CMAKE_MATCH_1}")
+    elseif(_pops_kokkos_record MATCHES "\\$<")
+      message(FATAL_ERROR
+        "Kokkos ${_pops_kokkos_property} exposes a non-replayable expression: "
+        "${_pops_kokkos_record}")
+    endif()
+    if(_pops_kokkos_record MATCHES "[|\r\n]")
+      message(FATAL_ERROR
+        "Kokkos ${_pops_kokkos_property} cannot be serialized exactly: "
+        "${_pops_kokkos_record}")
+    endif()
+    if(NOT _pops_kokkos_record STREQUAL "")
+      list(APPEND _pops_kokkos_normalized_records "${_pops_kokkos_record}")
+    endif()
+  endforeach()
+  list(REMOVE_DUPLICATES _pops_kokkos_normalized_records)
+  set(${_pops_kokkos_out} "${_pops_kokkos_normalized_records}" PARENT_SCOPE)
+endfunction()
+
+_pops_collect_kokkos_target_property(
+  Kokkos::kokkos INTERFACE_COMPILE_DEFINITIONS _pops_kokkos_compile_definitions)
+_pops_collect_kokkos_target_property(
+  Kokkos::kokkos INTERFACE_COMPILE_OPTIONS _pops_kokkos_compile_options)
+_pops_normalize_kokkos_replay_records(
+  "compile definitions" "${_pops_kokkos_compile_definitions}"
+  _pops_kokkos_normalized_compile_definitions)
+_pops_normalize_kokkos_replay_records(
+  "compile options" "${_pops_kokkos_compile_options}"
+  _pops_kokkos_normalized_compile_options)
 
 set(_pops_kokkos_header_paths "")
 set(_pops_kokkos_header_hashes "")
@@ -362,6 +462,8 @@ if(NOT _pops_kokkos_header_count EQUAL 2)
 endif()
 string(SHA256 POPS_NATIVE_KOKKOS_ABI "${_pops_kokkos_abi_material}")
 list(JOIN _pops_kokkos_normalized_includes "|" POPS_NATIVE_KOKKOS_INCLUDE)
+list(JOIN _pops_kokkos_normalized_compile_definitions "|" POPS_NATIVE_KOKKOS_DEFINITIONS)
+list(JOIN _pops_kokkos_normalized_compile_options "|" POPS_NATIVE_KOKKOS_OPTIONS)
 list(JOIN _pops_kokkos_header_paths "|" POPS_NATIVE_KOKKOS_HEADER_PATHS)
 list(JOIN _pops_kokkos_header_hashes "|" POPS_NATIVE_KOKKOS_HEADER_HASHES)
 # Pool Ninja taille 1 des TU de production du module Python (_pops) : serialisation anti-OOM de

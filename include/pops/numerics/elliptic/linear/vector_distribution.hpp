@@ -107,6 +107,10 @@ struct NativeFieldDistributionSource {
                                                          : 0u;
   }
 
+  /// Native presets retain no source-owned dynamic storage.  The erased Model and its exact
+  /// collective-contract string are accounted by PreparedVectorDistribution itself.
+  [[nodiscard]] std::uint64_t resident_storage_bytes() const noexcept { return 0; }
+
   PreparedVectorDistributionStatus reduce_sum_values(std::span<double> values,
                                                      std::span<double> scratch, const char*,
                                                      const ExecutionLane& lane) const noexcept {
@@ -227,6 +231,18 @@ class PreparedVectorDistribution {
     return implementation_->validation_scratch_byte_count();
   }
 
+  /// Logical dynamic storage retained by this type-erased handle, excluding this handle object.
+  ///
+  /// An extension may opt in with `std::uint64_t resident_storage_bytes() const noexcept`; that
+  /// hook must include every dynamic allocation retained by its Source (including external string
+  /// capacity) and exclude the Source object itself and allocator bookkeeping.  The handle adds
+  /// its erased Model and the external capacity of its collective contract.  A source without the
+  /// hook remains supported for numerical use, but produces `unknown` so a capacity-limited
+  /// Program can refuse it rather than treating missing evidence as zero.
+  [[nodiscard]] PreparedResidentStorage resident_storage() const {
+    return implementation_->resident_storage();
+  }
+
   void reduce_sum_values(std::span<double> values, std::span<double> scratch, const char* where,
                          const ExecutionLane& lane) const {
     const PreparedVectorDistributionStatus status =
@@ -333,6 +349,7 @@ class PreparedVectorDistribution {
     [[nodiscard]] virtual std::string layout_contract(const MultiFab<Dim>&) const = 0;
     [[nodiscard]] virtual std::size_t reduction_scratch_value_count(std::size_t) const noexcept = 0;
     [[nodiscard]] virtual std::size_t validation_scratch_byte_count() const noexcept = 0;
+    [[nodiscard]] virtual PreparedResidentStorage resident_storage() const = 0;
     virtual PreparedVectorDistributionStatus reduce_sum_values(
         std::span<double>, std::span<double>, const char*, const ExecutionLane&) const noexcept = 0;
     virtual PreparedVectorDistributionStatus reduce_max_values(
@@ -377,6 +394,24 @@ class PreparedVectorDistribution {
     std::size_t validation_scratch_byte_count() const noexcept override {
       return source_.validation_scratch_byte_count();
     }
+    PreparedResidentStorage resident_storage() const override {
+      if constexpr (requires(const Source& source) {
+                      { source.resident_storage_bytes() } noexcept -> std::same_as<std::uint64_t>;
+                    }) {
+        const std::uint64_t source_bytes = source_.resident_storage_bytes();
+        const std::uint64_t contract_bytes = external_string_storage_bytes_(collective_contract_);
+        if (source_bytes > std::numeric_limits<std::uint64_t>::max() - sizeof(Model) ||
+            contract_bytes >
+                std::numeric_limits<std::uint64_t>::max() - source_bytes - sizeof(Model))
+          throw std::overflow_error(
+              "prepared vector distribution resident storage size overflows uint64");
+        // make_shared co-allocates an implementation-defined shared_ptr control block with the
+        // Model.  Its allocator bookkeeping is intentionally outside the logical contract; the
+        // Model object itself is the exact provider-owned payload retained by the control block.
+        return PreparedResidentStorage::exact(sizeof(Model) + source_bytes + contract_bytes);
+      }
+      return PreparedResidentStorage::unknown();
+    }
     PreparedVectorDistributionStatus reduce_sum_values(
         std::span<double> values, std::span<double> scratch, const char* where,
         const ExecutionLane& lane) const noexcept override {
@@ -394,6 +429,15 @@ class PreparedVectorDistribution {
     }
 
    private:
+    static std::uint64_t external_string_storage_bytes_(const std::string& value) noexcept {
+      const auto object_begin = reinterpret_cast<std::uintptr_t>(&value);
+      const auto object_end = object_begin + sizeof(value);
+      const auto data = reinterpret_cast<std::uintptr_t>(value.data());
+      return data >= object_begin && data < object_end
+                 ? 0
+                 : static_cast<std::uint64_t>(value.capacity()) + 1U;
+    }
+
     Source source_;
     std::string collective_contract_;
   };

@@ -26,6 +26,10 @@ unit-tested by tests/cpp/integration/runtime/test_cache_manager.cpp. Pure Python
 """
 from pops.codegen.program_codegen import _check_schedules_lowerable
 from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen.program_persistent_plan import (
+    get_program_resource_plan,
+    persistent_slot_token,
+)
 from pops.codegen._resolution import CapabilityResolutionError, _resolve_amr_program
 import pytest
 import re
@@ -530,10 +534,8 @@ def test_scratch_hold_caches_named_scratch():
 
 
 def test_scratch_hold_primes_dense_resource_and_cache_before_step():
-    cpp = emit_cpp_program(
-        _scratch_program(lambda clock: _every(clock, 10, adctime.Hold())),
-        model=None,
-    )
+    program = _scratch_program(lambda clock: _every(clock, 10, adctime.Hold()))
+    cpp = emit_cpp_program(program, model=None)
     state_prepare = cpp.index("ctx.prepare_rhs_scratch(")
     cache_prepare = cpp.index("ctx.prepare_cache_slot(")
     step = cpp.index("ctx.begin_step(")
@@ -542,6 +544,22 @@ def test_scratch_hold_primes_dense_resource_and_cache_before_step():
     assert cpp.count("ctx.prepare_rhs_scratch(") == 1
     assert cpp.count("ctx.prepare_cache_slot(") == 1
     assert "__POPS_PERSISTENT_SLOT_" not in cpp
+
+
+def test_scratch_hold_plan_keeps_dense_authenticated_storage_consumers():
+    """A cache-backed row remains a real plan owner, never an alias fallback."""
+
+    program = _scratch_program(lambda clock: _every(clock, 10, adctime.Hold()))
+    plan = get_program_resource_plan(program, target="system")
+    scheduled = next(value for value in program._values if value.attrs.get("schedule") is not None)
+    slot = persistent_slot_token(program, scheduled, target="system")
+    entry = next(entry for entry in plan.entries if entry.slot == int(slot))
+
+    assert [entry.slot for entry in plan.entries] == list(range(len(plan.entries)))
+    assert entry.key.value_id == scheduled.id
+    assert entry.lifetime == "persistent_schedule"
+    assert entry.off_policy == "hold"
+    assert plan.digest and len(plan.digest) == 64
 
 
 def test_resource_priming_refuses_unprimed_step_local_and_late_shape_drift():
@@ -594,7 +612,7 @@ def test_resource_priming_refuses_unprimed_step_local_and_late_shape_drift():
         _prepare_cache_slot([], {}, slot="6", program_block=None)
 
 
-def test_ownerless_live_scalar_field_refuses_before_candidate_artifact():
+def test_uniform_fill_boundary_refuses_before_candidate_artifact():
     program = adctime.Program("ownerless_scalar_resource")
     state = typed_state(program, "ions")
     scratch = program.scalar_field("unowned")
@@ -602,7 +620,7 @@ def test_ownerless_live_scalar_field_refuses_before_candidate_artifact():
     endpoint = typed_state(program, "ions", state_name="U").next
     program.commit(endpoint, program.value("U1", 1 * state, at=endpoint.point))
 
-    with pytest.raises(ValueError, match="no unique authenticated owner block"):
+    with pytest.raises(NotImplementedError, match="cold-bound scalar boundary session"):
         emit_cpp_program(program, model=None)
 
 

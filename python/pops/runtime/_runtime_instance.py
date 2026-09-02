@@ -1294,15 +1294,15 @@ class RuntimeInstance:
         return cast(tuple[Any, Any, Any, Any], methods)
 
     @contextmanager
-    def _provisional_consumer_read_scope(self) -> Any:
+    def _provisional_candidate_read_scope(self) -> Any:
         """Read native candidate state through its private transaction capability.
 
         Native public readers deliberately refuse while the step writer owns the visibility lock.
-        Consumer staging is the only Python phase allowed to inspect that candidate.  It must
-        freeze the complete publication payload before native hidden publication; compensable
-        effect publication then consumes that frozen payload without reopening a provisional read.
-        Start/end consumers outside this envelope continue to use ordinary accepted readers through
-        ``_fire_consumers``.
+        Candidate controller work and consumer staging are the only Python phases allowed to
+        inspect that state.  Controller execution uses this scope for the pre/post-attempt clock
+        witnesses in ``_native_attempt``; consumer staging freezes its complete publication
+        payload before native hidden publication.  Compensable effect publication and start/end
+        consumers continue to use ordinary accepted readers and must not reopen this capability.
         """
         provider = getattr(self._executor, "_provisional_read_scope", None)
         if not callable(provider):
@@ -1597,12 +1597,16 @@ class RuntimeInstance:
             begin()
             native_active = True
             phase = "solve"
-            result, attempts = advance()
+            # ``_native_attempt`` reads the pre/post clock around the prepared controller.  The
+            # native transaction is already in Candidate phase after ``begin``, so those internal
+            # reads require the same explicit lease as candidate consumer staging.
+            with self._provisional_candidate_read_scope():
+                result, attempts = advance()
             if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts <= 0:
                 raise RuntimeError("step controller returned an invalid native-attempt count")
             phase = "effect"
             self._attempt += attempts
-            with self._provisional_consumer_read_scope():
+            with self._provisional_candidate_read_scope():
                 transactions = self._stage_consumers(
                     at_end=bool(at_end() if callable(at_end) else at_end)
                 )

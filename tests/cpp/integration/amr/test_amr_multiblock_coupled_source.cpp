@@ -14,8 +14,10 @@
 #include <cmath>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -145,13 +147,18 @@ using BlockLevelSnapshot = std::array<std::vector<pops::MultiFab<Dim>>, 2>;
 template <int Dim>
 BlockLevelSnapshot<Dim> snapshot_block_levels(pops::AmrSystem<Dim>& system) {
   BlockLevelSnapshot<Dim> result;
+  const long local_levels = system.n_levels();
+  const long maximum_levels = pops::all_reduce_max(local_levels);
+  const long minimum_levels = -pops::all_reduce_max(-local_levels);
+  if (minimum_levels != maximum_levels)
+    throw std::runtime_error("AMR accepted block level count diverged across ranks");
   for (int runtime_block = 0; runtime_block < 2; ++runtime_block) {
     auto& levels = result[static_cast<std::size_t>(runtime_block)];
-    levels.reserve(static_cast<std::size_t>(system.n_levels()));
-    for (int level = 0; level < system.n_levels(); ++level) {
+    levels.reserve(static_cast<std::size_t>(maximum_levels));
+    for (int level = 0; level < maximum_levels; ++level) {
       auto view = system.prepared_amr_block_state(runtime_block, level);
-      if (!view)
-        throw std::logic_error("AMR accepted block view is invalid");
+      if (pops::all_reduce_max(view ? 0L : 1L) != 0)
+        throw std::runtime_error("AMR accepted block view is invalid collectively");
       levels.emplace_back(*view);
     }
   }
@@ -162,11 +169,23 @@ template <int Dim>
 bool byte_exact_block_levels(const BlockLevelSnapshot<Dim>& expected,
                              pops::AmrSystem<Dim>& actual) {
   bool same = true;
+  const long local_levels = actual.n_levels();
+  const long maximum_levels = pops::all_reduce_max(local_levels);
+  const long minimum_levels = -pops::all_reduce_max(-local_levels);
+  const bool local_shape_matches =
+      minimum_levels == maximum_levels &&
+      std::all_of(expected.begin(), expected.end(), [maximum_levels](const auto& levels) {
+        return levels.size() == static_cast<std::size_t>(maximum_levels);
+      });
+  if (pops::all_reduce_max(local_shape_matches ? 0L : 1L) != 0)
+    return false;
   for (int runtime_block = 0; runtime_block < 2; ++runtime_block)
-    for (int level = 0; level < actual.n_levels(); ++level) {
+    for (int level = 0; level < maximum_levels; ++level) {
       auto view = actual.prepared_amr_block_state(runtime_block, level);
-      if (!view)
-        return false;
+      if (pops::all_reduce_max(view ? 0L : 1L) != 0) {
+        same = false;
+        continue;
+      }
       same = same &&
              byte_exact_equal(
                  expected[static_cast<std::size_t>(runtime_block)][static_cast<std::size_t>(level)],
@@ -252,73 +271,135 @@ struct CoupledFixture {
     // Program order is intentionally the reverse of canonical runtime ownership.  The detached
     // v5 plan routes every dense resource by block identity; no accepted facade escapes dispatch.
     using Resource = pops::test::program_v5::CallbackProgramResource;
+    using FluxBasis = pops::test::program_v5::CallbackProgramFluxBasisOccurrence;
+    using FluxStage = pops::test::program_v5::CallbackProgramFaceFluxStage;
+    using FluxBudget = pops::runtime::program::ProgramFluxBudgetRecord;
+    constexpr std::string_view kProgramIdentity =
+        "test.amr.multiblock-coupled-source/program-ssprk2-imex-v1";
+    constexpr std::string_view kRateIdentity = "test.amr.multiblock-coupled-source/rate-final";
+    constexpr std::string_view kApplicationIdentity =
+        "test.amr.multiblock-coupled-source/application-final";
     std::vector<Resource> resources;
-    resources.reserve(static_cast<std::size_t>(system.n_levels() * 2 * 4));
-    for (int level = 0; level < system.n_levels(); ++level) {
-      for (int program_block = 0; program_block < 2; ++program_block) {
-        const int runtime_block = program_block == 0 ? 1 : 0;
-        const auto state = system.prepared_amr_block_state(runtime_block, level);
-        if (!state)
-          throw std::logic_error("coupled-source Program resource has no accepted block state");
-        const auto append_resource = [&](Resource::Kind kind) {
-          resources.push_back({kind, resources.size(), 0, program_block, level,
-                               static_cast<std::uint32_t>(state->ncomp()),
-                               static_cast<std::uint32_t>(state->ghosts()[0])});
-        };
-        append_resource(Resource::Kind::state);
-        append_resource(Resource::Kind::rhs);
-        append_resource(Resource::Kind::rhs);
-        append_resource(Resource::Kind::state);
-      }
+    resources.reserve(8);
+    for (int program_block = 0; program_block < 2; ++program_block) {
+      const int runtime_block = program_block == 0 ? 1 : 0;
+      const auto state = system.prepared_amr_block_state(runtime_block, 0);
+      if (!state)
+        throw std::logic_error("coupled-source Program resource has no accepted block state");
+      const std::string_view owner = program_block == 0 ? "receiver" : "donor";
+      const auto append_resource = [&](Resource::Kind kind, std::uint64_t value_id) {
+        Resource resource{kind,
+                          resources.size(),
+                          0,
+                          program_block,
+                          -1,
+                          static_cast<std::uint32_t>(state->ncomp()),
+                          static_cast<std::uint32_t>(state->ghosts()[0])};
+        resource.value_id = value_id;
+        resource.identity =
+            std::string(kProgramIdentity) + "/resource/" + std::to_string(resource.slot);
+        resource.occurrence_path = "root/resource/" + std::to_string(resource.slot);
+        resource.owner = owner;
+        resource.clock = "test.clock.macro";
+        resources.push_back(std::move(resource));
+      };
+      append_resource(Resource::Kind::state, 0);
+      append_resource(Resource::Kind::rhs, static_cast<std::uint64_t>(5000 + 2 * program_block));
+      append_resource(Resource::Kind::rhs, static_cast<std::uint64_t>(5001 + 2 * program_block));
+      append_resource(Resource::Kind::state, 0);
     }
+    const std::optional<std::vector<FluxBudget>> flux_budgets{std::vector<FluxBudget>{
+        {2, 2, 1, kProgramIdentity.size() + kRateIdentity.size() + kApplicationIdentity.size()},
+        {2, 2, 1, kProgramIdentity.size() + kRateIdentity.size() + kApplicationIdentity.size()}}};
+    const auto basis = [](std::uint32_t basis_slot, std::uint32_t expression_slot,
+                          int program_block, int rhs_identity, std::int64_t stage_numerator,
+                          std::string_view owner) {
+      return FluxBasis{basis_slot,
+                       expression_slot,
+                       program_block,
+                       -1,
+                       rhs_identity,
+                       pops::test::program_v5::kPreparedDefaultFluxProvider,
+                       stage_numerator,
+                       1,
+                       "test.amr.multiblock-coupled-source/basis/" + std::to_string(basis_slot),
+                       "root/basis/" + std::to_string(basis_slot),
+                       std::string(owner),
+                       "test.clock.macro"};
+    };
+    const std::vector<FluxBasis> flux_bases{
+        basis(0, 1, 0, 5000, 0, "receiver"), basis(1, 2, 0, 5001, 1, "receiver"),
+        basis(2, 5, 1, 5002, 0, "donor"), basis(3, 6, 1, 5003, 1, "donor")};
+    const auto final_stage = [](std::uint32_t slot, std::uint32_t basis_slot,
+                                std::uint32_t expression_slot, std::string_view owner) {
+      return FluxStage{slot,
+                       basis_slot,
+                       expression_slot,
+                       1,
+                       1,
+                       2,
+                       "test.amr.multiblock-coupled-source/final-flux/" + std::to_string(slot),
+                       "root/final-flux/" + std::to_string(slot),
+                       std::string(owner),
+                       "test.clock.macro"};
+    };
+    const std::vector<FluxStage> flux_stages{
+        final_stage(0, 0, 1, "receiver"), final_stage(1, 1, 2, "receiver"),
+        final_stage(2, 2, 5, "donor"), final_stage(3, 3, 6, "donor")};
+    const auto projection_scratch = cross_owner_projection_scratch;
     pops::test::install_explicit_amr_callback_program<Dim>(
-        system, "test.amr.multiblock-coupled-source/program-ssprk2-imex-v1", "test.clock.macro",
-        std::vector<std::string>{"receiver", "donor"}, resources, {},
-        [cross_owner_projection_scratch](auto& context, double macro_dt) {
-          context.advance_hierarchy(macro_dt, [&context,
-                                               cross_owner_projection_scratch](double level_dt) {
-            std::array<pops::MultiFab<Dim>*, 2> accepted{};
-            std::array<pops::MultiFab<Dim>*, 2> candidates{};
-            for (int program_block = 0; program_block < 2; ++program_block) {
-              accepted[static_cast<std::size_t>(program_block)] = &context.state(program_block);
-              const auto base = static_cast<pops::runtime::program::ProgramCacheSlot>(
-                  (context.level() * 2 + program_block) * 4);
-              auto& stage = context.scratch_state(base, 0, *accepted[program_block]);
-              auto& rate_zero = context.rhs_scratch(base + 1, 0, *accepted[program_block]);
-              auto& rate_one = context.rhs_scratch(base + 2, 0, *accepted[program_block]);
-              auto& candidate = context.scratch_state(base + 3, 0, *accepted[program_block]);
+        system, kProgramIdentity, "test.clock.macro", std::vector<std::string>{"receiver", "donor"},
+        resources, {},
+        [projection_scratch, kProgramIdentity, kRateIdentity, kApplicationIdentity](
+            auto& context, double macro_dt) {
+          context.advance_hierarchy(
+              macro_dt, [&context, projection_scratch, kProgramIdentity, kRateIdentity,
+                         kApplicationIdentity](double level_dt) {
+                using ExactCoefficientTerm = pops::runtime::program::ExactCoefficientTerm;
+                std::array<pops::MultiFab<Dim>*, 2> accepted{};
+                std::array<pops::MultiFab<Dim>*, 2> candidates{};
+                for (int program_block = 0; program_block < 2; ++program_block) {
+                  accepted[static_cast<std::size_t>(program_block)] = &context.state(program_block);
+                  const auto base =
+                      static_cast<pops::runtime::program::ProgramCacheSlot>(program_block * 4);
+                  auto& stage = context.scratch_state(base, 0, *accepted[program_block]);
+                  auto& rate_zero = context.rhs_scratch(base + 1, 0, *accepted[program_block]);
+                  auto& rate_one = context.rhs_scratch(base + 2, 0, *accepted[program_block]);
+                  auto& candidate = context.scratch_state(base + 3, 0, *accepted[program_block]);
 
-              context.set_stage_time(0, 1);
-              context.neg_div_flux_default_into(program_block, *accepted[program_block], rate_zero,
-                                                5000 + 2 * program_block);
-              context.lincomb(stage, pops::Real(1), *accepted[program_block], pops::Real(0),
-                              *accepted[program_block], pops::Real(level_dt), {{0, 1, 1}},
-                              {{0, 0, 1}});
-              context.axpy(stage, pops::Real(level_dt), rate_zero, pops::Real(level_dt),
-                           {{1, 1, 1}});
+                  context.set_stage_time(0, 1);
+                  context.neg_div_flux_default_into(program_block, *accepted[program_block],
+                                                    rate_zero, 5000 + 2 * program_block);
+                  context.lincomb(stage, pops::Real(1), *accepted[program_block], pops::Real(0),
+                                  *accepted[program_block], pops::Real(level_dt),
+                                  std::initializer_list<ExactCoefficientTerm>{{0, 1, 1}},
+                                  std::initializer_list<ExactCoefficientTerm>{{0, 0, 1}});
+                  context.axpy(stage, pops::Real(level_dt), rate_zero, pops::Real(level_dt),
+                               {{1, 1, 1}});
 
-              context.set_stage_time(1, 1);
-              context.neg_div_flux_default_into(program_block, stage, rate_one,
-                                                5001 + 2 * program_block);
-              context.lincomb(candidate, pops::Real(0.5), *accepted[program_block], pops::Real(0.5),
-                              stage, pops::Real(level_dt), {{0, 1, 2}}, {{0, 1, 2}});
-              context.axpy(candidate, pops::Real(0.5 * level_dt), rate_one, pops::Real(level_dt),
-                           {{1, 1, 2}});
-              candidates[static_cast<std::size_t>(program_block)] = &candidate;
-            }
-            if (*cross_owner_projection_scratch)
-              context.apply_projection(1, *candidates[0]);
-            for (int program_block = 0; program_block < 2; ++program_block)
-              context.apply_projection(program_block,
-                                       *candidates[static_cast<std::size_t>(program_block)]);
-            context.apply_coupling_operators(
-                "test.amr.multiblock-coupled-source/program-ssprk2-imex-v1",
-                "test.amr.multiblock-coupled-source/rate-final",
-                "test.amr.multiblock-coupled-source/application-final", pops::Real(level_dt),
-                {{0, candidates[0]}, {1, candidates[1]}});
-            context.commit_many({{accepted[0], candidates[0]}, {accepted[1], candidates[1]}});
-          });
-        });
+                  context.set_stage_time(1, 1);
+                  context.neg_div_flux_default_into(program_block, stage, rate_one,
+                                                    5001 + 2 * program_block);
+                  context.lincomb(candidate, pops::Real(0.5), *accepted[program_block],
+                                  pops::Real(0.5), stage, pops::Real(level_dt),
+                                  std::initializer_list<ExactCoefficientTerm>{{0, 1, 2}},
+                                  std::initializer_list<ExactCoefficientTerm>{{0, 1, 2}});
+                  context.axpy(candidate, pops::Real(0.5 * level_dt), rate_one,
+                               pops::Real(level_dt), {{1, 1, 2}});
+                  candidates[static_cast<std::size_t>(program_block)] = &candidate;
+                }
+                if (*projection_scratch)
+                  context.apply_projection(1, *candidates[0]);
+                for (int program_block = 0; program_block < 2; ++program_block)
+                  context.apply_projection(program_block,
+                                           *candidates[static_cast<std::size_t>(program_block)]);
+                context.apply_coupling_operators(kProgramIdentity, kRateIdentity,
+                                                 kApplicationIdentity, pops::Real(level_dt),
+                                                 {{0, candidates[0]}, {1, candidates[1]}});
+                context.commit_many({{accepted[0], candidates[0]}, {accepted[1], candidates[1]}});
+              });
+        },
+        {}, {}, flux_budgets, {}, std::nullopt, flux_bases, flux_stages);
   }
 
   static pops::AmrSystemConfig<Dim> config() {
@@ -351,22 +432,23 @@ void prove_conservative_execution_rollback_and_retry() {
   const BlockLevelSnapshot<Dim> initial = snapshot_block_levels(fixture.system);
   const double total_before = fixture.system.mass("donor") + fixture.system.mass("receiver");
 
-  // The rank-zero request intentionally offers the other block's accepted carrier.  The facade
+  // The rank-zero request claims the other block as the owner of a detached candidate.  The facade
   // must converge that rank-local preflight failure before any rank enters the projection closure;
   // both accepted blocks remain byte-exact and a clean detached retry is still executable.
-  auto selected_live_view = fixture.system.prepared_amr_block_state(0, 0);
-  ASSERT_TRUE(selected_live_view);
-  const pops::MultiFab<Dim>& selected_live = *selected_live_view;
-  pops::MultiFab<Dim> detached(selected_live.layout(), selected_live.distribution(),
-                               selected_live.local_rank(), selected_live.ncomp(),
-                               selected_live.ghosts());
-  detached.set_val(pops::Real(0));
+  pops::MultiFab<Dim> detached = [&fixture] {
+    const auto selected_live_view = fixture.system.prepared_amr_block_state(0, 0);
+    if (!selected_live_view)
+      throw std::logic_error("coupled-source test has no accepted donor state");
+    const pops::MultiFab<Dim>& selected_live = *selected_live_view;
+    pops::MultiFab<Dim> candidate(selected_live.layout(), selected_live.distribution(),
+                                  selected_live.local_rank(), selected_live.ncomp(),
+                                  selected_live.ghosts());
+    candidate.set_val(pops::Real(0));
+    return candidate;
+  }();
   const auto cross_owner_live_projection = [&] {
     if (pops::my_rank() == 0) {
-      auto cross_owner_view = fixture.system.prepared_amr_block_state(1, 0);
-      if (!cross_owner_view)
-        throw std::logic_error("AMR accepted block view is invalid");
-      fixture.system.project_prepared_amr_block_level_state(0, 0, 0, *cross_owner_view);
+      fixture.system.project_prepared_amr_block_level_state(0, 0, 1, detached);
     } else {
       fixture.system.project_prepared_amr_block_level_state(0, 0, 0, detached);
     }

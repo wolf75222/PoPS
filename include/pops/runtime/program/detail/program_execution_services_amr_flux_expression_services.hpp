@@ -36,7 +36,7 @@ auto prepare_history_mutation_collectively_(Build&& build, Contract&& contract,
       std::rethrow_exception(local_error);
     throw std::runtime_error(std::string(operation) + " preparation failed collectively");
   }
-  const std::string& exact_contract = std::invoke(contract, *result);
+  const std::string_view exact_contract = std::invoke(contract, *result);
   if (!all_ranks_agree_exact_ordered_byte_pairs({{operation, exact_contract}}, lane))
     throw std::runtime_error(std::string(operation) +
                              " contract differs between communicator ranks");
@@ -158,7 +158,7 @@ static ::pops::amr::Rational exact_binary_rational_(Real value) {
 }
 
 ExactPolynomial exact_runtime_coefficient_unchecked_(Real factor) const {
-  if (active_attempt_states_.empty())
+  if (active_attempt_states_.empty() || static_flux_tables_.bound)
     return {};
   return {{0, exact_binary_rational_(factor)}};
 }
@@ -167,7 +167,7 @@ template <class Build>
 auto prepare_flux_metadata_collectively_(Build&& build, std::string_view failure) const
     -> std::invoke_result_t<Build> {
   using result_type = std::invoke_result_t<Build>;
-  if (active_attempt_states_.empty())
+  if (active_attempt_states_.empty() || static_flux_tables_.bound)
     return std::forward<Build>(build)();
   std::optional<result_type> result;
   std::exception_ptr local_error;
@@ -215,10 +215,57 @@ ExactPolynomial exact_runtime_axpy_coefficient_(Real factor, const field_type& s
 }
 
 FluxExpression active_flux_expression_(const field_type& field) const {
-  if (active_attempt_states_.empty())
+  if (active_attempt_states_.empty() || static_flux_tables_.bound)
     return {};
   const auto found = active_flux_expressions_.find(&field);
   return found == active_flux_expressions_.end() ? FluxExpression{} : found->second;
+}
+
+/// Return the last issued occurrence identity across every live, resident and retained
+/// expression authority.  `next_active_flux_basis_identity_` is reset for each level group, but
+/// retained history survives that boundary.  A rehydrated lag occurrence therefore cannot start
+/// from the reset counter: it must be issued strictly after both the current sample and every
+/// restored/static occurrence it can coexist with.  Map keys are the finite occurrence authority;
+/// pointer addresses and basis payload order are deliberately not identities here.
+std::uint64_t flux_basis_identity_floor_(const FluxExpressionRegistry& current,
+                                         std::uint64_t identity) const {
+  const auto observe_expression = [&](const FluxExpression& expression) {
+    for (const auto& [registered_identity, term] : expression) {
+      if (!term.basis)
+        throw std::logic_error(
+            "AMR Program flux expression has a non-canonical occurrence identity");
+      // Every inactive static slot retains its finite map key to preserve the bind-sealed map
+      // topology, while its payload carries the explicit inactive sentinel.  It has no live
+      // occurrence to collide with; any other key/payload disagreement is malformed.
+      if (term.basis->identity != registered_identity &&
+          term.basis->identity != kStaticHistoryFluxInactiveIdentity)
+        throw std::logic_error(
+            "AMR Program flux expression has a non-canonical occurrence identity");
+      identity = std::max(identity, registered_identity);
+    }
+  };
+  const auto observe_registry = [&](const FluxExpressionRegistry& registry) {
+    for (const auto& [field, expression] : registry) {
+      (void)field;
+      observe_expression(expression);
+    }
+  };
+
+  observe_registry(current);
+  observe_registry(active_flux_expressions_);
+  for (const auto& [key, ring] : history_flux_expressions_) {
+    (void)key;
+    for (const FluxExpression& expression : ring)
+      observe_expression(expression);
+  }
+  if (static_flux_tables_.bound) {
+    if (static_flux_basis_active_.size() != static_flux_basis_payloads_.size())
+      throw std::logic_error("AMR Program static flux identity carrier is incomplete");
+    for (std::size_t slot = 0; slot < static_flux_basis_payloads_.size(); ++slot)
+      if (static_flux_basis_active_[slot] != 0)
+        identity = std::max(identity, static_flux_basis_payloads_[slot].identity);
+  }
+  return identity;
 }
 
 /// Rebind an immutable retained sample to this exact level-group.  The scientific face payload and
@@ -234,6 +281,7 @@ std::pair<FluxExpression, std::uint64_t> rehydrated_history_flux_expression_(
   const FluxExpression retained = ring->second[static_cast<std::size_t>(lag)];
   if (retained.empty())
     return {{}, identity};
+  identity = flux_basis_identity_floor_(current, identity);
   FluxExpression rebound;
   const auto same_face_identity = [](const FluxBasisFace& left, const FluxBasisFace& right) {
     return left.role == right.role && left.axis == right.axis && left.face == right.face &&
@@ -316,25 +364,44 @@ void rehydrate_history_flux_expression_(const std::string& key, int lag,
   next_active_flux_basis_identity_ = prepared.second;
 }
 
-static std::vector<std::uint8_t> serialize_history_flux_payload_(
+template <class Writer>
+static bool write_history_flux_payload_(
+    Writer& out,
     const std::map<std::string, std::vector<FluxExpression>>& history_flux_expressions) {
+  const auto active_terms = [](const FluxExpression& expression) {
+    return std::count_if(expression.begin(), expression.end(), [](const auto& entry) {
+      const auto& [identity, term] = entry;
+      return term.basis && term.basis->identity == identity;
+    });
+  };
   const bool any_expression = std::any_of(
       history_flux_expressions.begin(), history_flux_expressions.end(), [](const auto& entry) {
-        return std::any_of(entry.second.begin(), entry.second.end(),
-                           [](const FluxExpression& expression) { return !expression.empty(); });
+        return std::any_of(
+            entry.second.begin(), entry.second.end(), [](const FluxExpression& expression) {
+              return std::any_of(expression.begin(), expression.end(), [](const auto& term) {
+                return term.second.basis && term.second.basis->identity == term.first;
+              });
+            });
       });
   if (!any_expression)
-    return {};
-  checkpoint_detail::Writer out;
+    return false;
   out.size(history_flux_expressions.size());
   for (const auto& [key, slots] : history_flux_expressions) {
     out.string(key);
     out.size(slots.size());
     for (const FluxExpression& expression : slots) {
-      out.size(expression.size());
+      out.size(static_cast<std::size_t>(active_terms(expression)));
       for (const auto& [identity, term] : expression) {
-        if (!term.basis || term.basis->identity != identity)
+        if (!term.basis)
           throw std::logic_error("AMR Program history flux payload has an unauthenticated basis");
+        // Cold-bound static images retain their complete map topology in every history slot.  An
+        // inactive basis deliberately has no sample for this slot and is omitted from the wire;
+        // the map node itself stays resident so the next store cannot allocate it.
+        if (term.basis->identity != identity) {
+          if (term.basis->identity != kStaticHistoryFluxInactiveIdentity)
+            throw std::logic_error("AMR Program history flux payload has an invalid basis state");
+          continue;
+        }
         out.u64(identity);
         out.size(term.coefficient.size());
         for (const auto& [power, coefficient] : term.coefficient) {
@@ -380,11 +447,43 @@ static std::vector<std::uint8_t> serialize_history_flux_payload_(
       }
     }
   }
+  return true;
+}
+
+static std::vector<std::uint8_t> serialize_history_flux_payload_(
+    const std::map<std::string, std::vector<FluxExpression>>& history_flux_expressions) {
+  checkpoint_detail::Writer out;
+  if (!write_history_flux_payload_(out, history_flux_expressions))
+    return {};
   return std::move(out).take();
+}
+
+/// Serialize the already bind-authenticated history provenance into its resident checkpoint
+/// payload arena.  The public convenience serializer above remains intentionally allocating for
+/// restart/cold paths; accepted-step refreshes use this companion after their complete shape has
+/// been cold-primed.
+static void serialize_history_flux_payload_into_(
+    const std::map<std::string, std::vector<FluxExpression>>& history_flux_expressions,
+    std::vector<std::uint8_t>& bytes) {
+  checkpoint_detail::CountingWriter count;
+  if (!write_history_flux_payload_(count, history_flux_expressions)) {
+    bytes.clear();
+    return;
+  }
+  if (count.count() > bytes.capacity())
+    throw std::length_error("AMR Program history flux payload arena was not primed");
+  bytes.resize(count.count());
+  checkpoint_detail::PreallocatedWriter out(std::span<std::uint8_t>(bytes.data(), bytes.size()));
+  (void)write_history_flux_payload_(out, history_flux_expressions);
+  out.require_complete();
 }
 
 std::vector<std::uint8_t> serialize_history_flux_payload_() const {
   return serialize_history_flux_payload_(history_flux_expressions_);
+}
+
+void serialize_history_flux_payload_into_(std::vector<std::uint8_t>& bytes) const {
+  serialize_history_flux_payload_into_(history_flux_expressions_, bytes);
 }
 
 std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_restore_(
@@ -507,6 +606,10 @@ std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_
           }
           basis.faces.push_back(std::move(face));
         }
+        // The checkpoint payload contains only the logical face prefix.  Preserve that boundary
+        // before the cold successor normalizer expands it into its bind-sealed route slots;
+        // treating vector capacity as logical faces would serialize stale template tails.
+        basis.face_count = face_count;
         // A completely covered level legitimately has no coarse--fine faces.  Archive bytes alone
         // cannot establish that an empty vector is meaningful, so admit it only when the rebuilt,
         // authenticated hierarchy proves that neither adjacent transition exposes an interface for
@@ -540,6 +643,15 @@ std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_
   in.finish();
   if (candidate.size() != runtime_state().hist_.histories.size())
     throw std::invalid_argument("AMR Program history flux payload omits a live ring");
+  if (static_flux_tables_.bound) {
+    // Restore is cold, but the following accepted snapshot is not: rebuild each restored logical
+    // prefix into the exact successor slots carried by the static table. This retains densities
+    // only for complete geometric identities and leaves newly exposed faces at their prepared
+    // zero value, so subsequent capture observes the same sealed shape as the live carrier.
+    candidate = prepare_static_history_flux_provenance_from_sealed_history_(
+        static_flux_tables_, static_flux_basis_payloads_, runtime_state().hist_.owner,
+        history_levels_, candidate, primary_clock_);
+  }
   return candidate;
 }
 
@@ -588,7 +700,7 @@ static void add_flux_expression_(FluxExpression& destination, const FluxExpressi
 
 FluxExpressionUpdate prepare_active_axpy_flux_expression_(
     field_type& destination, const field_type& source, const ExactPolynomial& coefficient) const {
-  if (active_attempt_states_.empty())
+  if (active_attempt_states_.empty() || static_flux_tables_.bound)
     return std::nullopt;
   return prepare_flux_metadata_collectively_(
       [&]() {
@@ -606,7 +718,7 @@ FluxExpressionUpdate prepare_active_axpy_flux_expression_(
 FluxExpressionUpdate prepare_active_lincomb_flux_expression_(
     field_type& destination, const field_type& left, const ExactPolynomial& left_coefficient,
     const field_type& right, const ExactPolynomial& right_coefficient) const {
-  if (active_attempt_states_.empty())
+  if (active_attempt_states_.empty() || static_flux_tables_.bound)
     return std::nullopt;
   return prepare_flux_metadata_collectively_(
       [&]() {
@@ -628,7 +740,7 @@ void publish_active_flux_expression_update_(FluxExpressionUpdate update) const n
 }
 
 void copy_active_flux_expression_(const field_type& source, field_type& destination) const {
-  if (active_attempt_states_.empty())
+  if (active_attempt_states_.empty() || static_flux_tables_.bound)
     return;
   FluxExpressionRegistry candidate = prepare_flux_metadata_collectively_(
       [&] {

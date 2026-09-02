@@ -121,6 +121,17 @@ class SameLevelCellIntegratedFluxLedger {
     return publication_generation_;
   }
 
+  /// Cold-only capacity reservation.  A cell-local Program binds every possible level-group
+  /// diagnostic before the artifact is accepted; a later stage may resize within this fixed
+  /// capacity but can never grow the host/device allocation on the hot path.
+  void prime_capacity(std::size_t value_count) {
+    if (publication_generation_ != 0 || begin_tick_ != end_tick_)
+      throw std::logic_error("cell flux diagnostic capacity is already published");
+    accepted_.reserve(value_count);
+    accepted_.resize(value_count, Real(0));
+    accepted_.clear();
+  }
+
   void copy_accepted_state_into(SameLevelCellIntegratedFluxLedgerAcceptedState<Dim>& state) const {
     state.topology_epoch = topology_epoch_;
     state.materialization_generation = materialization_generation_;
@@ -255,6 +266,25 @@ class SameLevelCellIntegratedFluxPackDiagnostic {
     return publication_generation_;
   }
 
+  /// Cold-only capacity reservation for the detached Program installation image.  The provider
+  /// may later select a smaller exact level payload, but it must never grow this vector during a
+  /// candidate step.
+  void prime_capacity(std::size_t value_count) {
+    if (publication_generation_ != 0 || begin_tick_ != end_tick_)
+      throw std::logic_error("cell flux pack diagnostic capacity is already published");
+    accepted_.reserve(value_count);
+    accepted_.clear();
+  }
+
+  /// This object is itself owned by a pool allocation.  The retained vector capacity is the
+  /// separately allocated payload that must be charged even while a diagnostic has no active
+  /// values between attempts.
+  [[nodiscard]] std::uint64_t resident_storage_bytes() const {
+    if (accepted_.capacity() > std::numeric_limits<std::uint64_t>::max() / sizeof(Real))
+      throw std::overflow_error("cell flux pack diagnostic resident storage overflows uint64");
+    return static_cast<std::uint64_t>(accepted_.capacity()) * sizeof(Real);
+  }
+
   void invalidate_accepted_publication(std::int64_t synchronization_tick,
                                        std::int64_t denominator) noexcept {
     std::fill(accepted_.begin(), accepted_.end(), Real(0));
@@ -264,6 +294,21 @@ class SameLevelCellIntegratedFluxPackDiagnostic {
     publication_generation_ = 0;
   }
 
+  /// Value-only transfer between candidate/accepted/rollback arenas.  All arenas are primed from
+  /// the same detached plan before installation, so a shape mismatch is an authority violation,
+  /// not an opportunity to allocate on a rollback or publication path.
+  void copy_accepted_into_preallocated_noexcept(
+      const SameLevelCellIntegratedFluxPackDiagnostic& source) noexcept {
+    if (accepted_.capacity() < source.accepted_.size())
+      std::terminate();
+    accepted_.resize(source.accepted_.size());
+    std::copy(source.accepted_.begin(), source.accepted_.end(), accepted_.begin());
+    begin_tick_ = source.begin_tick_;
+    end_tick_ = source.end_tick_;
+    tick_denominator_ = source.tick_denominator_;
+    publication_generation_ = source.publication_generation_;
+  }
+
  private:
   template <int, class>
   friend class PreparedSameLevelTransportEulerPackStageFluxProvider;
@@ -271,7 +316,10 @@ class SameLevelCellIntegratedFluxPackDiagnostic {
   void prepare_shape_(std::size_t value_count) {
     if (publication_generation_ != 0 || begin_tick_ != end_tick_)
       throw std::logic_error("cell flux diagnostic shape is already published");
-    accepted_.assign(value_count, Real(0));
+    if (value_count > accepted_.capacity())
+      throw std::logic_error("cell flux diagnostic exceeds its candidate-prepared fixed capacity");
+    accepted_.resize(value_count);
+    std::fill(accepted_.begin(), accepted_.end(), Real(0));
   }
 
   void publish_(std::int64_t begin_tick, std::int64_t end_tick, std::int64_t denominator,
@@ -453,8 +501,13 @@ void copy_local_storage(const MultiFab<Dim>& source, MultiFab<Dim>& destination)
       source.local_rank() != destination.local_rank() || source.ncomp() != destination.ncomp() ||
       source.ghosts() != destination.ghosts() || source.local_size() != destination.local_size())
     throw std::invalid_argument("same-level temporal candidate storage contract changed");
-  for (std::size_t local = 0; local < source.local_size(); ++local)
-    Kokkos::deep_copy(destination.fab(local).storage(), source.fab(local).storage());
+  for (std::size_t local = 0; local < source.local_size(); ++local) {
+    if constexpr (std::is_same_v<typename MultiFab<Dim>::memory_space, Kokkos::HostSpace>)
+      std::copy_n(source.fab(local).storage().data(), source.fab(local).size(),
+                  destination.fab(local).storage().data());
+    else
+      Kokkos::deep_copy(destination.fab(local).storage(), source.fab(local).storage());
+  }
 }
 
 POPS_HD inline bool finite_device_value(Real value) noexcept {
@@ -831,6 +884,10 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
     if (clock_identity_.empty())
       throw std::invalid_argument(
           "same-level transport provider requires a non-empty clock identity");
+    // This point is rewritten for every active batch.  Reserve its sole dynamic identity while
+    // building the resident provider so the batch path cannot first-allocate a long clock name.
+    batch_point_.clock.reserve(clock_identity_.size());
+    batch_point_.clock.assign(clock_identity_);
     live_ = &runtime_->same_level_cell_state();
     if (live_->layout().empty() || (lane_->size() > 1 && live_->distribution().replicated()) ||
         live_->rank_space().size() != static_cast<std::size_t>(lane_->size()) ||
@@ -1079,7 +1136,7 @@ concept SameLevelCellTemporalPackRuntime =
       } -> std::convertible_to<std::string_view>;
       {
         constant_runtime.same_level_cell_evaluation_point(CellTemporalRungBatchDescriptor{})
-      } -> std::same_as<multiblock::BoundaryEvaluationPoint>;
+      } -> std::same_as<const multiblock::BoundaryEvaluationPoint&>;
       {
         runtime.prepare_same_level_cell_stage_snapshot(route, point, snapshot, lane)
       } -> std::same_as<void>;
@@ -1241,6 +1298,83 @@ class PreparedSameLevelTransportEulerPackStageFluxProvider {
     return local_record_indices_;
   }
 
+  /// Exact heap payload of the level-qualified provider.  The shared diagnostic arena is owned
+  /// by the enclosing cell-temporal pool and is intentionally not charged here for every level.
+  [[nodiscard]] std::uint64_t resident_storage_bytes() const {
+    const auto checked_add = [](std::uint64_t& total, std::uint64_t value) {
+      if (value > std::numeric_limits<std::uint64_t>::max() - total)
+        throw std::overflow_error("cell-local provider resident storage overflows uint64");
+      total += value;
+    };
+    const auto vector_bytes = [](const auto& values) -> std::uint64_t {
+      using value_type = typename std::remove_reference_t<decltype(values)>::value_type;
+      if constexpr (requires { values.capacity(); }) {
+        if (values.capacity() > std::numeric_limits<std::uint64_t>::max() / sizeof(value_type))
+          throw std::overflow_error("cell-local provider vector storage overflows uint64");
+        return static_cast<std::uint64_t>(values.capacity()) * sizeof(value_type);
+      }
+      return 0;
+    };
+    const auto external_string_bytes = [](const std::string& value) -> std::uint64_t {
+      const auto begin = reinterpret_cast<std::uintptr_t>(&value);
+      const auto end = begin + sizeof(value);
+      const auto data = reinterpret_cast<std::uintptr_t>(value.data());
+      return data >= begin && data < end ? 0 : static_cast<std::uint64_t>(value.capacity()) + 1U;
+    };
+    std::uint64_t total = 0;
+    checked_add(total, vector_bytes(routes_));
+    checked_add(total, vector_bytes(local_addresses_));
+    checked_add(total, vector_bytes(local_record_indices_));
+    checked_add(total, vector_bytes(device_cells_));
+    checked_add(total, vector_bytes(attempt_flux_));
+    checked_add(total, vector_bytes(finalize_candidates_));
+    checked_add(total, external_string_bytes(clock_identity_));
+    checked_add(total, external_string_bytes(exact_parameters_));
+    for (const RouteStorage& route : routes_) {
+      checked_add(total, route.state_a.resident_storage_bytes());
+      checked_add(total, route.state_b.resident_storage_bytes());
+      checked_add(total, route.snapshot.resident_storage_bytes());
+      checked_add(total, route.residual.resident_storage_bytes());
+      checked_add(total, vector_bytes(route.face_fluxes));
+      for (const field_type& flux : route.face_fluxes)
+        checked_add(total, flux.resident_storage_bytes());
+    }
+    return total;
+  }
+
+  /// Rebind the resident provider from detached prototype fields to the current transaction's
+  /// preallocated candidate fields.  The route/device tables were sized during candidate_prepare;
+  /// this method performs no allocation and rejects any topology or component drift.
+  [[nodiscard]] PreparedProviderSupport rebind_active_candidates() noexcept {
+    if (!runtime_->rebind_active_candidates_noexcept())
+      return PreparedProviderSupport::reject(0x756207u,
+                                             "route-pack active candidate storage drifted");
+    if (routes_.size() != runtime_->same_level_cell_route_count() ||
+        device_cells_.size() != local_addresses_.size())
+      return PreparedProviderSupport::reject(0x756208u, "route-pack resident table shape drifted");
+    for (std::size_t route = 0; route < routes_.size(); ++route) {
+      RouteStorage& storage = routes_[route];
+      field_type& candidate = runtime_->same_level_cell_state(route);
+      if (candidate.ncomp() != storage.components || candidate.layout() != storage.live->layout() ||
+          candidate.ghosts() != storage.live->ghosts())
+        return PreparedProviderSupport::reject(0x756209u,
+                                               "route-pack candidate field contract drifted");
+      storage.live = &candidate;
+    }
+    for (std::size_t index = 0; index < local_addresses_.size(); ++index) {
+      const LocalAddress& address = local_addresses_[index];
+      RouteStorage& route = routes_[address.route];
+      auto& cell = device_cells_[index];
+      cell.stage = std::as_const(route.snapshot).fab(address.local_fab).view();
+      cell.residual = std::as_const(route.residual).fab(address.local_fab).view();
+      for (int axis = 0; axis < Dim; ++axis)
+        cell.fluxes[axis] = std::as_const(route.face_fluxes[axis]).fab(address.local_fab).view();
+      cell.candidate_a = route.state_a.fab(address.local_fab).view();
+      cell.candidate_b = route.state_b.fab(address.local_fab).view();
+    }
+    return PreparedProviderSupport::accept();
+  }
+
   [[nodiscard]] PreparedProviderSupport begin_attempt(
       CellTemporalAttemptDescriptor attempt) noexcept {
     if (active_)
@@ -1265,6 +1399,7 @@ class PreparedSameLevelTransportEulerPackStageFluxProvider {
     attempt_begin_tick_ = attempt.begin_tick;
     attempt_target_tick_ = attempt.target_tick;
     current_tick_ = attempt.begin_tick;
+    batch_point_ = nullptr;
     active_ = true;
     return PreparedProviderSupport::accept();
   }
@@ -1276,15 +1411,15 @@ class PreparedSameLevelTransportEulerPackStageFluxProvider {
         batch.tick_denominator != tick_denominator_ || batch.cell_count != global_record_count_ ||
         batch.local_cell_count != device_cells_.size())
       throw std::logic_error("same-level route pack received an unprepared rung batch");
-    batch_point_ = runtime_->same_level_cell_evaluation_point(batch);
-    if (batch_point_.clock != clock_identity_ || batch_point_.level != active_level_ ||
-        batch_point_.stage != 0 || batch_point_.stage_fraction != ::pops::amr::Rational(0, 1) ||
-        !std::isfinite(batch_point_.dt) || !(batch_point_.dt > 0.0) ||
-        !std::isfinite(batch_point_.physical_time))
+    batch_point_ = &runtime_->same_level_cell_evaluation_point(batch);
+    if (batch_point_->clock != clock_identity_ || batch_point_->level != active_level_ ||
+        batch_point_->stage != 0 || batch_point_->stage_fraction != ::pops::amr::Rational(0, 1) ||
+        !std::isfinite(batch_point_->dt) || !(batch_point_->dt > 0.0) ||
+        !std::isfinite(batch_point_->physical_time))
       throw std::invalid_argument(
           "same-level route pack received an invalid runtime evaluation point");
     batch_seconds_per_tick_ =
-        static_cast<Real>(batch_point_.dt) / static_cast<Real>(batch.end_tick - batch.begin_tick);
+        static_cast<Real>(batch_point_->dt) / static_cast<Real>(batch.end_tick - batch.begin_tick);
     for (RouteStorage& route : routes_) {
       same_level_cell_temporal_detail::copy_local_storage(current_state_(route),
                                                           candidate_state_(route));
@@ -1298,12 +1433,14 @@ class PreparedSameLevelTransportEulerPackStageFluxProvider {
 
   void materialize_rung_batch_snapshot(CellTemporalRungBatchDescriptor batch) {
     require_prepared_batch_(batch);
+    if (batch_point_ == nullptr)
+      throw std::logic_error("same-level route pack lost its resident evaluation point");
     for (std::size_t route = 0; route < routes_.size(); ++route) {
       RouteStorage& storage = routes_[route];
-      runtime_->prepare_same_level_cell_stage_snapshot(route, batch_point_, storage.snapshot,
+      runtime_->prepare_same_level_cell_stage_snapshot(route, *batch_point_, storage.snapshot,
                                                        *lane_);
       runtime_->capture_same_level_negative_flux_divergence(
-          route, batch_point_, std::as_const(storage.snapshot), storage.residual,
+          route, *batch_point_, std::as_const(storage.snapshot), storage.residual,
           face_flux_pointers_(storage));
     }
     device_fence();
@@ -1314,7 +1451,9 @@ class PreparedSameLevelTransportEulerPackStageFluxProvider {
   void finalize_rung_batch_candidate(CellTemporalRungBatchDescriptor batch) {
     if (!batch_active_ || batch.begin_tick != current_tick_ || batch.end_tick != batch_end_tick_)
       throw std::logic_error("same-level route pack cannot finalize a foreign rung batch");
-    const Real dt = static_cast<Real>(batch_point_.dt);
+    if (batch_point_ == nullptr)
+      throw std::logic_error("same-level route pack lost its resident evaluation point");
+    const Real dt = static_cast<Real>(batch_point_->dt);
     for (std::size_t route = 0; route < routes_.size(); ++route) {
       RouteStorage& storage = routes_[route];
       finalize_candidates_[route] = {route,
@@ -1338,6 +1477,7 @@ class PreparedSameLevelTransportEulerPackStageFluxProvider {
     flux_metadata_prepared_ = false;
     current_is_a_ = !current_is_a_;
     current_tick_ = batch_end_tick_;
+    batch_point_ = nullptr;
     batch_local_prepared_ = false;
     batch_active_ = false;
   }
@@ -1395,6 +1535,7 @@ class PreparedSameLevelTransportEulerPackStageFluxProvider {
     diagnostic_->publish_(attempt_begin_tick_, attempt_target_tick_, tick_denominator_,
                           attempt_flux_.data(), attempt_flux_.size());
     synchronization_tick_ = attempt_target_tick_;
+    batch_point_ = nullptr;
     active_ = false;
     attempt_finalized_ = false;
   }
@@ -1402,6 +1543,7 @@ class PreparedSameLevelTransportEulerPackStageFluxProvider {
   void rollback_attempt() noexcept {
     runtime_->discard_same_level_cell_flux_metadata();
     flux_metadata_prepared_ = false;
+    batch_point_ = nullptr;
     active_ = false;
     batch_local_prepared_ = false;
     batch_active_ = false;
@@ -1418,6 +1560,7 @@ class PreparedSameLevelTransportEulerPackStageFluxProvider {
     attempt_target_tick_ = synchronization_tick_;
     current_tick_ = synchronization_tick_;
     batch_end_tick_ = synchronization_tick_;
+    batch_point_ = nullptr;
     active_ = false;
     batch_local_prepared_ = false;
     batch_active_ = false;
@@ -1635,7 +1778,7 @@ class PreparedSameLevelTransportEulerPackStageFluxProvider {
       device_cells_;
   mutable std::vector<Real, fab_allocator<Real>> attempt_flux_;
   std::vector<SameLevelCellTemporalRouteCandidate<Dim>> finalize_candidates_;
-  multiblock::BoundaryEvaluationPoint batch_point_{};
+  const multiblock::BoundaryEvaluationPoint* batch_point_ = nullptr;
   CellTemporalRungBatchDescriptor prepared_batch_{};
   bool current_is_a_ = true;
   std::int64_t attempt_begin_tick_ = 0;

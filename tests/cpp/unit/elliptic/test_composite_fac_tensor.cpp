@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <pops/core/foundation/allocator.hpp>
 #include <pops/runtime/amr/amr_tensor_elliptic.hpp>
 #include <pops/runtime/program/prepared_tensor_boundary_session.hpp>
 
@@ -8,6 +9,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -67,6 +71,133 @@ pops::runtime::program::HierarchyTensorSolverBuildRequest<2> request(int coarse_
   result.options.values.emplace("fac.coarse_rel_tol", 1.0e-10);
   return result;
 }
+
+pops::runtime::program::HierarchyTensorSolverBuildRequest<2> fragmented_request(int coarse_cells) {
+  using namespace pops;
+  using namespace pops::runtime::program;
+  if (coarse_cells < 4 || coarse_cells % 2 != 0)
+    throw std::invalid_argument("fragmented tensor hierarchy requires an even coarse extent");
+
+  auto result = request(coarse_cells);
+  const mesh::RankSpace<2> rank_space{Index<2>{0, 0}, Extent<2>{1, 1}};
+  const int coarse_midpoint = coarse_cells / 2;
+  const mesh::BoxArray<2> coarse_layout(std::vector<Box<2>>{
+      {Index<2>{0, 0}, Index<2>{coarse_midpoint - 1, coarse_cells - 1}},
+      {Index<2>{coarse_midpoint, 0}, Index<2>{coarse_cells - 1, coarse_cells - 1}},
+  });
+  result.levels[0].layout = coarse_layout;
+  // Keep the serial fixture rank-local, but make the parent uniquely owned.  This materializes
+  // the RegionTransferPlan contracts and resident transport arenas that a replicated parent does
+  // not own, while the same test remains valid under an MPI world lane.
+  result.levels[0].distribution = mesh::Distribution<2>::partitioned(
+      coarse_layout, rank_space, std::vector<Index<2>>{Index<2>{0, 0}, Index<2>{0, 0}});
+
+  const int fine_cells = 2 * coarse_cells;
+  const int fine_begin = fine_cells / 4;
+  const int fine_midpoint = fine_cells / 2;
+  const int fine_end = 3 * fine_cells / 4 - 1;
+  const mesh::BoxArray<2> fine_layout(std::vector<Box<2>>{
+      {Index<2>{fine_begin, fine_begin}, Index<2>{fine_midpoint - 1, fine_end}},
+      {Index<2>{fine_midpoint, fine_begin}, Index<2>{fine_end, fine_end}},
+  });
+  result.levels[1].layout = fine_layout;
+  result.levels[1].distribution = mesh::Distribution<2>::partitioned(
+      fine_layout, rank_space, std::vector<Index<2>>{Index<2>{0, 0}, Index<2>{0, 0}});
+  return result;
+}
+
+template <int Dim>
+pops::runtime::program::HierarchyTensorConfiguredStorageRequest<Dim> configured_storage_request(
+    const pops::runtime::program::HierarchyTensorSolverBuildRequest<Dim>& build,
+    const pops::ExecutionLane& lane) {
+  using namespace pops;
+  using namespace pops::runtime::program;
+  HierarchyTensorConfiguredStorageRequest<Dim> result;
+  result.rank_bound = static_cast<std::uint64_t>(lane.size());
+  result.components = build.components;
+  result.provider_identity = std::string(tensor_elliptic_detail::kCompositeTensorProvider);
+  result.provider_interface_version = CompositeTensorHierarchyProvider<Dim>{}.interface_version();
+  result.execution_lane_identity = std::string(lane.identity());
+  result.plan_identity = build.plan_identity;
+  result.operator_contract_identity = build.operator_contract_identity;
+  result.assembly_field_slots = build.assembly_field_slots;
+  result.solution_field_slot = build.solution_field_slot;
+  result.options = build.options;
+  result.level_cell_bounds.reserve(build.levels.size());
+  result.patch_bounds.reserve(build.levels.size());
+  for (const auto& level : build.levels) {
+    const std::int64_t cells = level.geometry.domain().numPts();
+    if (cells <= 0)
+      throw std::logic_error("test hierarchy has an empty configured level");
+    result.level_cell_bounds.push_back(static_cast<std::uint64_t>(cells));
+    result.patch_bounds.push_back(static_cast<std::uint64_t>(level.layout.size()));
+  }
+  result.parent_child_pair_bounds.reserve(build.ratios.size());
+  for (std::size_t parent = 0; parent + 1U < build.levels.size(); ++parent) {
+    const std::uint64_t left = static_cast<std::uint64_t>(build.levels[parent].layout.size());
+    const std::uint64_t right = static_cast<std::uint64_t>(build.levels[parent + 1U].layout.size());
+    if (left != 0 && right > std::numeric_limits<std::uint64_t>::max() / left)
+      throw std::overflow_error("test configured pair bound overflows uint64");
+    result.parent_child_pair_bounds.push_back(left * right);
+  }
+  return result;
+}
+
+template <int Dim>
+pops::runtime::program::HierarchyTensorConfiguredStorageRequest<Dim>
+synthetic_configured_storage_request() {
+  using namespace pops::runtime::program;
+  HierarchyTensorConfiguredStorageRequest<Dim> result;
+  result.level_cell_bounds = {64, 128};
+  result.patch_bounds = {1, 2};
+  result.parent_child_pair_bounds = {2};
+  result.rank_bound = 2;
+  result.components = 1;
+  result.provider_identity = std::string(tensor_elliptic_detail::kCompositeTensorProvider);
+  result.provider_interface_version = CompositeTensorHierarchyProvider<Dim>{}.interface_version();
+  result.execution_lane_identity = "tests.tensor-configured-storage-synthetic";
+  result.plan_identity = "tests.tensor-configured-storage-plan";
+  result.operator_contract_identity =
+      std::string(tensor_elliptic_detail::kScalarTensorEllipticContract);
+  result.assembly_field_slots = tensor_elliptic_detail::assembly_slots<Dim>();
+  result.solution_field_slot = "pops.tensor-elliptic.solution";
+  result.options = tensor_elliptic_detail::default_options();
+  return result;
+}
+
+class UnboundedTensorProvider final
+    : public pops::runtime::program::HierarchyTensorSolverProvider<2> {
+ public:
+  using request_type = pops::runtime::program::HierarchyTensorSolverBuildRequest<2>;
+  using solver_type = pops::runtime::program::PreparedHierarchyTensorSolver<2>;
+
+  std::string_view identity() const noexcept override { return "tests.tensor-provider.unknown"; }
+  std::uint64_t interface_version() const noexcept override { return 1; }
+  std::string_view collective_contract() const noexcept override {
+    return "tests.tensor-provider.unknown.contract";
+  }
+  std::vector<std::string> capability_contracts() const override { return {}; }
+  pops::PreparedProviderOptions default_options() const override {
+    return pops::runtime::program::tensor_elliptic_detail::default_options();
+  }
+  pops::PreparedProviderSupport accepts_options(
+      const pops::PreparedProviderOptions&) const noexcept override {
+    return pops::PreparedProviderSupport::accept();
+  }
+  pops::PreparedProviderSupport supports(const request_type&) const noexcept override {
+    return pops::PreparedProviderSupport::accept();
+  }
+  pops::PreparedProviderSupport accepts_execution(
+      const request_type&,
+      pops::runtime::program::HierarchyTensorSolverExecutionPath) const noexcept override {
+    return pops::PreparedProviderSupport::accept();
+  }
+  std::string expected_prepared_contract(const request_type&) const override { return "unused"; }
+  std::unique_ptr<solver_type> prepare(const request_type&,
+                                       const pops::ExecutionLane&) const override {
+    return {};
+  }
+};
 
 std::size_t ordinal(const pops::Box<2>& box, const pops::Index<2>& cell) {
   return static_cast<std::size_t>(cell[0] - box.lo[0]) +
@@ -161,6 +292,112 @@ TEST(test_composite_fac_tensor, full_tensor_composite_retains_refinement_accurac
       << "genuinely refined full-tensor FAC must converge under hierarchy refinement";
 }
 
+TEST(test_composite_fac_tensor,
+     configured_provider_storage_ceiling_is_finite_monotone_and_dominates_preparation) {
+  using namespace pops;
+  using namespace pops::runtime::program;
+  const ExecutionLane lane = ExecutionLane::world("tests.tensor-configured-storage");
+  const auto build = request(16);
+  const auto configured = configured_storage_request(build, lane);
+  ASSERT_TRUE(hierarchy_tensor_detail::request_fits_configured_storage(build, configured));
+  const CompositeTensorHierarchyProvider<2> provider;
+  const HierarchyTensorConfiguredStorageLimit limit = provider.configured_storage_limit(configured);
+  ASSERT_TRUE(limit.is_exact());
+  ASSERT_GT(limit.maximum_bytes, 0U);
+
+  auto registry = std::make_shared<HierarchyTensorSolverProviderRegistry<2>>();
+  registry->add(std::make_shared<CompositeTensorHierarchyProvider<2>>(), lane);
+  auto solver = prepare_hierarchy_tensor_solver_collectively(
+      *registry, tensor_elliptic_detail::kCompositeTensorProvider, build, lane);
+  const PreparedResidentStorage actual = solver->resident_storage();
+  ASSERT_TRUE(actual.is_exact());
+  EXPECT_LE(actual.bytes, limit.maximum_bytes)
+      << "the sealed configured tensor ceiling must dominate the prepared resident receipt";
+
+  auto larger = configured;
+  ++larger.patch_bounds.back();
+  larger.level_cell_bounds.back() *= 2U;
+  ++larger.parent_child_pair_bounds.back();
+  ++larger.rank_bound;
+  const HierarchyTensorConfiguredStorageLimit larger_limit =
+      provider.configured_storage_limit(larger);
+  ASSERT_TRUE(larger_limit.is_exact());
+  EXPECT_GE(larger_limit.maximum_bytes, limit.maximum_bytes)
+      << "increasing a configured hierarchy envelope may not reduce its storage ceiling";
+
+  auto foreign_provider = configured;
+  foreign_provider.provider_identity = "tests.tensor-provider.foreign";
+  EXPECT_FALSE(provider.configured_storage_limit(foreign_provider).is_exact());
+
+  auto foreign_version = configured;
+  ++foreign_version.provider_interface_version;
+  EXPECT_FALSE(provider.configured_storage_limit(foreign_version).is_exact());
+
+  auto overflowing = configured;
+  overflowing.level_cell_bounds.front() = std::numeric_limits<std::uint64_t>::max();
+  overflowing.patch_bounds.front() = 2;
+  EXPECT_THROW((void)provider.configured_storage_limit(overflowing), std::overflow_error);
+}
+
+TEST(test_composite_fac_tensor,
+     configured_provider_storage_ceiling_dominates_each_topology_within_patch_envelope) {
+  using namespace pops;
+  using namespace pops::runtime::program;
+  const ExecutionLane lane = ExecutionLane::world("tests.tensor-configured-storage-fragmented");
+  const auto compact = request(16);
+  const auto fragmented = fragmented_request(16);
+  const auto configured = configured_storage_request(fragmented, lane);
+  ASSERT_TRUE(hierarchy_tensor_detail::request_fits_configured_storage(compact, configured));
+  ASSERT_TRUE(hierarchy_tensor_detail::request_fits_configured_storage(fragmented, configured));
+
+  const CompositeTensorHierarchyProvider<2> provider;
+  const HierarchyTensorConfiguredStorageLimit limit = provider.configured_storage_limit(configured);
+  ASSERT_TRUE(limit.is_exact());
+
+  auto registry = std::make_shared<HierarchyTensorSolverProviderRegistry<2>>();
+  registry->add(std::make_shared<CompositeTensorHierarchyProvider<2>>(), lane);
+  auto compact_solver = prepare_hierarchy_tensor_solver_collectively(
+      *registry, tensor_elliptic_detail::kCompositeTensorProvider, compact, lane);
+  auto fragmented_solver = prepare_hierarchy_tensor_solver_collectively(
+      *registry, tensor_elliptic_detail::kCompositeTensorProvider, fragmented, lane);
+  const PreparedResidentStorage compact_storage = compact_solver->resident_storage();
+  const PreparedResidentStorage fragmented_storage = fragmented_solver->resident_storage();
+  ASSERT_TRUE(compact_storage.is_exact());
+  ASSERT_TRUE(fragmented_storage.is_exact());
+  EXPECT_LE(compact_storage.bytes, limit.maximum_bytes);
+  EXPECT_LE(fragmented_storage.bytes, limit.maximum_bytes);
+
+  auto too_small = configured;
+  --too_small.patch_bounds.front();
+  EXPECT_FALSE(hierarchy_tensor_detail::request_fits_configured_storage(fragmented, too_small));
+}
+
+TEST(test_composite_fac_tensor, configured_provider_storage_ceiling_is_native_rank_generic) {
+  using namespace pops::runtime::program;
+  const auto limit_1 = CompositeTensorHierarchyProvider<1>{}.configured_storage_limit(
+      synthetic_configured_storage_request<1>());
+  const auto limit_2 = CompositeTensorHierarchyProvider<2>{}.configured_storage_limit(
+      synthetic_configured_storage_request<2>());
+  const auto limit_3 = CompositeTensorHierarchyProvider<3>{}.configured_storage_limit(
+      synthetic_configured_storage_request<3>());
+  EXPECT_TRUE(limit_1.is_exact());
+  EXPECT_TRUE(limit_2.is_exact());
+  EXPECT_TRUE(limit_3.is_exact());
+  EXPECT_GT(limit_1.maximum_bytes, 0U);
+  EXPECT_GT(limit_2.maximum_bytes, 0U);
+  EXPECT_GT(limit_3.maximum_bytes, 0U);
+}
+
+TEST(test_composite_fac_tensor, unbounded_provider_is_rejected_by_default_configured_contract) {
+  using namespace pops;
+  const ExecutionLane lane = ExecutionLane::world("tests.tensor-configured-storage-unknown");
+  const auto build = request(8);
+  const auto configured = configured_storage_request(build, lane);
+  const UnboundedTensorProvider provider;
+  EXPECT_FALSE(provider.configured_storage_limit(configured).is_exact())
+      << "third-party providers must opt in to a finite configured ceiling";
+}
+
 TEST(test_composite_fac_tensor, tensor_boundary_point_refresh_is_collective_and_transactional) {
   using namespace pops;
   using namespace pops::runtime::program;
@@ -206,13 +443,19 @@ TEST(test_composite_fac_tensor, tensor_boundary_point_refresh_is_collective_and_
     // The serial fixture still proves that local failure does not partially publish the candidate.
     rejected.clock = "foreign";
   }
+  const AllocationEventStats allocation_before_rejection = allocation_event_stats();
   EXPECT_THROW(session->refresh_point(rejected), std::exception);
+  EXPECT_EQ(allocation_event_stats(), allocation_before_rejection)
+      << "a rejected prepared tensor boundary refresh must not allocate a fallback transport";
   EXPECT_EQ(session->point(), previous);
 
   auto retry = previous;
   retry.tick = 1;
   retry.physical_time = 0.15;
+  const AllocationEventStats allocation_before_retry = allocation_event_stats();
   EXPECT_NO_THROW(session->refresh_point(retry));
+  EXPECT_EQ(allocation_event_stats(), allocation_before_retry)
+      << "a prepared tensor boundary refresh must reuse its cold-bound transport";
   EXPECT_EQ(session->point(), retry);
 }
 
@@ -246,8 +489,8 @@ pops::runtime::program::HierarchyTensorSolverBuildRequest<2> periodic_request(in
   result.components = 1;
   result.levels = {{coarse_geometry, all_periodic(coarse_geometry), coarse_layout,
                     coarse_distribution, Index<2>{0, 0}}};
-  result.levels.push_back({fine_geometry, all_periodic(fine_geometry), fine_layout,
-                           fine_distribution, Index<2>{0, 0}});
+  result.levels.push_back(
+      {fine_geometry, all_periodic(fine_geometry), fine_layout, fine_distribution, Index<2>{0, 0}});
   result.ratios = {amr::RefinementRatio<2>{std::array<int, 2>{2, 2}}};
   result.plan_identity = "tests.full-tensor-composite-periodic-nullspace";
   result.operator_contract_identity =
@@ -307,6 +550,10 @@ TEST(test_composite_fac_tensor, periodic_tensor_fac_applies_mean_zero_gauge) {
   for (const auto& level : build.levels)
     geometries.push_back(level.geometry);
   const ExecutionLane lane = ExecutionLane::world("tests.full-tensor-composite-periodic-nullspace");
+  const auto configured = configured_storage_request(build, lane);
+  const auto configured_limit =
+      CompositeTensorHierarchyProvider<2>{}.configured_storage_limit(configured);
+  ASSERT_TRUE(configured_limit.is_exact());
   const auto registry = make_default_hierarchy_tensor_solver_provider_registry<2>(lane);
   {
     auto incompatible = prepare_hierarchy_tensor_solver_collectively(
@@ -330,6 +577,12 @@ TEST(test_composite_fac_tensor, periodic_tensor_fac_applies_mean_zero_gauge) {
   }
   auto solver = prepare_hierarchy_tensor_solver_collectively(
       *registry, tensor_elliptic_detail::kCompositeTensorProvider, std::move(build), lane);
+  const PreparedResidentStorage storage_before_solve = solver->resident_storage();
+  ASSERT_TRUE(storage_before_solve.is_exact())
+      << "a periodic tensor FAC workspace must be fully materialized before its first solve";
+  EXPECT_LE(storage_before_solve.bytes, configured_limit.maximum_bytes)
+      << "the detached configured ceiling must include the possible singular nullspace image";
+  const AllocationEventStats allocation_before_solve = allocation_event_stats();
   for (int level = 0; level < solver->level_count(); ++level) {
     solver->assembly_target(tensor_elliptic_detail::coefficient_slot(0, 0), level).set_val(Real(1));
     solver->assembly_target(tensor_elliptic_detail::coefficient_slot(1, 1), level).set_val(Real(1));
@@ -341,9 +594,16 @@ TEST(test_composite_fac_tensor, periodic_tensor_fac_applies_mean_zero_gauge) {
   }
   auto outcome =
       solve_prepared_hierarchy_tensor_collectively(*solver, {Real(1e-4), Real(1e-12), 60}, lane);
-  const SolveReport report = outcome.consume(
-      outcome.report().solved_value_available() ? SolveConsumption::kAccept
-                                                : SolveConsumption::kFailRun);
+  const SolveReport report =
+      outcome.consume(outcome.report().solved_value_available() ? SolveConsumption::kAccept
+                                                                : SolveConsumption::kFailRun);
+  EXPECT_EQ(allocation_event_stats(), allocation_before_solve)
+      << "a prepared tensor nullspace must not allocate during solve";
+  const PreparedResidentStorage storage_after_solve = solver->resident_storage();
+  ASSERT_TRUE(storage_after_solve.is_exact())
+      << "a prepared tensor nullspace must remain resident-storage exact after solve";
+  EXPECT_EQ(storage_after_solve.bytes, storage_before_solve.bytes)
+      << "tensor nullspace solve must not change the prepared resident footprint";
   EXPECT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm;
   EXPECT_NEAR(solution_mean(solver->solution(0), geometries[0]), 0.0, 1.0e-7);
   EXPECT_NEAR(solution_mean(solver->solution(1), geometries[1]), 0.0, 1.0e-6);

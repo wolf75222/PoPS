@@ -3,7 +3,9 @@
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/coupling/base/elliptic_rhs.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/parallel/comm.hpp>
 #include <pops/parallel/execution_lane.hpp>
+#include <pops/parallel/prepared_load_balance.hpp>
 #include <pops/physics/bricks/elliptic.hpp>
 #include <pops/physics/bricks/source.hpp>
 #include <pops/physics/composition/composite.hpp>
@@ -41,6 +43,15 @@ using ChargeModel =
     pops::CompositeModel<pops::nd::ScalarAdvection<Dim>, pops::NoSource, pops::ChargeDensity>;
 
 static_assert(ChargeModel::n_providers == 0);
+
+class CommEnvironment final : public ::testing::Environment {
+ public:
+  void SetUp() override { pops::comm_init(); }
+  void TearDown() override { pops::comm_finalize(); }
+};
+
+[[maybe_unused]] const ::testing::Environment* const kCommEnvironment =
+    ::testing::AddGlobalTestEnvironment(new CommEnvironment);
 
 void install_execution_lane(NativeSystem& system) {
   system.install_prepared_boundary_execution_lane(
@@ -149,6 +160,26 @@ std::vector<std::string> periodic_kinds() {
 }
 
 }  // namespace
+
+TEST(test_coupled_fieldsolve, prepared_load_balance_refuses_mismatched_execution_lane_rank_space) {
+  const pops::ExecutionLane lane = pops::ExecutionLane::duplicate_world_collectively(
+      "test.coupled-fieldsolve.load-balance-mismatch@1");
+  pops::Extent<Dim> extent{};
+  for (int axis = 0; axis < Dim; ++axis)
+    extent[axis] = 1;
+  extent[0] = lane.size() == 1 ? 2 : 1;
+  const pops::mesh::RankSpace<Dim> rank_space(pops::Index<Dim>{}, extent);
+  std::vector<pops::Box<Dim>> patch_values;
+  patch_values.emplace_back(pops::Index<Dim>{}, pops::Index<Dim>{});
+  const pops::mesh::BoxArray<Dim> patches(std::move(patch_values));
+  const auto authority = pops::prepare_load_balance_authority<Dim>(
+      "round_robin", "test.coupled-fieldsolve.rank-space-refusal",
+      pops::PreparedProviderOptions{"pops.amr.load-balance.round-robin@1", {}});
+  const pops::parallel::LoadBalancePreparationBudget budget{patches.size(), rank_space.size(), 1};
+
+  EXPECT_THROW((void)authority.prepare(patches, rank_space, budget, {}, lane),
+               std::invalid_argument);
+}
 
 TEST(test_coupled_fieldsolve, simultaneous_stage_rhs_uses_every_qualified_block) {
   constexpr int cells = 24;
@@ -294,6 +325,6 @@ TEST(test_coupled_fieldsolve,
   ASSERT_TRUE(override_report.solved()) << override_report.reason;
   EXPECT_GT(max_difference(system.field_potential_global(slot), all_live), 1e-5)
       << "the named prepared plan must consume both qualified simultaneous stage slots";
-  EXPECT_EQ(system.density("first"), first);
-  EXPECT_EQ(system.density("second"), second);
+  EXPECT_EQ(system.density_global("first"), first);
+  EXPECT_EQ(system.density_global("second"), second);
 }

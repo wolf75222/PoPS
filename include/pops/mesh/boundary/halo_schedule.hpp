@@ -15,6 +15,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -304,6 +305,33 @@ class HaloSchedule {
   std::size_t local_elements() const noexcept { return local_elements_; }
   std::size_t send_elements() const noexcept { return send_elements_; }
   std::size_t receive_elements() const noexcept { return receive_elements_; }
+
+  /// Dynamic host storage retained by this immutable schedule, excluding the object itself.
+  [[nodiscard]] std::uint64_t resident_storage_bytes() const {
+    const auto add = [](std::uint64_t& total, std::uint64_t value) {
+      if (value > std::numeric_limits<std::uint64_t>::max() - total)
+        throw std::overflow_error("pops::HaloSchedule resident storage overflows uint64");
+      total += value;
+    };
+    const auto vector_bytes = [](const auto& values) {
+      using value_type = typename std::remove_reference_t<decltype(values)>::value_type;
+      if (values.capacity() > std::numeric_limits<std::uint64_t>::max() / sizeof(value_type))
+        throw std::overflow_error("pops::HaloSchedule vector storage overflows uint64");
+      return static_cast<std::uint64_t>(values.capacity()) * sizeof(value_type);
+    };
+    std::uint64_t total = 0;
+    add(total, vector_bytes(layout_.boxes()));
+    add(total, vector_bytes(distribution_.layout().boxes()));
+    add(total, vector_bytes(distribution_.owners()));
+    add(total, vector_bytes(canonical_jobs_));
+    add(total, vector_bytes(local_));
+    for (const auto* plans : {&send_, &receive_}) {
+      add(total, vector_bytes(*plans));
+      for (const peer_plan_type& plan : *plans)
+        add(total, vector_bytes(plan.jobs));
+    }
+    return total;
+  }
 
   bool has_remote_jobs() const noexcept { return !send_.empty() || !receive_.empty(); }
 

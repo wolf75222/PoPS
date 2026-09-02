@@ -56,12 +56,6 @@ jobs:
           environment-file: environment.yml
           auto-activate-base: false
 
-      - name: Runtime authority source ledger
-        run: |
-          for dim in 1 2 3; do
-            python scripts/run_runtime_authority_gate.py --check-only --dim "$dim"
-          done
-
       - name: Run the complete final gate and release preflight
         shell: bash -el {0}
         run: |

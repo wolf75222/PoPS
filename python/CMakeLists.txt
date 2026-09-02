@@ -131,6 +131,15 @@ set(POPS_PY_NATIVE_PKG ${POPS_PY_PKG}/_native/dim${POPS_NATIVE_DIM})
 set(POPS_PY_NATIVE_MANIFEST ${POPS_PY_PKG}/_native/variants.json)
 set_target_properties(_pops PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${POPS_PY_NATIVE_PKG})
 
+# The manifest authenticates the linked leaf before it is copied into a wheel.  Keep CMake's
+# install image byte-identical to that leaf: otherwise CMake rewrites automatically discovered
+# runtime paths at install time (``install_name_tool`` on Darwin) and invalidates both the digest
+# and the linker ad-hoc signature.  Let CMake carry its normal dependency search paths into the
+# install RPATH rather than hard-coding a host-specific prefix.
+set_target_properties(_pops PROPERTIES
+  BUILD_WITH_INSTALL_RPATH TRUE
+  INSTALL_RPATH_USE_LINK_PATH TRUE)
+
 # Publish the leaf only after interrogating the exact linked image.  The helper authenticates its
 # compile-time dimension, ABI, backend and final bytes, then atomically merges the row into the
 # build-tree inventory.  A distribution assembler may invoke the same helper for three isolated

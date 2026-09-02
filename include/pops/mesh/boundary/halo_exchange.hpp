@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -132,6 +133,52 @@ class HaloExchange {
 #endif
   }
 
+  /// Dynamic resident storage of this transport; the borrowed schedule is intentionally excluded.
+  [[nodiscard]] std::uint64_t resident_storage_bytes() const {
+    const auto add = [](std::uint64_t& total, std::uint64_t value) {
+      if (value > std::numeric_limits<std::uint64_t>::max() - total)
+        throw std::overflow_error("pops::HaloExchange resident storage overflows uint64");
+      total += value;
+    };
+    const auto vector_bytes = [](const auto& values) {
+      using value_type = typename std::remove_reference_t<decltype(values)>::value_type;
+      if (values.capacity() > std::numeric_limits<std::uint64_t>::max() / sizeof(value_type))
+        throw std::overflow_error("pops::HaloExchange vector storage overflows uint64");
+      return static_cast<std::uint64_t>(values.capacity()) * sizeof(value_type);
+    };
+    const auto view_bytes = [](const auto& view) {
+      if (view.extent(0) > std::numeric_limits<std::uint64_t>::max() / sizeof(Real))
+        throw std::overflow_error("pops::HaloExchange payload storage overflows uint64");
+      return static_cast<std::uint64_t>(view.extent(0)) * sizeof(Real);
+    };
+    const auto string_bytes = [](const std::string& value) {
+      const auto object = reinterpret_cast<std::uintptr_t>(&value);
+      const auto data = reinterpret_cast<std::uintptr_t>(value.data());
+      if (data >= object && data < object + sizeof(value))
+        return std::uint64_t{0};
+      if (value.capacity() == std::numeric_limits<std::size_t>::max())
+        throw std::overflow_error("pops::HaloExchange string storage overflows uint64");
+      return static_cast<std::uint64_t>(value.capacity()) + 1U;
+    };
+    std::uint64_t total = 0;
+    add(total, string_bytes(execution_fence_label_));
+    add(total, vector_bytes(peers_));
+    add(total, view_bytes(local_buffer_));
+    add(total, vector_bytes(active_storage_));
+    for (const PeerStorage& peer : peers_) {
+      add(total, view_bytes(peer.device_send));
+      add(total, view_bytes(peer.device_receive));
+      add(total, view_bytes(peer.host_send));
+      add(total, view_bytes(peer.host_receive));
+    }
+#ifdef POPS_HAS_MPI
+    add(total, vector_bytes(receive_requests_));
+    add(total, vector_bytes(send_requests_));
+    add(total, vector_bytes(receive_statuses_));
+#endif
+    return total;
+  }
+
   /// Pack and post every remote transfer without publishing any destination ghost.
   void begin(multifab_type& fields, const ExecutionLane& lane) {
 #ifdef POPS_HAS_MPI
@@ -154,9 +201,12 @@ class HaloExchange {
       for (PeerStorage& peer : peers_)
         if (peer.send_plan != nullptr) {
           pack_plan_(fields, *peer.send_plan, peer.device_send);
-          Kokkos::deep_copy(peer.host_send, peer.device_send);
+          if constexpr (std::is_same_v<MemorySpace, Kokkos::HostSpace>)
+            std::copy_n(peer.device_send.data(), peer.device_send.extent(0), peer.host_send.data());
+          else
+            Kokkos::deep_copy(peer.host_send, peer.device_send);
         }
-      Kokkos::fence();
+      ::pops::device_fence(execution_fence_label_);
     } catch (...) {
       packing_failure = 1;
     }
@@ -176,9 +226,10 @@ class HaloExchange {
         break;
       }
       receive_requests_.push_back(MPI_REQUEST_NULL);
-      receive_post_code = MPI_Irecv(
-          peer.host_receive.data(), static_cast<int>(peer.receive_plan->elements), mpi_real_datatype(),
-          peer.mpi_rank, context_.tag, lane_->native_handle(), &receive_requests_.back());
+      receive_post_code =
+          MPI_Irecv(peer.host_receive.data(), static_cast<int>(peer.receive_plan->elements),
+                    mpi_real_datatype(), peer.mpi_rank, context_.tag, lane_->native_handle(),
+                    &receive_requests_.back());
       if (receive_post_code != MPI_SUCCESS)
         receive_requests_.pop_back();
     }
@@ -199,9 +250,9 @@ class HaloExchange {
         break;
       }
       send_requests_.push_back(MPI_REQUEST_NULL);
-      send_post_code =
-          MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send_plan->elements), mpi_real_datatype(),
-                    peer.mpi_rank, context_.tag, lane_->native_handle(), &send_requests_.back());
+      send_post_code = MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send_plan->elements),
+                                 mpi_real_datatype(), peer.mpi_rank, context_.tag,
+                                 lane_->native_handle(), &send_requests_.back());
       if (send_post_code != MPI_SUCCESS)
         send_requests_.pop_back();
     }
@@ -256,9 +307,14 @@ class HaloExchange {
     long staging_failure = 0;
     try {
       for (PeerStorage& peer : peers_)
-        if (peer.receive_plan != nullptr)
-          Kokkos::deep_copy(peer.device_receive, peer.host_receive);
-      Kokkos::fence();
+        if (peer.receive_plan != nullptr) {
+          if constexpr (std::is_same_v<MemorySpace, Kokkos::HostSpace>)
+            std::copy_n(peer.host_receive.data(), peer.host_receive.extent(0),
+                        peer.device_receive.data());
+          else
+            Kokkos::deep_copy(peer.device_receive, peer.host_receive);
+        }
+      ::pops::device_fence(execution_fence_label_);
       if (context_.fail_staging_rank == lane_->rank())
         throw std::runtime_error("pops::HaloExchange injected receive staging failure");
     } catch (...) {
@@ -277,7 +333,7 @@ class HaloExchange {
           unpack_plan_(fields, *peer.receive_plan, peer.device_receive);
       if (schedule_->local_elements() != 0)
         unpack_jobs_(fields, schedule_->local_jobs(), schedule_->local_elements(), local_buffer_);
-      Kokkos::fence();
+      ::pops::device_fence(execution_fence_label_);
       if (context_.fail_publication_rank == lane_->rank())
         throw std::runtime_error("pops::HaloExchange injected publication failure");
     } catch (...) {
@@ -312,6 +368,31 @@ class HaloExchange {
     pinned_buffer_type host_receive{};
   };
 
+ public:
+  [[nodiscard]] static std::uint64_t configured_metadata_storage_upper_bound(
+      std::uint64_t remote_peer_bound, std::uint64_t local_fab_bound) {
+    const auto product = [](std::uint64_t left, std::uint64_t right) {
+      if (left != 0 && right > std::numeric_limits<std::uint64_t>::max() / left)
+        throw std::overflow_error("pops::HaloExchange configured metadata overflows uint64");
+      return left * right;
+    };
+    const auto add = [](std::uint64_t& total, std::uint64_t value) {
+      if (value > std::numeric_limits<std::uint64_t>::max() - total)
+        throw std::overflow_error("pops::HaloExchange configured metadata overflows uint64");
+      total += value;
+    };
+    const std::uint64_t peer_slots = product(2U, remote_peer_bound);
+    std::uint64_t total = product(peer_slots, sizeof(PeerStorage));
+    add(total, product(local_fab_bound, sizeof(const Real*)));
+#ifdef POPS_HAS_MPI
+    add(total, product(remote_peer_bound, sizeof(MPI_Request)));
+    add(total, product(remote_peer_bound, sizeof(MPI_Request)));
+    add(total, product(remote_peer_bound, sizeof(MPI_Status)));
+#endif
+    return total;
+  }
+
+ private:
   struct KernelJob {
     int destination_lower[Dim]{};
     execution_index_type destination_extent[Dim]{};
@@ -751,6 +832,7 @@ class HaloExchange {
   const ExecutionLane* lane_ = nullptr;
   ExecutionLane::ImmutableBorrow lane_borrow_;
   HaloExchangeContext context_{};
+  std::string execution_fence_label_ = "pops.halo-exchange.fence";
   std::vector<PeerStorage> peers_{};
   device_buffer_type local_buffer_{};
   std::vector<const Real*> active_storage_{};

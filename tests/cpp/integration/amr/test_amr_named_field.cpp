@@ -315,18 +315,25 @@ TEST(test_amr_named_field, NamedPlanConsumesExactStageWithoutPublishingConservat
       });
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   system.set_program_block_map({0});
+  system.refresh_prepared_amr_levels();
 
   using Resource = pops::test::program_v5::CallbackProgramResource;
-  const auto state = system.prepared_amr_block_state(0, 0);
-  ASSERT_TRUE(state);
+  std::uint32_t state_ncomp = 0;
+  std::uint32_t state_ghost_depth = 0;
+  {
+    const auto state = system.prepared_amr_block_state(0, 0);
+    ASSERT_TRUE(state);
+    state_ncomp = static_cast<std::uint32_t>(state->ncomp());
+    state_ghost_depth = static_cast<std::uint32_t>(state->ghosts()[0]);
+  }
   const std::vector<Resource> resources{{
       Resource::Kind::state,
       0,
       0,
       0,
       0,
-      static_cast<std::uint32_t>(state->ncomp()),
-      static_cast<std::uint32_t>(state->ghosts()[0]),
+      state_ncomp,
+      state_ghost_depth,
   }};
   const std::vector<pops::test::program_v5::CallbackProgramFieldRoute> field_routes{
       {0, "field/tracer", {0}}};

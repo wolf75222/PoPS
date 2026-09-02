@@ -1,11 +1,9 @@
 #pragma once
 
-#include "component_abi_test_helpers.hpp"
+#include "amr_runtime_authority.hpp"
 #include "native_dso_compiler.hpp"
 #include "program_v5_fixture.hpp"
 
-#include <pops/runtime/amr_system.hpp>
-#include <pops/runtime/dynamic/prepared_execution_context.hpp>
 #include <pops/runtime/program/program_execution_services.hpp>
 
 #include <algorithm>
@@ -65,25 +63,6 @@ extern "C" void pops_test_explicit_amr_program_callback(std::uint64_t identifier
       *static_cast<explicit_amr_program_detail::context_type*>(opaque), dt);
 }
 
-/// Install the explicit owned RuntimeInstance authority required before first AMR materialization.
-/// This is test-only world-authority construction; production receives its authenticated parent
-/// from the Python/native RuntimeInstance binding.
-template <int Dim>
-inline void install_amr_runtime_authority(AmrSystem<Dim>& system, std::string_view identity) {
-  auto lane =
-      std::make_shared<ExecutionLane>(ExecutionLane::duplicate_world_collectively(identity));
-  const PopsExecutionContextV1 raw = component::test_support::host_execution_context();
-  const component::PreparedExecutionContextV1 parent(
-      raw.execution_identity, raw.context_version, raw.memory_space, raw.backend_identity,
-      raw.device_identity, raw.scalar_type, raw.storage_precision, raw.compute_precision,
-      raw.accumulation_precision, raw.reduction_precision, raw.stream_handle, raw.stream_identity,
-      raw.communicator_f_handle, raw.communicator_datatype_f_handle, raw.communicator_identity,
-      raw.communicator_datatype_identity);
-  auto execution =
-      std::make_shared<const component::PreparedExecutionContextV1>(parent.for_lane(*lane));
-  system.install_prepared_boundary_execution_context(std::move(lane), std::move(execution));
-}
-
 /// AMR facade test Program: one explicit rate stage per recursive hierarchy clock.
 ///
 /// ProgramExecutionServices owns level clocks and conservative catch-up. AmrRuntime remains the spatial
@@ -98,7 +77,16 @@ inline void install_explicit_amr_callback_program(
     const std::vector<program_v5::CallbackProgramHistory>& histories = {},
     const std::vector<program_v5::CallbackProgramClockRelation>& clock_relations = {},
     const std::optional<std::vector<pops::runtime::program::ProgramFluxBudgetRecord>>&
-        flux_budgets = std::nullopt) {
+        flux_budgets = std::nullopt,
+    const program_v5::CallbackProgramTransactionAuthorities& transaction_authorities = {},
+    const std::optional<program_v5::CallbackProgramCellTemporalAuthority>& cell_temporal =
+        std::nullopt,
+    const std::vector<program_v5::CallbackProgramFluxBasisOccurrence>& flux_basis_occurrences = {},
+    const std::vector<program_v5::CallbackProgramFaceFluxStage>& face_flux_stages = {},
+    const std::optional<program_v5::CallbackProgramHierarchyTensorAuthority>& hierarchy_tensor =
+        std::nullopt,
+    const std::vector<pops::runtime::system::AuxiliaryConsumerProviderPlan<kNativeDimension>>&
+        auxiliary_consumer_plans = {}) {
   static_assert(Dim == kNativeDimension,
                 "the ABI-v5 explicit AMR fixture is compiled for POPS_NATIVE_DIM");
   if (identity.empty() || clock.empty() || !callback)
@@ -129,20 +117,20 @@ inline void install_explicit_amr_callback_program(
       std::string(POPS_TEST_TMPDIR) + "/explicit_amr_callback_" + std::to_string(++fixture_index);
   const std::string source_path = prefix + ".cpp";
   const std::string library_path = prefix + ".so";
-  std::ofstream source(source_path);
-  if (!source)
-    throw std::runtime_error("cannot create explicit AMR ABI-v5 callback source");
-  source << program_v5::callback_program_source(
-      callback_identifier, identity, clock, program_blocks, resources,
-      "pops_test_explicit_amr_program_callback", "amr", field_routes, {}, histories,
-      clock_relations, flux_budgets);
-  source.close();
-  const auto compiled = native_dso::compile_shared(source_path, library_path);
+  const auto compiled = native_dso::compile_shared_collectively(
+      identity,
+      [&]() {
+        return program_v5::callback_program_source(
+            callback_identifier, identity, clock, program_blocks, resources,
+            "pops_test_explicit_amr_program_callback", "amr", field_routes, transaction_authorities,
+            histories, clock_relations, flux_budgets, cell_temporal, flux_basis_occurrences,
+            face_flux_stages, hierarchy_tensor, auxiliary_consumer_plans);
+      },
+      source_path, library_path, "explicit_amr_callback_program");
   if (!compiled.ok) {
-    native_dso::report_compile_failure("explicit_amr_callback_program", compiled);
     throw std::runtime_error("explicit AMR ABI-v5 callback compilation failed");
   }
-  system.install_program(library_path);
+  system.install_program(compiled.library_path);
 #endif
 }
 
@@ -155,10 +143,20 @@ inline void install_explicit_amr_callback_program(
     const std::vector<program_v5::CallbackProgramHistory>& histories = {},
     const std::vector<program_v5::CallbackProgramClockRelation>& clock_relations = {},
     const std::optional<std::vector<pops::runtime::program::ProgramFluxBudgetRecord>>&
-        flux_budgets = std::nullopt) {
-  install_explicit_amr_callback_program<Dim>(system, identity, clock, system.block_names(),
-                                             resources, field_routes, std::move(callback),
-                                             histories, clock_relations, flux_budgets);
+        flux_budgets = std::nullopt,
+    const program_v5::CallbackProgramTransactionAuthorities& transaction_authorities = {},
+    const std::optional<program_v5::CallbackProgramCellTemporalAuthority>& cell_temporal =
+        std::nullopt,
+    const std::vector<program_v5::CallbackProgramFluxBasisOccurrence>& flux_basis_occurrences = {},
+    const std::vector<program_v5::CallbackProgramFaceFluxStage>& face_flux_stages = {},
+    const std::optional<program_v5::CallbackProgramHierarchyTensorAuthority>& hierarchy_tensor =
+        std::nullopt,
+    const std::vector<pops::runtime::system::AuxiliaryConsumerProviderPlan<kNativeDimension>>&
+        auxiliary_consumer_plans = {}) {
+  install_explicit_amr_callback_program<Dim>(
+      system, identity, clock, system.block_names(), resources, field_routes, std::move(callback),
+      histories, clock_relations, flux_budgets, transaction_authorities, cell_temporal,
+      flux_basis_occurrences, face_flux_stages, hierarchy_tensor, auxiliary_consumer_plans);
 }
 
 template <int Dim>
@@ -171,18 +169,53 @@ inline void install_forward_euler_program_execution_services(AmrSystem<Dim>& sys
   const int level_count = system.n_levels();
   if (block_count < 1 || level_count < 1)
     throw std::logic_error("explicit AMR Program requires materialized hierarchy levels");
+  const std::vector<std::string> program_blocks = system.block_names();
+  if (program_blocks.size() != static_cast<std::size_t>(block_count))
+    throw std::logic_error("explicit AMR Program block authority is incomplete");
   std::vector<Resource> resources;
   resources.reserve(static_cast<std::size_t>(block_count * level_count));
+  std::vector<program_v5::CallbackProgramFluxBasisOccurrence> flux_basis_occurrences;
+  std::vector<program_v5::CallbackProgramFaceFluxStage> face_flux_stages;
+  flux_basis_occurrences.reserve(resources.capacity());
+  face_flux_stages.reserve(resources.capacity());
   for (int level = 0; level < level_count; ++level) {
     for (int block = 0; block < block_count; ++block) {
       const auto state = system.prepared_amr_block_state(block, level);
       if (!state)
         throw std::logic_error("explicit AMR Program resource has no materialized block state");
-      resources.push_back({Resource::Kind::rhs, resources.size(), 0, block, level,
-                           static_cast<std::uint32_t>(state->ncomp()),
-                           static_cast<std::uint32_t>(state->ghosts()[0])});
+      const std::size_t slot = resources.size();
+      const int rhs_identity = 3000 + block;
+      const std::string resource_identity = "tests.explicit-amr/forward-euler/rhs/" +
+                                            std::to_string(block) + "/level/" +
+                                            std::to_string(level);
+      Resource resource{Resource::Kind::rhs,
+                        slot,
+                        0,
+                        block,
+                        level,
+                        static_cast<std::uint32_t>(state->ncomp()),
+                        static_cast<std::uint32_t>(state->ghosts()[0])};
+      resource.value_id = static_cast<std::uint64_t>(rhs_identity);
+      resource.identity = resource_identity;
+      resource.occurrence_path = resource_identity + "/occurrence";
+      resource.owner = program_blocks.at(static_cast<std::size_t>(block));
+      resource.clock = "test.clock.macro";
+      resources.push_back(std::move(resource));
+
+      const auto dense_slot = static_cast<std::uint32_t>(slot);
+      flux_basis_occurrences.push_back(
+          {dense_slot, dense_slot, block, level, rhs_identity, 0, 0, 1,
+           resource_identity + "/flux-basis", resource_identity + "/flux-basis/occurrence",
+           program_blocks.at(static_cast<std::size_t>(block)), "test.clock.macro"});
+      face_flux_stages.push_back(
+          {dense_slot, dense_slot, dense_slot, 1, 1, 1, resource_identity + "/face-flux",
+           resource_identity + "/face-flux/occurrence",
+           program_blocks.at(static_cast<std::size_t>(block)), "test.clock.macro"});
     }
   }
+  const std::optional<std::vector<runtime::program::ProgramFluxBudgetRecord>> flux_budgets{
+      std::vector<runtime::program::ProgramFluxBudgetRecord>(static_cast<std::size_t>(block_count),
+                                                             {1, 1, 0, 0})};
 
   install_explicit_amr_callback_program<Dim>(
       system, "tests.explicit-amr/forward-euler@1", "test.clock.macro", resources, {},
@@ -210,7 +243,8 @@ inline void install_forward_euler_program_execution_services(AmrSystem<Dim>& sys
               for (std::size_t block = 0; block < states.size(); ++block)
                 context.axpy(*states[block], Real(level_dt), *residuals[block]);
             });
-      });
+      },
+      {}, {}, flux_budgets, {}, std::nullopt, flux_basis_occurrences, face_flux_stages);
 }
 
 template <int Dim>

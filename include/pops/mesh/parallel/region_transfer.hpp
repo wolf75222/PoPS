@@ -407,11 +407,26 @@ class RegionTransport {
     try {
       pack_jobs_(plan_.local_jobs(), storage_->local_buffer, source);
       for (PeerStorage& peer : storage_->peers)
-        if (peer.send != nullptr) {
+        if (peer.send != nullptr)
           pack_jobs_(peer.send->jobs, peer.device_send, source);
+#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
+      if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, MemorySpace>::accessible) {
+        ::pops::device_fence(execution_fence_label_);
+        for (PeerStorage& peer : storage_->peers)
+          if (peer.send != nullptr)
+            std::copy_n(peer.device_send.data(), peer.send->elements, peer.host_send.data());
+      } else {
+        for (PeerStorage& peer : storage_->peers)
+          if (peer.send != nullptr)
+            Kokkos::deep_copy(peer.host_send, peer.device_send);
+        ::pops::device_fence(execution_fence_label_);
+      }
+#else
+      for (PeerStorage& peer : storage_->peers)
+        if (peer.send != nullptr)
           Kokkos::deep_copy(peer.host_send, peer.device_send);
-        }
-      Kokkos::fence();
+      ::pops::device_fence(execution_fence_label_);
+#endif
     } catch (...) {
       packing_failure = 1;
     }
@@ -432,7 +447,7 @@ class RegionTransport {
       for (PeerStorage& peer : storage_->peers)
         if (peer.receive != nullptr)
           unpack_jobs_(peer.receive->jobs, peer.device_receive, destination);
-      Kokkos::fence();
+      ::pops::device_fence(execution_fence_label_);
     } catch (...) {
       publication_failure = 1;
     }
@@ -548,8 +563,19 @@ class RegionTransport {
                   SourceAccessor& source) const {
     for (const job_type& job : jobs) {
       const KernelJob lowered = lower_(job);
-      Kokkos::parallel_for("pops_region_transfer_pack", execution_policy(0, lowered.elements),
+#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
+      if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, MemorySpace>::accessible) {
+        const PackKernel kernel{buffer, FieldView<const Real, Dim>(source(job)), lowered};
+        for (execution_index_type element = 0; element < lowered.elements; ++element)
+          kernel(element);
+      } else {
+        Kokkos::parallel_for(pack_kernel_label_, execution_policy(0, lowered.elements),
+                             PackKernel{buffer, FieldView<const Real, Dim>(source(job)), lowered});
+      }
+#else
+      Kokkos::parallel_for(pack_kernel_label_, execution_policy(0, lowered.elements),
                            PackKernel{buffer, FieldView<const Real, Dim>(source(job)), lowered});
+#endif
     }
   }
 
@@ -558,8 +584,19 @@ class RegionTransport {
                     DestinationAccessor& destination) const {
     for (const job_type& job : jobs) {
       const KernelJob lowered = lower_(job);
-      Kokkos::parallel_for("pops_region_transfer_unpack", execution_policy(0, lowered.elements),
+#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
+      if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, MemorySpace>::accessible) {
+        const UnpackKernel kernel{buffer, FieldView<Real, Dim>(destination(job)), lowered};
+        for (execution_index_type element = 0; element < lowered.elements; ++element)
+          kernel(element);
+      } else {
+        Kokkos::parallel_for(unpack_kernel_label_, execution_policy(0, lowered.elements),
+                             UnpackKernel{buffer, FieldView<Real, Dim>(destination(job)), lowered});
+      }
+#else
+      Kokkos::parallel_for(unpack_kernel_label_, execution_policy(0, lowered.elements),
                            UnpackKernel{buffer, FieldView<Real, Dim>(destination(job)), lowered});
+#endif
     }
   }
 
@@ -734,10 +771,24 @@ class RegionTransport {
 
     long staging_failure = 0;
     try {
+#if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL)
+      if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, MemorySpace>::accessible) {
+        for (PeerStorage& peer : storage_->peers)
+          if (peer.receive != nullptr)
+            std::copy_n(peer.host_receive.data(), peer.receive->elements, peer.device_receive.data());
+        ::pops::device_fence(execution_fence_label_);
+      } else {
+        for (PeerStorage& peer : storage_->peers)
+          if (peer.receive != nullptr)
+            Kokkos::deep_copy(peer.device_receive, peer.host_receive);
+        ::pops::device_fence(execution_fence_label_);
+      }
+#else
       for (PeerStorage& peer : storage_->peers)
         if (peer.receive != nullptr)
           Kokkos::deep_copy(peer.device_receive, peer.host_receive);
-      Kokkos::fence();
+      ::pops::device_fence(execution_fence_label_);
+#endif
     } catch (...) {
       staging_failure = 1;
     }
@@ -753,6 +804,9 @@ class RegionTransport {
   const ExecutionLane* lane_ = nullptr;
   std::optional<ExecutionLane::ImmutableBorrow> lane_borrow_{};
   std::unique_ptr<PreparedStorage> storage_{};
+  std::string pack_kernel_label_{"pops_region_transfer_pack"};
+  std::string unpack_kernel_label_{"pops_region_transfer_unpack"};
+  std::string execution_fence_label_{"pops.region-transfer.fence"};
   bool remote_any_ = false;
   bool sealed_ = false;
 };

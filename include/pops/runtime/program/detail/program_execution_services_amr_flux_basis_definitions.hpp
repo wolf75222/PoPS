@@ -15,6 +15,12 @@ enum class FluxBasisProvider : std::uint8_t {
   NamedCell = 3,
 };
 
+// A static-history expression keeps its bind-sealed map nodes even when a particular slot has
+// not received a sample yet.  This sentinel marks such a resident image without introducing a
+// dynamic erase/insert path during store or rotation.
+static constexpr std::uint64_t kStaticHistoryFluxInactiveIdentity =
+    std::numeric_limits<std::uint64_t>::max();
+
 struct FluxBasis {
   std::uint64_t identity = 0;
   std::size_t runtime_block = 0;
@@ -24,4 +30,5 @@ struct FluxBasis {
   FluxBasisProvider provider = FluxBasisProvider::PreparedResidual;
   ::pops::amr::ClockWindow window{};
   std::vector<FluxBasisFace> faces;
+  std::size_t face_count = 0;
 };

@@ -22,7 +22,11 @@ from pops.codegen.program_persistent_plan import (
     ProgramResourcePlanEntry,
     lower_program_resource_plan,
 )
-from pops.output._checkpoint_contract import program_persistent_value_checkpoint_capacity
+from pops.output._checkpoint_contract import (
+    ProgramPersistentValueCheckpoint,
+    encode_program_persistent_value_checkpoint,
+    program_persistent_value_checkpoint_capacity,
+)
 
 
 @dataclass(frozen=True)
@@ -90,6 +94,45 @@ def test_occurrences_are_preorder_and_nested_paths_are_canonical() -> None:
         "root/0/true_block/0",
         "root/0/false_block/0",
     ]
+
+
+def test_local_newton_residual_path_omits_only_its_inline_storage_occurrence() -> None:
+    """The same storage operation remains materialized outside ``residual_block``.
+
+    Program values are canonical single-occurrence objects, so this legal graph
+    uses two otherwise equivalent ``source`` occurrences.  The decision must be
+    made from the static path: the inline residual expression gets no slot,
+    while the outer source retains its dense prepared-storage row.
+    """
+
+    inline_source = _Value(3, op="source", name="inline-source")
+    residual_branch = _Value(
+        2,
+        op="branch",
+        attrs={"true_block": (inline_source,), "false_block": ()},
+        name="inline-residual-branch",
+    )
+    local_newton = _Value(
+        1,
+        op="solve_local_nonlinear",
+        attrs={
+            "components": 1,
+            "bytes": 8,
+            "residual_block": (residual_branch,),
+        },
+        name="local-newton",
+    )
+    outer_source = _Value(4, op="source", name="outer-source")
+
+    plan = lower_program_resource_plan(_Program(local_newton, outer_source))
+
+    assert [(row.slot, row.key.value_id, row.key.occurrence_path) for row in plan] == [
+        (0, 1, "root/0"),
+        (1, 4, "root/1"),
+    ]
+    assert plan.slot_for_value(outer_source) == 1
+    with pytest.raises(KeyError, match="needs its full occurrence path"):
+        plan.slot_for_value(inline_source)
 
 
 def test_complete_key_disambiguates_owner_space_clock_and_level() -> None:
@@ -197,6 +240,10 @@ def test_runtime_sized_bytes_are_explicitly_unresolved_until_host_materializatio
     assert row.bytes is None
     assert row.maximum_bytes is None
     assert row.cells is None and row.itemsize is None
+    before = plan.to_data()
+    with pytest.raises(RuntimeError, match="materialized Program resource plan"):
+        program_persistent_value_checkpoint_capacity(plan)
+    assert plan.to_data() == before
 
     with pytest.raises(ValueError, match="unknown"):
         lower_program_resource_plan(
@@ -204,6 +251,112 @@ def test_runtime_sized_bytes_are_explicitly_unresolved_until_host_materializatio
         )
     with pytest.raises(ValueError, match="memory bound"):
         ProgramResourcePlan((_entry(1),), maximum_bytes="unknown")
+
+
+def test_checkpoint_capacity_uses_native_materialization_for_runtime_sized_plan() -> None:
+    key = ProgramPersistentValueKey(1, "root/0", "owner", "space", "clock")
+    symbolic = ProgramResourcePlan(
+        (ProgramResourcePlanEntry(key=key, bytes=None, runtime_sized=True),)
+    )
+    materialized_row = {
+        "slot": 0,
+        "key": {
+            "value_id": 1,
+            "occurrence_path_id": key.occurrence_path_id,
+            "owner": 1,
+            "space": 2,
+            "clock": 3,
+            "level": None,
+        },
+        "identity": "program-resource:v1:materialized-slot-0",
+        "occurrence_path": "root/0",
+        "owner_identity": "owner",
+        "space_identity": "space",
+        "clock_identity": "clock",
+        "lifetime": 2,
+        "centering": 1,
+        "off_policy": 1,
+        "spatial_transfer": 1,
+        "components": 1,
+        "ghosts": 0,
+        "bytes": 8,
+        "maximum_bytes": 32,
+        "communicates": False,
+        "restart_required": False,
+        "communication": "none",
+        "transfer_identity": "none",
+        "restart_identity": "none",
+        "component_names": "[\"value\"]",
+        "shape": "[4]",
+        "cells": 4,
+        "itemsize": 8,
+    }
+    image = ProgramPersistentValueCheckpoint(
+        bound=True,
+        schema="program-persistent-value-checkpoint:v1",
+        plan_schema="program-resource-plan:v1",
+        plan_digest="b" * 64,
+        maximum_bytes=32,
+        slot_count=1,
+        rows=(materialized_row,),
+        metadata=(
+            {
+                "accepted_coordinate": 0,
+                "cursor": 0,
+                "accumulated_dt": 0.0,
+                "topology_epoch": 0,
+                "layout_generation": 0,
+                "valid": False,
+                "cold": True,
+            },
+        ),
+        offsets=(0, 32),
+        value_bytes=(0,),
+        storage=b"\0" * 32,
+    )
+    payload = encode_program_persistent_value_checkpoint(image)
+
+    class Native:
+        def capture_program_persistent_value_checkpoint(self):
+            return payload
+
+    from pops.runtime._checkpoint_resource_budget import _persistent_checkpoint_capacity
+
+    names, payload_capacity, evidence, materialized = _persistent_checkpoint_capacity(
+        symbolic, target="amr_system", native=Native()
+    )
+    assert names
+    assert payload_capacity > len(payload)
+    assert evidence["encoded_capacity"] == len(payload)
+    assert evidence["maximum_bytes"] == 32
+    assert materialized.maximum_bytes == 32
+    assert materialized.digest == "b" * 64
+
+    before = symbolic.to_data()
+    unbound = ProgramPersistentValueCheckpoint(
+        bound=False,
+        schema="program-persistent-value-checkpoint:v1",
+        plan_schema="",
+        plan_digest="",
+        maximum_bytes=0,
+        slot_count=0,
+        rows=(),
+        metadata=(),
+        offsets=(),
+        value_bytes=(),
+        storage=b"",
+    )
+    unbound_payload = encode_program_persistent_value_checkpoint(unbound)
+
+    class UnmaterializableNative:
+        def capture_program_persistent_value_checkpoint(self):
+            return unbound_payload
+
+    with pytest.raises(RuntimeError, match="materialized native Program resource plan"):
+        _persistent_checkpoint_capacity(
+            symbolic, target="amr_system", native=UnmaterializableNative()
+        )
+    assert symbolic.to_data() == before
 
 
 def test_resource_plan_has_one_canonical_surface_and_strict_serialization() -> None:
@@ -314,11 +467,24 @@ def test_symbolic_candidate_serializes_only_the_abi_unknown_sentinel() -> None:
         "system", "", "", "", artifact_identity="a", route_manifest="r",
         program_name="runtime", maximum_bytes=None,
     )
-    assert "descriptor.maximum_bytes = pops::runtime::program::kProgramResourcePlanUnknownExtent;" in install
+    assert (
+        "descriptor.maximum_bytes = "
+        "pops::runtime::program::kProgramResourcePlanUnknownExtent;" in install
+    )
     assert "sizeof(ProgramCandidateState)" not in install
     amr = _emit_amr_candidate_entry_suffix(None)
     assert "descriptor.maximum_bytes = pops::runtime::program::kProgramResourcePlanUnknownExtent;" in amr
     assert "sizeof(ProgramCandidateState)" not in amr
+
+
+def test_empty_value_plan_keeps_its_zero_manifest_but_uses_a_symbolic_descriptor() -> None:
+    plan = ProgramResourcePlan(())
+    assert plan.maximum_bytes == 0
+    install = _emit_system_install(
+        "system", "", "", "", artifact_identity="a", route_manifest="r",
+        program_name="empty", maximum_bytes=None,
+    )
+    assert "descriptor.maximum_bytes = pops::runtime::program::kProgramResourcePlanUnknownExtent;" in install
 
 
 def test_amr_level_schedule_requires_transfer_provider() -> None:
@@ -449,7 +615,7 @@ def test_explicit_exact_layout_without_geometry_is_refused_before_emission() -> 
         lower_program_resource_plan(_Program(value))
 
 
-def test_cache_field_missing_exact_geometry_is_runtime_sized_without_dummy_bytes() -> None:
+def test_field_solve_alias_is_omitted_without_a_materialized_slot() -> None:
     value = _Value(
         4,
         op="solve_fields",
@@ -459,10 +625,11 @@ def test_cache_field_missing_exact_geometry_is_runtime_sized_without_dummy_bytes
         },
     )
     plan = lower_program_resource_plan(_Program(value))
-    assert plan.entries[0].runtime_sized is True
-    assert plan.entries[0].bytes is None
-    assert plan.entries[0].maximum_bytes is None
-    assert plan.entries[0].bytes != 8
+    # ``solve_fields(state)`` refreshes the provider-owned auxiliary field and
+    # then aliases its input state.  It emits neither ``prepare_*`` nor a
+    # dense route token, so retaining it as a runtime-sized resource would
+    # leave host materialization with an intentionally unprimed slot.
+    assert plan.entries == ()
 
 
 def test_reachability_excludes_dead_matrix_free_operator_but_retains_indirect_consumer() -> None:

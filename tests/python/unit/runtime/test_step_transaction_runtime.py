@@ -92,6 +92,7 @@ class _Native:
             "cache": self.cache,
             "history": self.history,
             "diagnostics": self.diagnostics,
+            "executed_step_projections": self._executed_step_projections,
         })
 
     def _mutate_provisional_stores(self, dt):
@@ -160,6 +161,7 @@ class _Native:
         self.cache = accepted["cache"]
         self.history = accepted["history"]
         self.diagnostics = accepted["diagnostics"]
+        self._executed_step_projections = accepted["executed_step_projections"]
         self._accepted = None
         self._committed = False
         self.events.append("rollback")
@@ -280,7 +282,7 @@ def test_accepted_step_freezes_consumer_payload_before_hidden_publish_without_la
     runtime._accepted_step_transaction(lambda: (native.step(0.25), 1))
 
     assert runtime.scope_observations == [("stage", True), ("accept", False)]
-    assert native.scope_events == ["enter", "exit"]
+    assert native.scope_events == ["enter", "exit", "enter", "exit"]
 
 
 def test_accepted_step_refuses_a_native_executor_without_provisional_read_scope():
@@ -294,6 +296,71 @@ def test_accepted_step_refuses_a_native_executor_without_provisional_read_scope(
     assert native.events == ["begin", "rollback"]
     assert native.time() == 0.0
     assert runtime.consumer_cursors.rows == ()
+
+
+def test_accepted_controller_scopes_pre_and_post_attempt_clock_reads() -> None:
+    class CandidateClockNative(_Native):
+        def __init__(self) -> None:
+            super().__init__()
+            self.candidate_active = False
+
+        def time(self):
+            if self.candidate_active and not self.scope_active:
+                raise RuntimeError("candidate clock read requires an explicit provisional scope")
+            return super().time()
+
+        def macro_step(self):
+            if self.candidate_active and not self.scope_active:
+                raise RuntimeError("candidate clock read requires an explicit provisional scope")
+            return super().macro_step()
+
+        def _begin_step_transaction(self):
+            super()._begin_step_transaction()
+            self.candidate_active = True
+
+        def _finalize_step_transaction(self):
+            super()._finalize_step_transaction()
+            self.candidate_active = False
+
+        def _rollback_step_transaction(self):
+            super()._rollback_step_transaction()
+            self.candidate_active = False
+
+    native = CandidateClockNative()
+    runtime = _Runtime(native)
+
+    report = runtime._accepted_controller_step(
+        native, native, FixedDt(0.125), t_end=0.125, controls={}
+    )
+
+    assert report.attempts == 1
+    assert (native.time(), native.macro_step()) == (0.125, 1)
+    # The first pair covers ``_native_attempt`` pre/post reads; the second is consumer staging.
+    assert native.scope_events == ["enter", "exit", "enter", "exit"]
+
+    standalone = CandidateClockNative()
+    standalone_strategy = FixedDt(0.125)
+    standalone._step_strategy = standalone_strategy
+    standalone._step_transaction_plan.strategy = standalone_strategy
+    direct = prepare_program_run(standalone).run_step(standalone, t_end=0.125)
+    assert direct.attempts == 1
+    assert standalone.scope_events == []
+    assert (standalone.time(), standalone.macro_step()) == (0.125, 1)
+
+
+@pytest.mark.parametrize("scope", (None, lambda: object()))
+def test_accepted_controller_fails_closed_for_missing_or_malformed_candidate_scope(scope) -> None:
+    native = _Native()
+    native._provisional_read_scope = scope
+    runtime = _Runtime(native)
+
+    with pytest.raises((RuntimeError, TypeError), match="_provisional_read_scope"):
+        runtime._accepted_controller_step(
+            native, native, FixedDt(0.125), t_end=0.125, controls={}
+        )
+
+    assert native.events == ["begin", "rollback"]
+    assert (native.time(), native.macro_step()) == (0.0, 0)
 
 
 def test_multi_layout_provisional_scopes_enter_in_layout_order_and_unwind_in_reverse():

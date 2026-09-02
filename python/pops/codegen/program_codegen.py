@@ -340,7 +340,7 @@ def _emit_cpp_program_impl(
     from pops.codegen.program_emit_kernels import ProgramProviderPlans
 
     provider_plans = ProgramProviderPlans()
-    prelude, body, post_synchronization, operator_authorities = _emit_body(
+    prelude_sections, body, post_synchronization, operator_authorities = _emit_body(
         program,
         authority,
         target=target,
@@ -349,7 +349,7 @@ def _emit_cpp_program_impl(
         has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
         provider_plans=provider_plans,
     )
-    _validate_resource_slot_calls(prelude, resource_plan)
+    _validate_resource_slot_calls(prelude_sections.render_uniform(), resource_plan)
     _validate_resource_slot_calls(body, resource_plan)
     persistent_manifest = render_temporal_manifest(
         program, target=target, plan=resource_plan)
@@ -358,7 +358,10 @@ def _emit_cpp_program_impl(
     field_boundary_helpers = emit_field_boundaries(
         program, authority, field_plans or {}, target)
     if field_boundary_helpers:
-        prelude = "  program_candidate_prepare_field_boundaries(ctx);\n" + prelude
+        prelude_sections.prepend_global_install(
+            "program_candidate_prepare_field_boundaries(ctx);"
+        )
+    prelude = prelude_sections.render_uniform()
     from pops.runtime.routes import route_registry_signature
 
     amr_body = (
@@ -382,7 +385,7 @@ def _emit_cpp_program_impl(
     amr_install = _emit_amr_install(
         program,
         target,
-        prelude,
+        prelude_sections,
         body,
         amr_body,
         provider_plans.cpp_install(target),
@@ -390,7 +393,9 @@ def _emit_cpp_program_impl(
         artifact_identity=program._ir_hash(),
         route_manifest=route_registry_signature(),
         program_name=program.name,
-        maximum_bytes=resource_plan.maximum_bytes,
+        # Host-only prepared carriers are runtime-shaped even when generated value rows are
+        # exact, so their aggregate cannot be a DSO descriptor ceiling.
+        maximum_bytes=None,
     )
     # Keep AMR's dedicated install emitter as the source of its lifecycle hooks,
     # while replacing its fixed marker with the authenticated manifest payload.
@@ -422,12 +427,62 @@ def _emit_cpp_program_impl(
             route_manifest=route_registry_signature(),
             program_name=program.name,
             persistent_manifest=persistent_manifest,
-            maximum_bytes=resource_plan.maximum_bytes,
+            # Generated rows retain their exact manifest; the descriptor remains symbolic until
+            # host preparation materializes every detached carrier family.
+            maximum_bytes=None,
         ),
         prepared_native_component_includes=_prepared_native_component_includes(program),
         block_inverse_include=_block_inverse_include(program),
         amr_install=amr_install,
     )
+
+
+def _program_checkpoint_rows(program: Any, block_indices: dict[Any, int]) -> list[tuple[Any, ...]]:
+    """Return the exact checkpoint rows consumed by the detached native prelude.
+
+    The POD checkpoint table and ``ctx.register_history`` describe one authority.  In particular,
+    the table must not replace the authored clock, state or interpolation identities with historical
+    capacity-only placeholders: the host compares these rows with the detached accepted image before
+    publishing the Program.
+    """
+    history_manifest = {
+        row["name"]: row for row in program.temporal_manifest()["histories"]
+    }
+    histories_ncomp = getattr(program, "_histories_ncomp", {})
+    rows = []
+    for name, lag in sorted(getattr(program, "_histories", {}).items()):
+        owner = getattr(program, "_history_blocks", {}).get(name)
+        owner_index = block_indices.get(owner, -1)
+        state_ref = getattr(program, "_history_state_refs", {}).get(name)
+        state_identity = (
+            state_ref.qualified_id
+            if state_ref is not None
+            else "scalar-history:" + str(name)
+        )
+        space = getattr(program, "_history_spaces", {}).get(name)
+        space_identity = (
+            json.dumps(space.to_data(), sort_keys=True, separators=(",", ":"))
+            if space is not None
+            else "scalar-field"
+        )
+        manifest = history_manifest[str(name)]
+        interpolation = json.dumps(
+            manifest["interpolation"], sort_keys=True, separators=(",", ":")
+        )
+        ncomp = histories_ncomp.get(name)
+        rows.append(
+            (
+                str(name),
+                str(state_identity),
+                str(space_identity),
+                str(manifest["clock"]),
+                interpolation,
+                int(owner_index),
+                -1 if ncomp is None else int(ncomp),
+                int(lag) + 1,
+            )
+        )
+    return rows
 
 
 def _emit_candidate_tables(
@@ -457,28 +512,25 @@ def _emit_candidate_tables(
         for name, (depth, policy) in sorted((getattr(program, "_history_persistence", None) or {}).items())
         if not policy.degenerate_to_dense(depth)
     ]
-    checkpoints = []
-    for name, lag in sorted(getattr(program, "_histories", {}).items()):
-        owner = getattr(program, "_history_blocks", {}).get(name)
-        owner_index = block_indices.get(owner, -1)
-        space = getattr(program, "_history_spaces", {}).get(name)
-        space_identity = (
-            json.dumps(space.to_data(), sort_keys=True, separators=(",", ":"))
-            if space is not None
-            else "scalar-field"
-        )
-        checkpoints.append((
-            "history:" + str(name), str(owner or "global"), str(space_identity), "clock.macro",
-            "declared-transfer", int(owner_index), -1, int(lag) + 1,
-        ))
+    checkpoints = _program_checkpoint_rows(program, block_indices)
     # A fixed row per block makes zero an explicit bound.  AMR carries the exact frozen-IR basis
     # and coefficient limits in the candidate, rather than exposing one accessor per bound.
     if target == "amr_system":
-        from pops.codegen.program_emit_amr import _flux_expression_budgets
-        flux = [(int(rhs), int(coefficients), 0, 0)
-                for rhs, coefficients in _flux_expression_budgets(program)]
+        from pops.codegen.program_flux_lowering import flux_table_budgets, lower_amr_flux_tables
+        if program.cell_local_time_contract() is not None:
+            # ExactFace is consumed by the cell-temporal executor, not the ordinary two-table
+            # materializer.  Do not declare a non-zero host budget without a final consumer.
+            flux = [(0, 0, 0, 0) for _ in blocks]
+            flux_basis_occurrences, face_flux_stages = (), ()
+        else:
+            flux_basis_occurrences, face_flux_stages = lower_amr_flux_tables(program, plan)
+            flux = [(*bounds, 0, 0) for bounds in flux_table_budgets(
+                len(blocks), flux_basis_occurrences, face_flux_stages
+            )]
     else:
         flux = [(0, 0, 0, 0) for _ in blocks]
+        flux_basis_occurrences = ()
+        face_flux_stages = ()
     resource = plan.abi_rows()
     boundary_routes = [(route_manifest, "boundary-manifest", 0)]
     provider_routes = [(route_manifest, "provider-manifest", 0)]
@@ -573,6 +625,28 @@ def _emit_candidate_tables(
     table(
         "kProgramCandidateFluxBudgets", "ProgramFluxBudgetRecord",
         ["{UINT64_C(%d), UINT64_C(%d), UINT64_C(%d), UINT64_C(%d)}" % row for row in flux],
+    )
+    table(
+        "kProgramCandidateFluxBasisOccurrences", "ProgramFluxBasisOccurrenceRecord",
+        ["{sizeof(pops::runtime::program::ProgramFluxBasisOccurrenceRecord), "
+         "pops::runtime::program::kProgramFluxBasisOccurrenceSchemaVersion, "
+         "%d, %d, %d, %d, %d, %d, INT64_C(%d), INT64_C(%d), %s, %s, %s, %s}" % (
+             slot, expression_slot, block, level, rhs_identity, provider, stage_numerator,
+             stage_denominator, literal(identity), literal(occurrence_path), literal(owner), literal(clock),
+         ) for slot, expression_slot, block, level, rhs_identity, provider, stage_numerator,
+         stage_denominator, identity, occurrence_path, owner, clock in flux_basis_occurrences],
+    )
+    table(
+        "kProgramCandidateFaceFluxStages", "ProgramFaceFluxStageRecord",
+        ["{sizeof(pops::runtime::program::ProgramFaceFluxStageRecord), "
+         "pops::runtime::program::kProgramFaceFluxStageSchemaVersion, %d, %d, %d, "
+         "%d, INT64_C(%d), INT64_C(%d), %s, %s, %s, %s}" % (
+             slot, basis_slot, expression_slot, dt_power, coefficient_numerator,
+             coefficient_denominator,
+             literal(identity), literal(occurrence_path), literal(owner), literal(clock),
+         ) for slot, basis_slot, expression_slot, dt_power, coefficient_numerator,
+         coefficient_denominator, identity,
+         occurrence_path, owner, clock in face_flux_stages],
     )
     table(
         "kProgramCandidateResourcePlan", "ProgramResourcePlanRecord",
@@ -683,9 +757,29 @@ def _emit_system_install(
         "  std::function<void(double)> step;\n"
         "};\n"
         "\n"
+        "struct ProgramStepRejectSentinel final : pops::runtime::program::ProgramStepRejectSignal {\n"
+        "  using ProgramStepRejectSignal::ProgramStepRejectSignal;\n"
+        "};\n"
+        "struct ProgramStepRejectPublishFailure final {};\n"
+        "template <class Context>\n"
+        "[[noreturn]] void program_reject_step(Context& ctx, pops::SolveStatus status,\n"
+        "                                      pops::runtime::program::StepAttemptDisposition disposition,\n"
+        "                                      std::uint32_t reason_code, std::string_view phase,\n"
+        "                                      std::string_view detail = {}) {\n"
+        "  pops::runtime::program::ProgramStepRejectRecord record{};\n"
+        "  if (!ctx.publish_step_attempt_rejection(status, disposition, reason_code, phase, detail, record))\n"
+        "    throw ProgramStepRejectPublishFailure{};\n"
+        "  throw ProgramStepRejectSentinel{record};\n"
+        "}\n"
+        "\n"
         "void program_candidate_step(void* opaque, double dt) {\n"
         "  auto* state = static_cast<ProgramCandidateState*>(opaque);\n"
-        "  state->step(dt);\n"
+        "  try {\n"
+        "    state->step(dt);\n"
+        "  } catch (const pops::runtime::program::ProgramStepRejectSignal& signal) {\n"
+        "    if (!state->ctx_owner->adopt_step_attempt_rejection(signal.record))\n"
+        "      throw ProgramStepRejectPublishFailure{};\n"
+        "  }\n"
         "}\n"
         "\n"
         "void program_candidate_destroy(void* opaque) noexcept {\n"
@@ -754,6 +848,10 @@ def _emit_system_install(
         "      ctx.begin_step(dt);\n" + body + "\n"
         "    };\n"
         "    return true;\n"
+        "  } catch (const std::exception& exc) {\n"
+        "    write_program_install_diagnostic(diagnostic, ProgramInstallErrorCode::artifact_rejected,\n"
+        "                                     exc.what());\n"
+        "    return false;\n"
         "  } catch (...) {\n"
         "    write_program_install_diagnostic(diagnostic, ProgramInstallErrorCode::artifact_rejected,\n"
         "                                     \"Program candidate preparation failed\");\n"
@@ -805,6 +903,8 @@ def _emit_system_install(
         "    descriptor.history_authorities = kProgramCandidateHistoryAuthorities;\n"
         "    descriptor.checkpoint_shape = kProgramCandidateCheckpointShape;\n"
         "    descriptor.flux_budgets = kProgramCandidateFluxBudgets;\n"
+        "    descriptor.flux_basis_occurrences = kProgramCandidateFluxBasisOccurrences;\n"
+        "    descriptor.face_flux_stages = kProgramCandidateFaceFluxStages;\n"
         "    descriptor.resource_plan = kProgramCandidateResourcePlan;\n"
         "    descriptor.boundary_routes = kProgramCandidateBoundaryRoutes;\n"
         "    descriptor.provider_routes = kProgramCandidateProviderRoutes;\n"

@@ -1,4 +1,6 @@
 """v5 candidate-table module records emitted into the single Program artifact."""
+import json
+
 from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.module_lowering import lower_and_validate
 from pops.codegen.program_codegen import emit_cpp_program
@@ -69,6 +71,23 @@ def _emit(program, model):
         program, model=_lowered_emit_model(model), field_plans={field.local_id: plan})
 
 
+def _state_step_lambda_body(source):
+    """Extract the sole candidate ``state->step`` lambda, excluding descriptor setup."""
+
+    marker = "state->step = [ctx_owner = state->ctx_owner](double dt) {"
+    assert source.count(marker) == 1
+    start = source.index(marker) + len(marker) - 1
+    depth = 0
+    for index in range(start, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start + 1:index]
+    raise AssertionError("unterminated candidate state->step lambda")
+
+
 def test_module_records_are_emitted_in_the_candidate_table():
     m = _model()
     state, fields = _program_inputs(m)
@@ -100,7 +119,7 @@ def test_module_records_are_not_referenced_by_the_step_body():
         state, fields=fields,
         explicit=_op(m, "explicit_rhs"), implicit=_op(m, "lorentz"))
     src = _emit(P, m)
-    body = src.split("pops_install_program", 1)[1]
+    body = _state_step_lambda_body(src)
     assert "kProgramCandidateModule" not in body, \
         "candidate module records must not be referenced in the hot step body"
     print("OK  candidate module records are install-time only")
@@ -119,7 +138,12 @@ def test_no_model_emits_empty_candidate_module_tables():
         ),
     )
     src = emit_cpp_program(P, model=None)
-    assert "kProgramCandidateModuleOperators[] = {}" in src
+    for table in (
+        "kProgramCandidateModuleOperators",
+        "kProgramCandidateModuleStateSpaces",
+        "kProgramCandidateModuleFieldSpaces",
+    ):
+        assert "ProgramAbiTable %s{};" % table in src
     print("OK  model=None emits empty v5 candidate module tables")
 
 
@@ -154,6 +178,9 @@ def test_module_records_include_every_declared_space_for_one_owner():
     assert len(operators) == 0
     assert {row[0] for row in states} == {"fluid", "tracer"}
     assert {row[0] for row in fields} == {"electrostatic", "magnetic"}
+    for _, _, signature, _, _ in (*states, *fields):
+        assert signature
+        assert json.dumps(json.loads(signature), sort_keys=True, separators=(",", ":")) == signature
 
 
 def main():

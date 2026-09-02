@@ -211,7 +211,19 @@ void prove_prepared_multiblock_hierarchy() {
   prepared.seal_couplings();
   EXPECT_FALSE(prepared.coupling_registry_contract().empty());
 
-  EXPECT_EQ(prepared.apply_and_publish_level(0, pops::Real(0.4)), 1U);
+  const std::vector<std::string> canonical_order{"ion", "neutral"};
+  const auto canonical_map = prepared.prepare_program_block_map(canonical_order);
+  MultiFab<Dim> canonical_ion_candidate(prepared.state(0, 0));
+  MultiFab<Dim> canonical_neutral_candidate(prepared.state(1, 0));
+  std::vector<MultiFab<Dim>*> canonical_candidates{&canonical_ion_candidate,
+                                                   &canonical_neutral_candidate};
+  const pops::runtime::multiblock::BoundaryEvaluationPoint point{
+      "test.prepared-multiblock-amr.direct", 0, 0, 0, 0, {0, 1}, 0.4, 0.0, {}, {}, {}};
+  prepared.capture_resident_rollback();
+  EXPECT_EQ(prepared.apply_program_candidates(canonical_map, 0, pops::Real(0.4),
+                                              canonical_candidates, point, nullptr),
+            1U);
+  prepared.publish_resident_program_candidates(canonical_map, 0, canonical_candidates);
   EXPECT_EQ(pops::reduce_min_local(prepared.state(0, 0)), pops::Real(0.9));
   EXPECT_EQ(pops::reduce_max_local(prepared.state(0, 0)), pops::Real(0.9));
   EXPECT_EQ(pops::reduce_min_local(prepared.state(1, 0)), pops::Real(3.1));
@@ -223,10 +235,10 @@ void prove_prepared_multiblock_hierarchy() {
   MultiFab<Dim> neutral_candidate(prepared.state(1, 0));
   MultiFab<Dim> ion_candidate(prepared.state(0, 0));
   std::vector<MultiFab<Dim>*> reverse_candidates{&neutral_candidate, &ion_candidate};
-  const pops::runtime::multiblock::BoundaryEvaluationPoint point{
+  const pops::runtime::multiblock::BoundaryEvaluationPoint reverse_point{
       "test.prepared-multiblock-amr.direct", 0, 0, 0, 0, {0, 1}, 0.1, 0.0, {}, {}, {}};
   EXPECT_EQ(prepared.apply_program_candidates(reverse_map, 0, pops::Real(0.1), reverse_candidates,
-                                              point, nullptr),
+                                              reverse_point, nullptr),
             1U);
   EXPECT_NEAR(pops::reduce_min_local(ion_candidate), pops::Real(0.8775), 1e-14);
   EXPECT_NEAR(pops::reduce_min_local(neutral_candidate), pops::Real(3.1225), 1e-14);
@@ -235,14 +247,46 @@ void prove_prepared_multiblock_hierarchy() {
   auto forged_map = reverse_map;
   forged_map.exact_contract += "forged";
   EXPECT_THROW(prepared.apply_program_candidates(forged_map, 0, pops::Real(0.1), reverse_candidates,
-                                                 point, nullptr),
+                                                 reverse_point, nullptr),
                std::exception);
 
-  EXPECT_THROW(prepared.apply_and_publish_level(0, pops::Real(0.8)), std::runtime_error);
+  MultiFab<Dim> rejected_ion_candidate(prepared.state(0, 0));
+  MultiFab<Dim> rejected_neutral_candidate(prepared.state(1, 0));
+  std::vector<MultiFab<Dim>*> rejected_candidates{&rejected_ion_candidate,
+                                                  &rejected_neutral_candidate};
+  const pops::runtime::multiblock::BoundaryEvaluationPoint rejection_point{
+      "test.prepared-multiblock-amr.direct", 0, 0, 0, 0, {0, 1}, 0.8, 0.0, {}, {}, {}};
+  EXPECT_THROW(prepared.apply_program_candidates(canonical_map, 0, pops::Real(0.8),
+                                                 rejected_candidates, rejection_point, nullptr),
+               std::runtime_error);
   EXPECT_EQ(pops::reduce_min_local(prepared.state(0, 0)), pops::Real(0.9));
   EXPECT_EQ(pops::reduce_max_local(prepared.state(1, 0)), pops::Real(3.1));
   EXPECT_EQ(prepared.accepted_revision(), 1U)
       << "a failed device provider never publishes a partial block pack";
+
+  // The public assembler reaches this provider hook after coupling seal.  A failed candidate
+  // installation must leave the sealed no-interface workspace intact; a successful one rebuilds
+  // the prebound RHS arena before swapping the scheduler into the resident authority.
+  pops::RealVector<Dim> physical_lower{};
+  pops::RealVector<Dim> physical_upper{};
+  for (int axis = 0; axis < Dim; ++axis)
+    physical_upper[axis] = pops::Real(1);
+  const auto interface_geometry =
+      pops::Geometry<Dim>::from_bounds(domain, physical_lower, physical_upper);
+  const std::string before_interface_contract(prepared.interface_flux_provider_contract());
+  EXPECT_THROW(
+      prepared.install_interface_flux_provider(
+          "test.prepared-multiblock-amr.post-seal-refused.v1", interface_geometry,
+          [](auto&) { throw std::runtime_error("deliberate interface installer failure"); }),
+      std::runtime_error);
+  EXPECT_EQ(prepared.interface_flux_provider_contract(), before_interface_contract);
+  EXPECT_FALSE(prepared.has_interface_flux_provider());
+  EXPECT_TRUE(prepared.resident_coupling_workspace_bound());
+  prepared.install_interface_flux_provider("test.prepared-multiblock-amr.post-seal.v1",
+                                           interface_geometry, [](auto&) {});
+  EXPECT_FALSE(prepared.interface_flux_provider_contract().empty());
+  EXPECT_FALSE(prepared.has_interface_flux_provider());
+  EXPECT_TRUE(prepared.resident_coupling_workspace_bound());
 
   const std::string coarse_coupling_contract(prepared.coupling_registry_contract());
 
@@ -268,16 +312,56 @@ void prove_prepared_multiblock_hierarchy() {
   children.emplace_back(std::move(primary_child));
   children.emplace_back(std::move(secondary_child));
   typename MultiBlock::PreparedRegridTransactionStack regrid_stack(2);
-  regrid_stack.execute_and_publish(
+  const std::string accepted_coarse_contract(prepared.collective_contract());
+  regrid_stack.execute_and_stage(
       prepared.prepare_regrid_transaction(0, std::move(regrid), std::move(children)));
   ASSERT_EQ(regrid_stack.published_transitions(), 1U);
   ASSERT_TRUE(regrid_stack.transaction(0).changes_topology());
-  ASSERT_TRUE(regrid_stack.transaction(0).candidate_published());
+  ASSERT_FALSE(regrid_stack.transaction(0).candidate_published());
   ASSERT_FALSE(regrid_stack.transaction(0).inverse_consumed());
 
-  ASSERT_EQ(prepared.level_count(), 2U);
+  // The accepted carrier remains untouched while the second transition is prepared from the
+  // first transaction's unpublished forward topology.
+  ASSERT_EQ(prepared.level_count(), 1U);
+  EXPECT_EQ(prepared.collective_contract(), accepted_coarse_contract);
+  auto second_regrid = [&] {
+    auto forward = regrid_stack.latest_forward_topology();
+    return prepared.topology_runtime().prepare_regrid_from_snapshot(
+        forward.snapshot().primary, 1, ratio,
+        cluster_result(forward.hierarchy().layout(1),
+                       forward.hierarchy().layout(1).patches().boxes()),
+        regridding::RegridPreparationBudget{.clustered_parent_layout = kLayoutBudget,
+                                            .fine_layout = kLayoutBudget,
+                                            .load_balance = kLoadBalanceBudget},
+        prepared.lane());
+  }();
+  ASSERT_TRUE(second_regrid.fine_layout());
+  MultiFab<Dim> second_primary_child(second_regrid.fine_layout()->patches(),
+                                     second_regrid.fine_layout()->distribution(), local_rank, 1,
+                                     Extent<Dim>{});
+  MultiFab<Dim> second_secondary_child(second_regrid.fine_layout()->patches(),
+                                       second_regrid.fine_layout()->distribution(), local_rank, 1,
+                                       Extent<Dim>{});
+  second_primary_child.set_val(pops::Real(11));
+  second_secondary_child.set_val(pops::Real(13));
+  std::vector<std::optional<MultiFab<Dim>>> second_children;
+  second_children.emplace_back(std::move(second_primary_child));
+  second_children.emplace_back(std::move(second_secondary_child));
+  regrid_stack.prepare_and_stage_successor(1, std::move(second_regrid), std::move(second_children));
+  ASSERT_EQ(regrid_stack.published_transitions(), 2U);
+  ASSERT_FALSE(regrid_stack.transaction(1).candidate_published());
+  EXPECT_EQ(prepared.level_count(), 1U)
+      << "both forward transitions remain private until their grouped publication";
+  EXPECT_EQ(prepared.collective_contract(), accepted_coarse_contract);
+
+  regrid_stack.publish_staged_noexcept();
+  ASSERT_TRUE(regrid_stack.transaction(0).candidate_published());
+  ASSERT_TRUE(regrid_stack.transaction(1).candidate_published());
+  ASSERT_EQ(prepared.level_count(), 3U);
   EXPECT_EQ(pops::reduce_min_local(prepared.state(0, 1)), pops::Real(5));
   EXPECT_EQ(pops::reduce_min_local(prepared.state(1, 1)), pops::Real(7));
+  EXPECT_EQ(pops::reduce_min_local(prepared.state(0, 2)), pops::Real(11));
+  EXPECT_EQ(pops::reduce_min_local(prepared.state(1, 2)), pops::Real(13));
   EXPECT_EQ(prepared.state(0, 1).layout(), prepared.state(1, 1).layout());
   EXPECT_EQ(prepared.state(0, 1).distribution(), prepared.state(1, 1).distribution());
   EXPECT_NE(prepared.coupling_registry_contract(), coarse_coupling_contract)
@@ -334,36 +418,6 @@ void prove_prepared_multiblock_hierarchy() {
   budget_stack.reset_for_next_candidate_noexcept();
   EXPECT_EQ(prepared.collective_contract(), first_candidate_contract);
 
-  // A three-level hierarchy publishes two distinct prepared transitions in one candidate and
-  // then restores them LIFO.  No transition has a global singleton budget: the cold-bound stack
-  // owns exactly the finite maximum supplied by the enclosing step authority.
-  auto second_regrid = prepared.topology_runtime().prepare_regrid(
-      1, ratio,
-      cluster_result(prepared.topology_runtime().hierarchy().layout(1),
-                     prepared.topology_runtime().hierarchy().layout(1).patches().boxes()),
-      regridding::RegridPreparationBudget{.clustered_parent_layout = kLayoutBudget,
-                                          .fine_layout = kLayoutBudget,
-                                          .load_balance = kLoadBalanceBudget},
-      prepared.lane());
-  ASSERT_TRUE(second_regrid.fine_layout());
-  MultiFab<Dim> second_primary_child(second_regrid.fine_layout()->patches(),
-                                     second_regrid.fine_layout()->distribution(), local_rank, 1,
-                                     Extent<Dim>{});
-  MultiFab<Dim> second_secondary_child(second_regrid.fine_layout()->patches(),
-                                       second_regrid.fine_layout()->distribution(), local_rank, 1,
-                                       Extent<Dim>{});
-  second_primary_child.set_val(pops::Real(11));
-  second_secondary_child.set_val(pops::Real(13));
-  std::vector<std::optional<MultiFab<Dim>>> second_children;
-  second_children.emplace_back(std::move(second_primary_child));
-  second_children.emplace_back(std::move(second_secondary_child));
-  regrid_stack.execute_and_publish(
-      prepared.prepare_regrid_transaction(1, std::move(second_regrid), std::move(second_children)));
-  ASSERT_EQ(regrid_stack.published_transitions(), 2U);
-  ASSERT_EQ(prepared.level_count(), 3U);
-  EXPECT_EQ(pops::reduce_min_local(prepared.state(0, 2)), pops::Real(11));
-  EXPECT_EQ(pops::reduce_min_local(prepared.state(1, 2)), pops::Real(13));
-
   auto invalid_snapshot = prepared.snapshot();
   invalid_snapshot.additional[0].identity = "another-block";
   EXPECT_THROW(prepared.restore(invalid_snapshot), std::exception);
@@ -392,9 +446,9 @@ void prove_prepared_multiblock_hierarchy() {
   EXPECT_EQ(pops::reduce_min_local(prepared.state(1, 0)), pops::Real(3.1));
   EXPECT_EQ(prepared.coupling_registry_contract(), coarse_coupling_contract);
 
-  // Rollback keeps the cold capacity, so an identical retry may be accepted and retired. A later
-  // transition proves that acceptance clears consumed authorities without exhausting the next
-  // candidate's finite budget.
+  // Rollback keeps the cold capacity, so the same cumulative candidate may be retried and
+  // retired. A later transition proves that acceptance clears consumed authorities without
+  // exhausting the next candidate's finite budget.
   regrid_stack.reset_for_next_candidate_noexcept();
   EXPECT_EQ(regrid_stack.published_transitions(), 0U);
   auto retry_regrid = prepared.topology_runtime().prepare_regrid(
@@ -416,16 +470,42 @@ void prove_prepared_multiblock_hierarchy() {
   std::vector<std::optional<MultiFab<Dim>>> retry_children;
   retry_children.emplace_back(std::move(retry_primary));
   retry_children.emplace_back(std::move(retry_secondary));
-  regrid_stack.execute_and_publish(
+  regrid_stack.execute_and_stage(
       prepared.prepare_regrid_transaction(0, std::move(retry_regrid), std::move(retry_children)));
+  auto retry_second_regrid = [&] {
+    auto forward = regrid_stack.latest_forward_topology();
+    return prepared.topology_runtime().prepare_regrid_from_snapshot(
+        forward.snapshot().primary, 1, ratio,
+        cluster_result(forward.hierarchy().layout(1),
+                       forward.hierarchy().layout(1).patches().boxes()),
+        regridding::RegridPreparationBudget{.clustered_parent_layout = kLayoutBudget,
+                                            .fine_layout = kLayoutBudget,
+                                            .load_balance = kLoadBalanceBudget},
+        prepared.lane());
+  }();
+  ASSERT_TRUE(retry_second_regrid.fine_layout());
+  MultiFab<Dim> retry_second_primary(retry_second_regrid.fine_layout()->patches(),
+                                     retry_second_regrid.fine_layout()->distribution(), local_rank,
+                                     1, Extent<Dim>{});
+  MultiFab<Dim> retry_second_secondary(retry_second_regrid.fine_layout()->patches(),
+                                       retry_second_regrid.fine_layout()->distribution(),
+                                       local_rank, 1, Extent<Dim>{});
+  retry_second_primary.set_val(pops::Real(11));
+  retry_second_secondary.set_val(pops::Real(13));
+  std::vector<std::optional<MultiFab<Dim>>> retry_second_children;
+  retry_second_children.emplace_back(std::move(retry_second_primary));
+  retry_second_children.emplace_back(std::move(retry_second_secondary));
+  regrid_stack.prepare_and_stage_successor(1, std::move(retry_second_regrid),
+                                           std::move(retry_second_children));
+  regrid_stack.publish_staged_noexcept();
   EXPECT_EQ(prepared.collective_contract(), first_candidate_contract);
   regrid_stack.discard_after_accept_noexcept();
   EXPECT_EQ(regrid_stack.published_transitions(), 0U);
 
   auto post_accept_regrid = prepared.topology_runtime().prepare_regrid(
-      1, ratio,
-      cluster_result(prepared.topology_runtime().hierarchy().layout(1),
-                     prepared.topology_runtime().hierarchy().layout(1).patches().boxes()),
+      2, ratio,
+      cluster_result(prepared.topology_runtime().hierarchy().layout(2),
+                     prepared.topology_runtime().hierarchy().layout(2).patches().boxes()),
       regridding::RegridPreparationBudget{.clustered_parent_layout = kLayoutBudget,
                                           .fine_layout = kLayoutBudget,
                                           .load_balance = kLoadBalanceBudget},
@@ -442,11 +522,142 @@ void prove_prepared_multiblock_hierarchy() {
   post_accept_children.emplace_back(std::move(post_accept_primary));
   post_accept_children.emplace_back(std::move(post_accept_secondary));
   regrid_stack.execute_and_publish(prepared.prepare_regrid_transaction(
-      1, std::move(post_accept_regrid), std::move(post_accept_children)));
-  EXPECT_EQ(prepared.level_count(), 3U);
+      2, std::move(post_accept_regrid), std::move(post_accept_children)));
+  EXPECT_EQ(prepared.level_count(), 4U);
   regrid_stack.publish_inverse_lifo_noexcept();
   regrid_stack.reset_for_next_candidate_noexcept();
-  EXPECT_EQ(prepared.level_count(), 2U);
+  EXPECT_EQ(prepared.level_count(), 3U);
+}
+
+template <int Dim>
+void install_sealed_exchange_coupling(
+    pops::runtime::amr::PreparedMultiBlockAmrHierarchy<Dim>& hierarchy) {
+  pops::CouplingOperatorView view;
+  view.label = "conservative-exchange";
+  view.conservation.conserved_roles = {"density"};
+  hierarchy.install_prepared_coupling_operator(
+      "test.prepared-multiblock-amr.full-rebuild.exchange.v1", view,
+      [](pops::Real dt, const std::vector<MultiFab<Dim>*>& states) {
+        MultiFab<Dim>& first = *states.at(0);
+        MultiFab<Dim>& second = *states.at(1);
+        for (std::size_t local = 0; local < first.local_size(); ++local)
+          pops::for_each_cell(
+              first.box(local),
+              ConservativeExchange<Dim>{first.fab(local).view(), second.fab(local).view(), dt});
+      });
+  hierarchy.seal_couplings();
+}
+
+void prove_full_rebuild_transaction_restores_fresh_multiblock_carrier() {
+  constexpr int Dim = 2;
+  using MultiBlock = pops::runtime::amr::PreparedMultiBlockAmrHierarchy<Dim>;
+  pops::ExecutionLane parent = pops::ExecutionLane::duplicate_world_collectively(
+      "test.prepared-multiblock-amr.full-rebuild.parent");
+  const auto authority = load_balance<Dim>();
+  const auto ranks = execution_rank_space<Dim>(parent);
+  const Index<Dim> local_rank = ranks.coordinate(static_cast<std::size_t>(parent.rank()));
+  const Box<Dim> domain{Index<Dim>{}, Index<Dim>{4 * static_cast<int>(ranks.size()) - 1, 3}};
+  const auto coarse = coarse_layout(domain, *authority, ranks, parent);
+
+  MultiFab<Dim> primary_state(coarse.patches(), coarse.distribution(), local_rank, 1,
+                              Extent<Dim>{});
+  primary_state.set_val(pops::Real(1));
+  pops::runtime::amr::AmrRuntime<Dim> source_engine(
+      hierarchy::AmrHierarchy<Dim>::from_coarse(coarse, std::move(primary_state), kHierarchyBudget),
+      authority, "test.prepared-multiblock-amr.full-rebuild.spatial");
+  MultiFab<Dim> secondary_state(source_engine.hierarchy().state(0).layout(),
+                                source_engine.hierarchy().state(0).distribution(), local_rank, 1,
+                                Extent<Dim>{});
+  secondary_state.set_val(pops::Real(3));
+  std::vector<typename MultiBlock::AdditionalBlock> additional;
+  additional.push_back({"neutral", {std::move(secondary_state)}});
+  MultiBlock source = MultiBlock::prepare_collectively(
+      parent, std::move(source_engine), "ion", std::move(additional),
+      "test.prepared-multiblock-amr.full-rebuild.source-lane");
+  install_sealed_exchange_coupling(source);
+  const auto source_snapshot = source.snapshot();
+  const std::string source_coupling_contract(source.coupling_registry_contract());
+  const auto expect_source_restored = [&] {
+    const auto restored = source.snapshot();
+    EXPECT_EQ(restored.primary.topology_epoch, source_snapshot.primary.topology_epoch);
+    EXPECT_EQ(restored.primary.materialization_generation,
+              source_snapshot.primary.materialization_generation);
+    EXPECT_EQ(restored.primary.exact_spatial_contract,
+              source_snapshot.primary.exact_spatial_contract);
+    EXPECT_EQ(restored.accepted_revision, source_snapshot.accepted_revision);
+    EXPECT_EQ(restored.exact_collective_contract, source_snapshot.exact_collective_contract);
+    EXPECT_EQ(source.coupling_registry_contract(), source_coupling_contract);
+    EXPECT_EQ(source.level_count(), 1U);
+    EXPECT_EQ(pops::reduce_min_local(source.state(0, 0)), pops::Real(1));
+    EXPECT_EQ(pops::reduce_min_local(source.state(1, 0)), pops::Real(3));
+  };
+
+  auto replacement_snapshot = source_snapshot.primary;
+  ++replacement_snapshot.topology_epoch;
+  ++replacement_snapshot.materialization_generation;
+  replacement_snapshot.exact_spatial_contract = runtime::detail::exact_runtime_spatial_contract(
+      "test.prepared-multiblock-amr.full-rebuild.spatial", replacement_snapshot.hierarchy,
+      replacement_snapshot.topology_epoch, replacement_snapshot.materialization_generation);
+  pops::runtime::amr::AmrRuntime<Dim> replacement_engine(
+      hierarchy::AmrHierarchy<Dim>(replacement_snapshot.hierarchy), authority,
+      "test.prepared-multiblock-amr.full-rebuild.spatial");
+  replacement_engine.restore(replacement_snapshot);
+  auto replacement_additional = source_snapshot.additional;
+  MultiBlock replacement = MultiBlock::prepare_collectively(
+      parent, std::move(replacement_engine), "ion", std::move(replacement_additional),
+      "test.prepared-multiblock-amr.full-rebuild.source-lane");
+  install_sealed_exchange_coupling(replacement);
+  EXPECT_FALSE(replacement.coupling_registry_contract().empty());
+
+  typename MultiBlock::PreparedRegridTransactionStack full_rebuild_stack(1);
+  full_rebuild_stack.execute_and_stage(
+      source.prepare_full_rebuild_transaction(replacement.snapshot()));
+  full_rebuild_stack.publish_staged_noexcept();
+  EXPECT_EQ(source.topology_runtime().topology_epoch(), replacement_snapshot.topology_epoch);
+  EXPECT_EQ(source.topology_runtime().materialization_generation(),
+            replacement_snapshot.materialization_generation);
+  EXPECT_NE(source.coupling_registry_contract(), source_coupling_contract);
+  full_rebuild_stack.publish_inverse_lifo_noexcept();
+  full_rebuild_stack.reset_for_next_candidate_noexcept();
+  expect_source_restored();
+
+  full_rebuild_stack.execute_and_stage(
+      source.prepare_full_rebuild_transaction(replacement.snapshot()));
+  full_rebuild_stack.publish_staged_noexcept();
+  full_rebuild_stack.publish_inverse_lifo_noexcept();
+  full_rebuild_stack.reset_for_next_candidate_noexcept();
+  expect_source_restored();
+
+  const pops::amr::RefinementRatio<Dim> ratio(std::array<int, Dim>{2, 2});
+  auto ordinary_regrid = source.topology_runtime().prepare_regrid(
+      0, ratio,
+      cluster_result(source.topology_runtime().hierarchy().layout(0),
+                     source.topology_runtime().hierarchy().layout(0).patches().boxes()),
+      regridding::RegridPreparationBudget{.clustered_parent_layout = kLayoutBudget,
+                                          .fine_layout = kLayoutBudget,
+                                          .load_balance = kLoadBalanceBudget},
+      source.lane());
+  ASSERT_TRUE(ordinary_regrid.fine_layout());
+  MultiFab<Dim> ordinary_primary(ordinary_regrid.fine_layout()->patches(),
+                                 ordinary_regrid.fine_layout()->distribution(), local_rank, 1,
+                                 Extent<Dim>{});
+  MultiFab<Dim> ordinary_secondary(ordinary_regrid.fine_layout()->patches(),
+                                   ordinary_regrid.fine_layout()->distribution(), local_rank, 1,
+                                   Extent<Dim>{});
+  ordinary_primary.set_val(pops::Real(5));
+  ordinary_secondary.set_val(pops::Real(7));
+  std::vector<std::optional<MultiFab<Dim>>> ordinary_children;
+  ordinary_children.emplace_back(std::move(ordinary_primary));
+  ordinary_children.emplace_back(std::move(ordinary_secondary));
+  typename MultiBlock::PreparedRegridTransactionStack ordinary_stack(1);
+  ordinary_stack.execute_and_publish(source.prepare_regrid_transaction(
+      0, std::move(ordinary_regrid), std::move(ordinary_children)));
+  ASSERT_EQ(source.level_count(), 2U);
+  EXPECT_EQ(pops::reduce_min_local(source.state(0, 1)), pops::Real(5));
+  EXPECT_EQ(pops::reduce_min_local(source.state(1, 1)), pops::Real(7));
+  ordinary_stack.publish_inverse_lifo_noexcept();
+  ordinary_stack.reset_for_next_candidate_noexcept();
+  expect_source_restored();
 }
 
 }  // namespace
@@ -455,6 +666,11 @@ TEST(test_nd_amr_runtime, prepared_multiblock_hierarchy_is_exact_ranked_in_1d_2d
   prove_prepared_multiblock_hierarchy<1>();
   prove_prepared_multiblock_hierarchy<2>();
   prove_prepared_multiblock_hierarchy<3>();
+}
+
+TEST(test_nd_amr_runtime,
+     full_rebuild_transaction_restores_and_retries_before_ordinary_regrid_publication) {
+  prove_full_rebuild_transaction_restores_fresh_multiblock_carrier();
 }
 
 TEST(test_nd_amr_runtime, anisotropic_regrid_publishes_one_authenticated_spatial_contract) {

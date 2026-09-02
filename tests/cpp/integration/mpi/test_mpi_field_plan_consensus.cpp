@@ -8,7 +8,7 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
-#include "explicit_amr_program.hpp"
+#include "amr_runtime_authority.hpp"
 #include "gtest_compat.hpp"
 #include "native_dso_compiler.hpp"
 #include "program_v5_fixture.hpp"

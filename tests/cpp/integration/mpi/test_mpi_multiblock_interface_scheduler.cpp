@@ -7,9 +7,13 @@
 
 #include <Kokkos_Core.hpp>
 
+#include <array>
+#include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -23,6 +27,124 @@ constexpr int Dim = 3;
 using Field = MultiFab<Dim>;
 using Route = AxisAlignedInterface<Dim>;
 using Scheduler = InterfaceFluxScheduler<Dim>;
+
+// This executable owns its heap witness.  It is armed only around the already-bound hot
+// scheduler call; MPI setup, assertions, and collective failure diagnostics stay outside it.
+std::atomic<bool> g_heap_measurement_enabled{false};
+std::atomic<std::uint64_t> g_measured_heap_allocations{0};
+
+void note_measured_heap_allocation() noexcept {
+  if (g_heap_measurement_enabled.load(std::memory_order_relaxed))
+    g_measured_heap_allocations.fetch_add(1, std::memory_order_relaxed);
+}
+
+void* measured_allocate(std::size_t size) {
+  void* pointer = std::malloc(size == 0 ? 1 : size);
+  if (pointer == nullptr)
+    throw std::bad_alloc();
+  note_measured_heap_allocation();
+  return pointer;
+}
+
+void* measured_allocate_nothrow(std::size_t size) noexcept {
+  void* pointer = std::malloc(size == 0 ? 1 : size);
+  if (pointer != nullptr)
+    note_measured_heap_allocation();
+  return pointer;
+}
+
+void* measured_aligned_allocate(std::size_t size, std::size_t alignment) {
+  void* pointer = nullptr;
+  if (posix_memalign(&pointer, alignment, size == 0 ? 1 : size) != 0)
+    pointer = nullptr;
+  if (pointer == nullptr)
+    throw std::bad_alloc();
+  note_measured_heap_allocation();
+  return pointer;
+}
+
+void* measured_aligned_allocate_nothrow(std::size_t size, std::size_t alignment) noexcept {
+  void* pointer = nullptr;
+  if (posix_memalign(&pointer, alignment, size == 0 ? 1 : size) != 0)
+    pointer = nullptr;
+  if (pointer != nullptr)
+    note_measured_heap_allocation();
+  return pointer;
+}
+
+class HeapAllocationWindow {
+ public:
+  HeapAllocationWindow() : before_(g_measured_heap_allocations.load(std::memory_order_relaxed)) {
+    g_heap_measurement_enabled.store(true, std::memory_order_relaxed);
+  }
+
+  [[nodiscard]] std::uint64_t close() noexcept {
+    g_heap_measurement_enabled.store(false, std::memory_order_relaxed);
+    return g_measured_heap_allocations.load(std::memory_order_relaxed) - before_;
+  }
+
+ private:
+  std::uint64_t before_ = 0;
+};
+
+}  // namespace
+
+void* operator new(std::size_t size) {
+  return measured_allocate(size);
+}
+void* operator new[](std::size_t size) {
+  return measured_allocate(size);
+}
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+  return measured_allocate_nothrow(size);
+}
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+  return measured_allocate_nothrow(size);
+}
+void operator delete(void* pointer) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+void* operator new(std::size_t size, std::align_val_t alignment) {
+  return measured_aligned_allocate(size, static_cast<std::size_t>(alignment));
+}
+void* operator new[](std::size_t size, std::align_val_t alignment) {
+  return measured_aligned_allocate(size, static_cast<std::size_t>(alignment));
+}
+void* operator new(std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
+  return measured_aligned_allocate_nothrow(size, static_cast<std::size_t>(alignment));
+}
+void* operator new[](std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
+  return measured_aligned_allocate_nothrow(size, static_cast<std::size_t>(alignment));
+}
+void operator delete(void* pointer, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::size_t, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::size_t, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+
+namespace {
 
 Extent<Dim> rank_extent(int ranks) {
   Extent<Dim> result{};
@@ -189,9 +311,41 @@ int run_mpi_interface_scheduler() {
                         }
                       });
     const BoundaryEvaluationPoint point{"mpi.nd.clock", 1, 0, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
-    scheduler.apply(point, std::vector<Field*>{&left, &right},
-                    std::vector<Field*>{&left_rhs, &right_rhs});
-    if (calls != 1 || scheduler.evaluation_count(route.identity, 0) != 1)
+    std::array<Field*, 2> states{{&left, &right}};
+    std::array<Field*, 2> rhs{{&left_rhs, &right_rhs}};
+    Scheduler::InterfaceInvocationWorkspace invocation;
+    scheduler.bind_invocation_workspace(invocation, point.clock.size(), 0,
+                                        Scheduler::generated_program_stage_identity_characters());
+    HeapAllocationWindow first_heap;
+    scheduler.apply(point, states, rhs, invocation);
+    const std::uint64_t first_heap_allocations = first_heap.close();
+    const bool first_allocation_free = first_heap_allocations == 0;
+    if (all_reduce_min(first_allocation_free ? 1L : 0L) != 1 ||
+        all_reduce_max(first_allocation_free ? 1L : 0L) != 1 || calls != 1 ||
+        scheduler.evaluation_count(route.identity, 0) != 1)
+      ++failures;
+    for (int z = 0; z < 2; ++z)
+      for (int y = 0; y < 4; ++y) {
+        const int face = y + 4 * z;
+        const bool local = left.local_index_of(y < 2 ? 0u : 1u) != Field::not_local;
+        if (!local)
+          continue;
+        if (get_cell(left_rhs, Index<Dim>(1, y, z), 0) != Real(-2 * (face + 1)) ||
+            get_cell(right_rhs, Index<Dim>(5, y, z), 1) != Real(2 * (face + 1)) ||
+            get_cell(left_rhs, Index<Dim>(1, y, z), 1) != Real(-2 * (face + 11)) ||
+            get_cell(right_rhs, Index<Dim>(5, y, z), 0) != Real(2 * (face + 11)))
+          ++failures;
+      }
+
+    left_rhs.set_val(Real(0));
+    right_rhs.set_val(Real(0));
+    HeapAllocationWindow repeat_heap;
+    scheduler.apply(point, states, rhs, invocation);
+    const std::uint64_t repeat_heap_allocations = repeat_heap.close();
+    const bool repeat_allocation_free = repeat_heap_allocations == 0;
+    if (all_reduce_min(repeat_allocation_free ? 1L : 0L) != 1 ||
+        all_reduce_max(repeat_allocation_free ? 1L : 0L) != 1 || calls != 2 ||
+        scheduler.evaluation_count(route.identity, 0) != 2)
       ++failures;
     for (int z = 0; z < 2; ++z)
       for (int y = 0; y < 4; ++y) {
@@ -212,13 +366,12 @@ int run_mpi_interface_scheduler() {
     divergent_point.tick += my_rank();
     bool point_rejected = false;
     try {
-      scheduler.apply(divergent_point, std::vector<Field*>{&left, &right},
-                      std::vector<Field*>{&left_rhs, &right_rhs});
+      scheduler.apply(divergent_point, states, rhs, invocation);
     } catch (const std::runtime_error& error) {
       point_rejected =
           std::string(error.what()).find("BoundaryEvaluationPoint differs") != std::string::npos;
     }
-    if (!point_rejected || calls != 1 || !local_field_is_zero(left_rhs) ||
+    if (!point_rejected || calls != 2 || !local_field_is_zero(left_rhs) ||
         !local_field_is_zero(right_rhs))
       ++failures;
 
@@ -229,11 +382,11 @@ int run_mpi_interface_scheduler() {
                                                   : std::vector<Field*>{nullptr, nullptr};
     bool active_rejected = false;
     try {
-      scheduler.apply(point, divergent_states, divergent_rhs);
+      scheduler.apply(point, divergent_states, divergent_rhs, invocation);
     } catch (const std::runtime_error& error) {
       active_rejected = std::string(error.what()).find("active mask differs") != std::string::npos;
     }
-    if (!active_rejected || calls != 1 || !local_field_is_zero(left_rhs) ||
+    if (!active_rejected || calls != 2 || !local_field_is_zero(left_rhs) ||
         !local_field_is_zero(right_rhs))
       ++failures;
 

@@ -357,6 +357,12 @@ void program_install_error(pops::runtime::program::ProgramInstallDiagnostic* dia
   if (include_block_identities) {
     source += R"CPP(
 namespace { constexpr pops::runtime::program::ProgramBlockRecord kProgramBlocks[] = {{{"gas", 3}}}; }
+namespace {
+// v5 authenticates a zero flux envelope for every declared Program block, even when this
+// uniform loader fixture emits no static basis or face-flux rows.
+constexpr pops::runtime::program::ProgramFluxBudgetRecord kProgramFluxBudgets[] = {
+    {0, 0, 0, 0}};
+}
 )CPP";
   }
   if (include_cache_plan) {
@@ -466,16 +472,20 @@ extern "C" bool pops_install_program(
                                              sizeof(persistent_resource_manifest) - 1};
   descriptor.checkpoint_identity = {identity, sizeof(identity) - 1};
 )CPP";
-    if (include_block_identities) {
+  if (include_block_identities) {
     source += R"CPP(
   descriptor.blocks = {kProgramBlocks, 1, sizeof(ProgramBlockRecord)};
+  descriptor.flux_budgets = {kProgramFluxBudgets, 1, sizeof(ProgramFluxBudgetRecord)};
 )CPP";
     }
-    source += include_cache_plan ? R"CPP(
+    if (include_cache_plan)
+      source += R"CPP(
   descriptor.resource_plan = {kProgramResources, 1, sizeof(ProgramResourcePlanRecord)};
-  descriptor.maximum_bytes = 8;
-)CPP" : R"CPP(
-  descriptor.maximum_bytes = 0;
+)CPP";
+    // The generated value rows authenticate only cache storage.  The host adds its detached,
+    // exact hot workspace at seal time, so this pre-seal ceiling must remain symbolic.
+    source += R"CPP(
+  descriptor.maximum_bytes = kProgramResourcePlanUnknownExtent;
 )CPP";
     source += R"CPP(
   descriptor.context = state.get();
@@ -781,6 +791,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
     ++fails;
   }
   try {
+    no_op.mark_bound();
     no_op.step(dt);
   } catch (const std::exception& e) {
     std::printf("FAIL no-op installer did not restore the prior Program: %s\\n", e.what());
@@ -921,6 +932,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   sim.set_state("gas", U0);
   sim.install_program(so);  // dlopen + ABI check + pops_install_program(this)
   const int step0 = sim.macro_step();
+  sim.mark_bound();
   sim.step(dt);  // The exact-ranked System facade dispatches to the installed Program.
   const std::vector<double> Up = sim.get_state("gas");
 

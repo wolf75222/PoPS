@@ -42,6 +42,7 @@ def _installed_variant(helper, root: Path, dimension: int = 2, payload: bytes = 
         "abi_key": f"abi-dim{dimension}",
         "has_mpi": True,
         "has_kokkos": True,
+        "kokkos_execution_space": "Serial",
     }
     helper.write_manifest_atomic(native / "variants.json", [row])
     return helper.InstalledNativeVariant(dimension, extension.resolve(), row)

@@ -243,7 +243,7 @@ void parallel_copy(MultiFab<Dim, DestinationMemorySpace>& destination,
                                   destination_fab.view(), source_fab.view(), destination_component,
                                   source_component, component_count});
   }
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 template <int Dim, class DestinationMemorySpace, class SourceMemorySpace>
@@ -290,7 +290,7 @@ void average_down(const MultiFab<Dim, MemorySpace>& fine, MultiFab<Dim, MemorySp
                   refinement_detail::AverageDownKernel<Dim>{coarse_fab.view(), fine_fab.view(),
                                                             ratio, children, fine.ncomp()});
   }
-  Kokkos::fence();
+  ::pops::device_fence();
   parallel_copy(coarse, scratch, schedule);
 }
 
@@ -326,7 +326,7 @@ void interpolate(const MultiFab<Dim, MemorySpace>& coarse, MultiFab<Dim, MemoryS
     for_each_cell(fine_fab.box(), refinement_detail::InterpolateKernel<Dim>{
                                       fine_fab.view(), coarse_fab.view(), ratio, fine.ncomp()});
   }
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 template <int Dim, class MemorySpace>

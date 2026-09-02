@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +29,169 @@ def test_m2_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M2 gate matrix is incomplete:\n  " + "\n  ".join(errors)
     assert len(data["check"]) == 65
+
+
+def test_m2_manifest_declares_backend_and_dimension_coverage_exactly():
+    data, errors = _load_runner().validate_manifest(MANIFEST)
+    assert not errors
+
+    assert Counter(row["backend"] for row in data["check"]) == Counter(
+        {"serial": 58, "mpi": 7}
+    )
+    assert Counter(
+        tuple(row.get("dimensions", ("all",))) for row in data["check"]
+    ) == Counter({("all",): 48, (2,): 11, (1, 2, 3): 6})
+
+
+def test_m2_backend_and_dimension_filters_select_exact_rows_and_targets():
+    runner = _load_runner()
+    data, errors = runner.validate_manifest(MANIFEST)
+    assert not errors
+
+    selected = {
+        (backend, dimension): runner._selected_checks(
+            data["check"], backend=backend, dimension=dimension
+        )
+        for backend in ("serial", "mpi")
+        for dimension in (1, 2, 3)
+    }
+    assert len(selected["serial", 1]) == 48
+    assert len(selected["serial", 2]) == 58
+    assert len(selected["serial", 3]) == 48
+    assert len(selected["mpi", 1]) == 54
+    assert len(selected["mpi", 2]) == 65
+    assert len(selected["mpi", 3]) == 54
+
+    mpi_targets = {
+        "test_mpi_field_plan_consensus",
+        "test_coupled_fieldsolve",
+        "test_krylov_collective_contract",
+        "test_mpi_cell_temporal_program",
+        "test_mpi_cell_temporal_program_multibox",
+        "test_mpi_cell_temporal_program_collective_rollback",
+        "test_mpi_cell_temporal_program_refusal",
+    }
+    serial_targets = {
+        "test_amr_history_ring",
+        "test_newton_robustness",
+        "test_program_transaction",
+        "test_system_transaction_authority",
+    }
+    assert set(runner._required_ctest_targets(
+        data["check"], backend="serial", dimension=1
+    )) == serial_targets
+    assert set(runner._required_ctest_targets(
+        data["check"], backend="mpi", dimension=1
+    )) == serial_targets | mpi_targets - {"test_krylov_collective_contract"}
+    assert set(runner._required_ctest_targets(
+        data["check"], backend="mpi", dimension=2
+    )) == serial_targets | mpi_targets
+    assert set(runner._required_ctest_targets(
+        data["check"], backend="mpi", dimension=3
+    )) == serial_targets | mpi_targets - {"test_krylov_collective_contract"}
+
+    serial_selected_targets = {
+        row["target"] for row in selected["serial", 2] if row["kind"] == "ctest"
+    }
+    assert serial_selected_targets.isdisjoint(mpi_targets)
+    assert all(
+        "_np" not in row["test_regex"]
+        for row in selected["serial", 2]
+        if row["kind"] == "ctest"
+    )
+
+
+@pytest.mark.parametrize(
+    ("replacement", "message"),
+    (
+        ("dimensions = 3", "dimensions must be a list"),
+        ("dimensions = []", "dimensions must be non-empty"),
+        ("dimensions = [true]", "bool is not accepted"),
+        ("dimensions = [0]", "only supported values"),
+        ("dimensions = [3, 3]", "dimensions must contain unique values"),
+        ("dimensions = [3, 1]", "canonical sorted order"),
+    ),
+)
+def test_m2_rejects_invalid_row_dimension_qualifiers(tmp_path, replacement, message):
+    runner = _load_runner()
+    source = MANIFEST.read_text(encoding="utf-8")
+    assert "dimensions = [1, 2, 3]" in source
+    path = tmp_path / "m2-temporal-execution.toml"
+    path.write_text(
+        source.replace("dimensions = [1, 2, 3]", replacement, 1), encoding="utf-8"
+    )
+
+    _data, errors = runner.validate_manifest(path)
+
+    assert any(message in error for error in errors)
+
+
+def test_m2_rejects_unknown_or_inapplicable_backend_rows(tmp_path):
+    runner = _load_runner()
+    source = MANIFEST.read_text(encoding="utf-8")
+    path = tmp_path / "m2-temporal-execution.toml"
+    path.write_text(
+        source.replace('backend = "serial"', 'backend = "cuda"', 1), encoding="utf-8"
+    )
+    _data, errors = runner.validate_manifest(path)
+    assert any("backend must be serial or mpi" in error for error in errors)
+
+    path.write_text(
+        source.replace(
+            'target = "test_amr_history_ring"\nbackend = "serial"',
+            'target = "test_amr_history_ring"\nbackend = "mpi"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    _data, errors = runner.validate_manifest(path)
+    assert any("has no MPI registration" in error for error in errors)
+
+    path.write_text(
+        source.replace(
+            'target = "test_mpi_field_plan_consensus"\nbackend = "mpi"',
+            'target = "test_mpi_field_plan_consensus"\nbackend = "serial"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    _data, errors = runner.validate_manifest(path)
+    assert any("serial CTest row selects MPI case" in error for error in errors)
+
+
+def test_m2_backend_selection_is_explicit_or_authenticated_mpi(monkeypatch):
+    runner = _load_runner()
+    monkeypatch.delenv("POPS_REQUIRE_MPI_TESTS", raising=False)
+
+    with pytest.raises(ValueError, match="backend is required"):
+        runner._selected_backend(None)
+    assert runner._selected_backend("serial") == "serial"
+
+    monkeypatch.setenv("POPS_REQUIRE_MPI_TESTS", "1")
+    assert runner._selected_backend(None) == "mpi"
+    with pytest.raises(ValueError, match="conflicting M2 backends"):
+        runner._selected_backend("serial")
+
+
+def test_m2_check_only_and_target_listing_are_source_only(monkeypatch, capsys):
+    runner = _load_runner()
+    monkeypatch.delenv("POPS_REQUIRE_MPI_TESTS", raising=False)
+    monkeypatch.delenv("POPS_NATIVE_DIM", raising=False)
+
+    assert runner.main(["--check-only"]) == 0
+    assert runner.main([
+        "--list-ctest-targets", "--backend", "serial", "--dim", "1"
+    ]) == 0
+    serial_output = set(capsys.readouterr().out.splitlines())
+    assert "test_amr_history_ring" in serial_output
+    assert "test_mpi_cell_temporal_program" not in serial_output
+
+    assert runner.main([
+        "--list-ctest-targets", "--backend", "mpi", "--dim", "1"
+    ]) == 0
+    mpi_output = set(capsys.readouterr().out.splitlines())
+    assert "test_mpi_cell_temporal_program" in mpi_output
+    assert "test_krylov_collective_contract" not in mpi_output
 
 
 def test_m2_final_gate_has_no_deferred_requirement():
@@ -351,7 +515,7 @@ def test_m2_transaction_matrix_retry_and_mpi_proofs_use_closed_selectors():
             "ctest",
             "positive",
             "test_system_transaction_authority",
-            r"^SystemTransactionAuthority\.ReusedImageDoesNotAllocateFabStorageAfterWarmup$",
+            r"^SystemTransactionAuthority\.PreparedFullAcceptedTransactionsAllocateNothing$",
         ),
         (
             "pytest",

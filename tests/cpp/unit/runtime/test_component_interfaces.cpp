@@ -228,6 +228,17 @@ void verify_persistent_tagging_state() {
   state.record(redistributed, State::Decision::Coarsen, minimum_cycles);
   const auto image = state.encode(minimum_cycles, "test::tagging-graph@1");
   ASSERT_FALSE(image.empty());
+  EXPECT_EQ(state.encoded_size(minimum_cycles, "test::tagging-graph@1"), image.size());
+  std::vector<std::uint8_t> primed_image;
+  primed_image.reserve(image.size());
+  ASSERT_NO_THROW(state.encode_into(primed_image, minimum_cycles, "test::tagging-graph@1"));
+  EXPECT_EQ(primed_image, image);
+  std::vector<std::uint8_t> unprimed_image{0xa5};
+  const auto unprimed_before = unprimed_image;
+  EXPECT_THROW(state.encode_into(unprimed_image, minimum_cycles, "test::tagging-graph@1"),
+               std::length_error);
+  EXPECT_EQ(unprimed_image, unprimed_before)
+      << "a rejected preflight must not clobber the caller-owned accepted slot";
 
   pops::Index<Dim> zero{};
   pops::Index<Dim> coarse_high{};

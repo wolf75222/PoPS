@@ -103,7 +103,7 @@ void copy_overlapping_valid(const MultiFab<Dim>& source, MultiFab<Dim>& destinat
       for_each_cell(overlap, [=] POPS_HD(const Index<Dim>& cell) { out(cell, 0) = in(cell, 0); });
     }
   }
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 template <int Dim>
@@ -300,7 +300,7 @@ class PoissonFftMultiFabAdapter {
             complex_type(static_cast<double>(sign * in(cell, 0)), 0.0);
       });
     }
-    Kokkos::fence();
+    ::pops::device_fence();
   }
 
   void unpack_slab_(const device_view& source, field_type& destination) const {
@@ -315,7 +315,7 @@ class PoissonFftMultiFabAdapter {
         out(cell, 0) = static_cast<Real>(src[fft_solver_detail::local_slab_ordinal(slab, cell)].real());
       });
     }
-    Kokkos::fence();
+    ::pops::device_fence();
   }
 
   void subtract_mean_(field_type& field) const {

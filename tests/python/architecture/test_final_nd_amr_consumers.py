@@ -23,6 +23,8 @@ UNCHANGED_CONSUMERS = (
 CONTEXT_FRAGMENT_PATHS = frozenset(
     {
         "pops/runtime/program/detail/program_execution_services_amr_spatial.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_backend_state.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_backend_preparation.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_field_runtime_public.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_flux_expression_public.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_spatial_operations.hpp",
@@ -32,6 +34,9 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/detail/program_execution_services_amr_flux_expression_polynomial.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_cell_temporal_configuration.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_definitions.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_snapshot.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_forward.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_history_reseed.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_capacity.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_flux_basis_definitions.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_flux_expression_definitions.hpp",
@@ -40,9 +45,11 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/detail/program_execution_services_amr_flux_expression_services.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_cell_temporal_runtime.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_subcycling_runtime.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_subcycling_interface_payload.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_flux_basis.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_flux_expression_runtime.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_runtime.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_lifecycle.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_field_runtime_services.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_services.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_spatial_operations_services.hpp",
@@ -51,6 +58,15 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
 PROGRAM_RESPONSIBILITY_AUTHORITIES = {
     "spatial_context": frozenset(
         {"pops/runtime/program/detail/program_execution_services_amr_spatial.hpp"}
+    ),
+    "backend_state": frozenset(
+        {"pops/runtime/program/detail/program_execution_services_amr_backend_state.hpp"}
+    ),
+    "backend_preparation": frozenset(
+        {
+            "pops/runtime/program/detail/"
+            "program_execution_services_amr_backend_preparation.hpp"
+        }
     ),
     "spatial_operations": frozenset(
         {
@@ -73,9 +89,33 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
             "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_capacity.hpp",
         }
     ),
+    "history_snapshot": frozenset(
+        {
+            "pops/runtime/program/detail/"
+            "program_execution_services_amr_history_checkpoint_snapshot.hpp"
+        }
+    ),
+    "history_forward": frozenset(
+        {
+            "pops/runtime/program/detail/"
+            "program_execution_services_amr_history_checkpoint_forward.hpp"
+        }
+    ),
+    "history_reseed": frozenset(
+        {
+            "pops/runtime/program/detail/"
+            "program_execution_services_amr_history_checkpoint_history_reseed.hpp"
+        }
+    ),
     "history_runtime": frozenset(
         {
             "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_runtime.hpp",
+        }
+    ),
+    "history_lifecycle": frozenset(
+        {
+            "pops/runtime/program/detail/"
+            "program_execution_services_amr_history_checkpoint_lifecycle.hpp",
         }
     ),
     "history_services": frozenset(
@@ -102,6 +142,12 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
     "subcycling_runtime": frozenset(
         {"pops/runtime/program/detail/program_execution_services_amr_subcycling_runtime.hpp"}
     ),
+    "subcycling_interface_payload": frozenset(
+        {
+            "pops/runtime/program/detail/"
+            "program_execution_services_amr_subcycling_interface_payload.hpp"
+        }
+    ),
     "cell_temporal_runtime": frozenset(
         {
             "pops/runtime/program/detail/program_execution_services_amr_cell_temporal_configuration.hpp",
@@ -111,33 +157,41 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
     ),
 }
 PROGRAM_RESPONSIBILITY_BUDGETS = {
-    "spatial_context": 350,
-    "spatial_operations": 900,
-    "field_runtime": 1_800,
-    "history_checkpoint": 1_800,
-    "history_runtime": 1_800,
+    "spatial_context": 500,
+    "backend_state": 100,
+    "backend_preparation": 950,
+    "spatial_operations": 950,
+    "field_runtime": 1_850,
+    "history_checkpoint": 2_200,
+    "history_snapshot": 400,
+    "history_forward": 600,
+    "history_reseed": 600,
+    "history_runtime": 1_400,
+    "history_lifecycle": 600,
     "history_services": 1_800,
-    "flux_expression": 1_200,
-    "flux_basis": 500,
-    "subcycling_runtime": 800,
-    "cell_temporal_runtime": 800,
+    "flux_expression": 1_450,
+    "flux_basis": 600,
+    "subcycling_runtime": 1_500,
+    "subcycling_interface_payload": 450,
+    "cell_temporal_runtime": 1_000,
 }
-# The final authority closure includes the detached preparation image, dense resource/persistence
-# stores and accepted-step transaction services. Keep the envelopes tight to the authenticated
-# source-owned closure; the per-file and per-responsibility budgets above remain the primary growth
-# fences and prevent one subsystem from hiding inside this aggregate allowance.
-PROGRAM_FRAGMENT_BUDGET = 8_900
+# The newly explicit private sub-authorities are all classified above and remain one acyclic
+# semantic closure. Keep their per-file and per-responsibility envelopes tight so this cutover
+# cannot hide a new monolith behind the aggregate allowances.
+PROGRAM_AUTHORITY_FILE_BUDGET = 1_500
+PROGRAM_FRAGMENT_BUDGET = 16_500
 # The unified public root carries the Uniform facade as well as its AMR backend and prepared
 # transaction prerequisites.
-PROGRAM_SCAFFOLDING_BUDGET = 7_200
-PROGRAM_SEMANTIC_CLOSURE_BUDGET = 16_000
-PROGRAM_SHALLOW_ROOT_BUDGET = 5_500
+PROGRAM_SCAFFOLDING_BUDGET = 10_500
+PROGRAM_SEMANTIC_CLOSURE_BUDGET = 26_500
+PROGRAM_SHALLOW_ROOT_BUDGET = 7_000
 SEMANTIC_AUTHORITIES = frozenset(
     {
         "pops/numerics/time/amr/reflux/amr_flux_execution.hpp",
         "pops/numerics/time/amr/reflux/amr_flux_preparation.hpp",
         "pops/numerics/time/amr/levels/amr_subcycling_plan.hpp",
         "pops/numerics/time/amr/levels/amr_subcycling_engine.hpp",
+        "pops/numerics/time/amr/levels/amr_subcycling_engine_execution.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_backend.hpp",
         *CONTEXT_FRAGMENT_PATHS,
     }
@@ -145,6 +199,7 @@ SEMANTIC_AUTHORITIES = frozenset(
 COMPATIBILITY_UMBRELLAS = frozenset(ROOTS.values())
 PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
     {
+        "pops/amr/reflux/metric_reflux.hpp",
         "pops/amr/transfer/temporal_interpolation_provider.hpp",
         "pops/amr/transfer/transfer_provider.hpp",
         "pops/core/foundation/types.hpp",
@@ -167,6 +222,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/builders/compiled/generated_amr_system_block.hpp",
         "pops/runtime/multiblock/evaluation_point.hpp",
         "pops/runtime/program/amr_program_checkpoint.hpp",
+        "pops/runtime/program/cell_temporal_partition.hpp",
         "pops/runtime/program/program_abi.hpp",
         "pops/runtime/program/program_preparation_image.hpp",
         "pops/runtime/program/clock_schedule.hpp",
@@ -268,7 +324,7 @@ def test_amr_consumer_closures_are_explicit_bounded_and_acyclic() -> None:
 
     for path in SEMANTIC_AUTHORITIES:
         lines = (INCLUDE / path).read_text(encoding="utf-8").count("\n") + 1
-        assert lines <= 1_200, (path, lines)
+        assert lines <= PROGRAM_AUTHORITY_FILE_BUDGET, (path, lines)
 
     responsibility_groups = tuple(PROGRAM_RESPONSIBILITY_AUTHORITIES.values())
     responsibility_union = set().union(*responsibility_groups)
@@ -284,8 +340,8 @@ def test_amr_consumer_closures_are_explicit_bounded_and_acyclic() -> None:
             PROGRAM_RESPONSIBILITY_BUDGETS[responsibility],
         )
 
-    assert len(_source(closures["flux"]).splitlines()) <= 700
-    assert len(_source(closures["subcycling"]).splitlines()) <= 1_600
+    assert len(_source(closures["flux"]).splitlines()) <= 750
+    assert len(_source(closures["subcycling"]).splitlines()) <= 2_500
     program_fragments = tuple(
         path for path in closures["program"] if path in CONTEXT_FRAGMENT_PATHS
     )

@@ -21,9 +21,16 @@ struct ProgramInstallDiagnostic;
 struct ProgramHostDescriptor;
 
 inline constexpr std::uint32_t kProgramInstallAbiVersion = 5;
+/// Canonical inline text extent used by host-owned v5 callback rejection records and the public
+/// compatibility exception.  It is ABI vocabulary, not a dynamically sized diagnostic buffer.
+inline constexpr std::size_t kProgramStepRejectTextCapacity = 192;
 
 enum class ProgramRuntimeKind : std::uint32_t { uniform = 1, amr = 2 };
 enum class ProgramExecutionLane : std::uint32_t { host = 1, device = 2, distributed = 3 };
+/// POD disposition transported through the host-owned v5 rejection mailbox.  It belongs to the
+/// ABI vocabulary because generated code and the host authenticate the same fixed record, but it
+/// does not add a callback or change the StepFn signature.
+enum class StepAttemptDisposition : std::uint8_t { kRetry, kReject };
 enum class ProgramInstallErrorCode : std::uint32_t {
   none = 0,
   invalid_host_descriptor = 1,
@@ -114,6 +121,42 @@ struct ProgramFluxBudgetRecord final {
   std::uint64_t coefficient_term_bound = 0;
   std::uint64_t interface_application_bound = 0;
   std::uint64_t interface_identity_character_bound = 0;
+};
+
+/// AMR flux identities are split into basis occurrences and final terms.  Clock stamps and
+/// attempts remain mutable scalar metadata and deliberately are not slot dimensions.
+inline constexpr std::uint32_t kProgramFluxBasisOccurrenceSchemaVersion = 1;
+struct ProgramFluxBasisOccurrenceRecord final {
+  std::uint32_t struct_size = sizeof(ProgramFluxBasisOccurrenceRecord);
+  std::uint32_t schema_version = kProgramFluxBasisOccurrenceSchemaVersion;
+  std::uint32_t basis_slot = 0;
+  std::uint32_t expression_slot = 0;
+  std::int32_t block = -1;
+  std::int32_t level = -1;
+  std::int32_t rhs_identity = -1;
+  std::uint32_t provider = 0;
+  std::int64_t stage_numerator = 0;
+  std::int64_t stage_denominator = 1;
+  ProgramAbiView identity{};
+  ProgramAbiView occurrence_path{};
+  ProgramAbiView owner{};
+  ProgramAbiView clock{};
+};
+
+inline constexpr std::uint32_t kProgramFaceFluxStageSchemaVersion = 1;
+struct ProgramFaceFluxStageRecord final {
+  std::uint32_t struct_size = sizeof(ProgramFaceFluxStageRecord);
+  std::uint32_t schema_version = kProgramFaceFluxStageSchemaVersion;
+  std::uint32_t slot = 0;
+  std::uint32_t basis_slot = 0;
+  std::uint32_t expression_slot = 0;
+  std::uint32_t dt_power = 1;
+  std::int64_t coefficient_numerator = 0;
+  std::int64_t coefficient_denominator = 1;
+  ProgramAbiView identity{};
+  ProgramAbiView occurrence_path{};
+  ProgramAbiView owner{};
+  ProgramAbiView clock{};
 };
 
 /// Persistent/transient allocation promised by the compiled Program before a single candidate
@@ -278,6 +321,8 @@ struct ProgramCandidateDescriptor final {
   ProgramAbiTable history_authorities{};
   ProgramAbiTable checkpoint_shape{};
   ProgramAbiTable flux_budgets{};
+  ProgramAbiTable flux_basis_occurrences{};
+  ProgramAbiTable face_flux_stages{};
   ProgramAbiTable resource_plan{};
   ProgramAbiTable boundary_routes{};
   ProgramAbiTable provider_routes{};
@@ -379,6 +424,8 @@ using ProgramInstallFn = bool (*)(const ProgramHostDescriptor*, ProgramCandidate
          valid_table(value.history_authorities, sizeof(ProgramHistoryAuthorityRecord)) &&
          valid_table(value.checkpoint_shape, sizeof(ProgramCheckpointRecord)) &&
          valid_table(value.flux_budgets, sizeof(ProgramFluxBudgetRecord)) &&
+         valid_table(value.flux_basis_occurrences, sizeof(ProgramFluxBasisOccurrenceRecord)) &&
+         valid_table(value.face_flux_stages, sizeof(ProgramFaceFluxStageRecord)) &&
          valid_table(value.resource_plan, sizeof(ProgramResourcePlanRecord)) &&
          valid_table(value.boundary_routes, sizeof(ProgramRouteRecord)) &&
          valid_table(value.provider_routes, sizeof(ProgramRouteRecord)) &&
@@ -412,6 +459,10 @@ static_assert(std::is_standard_layout_v<ProgramCheckpointRecord> &&
               std::is_trivially_copyable_v<ProgramCheckpointRecord>);
 static_assert(std::is_standard_layout_v<ProgramFluxBudgetRecord> &&
               std::is_trivially_copyable_v<ProgramFluxBudgetRecord>);
+static_assert(std::is_standard_layout_v<ProgramFluxBasisOccurrenceRecord> &&
+              std::is_trivially_copyable_v<ProgramFluxBasisOccurrenceRecord>);
+static_assert(std::is_standard_layout_v<ProgramFaceFluxStageRecord> &&
+              std::is_trivially_copyable_v<ProgramFaceFluxStageRecord>);
 static_assert(std::is_standard_layout_v<ProgramResourcePlanRecord> &&
               std::is_trivially_copyable_v<ProgramResourcePlanRecord>);
 static_assert(std::is_standard_layout_v<ProgramRouteRecord> &&

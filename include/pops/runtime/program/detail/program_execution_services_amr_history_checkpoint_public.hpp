@@ -85,12 +85,11 @@ void register_history(const std::string& name, int lag, int ncomp, int program_o
   // The host invokes history materialization while the Program image is still detached.  At that
   // point the exact block prototype is carried by PreparedAmrTopologyView; consulting facade_
   // would both be null and would leak the accepted hierarchy into DSO preparation.
-  const field_type& prototype = preparation_view_ != nullptr
-                                    ? preparation_view_->block_prototypes
-                                          .at(static_cast<std::size_t>(runtime_owner))
-                                          .at(static_cast<std::size_t>(active_level_))
-                                    : facade_->program_prepared_amr_block_state_(runtime_owner,
-                                                                                active_level_);
+  const field_type& prototype =
+      preparation_view_ != nullptr
+          ? preparation_view_->block_prototypes.at(static_cast<std::size_t>(runtime_owner))
+                .at(static_cast<std::size_t>(active_level_))
+          : facade_->program_prepared_amr_block_state_(runtime_owner, active_level_);
   const int components = ncomp < 0 ? prototype.ncomp() : ncomp;
   if (components < 1)
     throw std::invalid_argument("AMR Program history component count must be positive");
@@ -169,7 +168,7 @@ void rotate_histories() const {
 void rotate_histories(const std::string& clock_identity) const {
   if (clock_identity.empty())
     throw std::invalid_argument("AMR Program history rotation requires a clock identity");
-  rotate_histories_(clock_identity);
+  rotate_histories_(std::string_view(clock_identity));
 }
 
 void interpolate_history_linear(field_type& output, const std::string& name, int max_lag,
@@ -258,8 +257,8 @@ bool schedule_domain_occurs(ScheduleDomainKind kind, const std::string& clock,
                             const std::string& stage_identity, int level) const {
   return schedule_coordinate_(kind, clock, stage_identity, level).has_value();
 }
-bool schedule_is_due(ProgramCacheSlot slot, int every_n, ScheduleDomainKind kind, const std::string& clock,
-                     const std::string& stage_identity, int level) const {
+bool schedule_is_due(ProgramCacheSlot slot, int every_n, ScheduleDomainKind kind,
+                     const std::string& clock, const std::string& stage_identity, int level) const {
   (void)runtime_state().cache_.plan_entry(slot);
   if (every_n <= 0)
     throw std::invalid_argument("AMR Program schedule has an invalid period");

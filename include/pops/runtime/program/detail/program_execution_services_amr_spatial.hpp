@@ -10,7 +10,7 @@ hierarchy_type& hierarchy() const noexcept {
   if (preparation_view_ != nullptr)
     return *preparation_view_->lane;
   require_facade_execution_();
-  return facade_->prepared_amr_multiblock_hierarchy_().lane();
+  return facade_->program_prepared_amr_execution_lane_();
 }
 /// Borrow the exact runtime lane as the parent authority for generated private Krylov lanes.
 /// In MPI builds the returned communicator never owns or substitutes WORLD; it only survives the
@@ -195,8 +195,16 @@ void configure_primary_clock(const std::string& clock) const {
 void adopt_prepared_clock(ClockScheduleState schedule, std::string primary_clock) const {
   if (primary_clock.empty())
     throw std::invalid_argument("AMR Program prepared clock has no primary identity");
+  schedule.seal_for_execution();
   clock_schedule_ = std::move(schedule);
   primary_clock_ = std::move(primary_clock);
+  // The generic RHS packs are populated only during cold preparation.  Keep their clock storage
+  // resident so a bound Program never constructs/copies a BoundaryEvaluationPoint string.
+  hot_path_workspace_.bind_boundary_point_clock(primary_clock_);
+}
+
+[[nodiscard]] const ClockScheduleState& accepted_clock_schedule() const noexcept {
+  return clock_schedule_;
 }
 
 void declare_clock_relation(const std::string& parent, const std::string& child, int count) const {
@@ -224,6 +232,99 @@ runtime::multiblock::BoundaryEvaluationPoint boundary_evaluation_point(int stage
           .physical_time = current_interval_start_time_ + stage_time_.value() * current_dt_};
 }
 
+/// Cold preparation for a point retained by a generated matrix-free session.  Only the fixed
+/// clock string can require heap storage; exact stage coordinates are populated later through the
+/// write-into seam below.
+void prepare_boundary_evaluation_point(runtime::multiblock::BoundaryEvaluationPoint& point) const {
+  if (primary_clock_.empty())
+    throw std::logic_error("AMR Program boundary point preparation has no primary clock");
+  if (!point.clock.empty() && point.clock != primary_clock_)
+    throw std::logic_error("AMR Program boundary point preparation changed its clock");
+  if (point.clock.capacity() < primary_clock_.size())
+    point.clock.reserve(primary_clock_.size());
+  point.clock.assign(primary_clock_);
+  point.graph_identity.clear();
+  point.rate_identity.clear();
+  point.application_identity.clear();
+}
+
+void prepare_boundary_evaluation_point(
+    runtime::multiblock::BoundaryEvaluationPoint& destination,
+    const runtime::multiblock::BoundaryEvaluationPoint& capacity_source) const {
+  if (primary_clock_.empty() || capacity_source.clock != primary_clock_)
+    throw std::logic_error("AMR Program boundary point clone has a different prepared clock");
+  const auto prepare_string = [](std::string& target, const std::string& source) {
+    if (target.capacity() < source.capacity())
+      target.reserve(source.capacity());
+    if (target.capacity() < source.size())
+      throw std::logic_error("AMR Program boundary point clone capacity is incomplete");
+    target.assign(source);
+  };
+  prepare_string(destination.clock, capacity_source.clock);
+  prepare_string(destination.graph_identity, capacity_source.graph_identity);
+  prepare_string(destination.rate_identity, capacity_source.rate_identity);
+  prepare_string(destination.application_identity, capacity_source.application_identity);
+}
+
+void write_boundary_evaluation_point_into(runtime::multiblock::BoundaryEvaluationPoint& point,
+                                          int stage) const {
+  require_rate_identity_(stage);
+  require_facade_execution_();
+  if (primary_clock_.empty() || !std::isfinite(current_dt_) || !(current_dt_ > 0.0) ||
+      point.clock != primary_clock_)
+    throw std::logic_error("AMR Program resident evaluation point lacks its prepared clock");
+  point.tick = static_cast<std::int64_t>(facade_->program_macro_step_());
+  point.level = active_level_;
+  point.substep = logical_substep_;
+  point.stage = stage;
+  point.stage_fraction = stage_time_;
+  point.dt = current_dt_;
+  point.physical_time = current_interval_start_time_ + stage_time_.value() * current_dt_;
+  // Ordinary RHS evaluation carries no authored coupling identities.  They were reserved only
+  // for the dedicated coupling carrier and must not be assigned on this path.
+  point.graph_identity.clear();
+  point.rate_identity.clear();
+  point.application_identity.clear();
+}
+
+[[nodiscard]] const runtime::multiblock::BoundaryEvaluationPoint&
+prepared_boundary_evaluation_point(int stage) const {
+  auto& point = hot_path_workspace_.direct_point;
+  write_boundary_evaluation_point_into(point, stage);
+  return point;
+}
+
+void copy_boundary_evaluation_point_into(
+    runtime::multiblock::BoundaryEvaluationPoint& destination,
+    const runtime::multiblock::BoundaryEvaluationPoint& source) const {
+  require_facade_execution_();
+  if (source.clock.empty() || source.tick < 0 || source.level != active_level_ ||
+      source.substep < 0 || source.stage < 0 || source.stage_fraction.denominator <= 0 ||
+      source.stage_fraction.numerator < 0 ||
+      source.stage_fraction.numerator > source.stage_fraction.denominator ||
+      !std::isfinite(source.dt) || !(source.dt > 0.0) || !std::isfinite(source.physical_time))
+    throw std::invalid_argument("AMR Program boundary point copy has an invalid source");
+  const auto require_capacity = [](const std::string& target, std::string_view value) {
+    if (target.capacity() < value.size())
+      throw std::logic_error("AMR Program boundary point copy exceeds its prepared capacity");
+  };
+  require_capacity(destination.clock, source.clock);
+  require_capacity(destination.graph_identity, source.graph_identity);
+  require_capacity(destination.rate_identity, source.rate_identity);
+  require_capacity(destination.application_identity, source.application_identity);
+  destination.clock.assign(source.clock);
+  destination.tick = source.tick;
+  destination.level = source.level;
+  destination.substep = source.substep;
+  destination.stage = source.stage;
+  destination.stage_fraction = source.stage_fraction;
+  destination.dt = source.dt;
+  destination.physical_time = source.physical_time;
+  destination.graph_identity.assign(source.graph_identity);
+  destination.rate_identity.assign(source.rate_identity);
+  destination.application_identity.assign(source.application_identity);
+}
+
 template <class Body>
 void advance_hierarchy(double dt, Body&& body) const {
   advance_prepared_hierarchy_(dt, std::forward<Body>(body), "advance_hierarchy");
@@ -234,10 +335,12 @@ void advance_synchronized_hierarchy(double dt, Body&& body) const {
   advance_prepared_hierarchy_(dt, std::forward<Body>(body), "advance_synchronized_hierarchy");
 }
 
-void prepare_same_level_cell_temporal_execution(
+[[nodiscard]] std::optional<PreparedCellTemporalExecution<Dim>>
+prepare_same_level_cell_temporal_execution(
     std::string clock, std::int64_t tick_denominator, int rung,
     std::span<const SameLevelCellTemporalForwardEulerRoute> routes) const {
-  prepare_same_level_cell_temporal_execution_(std::move(clock), tick_denominator, rung, routes);
+  return prepare_same_level_cell_temporal_execution_(std::move(clock), tick_denominator, rung,
+                                                     routes);
 }
 void advance_same_level_cell_temporal(double dt) const {
   advance_same_level_cell_temporal_(dt);
@@ -248,6 +351,19 @@ bool uses_prepared_krylov_fallback() const {
          HierarchyTensorSolverExecutionPath::PreparedKrylovFallback;
 }
 int nlev() const {
+  if (preparation_view_ != nullptr) {
+    // A forward bootstrap/regrid image deliberately has no AmrRuntime.  Its copied level
+    // geometry is the sole topology authority until the aggregate publication adopts the
+    // forward owner.  Validate the complete immutable view before exposing that bounded count;
+    // falling through to runtime_ here would dereference the canonical null forward runtime.
+    preparation_view_->validate();
+    const std::size_t levels = preparation_view_->level_geometries.size();
+    if (levels > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+      throw std::overflow_error("AMR Program resource level count exceeds int");
+    return static_cast<int>(levels);
+  }
+  if (runtime_ == nullptr)
+    throw std::logic_error("AMR Program accepted topology has no runtime authority");
   return static_cast<int>(runtime_->hierarchy().num_levels());
 }
 int level() const noexcept {
@@ -255,8 +371,14 @@ int level() const noexcept {
 }
 
 ProgramResourceTopology program_resource_topology() const {
-  if (preparation_view_ == nullptr)
-    refresh_resources_();
+  if (preparation_view_ != nullptr) {
+    const int levels = nlev();
+    return {levels, preparation_view_->topology_epoch,
+            preparation_view_->materialization_generation};
+  }
+  refresh_resources_();
+  if (runtime_ == nullptr)
+    throw std::logic_error("AMR Program accepted topology refresh lost its runtime authority");
   return {nlev(), runtime_->topology_epoch(), runtime_->materialization_generation()};
 }
 
@@ -264,9 +386,10 @@ template <class Function>
 void for_each_program_resource_level(Function&& function) const {
   if (preparation_view_ == nullptr)
     refresh_resources_();
+  const int levels = nlev();
   const int prior = active_level_;
   try {
-    for (int selected = 0; selected < nlev(); ++selected) {
+    for (int selected = 0; selected < levels; ++selected) {
       active_level_ = selected;
       function(selected);
     }
@@ -315,7 +438,9 @@ int sys_block(int program_block) const {
   require_facade_execution_();
   const auto& map = facade_->program_block_map_();
   if (program_block < 0 || static_cast<std::size_t>(program_block) >= map.size())
-    throw std::out_of_range("AMR Program block has no authenticated runtime mapping");
+    throw std::out_of_range("AMR Program block " + std::to_string(program_block) +
+                            " has no authenticated runtime mapping in a map of size " +
+                            std::to_string(map.size()));
   const int selected = map[static_cast<std::size_t>(program_block)];
   if (selected < 0 || selected >= facade_->program_n_blocks_())
     throw std::runtime_error("AMR Program block mapping targets no runtime block");

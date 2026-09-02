@@ -666,11 +666,18 @@ def _public_amr_hierarchy_case(
             projection=ConservativeCellAverage(),
         )
     )
-    threshold = case.param(RuntimeParam("nested-refine-threshold", default=0.5))
+    # ``AMRTransfer`` is an adaptive transition authority, so even the flat-provider exercise
+    # needs one valid coarse/fine contract.  Keep the *materialized* hierarchy flat by making the
+    # tagging predicate false, while retaining a two-level capability with its authenticated
+    # temporal relation.  A one-level AMR descriptor with an empty transition set is rejected by
+    # the transfer resolver before the provider can be compiled.
+    layout_max_levels = 2 if max_levels == 1 else max_levels
+    threshold_default = 3.0 if max_levels == 1 else 0.5
+    threshold = case.param(RuntimeParam("nested-refine-threshold", default=threshold_default))
     transfer = AMRTransfer()
     transfer.state(state_instance, StateTransfer())
     transfer.state(marker_instance, StateTransfer())
-    if len(temporal_ratios) != max_levels - 1:
+    if len(temporal_ratios) != layout_max_levels - 1:
         raise ValueError(
             "one independent temporal ratio is required per AMR transition"
         )
@@ -681,8 +688,8 @@ def _public_amr_hierarchy_case(
             periodic=None if bound_plasma else PeriodicAxes(frame.axes),
         ),
         hierarchy=AMRHierarchy(
-            max_levels=max_levels,
-            ratios=tuple(2 for _ in range(max_levels - 1)),
+            max_levels=layout_max_levels,
+            ratios=tuple(2 for _ in range(layout_max_levels - 1)),
         ),
         tagging=AMRTagging(
             rules=(
@@ -702,6 +709,24 @@ def _public_amr_hierarchy_case(
         ),
     )
     return case, layout, state_instance
+
+
+def test_hierarchy_provider_flux_budget_matches_the_retained_lowered_rows():
+    """The ABI budget follows final basis/term rows, not pre-lowering IR counts."""
+    from pops.codegen.program_codegen import _emit_candidate_tables
+    from pops.codegen.program_persistent_plan import get_program_resource_plan
+
+    case, _layout, _state = _public_amr_hierarchy_case(CompositeTensorFAC())
+    program = case._time
+    plan = get_program_resource_plan(program, target="amr_system")
+
+    tables = _emit_candidate_tables(program, None, (), "provider-routes", "amr_system", plan=plan)
+
+    budget_start = tables.index("kProgramCandidateFluxBudgetsRows[]")
+    budget_end = tables.index("};", budget_start)
+    budgets = tables[budget_start:budget_end]
+    assert "{UINT64_C(0), UINT64_C(0), UINT64_C(0), UINT64_C(0)}" in budgets
+    assert "{UINT64_C(1), UINT64_C(1), UINT64_C(0), UINT64_C(0)}" in budgets
 
 
 def _constant_rotation_oracle(*, dt, rate, density, east, north):
@@ -736,6 +761,12 @@ def _external_hierarchy_fallback_queries(so_path):
     library = ctypes.CDLL(so_path)
     library.pops_test_hierarchy_fallback_queries.restype = ctypes.c_uint64
     return int(library.pops_test_hierarchy_fallback_queries())
+
+
+def _external_hierarchy_configured_storage_limit_calls(so_path):
+    library = ctypes.CDLL(so_path)
+    library.pops_test_hierarchy_configured_storage_limit_calls.restype = ctypes.c_uint64
+    return int(library.pops_test_hierarchy_configured_storage_limit_calls())
 
 
 def _external_hierarchy_carry_metrics(so_path):
@@ -997,6 +1028,8 @@ using Field = pops::MultiFab<kDim>;
 using TensorRequest = pops::runtime::program::HierarchyTensorSolverBuildRequest<kDim>;
 using PreparedTensorSolver = pops::runtime::program::PreparedHierarchyTensorSolver<kDim>;
 using TensorProvider = pops::runtime::program::HierarchyTensorSolverProvider<kDim>;
+using ConfiguredStorageRequest =
+    pops::runtime::program::HierarchyTensorConfiguredStorageRequest<kDim>;
 using BuiltinTensorProvider = pops::runtime::program::CompositeTensorHierarchyProvider<kDim>;
 // Keep the complete instrumented provider local to this generated Program DSO. A future test may
 // load another artifact containing this header in the same process; no inline counter, provider
@@ -1005,6 +1038,7 @@ std::atomic<std::uint64_t> register_calls{0};
 std::atomic<std::uint64_t> prepare_calls{0};
 std::atomic<std::uint64_t> execution_queries{0};
 std::atomic<std::uint64_t> fallback_queries{0};
+std::atomic<std::uint64_t> configured_storage_limit_calls{0};
 std::atomic<std::uint64_t> solve_calls{0};
 std::atomic<std::uint64_t> second_guess_calls{0};
 // Provider orchestration is single-threaded.  The Kokkos reductions complete before these host-only
@@ -1017,7 +1051,7 @@ class DelegatingPrepared final : public PreparedTensorSolver {
  public:
   DelegatingPrepared(
       std::string contract,
-      std::vector<bool> level_populated,
+      std::vector<std::uint8_t> level_populated,
       std::unique_ptr<PreparedTensorSolver> delegate)
       : contract_(std::move(contract)),
         level_populated_(std::move(level_populated)),
@@ -1078,9 +1112,26 @@ class DelegatingPrepared final : public PreparedTensorSolver {
     }
     return report;
   }
+ protected:
+  pops::PreparedResidentStorage derived_resident_storage() const override {
+    const pops::PreparedResidentStorage delegate_storage = delegate_->resident_storage();
+    if (!delegate_storage.is_exact())
+      return pops::PreparedResidentStorage::unknown();
+    std::uint64_t total = sizeof(DelegatingPrepared);
+    pops::runtime::program::tensor_elliptic_detail::checked_add_resident_storage(
+        total, delegate_storage.bytes);
+    pops::runtime::program::tensor_elliptic_detail::checked_add_resident_storage(
+        total,
+        pops::runtime::program::tensor_elliptic_detail::external_string_storage_bytes(contract_));
+    pops::runtime::program::tensor_elliptic_detail::checked_add_resident_storage(
+        total,
+        pops::runtime::program::tensor_elliptic_detail::vector_storage_bytes(level_populated_));
+    return pops::PreparedResidentStorage::exact(total);
+  }
+
  private:
   std::string contract_;
-  std::vector<bool> level_populated_;
+  std::vector<std::uint8_t> level_populated_;
   std::unique_ptr<PreparedTensorSolver> delegate_;
 };
 
@@ -1091,6 +1142,35 @@ class Provider final : public TensorProvider {
     converted.options = {
         "pops.hierarchy.composite-tensor-fac.options@2", request.options.values};
     return converted;
+  }
+
+  static ConfiguredStorageRequest delegate_configured_storage_request(
+      const ConfiguredStorageRequest& request) {
+    auto converted = request;
+    const BuiltinTensorProvider delegate;
+    converted.provider_identity = std::string(delegate.identity());
+    converted.provider_interface_version = delegate.interface_version();
+    converted.options = {
+        "pops.hierarchy.composite-tensor-fac.options@2", request.options.values};
+    return converted;
+  }
+
+  static std::uint64_t configured_expected_prepared_contract_bytes(
+      const ConfiguredStorageRequest& request) {
+    constexpr std::uint64_t kFrameBytes = 9;
+    constexpr std::uint64_t kScalarFrameBytes = 20;
+    const std::uint64_t request_contract =
+        pops::runtime::program::tensor_elliptic_detail::configured_request_contract_bytes(request);
+    std::uint64_t total = 0;
+    pops::runtime::program::tensor_elliptic_detail::checked_add_configured_storage(
+        total,
+        kFrameBytes + static_cast<std::uint64_t>(
+                          std::string_view{"tests.hierarchy.header-only.prepared"}.size()));
+    pops::runtime::program::tensor_elliptic_detail::checked_add_configured_storage(
+        total, 2U * kScalarFrameBytes);
+    pops::runtime::program::tensor_elliptic_detail::checked_add_configured_storage(
+        total, kFrameBytes + request_contract);
+    return total;
   }
 
  public:
@@ -1139,6 +1219,44 @@ class Provider final : public TensorProvider {
           3, "header-only execution is invalid");
     }
   }
+  [[nodiscard]] pops::runtime::program::HierarchyTensorConfiguredStorageLimit
+  configured_storage_limit(const ConfiguredStorageRequest& request) const override {
+    configured_storage_limit_calls.fetch_add(1, std::memory_order_relaxed);
+    const BuiltinTensorProvider delegate;
+    const auto limit =
+        delegate.configured_storage_limit(delegate_configured_storage_request(request));
+    if (!limit.is_exact())
+      return pops::runtime::program::HierarchyTensorConfiguredStorageLimit::unknown();
+
+    std::uint64_t maximum = limit.maximum_bytes;
+    using MemorySpace = Kokkos::DefaultExecutionSpace::memory_space;
+    const std::uint64_t levels = static_cast<std::uint64_t>(request.level_cell_bounds.size());
+    const auto add = [](std::uint64_t& total, std::uint64_t value) {
+      pops::runtime::program::tensor_elliptic_detail::checked_add_configured_storage(total, value);
+    };
+    add(maximum, sizeof(DelegatingPrepared));
+    add(
+        maximum,
+        pops::runtime::program::tensor_elliptic_detail::configured_external_string_storage(
+            configured_expected_prepared_contract_bytes(request)));
+    add(
+        maximum,
+        pops::runtime::program::tensor_elliptic_detail::checked_configured_storage_product(
+            levels, sizeof(std::uint8_t)));
+    add(
+        maximum,
+        pops::runtime::program::tensor_elliptic_detail::checked_configured_storage_product(
+            pops::runtime::program::tensor_elliptic_detail::checked_configured_storage_product(
+                2U, levels), sizeof(Field)));
+    for (std::size_t level = 0; level < request.level_cell_bounds.size(); ++level)
+      for (int image = 0; image < 2; ++image)
+        add(
+            maximum,
+            pops::runtime::program::tensor_elliptic_detail::configured_multifab_storage<
+                kDim, MemorySpace>(request.level_cell_bounds[level], request.patch_bounds[level],
+                                   1, true));
+    return pops::runtime::program::HierarchyTensorConfiguredStorageLimit::exact(maximum);
+  }
   std::string expected_prepared_contract(const TensorRequest& request) const override {
     pops::ExactContractBuilder contract;
     contract.text("tests.hierarchy.header-only.prepared")
@@ -1153,7 +1271,8 @@ class Provider final : public TensorProvider {
       throw std::invalid_argument("header-only hierarchy provider rejected the request");
     const BuiltinTensorProvider delegate;
     auto prepared_delegate = delegate.prepare(delegate_request(request), lane);
-    std::vector<bool> level_populated;
+    prepared_delegate->seal_preparation(lane);
+    std::vector<std::uint8_t> level_populated;
     level_populated.reserve(request.levels.size());
     for (const auto& level : request.levels)
       level_populated.push_back(!level.layout.empty());
@@ -1191,6 +1310,10 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_execution_queries() noe
 
 extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_fallback_queries() noexcept {
   return pops_test_hierarchy::fallback_queries.load(std::memory_order_relaxed);
+}
+
+extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_configured_storage_limit_calls() noexcept {
+  return pops_test_hierarchy::configured_storage_limit_calls.load(std::memory_order_relaxed);
 }
 
 extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_solve_calls() noexcept {
@@ -1267,7 +1390,11 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
     assert "pops_test_hierarchy::solve(ctx," in source
     assert "pops_test_hierarchy::register_provider(ctx);" in source
     assert '"tests.hierarchy.header-only"' in source
-    amr = source.split('extern "C" bool pops_install_program', 1)[1]
+    # The detached provider/workspace prelude is materialized by
+    # ``program_candidate_prepare`` before the ABI entry declaration.  Inspect the complete AMR
+    # artifact so the test authenticates that install-time communicator/resource setup rather than
+    # incorrectly restricting the witness to the descriptor suffix after ``extern``.
+    amr = source
     assert "ctx.prepared_execution_communicator()" in amr
     assert '"pops.program.amr.prepared-problem.' in amr
     assert '"pops.program.amr.krylov-workspace.' in amr
@@ -1279,7 +1406,7 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
     assert "operator_mesh_boundary_session" not in tensor_calls[0]
     branch = amr.index("if (ctx.uses_prepared_krylov_fallback())")
     gather = amr.index(".gather(hierarchy_dt)", branch)
-    solve_once = amr.index("_level_programs->front().solve(hierarchy_dt)", gather)
+    solve_once = amr.index("_active_level_authority(ctx)->programs.front().solve(hierarchy_dt)", gather)
     publish = amr.index(".publish(hierarchy_dt)", solve_once)
     assert gather < solve_once < publish
     solve = next(value for value in program._values if value.op == "solve_linear")
@@ -1310,12 +1437,13 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         north=-0.5,
     )
     configurations = (
-        # One level has an empty ratio set and must execute the provider-selected prepared Krylov
-        # fallback over the frozen packed tensor, without calling the provider's direct solve.
-        (1, (), 1, False, True, _HIERARCHY_BASE_CELLS),
+        # One active level has a valid (but unrefined) coarse/fine capability and must execute the
+        # provider-selected prepared Krylov fallback over the frozen packed tensor, without
+        # calling the provider's direct solve.
+        (1, (3,), 1, False, True, _HIERARCHY_BASE_CELLS),
         # The same fallback must consume the provider-authenticated zero-Dirichlet face law.  This
         # dense-oracle case distinguishes it from the generic scalar constant extrapolation.
-        (1, (), 1, True, True, _HIERARCHY_BASE_CELLS),
+        (1, (3,), 1, True, True, _HIERARCHY_BASE_CELLS),
         # Preserve the two-step outflow/reflux/history-carry composition.
         (2, (3,), 2, True, False, _HIERARCHY_BASE_CELLS),
         # Independently quantify the nonzero two-level solve at h and h/2.
@@ -1341,6 +1469,7 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
             manufactured_plasma=manufactured_plasma,
             base_cells=base_cells,
         )
+        qualified_program_clock = case._time.clock.qualified_id
         resolved = pops.resolve(
             pops.validate(case),
             layout=layout,
@@ -1353,6 +1482,9 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         compiled = pops.compile(resolved)
         assert Path(compiled.so_path).is_file()
         before_bind = _external_hierarchy_counters(compiled.so_path)
+        before_configured_storage_limit = _external_hierarchy_configured_storage_limit_calls(
+            compiled.so_path
+        )
 
         simulation = pops.bind(
             compiled,
@@ -1362,6 +1494,10 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
                 else None
             ),
             resources={"execution_context": artifact_execution_context(compiled)},
+        )
+        assert (
+            _external_hierarchy_configured_storage_limit_calls(compiled.so_path)
+            > before_configured_storage_limit
         )
         bound_register, bound_prepare, bound_execution, bound_solve = (
             _external_hierarchy_counters(compiled.so_path)
@@ -1424,6 +1560,13 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         # Each level owns a distinct qualified clock, while the authored temporal ratios remain
         # independent from the spatial ratio two (and from each other in the three-level tower).
         program_report = simulation.program_report()
+        logical_clocks = {
+            row["clock"]: row["tick"]
+            for row in program_report.clocks
+            if row["kind"] == "logical"
+        }
+        assert logical_clocks["clock.macro"] == steps
+        assert logical_clocks[qualified_program_clock] == steps
         level_clocks = [row for row in program_report.clocks if row["kind"] == "level"]
         assert {row["level"] for row in level_clocks} == set(range(max_levels))
         assert all(row["macro_step"] == steps for row in level_clocks)
@@ -1445,16 +1588,14 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         ]
 
         # This is one combined Program, not two adjacent tests: its explicit finite-volume rate
-        # materializes the accepted interface-flux ledger and the same macro-step then executes the
-        # hierarchy-scoped condensed solve.  Every refined level participates and synchronization
+        # materializes the accepted coarse/fine ledger and the same macro-step then executes the
+        # hierarchy-scoped condensed solve. A flat hierarchy has no interface to ledger or
+        # synchronize; once refined, every participating level is represented and synchronization
         # remains conservative reflux followed by average-down.
-        assert {row["level"] for row in program_report.flux_ledger} == set(
-            range(max_levels)
-        )
-        assert {row["phase"] for row in program_report.synchronization} == {
-            "reflux",
-            "average_down",
-        }
+        expected_flux_levels = set(range(max_levels)) if max_levels > 1 else set()
+        assert {row["level"] for row in program_report.flux_ledger} == expected_flux_levels
+        expected_sync_phases = {"reflux", "average_down"} if max_levels > 1 else set()
+        assert {row["phase"] for row in program_report.synchronization} == expected_sync_phases
 
         if bound_plasma and not manufactured_plasma:
             # ADC-639 composition: the Gaussian marker has nontrivial C/F transport fluxes while the

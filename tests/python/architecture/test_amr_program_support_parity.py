@@ -28,6 +28,8 @@ CONTEXT_ROOT = "pops/runtime/program/program_execution_services.hpp"
 CONTEXT_FRAGMENT_PATHS = frozenset(
     {
         "pops/runtime/program/detail/program_execution_services_amr_backend.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_backend_preparation.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_backend_state.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_spatial.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_field_runtime_public.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_flux_expression_public.hpp",
@@ -38,6 +40,9 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/detail/program_execution_services_amr_flux_expression_polynomial.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_cell_temporal_configuration.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_definitions.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_forward.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_history_reseed.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_lifecycle.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_capacity.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_flux_basis_definitions.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_flux_expression_definitions.hpp",
@@ -49,9 +54,11 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/detail/program_execution_services_amr_flux_basis.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_flux_expression_runtime.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_runtime.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_snapshot.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_field_runtime_services.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_services.hpp",
         "pops/runtime/program/detail/program_execution_services_amr_spatial_operations_services.hpp",
+        "pops/runtime/program/detail/program_execution_services_amr_subcycling_interface_payload.hpp",
     }
 )
 CONTEXT_DETAIL_PATHS = frozenset(
@@ -110,7 +117,7 @@ def _context_semantic_source() -> str:
         path.relative_to(REPO_ROOT / "include").as_posix()
         for path in detail_dir.glob("program_execution_services_amr_*.hpp")
     )
-    assert len(CONTEXT_DETAIL_PATHS) == 24
+    assert len(CONTEXT_DETAIL_PATHS) == 31
     assert physical_details == CONTEXT_FRAGMENT_PATHS, (
         "ProgramExecutionServices AMR detail inventory differs from its authenticated closure: "
         f"missing={sorted(CONTEXT_FRAGMENT_PATHS - physical_details)} "

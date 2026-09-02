@@ -3,7 +3,7 @@
 
 #include <gtest/gtest.h>
 
-#include "explicit_amr_program.hpp"
+#include "amr_runtime_authority.hpp"
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/parallel/execution_lane.hpp>

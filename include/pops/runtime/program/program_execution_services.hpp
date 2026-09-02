@@ -31,14 +31,17 @@
 #include <exception>
 #include <functional>
 #include <initializer_list>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -47,6 +50,29 @@ namespace pops::runtime::program {
 
 template <int Dim>
 class ProgramExecutionPreparationImage;
+template <int Dim>
+class PreparedForwardAmrExecutionAuthorityView;
+
+/// Bind-sealed finite storage authority for one optional hierarchy-tensor provider.
+///
+/// A disabled tensor route has exactly one canonical representation: ``active == false`` with
+/// zero bytes and no contracts.  An enabled route retains the exact configured-envelope and
+/// provider-limit contracts that were agreed by every prepared rank; it is therefore not an
+/// estimate that a later forward image may reinterpret.
+template <int Dim>
+struct HierarchyTensorConfiguredStorageReceipt final {
+  static_assert(Dim >= 1 && Dim <= 3);
+
+  bool active = false;
+  std::uint64_t maximum_bytes = 0;
+  std::string configured_request_contract;
+  std::string configured_limit_contract;
+
+  [[nodiscard]] bool is_canonical_inactive() const noexcept {
+    return !active && maximum_bytes == 0 && configured_request_contract.empty() &&
+           configured_limit_contract.empty();
+  }
+};
 
 // These hooks are intentionally declared next to the public execution authority, rather than in
 // System.  A generated v5 prelude can therefore only populate the image retained by its candidate;
@@ -274,6 +300,8 @@ class UniformStorageTopologyAdapter {
   /// commit image is constructed from a candidate during a step: every image has the exact layout
   /// of its owning accepted block and is copied with device deep copies.
   struct PreparedHotPathWorkspace {
+    using sum_execution_space = Kokkos::DefaultExecutionSpace;
+
     bool bound = false;
     std::size_t block_capacity = 0;
     std::vector<int> rhs_blocks;
@@ -290,6 +318,15 @@ class UniformStorageTopologyAdapter {
     std::vector<int> commit_runtime_blocks;
     std::vector<char> commit_identity;
     std::vector<field_type> commit_snapshots;
+    /// One resident point for direct generated operations.  Its clock capacity is fixed when the
+    /// Program clock is adopted; candidate execution only rewrites scalar time coordinates.
+    runtime::multiblock::BoundaryEvaluationPoint direct_point;
+    /// The Program SUM path uses this prepared workspace for each local Fab in turn.  It is sized
+    /// from detached state prototypes during installation and therefore cannot acquire a Kokkos
+    /// reduction buffer while a candidate transaction is active.
+    PreparedCellSumReduction<sum_execution_space> sum_reduction;
+    std::int64_t sum_maximum_points = 0;
+    bool sum_reduction_bound = false;
 
     void bind_shape(std::size_t blocks, std::size_t request_capacity) {
       const std::size_t capacity = std::max(blocks, request_capacity);
@@ -328,12 +365,103 @@ class UniformStorageTopologyAdapter {
         commit_snapshots.emplace_back(getter(block));
     }
 
+    void bind_boundary_point_clock(std::string_view clock) {
+      if (!bound || clock.empty())
+        throw std::logic_error("Program boundary point clock is not prepared");
+      if (!direct_point.clock.empty() && direct_point.clock != clock)
+        throw std::logic_error("Program boundary point clock changed after preparation");
+      if (direct_point.clock.capacity() < clock.size())
+        direct_point.clock.reserve(clock.size());
+      direct_point.clock.assign(clock);
+    }
+
     void require_bound(std::size_t count, const char* operation) const {
       if (!bound || count > block_capacity || commit_snapshots.size() != coupling_states.size())
         throw std::logic_error(std::string(operation) +
                                " requires a bind-sealed hot-path workspace");
     }
+
+    void bind_sum_reduction(std::int64_t maximum_points) {
+      if (maximum_points < 0)
+        throw std::invalid_argument("Program SUM workspace has an invalid local Fab capacity");
+      if (sum_reduction_bound) {
+        if (sum_maximum_points != maximum_points)
+          throw std::logic_error("Program SUM workspace capacity changed after preparation");
+        return;
+      }
+      // Prime the same deterministic partials, host fold, and representative kernel for every
+      // backend.  In particular, a device-backed candidate must not defer its first allocation
+      // until the first reduction inside a transaction.
+      if (maximum_points > 0)
+        sum_reduction.prepare(sum_execution_space{}, maximum_points);
+      sum_maximum_points = maximum_points;
+      sum_reduction_bound = true;
+    }
+
+    void require_sum_reduction(const char* operation) const {
+      if (!sum_reduction_bound || (sum_maximum_points > 0 && !sum_reduction.is_prepared()))
+        throw std::logic_error(std::string(operation) +
+                               " requires a bind-sealed prepared SUM workspace");
+    }
+
+    /// Exact heap payload retained by this adapter-owned hot carrier.  Field payloads are
+    /// deliberately queried from MultiFab rather than reconstructed from a logical domain: the
+    /// resident image includes local allocation and ghost storage chosen at preparation time.
+    [[nodiscard]] std::uint64_t resident_storage_bytes() const {
+      const auto checked_add = [](std::uint64_t& total, std::uint64_t value) {
+        if (value > std::numeric_limits<std::uint64_t>::max() - total)
+          throw std::overflow_error("Uniform Program hot-path resident storage overflows uint64");
+        total += value;
+      };
+      const auto vector_bytes = [](const auto& values) -> std::uint64_t {
+        using value_type = typename std::remove_reference_t<decltype(values)>::value_type;
+        if (values.capacity() > std::numeric_limits<std::uint64_t>::max() / sizeof(value_type))
+          throw std::overflow_error("Uniform Program hot-path vector storage overflows uint64");
+        return static_cast<std::uint64_t>(values.capacity()) * sizeof(value_type);
+      };
+      std::uint64_t total = 0;
+      checked_add(total, vector_bytes(rhs_blocks));
+      checked_add(total, vector_bytes(rhs_rates));
+      checked_add(total, vector_bytes(rhs_flux_only));
+      checked_add(total, vector_bytes(rhs_states));
+      checked_add(total, vector_bytes(rhs_residuals));
+      checked_add(total, vector_bytes(coupling_states));
+      checked_add(total, vector_bytes(solve_runtime_stages));
+      checked_add(total, vector_bytes(solve_unique_stages));
+      checked_add(total, vector_bytes(commit_targets));
+      checked_add(total, vector_bytes(commit_sources));
+      checked_add(total, vector_bytes(commit_masks));
+      checked_add(total, vector_bytes(commit_runtime_blocks));
+      checked_add(total, vector_bytes(commit_identity));
+      checked_add(total, vector_bytes(commit_snapshots));
+      const auto external_string_bytes = [](const std::string& value) -> std::uint64_t {
+        const auto object_begin = reinterpret_cast<std::uintptr_t>(&value);
+        const auto object_end = object_begin + sizeof(value);
+        const auto data = reinterpret_cast<std::uintptr_t>(value.data());
+        return data >= object_begin && data < object_end
+                   ? 0
+                   : static_cast<std::uint64_t>(value.capacity()) + 1U;
+      };
+      checked_add(total, external_string_bytes(direct_point.clock));
+      checked_add(total, external_string_bytes(direct_point.graph_identity));
+      checked_add(total, external_string_bytes(direct_point.rate_identity));
+      checked_add(total, external_string_bytes(direct_point.application_identity));
+      for (const field_type& snapshot : commit_snapshots)
+        checked_add(total, snapshot.resident_storage_bytes());
+      return total;
+    }
   };
+
+  template <class StateAt>
+  static std::int64_t max_local_fab_points_(std::size_t state_count, StateAt&& state_at) {
+    std::int64_t maximum_points = 0;
+    for (std::size_t state_index = 0; state_index < state_count; ++state_index) {
+      const field_type& state = state_at(state_index);
+      for (std::size_t local = 0; local < state.local_size(); ++local)
+        maximum_points = std::max(maximum_points, state.box(local).numPts());
+    }
+    return maximum_points;
+  }
 
   void bind_accepted_hot_path_workspace_() const {
     if (system_ == nullptr)
@@ -343,6 +471,19 @@ class UniformStorageTopologyAdapter {
     hot_path_workspace_.bind_commit_images(blocks, [this](std::size_t block) -> const field_type& {
       return program_state_const_(static_cast<int>(block));
     });
+    if (!primary_clock_.empty())
+      hot_path_workspace_.bind_boundary_point_clock(primary_clock_);
+    // A service that originated from a detached image has already frozen this capacity.  Accepted
+    // activation intentionally reuses it rather than rescanning live System state; direct native
+    // construction is a cold bind and establishes the witness here.
+    if (!hot_path_workspace_.sum_reduction_bound) {
+      hot_path_workspace_.bind_sum_reduction(
+          max_local_fab_points_(blocks, [this](std::size_t block) -> const field_type& {
+            return program_state_const_(static_cast<int>(block));
+          }));
+    } else {
+      hot_path_workspace_.require_sum_reduction("accepted Program SUM activation");
+    }
   }
 
   void bind_prepared_hot_path_workspace_() const {
@@ -352,6 +493,52 @@ class UniformStorageTopologyAdapter {
     hot_path_workspace_.bind_commit_images(
         preparation_states_->size(),
         [this](std::size_t block) -> const field_type& { return preparation_states_->at(block); });
+    if (!primary_clock_.empty())
+      hot_path_workspace_.bind_boundary_point_clock(primary_clock_);
+    hot_path_workspace_.bind_sum_reduction(max_local_fab_points_(
+        preparation_states_->size(),
+        [this](std::size_t block) -> const field_type& { return preparation_states_->at(block); }));
+  }
+
+  /// Host-only families do not consume a generated value slot.  Slot zero is therefore a stable
+  /// namespace token (not a ProgramResourcePlan index); the kind/subslot pair is the complete
+  /// identity and remains valid for exact and empty generated plans.
+  [[nodiscard]] std::vector<ProgramInstallationTables::ResourcePrototype>
+  prepared_host_resident_resource_prototypes() const {
+    using prototype = ProgramInstallationTables::ResourcePrototype;
+    using kind = ProgramInstallationTables::ResourcePrototypeKind;
+    if (preparation_states_ == nullptr || preparation_block_map_ == nullptr ||
+        !hot_path_workspace_.bound)
+      throw std::logic_error("Uniform Program host resident footprint has no prepared workspace");
+    hot_path_workspace_.require_bound(preparation_states_->size(),
+                                      "Uniform Program host resident footprint");
+    if (scratch_.size() != generated_field_routes_.size())
+      throw std::logic_error("Uniform Program host resident footprint has incoherent slot shape");
+    validate_prepared_host_carriers_();
+    const auto workspace_bytes = hot_path_workspace_.resident_storage_bytes();
+    const auto reduction_bytes = hot_path_workspace_.sum_reduction.resident_storage_bytes();
+    const auto route_bytes = generated_field_routes_resident_storage_bytes_();
+    const auto scratch_bytes = scratch_metadata_resident_storage_bytes_();
+    std::uint64_t clock_bytes = clock_schedule_.resident_storage_bytes();
+    checked_add_resident_storage_(clock_bytes, external_string_storage_bytes_(primary_clock_));
+    std::vector<prototype> result;
+    result.reserve(5);
+    if (workspace_bytes != 0)
+      result.push_back(
+          {0, 0, {workspace_bytes, 1, 1, 0, workspace_bytes, workspace_bytes}, kind::hot_snapshot});
+    if (reduction_bytes != 0)
+      result.push_back(
+          {0, 1, {reduction_bytes, 1, 1, 0, reduction_bytes, reduction_bytes}, kind::reduction});
+    if (route_bytes != 0)
+      result.push_back(
+          {0, 2, {route_bytes, 1, 1, 0, route_bytes, route_bytes}, kind::generated_route});
+    if (scratch_bytes != 0)
+      result.push_back(
+          {0, 3, {scratch_bytes, 1, 1, 0, scratch_bytes, scratch_bytes}, kind::prepared_scratch});
+    if (clock_bytes != 0)
+      result.push_back(
+          {0, 4, {clock_bytes, 1, 1, 0, clock_bytes, clock_bytes}, kind::clock_schedule});
+    return result;
   }
 
   UniformStorageTopologyAdapter() = default;
@@ -361,6 +548,7 @@ class UniformStorageTopologyAdapter {
     if (system_ != nullptr && system_ != accepted)
       throw std::logic_error("Program execution services cannot change their accepted System");
     system_ = accepted;
+    bind_projection_speed_routes_();
     bind_accepted_hot_path_workspace_();
   }
 
@@ -411,6 +599,8 @@ class UniformStorageTopologyAdapter {
   void configure_primary_clock(const std::string& clock) const {
     clock_schedule_.configure_primary_clock(clock);
     primary_clock_ = clock;
+    if (hot_path_workspace_.bound)
+      hot_path_workspace_.bind_boundary_point_clock(primary_clock_);
   }
 
   /// Transfer a clock prepared in the host-owned installation image.  This only changes the
@@ -419,14 +609,21 @@ class UniformStorageTopologyAdapter {
   void adopt_prepared_clock(ClockScheduleState schedule, std::string primary_clock) const {
     if (primary_clock.empty())
       throw std::invalid_argument("Program prepared clock has no primary identity");
+    schedule.seal_for_execution();
     clock_schedule_ = std::move(schedule);
     primary_clock_ = std::move(primary_clock);
+    if (hot_path_workspace_.bound)
+      hot_path_workspace_.bind_boundary_point_clock(primary_clock_);
   }
 
   void declare_clock_relation(const std::string& parent, const std::string& child,
                               int count) const {
     clock_schedule_.declare_relation(parent, child, count);
   }
+
+  /// Explicit cold boundary for direct native users that configure a clock after constructing a
+  /// service.  Generated packages cross this through the preparation-image seal instead.
+  void seal_clock_schedule_for_execution() const { clock_schedule_.seal_for_execution(); }
 
   void set_stage_time(std::int64_t numerator, std::int64_t denominator) const {
     if (denominator <= 0 || numerator < 0 || numerator > denominator)
@@ -450,6 +647,95 @@ class UniformStorageTopologyAdapter {
             evaluation_stage,
             current_dt_,
             physical_time() + logical_physical_time_offset_ + stage_time_.value() * current_dt_};
+  }
+
+  /// Prepare an externally-owned point during installation.  The value-returning overload above
+  /// remains the cold convenience API; generated hot code must use this paired prepare/write
+  /// protocol so copying a non-SSO clock can never allocate after begin_step().
+  void prepare_boundary_evaluation_point(
+      runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    if (primary_clock_.empty())
+      throw std::logic_error("Program boundary point preparation has no primary clock");
+    if (!point.clock.empty() && point.clock != primary_clock_)
+      throw std::logic_error("Program boundary point preparation changed its clock");
+    if (point.clock.capacity() < primary_clock_.size())
+      point.clock.reserve(primary_clock_.size());
+    point.clock.assign(primary_clock_);
+    point.graph_identity.clear();
+    point.rate_identity.clear();
+    point.application_identity.clear();
+  }
+
+  /// Cold-clone companion for a matrix-free session point.  The source may carry authored
+  /// coupling identities longer than SSO; reserve and copy all four strings before the clone can
+  /// enter a candidate callback.  Scalar coordinates are deliberately left to copy/write below.
+  void prepare_boundary_evaluation_point(
+      runtime::multiblock::BoundaryEvaluationPoint& destination,
+      const runtime::multiblock::BoundaryEvaluationPoint& capacity_source) const {
+    if (primary_clock_.empty() || capacity_source.clock != primary_clock_)
+      throw std::logic_error("Program boundary point clone has a different prepared clock");
+    const auto prepare_string = [](std::string& target, const std::string& source) {
+      if (target.capacity() < source.capacity())
+        target.reserve(source.capacity());
+      if (target.capacity() < source.size())
+        throw std::logic_error("Program boundary point clone capacity is incomplete");
+      target.assign(source);
+    };
+    prepare_string(destination.clock, capacity_source.clock);
+    prepare_string(destination.graph_identity, capacity_source.graph_identity);
+    prepare_string(destination.rate_identity, capacity_source.rate_identity);
+    prepare_string(destination.application_identity, capacity_source.application_identity);
+  }
+
+  void write_boundary_evaluation_point_into(runtime::multiblock::BoundaryEvaluationPoint& point,
+                                            int stage) const {
+    require_rate_identity_(stage);
+    if (primary_clock_.empty() || !std::isfinite(current_dt_) || !(current_dt_ > 0.0) ||
+        point.clock != primary_clock_)
+      throw std::logic_error("Program resident boundary point is not prepared for this clock");
+    point.tick = static_cast<std::int64_t>(macro_step());
+    point.level = 0;
+    point.substep = 0;
+    point.stage = stage;
+    point.stage_fraction = logical_phase_begin_ + stage_time_ * logical_phase_span_;
+    point.dt = current_dt_;
+    point.physical_time =
+        physical_time() + logical_physical_time_offset_ + stage_time_.value() * current_dt_;
+    point.graph_identity.clear();
+    point.rate_identity.clear();
+    point.application_identity.clear();
+  }
+
+  void copy_boundary_evaluation_point_into(
+      runtime::multiblock::BoundaryEvaluationPoint& destination,
+      const runtime::multiblock::BoundaryEvaluationPoint& source) const {
+    require_boundary_point_(source, "Program boundary point copy");
+    const auto require_capacity = [](const std::string& target, std::string_view value) {
+      if (target.capacity() < value.size())
+        throw std::logic_error("Program boundary point copy exceeds its prepared capacity");
+    };
+    require_capacity(destination.clock, source.clock);
+    require_capacity(destination.graph_identity, source.graph_identity);
+    require_capacity(destination.rate_identity, source.rate_identity);
+    require_capacity(destination.application_identity, source.application_identity);
+    destination.clock.assign(source.clock);
+    destination.tick = source.tick;
+    destination.level = source.level;
+    destination.substep = source.substep;
+    destination.stage = source.stage;
+    destination.stage_fraction = source.stage_fraction;
+    destination.dt = source.dt;
+    destination.physical_time = source.physical_time;
+    destination.graph_identity.assign(source.graph_identity);
+    destination.rate_identity.assign(source.rate_identity);
+    destination.application_identity.assign(source.application_identity);
+  }
+
+  [[nodiscard]] const runtime::multiblock::BoundaryEvaluationPoint&
+  prepared_boundary_evaluation_point(int stage) const {
+    auto& point = hot_path_workspace_.direct_point;
+    write_boundary_evaluation_point_into(point, stage);
+    return point;
   }
 
   // These accessors are explicit writer-side seams.  A generated Uniform Program runs while the
@@ -508,7 +794,7 @@ class UniformStorageTopologyAdapter {
     if (system_ == nullptr)
       throw std::logic_error(
           "Program preparation cannot resolve an accepted auxiliary consumer plan before seal");
-    return system_->program_prepared_auxiliary_consumer_plan_(std::string(consumer_qid));
+    return system_->program_prepared_auxiliary_consumer_plan_(consumer_qid);
   }
   [[nodiscard]] NewtonOptions program_newton_options_(int runtime_block) const {
     if (system_ == nullptr && preparation_read_view_ != nullptr)
@@ -626,9 +912,21 @@ class UniformStorageTopologyAdapter {
                                prototype.ghosts());
   }
 
+  field_type& prepared_rhs_scratch(ProgramCacheSlot slot, int subslot,
+                                   const field_type& prototype) const {
+    return persistent_scratch_(ScratchKind::Rhs, slot, subslot, prototype, prototype.ncomp(),
+                               prototype.ghosts(), false);
+  }
+
   field_type& scratch_state(ProgramCacheSlot slot, int subslot, const field_type& prototype) const {
     return persistent_scratch_(ScratchKind::State, slot, subslot, prototype, prototype.ncomp(),
                                prototype.ghosts());
+  }
+
+  field_type& prepared_state_scratch(ProgramCacheSlot slot, int subslot,
+                                     const field_type& prototype) const {
+    return persistent_scratch_(ScratchKind::State, slot, subslot, prototype, prototype.ncomp(),
+                               prototype.ghosts(), false);
   }
 
   field_type& scalar_scratch(ProgramCacheSlot slot, int subslot, const field_type& prototype,
@@ -641,6 +939,19 @@ class UniformStorageTopologyAdapter {
     for (int axis = 0; axis < Dim; ++axis)
       ghosts[axis] = ghost_depth;
     return persistent_scratch_(ScratchKind::Scalar, slot, subslot, prototype, ncomp, ghosts);
+  }
+
+  field_type& prepared_scalar_scratch(ProgramCacheSlot slot, int subslot,
+                                      const field_type& prototype, int ncomp = 1,
+                                      int ghost_depth = 1) const {
+    if (ncomp < 1 || ghost_depth < 0)
+      throw std::invalid_argument(
+          "ProgramExecutionServices prepared scalar scratch requires positive components and "
+          "non-negative ghosts");
+    Extent<Dim> ghosts{};
+    for (int axis = 0; axis < Dim; ++axis)
+      ghosts[axis] = ghost_depth;
+    return persistent_scratch_(ScratchKind::Scalar, slot, subslot, prototype, ncomp, ghosts, false);
   }
 
   /// Install-time-only reservation of one finite scratch location.  The compact value id is the
@@ -694,7 +1005,7 @@ class UniformStorageTopologyAdapter {
   void rhs_into(int program_block, field_type& state_value, field_type& rhs, int rate_id) const {
     require_rate_identity_(rate_id);
     count_kernel_();
-    const auto point = boundary_evaluation_point(rate_id);
+    const auto& point = prepared_boundary_evaluation_point(rate_id);
     const int runtime_block = sys_block(program_block);
     if (program_requires_boundary_session_(runtime_block)) {
       const ExecutionLane& lane = program_prepared_execution_lane_();
@@ -711,7 +1022,7 @@ class UniformStorageTopologyAdapter {
                                  int rate_id) const {
     require_rate_identity_(rate_id);
     count_kernel_();
-    system_->block_neg_div_flux_into_at(boundary_evaluation_point(rate_id),
+    system_->block_neg_div_flux_into_at(prepared_boundary_evaluation_point(rate_id),
                                         sys_block(program_block), state_value, rhs);
   }
 
@@ -735,8 +1046,7 @@ class UniformStorageTopologyAdapter {
   }
 
   void apply_source_mask(field_type& rhs, std::initializer_list<int> keep) const {
-    pops::runtime::program::apply_component_keep_mask(rhs,
-                                                      std::vector<int>(keep.begin(), keep.end()));
+    pops::runtime::program::apply_component_keep_mask(rhs, keep);
     count_kernel_();
   }
 
@@ -768,7 +1078,7 @@ class UniformStorageTopologyAdapter {
       ++index;
     }
     count_kernel_(static_cast<std::int64_t>(requests.size()));
-    system_->block_rhs_group(boundary_evaluation_point(group_id), workspace.rhs_blocks,
+    system_->block_rhs_group(prepared_boundary_evaluation_point(group_id), workspace.rhs_blocks,
                              workspace.rhs_states, workspace.rhs_residuals,
                              workspace.rhs_flux_only);
   }
@@ -782,7 +1092,7 @@ class UniformStorageTopologyAdapter {
   /// policy; both are retained by `SystemBlockStore<Dim>`.
   void prepare_generated_state(int program_block, field_type& state_value, int rate_id) const {
     require_rate_identity_(rate_id);
-    system_->block_prepare_generated_state_at(boundary_evaluation_point(rate_id),
+    system_->block_prepare_generated_state_at(prepared_boundary_evaluation_point(rate_id),
                                               sys_block(program_block), state_value);
   }
 
@@ -831,17 +1141,14 @@ class UniformStorageTopologyAdapter {
   }
 
   void apply_projection(int program_block, field_type& state_value) const {
-    const ExecutionLane& lane = prepared_execution_lane();
-    const int runtime_block =
-        resolve_prepared_program_block_(program_block, lane, "Program projection block");
+    const int runtime_block = prepared_projection_speed_route_(program_block);
     count_kernel_();
     system_->block_project(runtime_block, state_value);
   }
 
   Real max_wave_speed(int program_block, const field_type& state_value) const {
+    const int runtime_block = prepared_projection_speed_route_(program_block);
     const ExecutionLane& lane = prepared_execution_lane();
-    const int runtime_block =
-        resolve_prepared_program_block_(program_block, lane, "Program maximum-speed block");
     return system_->block_max_speed_prepared_(runtime_block, state_value, lane);
   }
 
@@ -1033,16 +1340,26 @@ class UniformStorageTopologyAdapter {
                             const field_type* active_cells, const ExecutionLane& lane) const {
     require_prepared_lane_(lane, "Program pointwise status");
     const int runtime_block = resolve_pointwise_program_block_(program_block, lane);
-    const field_type* const expected =
-        system_->prepared_program_block_active_mask_(runtime_block, status, lane);
+    const field_type* expected = nullptr;
+    std::exception_ptr mask_error;
+    try {
+      expected = system_->prepared_program_block_active_mask_(runtime_block, status, lane);
+    } catch (...) {
+      mask_error = std::current_exception();
+    }
+    converge_owner_reduction_(mask_error, lane, "Program pointwise status active-mask");
     if (all_reduce_max(active_cells == expected ? 0L : 1L, lane) != 0)
       throw std::invalid_argument("Program pointwise status received a foreign active-cell mask");
     if (all_reduce_max(status.ncomp() == 1 ? 0L : 1L, lane) != 0)
       throw std::invalid_argument("Program pointwise status requires exactly one component");
+    const auto& workspace = hot_path_workspace_;
     MaskedMaxLocalResult local;
     std::exception_ptr local_error;
     try {
-      local = pops::reduce_masked_max_local(status, 0, expected);
+      workspace.require_sum_reduction("Program pointwise status");
+      local = pops::reduce_masked_max_local(
+          status, 0, expected, typename PreparedHotPathWorkspace::sum_execution_space{},
+          workspace.sum_reduction);
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -1061,20 +1378,68 @@ class UniformStorageTopologyAdapter {
   }
 
   Real sum_component(const field_type& field, int component) const {
-    return static_cast<Real>(
-        all_reduce_sum(pops::reduce_sum_local(field, component), prepared_execution_lane()));
+    const ExecutionLane& lane = prepared_execution_lane();
+    const auto& workspace = hot_path_workspace_;
+    Real local = Real(0);
+    std::exception_ptr local_error;
+    try {
+      workspace.require_sum_reduction("Program sum reduction");
+      local =
+          pops::reduce_sum_local(field, typename PreparedHotPathWorkspace::sum_execution_space{},
+                                 workspace.sum_reduction, component);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program sum reduction");
+    return static_cast<Real>(all_reduce_sum(local, lane));
   }
   Real abs_sum_component(const field_type& field, int component) const {
-    return static_cast<Real>(
-        all_reduce_sum(pops::reduce_abs_sum_local(field, component), prepared_execution_lane()));
+    const ExecutionLane& lane = prepared_execution_lane();
+    const auto& workspace = hot_path_workspace_;
+    Real local = Real(0);
+    std::exception_ptr local_error;
+    try {
+      workspace.require_sum_reduction("Program abs-sum reduction");
+      local = pops::reduce_abs_sum_local(field,
+                                         typename PreparedHotPathWorkspace::sum_execution_space{},
+                                         workspace.sum_reduction, component);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program abs-sum reduction");
+    return static_cast<Real>(all_reduce_sum(local, lane));
   }
   Real max_component(const field_type& field, int component) const {
-    return static_cast<Real>(
-        all_reduce_max(pops::reduce_max_local(field, component), prepared_execution_lane()));
+    const ExecutionLane& lane = prepared_execution_lane();
+    const auto& workspace = hot_path_workspace_;
+    Real local = Real(0);
+    std::exception_ptr local_error;
+    try {
+      workspace.require_sum_reduction("Program max reduction");
+      local =
+          pops::reduce_max_local(field, typename PreparedHotPathWorkspace::sum_execution_space{},
+                                 workspace.sum_reduction, component);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program max reduction");
+    return static_cast<Real>(all_reduce_max(local, lane));
   }
   Real min_component(const field_type& field, int component) const {
-    return static_cast<Real>(
-        all_reduce_min(pops::reduce_min_local(field, component), prepared_execution_lane()));
+    const ExecutionLane& lane = prepared_execution_lane();
+    const auto& workspace = hot_path_workspace_;
+    Real local = Real(0);
+    std::exception_ptr local_error;
+    try {
+      workspace.require_sum_reduction("Program min reduction");
+      local =
+          pops::reduce_min_local(field, typename PreparedHotPathWorkspace::sum_execution_space{},
+                                 workspace.sum_reduction, component);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program min reduction");
+    return static_cast<Real>(all_reduce_min(local, lane));
   }
 
   /// Generated reductions authenticate the Program owner and exclude inactive embedded-boundary
@@ -1082,11 +1447,16 @@ class UniformStorageTopologyAdapter {
   /// System reduction services, not to Program control-flow scalars.
   Real sum_component(int program_block, const field_type& field, int component) const {
     const ExecutionLane& lane = prepared_execution_lane();
-    const field_type* const active = pointwise_active_mask(program_block, field);
+    const auto& workspace = hot_path_workspace_;
+    const field_type* active = nullptr;
     std::exception_ptr local_error;
     Real local = Real(0);
     try {
-      local = pops::reduce_active_sum_local(field, component, active);
+      active = pointwise_active_mask(program_block, field);
+      workspace.require_sum_reduction("Program owner-qualified sum reduction");
+      local = pops::reduce_active_sum_local(
+          field, component, active, typename PreparedHotPathWorkspace::sum_execution_space{},
+          workspace.sum_reduction);
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -1095,11 +1465,16 @@ class UniformStorageTopologyAdapter {
   }
   Real abs_sum_component(int program_block, const field_type& field, int component) const {
     const ExecutionLane& lane = prepared_execution_lane();
-    const field_type* const active = pointwise_active_mask(program_block, field);
+    const auto& workspace = hot_path_workspace_;
+    const field_type* active = nullptr;
     std::exception_ptr local_error;
     Real local = Real(0);
     try {
-      local = pops::reduce_active_abs_sum_local(field, component, active);
+      active = pointwise_active_mask(program_block, field);
+      workspace.require_sum_reduction("Program owner-qualified abs-sum reduction");
+      local = pops::reduce_active_abs_sum_local(
+          field, component, active, typename PreparedHotPathWorkspace::sum_execution_space{},
+          workspace.sum_reduction);
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -1108,11 +1483,16 @@ class UniformStorageTopologyAdapter {
   }
   Real max_component(int program_block, const field_type& field, int component) const {
     const ExecutionLane& lane = prepared_execution_lane();
-    const field_type* const active = pointwise_active_mask(program_block, field);
+    const auto& workspace = hot_path_workspace_;
+    const field_type* active = nullptr;
     std::exception_ptr local_error;
     Real local = Real(0);
     try {
-      local = pops::reduce_active_max_local(field, component, active);
+      active = pointwise_active_mask(program_block, field);
+      workspace.require_sum_reduction("Program owner-qualified max reduction");
+      local = pops::reduce_active_max_local(
+          field, component, active, typename PreparedHotPathWorkspace::sum_execution_space{},
+          workspace.sum_reduction);
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -1121,11 +1501,16 @@ class UniformStorageTopologyAdapter {
   }
   Real min_component(int program_block, const field_type& field, int component) const {
     const ExecutionLane& lane = prepared_execution_lane();
-    const field_type* const active = pointwise_active_mask(program_block, field);
+    const auto& workspace = hot_path_workspace_;
+    const field_type* active = nullptr;
     std::exception_ptr local_error;
     Real local = Real(0);
     try {
-      local = pops::reduce_active_min_local(field, component, active);
+      active = pointwise_active_mask(program_block, field);
+      workspace.require_sum_reduction("Program owner-qualified min reduction");
+      local = pops::reduce_active_min_local(
+          field, component, active, typename PreparedHotPathWorkspace::sum_execution_space{},
+          workspace.sum_reduction);
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -1134,11 +1519,16 @@ class UniformStorageTopologyAdapter {
   }
   Real norm2(int program_block, const field_type& field) const {
     const ExecutionLane& lane = prepared_execution_lane();
-    const field_type* const active = pointwise_active_mask(program_block, field);
+    const auto& workspace = hot_path_workspace_;
+    const field_type* active = nullptr;
     std::exception_ptr local_error;
     Real local = Real(0);
     try {
-      local = pops::dot_active_local(field, field, 0, active);
+      active = pointwise_active_mask(program_block, field);
+      workspace.require_sum_reduction("Program owner-qualified norm2 reduction");
+      local = pops::dot_active_local(field, field, 0, active,
+                                     typename PreparedHotPathWorkspace::sum_execution_space{},
+                                     workspace.sum_reduction);
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -1147,11 +1537,16 @@ class UniformStorageTopologyAdapter {
   }
   Real norm_inf(int program_block, const field_type& field) const {
     const ExecutionLane& lane = prepared_execution_lane();
-    const field_type* const active = pointwise_active_mask(program_block, field);
+    const auto& workspace = hot_path_workspace_;
+    const field_type* active = nullptr;
     std::exception_ptr local_error;
     Real local = Real(0);
     try {
-      local = pops::reduce_active_norm_inf_local(field, 0, active);
+      active = pointwise_active_mask(program_block, field);
+      workspace.require_sum_reduction("Program owner-qualified norm-inf reduction");
+      local = pops::reduce_active_norm_inf_local(
+          field, 0, active, typename PreparedHotPathWorkspace::sum_execution_space{},
+          workspace.sum_reduction);
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -1160,12 +1555,17 @@ class UniformStorageTopologyAdapter {
   }
   Real dot(int program_block, const field_type& left, const field_type& right) const {
     const ExecutionLane& lane = prepared_execution_lane();
-    const field_type* const active = pointwise_active_mask(program_block, left);
+    const auto& workspace = hot_path_workspace_;
+    const field_type* active = nullptr;
     std::exception_ptr local_error;
     Real local = Real(0);
     try {
+      active = pointwise_active_mask(program_block, left);
+      workspace.require_sum_reduction("Program owner-qualified dot reduction");
       require_same_field_contract_(left, right, "ProgramExecutionServices dot");
-      local = pops::dot_active_local(left, right, 0, active);
+      local = pops::dot_active_local(left, right, 0, active,
+                                     typename PreparedHotPathWorkspace::sum_execution_space{},
+                                     workspace.sum_reduction);
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -1285,22 +1685,23 @@ class UniformStorageTopologyAdapter {
   }
 
   void fill_boundary(field_type& field) const {
-    auto session = scalar_boundary_session_type::prepare(geometry(), scalar_boundary_topology_(),
-                                                         field, prepared_execution_lane(),
-                                                         next_scalar_boundary_generation_());
-    session->fill(field);
+    (void)field;
+    throw std::logic_error(
+        "Uniform Program boundary fill requires a cold-bound PreparedScalarBoundarySession");
   }
 
   void fill_boundary(field_type& field, const ExecutionLane& lane) const {
-    require_prepared_lane_(lane, "Program boundary fill");
-    auto session = scalar_boundary_session_type::prepare(
-        geometry(), scalar_boundary_topology_(), field, lane, next_scalar_boundary_generation_());
-    session->fill(field);
+    (void)field;
+    (void)lane;
+    throw std::logic_error(
+        "Uniform Program boundary fill requires a cold-bound PreparedScalarBoundarySession");
   }
 
   void laplacian(field_type& output, field_type& input) const {
-    auto boundary = prepare_mesh_boundary_session(input, prepared_execution_lane());
-    laplacian(output, input, *boundary);
+    (void)output;
+    (void)input;
+    throw std::logic_error(
+        "Uniform Program Laplacian requires a cold-bound PreparedScalarBoundarySession");
   }
 
   void laplacian(field_type& output, field_type& input,
@@ -1337,8 +1738,10 @@ class UniformStorageTopologyAdapter {
   }
 
   void gradient(field_type& output, field_type& input) const {
-    auto boundary = prepare_mesh_boundary_session(input, prepared_execution_lane());
-    gradient(output, input, *boundary);
+    (void)output;
+    (void)input;
+    throw std::logic_error(
+        "Uniform Program gradient requires a cold-bound PreparedScalarBoundarySession");
   }
 
   void gradient(field_type& output, field_type& input,
@@ -1370,8 +1773,10 @@ class UniformStorageTopologyAdapter {
   }
 
   void divergence(field_type& output, field_type& flux) const {
-    auto boundary = prepare_mesh_boundary_session(flux, prepared_execution_lane());
-    divergence(output, flux, *boundary);
+    (void)output;
+    (void)flux;
+    throw std::logic_error(
+        "Uniform Program divergence requires a cold-bound PreparedScalarBoundarySession");
   }
 
   void divergence(field_type& output, field_type& flux,
@@ -1704,7 +2109,7 @@ class UniformStorageTopologyAdapter {
     return static_cast<Real>(system_->program_time_());
   }
 
-  void record_scalar(const std::string& name, Real value) const {
+  void record_scalar(std::string_view name, Real value) const {
     runtime_state().record_diagnostic(name, value);
   }
   void record_balance_term(const std::string& route, const std::string& term, Real value) const {
@@ -1978,7 +2383,93 @@ class UniformStorageTopologyAdapter {
     std::vector<int> runtime_blocks;
     std::vector<const field_type*> runtime_stages;
     std::vector<const field_type*> unique_stages;
+
+    [[nodiscard]] std::uint64_t resident_storage_bytes() const {
+      std::uint64_t total = external_string_storage_bytes_(field);
+      checked_add_resident_storage_(total, vector_storage_bytes_(program_blocks));
+      checked_add_resident_storage_(total, vector_storage_bytes_(runtime_blocks));
+      checked_add_resident_storage_(total, vector_storage_bytes_(runtime_stages));
+      checked_add_resident_storage_(total, vector_storage_bytes_(unique_stages));
+      return total;
+    }
   };
+
+  static void checked_add_resident_storage_(std::uint64_t& total, std::uint64_t value) {
+    if (value > std::numeric_limits<std::uint64_t>::max() - total)
+      throw std::overflow_error("Uniform Program resident storage overflows uint64");
+    total += value;
+  }
+
+  template <class T>
+  static std::uint64_t vector_storage_bytes_(const std::vector<T>& values) {
+    if (values.capacity() > std::numeric_limits<std::uint64_t>::max() / sizeof(T))
+      throw std::overflow_error("Uniform Program resident vector storage overflows uint64");
+    return static_cast<std::uint64_t>(values.capacity()) * sizeof(T);
+  }
+
+  static std::uint64_t external_string_storage_bytes_(const std::string& value) {
+    const auto begin = reinterpret_cast<std::uintptr_t>(&value);
+    const auto end = begin + sizeof(value);
+    const auto data = reinterpret_cast<std::uintptr_t>(value.data());
+    if (data >= begin && data < end)
+      return 0;
+    if (value.capacity() == std::numeric_limits<std::uint64_t>::max())
+      throw std::overflow_error("Uniform Program resident string storage overflows uint64");
+    return static_cast<std::uint64_t>(value.capacity()) + 1U;
+  }
+
+  [[nodiscard]] std::uint64_t generated_field_routes_resident_storage_bytes_() const {
+    std::uint64_t total = vector_storage_bytes_(generated_field_routes_);
+    for (const GeneratedFieldRoute& route : generated_field_routes_)
+      checked_add_resident_storage_(total, route.resident_storage_bytes());
+    return total;
+  }
+
+  [[nodiscard]] std::uint64_t scratch_metadata_resident_storage_bytes_() const {
+    std::uint64_t total = vector_storage_bytes_(scratch_);
+    for (const scratch_slot_type& slot : scratch_)
+      for (const auto& family : slot) {
+        checked_add_resident_storage_(total, vector_storage_bytes_(family));
+        for (const auto& field : family) {
+          if (!field)
+            continue;
+          const std::uint64_t storage = field->resident_storage_bytes();
+          const std::uint64_t payload = field->resident_payload_bytes();
+          if (storage < payload)
+            throw std::logic_error(
+                "Uniform Program scratch resident storage is smaller than its payload");
+          checked_add_resident_storage_(total, storage - payload);
+        }
+      }
+    return total;
+  }
+
+  void validate_prepared_host_carriers_() const {
+    if (clock_schedule_.primary_clock() != primary_clock_)
+      throw std::logic_error("Uniform Program host resident footprint has incoherent clock shape");
+    const std::size_t blocks = preparation_states_->size();
+    for (const GeneratedFieldRoute& route : generated_field_routes_) {
+      if (!route.prepared)
+        continue;
+      if (route.field.empty() || route.program_blocks.empty() ||
+          route.runtime_blocks.size() != route.program_blocks.size() ||
+          route.runtime_stages.size() != blocks ||
+          route.runtime_blocks.capacity() < route.program_blocks.size() ||
+          route.unique_stages.capacity() < route.program_blocks.size())
+        throw std::logic_error(
+            "Uniform Program host resident footprint has incoherent generated route shape");
+      for (std::size_t index = 0; index < route.program_blocks.size(); ++index) {
+        const int program_block = route.program_blocks[index];
+        const int runtime_block = route.runtime_blocks[index];
+        if (program_block < 0 || runtime_block < 0 ||
+            static_cast<std::size_t>(program_block) >= preparation_block_map_->size() ||
+            static_cast<std::size_t>(runtime_block) >= blocks ||
+            preparation_block_map_->at(static_cast<std::size_t>(program_block)) != runtime_block)
+          throw std::logic_error(
+              "Uniform Program host resident footprint has incoherent generated route mapping");
+      }
+    }
+  }
 
   static runtime_type* require_system_(runtime_type* system) {
     if (system == nullptr)
@@ -2073,6 +2564,53 @@ class UniformStorageTopologyAdapter {
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("program-prepared-boundary-route"), contract.view()}}, lane))
       throw std::runtime_error(std::string(operation) + " differs across MPI ranks");
+    return runtime_block;
+  }
+
+  /// Projection and CFL callbacks are inside generated step loops.  Their complete Program-to-
+  /// runtime table and exact-ranked receipt are built once when the accepted System is bound;
+  /// execution performs only a checked dense-index lookup.  In particular, do not route these
+  /// calls through sys_block()/ExactContractBuilder here: that would recreate a map/string
+  /// consensus payload in the hot path.
+  void bind_projection_speed_routes_() const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const auto& map = program_block_map_();
+    if (map.empty()) {
+      // A descriptor-only/state-free Program has no block operation to seal.  Keep the route
+      // carrier explicitly unbound so a later projection/CFL call fails closed rather than
+      // manufacturing positional identity.
+      projection_speed_routes_.clear();
+      projection_speed_routes_bound_ = false;
+      return;
+    }
+    std::vector<int> candidate;
+    candidate.reserve(map.size());
+    for (std::size_t program = 0; program < map.size(); ++program)
+      candidate.push_back(sys_block(static_cast<int>(program)));
+
+    ExactContractBuilder receipt;
+    receipt.text("pops.program.projection-speed-routes")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .text(lane.identity())
+        .scalar(static_cast<std::uint64_t>(candidate.size()));
+    for (const int runtime_block : candidate)
+      receipt.scalar(std::int32_t{runtime_block});
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("program-projection-speed-routes"), receipt.view()}}, lane))
+      throw std::runtime_error("Program projection/speed block routes differ across MPI ranks");
+
+    projection_speed_routes_.swap(candidate);
+    projection_speed_routes_bound_ = true;
+  }
+
+  [[nodiscard]] int prepared_projection_speed_route_(int program_block) const {
+    if (!projection_speed_routes_bound_ || program_block < 0 ||
+        static_cast<std::size_t>(program_block) >= projection_speed_routes_.size())
+      throw std::logic_error("Program projection/speed route is not bind-prepared");
+    const int runtime_block = projection_speed_routes_[static_cast<std::size_t>(program_block)];
+    if (runtime_block < 0)
+      throw std::logic_error("Program projection/speed route is invalid");
     return runtime_block;
   }
 
@@ -2247,7 +2785,7 @@ class UniformStorageTopologyAdapter {
       family.resize(required);
     auto& entry = family[static_cast<std::size_t>(subslot)];
     if (entry) {
-      require_same_field_contract_(*entry, prototype, "Program scratch prime");
+      require_same_layout_(*entry, prototype, "Program scratch prime");
       if (entry->ncomp() != ncomp || entry->ghosts() != ghosts)
         throw std::logic_error("Program scratch prime changed a prepared shape");
       return;
@@ -2256,8 +2794,8 @@ class UniformStorageTopologyAdapter {
   }
 
   field_type& persistent_scratch_(ScratchKind kind, ProgramCacheSlot slot, int subslot,
-                                  const field_type& prototype, int ncomp,
-                                  const Extent<Dim>& ghosts) const {
+                                  const field_type& prototype, int ncomp, const Extent<Dim>& ghosts,
+                                  bool reset = true) const {
     if (subslot < 0)
       throw std::invalid_argument("ProgramExecutionServices scratch identity must be non-negative");
     if (slot >= scratch_.size())
@@ -2267,10 +2805,11 @@ class UniformStorageTopologyAdapter {
     if (index >= family.size() || !family[index])
       throw std::logic_error("Program scratch was not primed during installation");
     field_type& result = *family[index];
-    require_same_field_contract_(result, prototype, "Program scratch");
+    require_same_layout_(result, prototype, "Program scratch");
     if (result.ncomp() != ncomp || result.ghosts() != ghosts)
       throw std::logic_error("Program scratch shape drifted after installation");
-    result.set_val(Real(0));
+    if (reset)
+      result.set_val(Real(0));
     return result;
   }
 
@@ -2329,6 +2868,10 @@ class UniformStorageTopologyAdapter {
   /// preparation calls; generated step code cannot recover a map/string fallback.
   mutable std::vector<scratch_slot_type> scratch_;
   mutable std::vector<GeneratedFieldRoute> generated_field_routes_;
+  /// Fixed Program-block indices for the two scalar/spatial callbacks that occur in every
+  /// generated step.  The vector is cold-built and collectively authenticated at accepted bind.
+  mutable std::vector<int> projection_speed_routes_;
+  mutable bool projection_speed_routes_bound_ = false;
   /// All pointer packs and accepted-state rollback images used by the selected hot paths.  This
   /// member is bound before the first candidate step and is never resized by execution.
   mutable PreparedHotPathWorkspace hot_path_workspace_;
@@ -2346,13 +2889,17 @@ namespace pops::runtime::program {
 
 template <int Dim>
 class ProgramExecutionPreparationImage;
+namespace detail {
+template <int Dim>
+struct ProgramExecutionServicesForwardOverlayTestAccess;
+}
 
 template <int Dim>
 class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<Dim>,
                                  private detail::AmrStorageTopologyAdapter<
                                      Dim, typename Kokkos::DefaultExecutionSpace::memory_space> {
  public:
-  enum class Binding : std::uint8_t { accepted, preparation };
+  enum class Binding : std::uint8_t { accepted, preparation, sealed_preparation };
 
  private:
   // These private bases are storage/topology adapters only.  They own the exact-ranked
@@ -2380,10 +2927,141 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
  public:
   static constexpr int dimension = Dim;
   using field_type = typename uniform_backend::field_type;
+  using scalar_boundary_session_type = typename uniform_backend::scalar_boundary_session_type;
+  using tensor_boundary_session_type = typename amr_backend::tensor_boundary_session_type;
   using UniformPreparedReadView = typename uniform_backend::PreparedReadView;
+  using AmrAcceptedRuntimeStateResolver =
+      typename amr_backend::accepted_runtime_state_resolver_type;
+  using AmrBackend = amr_backend;
   using FieldStageOverride = detail::ProgramFieldStageOverride<Dim>;
   using RhsGroupRequest = detail::ProgramRhsGroupRequest<Dim>;
+  /// Exact AMR coupling candidate record.  Keep the backend's value type on the public
+  /// authority so overload lookup cannot accidentally select the Uniform coupling route.
+  using CouplingStateOverride = typename amr_backend::CouplingStateOverride;
   using AmrPreparationTopologyView = typename amr_backend::PreparedAmrTopologyView;
+
+  /// A value-like reference to one bind-sealed persistent scratch family.
+  ///
+  /// The handle deliberately stores only the stable execution owner and dense resource
+  /// coordinates.  It never retains a MultiFab, topology, or level pointer: ``resolve`` rereads
+  /// the active level's prepared slot on every use, so a regrid/level switch cannot leave a
+  /// generated closure with a stale field address.  Resolving a handle preserves the resident
+  /// contents: generated prepared sessions explicitly overwrite or zero their outputs, while
+  /// repeated reads of coefficients and Krylov accumulators must not erase them.  All shape and
+  /// owner checks remain vector-indexed after preparation and cannot allocate or consult the
+  /// fallback map on the candidate path.
+  enum class PreparedScratchFamily : std::uint8_t { rhs = 0, state = 1, scalar = 2 };
+
+  class PreparedScratchHandle final {
+   public:
+    PreparedScratchHandle() = default;
+    PreparedScratchHandle(const PreparedScratchHandle&) = default;
+    PreparedScratchHandle& operator=(const PreparedScratchHandle&) = default;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return owner_ != nullptr; }
+
+    [[nodiscard]] field_type& resolve() const {
+      if (owner_ == nullptr)
+        throw std::logic_error("Program scratch handle is not bound");
+      if (subslot_ < 0 || ncomp_ < 1 || program_block_ < 0)
+        throw std::logic_error("Program scratch handle has an invalid dense identity");
+      for (int axis = 0; axis < Dim; ++axis)
+        if (ghosts_[axis] < 0)
+          throw std::logic_error("Program scratch handle has a negative ghost extent");
+
+      const field_type& prototype = owner_->state(program_block_);
+      switch (family_) {
+        case PreparedScratchFamily::rhs: {
+          if (prototype.ncomp() != ncomp_ || prototype.ghosts() != ghosts_)
+            throw std::runtime_error("Program RHS scratch handle changed its field contract");
+          return owner_->is_amr()
+                     ? static_cast<const amr_backend&>(*owner_).prepared_rhs_scratch(
+                           slot_, subslot_, prototype)
+                     : static_cast<const uniform_backend&>(*owner_).prepared_rhs_scratch(
+                           slot_, subslot_, prototype);
+        }
+        case PreparedScratchFamily::state: {
+          if (prototype.ncomp() != ncomp_ || prototype.ghosts() != ghosts_)
+            throw std::runtime_error("Program state scratch handle changed its field contract");
+          return owner_->is_amr()
+                     ? static_cast<const amr_backend&>(*owner_).prepared_state_scratch(
+                           slot_, subslot_, prototype)
+                     : static_cast<const uniform_backend&>(*owner_).prepared_state_scratch(
+                           slot_, subslot_, prototype);
+        }
+        case PreparedScratchFamily::scalar: {
+          const int depth = ghosts_[0];
+          for (int axis = 1; axis < Dim; ++axis)
+            if (ghosts_[axis] != depth)
+              throw std::invalid_argument(
+                  "Program scalar scratch handle requires isotropic ghost depth");
+          return owner_->is_amr()
+                     ? static_cast<const amr_backend&>(*owner_).prepared_scalar_scratch(
+                           slot_, subslot_, prototype, ncomp_, depth)
+                     : static_cast<const uniform_backend&>(*owner_).prepared_scalar_scratch(
+                           slot_, subslot_, prototype, ncomp_, depth);
+        }
+      }
+      throw std::logic_error("Program scratch handle has an invalid family");
+    }
+
+    [[nodiscard]] field_type* operator->() const { return &resolve(); }
+    [[nodiscard]] field_type& operator*() const { return resolve(); }
+
+   private:
+    friend class ProgramExecutionServices;
+
+    PreparedScratchHandle(const ProgramExecutionServices* owner, PreparedScratchFamily family,
+                          ProgramCacheSlot slot, int subslot, int program_block, int ncomp,
+                          Extent<Dim> ghosts)
+        : owner_(owner),
+          family_(family),
+          slot_(slot),
+          subslot_(subslot),
+          program_block_(program_block),
+          ncomp_(ncomp),
+          ghosts_(ghosts) {}
+
+    const ProgramExecutionServices* owner_ = nullptr;
+    PreparedScratchFamily family_ = PreparedScratchFamily::scalar;
+    ProgramCacheSlot slot_ = 0;
+    int subslot_ = -1;
+    int program_block_ = -1;
+    int ncomp_ = 0;
+    Extent<Dim> ghosts_{};
+  };
+
+  [[nodiscard]] PreparedScratchHandle prepared_scratch_handle(PreparedScratchFamily family,
+                                                              ProgramCacheSlot slot, int subslot,
+                                                              int program_block, int ncomp,
+                                                              const Extent<Dim>& ghosts) const {
+    if (subslot < 0 || program_block < 0 || ncomp < 1)
+      throw std::invalid_argument("Program scratch handle has an invalid dense identity");
+    for (int axis = 0; axis < Dim; ++axis)
+      if (ghosts[axis] < 0)
+        throw std::invalid_argument("Program scratch handle has a negative ghost extent");
+    if (family != PreparedScratchFamily::rhs && family != PreparedScratchFamily::state &&
+        family != PreparedScratchFamily::scalar)
+      throw std::invalid_argument("Program scratch handle has an invalid family");
+    return PreparedScratchHandle(this, family, slot, subslot, program_block, ncomp, ghosts);
+  }
+
+  [[nodiscard]] PreparedScratchHandle prepared_scalar_scratch_handle(ProgramCacheSlot slot,
+                                                                     int subslot, int program_block,
+                                                                     int ncomp = 1,
+                                                                     int ghost_depth = 1) const {
+    return prepared_scratch_handle(PreparedScratchFamily::scalar, slot, subslot, program_block,
+                                   ncomp, uniform_ghosts_(ghost_depth));
+  }
+
+  // This is the unique owner of the active adapter graph. AMR resident level runtimes point
+  // back to that graph, so public services must be retained by pointer, not copied or moved.
+  // Independent prepared/accepted images are built through their explicit factories and snapshot
+  // protocol, which establishes fresh ownership rather than copying this object.
+  ProgramExecutionServices(const ProgramExecutionServices&) = delete;
+  ProgramExecutionServices& operator=(const ProgramExecutionServices&) = delete;
+  ProgramExecutionServices(ProgramExecutionServices&&) = delete;
+  ProgramExecutionServices& operator=(ProgramExecutionServices&&) = delete;
 
   /// Uniform and AMR keep different private child-window state, but the generated Program has
   /// one scope ABI.  The variant owns exactly one already-constructed backend guard and adds no
@@ -2418,6 +3096,23 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
   void prepare_cache_slot(std::size_t slot, int program_block) const;
   void prepare_generated_field_route(std::uint32_t slot, std::string_view field,
                                      std::initializer_list<int> program_blocks) const;
+
+  /// Publish a recoverable callback rejection into the host-owned fixed mailbox.  Generated code
+  /// follows this with a DSO-local sentinel; no C++ exception object or dynamically sized text
+  /// crosses ProgramCandidateDescriptor::StepFn.
+  [[nodiscard]] bool publish_step_attempt_rejection(
+      SolveStatus status, StepAttemptDisposition disposition, std::uint32_t reason_code,
+      std::string_view phase, std::string_view detail,
+      ProgramStepRejectRecord& record) const noexcept {
+    return preparation_image_ != nullptr &&
+           preparation_image_->step_reject_mailbox().publish(status, disposition, reason_code,
+                                                             phase, detail, record);
+  }
+
+  [[nodiscard]] bool adopt_step_attempt_rejection(
+      const ProgramStepRejectRecord& record) const noexcept {
+    return preparation_image_ != nullptr && preparation_image_->step_reject_mailbox().adopt(record);
+  }
 
   // Image-private forwarding seams.  No generated step calls these names; they retain the dense
   // storage inside this provider while the image is still the sole owner.
@@ -2477,8 +3172,37 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
     amr_backend::bind_prepared_scratch_slots(count);
   }
   void prime_prepared_amr_scratch(std::uint8_t kind, std::size_t slot, int subslot,
-                                  int program_block, int ncomp, int ghost_depth) const {
-    amr_backend::prime_prepared_scratch(kind, slot, subslot, program_block, ncomp, ghost_depth);
+                                  int program_block, int declared_level, int ncomp,
+                                  int ghost_depth) const {
+    amr_backend::prime_prepared_scratch(kind, slot, subslot, program_block, declared_level, ncomp,
+                                        ghost_depth);
+  }
+  void prime_prepared_amr_subcycling_engine() const {
+    if (!is_amr() || binding_ != Binding::preparation)
+      throw std::logic_error(
+          "AMR Program subcycling prime requires the detached preparation provider");
+    amr_backend::prime_prepared_subcycling_engine();
+  }
+  [[nodiscard]] std::vector<ProgramInstallationTables::ResourcePrototype>
+  prepared_amr_flux_resident_resource_prototypes() const {
+    if (!is_amr() || binding_ != Binding::preparation)
+      throw std::logic_error(
+          "AMR Program resident flux footprint requires the detached preparation provider");
+    return amr_backend::prepared_amr_flux_resident_resource_prototypes();
+  }
+  [[nodiscard]] std::vector<ProgramInstallationTables::ResourcePrototype>
+  prepared_uniform_host_resident_resource_prototypes() const {
+    if (is_amr() || binding_ != Binding::sealed_preparation || preparation_image_ == nullptr)
+      throw std::logic_error(
+          "Uniform Program resident footprint requires the detached preparation provider");
+    return static_cast<const uniform_backend&>(*this).prepared_host_resident_resource_prototypes();
+  }
+  [[nodiscard]] std::vector<ProgramInstallationTables::ResourcePrototype>
+  prepared_amr_host_resident_resource_prototypes() const {
+    if (!is_amr() || binding_ != Binding::preparation)
+      throw std::logic_error(
+          "AMR Program resident footprint requires the detached preparation provider");
+    return amr_backend::prepared_host_resident_resource_prototypes();
   }
   class PreparedBlockBoundarySession {
    public:
@@ -2495,6 +3219,27 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
   };
   using block_boundary_session_type = PreparedBlockBoundarySession;
 
+  /// Prepare the scalar mesh-boundary authority through the one public Program surface.
+  /// Both storage adapters use the same session type, but remain private implementation
+  /// details so generated code cannot select an adapter-specific path.
+  [[nodiscard]] std::shared_ptr<scalar_boundary_session_type> prepare_mesh_boundary_session(
+      field_type& prototype, const ExecutionLane& lane) const {
+    if (is_amr())
+      return amr_backend::prepare_mesh_boundary_session(prototype, lane);
+    return uniform_backend::prepare_mesh_boundary_session(prototype, lane);
+  }
+
+  /// Bind the transport used by a scalar AMR stencil before execution enters its hot route.
+  /// Uniform callers retain their existing prepared scalar route; AMR deliberately exposes this
+  /// separate seam so a missing session cannot fall back to schedule/exchange construction.
+  [[nodiscard]] std::shared_ptr<scalar_boundary_session_type> bind_mesh_boundary_session(
+      field_type& prototype, const ExecutionLane& lane) const {
+    if (!is_amr())
+      throw std::logic_error(
+          "Uniform Program has no AMR cold-bound scalar boundary session authority");
+    return amr_backend::bind_mesh_boundary_session(prototype, lane);
+  }
+
   [[nodiscard]] std::shared_ptr<block_boundary_session_type> prepare_block_boundary_session(
       int program_block, field_type& prototype,
       const runtime::multiblock::BoundaryEvaluationPoint& point, const ExecutionLane& lane) const {
@@ -2506,6 +3251,55 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
       session->uniform =
           uniform_backend::prepare_block_boundary_session(program_block, prototype, point, lane);
     return session;
+  }
+
+  /// Prepare the AMR tensor boundary authority through the single generated Program surface.
+  /// The AMR adapter remains a private storage/topology implementation detail; a Uniform
+  /// execution refuses before touching either backend.
+  [[nodiscard]] std::shared_ptr<tensor_boundary_session_type> prepare_tensor_boundary_session(
+      int program_block, field_type& prototype,
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const ExecutionLane& lane) const {
+    return amr_only_("prepare_tensor_boundary_session", [&](auto& backend) {
+      return backend.prepare_tensor_boundary_session(program_block, prototype, point, lane);
+    });
+  }
+
+  /// Dispatch the tensor stencil without exposing either private adapter through inheritance.
+  /// Uniform tensor stencils use their scalar boundary session; AMR tensor stencils require the
+  /// authenticated tensor session prepared above.  Keeping the overloads concrete also lets
+  /// generated aggregate ``OperatorFingerprint`` arguments bind without template deduction.
+  void tensor_laplacian(field_type& output, field_type& input, const field_type& tensor,
+                        const scalar_boundary_session_type& boundary) const {
+    if (is_amr())
+      throw std::invalid_argument(
+          "AMR Program tensor Laplacian requires its prepared tensor boundary session");
+    uniform_backend::tensor_laplacian(output, input, tensor, boundary);
+  }
+
+  void tensor_laplacian(field_type& output, field_type& input, const field_type& tensor,
+                        const scalar_boundary_session_type& boundary,
+                        const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    if (is_amr())
+      throw std::invalid_argument(
+          "AMR Program tensor Laplacian requires its prepared tensor boundary session");
+    uniform_backend::tensor_laplacian(output, input, tensor, boundary, point);
+  }
+
+  void tensor_laplacian(field_type& output, field_type& input, const field_type& tensor,
+                        const tensor_boundary_session_type& boundary) const {
+    if (!is_amr())
+      throw std::invalid_argument(
+          "Uniform Program tensor Laplacian requires its scalar boundary session");
+    amr_backend::tensor_laplacian(output, input, tensor, boundary);
+  }
+
+  void tensor_laplacian(field_type& output, field_type& input, const field_type& tensor,
+                        const tensor_boundary_session_type& boundary,
+                        const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    if (!is_amr())
+      throw std::invalid_argument(
+          "Uniform Program tensor Laplacian requires its scalar boundary session");
+    amr_backend::tensor_laplacian(output, input, tensor, boundary, point);
   }
 
   void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
@@ -2569,6 +3363,16 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
     return uniform_backend::solve_prepared_linear(problem, workspace, solution, rhs, controls);
   }
 
+  /// Materialize the AMR-only resource identity through the single Program authority.  The
+  /// generated solver uses this during detached preparation; keeping the adapter private prevents
+  /// a DSO from selecting a second AMR context or bypassing the runtime-kind check.
+  [[nodiscard]] std::string program_resource_materialization_identity(
+      std::string_view owner_identity) const {
+    return amr_only_("program_resource_materialization_identity", [&](auto& backend) {
+      return backend.program_resource_materialization_identity(owner_identity);
+    });
+  }
+
   // AMR-only operations are explicit public authority methods.  Uniform never reaches an
   // uninitialised hierarchy adapter: each route refuses before it can allocate or mutate state.
   template <class... Args>
@@ -2587,6 +3391,17 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
   decltype(auto) refresh_accepted_hierarchy(Args&&... args) const {
     return amr_only_("refresh_accepted_hierarchy", [&](auto& backend) -> decltype(auto) {
       return backend.refresh_accepted_hierarchy(std::forward<Args>(args)...);
+    });
+  }
+  /// Apply the authenticated AMR coupling graph to a complete candidate pack.  This concrete
+  /// wrapper intentionally routes through ``amr_only_``: exposing the backend overload through
+  /// private inheritance leaves lookup ambiguous with Uniform's shorter coupling signature.
+  void apply_coupling_operators(std::string_view graph_identity, std::string_view rate_identity,
+                                std::string_view application_identity, Real dt,
+                                std::initializer_list<CouplingStateOverride> candidates) const {
+    amr_only_("apply_coupling_operators", [&](auto& backend) {
+      backend.apply_coupling_operators(graph_identity, rate_identity, application_identity, dt,
+                                       candidates);
     });
   }
   template <class... Args>
@@ -2610,6 +3425,53 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
       return backend.create_accepted_context_snapshot();
     });
   }
+  /// Host-only installation bridge.  Activation has bound the provider to its candidate facade,
+  /// but ProgramRuntimeState has not published the artifact yet.  Prepare the same value-owned
+  /// temporal image as a forward snapshot, then exchange only that image into this exact provider
+  /// so all future DSO snapshot factories inherit the sealed contracts.
+  void publish_prepared_amr_installation_temporal_authority(
+      const PreparedForwardAmrTemporalAuthority& authority) const {
+    if (!is_amr() || binding_ != Binding::accepted)
+      throw std::logic_error(
+          "AMR Program installation temporal authority requires its activated candidate provider");
+    auto accepted = amr_backend::create_accepted_context_snapshot();
+    if (!accepted)
+      throw std::logic_error("AMR Program installation temporal authority has no snapshot");
+    void* rebind_token = nullptr;
+    auto detached = accepted->detach_for_forward(
+        authority.topology_epoch, authority.materialization_generation, rebind_token);
+    if (!detached || rebind_token == nullptr)
+      throw std::logic_error(
+          "AMR Program installation temporal authority has no detached provider image");
+    detached->prepare_forward_temporal_partition(authority);
+    detached->publish_prepared_installation_temporal_authority(rebind_token);
+
+    // Prove at the cold installation boundary that the exchange targeted the exact provider
+    // retained by the DSO.  A copied preparation image may have the same topology and generation
+    // while still being the wrong lifetime owner; accepting that image would defer the mismatch
+    // until the first accepted checkpoint refresh.  Re-capture through this provider and compare
+    // the complete temporal witness before owner-last publication can make it observable.
+    auto published = amr_backend::create_accepted_context_snapshot();
+    if (!published)
+      throw std::logic_error(
+          "AMR Program installation temporal authority lost its published provider snapshot");
+    void* witness_rebind_token = nullptr;
+    auto published_detached = published->detach_for_forward(
+        authority.topology_epoch, authority.materialization_generation, witness_rebind_token);
+    if (!published_detached || witness_rebind_token == nullptr)
+      throw std::logic_error(
+          "AMR Program installation temporal authority has no published detached witness");
+    const PreparedForwardAmrAcceptedContext witness =
+        published_detached->prepare_forward_accepted_context(0);
+    if (witness.topology_epoch != authority.topology_epoch ||
+        witness.materialization_generation != authority.materialization_generation ||
+        witness.accepted_state_revision != authority.accepted_state_revision ||
+        witness.temporal_partition.provider_identity != authority.temporal_provider_identity ||
+        witness.flux_budget_contract != authority.flux_budget_contract ||
+        witness.coupling_contract != authority.coupling_contract)
+      throw std::logic_error(
+          "AMR Program installation temporal authority did not publish to its retained provider");
+  }
   template <class... Args>
   decltype(auto) for_each_program_resource_level(Args&&... args) const {
     return amr_only_("for_each_program_resource_level", [&](auto& backend) -> decltype(auto) {
@@ -2619,6 +3481,14 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
   [[nodiscard]] int level() const {
     return amr_only_("level", [](auto& backend) { return backend.level(); });
   }
+  /// Execute one cold Candidate builder against a detached forward topology.  The caller owns the
+  /// resulting bundle; this helper deliberately exposes no accepted facade and has no hot-path
+  /// route.  `detached_snapshot` is an explicit lifetime witness for decorators which retain
+  /// topology-bound objects beside the service image.
+  template <class Fn>
+  decltype(auto) with_forward_execution_overlay(
+      const PreparedForwardAmrExecutionAuthorityView<Dim>& authority,
+      const AcceptedProgramExecutionServicesSnapshot& detached_snapshot, Fn&& fn) const;
   template <class... Args>
   decltype(auto) prepare_rebalance(Args&&... args) const {
     return amr_only_("prepare_rebalance", [&](auto& backend) -> decltype(auto) {
@@ -2626,11 +3496,18 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
     });
   }
   template <class... Args>
-  decltype(auto) prepare_same_level_cell_temporal_execution(Args&&... args) const {
-    return amr_only_(
-        "prepare_same_level_cell_temporal_execution", [&](auto& backend) -> decltype(auto) {
-          return backend.prepare_same_level_cell_temporal_execution(std::forward<Args>(args)...);
-        });
+  void prepare_same_level_cell_temporal_execution(Args&&... args) const {
+    auto staged = amr_only_("prepare_same_level_cell_temporal_execution", [&](auto& backend) {
+      return backend.prepare_same_level_cell_temporal_execution(std::forward<Args>(args)...);
+    });
+    if (binding_ != Binding::preparation)
+      return;
+    if (!staged || preparation_image_ == nullptr)
+      throw std::logic_error(
+          "AMR Program cell-temporal preparation did not produce one detached execution image");
+    auto& image = const_cast<ProgramExecutionPreparationImage<Dim>&>(
+        static_cast<const ProgramExecutionPreparationImage<Dim>&>(*preparation_image_));
+    image.stage_cell_temporal_execution(std::move(*staged));
   }
   void advance_same_level_cell_temporal(double dt) const {
     amr_only_("advance_same_level_cell_temporal",
@@ -2644,6 +3521,8 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
   }
   template <class... Args>
   decltype(auto) register_hierarchy_tensor_solver_provider(Args&&... args) const {
+    if (binding_ != Binding::preparation)
+      throw std::logic_error("AMR hierarchy tensor provider registration is preparation-only");
     return amr_only_(
         "register_hierarchy_tensor_solver_provider", [&](auto& backend) -> decltype(auto) {
           return backend.register_hierarchy_tensor_solver_provider(std::forward<Args>(args)...);
@@ -2675,8 +3554,22 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
   }
   template <class... Args>
   decltype(auto) configure_hierarchy_tensor_solver(Args&&... args) const {
+    if (binding_ != Binding::preparation)
+      throw std::logic_error("AMR hierarchy tensor solver configuration is preparation-only");
     return amr_only_("configure_hierarchy_tensor_solver", [&](auto& backend) -> decltype(auto) {
       return backend.configure_hierarchy_tensor_solver(std::forward<Args>(args)...);
+    });
+  }
+  [[nodiscard]] HierarchyTensorConfiguredStorageReceipt<Dim>
+  configured_hierarchy_tensor_storage_receipt(
+      std::span<const std::uint64_t> level_cell_bounds, std::span<const std::uint64_t> patch_bounds,
+      std::span<const std::uint64_t> parent_child_pair_bounds, std::uint64_t rank_bound) const {
+    if (binding_ != Binding::preparation)
+      throw std::logic_error(
+          "AMR hierarchy tensor storage receipt requires the detached preparation provider");
+    return amr_only_("configured_hierarchy_tensor_storage_receipt", [&](auto& backend) {
+      return backend.configured_hierarchy_tensor_storage_receipt(
+          level_cell_bounds, patch_bounds, parent_child_pair_bounds, rank_bound);
     });
   }
   [[nodiscard]] bool uses_prepared_krylov_fallback() const {
@@ -2756,6 +3649,21 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
     }
     return uniform_backend::apply_projection(std::forward<Args>(args)...);
   }
+  // A braced keep set cannot be deduced through the generic forwarding pack below.  Generated
+  // Program source always carries this immutable list directly, so route it through this typed
+  // overload to both backends without first materializing a per-step vector.
+  void apply_source_mask(field_type& rhs, std::initializer_list<int> keep) const {
+    if (is_amr()) {
+      if constexpr (requires(const amr_backend& backend) {
+                      backend.apply_source_mask(rhs, keep);
+                    }) {
+        amr_backend::apply_source_mask(rhs, keep);
+        return;
+      }
+      throw std::logic_error("AMR Program does not provide operation: apply_source_mask");
+    }
+    uniform_backend::apply_source_mask(rhs, keep);
+  }
   template <class... Args>
   decltype(auto) apply_source_mask(Args&&... args) const {
     if (is_amr()) {
@@ -2810,6 +3718,54 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
       throw std::logic_error("AMR Program does not provide operation: boundary_evaluation_point");
     }
     return uniform_backend::boundary_evaluation_point(std::forward<Args>(args)...);
+  }
+  template <class... Args>
+  decltype(auto) prepare_boundary_evaluation_point(Args&&... args) const {
+    if (is_amr()) {
+      if constexpr (requires(const amr_backend& backend) {
+                      backend.prepare_boundary_evaluation_point(std::forward<Args>(args)...);
+                    })
+        return amr_backend::prepare_boundary_evaluation_point(std::forward<Args>(args)...);
+      throw std::logic_error(
+          "AMR Program does not provide operation: prepare_boundary_evaluation_point");
+    }
+    return uniform_backend::prepare_boundary_evaluation_point(std::forward<Args>(args)...);
+  }
+  template <class... Args>
+  decltype(auto) write_boundary_evaluation_point_into(Args&&... args) const {
+    if (is_amr()) {
+      if constexpr (requires(const amr_backend& backend) {
+                      backend.write_boundary_evaluation_point_into(std::forward<Args>(args)...);
+                    })
+        return amr_backend::write_boundary_evaluation_point_into(std::forward<Args>(args)...);
+      throw std::logic_error(
+          "AMR Program does not provide operation: write_boundary_evaluation_point_into");
+    }
+    return uniform_backend::write_boundary_evaluation_point_into(std::forward<Args>(args)...);
+  }
+  template <class... Args>
+  decltype(auto) copy_boundary_evaluation_point_into(Args&&... args) const {
+    if (is_amr()) {
+      if constexpr (requires(const amr_backend& backend) {
+                      backend.copy_boundary_evaluation_point_into(std::forward<Args>(args)...);
+                    })
+        return amr_backend::copy_boundary_evaluation_point_into(std::forward<Args>(args)...);
+      throw std::logic_error(
+          "AMR Program does not provide operation: copy_boundary_evaluation_point_into");
+    }
+    return uniform_backend::copy_boundary_evaluation_point_into(std::forward<Args>(args)...);
+  }
+  template <class... Args>
+  decltype(auto) prepared_boundary_evaluation_point(Args&&... args) const {
+    if (is_amr()) {
+      if constexpr (requires(const amr_backend& backend) {
+                      backend.prepared_boundary_evaluation_point(std::forward<Args>(args)...);
+                    })
+        return amr_backend::prepared_boundary_evaluation_point(std::forward<Args>(args)...);
+      throw std::logic_error(
+          "AMR Program does not provide operation: prepared_boundary_evaluation_point");
+    }
+    return uniform_backend::prepared_boundary_evaluation_point(std::forward<Args>(args)...);
   }
   template <class... Args>
   decltype(auto) cache_accumulate_dt(Args&&... args) const {
@@ -2971,7 +3927,22 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
         return amr_backend::history_zero_start(std::forward<Args>(args)...);
       throw std::logic_error("AMR Program does not provide operation: history_zero_start");
     }
-    return uniform_backend::history_zero_start(std::forward<Args>(args)...);
+    if constexpr (requires(const uniform_backend& backend) {
+                    backend.history_zero_start(std::forward<Args>(args)...);
+                  })
+      return uniform_backend::history_zero_start(std::forward<Args>(args)...);
+    throw std::logic_error("Uniform Program does not provide operation: history_zero_start");
+  }
+
+  /// Owner-qualified AMR history access has four fixed arguments.  Keep this concrete overload
+  /// ahead of the forwarding compatibility seam so generated braced/owner-qualified calls do not
+  /// instantiate the Uniform branch with an AMR-only signature.
+  [[nodiscard]] field_type& history_zero_start(const std::string& name, int lag, int ncomp,
+                                               int program_owner) const {
+    if (!is_amr())
+      throw std::invalid_argument(
+          "Uniform Program history_zero_start does not accept an AMR owner level");
+    return amr_backend::history_zero_start(name, lag, ncomp, program_owner);
   }
   template <class... Args>
   decltype(auto) hmin(Args&&... args) const {
@@ -3177,6 +4148,18 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
     }
     return uniform_backend::probe_operator_evaluation(std::forward<Args>(args)...);
   }
+
+  /// Concrete overload for generated aggregate fingerprints.  A braced ``std::array`` argument
+  /// cannot participate in template argument deduction, so the public authority must expose the
+  /// exact value type instead of relying only on the forwarding compatibility seam above.
+  [[nodiscard]] OperatorEvaluationSnapshot probe_operator_evaluation(OperatorFingerprint authority,
+                                                                     OperatorFingerprint topology,
+                                                                     OperatorFingerprint resources,
+                                                                     std::uint64_t revision) const {
+    if (is_amr())
+      return amr_backend::probe_operator_evaluation(authority, topology, resources, revision);
+    return uniform_backend::probe_operator_evaluation(authority, topology, resources, revision);
+  }
   template <class... Args>
   decltype(auto) program_params(Args&&... args) const {
     if (is_amr()) {
@@ -3324,6 +4307,15 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
           "AMR Program does not provide operation: operator_evaluation_snapshot");
     }
     return uniform_backend::operator_evaluation_snapshot(std::forward<Args>(args)...);
+  }
+
+  /// Concrete counterpart of ``probe_operator_evaluation`` for generated aggregate fingerprints.
+  [[nodiscard]] OperatorEvaluationSnapshot operator_evaluation_snapshot(
+      OperatorFingerprint authority, const field_type& prototype,
+      OperatorFingerprint resources) const {
+    if (is_amr())
+      return amr_backend::operator_evaluation_snapshot(authority, prototype, resources);
+    return uniform_backend::operator_evaluation_snapshot(authority, prototype, resources);
   }
   template <class... Args>
   decltype(auto) prepared_execution_communicator(Args&&... args) const {
@@ -3512,6 +4504,11 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
     }
     return uniform_backend::subcycle_scope(std::forward<Args>(args)...);
   }
+  void seal_clock_schedule_for_execution() const {
+    if (is_amr())
+      throw std::logic_error("AMR Program clock sealing is owned by its preparation image");
+    uniform_backend::seal_clock_schedule_for_execution();
+  }
   template <class... Args>
   decltype(auto) sum_component(Args&&... args) const {
     if (is_amr()) {
@@ -3548,6 +4545,8 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
 
  private:
   friend class ProgramExecutionPreparationImage<Dim>;
+  template <int>
+  friend struct detail::ProgramExecutionServicesForwardOverlayTestAccess;
 
   explicit ProgramExecutionServices(Binding binding)
       : uniform_backend(),
@@ -3669,6 +4668,15 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
     if (binding_ == Binding::preparation) {
       preparation_clock_schedule_.configure_primary_clock(clock);
       preparation_primary_clock_ = clock;
+      // Topology-bound resources are cold-prepared through the detached backend before the
+      // candidate is activated.  Mirror only the primary identity into that image so boundary
+      // points can reserve their clock storage without reaching an accepted System/AmrSystem.
+      // The host-owned schedule above remains the publication authority and is adopted again
+      // after collective validation.
+      if (is_amr())
+        amr_backend::configure_primary_clock(clock);
+      else
+        uniform_backend::configure_primary_clock(clock);
       if (preparation_image_ != nullptr) {
         auto& image = const_cast<ProgramExecutionPreparationImage<Dim>&>(
             static_cast<const ProgramExecutionPreparationImage<Dim>&>(*preparation_image_));
@@ -3689,6 +4697,13 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
         throw std::runtime_error("Program preparation clock relation '" + parent + "->" + child +
                                  "' failed: " + error.what());
       }
+      // Keep the detached backend's cold footprint and any topology-bound preparation query in
+      // exact agreement with the host-owned schedule.  This still cannot reach a live facade;
+      // activation replaces the mirror from the sealed schedule after collective validation.
+      if (is_amr())
+        amr_backend::declare_clock_relation(parent, child, count);
+      else
+        uniform_backend::declare_clock_relation(parent, child, count);
       if (preparation_image_ != nullptr && !preparation_primary_clock_.empty()) {
         auto& image = const_cast<ProgramExecutionPreparationImage<Dim>&>(
             static_cast<const ProgramExecutionPreparationImage<Dim>&>(*preparation_image_));
@@ -3804,6 +4819,21 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
       uniform_backend::axpy(destination, factor, source);
   }
 
+  /// Apply a generated exact-dt coefficient without requiring callers to type a braced list.
+  ///
+  /// A bare ``{{power, numerator, denominator}}`` is not deducible through the generic forwarding
+  /// template above.  This concrete public overload is therefore the common Program seam for the
+  /// generated five-argument form.  The AMR backend consumes the metadata for its flux ledger;
+  /// Uniform validates the same generated signature but needs no additional runtime storage.
+  void axpy(typename uniform_backend::field_type& destination, Real factor,
+            const typename uniform_backend::field_type& source, Real reference_dt,
+            std::initializer_list<ExactCoefficientTerm> terms) const {
+    if (is_amr())
+      amr_backend::axpy(destination, factor, source, reference_dt, terms);
+    else
+      uniform_backend::axpy(destination, factor, source, reference_dt, terms);
+  }
+
   void record_balance_term(const std::string& route, const std::string& term, Real value) const {
     if (is_amr())
       amr_backend::record_balance_term(route, term, value);
@@ -3846,6 +4876,19 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
     preparation_image_ = image;
   }
 
+  [[nodiscard]] const ProgramExecutionPreparationImage<Dim>& detached_amr_preparation_anchor_()
+      const;
+
+  void adopt_forward_prepared_clock_(ClockScheduleState schedule, std::string primary_clock) const {
+    if (!is_amr() || binding_ != Binding::preparation || primary_clock.empty())
+      throw std::logic_error(
+          "AMR forward clock adoption requires one detached preparation provider");
+    preparation_clock_schedule_ = schedule;
+    preparation_primary_clock_ = primary_clock;
+    static_cast<const amr_backend&>(*this).adopt_prepared_clock(std::move(schedule),
+                                                                std::move(primary_clock));
+  }
+
  public:
   /// Seal the DSO-visible preparation state into the retained provider before publication.  The
   /// provider remains host-owned by ProgramExecutionPreparationImage, so this is a detached
@@ -3858,27 +4901,47 @@ class ProgramExecutionServices : private detail::UniformStorageTopologyAdapter<D
       throw std::logic_error("Uniform Program preparation did not configure a primary clock");
     static_cast<const uniform_backend&>(*this).adopt_prepared_clock(preparation_clock_schedule_,
                                                                     preparation_primary_clock_);
-    binding_ = Binding::accepted;
+    binding_ = Binding::sealed_preparation;
+  }
+
+  /// A state-free Uniform artifact has no clock declaration to adopt, but its transaction
+  /// authorities still cross the same detached seal before footprint collection/publication.
+  void seal_uniform_preparation_without_clock() const {
+    if (is_amr() || binding_ != Binding::preparation)
+      return;
+    seal_transaction_authorities();
+    binding_ = Binding::sealed_preparation;
   }
 
   void activate_uniform_after_collective(System<Dim>* system) const {
     if (is_amr())
       throw std::logic_error("AMR Program cannot activate through the Uniform preparation image");
-    static_cast<const uniform_backend&>(*this).bind_accepted_system(system);
     if (binding_ == Binding::preparation && has_staged_uniform_clock())
       seal_uniform_preparation();
     else if (binding_ == Binding::preparation)
-      binding_ = Binding::accepted;
+      seal_uniform_preparation_without_clock();
+    if (binding_ != Binding::sealed_preparation)
+      throw std::logic_error("Uniform Program activation requires one sealed preparation provider");
+    static_cast<const uniform_backend&>(*this).bind_accepted_system(system);
+    binding_ = Binding::accepted;
   }
 
-  void activate_amr_after_collective(::pops::AmrSystem<Dim>* system) const {
+  void activate_amr_after_collective(::pops::AmrSystem<Dim>* system,
+                                     AmrAcceptedRuntimeStateResolver runtime_state_resolver) const {
     if (!is_amr() || binding_ != Binding::preparation)
       throw std::logic_error("AMR Program activation requires one preparation provider");
     if (!preparation_primary_clock_.empty())
       static_cast<const amr_backend&>(*this).adopt_prepared_clock(preparation_clock_schedule_,
                                                                   preparation_primary_clock_);
-    const_cast<amr_backend&>(static_cast<const amr_backend&>(*this)).bind_accepted_facade(system);
+    const_cast<amr_backend&>(static_cast<const amr_backend&>(*this))
+        .bind_accepted_facade(system, runtime_state_resolver);
     binding_ = Binding::accepted;
+  }
+
+  void rebind_amr_accepted_runtime_state_after_publish() const noexcept {
+    if (!is_amr() || binding_ != Binding::accepted)
+      std::terminate();
+    static_cast<const amr_backend&>(*this).rebind_accepted_runtime_state_after_publish();
   }
 
   [[nodiscard]] bool has_staged_uniform_clock() const noexcept {
@@ -3966,9 +5029,14 @@ class ProgramExecutionPreparationImage final : public ProgramPreparationImage {
     std::optional<FieldLogicalTimePoint> point;
     std::optional<std::vector<double>> parameters;
   };
+  static ProgramHostDescriptor require_uniform_program_host_(System<Dim>* system) {
+    if (system == nullptr)
+      throw std::invalid_argument("Uniform Program preparation requires one System");
+    return system->program_host_descriptor();
+  }
   explicit ProgramExecutionPreparationImage(System<Dim>* system, std::uint64_t generation)
       : ProgramPreparationImage(static_cast<std::uint32_t>(Dim), ProgramRuntimeKind::uniform,
-                                system->program_host_descriptor().services, generation),
+                                require_uniform_program_host_(system).services, generation),
         uniform_activation_(system),
         uniform_prototypes_(capture_uniform_prototypes_(system)),
         uniform_read_view_(capture_uniform_read_view_(system)),
@@ -4000,6 +5068,28 @@ class ProgramExecutionPreparationImage final : public ProgramPreparationImage {
 
   [[nodiscard]] const std::shared_ptr<ProgramExecutionServices<Dim>>& provider() const noexcept {
     return provider_;
+  }
+
+  [[nodiscard]] std::shared_ptr<ProgramExecutionServices<Dim>> make_forward_provider(
+      std::shared_ptr<const typename ProgramExecutionServices<Dim>::AmrPreparationTopologyView>
+          topology) const {
+    if (runtime_kind() != ProgramRuntimeKind::amr || !topology)
+      throw std::invalid_argument("AMR forward execution requires one detached topology image");
+    ProgramHostDescriptor source{};
+    source.native_dimension = static_cast<std::uint32_t>(Dim);
+    source.runtime_kind = ProgramRuntimeKind::amr;
+    source.services = services();
+    auto forward = std::make_shared<ProgramExecutionPreparationImage<Dim>>(
+        source, std::move(topology), generation());
+    forward->bind_amr_resource_declaration(amr_resource_declaration_);
+    ProgramExecutionServices<Dim>* provider = forward->provider().get();
+    if (provider == nullptr)
+      throw std::logic_error("AMR forward execution has no detached provider");
+    if (has_staged_clock()) {
+      forward->stage_clock_schedule(staged_clock_schedule_, staged_primary_clock_);
+      provider->adopt_forward_prepared_clock_(staged_clock_schedule_, staged_primary_clock_);
+    }
+    return std::shared_ptr<ProgramExecutionServices<Dim>>(std::move(forward), provider);
   }
 
   /// Bind the symbolic declaration before the first DSO callback.  Runtime-sized rows cannot be
@@ -4046,6 +5136,26 @@ class ProgramExecutionPreparationImage final : public ProgramPreparationImage {
     provider_->bind_prepared_generated_field_route_slots(amr_resource_declaration_.size());
   }
 
+  /// Freeze the two v5 AMR flux tables beside the already dense resource declaration.  This is
+  /// deliberately a host-only prelude operation: generated code receives neither table pointers
+  /// nor a fallback value-id registry once its preparation callback starts.
+  void bind_amr_flux_tables(
+      const std::vector<ProgramInstallationTables::ResourcePlan>& resource_plan,
+      const std::vector<ProgramInstallationTables::FluxBasisOccurrence>& basis_occurrences,
+      const std::vector<ProgramInstallationTables::FaceFluxStage>& face_flux_stages) {
+    if (runtime_kind() != ProgramRuntimeKind::amr)
+      throw std::logic_error("AMR flux tables cannot bind a Uniform image");
+    if (resource_plan.size() != amr_resource_declaration_.size())
+      throw std::invalid_argument(
+          "AMR flux tables differ from the already sealed resource declaration");
+    for (std::size_t slot = 0; slot < resource_plan.size(); ++slot)
+      if (resource_plan[slot].slot != slot || amr_resource_declaration_[slot].slot != slot ||
+          resource_plan[slot].value_id != amr_resource_declaration_[slot].value_id)
+        throw std::invalid_argument(
+            "AMR flux tables differ from the already sealed resource declaration");
+    provider_->bind_prepared_amr_flux_tables(resource_plan, basis_occurrences, face_flux_stages);
+  }
+
   void prepare_amr_scratch(std::uint8_t kind, std::size_t slot, int subslot, int program_block,
                            int ncomp, int ghost_depth) {
     if (runtime_kind() != ProgramRuntimeKind::amr || slot >= amr_resource_declaration_.size())
@@ -4053,22 +5163,27 @@ class ProgramExecutionPreparationImage final : public ProgramPreparationImage {
     const auto& row = amr_resource_declaration_[slot];
     const auto& view = *amr_topology_;
     const int runtime_block = view.program_block_map.at(static_cast<std::size_t>(program_block));
-    if (row.level < 0 &&
-        view.block_prototypes.at(static_cast<std::size_t>(runtime_block)).size() != 1)
-      throw std::invalid_argument(
-          "AMR runtime-sized resource must declare one exact hierarchy level");
+    // A negative level is the sealed topology-relative authority: storage owns the complete
+    // per-level prototype pack and selects its active member during the hot level group.  An
+    // explicit non-negative level remains an exact, single-level declaration below.
     const std::size_t level = row.level < 0 ? 0U : static_cast<std::size_t>(row.level);
     const auto& prototype =
         view.block_prototypes.at(static_cast<std::size_t>(runtime_block)).at(level);
-    if (kind > 2 || row.components == 0)
+    if (kind > 2 || row.components == 0 || ncomp < 1 || ghost_depth < 0)
       throw std::invalid_argument("AMR Program scratch preparation has an invalid shape");
-    if (kind == 2 &&
+    // An exact row carries one authored component/ghost contract.  A
+    // runtime-sized row may own several independently shaped subslots (for
+    // example the state scratch and the fixed-width Newton status scratch on
+    // one solve value), so its exact shape is the observed
+    // (kind, slot, subslot) prototype.  prime_prepared_amr_scratch() checks
+    // that prototype for repeatability and take_amr_resource_prototypes()
+    // authenticates it in the materialized layout digest.
+    if (!row.runtime_sized() &&
         (ncomp != static_cast<int>(row.components) || ghost_depth != static_cast<int>(row.ghosts)))
       throw std::invalid_argument(
-          "AMR Program scalar scratch request differs from its resource declaration");
-    ncomp = static_cast<int>(row.components);
-    ghost_depth = static_cast<int>(row.ghosts);
-    provider_->prime_prepared_amr_scratch(kind, slot, subslot, program_block, ncomp, ghost_depth);
+          "AMR Program scratch request differs from its resource declaration");
+    provider_->prime_prepared_amr_scratch(kind, slot, subslot, program_block, row.level, ncomp,
+                                          ghost_depth);
     const auto key = std::tuple{kind, slot, subslot};
     if (std::find(amr_resource_prototype_keys_.begin(), amr_resource_prototype_keys_.end(), key) !=
         amr_resource_prototype_keys_.end())
@@ -4096,7 +5211,71 @@ class ProgramExecutionPreparationImage final : public ProgramPreparationImage {
 
   [[nodiscard]] std::vector<ProgramInstallationTables::ResourcePrototype>
   take_amr_resource_prototypes() {
-    return std::exchange(amr_resource_prototypes_, {});
+    auto result = std::exchange(amr_resource_prototypes_, {});
+    auto host_resident = provider_->prepared_amr_host_resident_resource_prototypes();
+    result.insert(result.end(), std::make_move_iterator(host_resident.begin()),
+                  std::make_move_iterator(host_resident.end()));
+    // The detached image, rather than the AMR adapter, owns the three diagnostic pools until
+    // owner-last publication.  Fold their retained capacity into the adapter's one
+    // cell-temporal family here, before the collective resource merge and sole plan seal.
+    if (cell_temporal_execution_) {
+      const auto checked_add = [](std::uint64_t& total, std::uint64_t value) {
+        if (value > std::numeric_limits<std::uint64_t>::max() - total)
+          throw std::overflow_error("AMR Program cell-temporal staging storage overflows uint64");
+        total += value;
+      };
+      const auto vector_bytes = [](const auto& values) -> std::uint64_t {
+        using value_type = typename std::remove_reference_t<decltype(values)>::value_type;
+        if (values.capacity() > std::numeric_limits<std::uint64_t>::max() / sizeof(value_type))
+          throw std::overflow_error("AMR Program cell-temporal staging vector overflows uint64");
+        return static_cast<std::uint64_t>(values.capacity()) * sizeof(value_type);
+      };
+      const auto external_string_bytes = [](const std::string& value) -> std::uint64_t {
+        const auto begin = reinterpret_cast<std::uintptr_t>(&value);
+        const auto end = begin + sizeof(value);
+        const auto data = reinterpret_cast<std::uintptr_t>(value.data());
+        return data >= begin && data < end ? 0 : static_cast<std::uint64_t>(value.capacity()) + 1U;
+      };
+      const auto& execution = *cell_temporal_execution_;
+      std::uint64_t bytes = 0;
+      checked_add(bytes, external_string_bytes(execution.configuration.clock));
+      checked_add(bytes, external_string_bytes(execution.configuration.exact_contract));
+      checked_add(bytes, vector_bytes(execution.configuration.level_rungs));
+      checked_add(bytes, vector_bytes(execution.configuration.routes));
+      checked_add(bytes, vector_bytes(execution.configuration.level_cell_counts));
+      checked_add(bytes, external_string_bytes(execution.partition.provider_identity));
+      checked_add(bytes, vector_bytes(execution.partition.cells));
+      const auto add_pool = [&](const auto& pool) {
+        checked_add(bytes, vector_bytes(pool));
+        for (const auto& diagnostic : pool) {
+          if (!diagnostic)
+            throw std::logic_error("AMR Program staged cell-temporal pool has a null diagnostic");
+          checked_add(bytes, sizeof(*diagnostic));
+          checked_add(bytes, diagnostic->resident_storage_bytes());
+        }
+      };
+      add_pool(execution.diagnostic_workspace);
+      add_pool(execution.accepted_diagnostics);
+      add_pool(execution.rollback_diagnostics);
+      const auto found = std::find_if(result.begin(), result.end(), [](const auto& prototype) {
+        return prototype.kind == ProgramInstallationTables::ResourcePrototypeKind::cell_temporal &&
+               prototype.slot == 0 && prototype.subslot == 0;
+      });
+      if (found == result.end()) {
+        if (bytes != 0)
+          result.push_back({0,
+                            0,
+                            {bytes, 1, 1, 0, bytes, bytes},
+                            ProgramInstallationTables::ResourcePrototypeKind::cell_temporal});
+      } else {
+        if (bytes > std::numeric_limits<std::uint64_t>::max() - found->layout.cells)
+          throw std::overflow_error("AMR Program cell-temporal family overflows uint64");
+        found->layout.cells += bytes;
+        found->layout.bytes = found->layout.cells;
+        found->layout.maximum_bytes = found->layout.cells;
+      }
+    }
+    return result;
   }
 
   void prepare_amr_cache(std::size_t slot, int program_block) {
@@ -4171,12 +5350,27 @@ class ProgramExecutionPreparationImage final : public ProgramPreparationImage {
     const auto& prototype = uniform_prototypes_[static_cast<std::size_t>(runtime_block)];
     if (kind > 2 || row.components == 0)
       throw std::invalid_argument("Uniform Program scratch preparation has an invalid shape");
-    if (kind == 2 &&
-        (ncomp != static_cast<int>(row.components) || ghost_depth != static_cast<int>(row.ghosts)))
-      throw std::invalid_argument(
-          "Uniform Program scalar scratch request differs from its resource declaration");
-    ncomp = static_cast<int>(row.components);
-    ghost_depth = static_cast<int>(row.ghosts);
+    const int prototype_ncomp = prototype.ncomp();
+    const int prototype_ghost_depth = uniform_ghost_depth_(prototype.ghosts());
+    // Exact rows have one declared shape.  Runtime-sized rows are allowed to
+    // aggregate multiple typed subslots under one dense Program value: the
+    // requested scalar shape is captured by the per-subslot prime below and
+    // authenticated in the host materialized resource manifest.  This is
+    // required for a solve value whose state family has one component while
+    // its fixed-width Newton status family has eleven.
+    if (!row.runtime_sized()) {
+      if (ncomp != static_cast<int>(row.components) || ghost_depth != static_cast<int>(row.ghosts))
+        throw std::invalid_argument(
+            "Uniform Program scratch request differs from its resource declaration");
+      ncomp = static_cast<int>(row.components);
+      ghost_depth = static_cast<int>(row.ghosts);
+      if (kind != 2 && (ncomp != prototype_ncomp || ghost_depth != prototype_ghost_depth))
+        throw std::invalid_argument(
+            "Uniform Program scratch request differs from its captured prototype");
+    } else if (kind != 2) {
+      ncomp = prototype_ncomp;
+      ghost_depth = prototype_ghost_depth;
+    }
     switch (kind) {
       case 0:
         provider_->prime_prepared_uniform_rhs(slot, subslot, prototype, ncomp, ghost_depth);
@@ -4214,7 +5408,11 @@ class ProgramExecutionPreparationImage final : public ProgramPreparationImage {
 
   [[nodiscard]] std::vector<ProgramInstallationTables::ResourcePrototype>
   take_uniform_resource_prototypes() {
-    return std::exchange(uniform_resource_prototypes_, {});
+    auto result = std::exchange(uniform_resource_prototypes_, {});
+    auto host_resident = provider_->prepared_uniform_host_resident_resource_prototypes();
+    result.insert(result.end(), std::make_move_iterator(host_resident.begin()),
+                  std::make_move_iterator(host_resident.end()));
+    return result;
   }
 
   void prepare_uniform_cache(std::size_t slot, int program_block) {
@@ -4359,10 +5557,58 @@ class ProgramExecutionPreparationImage final : public ProgramPreparationImage {
     provider_->activate_uniform_after_collective(uniform_activation_);
   }
 
-  void activate_amr_after_collective(::pops::AmrSystem<Dim>* system) const {
+  void activate_amr_after_collective(
+      ::pops::AmrSystem<Dim>* system,
+      typename ProgramExecutionServices<Dim>::AmrAcceptedRuntimeStateResolver
+          runtime_state_resolver) const {
     if (runtime_kind() != ProgramRuntimeKind::amr)
       throw std::logic_error("Program preparation image has no AMR activation authority");
-    provider_->activate_amr_after_collective(system);
+    provider_->activate_amr_after_collective(system, runtime_state_resolver);
+  }
+
+  void rebind_amr_accepted_runtime_state_after_publish() const noexcept {
+    if (runtime_kind() != ProgramRuntimeKind::amr)
+      std::terminate();
+    provider_->rebind_amr_accepted_runtime_state_after_publish();
+  }
+
+  void prime_amr_subcycling_engine() {
+    if (runtime_kind() != ProgramRuntimeKind::amr)
+      throw std::logic_error("AMR Program subcycling prime requires an AMR preparation image");
+    provider_->prime_prepared_amr_subcycling_engine();
+    const auto host_prototypes = provider_->prepared_amr_flux_resident_resource_prototypes();
+    for (const auto& prototype : host_prototypes) {
+      const bool host_resident =
+          ProgramInstallationTables::is_host_resident_resource_kind(prototype.kind);
+      if (prototype.subslot < 0 ||
+          (!host_resident && prototype.slot >= amr_resource_declaration_.size()))
+        throw std::logic_error("AMR Program resident footprint has no declared resource slot");
+      if (!host_resident && !amr_resource_declaration_[prototype.slot].runtime_sized())
+        throw std::invalid_argument(
+            "AMR Program exact expression slot cannot absorb a generated resident arena");
+      if (prototype.layout.cells == 0 || prototype.layout.itemsize != 1 ||
+          prototype.layout.components != 1 || prototype.layout.ghosts != 0 ||
+          !prototype.layout.bytes || !prototype.layout.maximum_bytes ||
+          *prototype.layout.bytes != prototype.layout.cells ||
+          *prototype.layout.maximum_bytes != prototype.layout.cells || !host_resident)
+        throw std::invalid_argument(
+            "AMR Program host resident footprint is not an exact byte arena");
+      const auto key = std::tuple{static_cast<std::uint8_t>(prototype.kind),
+                                  static_cast<std::size_t>(prototype.slot), prototype.subslot};
+      if (std::find(amr_resource_prototype_keys_.begin(), amr_resource_prototype_keys_.end(),
+                    key) != amr_resource_prototype_keys_.end())
+        throw std::logic_error("AMR Program resident footprint was staged twice");
+      amr_resource_prototype_keys_.push_back(key);
+      amr_resource_prototypes_.push_back(prototype);
+    }
+  }
+
+  void publish_amr_installation_temporal_authority(
+      const PreparedForwardAmrTemporalAuthority& authority) const {
+    if (runtime_kind() != ProgramRuntimeKind::amr)
+      throw std::logic_error(
+          "Program preparation image has no AMR installation temporal authority");
+    provider_->publish_prepared_amr_installation_temporal_authority(authority);
   }
 
   void stage_auxiliary_consumer_plan(runtime::system::AuxiliaryConsumerProviderPlan<Dim> plan) {
@@ -4427,6 +5673,91 @@ class ProgramExecutionPreparationImage final : public ProgramPreparationImage {
       throw std::invalid_argument("Program staged clock has no primary identity");
     staged_clock_schedule_ = std::move(schedule);
     staged_primary_clock_ = std::move(primary_clock);
+  }
+
+  /// Reconcile the checkpoint shape frozen from the artifact with the detached execution
+  /// schedule before any accepted-state capacity or snapshot is prepared.  Historical checkpoint
+  /// tables use ``clock.macro`` for the native macro clock, while authored Program clocks are
+  /// qualified identities.  The latter remains the primary execution clock; the former is its
+  /// exact one-to-one checkpoint relation.  No arbitrary metadata identity can be manufactured
+  /// here: anything other than that canonical macro identity fails before publication.
+  void reconcile_staged_amr_checkpoint_clock_identities(
+      const std::vector<std::string>& frozen_clock_identities) {
+    if (runtime_kind() != ProgramRuntimeKind::amr || !has_staged_clock() || !provider_)
+      throw std::logic_error(
+          "AMR Program checkpoint clock reconciliation requires one staged execution image");
+    std::vector<std::string> frozen = frozen_clock_identities;
+    if (frozen.empty() || std::any_of(frozen.begin(), frozen.end(),
+                                      [](const std::string& identity) { return identity.empty(); }))
+      throw std::invalid_argument("AMR Program checkpoint clock identities are incomplete");
+    std::sort(frozen.begin(), frozen.end());
+    if (std::adjacent_find(frozen.begin(), frozen.end()) != frozen.end())
+      throw std::invalid_argument("AMR Program checkpoint clock identities are not unique");
+
+    ClockScheduleState reconciled = staged_clock_schedule_;
+    auto declared = reconciled.accepted_ticks(0);
+    bool adopted_macro_clock = false;
+    for (const std::string& identity : frozen) {
+      if (declared.find(identity) != declared.end())
+        continue;
+      if (identity != "clock.macro")
+        throw std::logic_error(
+            "AMR Program checkpoint metadata names a clock absent from its staged schedule");
+      reconciled.declare_relation(staged_primary_clock_, identity, 1);
+      declared = reconciled.accepted_ticks(0);
+      adopted_macro_clock = true;
+    }
+    if (declared.size() != frozen.size())
+      throw std::logic_error(
+          "AMR Program staged clock schedule differs from its frozen checkpoint identities");
+    auto declared_clock = declared.begin();
+    for (const std::string& identity : frozen) {
+      if (declared_clock == declared.end() || declared_clock->first != identity)
+        throw std::logic_error(
+            "AMR Program staged clock schedule differs from its frozen checkpoint identities");
+      ++declared_clock;
+    }
+    if (std::binary_search(frozen.begin(), frozen.end(), "clock.macro")) {
+      const auto ticks = reconciled.accepted_ticks(1);
+      if (ticks.at("clock.macro") != ticks.at(staged_primary_clock_))
+        throw std::logic_error(
+            "AMR Program checkpoint macro clock differs from its staged primary clock");
+    }
+    if (!adopted_macro_clock)
+      return;
+
+    // This remains a detached cold adoption.  The provider has no accepted facade until the
+    // collective activation below, and future accepted steps can only read this sealed shape.
+    staged_clock_schedule_ = std::move(reconciled);
+    provider_->adopt_forward_prepared_clock_(staged_clock_schedule_, staged_primary_clock_);
+  }
+
+  void stage_cell_temporal_execution(PreparedCellTemporalExecution<Dim> execution) {
+    if (runtime_kind() != ProgramRuntimeKind::amr)
+      throw std::logic_error("Uniform Program cannot stage cell-temporal execution");
+    if (cell_temporal_execution_)
+      throw std::logic_error("AMR Program cell-temporal execution was staged twice");
+    cell_temporal_execution_.emplace(std::move(execution));
+  }
+
+  [[nodiscard]] bool has_staged_cell_temporal_execution() const noexcept {
+    return cell_temporal_execution_.has_value();
+  }
+
+  [[nodiscard]] const PreparedCellTemporalExecution<Dim>& staged_cell_temporal_execution() const {
+    if (!cell_temporal_execution_)
+      throw std::logic_error("Program preparation image has no staged cell-temporal execution");
+    return *cell_temporal_execution_;
+  }
+
+  /// Make the detached pair visible to the candidate accepted-snapshot hook before it captures
+  /// its image.  The provider remains facade-free; only the later activation binds AmrSystem.
+  void adopt_staged_cell_temporal_execution_for_snapshot() const noexcept {
+    if (!cell_temporal_execution_)
+      return;
+    PreparedCellTemporalExecution<Dim> execution(std::move(*cell_temporal_execution_));
+    cell_temporal_execution_.reset();
+    provider_->adopt_prepared_cell_temporal_execution(std::move(execution));
   }
 
   [[nodiscard]] bool has_staged_clock() const noexcept { return !staged_primary_clock_.empty(); }
@@ -4565,12 +5896,15 @@ class ProgramExecutionPreparationImage final : public ProgramPreparationImage {
   static void validate_resource_layout_(const ProgramInstallationTables::ResourcePlan& row,
                                         std::uint64_t cells, int components, int ghosts,
                                         std::string_view what) {
-    if (components < 1 || ghosts < 0 || row.components != static_cast<std::uint32_t>(components) ||
-        row.ghosts != static_cast<std::uint32_t>(ghosts))
+    if (components < 1 || ghosts < 0)
       throw std::invalid_argument(std::string(what) +
                                   " shape differs from its resource declaration");
     if (row.runtime_sized())
       return;
+    if (row.components != static_cast<std::uint32_t>(components) ||
+        row.ghosts != static_cast<std::uint32_t>(ghosts))
+      throw std::invalid_argument(std::string(what) +
+                                  " shape differs from its resource declaration");
     if (!row.cells || !row.itemsize || !row.bytes || !row.maximum_bytes || *row.cells != cells ||
         *row.itemsize != sizeof(Real) ||
         cells > std::numeric_limits<std::uint64_t>::max() / sizeof(Real) /
@@ -4637,6 +5971,7 @@ class ProgramExecutionPreparationImage final : public ProgramPreparationImage {
   std::vector<HistoryRequest> histories_;
   ClockScheduleState staged_clock_schedule_;
   std::string staged_primary_clock_;
+  mutable std::optional<PreparedCellTemporalExecution<Dim>> cell_temporal_execution_;
 };
 
 /// Host-only v5 image used for the descriptor callback.  Its service words are distinct static
@@ -4659,6 +5994,123 @@ class ProgramInspectionPreparationImage final : public ProgramPreparationImage {
 
   inline static std::array<std::uint8_t, 9> tokens_{};
 };
+
+/// Typed side of the type-erased forward authority. It owns an immutable topology image, so a
+/// generated Candidate bundle has no route back to a live AmrSystem facade.
+template <int Dim>
+class ForwardSubcyclingPreparationAuthority {
+ public:
+  using backend_type = typename ProgramExecutionServices<Dim>::AmrBackend;
+  using topology_hierarchy_type = typename backend_type::hierarchy_type;
+  using prepared_multiblock_type = typename backend_type::prepared_multiblock_type;
+  using field_type = typename backend_type::field_type;
+  using flux_expression_budget_type = typename backend_type::flux_expression_budget_type;
+  using program_block_map_type = typename prepared_multiblock_type::ProgramBlockMap;
+  virtual ~ForwardSubcyclingPreparationAuthority() = default;
+  virtual const topology_hierarchy_type& hierarchy() const = 0;
+  /// Exact per-level metrics carried by the forward topology image. Candidate builders use this
+  /// authority to cold-materialize static flux templates, never an accepted facade after regrid.
+  virtual const std::vector<Geometry<Dim>>& level_geometries() const = 0;
+  virtual const field_type& state(std::size_t, std::size_t) const = 0;
+  virtual std::size_t block_count() const = 0;
+  virtual std::string_view block_identity(std::size_t) const = 0;
+  virtual const ExecutionLane& lane() const = 0;
+  virtual std::string_view collective_contract() const = 0;
+  virtual std::string_view spatial_contract() const = 0;
+  virtual std::uint64_t topology_epoch() const = 0;
+  virtual std::uint64_t materialization_generation() const = 0;
+  virtual prepared_multiblock_type& eventual_owner() const = 0;
+  /// Post-publication liveness anchor only.  Candidate preparation must not inspect it.
+  virtual typename prepared_multiblock_type::engine_type& eventual_runtime() const = 0;
+  virtual program_block_map_type prepare_program_block_map(std::span<const std::string>) const = 0;
+  virtual std::span<const ::pops::amr::ParentChildClockRelation> temporal_relations() const = 0;
+  virtual const flux_expression_budget_type& flux_expression_budget() const = 0;
+  virtual const program_block_map_type& program_block_map() const = 0;
+  virtual const ::pops::amr::InterfaceFluxLedgerBudget& interface_flux_ledger_budget() const = 0;
+  virtual std::string_view installed_hash() const = 0;
+  virtual BoundaryTopology<Dim> boundary_topology() const = 0;
+};
+
+template <int Dim>
+class PreparedForwardAmrExecutionAuthorityView final : public PreparedForwardAmrExecutionAuthority {
+ public:
+  using services_type = ProgramExecutionServices<Dim>;
+  using topology_type = typename services_type::AmrPreparationTopologyView;
+
+  explicit PreparedForwardAmrExecutionAuthorityView(
+      std::shared_ptr<const topology_type> topology,
+      const ForwardSubcyclingPreparationAuthority<Dim>* forward_subcycling = nullptr)
+      : topology_(std::move(topology)), forward_subcycling_(forward_subcycling) {
+    if (!topology_)
+      throw std::invalid_argument("AMR forward execution authority has no topology image");
+    topology_->validate();
+  }
+  [[nodiscard]] std::uint32_t native_dimension() const noexcept override {
+    return static_cast<std::uint32_t>(Dim);
+  }
+  [[nodiscard]] std::uint64_t topology_epoch() const noexcept override {
+    return topology_->topology_epoch;
+  }
+  [[nodiscard]] std::uint64_t materialization_generation() const noexcept override {
+    return topology_->materialization_generation;
+  }
+  [[nodiscard]] std::size_t configured_level_count() const noexcept override {
+    if (topology_->candidate_accepted_state_staging_capacity != nullptr)
+      return topology_->candidate_accepted_state_staging_capacity->level_count;
+    return topology_->configured_temporal_relations.size() + 1U;
+  }
+  [[nodiscard]] std::size_t active_level_count() const noexcept override {
+    if (topology_->candidate_multiblock != nullptr)
+      return topology_->candidate_multiblock->level_count();
+    return topology_->level_geometries.size();
+  }
+  [[nodiscard]] const std::shared_ptr<const topology_type>& topology() const noexcept {
+    return topology_;
+  }
+  [[nodiscard]] const ForwardSubcyclingPreparationAuthority<Dim>* forward_subcycling()
+      const noexcept {
+    return forward_subcycling_;
+  }
+
+ private:
+  std::shared_ptr<const topology_type> topology_;
+  const ForwardSubcyclingPreparationAuthority<Dim>* forward_subcycling_ = nullptr;
+};
+
+template <int Dim>
+const ProgramExecutionPreparationImage<Dim>&
+ProgramExecutionServices<Dim>::detached_amr_preparation_anchor_() const {
+  if (!is_amr() || binding_ != Binding::accepted || preparation_image_ == nullptr ||
+      preparation_image_->native_dimension() != static_cast<std::uint32_t>(Dim) ||
+      preparation_image_->runtime_kind() != ProgramRuntimeKind::amr ||
+      !preparation_image_->execution_ready())
+    throw std::logic_error(
+        "Program forward execution overlay has no retained AMR preparation image");
+  const auto& image =
+      static_cast<const ProgramExecutionPreparationImage<Dim>&>(*preparation_image_);
+  if (image.provider().get() != this)
+    throw std::logic_error(
+        "Program forward execution overlay provider differs from its retained AMR preparation "
+        "image");
+  return image;
+}
+
+template <int Dim>
+template <class Fn>
+decltype(auto) ProgramExecutionServices<Dim>::with_forward_execution_overlay(
+    const PreparedForwardAmrExecutionAuthorityView<Dim>& authority,
+    const AcceptedProgramExecutionServicesSnapshot& detached_snapshot, Fn&& fn) const {
+  if (authority.native_dimension() != static_cast<std::uint32_t>(Dim))
+    throw std::logic_error("Program forward execution overlay has no detached AMR authority");
+  (void)detached_snapshot;
+  authority.topology()->validate();
+  const auto& image = detached_amr_preparation_anchor_();
+  auto overlay = image.make_forward_provider(authority.topology());
+  if (!overlay || !overlay->is_amr() || overlay->binding_ != Binding::preparation)
+    throw std::logic_error(
+        "Program forward execution overlay did not create a detached AMR provider");
+  return std::forward<Fn>(fn)(std::move(overlay));
+}
 
 template <int Dim>
 [[nodiscard]] std::shared_ptr<ProgramPreparationImage> make_program_preparation_image(
@@ -4729,6 +6181,21 @@ void bind_staged_amr_program_resource_declaration(
     throw std::logic_error("AMR Program resource declaration requires its preparation image");
   static_cast<ProgramExecutionPreparationImage<Dim>&>(*base).bind_amr_resource_declaration(
       declaration);
+}
+
+/// Bind the copied two-table flux authority before the candidate can prepare.  Keeping this as a
+/// separate seam makes the resource plan's dense slots the only route from the artifact receipt
+/// into the AMR execution image.
+template <int Dim>
+void bind_staged_amr_program_flux_tables(
+    const std::shared_ptr<ProgramPreparationImage>& base,
+    const std::vector<ProgramInstallationTables::ResourcePlan>& resource_plan,
+    const std::vector<ProgramInstallationTables::FluxBasisOccurrence>& basis_occurrences,
+    const std::vector<ProgramInstallationTables::FaceFluxStage>& face_flux_stages) {
+  if (!base || base->runtime_kind() != ProgramRuntimeKind::amr)
+    throw std::logic_error("AMR Program flux tables require their preparation image");
+  static_cast<ProgramExecutionPreparationImage<Dim>&>(*base).bind_amr_flux_tables(
+      resource_plan, basis_occurrences, face_flux_stages);
 }
 
 template <int Dim>
@@ -4975,6 +6442,31 @@ void materialize_staged_amr_histories(const std::shared_ptr<ProgramPreparationIm
   static_cast<ProgramExecutionPreparationImage<Dim>&>(*image).materialize_amr_staged_histories();
 }
 
+/// Return the exact optional hierarchy-tensor storage ceiling for this detached AMR candidate.
+///
+/// The caller supplies only the already-sealed finite topology bounds.  Provider identity,
+/// interface version, field/operator envelope and collective lane are recovered exclusively from
+/// the preparation image, so an installer cannot accidentally charge one provider's limit to a
+/// different Program candidate.
+template <int Dim>
+[[nodiscard]] HierarchyTensorConfiguredStorageReceipt<Dim>
+staged_amr_hierarchy_tensor_storage_receipt(const std::shared_ptr<ProgramPreparationImage>& image,
+                                            std::span<const std::uint64_t> level_cell_bounds,
+                                            std::span<const std::uint64_t> patch_bounds,
+                                            std::span<const std::uint64_t> parent_child_pair_bounds,
+                                            std::uint64_t rank_bound) {
+  if (!image || image->native_dimension() != static_cast<std::uint32_t>(Dim) ||
+      image->runtime_kind() != ProgramRuntimeKind::amr)
+    throw std::invalid_argument(
+        "AMR hierarchy tensor storage receipt requires its matching preparation image");
+  const auto& provider =
+      static_cast<const ProgramExecutionPreparationImage<Dim>&>(*image).provider();
+  if (!provider)
+    throw std::logic_error("AMR hierarchy tensor storage receipt image has no execution provider");
+  return provider->configured_hierarchy_tensor_storage_receipt(
+      level_cell_bounds, patch_bounds, parent_child_pair_bounds, rank_bound);
+}
+
 /// Finalize Uniform provider declarations while the image remains private to the installer. AMR
 /// retains its dedicated level-qualified preparation graph and does not use this route.
 template <int Dim>
@@ -4987,7 +6479,7 @@ void seal_staged_uniform_program_execution_services(
   if (provider->has_staged_uniform_clock())
     provider->seal_uniform_preparation();
   else
-    provider->seal_transaction_authorities();
+    provider->seal_uniform_preparation_without_clock();
 }
 
 template <int Dim>
@@ -5028,11 +6520,48 @@ void activate_staged_uniform_program_execution_services(
 
 template <int Dim>
 void activate_staged_amr_program_execution_services(
-    const std::shared_ptr<ProgramPreparationImage>& image, ::pops::AmrSystem<Dim>* system) {
+    const std::shared_ptr<ProgramPreparationImage>& image, ::pops::AmrSystem<Dim>* system,
+    typename ProgramExecutionServices<Dim>::AmrAcceptedRuntimeStateResolver
+        runtime_state_resolver) {
   if (!image || image->native_dimension() != static_cast<std::uint32_t>(Dim) ||
       image->runtime_kind() != ProgramRuntimeKind::amr)
     throw std::invalid_argument("AMR Program preparation image has the wrong authority");
-  static_cast<ProgramExecutionPreparationImage<Dim>&>(*image).activate_amr_after_collective(system);
+  static_cast<ProgramExecutionPreparationImage<Dim>&>(*image).activate_amr_after_collective(
+      system, runtime_state_resolver);
+}
+
+template <int Dim>
+void rebind_staged_amr_program_execution_services_after_publish(
+    const std::shared_ptr<ProgramPreparationImage>& image) noexcept {
+  if (!image || image->native_dimension() != static_cast<std::uint32_t>(Dim) ||
+      image->runtime_kind() != ProgramRuntimeKind::amr)
+    std::terminate();
+  static_cast<ProgramExecutionPreparationImage<Dim>&>(*image)
+      .rebind_amr_accepted_runtime_state_after_publish();
+}
+
+/// Cold-build the generic AMR subcycling carrier from the sealed detached topology.  This is a
+/// host-only installation seam: generated code has no access to it and accepted execution only
+/// observes the resulting scalar generation witness.
+template <int Dim>
+void prime_staged_amr_program_subcycling_engine(
+    const std::shared_ptr<ProgramPreparationImage>& image) {
+  if (!image || image->native_dimension() != static_cast<std::uint32_t>(Dim) ||
+      image->runtime_kind() != ProgramRuntimeKind::amr)
+    throw std::invalid_argument("AMR Program subcycling prime has the wrong preparation image");
+  static_cast<ProgramExecutionPreparationImage<Dim>&>(*image).prime_amr_subcycling_engine();
+}
+
+template <int Dim>
+void publish_staged_amr_program_installation_temporal_authority(
+    const std::shared_ptr<ProgramPreparationImage>& image,
+    const PreparedForwardAmrTemporalAuthority& authority) {
+  if (!image || image->native_dimension() != static_cast<std::uint32_t>(Dim) ||
+      image->runtime_kind() != ProgramRuntimeKind::amr)
+    throw std::invalid_argument(
+        "AMR Program installation temporal authority has the wrong preparation image");
+  static_cast<ProgramExecutionPreparationImage<Dim>&>(*image)
+      .publish_amr_installation_temporal_authority(authority);
 }
 
 }  // namespace pops::runtime::program

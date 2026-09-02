@@ -56,8 +56,14 @@ static void copy_full_(const field_type& source, field_type& destination) {
         source.fab(local).size() != destination.fab(local).size())
       throw std::invalid_argument("AMR Program full-field copy patch storage changed");
   }
-  for (std::size_t local = 0; local < destination.local_size(); ++local)
-    Kokkos::deep_copy(destination.fab(local).storage(), source.fab(local).storage());
+  for (std::size_t local = 0; local < destination.local_size(); ++local) {
+    const auto& source_storage = source.fab(local).storage();
+    auto& destination_storage = destination.fab(local).storage();
+    if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, MemorySpace>::accessible)
+      std::copy_n(source_storage.data(), source_storage.extent(0), destination_storage.data());
+    else
+      Kokkos::deep_copy(destination_storage, source_storage);
+  }
 }
 
 static void copy_valid_(const field_type& source, field_type& destination) {

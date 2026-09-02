@@ -3,6 +3,7 @@
 #include "amr_tagging_test_authority.hpp"
 #include "explicit_amr_program.hpp"
 
+#include <pops/core/foundation/allocator.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
@@ -148,7 +149,7 @@ template <int Dim>
 struct Fixture {
   pops::AmrSystem<Dim> system;
 
-  explicit Fixture(int level_count = 2) : system(config(level_count)) {
+  explicit Fixture(int level_count = 2, bool install_tagger = true) : system(config(level_count)) {
     pops::test::install_amr_runtime_authority(system, "test.amr-history.fixture/runtime@1");
     if (level_count > 1) {
       const auto transitions = static_cast<std::size_t>(level_count - 1);
@@ -159,7 +160,7 @@ struct Fixture {
     system.install_block_state_route("tracer", "state/tracer");
     install_advection(system);
     system.set_conservative_state("tracer", std::vector<double>(cell_count(config().shape), 1.0));
-    if (level_count > 1)
+    if (level_count > 1 && install_tagger)
       pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.5}},
                                                    "test.amr-history.fixture-tagging@1");
     (void)system.accepted_amr_runtime();
@@ -589,7 +590,9 @@ TEST(test_amr_history_ring, FineNonFiniteAfterCoarseSuccessRestoresCompleteAccep
   } catch (const pops::runtime::program::StepAttemptRejected& rejected) {
     EXPECT_EQ(rejected.status(), pops::SolveStatus::kInvalidEvaluation);
     EXPECT_EQ(rejected.disposition(), pops::runtime::program::StepAttemptDisposition::kReject);
+    EXPECT_EQ(rejected.reason_code(), 668U);
     EXPECT_EQ(rejected.phase(), "fine-stage");
+    EXPECT_EQ(rejected.detail(), "fine state is non-finite after the coarse candidate succeeded");
   }
 
   EXPECT_EQ(observation->rejected_attempt_levels, (std::array<int, 2>{1, 1}));
@@ -634,7 +637,9 @@ TEST(test_amr_history_ring, ProviderCreatesAcceptedSnapshotWithoutInstallingRunt
 
 TEST(test_amr_history_ring, RegisteredHistoryRejectsTopologyPublicationBeforeMutation) {
   constexpr int Dim = pops::kNativeDimension;
-  Fixture<Dim> fixture;
+  // This witness owns an explicit Program regrid candidate.  Disable the independent automatic
+  // tagger so a correctly rejected candidate cannot be followed by an unrelated accepted regrid.
+  Fixture<Dim> fixture(2, false);
   using Resource = pops::test::program_v5::CallbackProgramResource;
   using History = pops::test::program_v5::CallbackProgramHistory;
   const auto resources = dense_resources<Dim>(fixture.system, {Resource::Kind::state});
@@ -700,7 +705,70 @@ TEST(test_amr_history_ring, RegisteredHistoryRejectsTopologyPublicationBeforeMut
   EXPECT_EQ(after_runtime->hierarchy().num_levels(), 1U);
 }
 
-TEST(test_amr_history_ring, ThreeLevelProgramFailsClosedWithoutExactFluxExpressionBudget) {
+TEST(test_amr_history_ring, FullRebuildReseedsDetachedHistoryBeforeFirstStore) {
+  constexpr int Dim = pops::kNativeDimension;
+  Fixture<Dim> fixture;
+  using Resource = pops::test::program_v5::CallbackProgramResource;
+  using History = pops::test::program_v5::CallbackProgramHistory;
+  const auto resources = dense_resources<Dim>(fixture.system, {Resource::Kind::rhs});
+  struct Observation {
+    int dispatches = 0;
+  };
+  auto observation = std::make_shared<Observation>();
+  pops::test::install_explicit_amr_callback_program<Dim>(
+      fixture.system, "test.amr-history/full-rebuild-reseed@1", "clock.macro", resources, {},
+      [observation](auto& context, double dt) {
+        context.begin_step(dt);
+        auto& sample = context.rhs_scratch(0, 0, context.state(0));
+        sample.set_val(pops::Real(7));
+        context.store_history("tracer.rate", sample, 0);
+        ++observation->dispatches;
+      },
+      {History{"tracer.rate", 1, 1, 0, "tracer.U", "cell.conservative", "clock.macro",
+               "dense.linear"}});
+
+  pops::Index<Dim> lower{};
+  pops::Index<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    lower[axis] = 2;
+    upper[axis] = 5;
+  }
+  std::uint64_t epoch_before = 0;
+  std::uint64_t generation_before = 0;
+  {
+    const auto accepted_before = fixture.system.accepted_amr_runtime();
+    ASSERT_TRUE(accepted_before);
+    epoch_before = accepted_before->topology_epoch();
+    generation_before = accepted_before->materialization_generation();
+  }
+
+  ASSERT_NO_THROW(fixture.system.rebuild_hierarchy({pops::AmrPatch<Dim>{1, {lower, upper}}}, {-1}));
+  {
+    const auto accepted_after = fixture.system.accepted_amr_runtime();
+    ASSERT_TRUE(accepted_after);
+    EXPECT_EQ(accepted_after->topology_epoch(), epoch_before + 1U);
+    EXPECT_EQ(accepted_after->materialization_generation(), generation_before + 1U);
+    EXPECT_EQ(accepted_after->hierarchy().num_levels(), 2U);
+  }
+  EXPECT_EQ(fixture.system.history_names(), (std::vector<std::string>{"tracer.rate"}));
+  EXPECT_EQ(fixture.system.history_levels("tracer.rate"), (std::vector<int>{0, 1}));
+  for (const int level : fixture.system.history_levels("tracer.rate")) {
+    EXPECT_FALSE(fixture.system.history_initialized("tracer.rate", level));
+    EXPECT_EQ(fixture.system.history_fill_count("tracer.rate", level), 0);
+  }
+  // The HistoryManager was recreated on the detached forward hierarchy.  This first store would
+  // still hit the old snapshot's explicit-history refusal if the reseed had not replaced it.  It
+  // also exercises the level-clock envelope after the hierarchy grows 1 -> 2: Candidate must
+  // have staged that capacity before publication, so the first refreshed accepted step allocates
+  // neither Fab nor communication storage.
+  const pops::AllocationEventStats allocation_before_first_store = pops::allocation_event_stats();
+  ASSERT_NO_THROW(fixture.system.step(0.1));
+  EXPECT_EQ(pops::allocation_event_stats(), allocation_before_first_store);
+  EXPECT_EQ(observation->dispatches, 1);
+}
+
+TEST(test_amr_history_ring,
+     ThreeLevelProgramInstallationFailsClosedWithoutExactFluxExpressionBudget) {
   constexpr int Dim = pops::kNativeDimension;
   const pops::AmrSystemConfig<Dim> config = three_level_config<Dim>();
   pops::AmrSystem<Dim> system(config);
@@ -731,43 +799,23 @@ TEST(test_amr_history_ring, ThreeLevelProgramFailsClosedWithoutExactFluxExpressi
   using ClockRelation = pops::test::program_v5::CallbackProgramClockRelation;
   const auto resources = dense_resources<Dim>(system, {Resource::Kind::state});
   const std::array<int, 2> temporal_substeps{2, 2};
-  struct Observation {
-    std::array<int, 3> level_advances{};
-    std::string refusal;
-    std::size_t plan_size = 0;
-    int first_substeps = 0;
-    int second_substeps = 0;
-  };
-  auto observation = std::make_shared<Observation>();
-  pops::test::install_explicit_amr_callback_program<Dim>(
-      system, "test.amr-history/three-level@1", "clock.level.0", resources, {},
-      [observation, temporal_substeps](auto& context, double dt) {
-        // The synchronized advance owns the exact prepared subcycle plan.  The requested
-        // two-transition shape is recorded here as a carrier; execution is expected to refuse
-        // before entering any level body because this artifact intentionally has no flux budget.
-        observation->plan_size = temporal_substeps.size();
-        observation->first_substeps = temporal_substeps[0];
-        observation->second_substeps = temporal_substeps[1];
-        try {
-          context.advance_synchronized_hierarchy(dt, [&context, observation](double) {
-            ++observation->level_advances[static_cast<std::size_t>(context.level())];
-            context.state(0).set_val(pops::Real(9));
-          });
-        } catch (const std::logic_error& error) {
-          observation->refusal = error.what();
-        }
-      },
-      {},
-      {ClockRelation{"clock.level.0", "clock.level.1", 2},
-       ClockRelation{"clock.level.1", "clock.level.2", 2}},
-      std::vector<pops::runtime::program::ProgramFluxBudgetRecord>{});
-  ASSERT_NO_THROW(system.step(0.125));
+  // A three-level Program must declare one exact flux-expression budget per Program block.  The
+  // final installer rejects the incomplete artifact before candidate preparation or mutation.
+  EXPECT_THROW(
+      pops::test::install_explicit_amr_callback_program<Dim>(
+          system, "test.amr-history/three-level@1", "clock.level.0", resources, {},
+          [temporal_substeps](auto& context, double dt) {
+            if (temporal_substeps != std::array<int, 2>{2, 2})
+              throw std::logic_error("three-level fixture lost its exact temporal carrier");
+            context.advance_synchronized_hierarchy(
+                dt, [&context](double) { context.state(0).set_val(pops::Real(9)); });
+          },
+          {},
+          {ClockRelation{"clock.level.0", "clock.level.1", 2},
+           ClockRelation{"clock.level.1", "clock.level.2", 2}},
+          std::vector<pops::runtime::program::ProgramFluxBudgetRecord>{}),
+      std::invalid_argument);
 
-  EXPECT_EQ(observation->refusal, "installed AMR Program has no prepared flux-expression budget");
-  EXPECT_EQ(observation->level_advances, (std::array<int, 3>{0, 0, 0}));
-  EXPECT_EQ(observation->plan_size, 2U);
-  EXPECT_EQ(observation->first_substeps, 2);
-  EXPECT_EQ(observation->second_substeps, 2);
   auto after_runtime = system.accepted_amr_runtime();
   ASSERT_TRUE(after_runtime);
   for (std::size_t level = 0; level < after_runtime->hierarchy().num_levels(); ++level) {
@@ -903,7 +951,10 @@ TEST(test_amr_history_ring, CumulativeRegridRetryPublishesFourLevelAcceptedAutho
   EXPECT_EQ(accepted.ledger_budget.max_transaction_depth, 1U);
   EXPECT_FALSE(accepted.ledger_budget.exact_contract.empty());
   ASSERT_EQ(accepted.flux_budget.blocks.size(), 1U);
-  EXPECT_EQ(accepted.flux_budget.blocks.front(), (std::array<std::size_t, 2>{1, 1}));
+  // This history-only callback declares no conservative flux basis or final coefficient term.
+  // The forward hierarchy must preserve that exact zero budget rather than inventing a reflux
+  // authority while rematerializing four levels.
+  EXPECT_EQ(accepted.flux_budget.blocks.front(), (std::array<std::size_t, 2>{0, 0}));
   EXPECT_FALSE(accepted.program_state_manifest.empty());
   EXPECT_FALSE(accepted.program_clock_manifest.empty());
   const auto accepted_program =

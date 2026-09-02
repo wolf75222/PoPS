@@ -131,7 +131,7 @@ def test_unified_program_amr_closure_has_global_include_impact():
         path.relative_to(REPO_ROOT / "include").as_posix()
         for path in detail_dir.glob("program_execution_services_amr_*.hpp")
     )
-    assert len(details) == 25  # authenticated backend + 24 AMR definition details
+    assert len(details) == 32, "AMR private include closure was truncated"
     headers = {
         "pops/runtime/program/program_execution_services.hpp",
         *details,

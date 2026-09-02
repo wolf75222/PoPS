@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "explicit_amr_program.hpp"
+#include "amr_runtime_authority.hpp"
 #include "gtest_compat.hpp"
 #include "test_harness.hpp"
 #include "amr_tagging_test_authority.hpp"

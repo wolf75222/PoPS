@@ -22,6 +22,14 @@ void attach_active_flux_basis_(int runtime_block, const level_evaluation_type& e
        current_interval_start_time_},
       {active_level_, evaluation.point.tick, current_interval_end_phase_,
        current_interval_start_time_ + current_dt_}};
+  if (static_flux_tables_.bound) {
+    FluxExpressionRegistry unused_registry;
+    prepare_active_flux_basis_impl_(
+        runtime_block, evaluation.point, rhs_identity, provider, evaluation.topology_epoch,
+        evaluation.materialization_generation, rhs, &evaluation, nullptr, nullptr, interval,
+        unused_registry, active_flux_basis_counts_, next_active_flux_basis_identity_);
+    return;
+  }
   FluxExpressionRegistry candidate_registry;
   std::vector<std::size_t> candidate_counts;
   std::uint64_t candidate_identity = 0;
@@ -120,8 +128,15 @@ void prepare_active_flux_basis_impl_(
   };
 
   std::size_t block = 0;
-  std::vector<PendingFace> pending;
-  std::string pending_contract;
+  std::optional<std::uint32_t> declared_basis_slot;
+  std::optional<std::size_t> static_cursor_restore;
+  std::optional<std::size_t> static_count_restore;
+  std::optional<std::uint64_t> static_identity_restore;
+  bool static_prepared = false;
+  // Legacy/non-table fallback storage is constructed only after the static carrier has declined
+  // the call.  A bound Program never even creates these dynamic containers on its RHS route.
+  std::optional<std::vector<PendingFace>> pending;
+  std::optional<std::string> pending_contract;
   std::exception_ptr preparation_error;
   try {
     if (runtime_block < 0 ||
@@ -169,102 +184,266 @@ void prepare_active_flux_basis_impl_(
         !(interval_dt > 0.0))
       throw std::logic_error(
           "AMR Program flux-expression basis differs from its active evaluation interval");
-    if (prepared_rhs_basis_bounds_[block] == 0 || prepared_coefficient_term_bounds_[block] == 0)
+    const auto static_term_applies = [&](std::uint32_t term_slot) {
+      if (term_slot >= static_flux_tables_.terms.size())
+        throw std::logic_error("AMR Program static flux term slot is outside its carrier");
+      const auto& term = static_flux_tables_.terms[term_slot];
+      if (term.basis_slot >= static_flux_tables_.bases.size())
+        throw std::logic_error("AMR Program static flux term has no declared basis");
+      const int declared_level = static_flux_tables_.bases[term.basis_slot].level;
+      return declared_level < 0 || declared_level == active_level_;
+    };
+    const bool static_cancellation =
+        static_flux_tables_.bound &&
+        std::none_of(static_flux_tables_.term_slots_by_runtime_block.at(block).begin(),
+                     static_flux_tables_.term_slots_by_runtime_block.at(block).end(),
+                     static_term_applies);
+    if (prepared_rhs_basis_bounds_[block] == 0 ||
+        (prepared_coefficient_term_bounds_[block] == 0 && !static_cancellation))
       throw std::logic_error(
           "flux-producing AMR Program block has no authenticated expression budget");
     if (candidate_counts.at(block) >= prepared_rhs_basis_bounds_[block])
       throw std::length_error(
           "AMR Program flux evaluations exceed their authenticated RHS-basis bound");
+    if (static_flux_tables_.bound) {
+      if (block >= static_flux_tables_.basis_slots_by_runtime_block.size())
+        throw std::logic_error("AMR Program flux table carrier has no runtime block slot");
+      const auto& ordered = static_flux_tables_.basis_slots_by_runtime_block[block];
+      const std::size_t position = candidate_counts.at(block);
+      if (position == 0)
+        static_flux_tables_.next_basis_by_runtime_block[block] = 0;
+      std::optional<std::uint32_t> applicable_slot;
+      std::size_t applicable_position = 0;
+      for (const std::uint32_t slot : ordered) {
+        const auto& candidate = static_flux_tables_.bases.at(slot);
+        if (candidate.level >= 0 && candidate.level != active_level_)
+          continue;
+        if (applicable_position++ == position) {
+          applicable_slot = slot;
+          break;
+        }
+      }
+      if (!applicable_slot)
+        throw std::length_error(
+            "AMR Program flux evaluation exceeds its declared static basis occurrences");
+      const auto& declared = static_flux_tables_.bases.at(*applicable_slot);
+      if (declared.runtime_block != block || declared.rhs_identity != rhs_identity ||
+          declared.provider != static_cast<std::uint8_t>(provider) ||
+          (declared.level >= 0 && declared.level != active_level_) ||
+          declared.stage != point.stage_fraction)
+        throw std::invalid_argument(
+            "AMR Program flux evaluation differs from its declared static basis occurrence");
+      if (static_flux_tables_.next_basis_by_runtime_block[block] != position)
+        throw std::logic_error(
+            "AMR Program flux basis slot order was not reset for this level group");
+      static_cursor_restore = static_flux_tables_.next_basis_by_runtime_block[block];
+      ++static_flux_tables_.next_basis_by_runtime_block[block];
+      declared_basis_slot = declared.basis_slot;
+    }
     if (candidate_identity == std::numeric_limits<std::uint64_t>::max())
       throw std::overflow_error("AMR Program flux basis identity exhausted uint64_t");
 
-    if (active_outgoing_flux_[block] != nullptr) {
-      const Geometry<Dim> geometry = facade_->program_prepared_amr_level_geometry_(active_level_);
-      for (const ProgramInterfaceFace& interface :
-           program_interface_faces_(static_cast<std::size_t>(active_level_)))
-        pending.push_back({fragment_role_type::Coarse, interface.axis, interface.coarse_face,
-                           interface.coarse_face, face_measure_(geometry, interface.axis)});
+    if (static_flux_tables_.bound) {
+      static_count_restore = candidate_counts.at(block);
+      static_identity_restore = candidate_identity;
+      if (!declared_basis_slot || *declared_basis_slot >= static_flux_basis_payloads_.size() ||
+          *declared_basis_slot >= static_flux_basis_active_.size())
+        throw std::logic_error("AMR Program flux basis has no resident static payload slot");
+      const auto& declared = static_flux_tables_.bases.at(*declared_basis_slot);
+      FluxBasis& resident = static_flux_basis_payloads_[*declared_basis_slot];
+      resident.identity = *declared_basis_slot;
+      resident.runtime_block = block;
+      resident.level = active_level_;
+      // The bound two-table route consumes only the scalar stage coordinates.  Graph/rate/
+      // application identities have already been authenticated into the cold ledger routes;
+      // copying the runtime strings here would make every RHS attachment allocator-visible.
+      resident.point.tick = point.tick;
+      resident.point.level = point.level;
+      resident.point.substep = point.substep;
+      resident.point.stage = point.stage;
+      resident.point.stage_fraction = point.stage_fraction;
+      resident.point.dt = point.dt;
+      resident.point.physical_time = point.physical_time;
+      resident.rhs_identity = rhs_identity;
+      resident.provider = provider;
+      resident.window = interval;
+      resident.face_count = 0;
+      const bool has_final_term = std::any_of(
+          static_flux_tables_.term_slots_by_runtime_block.at(block).begin(),
+          static_flux_tables_.term_slots_by_runtime_block.at(block).end(), [&](std::uint32_t term) {
+            return static_flux_tables_.terms.at(term).basis_slot == *declared_basis_slot;
+          });
+      const auto fill_route = [&](multiblock_flux_ledger_type* ledger, fragment_role_type role) {
+        if (ledger == nullptr || !has_final_term)
+          return;
+        const auto route = std::find_if(
+            declared.face_routes.begin(), declared.face_routes.end(), [&](const auto& candidate) {
+              return candidate.ledger == ledger && candidate.level == active_level_ &&
+                     candidate.role == role;
+            });
+        if (route == declared.face_routes.end())
+          throw std::invalid_argument("AMR Program flux basis has no resident topology route");
+        const Geometry<Dim> geometry = facade_->program_prepared_amr_level_geometry_(active_level_);
+        for (const auto& template_face : route->faces) {
+          if (resident.face_count >= resident.faces.size())
+            throw std::length_error(
+                "AMR Program flux basis exceeds its frozen resident face slots");
+          FluxBasisFace& face = resident.faces[resident.face_count++];
+          if (face.flux_density.size() != declared.components ||
+              face.flux_density.size() != static_cast<std::size_t>(rhs.ncomp()))
+            throw std::invalid_argument(
+                "AMR Program flux basis payload differs from its frozen slot");
+          face.role = role;
+          face.axis = template_face.axis;
+          face.face = template_face.face;
+          face.coarse_face = template_face.coarse_face;
+          face.face_measure = face_measure_(geometry, face.axis);
+          if (!(face.face_measure > 0.0) || !std::isfinite(face.face_measure))
+            throw std::invalid_argument(
+                "AMR Program flux basis has an invalid resident face measure");
+          if (named_cell_fluxes != nullptr)
+            collective_named_face_payload_into_(*named_cell_fluxes, rhs, face.axis, face.face,
+                                                face.flux_density);
+          else if (exact_face_fluxes != nullptr)
+            collective_face_payload_into_(*exact_face_fluxes, rhs, face.axis, face.face,
+                                          face.flux_density);
+          else
+            collective_face_payload_into_(*evaluation, rhs, face.axis, face.face,
+                                          face.flux_density);
+          for (Real& component : face.flux_density) {
+            if (!std::isfinite(static_cast<double>(component)))
+              throw std::invalid_argument("AMR Program flux basis contains a non-finite payload");
+            if (named_cell_fluxes == nullptr)
+              component /= static_cast<Real>(face.face_measure);
+          }
+        }
+      };
+      fill_route(active_outgoing_flux_[block], fragment_role_type::Coarse);
+      fill_route(active_incoming_flux_[block], fragment_role_type::Fine);
+      static_flux_basis_active_[*declared_basis_slot] = 1;
+      ++candidate_counts[block];
+      candidate_identity = std::max(candidate_identity, resident.identity);
+      static_prepared = true;
     }
-    if (active_incoming_flux_[block] != nullptr) {
-      const std::size_t parent = static_cast<std::size_t>(active_level_ - 1);
-      const auto& hierarchy = facade_->prepared_amr_multiblock_hierarchy_();
-      const auto ratio =
-          hierarchy.topology_runtime().hierarchy().layout(parent + 1).ratio_from_parent();
-      const ::pops::amr::reflux::FaceRefinementMapping<Dim> mapping{
-          hierarchy.topology_runtime().hierarchy().layout(parent).domain().lo,
-          hierarchy.topology_runtime().hierarchy().layout(parent + 1).domain().lo};
-      const Geometry<Dim> geometry = facade_->program_prepared_amr_level_geometry_(active_level_);
-      for (const ProgramInterfaceFace& interface : program_interface_faces_(parent)) {
-        ::pops::amr::reflux::CoarseFaceRefluxKey<Dim> query;
-        query.owner = std::string(active_block_identities_[block]);
-        query.state = query.owner + "/state";
-        query.levels = {static_cast<int>(parent), static_cast<int>(parent + 1)};
-        query.axis = interface.axis;
-        query.coarse_face = interface.coarse_face;
-        query.attempt = active_subcycling_attempt_;
-        query.macro_step = point.tick;
-        query.window_begin = interval.begin.phase;
-        query.window_end = interval.end.phase;
-        std::size_t fine_count = 1;
-        for (int axis = 0; axis < Dim; ++axis)
-          if (axis != interface.axis)
-            fine_count = checked_product_(fine_count, static_cast<std::size_t>(ratio[axis]),
-                                          "AMR Program fine-face enumeration");
-        const ::pops::amr::reflux::MetricRefluxBudget budget{fine_count, fine_count, 1};
-        for (const Index<Dim>& fine_face :
-             ::pops::amr::reflux::fine_faces_for_coarse_face(query, ratio, mapping, budget))
-          pending.push_back({fragment_role_type::Fine, interface.axis, fine_face,
-                             interface.coarse_face, face_measure_(geometry, interface.axis)});
+
+    if (!static_prepared) {
+      pending.emplace();
+      if (active_outgoing_flux_[block] != nullptr) {
+        const Geometry<Dim> geometry = facade_->program_prepared_amr_level_geometry_(active_level_);
+        for (const ProgramInterfaceFace& interface :
+             program_interface_faces_(static_cast<std::size_t>(active_level_)))
+          pending->push_back({fragment_role_type::Coarse, interface.axis, interface.coarse_face,
+                              interface.coarse_face, face_measure_(geometry, interface.axis)});
       }
+      if (active_incoming_flux_[block] != nullptr) {
+        const std::size_t parent = static_cast<std::size_t>(active_level_ - 1);
+        const auto& hierarchy = facade_->prepared_amr_multiblock_hierarchy_();
+        const auto ratio =
+            hierarchy.topology_runtime().hierarchy().layout(parent + 1).ratio_from_parent();
+        const ::pops::amr::reflux::FaceRefinementMapping<Dim> mapping{
+            hierarchy.topology_runtime().hierarchy().layout(parent).domain().lo,
+            hierarchy.topology_runtime().hierarchy().layout(parent + 1).domain().lo};
+        const Geometry<Dim> geometry = facade_->program_prepared_amr_level_geometry_(active_level_);
+        for (const ProgramInterfaceFace& interface : program_interface_faces_(parent)) {
+          ::pops::amr::reflux::CoarseFaceRefluxKey<Dim> query;
+          query.owner = std::string(active_block_identities_[block]);
+          query.state = query.owner + "/state";
+          query.levels = {static_cast<int>(parent), static_cast<int>(parent + 1)};
+          query.axis = interface.axis;
+          query.coarse_face = interface.coarse_face;
+          query.attempt = active_subcycling_attempt_;
+          query.macro_step = point.tick;
+          query.window_begin = interval.begin.phase;
+          query.window_end = interval.end.phase;
+          std::size_t fine_count = 1;
+          for (int axis = 0; axis < Dim; ++axis)
+            if (axis != interface.axis)
+              fine_count = checked_product_(fine_count, static_cast<std::size_t>(ratio[axis]),
+                                            "AMR Program fine-face enumeration");
+          const ::pops::amr::reflux::MetricRefluxBudget budget{fine_count, fine_count, 1};
+          for (const Index<Dim>& fine_face :
+               ::pops::amr::reflux::fine_faces_for_coarse_face(query, ratio, mapping, budget))
+            pending->push_back({fragment_role_type::Fine, interface.axis, fine_face,
+                                interface.coarse_face, face_measure_(geometry, interface.axis)});
+        }
+      }
+      ExactContractBuilder exact;
+      exact.text("pops.amr-program.cell-local-pending-flux-faces")
+          .scalar(std::uint32_t{1})
+          .scalar(std::int32_t{runtime_block})
+          .scalar(std::int32_t{rhs_identity})
+          .scalar(static_cast<std::uint8_t>(provider))
+          .text(point.clock)
+          .scalar(point.tick)
+          .scalar(std::int32_t{point.level})
+          .scalar(std::int32_t{point.substep})
+          .scalar(std::int32_t{point.stage})
+          .scalar(point.stage_fraction.numerator)
+          .scalar(point.stage_fraction.denominator)
+          .scalar(point.dt)
+          .scalar(point.physical_time)
+          .text(point.graph_identity)
+          .text(point.rate_identity)
+          .text(point.application_identity)
+          .scalar(candidate_identity)
+          .scalar(static_cast<std::uint64_t>(candidate_counts[block]))
+          .scalar(std::uint64_t{pending->size()});
+      for (const PendingFace& face : *pending) {
+        exact.scalar(std::uint32_t{face.role == fragment_role_type::Coarse ? 0u : 1u})
+            .scalar(std::int32_t{face.axis});
+        for (int axis = 0; axis < Dim; ++axis)
+          exact.scalar(face.face[axis]);
+        for (int axis = 0; axis < Dim; ++axis)
+          exact.scalar(face.coarse_face[axis]);
+        exact.scalar(face.measure);
+      }
+      pending_contract.emplace(std::move(exact).release());
     }
-    ExactContractBuilder exact;
-    exact.text("pops.amr-program.cell-local-pending-flux-faces")
-        .scalar(std::uint32_t{1})
-        .scalar(std::int32_t{runtime_block})
-        .scalar(std::int32_t{rhs_identity})
-        .scalar(static_cast<std::uint8_t>(provider))
-        .text(point.clock)
-        .scalar(point.tick)
-        .scalar(std::int32_t{point.level})
-        .scalar(std::int32_t{point.substep})
-        .scalar(std::int32_t{point.stage})
-        .scalar(point.stage_fraction.numerator)
-        .scalar(point.stage_fraction.denominator)
-        .scalar(point.dt)
-        .scalar(point.physical_time)
-        .text(point.graph_identity)
-        .text(point.rate_identity)
-        .text(point.application_identity)
-        .scalar(candidate_identity)
-        .scalar(static_cast<std::uint64_t>(candidate_counts[block]))
-        .scalar(std::uint64_t{pending.size()});
-    for (const PendingFace& face : pending) {
-      exact.scalar(std::uint32_t{face.role == fragment_role_type::Coarse ? 0u : 1u})
-          .scalar(std::int32_t{face.axis});
-      for (int axis = 0; axis < Dim; ++axis)
-        exact.scalar(face.face[axis]);
-      for (int axis = 0; axis < Dim; ++axis)
-        exact.scalar(face.coarse_face[axis]);
-      exact.scalar(face.measure);
-    }
-    pending_contract = std::move(exact).release();
   } catch (...) {
+    if (static_flux_tables_.bound && declared_basis_slot) {
+      if (*declared_basis_slot < static_flux_basis_active_.size())
+        static_flux_basis_active_[*declared_basis_slot] = 0;
+      if (*declared_basis_slot < static_flux_basis_payloads_.size())
+        static_flux_basis_payloads_[*declared_basis_slot].face_count = 0;
+      if (static_cursor_restore && block < static_flux_tables_.next_basis_by_runtime_block.size())
+        static_flux_tables_.next_basis_by_runtime_block[block] = *static_cursor_restore;
+      if (static_count_restore)
+        candidate_counts[block] = *static_count_restore;
+      if (static_identity_restore)
+        candidate_identity = *static_identity_restore;
+    }
     preparation_error = std::current_exception();
   }
   if (all_reduce_max(preparation_error ? 1L : 0L, lane) != 0) {
+    if (static_flux_tables_.bound && declared_basis_slot) {
+      if (*declared_basis_slot < static_flux_basis_active_.size())
+        static_flux_basis_active_[*declared_basis_slot] = 0;
+      if (*declared_basis_slot < static_flux_basis_payloads_.size())
+        static_flux_basis_payloads_[*declared_basis_slot].face_count = 0;
+      if (static_cursor_restore && block < static_flux_tables_.next_basis_by_runtime_block.size())
+        static_flux_tables_.next_basis_by_runtime_block[block] = *static_cursor_restore;
+      if (static_count_restore)
+        candidate_counts[block] = *static_count_restore;
+      if (static_identity_restore)
+        candidate_identity = *static_identity_restore;
+    }
     if (facade_->prepared_amr_multiblock_hierarchy_().lane().size() == 1 && preparation_error)
       std::rethrow_exception(preparation_error);
     throw std::runtime_error("AMR Program face-flux preparation failed collectively");
   }
+  if (static_prepared)
+    return;
+  if (!pending || !pending_contract)
+    throw std::logic_error("AMR Program dynamic flux fallback has no prepared face witness");
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"cell-local-amr-pending-flux-faces", pending_contract}}, lane))
+          {{"cell-local-amr-pending-flux-faces", *pending_contract}}, lane))
     throw std::invalid_argument(
         "AMR Program pending face-flux order differs between execution ranks");
 
   std::vector<FluxBasisFace> faces;
   preparation_error = nullptr;
   try {
-    faces.reserve(pending.size());
+    faces.reserve(pending->size());
   } catch (...) {
     preparation_error = std::current_exception();
   }
@@ -274,7 +453,7 @@ void prepare_active_flux_basis_impl_(
     throw std::runtime_error("AMR Program face-flux basis reservation failed collectively");
   }
 
-  for (const PendingFace& face : pending) {
+  for (const PendingFace& face : *pending) {
     std::vector<Real> payload =
         named_cell_fluxes != nullptr
             ? collective_named_face_payload_(*named_cell_fluxes, rhs, face.axis, face.face)
@@ -308,7 +487,20 @@ void prepare_active_flux_basis_impl_(
     }
   }
 
-  const std::uint64_t identity = candidate_identity + 1;
+  const std::uint64_t identity =
+      declared_basis_slot ? *declared_basis_slot : candidate_identity + 1;
+  if (static_flux_tables_.bound) {
+    if (!declared_basis_slot || *declared_basis_slot >= static_flux_basis_payloads_.size() ||
+        *declared_basis_slot >= static_flux_basis_active_.size())
+      throw std::logic_error("AMR Program flux basis has no resident static payload slot");
+    FluxBasis& resident = static_flux_basis_payloads_[*declared_basis_slot];
+    resident = FluxBasis{identity,     block,    active_level_, point,
+                         rhs_identity, provider, interval,      std::move(faces)};
+    static_flux_basis_active_[*declared_basis_slot] = 1;
+    ++candidate_counts[block];
+    candidate_identity = std::max(candidate_identity, identity);
+    return;
+  }
   std::optional<FluxExpression> prepared_expression;
   std::exception_ptr expression_error;
   try {
@@ -330,7 +522,7 @@ void prepare_active_flux_basis_impl_(
   try {
     candidate_registry[&rhs] = std::move(*prepared_expression);
     ++candidate_counts[block];
-    candidate_identity = identity;
+    candidate_identity = std::max(candidate_identity, identity);
   } catch (...) {
     expression_error = std::current_exception();
   }

@@ -255,7 +255,7 @@ class PoissonFftFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
     std::exception_ptr copy_error;
     try {
       elliptic::nd::detail::copy_component(warm_start, 0, solver_.phi(), 0);
-      Kokkos::fence();
+      ::pops::device_fence();
     } catch (...) {
       copy_error = std::current_exception();
     }
@@ -458,7 +458,7 @@ class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
     require_field_nullspace_compatible(rhs_, nullspace_plan_, nullspace_distribution_, lane);
     elliptic::nd::detail::copy_component(warm_start, 0, candidate_, 0);
     apply_field_gauge(candidate_, nullspace_plan_, nullspace_distribution_, lane);
-    Kokkos::fence();
+    ::pops::device_fence();
     SolveReport report = component_->solve(rhs_, candidate_, geometry_, periodicity_);
     if (!report.solved_value_available())
       return report;

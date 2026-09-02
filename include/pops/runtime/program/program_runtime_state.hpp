@@ -113,6 +113,32 @@ struct AmrProgramHistoryRemapDescriptor {
   bool operator==(const AmrProgramHistoryRemapDescriptor&) const = default;
 };
 
+/// Native-prepared authority for replacing every AMR history ring after a complete hierarchy
+/// rebuild.  Unlike a parent/child regrid remap, this is a detached total replacement: each entry
+/// carries the new exact key/level and the retained source provenance key for the same historical
+/// identity.  It is intentionally a C++ runtime DTO only; no public facade or component ABI is
+/// extended by this Candidate-time operation.
+struct AmrProgramFullHistoryReseedEntry {
+  std::string key;
+  std::string source_key;
+  std::string history_identity;
+  int level = -1;
+
+  bool operator==(const AmrProgramFullHistoryReseedEntry&) const = default;
+};
+
+struct AmrProgramFullHistoryReseedDescriptor {
+  std::vector<AmrProgramFullHistoryReseedEntry> history_plan;
+  std::uint64_t prior_topology_epoch = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t prior_materialization_generation = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t published_topology_epoch = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t published_materialization_generation = std::numeric_limits<std::uint64_t>::max();
+  std::int64_t accepted_macro_step = -1;
+  std::size_t level_count = 0;
+
+  bool operator==(const AmrProgramFullHistoryReseedDescriptor&) const = default;
+};
+
 /// Fully value-owned topology authority needed to rebuild a cell-local temporal provider while
 /// the next AMR hierarchy is still unpublished.  It deliberately carries only frozen forward
 /// facts; a detached Program snapshot must never consult the last accepted adapter to recover a
@@ -141,6 +167,14 @@ struct PreparedForwardAmrTemporalAuthority {
   ::pops::amr::InterfaceFluxLedgerBudget interface_flux_ledger_budget;
 };
 
+/// Opaque, candidate-owned AMR field prototypes used to rebuild finite Program scratch arenas
+/// against an unpublished forward topology.  The concrete carrier lives with the AMR adapter so
+/// this type-erased boundary cannot expose an accepted facade or a live runtime fallback.
+class PreparedForwardAmrScratchTopology {
+ public:
+  virtual ~PreparedForwardAmrScratchTopology() = default;
+};
+
 /// Type-erased, candidate-only portion of an AMR accepted checkpoint.  The regrid carrier owns
 /// the forward hierarchy and rematerialized numeric HistoryManager; the detached Program snapshot
 /// owns the complementary flux provenance, temporal authority and deferred markers.  Keeping this
@@ -160,6 +194,24 @@ struct PreparedForwardAmrAcceptedContext {
   /// invalidates them and the carrier serializes empty collections until the next accepted step
   /// prepares new topology-qualified effects.
   bool topology_scoped_effects_invalidated = false;
+};
+
+/// Type-erased authority for a detached, topology-qualified AMR execution image.  This stays on
+/// the C++ side of the v5 boundary: artifacts see it only through an accepted snapshot virtual
+/// call, never through a new ABI callback or descriptor field.
+class PreparedForwardAmrExecutionAuthority {
+ public:
+  PreparedForwardAmrExecutionAuthority() = default;
+  PreparedForwardAmrExecutionAuthority(const PreparedForwardAmrExecutionAuthority&) = delete;
+  PreparedForwardAmrExecutionAuthority& operator=(
+      const PreparedForwardAmrExecutionAuthority&) = delete;
+  virtual ~PreparedForwardAmrExecutionAuthority() = default;
+
+  [[nodiscard]] virtual std::uint32_t native_dimension() const noexcept = 0;
+  [[nodiscard]] virtual std::uint64_t topology_epoch() const noexcept = 0;
+  [[nodiscard]] virtual std::uint64_t materialization_generation() const noexcept = 0;
+  [[nodiscard]] virtual std::size_t configured_level_count() const noexcept { return 0; }
+  [[nodiscard]] virtual std::size_t active_level_count() const noexcept { return 0; }
 };
 
 /// Type-erased, already allocated image of one artifact context's accepted state.  Runtime
@@ -189,6 +241,12 @@ class AcceptedProgramExecutionServicesSnapshot {
     throw std::logic_error("Program accepted execution snapshot cannot stage a forward topology");
   }
   virtual void rebind_after_forward_publish(void*) noexcept { std::terminate(); }
+  /// Installation-only publication into an adapter that is still exclusively candidate-owned.
+  /// Unlike a forward topology publication this transfers only the prepared temporal/contract
+  /// authority; checkpoint staging and topology-bound workspaces remain the host-primed image.
+  virtual void publish_prepared_installation_temporal_authority(void*) noexcept {
+    std::terminate();
+  }
   virtual void prepare_forward_hierarchy_refresh(std::uint64_t, std::uint64_t) {
     throw std::logic_error(
         "Program accepted execution snapshot cannot prepare a forward hierarchy refresh");
@@ -197,11 +255,29 @@ class AcceptedProgramExecutionServicesSnapshot {
     throw std::logic_error(
         "Program accepted execution snapshot cannot prepare a forward history remap");
   }
+  virtual void prepare_forward_full_history_reseed(const AmrProgramFullHistoryReseedDescriptor&) {
+    throw std::logic_error(
+        "Program accepted execution snapshot cannot prepare a forward full-history reseed");
+  }
   /// Candidate-only cell-local provider rematerialization for a forward AMR hierarchy.  The
   /// authority is host-owned by the regrid carrier and contains no facade pointer.
   virtual void prepare_forward_temporal_partition(const PreparedForwardAmrTemporalAuthority&) {
     throw std::logic_error(
         "Program accepted execution snapshot cannot prepare a forward temporal partition");
+  }
+  /// Candidate-only rematerialization of bind-sealed transient Program resources. The concrete
+  /// topology carrier supplies only forward field prototypes; publication remains a no-throw
+  /// owner exchange after the AMR hierarchy itself is live.
+  virtual void prepare_forward_scratch_rematerialization(
+      const PreparedForwardAmrScratchTopology&) {
+    throw std::logic_error(
+        "Program accepted execution snapshot cannot prepare forward scratch resources");
+  }
+  /// Construct all DSO-private topology-bound execution resources while Candidate still owns the
+  /// detached forward authority.  Publication is deliberately separate and noexcept.
+  virtual void prepare_forward_execution_bundle(const PreparedForwardAmrExecutionAuthority&) {
+    throw std::logic_error(
+        "Program accepted execution snapshot cannot prepare a forward execution bundle");
   }
   /// Candidate-only checkpoint contribution for an unpublished forward AMR topology.  The result
   /// is intentionally value-owned and contains no facade/adapter pointer.
@@ -218,6 +294,12 @@ class AcceptedProgramExecutionServicesSnapshot {
   /// Implementations restore copy-lost spare capacities without refreshing or republishing the
   /// owner a second time.
   virtual void prime_copied_image_at_bind() { prime_at_bind(); }
+  /// Finite diagnostics that live beside an accepted execution context participate in the same
+  /// Snapshot/Publish/Rollback authority.  Contexts without a separate provisional arena retain
+  /// their existing semantics through these no-op defaults.
+  virtual void snapshot_transaction_diagnostics_noexcept() noexcept {}
+  virtual void publish_transaction_diagnostics_noexcept() noexcept {}
+  virtual void restore_transaction_diagnostics_noexcept() noexcept {}
   virtual void publish_restore() noexcept = 0;
 };
 
@@ -268,6 +350,12 @@ class RetainedAcceptedProgramExecutionServicesSnapshot final
     snapshot_->rebind_after_forward_publish(rebind_token);
   }
 
+  void publish_prepared_installation_temporal_authority(void* rebind_token) noexcept override {
+    if (!snapshot_)
+      std::terminate();
+    snapshot_->publish_prepared_installation_temporal_authority(rebind_token);
+  }
+
   void prepare_forward_hierarchy_refresh(std::uint64_t topology_epoch,
                                          std::uint64_t materialization_generation) override {
     if (!snapshot_)
@@ -281,11 +369,32 @@ class RetainedAcceptedProgramExecutionServicesSnapshot final
     snapshot_->prepare_forward_history_remap(descriptor);
   }
 
+  void prepare_forward_full_history_reseed(
+      const AmrProgramFullHistoryReseedDescriptor& descriptor) override {
+    if (!snapshot_)
+      throw std::logic_error("retained Program accepted snapshot is empty");
+    snapshot_->prepare_forward_full_history_reseed(descriptor);
+  }
+
   void prepare_forward_temporal_partition(
       const PreparedForwardAmrTemporalAuthority& authority) override {
     if (!snapshot_)
       throw std::logic_error("retained Program accepted snapshot is empty");
     snapshot_->prepare_forward_temporal_partition(authority);
+  }
+
+  void prepare_forward_scratch_rematerialization(
+      const PreparedForwardAmrScratchTopology& topology) override {
+    if (!snapshot_)
+      throw std::logic_error("retained Program accepted snapshot is empty");
+    snapshot_->prepare_forward_scratch_rematerialization(topology);
+  }
+
+  void prepare_forward_execution_bundle(
+      const PreparedForwardAmrExecutionAuthority& authority) override {
+    if (!snapshot_)
+      throw std::logic_error("retained Program accepted snapshot is empty");
+    snapshot_->prepare_forward_execution_bundle(authority);
   }
 
   PreparedForwardAmrAcceptedContext prepare_forward_accepted_context(
@@ -299,6 +408,30 @@ class RetainedAcceptedProgramExecutionServicesSnapshot final
     if (!snapshot_)
       throw std::logic_error("retained Program accepted snapshot is empty");
     snapshot_->prime_at_bind();
+  }
+
+  void prime_copied_image_at_bind() override {
+    if (!snapshot_)
+      throw std::logic_error("retained Program accepted snapshot is empty");
+    snapshot_->prime_copied_image_at_bind();
+  }
+
+  void snapshot_transaction_diagnostics_noexcept() noexcept override {
+    if (!snapshot_)
+      std::terminate();
+    snapshot_->snapshot_transaction_diagnostics_noexcept();
+  }
+
+  void publish_transaction_diagnostics_noexcept() noexcept override {
+    if (!snapshot_)
+      std::terminate();
+    snapshot_->publish_transaction_diagnostics_noexcept();
+  }
+
+  void restore_transaction_diagnostics_noexcept() noexcept override {
+    if (!snapshot_)
+      std::terminate();
+    snapshot_->restore_transaction_diagnostics_noexcept();
   }
 
   void publish_restore() noexcept override { snapshot_->publish_restore(); }
@@ -938,9 +1071,22 @@ struct ProgramRuntimeState {
           destination.fab(local).size() != source.fab(local).size())
         throw std::logic_error("Program accepted image field ownership changed after preparation");
     }
-    for (std::size_t local = 0; local < source.local_size(); ++local)
-      Kokkos::deep_copy(destination.fab(local).storage(), source.fab(local).storage());
-    Kokkos::fence();
+    if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace,
+                                             typename MultiFab<Dim>::memory_space>::accessible) {
+      // Kokkos::deep_copy constructs profiling labels on this host-to-host path.  Those labels
+      // allocate even though both resident images and their exact shape were already prepared.
+      // Synchronize prior kernels once, then copy directly between the sealed host-accessible
+      // views.  Device-only backends retain the asynchronous Kokkos copy below.
+      ::pops::device_fence();
+      for (std::size_t local = 0; local < source.local_size(); ++local) {
+        const auto& source_storage = source.fab(local).storage();
+        auto& destination_storage = destination.fab(local).storage();
+        std::copy_n(source_storage.data(), source_storage.extent(0), destination_storage.data());
+      }
+    } else {
+      for (std::size_t local = 0; local < source.local_size(); ++local)
+        Kokkos::deep_copy(destination.fab(local).storage(), source.fab(local).storage());
+    }
   }
 
   static void copy_string_map_(std::map<std::string, std::string>& destination,
@@ -1131,7 +1277,11 @@ struct ProgramRuntimeState {
       step_balance_terms_.swap(staged.step_balance_terms_);
       automatic_balance_terms_.swap(staged.automatic_balance_terms_);
       step_projections_.swap(staged.step_projections_);
-      transaction_authorities_bound_ = staged.transaction_authorities_bound_;
+      // The publication image receives the staged declaration nodes only here.  Its prior
+      // bound bit describes the empty construction image, not these swapped registries; reseal
+      // the final owner before any detached accepted transaction image can capture it.
+      transaction_authorities_bound_ = false;
+      bind_transaction_authorities_();
     }
 
     void adopt_prepared_execution_state(ProgramRuntimeState& staged) {
@@ -1143,6 +1293,49 @@ struct ProgramRuntimeState {
         cache_.swap(staged.cache_);
       using std::swap;
       swap(hist_, staged.hist_);
+    }
+
+    /// Build the mutable Program portion of an accepted transaction image from this final
+    /// publication, without retaining the previously installed DSO copied into `staged`.
+    /// Installation callbacks and immutable receipts are deliberately absent: transaction
+    /// capture/restore only refreshes the finite scientific registries below, while the live
+    /// ProgramRuntimeState remains the sole installation authority.
+    [[nodiscard]] ProgramRuntimeState prepare_accepted_transaction_image(
+        const ProgramRuntimeState& staged) const {
+      ProgramRuntimeState image(staged);
+      image.artifact_installation_.reset();
+      image.artifact_publication_receipt_.reset();
+      image.artifact_field_boundary_baseline_.reset();
+      image.artifact_field_boundary_stage_.reset();
+      image.step_ = {};
+      image.hierarchy_refresh_ = {};
+      image.history_remap_accepted_ = {};
+      image.restart_regrid_preflight_ = {};
+      image.restart_regrid_ = {};
+      image.restart_resync_ = {};
+      image.accepted_context_snapshot_ = {};
+      image.dt_bound_ = {};
+      image.step_install_generation_ = next_generation_;
+      image.diagnostics_ = diagnostics_;
+      image.step_balance_terms_ = step_balance_terms_;
+      image.automatic_balance_terms_ = automatic_balance_terms_;
+      image.step_projections_ = step_projections_;
+      // This image is the resident Program portion of an AMR rollback carrier.  Seal the exact
+      // final registry shape it owns rather than inheriting a construction-state bit from either
+      // the detached staging state or the publication image.
+      image.transaction_authorities_bound_ = false;
+      image.bind_transaction_authorities();
+      image.block_map_ = block_map_;
+      image.block_params_ = block_params_;
+      image.persistent_values_ = persistent_values_.clone();
+      image.cache_ = cache_;
+      image.hist_ = hist_;
+      image.installed_hash_.clear();
+      image.operator_authorities_.clear();
+      image.history_replay_authorities_.clear();
+      image.checkpoint_metadata_ = {};
+      image.artifact_backed_ = false;
+      return image;
     }
 
     /// Installation-only cache materialization.  The finite slot table was bound in
@@ -1170,11 +1363,48 @@ struct ProgramRuntimeState {
     }
     [[nodiscard]] const ProgramInstallationMetadata& metadata() const noexcept { return metadata_; }
     [[nodiscard]] const ProgramInstallationTables& tables() const noexcept { return tables_; }
+    [[nodiscard]] const ProgramCheckpointMetadata& checkpoint_metadata() const noexcept {
+      return checkpoint_metadata_;
+    }
+
+    /// Invoke the artifact-owned accepted-context factory while this publication image still owns
+    /// the DSO but before the host swaps any live authority.  AMR uses the resulting detached
+    /// snapshot to serialize its initial POPSAND5 image during installation; doing that after
+    /// owner-last publication would turn a cold bootstrap into an observable live mutation.
+    [[nodiscard]] std::unique_ptr<AcceptedProgramExecutionServicesSnapshot>
+    prepare_accepted_context_snapshot() const {
+      if (!accepted_context_snapshot_)
+        throw std::logic_error(
+            "prepared Program artifact lacks its accepted context snapshot factory");
+      auto snapshot = accepted_context_snapshot_();
+      if (!snapshot)
+        throw std::logic_error(
+            "prepared Program artifact returned an empty accepted context snapshot");
+      return snapshot;
+    }
 
    private:
     explicit PreparedArtifactPublication(std::shared_ptr<OwnedProgramInstallation> artifact)
         : artifact_(std::move(artifact)) {}
     friend struct ProgramRuntimeState;
+
+    void bind_transaction_authorities_() {
+      for (const auto& [name, slot] : diagnostics_) {
+        (void)slot;
+        if (name.empty() || ProgramRuntimeState::has_reserved_balance_namespace(name))
+          throw std::logic_error("Program diagnostic registry is invalid at bind");
+      }
+      for (const auto& [route, slot] : step_balance_terms_) {
+        (void)slot;
+        ProgramRuntimeState::require_balance_route(
+            route,
+            "ProgramRuntimeState::PreparedArtifactPublication::bind_transaction_authorities");
+      }
+      for (const auto& slot : step_projections_)
+        if (slot.identity.empty())
+          throw std::logic_error("Program projection registry is invalid at bind");
+      transaction_authorities_bound_ = true;
+    }
 
     std::shared_ptr<OwnedProgramInstallation> artifact_;
     ProgramInstallationMetadata metadata_;
@@ -1187,7 +1417,7 @@ struct ProgramRuntimeState {
     BalanceRouteRegistry step_balance_terms_;
     AutomaticBalanceRegistry automatic_balance_terms_;
     std::vector<StepProjectionSlot> step_projections_;
-    bool transaction_authorities_bound_ = true;
+    bool transaction_authorities_bound_ = false;
     CacheManager<Dim> cache_;
     HistoryManager<Dim> hist_;
     std::function<void(double)> step_;

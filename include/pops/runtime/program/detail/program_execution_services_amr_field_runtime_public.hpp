@@ -23,10 +23,10 @@ template <int Count>
       throw std::out_of_range("AMR Program provider level lies outside the live hierarchy");
     const field_type& state_field =
         facade_->program_prepared_amr_block_state_(runtime_block, active_level_);
-    const auto* const groups = facade_->program_prepared_amr_provider_storage_groups_(active_level_);
+    const auto* const groups =
+        facade_->program_prepared_amr_provider_storage_groups_(active_level_);
     const auto& plan =
-        facade_->program_prepared_amr_auxiliary_consumer_plan_(std::string(consumer_qid),
-                                                               active_level_);
+        facade_->program_prepared_amr_auxiliary_consumer_plan_(consumer_qid, active_level_);
     runtime::system::require_pointwise_provider_groups<Dim, Count>(
         state_field, groups, &plan, "AmrStorageTopologyAdapter provider values");
     return runtime::system::bind_provider_storage_view<Dim, Count>(&plan, groups, local_fab);
@@ -44,14 +44,29 @@ field_type& rhs_scratch(ProgramCacheSlot slot, int subslot, const field_type& pr
   return persistent_scratch_(ScratchKind::Rhs, slot, subslot, prototype, prototype.ncomp(),
                              prototype.ghosts());
 }
+field_type& prepared_rhs_scratch(ProgramCacheSlot slot, int subslot,
+                                 const field_type& prototype) const {
+  return persistent_scratch_(ScratchKind::Rhs, slot, subslot, prototype, prototype.ncomp(),
+                             prototype.ghosts(), false);
+}
 field_type& scratch_state(ProgramCacheSlot slot, int subslot, const field_type& prototype) const {
   return persistent_scratch_(ScratchKind::State, slot, subslot, prototype, prototype.ncomp(),
                              prototype.ghosts());
+}
+field_type& prepared_state_scratch(ProgramCacheSlot slot, int subslot,
+                                   const field_type& prototype) const {
+  return persistent_scratch_(ScratchKind::State, slot, subslot, prototype, prototype.ncomp(),
+                             prototype.ghosts(), false);
 }
 field_type& scalar_scratch(ProgramCacheSlot slot, int subslot, const field_type& prototype,
                            int ncomp = 1, int ghost_depth = 1) const {
   return persistent_scratch_(ScratchKind::Scalar, slot, subslot, prototype, ncomp,
                              uniform_ghosts_(ghost_depth));
+}
+field_type& prepared_scalar_scratch(ProgramCacheSlot slot, int subslot, const field_type& prototype,
+                                    int ncomp = 1, int ghost_depth = 1) const {
+  return persistent_scratch_(ScratchKind::Scalar, slot, subslot, prototype, ncomp,
+                             uniform_ghosts_(ghost_depth), false);
 }
 
 field_type alloc_scalar_field(int ncomp = 1, int ghost_depth = 1) const {
@@ -66,14 +81,14 @@ void rhs_into(int program_block, field_type& stage_state, field_type& rhs, int r
   const int runtime_block = sys_block(program_block);
   require_rate_identity_(rate_id);
   require_same_field_contract_(stage_state, rhs, "AMR Program residual");
-      const auto point = boundary_evaluation_point(rate_id);
-  const auto& evaluation =
-      active_attempt_states_.empty()
-          ? facade_->program_evaluate_prepared_amr_block_level_at_(runtime_block, point,
-                                                                    stage_state)
-          : facade_->program_evaluate_prepared_amr_block_level_at_(
-                runtime_block, point, stage_state, active_level_ - 1,
-                staged_parent_for_block_(runtime_block));
+  auto& point = hot_path_workspace_.direct_point;
+  write_boundary_evaluation_point_into(point, rate_id);
+  const auto& evaluation = active_attempt_states_.empty()
+                               ? facade_->program_evaluate_prepared_amr_block_level_at_(
+                                     runtime_block, point, stage_state)
+                               : facade_->program_evaluate_prepared_amr_block_level_at_(
+                                     runtime_block, point, stage_state, active_level_ - 1,
+                                     staged_parent_for_block_(runtime_block));
   copy_valid_(evaluation.residual, rhs);
   if (!active_attempt_states_.empty())
     attach_active_flux_basis_(runtime_block, evaluation, rhs, rate_id,
@@ -87,7 +102,6 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
   const ExecutionLane& lane = prepared_execution_lane();
   workspace.rhs_ordered.resize(requests.size());
   workspace.rhs_runtime_blocks.resize(requests.size());
-  workspace.rhs_points.resize(requests.size());
   workspace.rhs_evaluation_targets.resize(requests.size());
   workspace.rhs_staged_parents.resize(requests.size());
   workspace.rhs_evaluations.resize(requests.size());
@@ -98,8 +112,7 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
     require_rate_identity_(group_id);
     if (requests.size() == 0)
       throw std::invalid_argument("AMR Program RHS group cannot be empty");
-    if (active_level_ < 0 || static_cast<std::size_t>(active_level_) >=
-                                 workspace.level_capacity)
+    if (active_level_ < 0 || static_cast<std::size_t>(active_level_) >= workspace.level_capacity)
       throw std::logic_error("AMR Program RHS group selected level is outside its prepared image");
     std::size_t index = 0;
     for (const RhsGroupRequest& request : requests) {
@@ -121,14 +134,12 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
       workspace.rhs_rates[index] = request.rate_id;
       workspace.rhs_flux_only[index] = request.flux_only;
       workspace.rhs_residuals[index] = request.rhs;
-      workspace.rhs_points[index] = boundary_evaluation_point(request.rate_id);
+      write_boundary_evaluation_point_into(workspace.rhs_points[index], request.rate_id);
       workspace.rhs_evaluation_targets[index] = {runtime_block, workspace.rhs_points[index].level};
-      workspace.rhs_candidates[index] =
-          &workspace.candidate(static_cast<std::size_t>(active_level_),
-                               static_cast<std::size_t>(runtime_block));
-      workspace.rhs_backups[index] =
-          &workspace.backup(static_cast<std::size_t>(active_level_),
-                            static_cast<std::size_t>(runtime_block));
+      workspace.rhs_candidates[index] = &workspace.candidate(
+          static_cast<std::size_t>(active_level_), static_cast<std::size_t>(runtime_block));
+      workspace.rhs_backups[index] = &workspace.backup(static_cast<std::size_t>(active_level_),
+                                                       static_cast<std::size_t>(runtime_block));
       ++index;
     }
   } catch (...) {
@@ -175,20 +186,20 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
       const RhsGroupRequest& request = *workspace.rhs_ordered[index];
       const auto& evaluation =
           request.flux_only != 0
-              ? (active != 0 ? facade_->prepare_prepared_amr_block_level_flux_at(
-                                   workspace.rhs_runtime_blocks[index], workspace.rhs_points[index],
-                                   *request.state, active_level_ - 1,
-                                   workspace.rhs_staged_parents[index])
-                             : facade_->prepare_prepared_amr_block_level_flux_at(
-                                   workspace.rhs_runtime_blocks[index], workspace.rhs_points[index],
-                                   *request.state))
-              : (active != 0 ? facade_->prepare_prepared_amr_block_level_at(
-                                   workspace.rhs_runtime_blocks[index], workspace.rhs_points[index],
-                                   *request.state, active_level_ - 1,
-                                   workspace.rhs_staged_parents[index])
-                             : facade_->prepare_prepared_amr_block_level_at(
-                                   workspace.rhs_runtime_blocks[index], workspace.rhs_points[index],
-                                   *request.state));
+              ? (active != 0
+                     ? facade_->prepare_prepared_amr_block_level_flux_at(
+                           workspace.rhs_runtime_blocks[index], workspace.rhs_points[index],
+                           *request.state, active_level_ - 1, workspace.rhs_staged_parents[index])
+                     : facade_->prepare_prepared_amr_block_level_flux_at(
+                           workspace.rhs_runtime_blocks[index], workspace.rhs_points[index],
+                           *request.state))
+              : (active != 0
+                     ? facade_->prepare_prepared_amr_block_level_at(
+                           workspace.rhs_runtime_blocks[index], workspace.rhs_points[index],
+                           *request.state, active_level_ - 1, workspace.rhs_staged_parents[index])
+                     : facade_->prepare_prepared_amr_block_level_at(
+                           workspace.rhs_runtime_blocks[index], workspace.rhs_points[index],
+                           *request.state));
       workspace.rhs_evaluations[index] = &evaluation;
       copy_valid_(evaluation.residual, *workspace.rhs_candidates[index]);
       device_fence();
@@ -208,9 +219,13 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
   if (active != 0) {
     std::exception_ptr flux_preparation_error;
     try {
-      candidate_registry = active_flux_expressions_;
-      candidate_counts = active_flux_basis_counts_;
-      candidate_identity = next_active_flux_basis_identity_;
+      // Bound v5 tables own their dense cursors and resident payloads.  Do not copy the legacy
+      // registry/count packs on this hot route: they are only the dynamic fallback authority.
+      if (!static_flux_tables_.bound) {
+        candidate_registry = active_flux_expressions_;
+        candidate_counts = active_flux_basis_counts_;
+        candidate_identity = next_active_flux_basis_identity_;
+      }
       const ::pops::amr::ClockWindow interval{
           {active_level_, workspace.rhs_points.front().tick, current_interval_begin_phase_,
            current_interval_start_time_},
@@ -225,7 +240,8 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
             workspace.rhs_evaluations[index]->topology_epoch,
             workspace.rhs_evaluations[index]->materialization_generation, *request.rhs,
             workspace.rhs_evaluations[index], nullptr, nullptr, interval, candidate_registry,
-            candidate_counts, candidate_identity);
+            static_flux_tables_.bound ? active_flux_basis_counts_ : candidate_counts,
+            static_flux_tables_.bound ? next_active_flux_basis_identity_ : candidate_identity);
       }
     } catch (...) {
       flux_preparation_error = std::current_exception();
@@ -239,9 +255,8 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
 
   std::exception_ptr evaluation_publication_validation_error;
   try {
-    facade_->validate_prepared_amr_block_level_batch(
-        std::span<const std::pair<int, int>>(workspace.rhs_evaluation_targets.data(),
-                                             requests.size()));
+    facade_->validate_prepared_amr_block_level_batch(std::span<const std::pair<int, int>>(
+        workspace.rhs_evaluation_targets.data(), requests.size()));
   } catch (...) {
     evaluation_publication_validation_error = std::current_exception();
   }
@@ -305,18 +320,18 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
   }
 
   if (active != 0) {
-    facade_->publish_prepared_amr_block_level_batch(
-        std::span<const std::pair<int, int>>(workspace.rhs_evaluation_targets.data(),
-                                             requests.size()));
-    static_assert(std::is_nothrow_swappable_v<FluxExpressionRegistry>);
-    static_assert(std::is_nothrow_swappable_v<std::vector<std::size_t>>);
-    active_flux_expressions_.swap(candidate_registry);
-    active_flux_basis_counts_.swap(candidate_counts);
-    next_active_flux_basis_identity_ = candidate_identity;
+    facade_->publish_prepared_amr_block_level_batch(std::span<const std::pair<int, int>>(
+        workspace.rhs_evaluation_targets.data(), requests.size()));
+    if (!static_flux_tables_.bound) {
+      static_assert(std::is_nothrow_swappable_v<FluxExpressionRegistry>);
+      static_assert(std::is_nothrow_swappable_v<std::vector<std::size_t>>);
+      active_flux_expressions_.swap(candidate_registry);
+      active_flux_basis_counts_.swap(candidate_counts);
+      next_active_flux_basis_identity_ = candidate_identity;
+    }
   } else {
-    facade_->publish_prepared_amr_block_level_batch(
-        std::span<const std::pair<int, int>>(workspace.rhs_evaluation_targets.data(),
-                                             requests.size()));
+    facade_->publish_prepared_amr_block_level_batch(std::span<const std::pair<int, int>>(
+        workspace.rhs_evaluation_targets.data(), requests.size()));
   }
 }
 
@@ -325,14 +340,14 @@ void neg_div_flux_default_into(int program_block, field_type& stage_state, field
   const int runtime_block = sys_block(program_block);
   require_rate_identity_(rate_id);
   require_same_field_contract_(stage_state, rhs, "AMR Program default flux residual");
-      const auto point = boundary_evaluation_point(rate_id);
-  const auto& evaluation =
-      active_attempt_states_.empty()
-          ? facade_->program_evaluate_prepared_amr_block_level_flux_at_(runtime_block, point,
-                                                                         stage_state)
-          : facade_->program_evaluate_prepared_amr_block_level_flux_at_(
-                runtime_block, point, stage_state, active_level_ - 1,
-                staged_parent_for_block_(runtime_block));
+  auto& point = hot_path_workspace_.direct_point;
+  write_boundary_evaluation_point_into(point, rate_id);
+  const auto& evaluation = active_attempt_states_.empty()
+                               ? facade_->program_evaluate_prepared_amr_block_level_flux_at_(
+                                     runtime_block, point, stage_state)
+                               : facade_->program_evaluate_prepared_amr_block_level_flux_at_(
+                                     runtime_block, point, stage_state, active_level_ - 1,
+                                     staged_parent_for_block_(runtime_block));
   copy_valid_(evaluation.residual, rhs);
   if (!active_attempt_states_.empty())
     attach_active_flux_basis_(runtime_block, evaluation, rhs, rate_id,
@@ -342,7 +357,8 @@ void neg_div_flux_default_into(int program_block, field_type& stage_state, field
 void source_default_into(int program_block, field_type& stage_state, field_type& rhs) const {
   const int runtime_block = sys_block(program_block);
   require_same_field_contract_(stage_state, rhs, "AMR Program default source residual");
-  const auto point = boundary_evaluation_point(0);
+  auto& point = hot_path_workspace_.direct_point;
+  write_boundary_evaluation_point_into(point, 0);
   if (active_attempt_states_.empty())
     facade_->prepared_amr_block_level_source_into_at(runtime_block, point, stage_state, rhs);
   else
@@ -354,8 +370,7 @@ void source_default_into(int program_block, field_type& stage_state, field_type&
 }
 
 void apply_source_mask(field_type& rhs, std::initializer_list<int> keep) const {
-  pops::runtime::program::apply_component_keep_mask(
-      rhs, std::vector<int>(keep.begin(), keep.end()));
+  pops::runtime::program::apply_component_keep_mask(rhs, keep);
   count_kernel_();
 }
 
@@ -366,7 +381,8 @@ void apply_source_mask(field_type& rhs, std::initializer_list<int> keep) const {
 [[nodiscard]] SolveOutcome solve_source_default(int program_block, field_type& stage_state, Real dt,
                                                 const NewtonOptions& options) const {
   const int runtime_block = sys_block(program_block);
-  const auto point = boundary_evaluation_point(0);
+  auto& point = hot_path_workspace_.direct_point;
+  write_boundary_evaluation_point_into(point, 0);
   SolveOutcome outcome = active_attempt_states_.empty()
                              ? facade_->solve_prepared_amr_block_level_source_at(
                                    runtime_block, point, stage_state, dt, options)
@@ -392,7 +408,8 @@ void require_cartesian_generated_operator(int program_block, const std::string& 
 void prepare_generated_state(int program_block, field_type& stage_state, int rate_id) const {
   const int runtime_block = sys_block(program_block);
   require_rate_identity_(rate_id);
-  const auto point = boundary_evaluation_point(rate_id);
+  auto& point = hot_path_workspace_.direct_point;
+  write_boundary_evaluation_point_into(point, rate_id);
   if (active_attempt_states_.empty())
     facade_->prepare_generated_amr_block_level_state(runtime_block, point, stage_state);
   else

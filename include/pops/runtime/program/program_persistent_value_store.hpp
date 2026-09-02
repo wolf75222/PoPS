@@ -107,12 +107,14 @@ class ProgramResourcePlan final {
     if (schema_ != "program-resource-plan:v1")
       throw std::invalid_argument("Program resource plan has an unsupported schema");
     if (entries_.empty()) {
-      if (maximum_bytes_ != 0 || digest_.size() != 64 ||
+      // Value-backed slots may be empty while the sealed aggregate contains prepared host-only
+      // arenas.  Those bytes remain outside this persistent store, but their exact ceiling and
+      // canonical digest are still part of the one authenticated Program receipt.
+      if (digest_.size() != 64 ||
           !std::all_of(digest_.begin(), digest_.end(), [](unsigned char value) {
             return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
           }))
-        throw std::invalid_argument(
-            "empty Program resource plan has an invalid memory ceiling or digest");
+        throw std::invalid_argument("empty Program resource plan has no SHA-256 digest");
       return;
     }
     if (digest_.size() != 64 ||

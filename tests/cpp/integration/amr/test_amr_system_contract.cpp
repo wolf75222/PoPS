@@ -33,6 +33,7 @@
 #include <map>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -156,7 +157,7 @@ void verify_rectangular_geometry_and_independent_periodicity() {
 template <int Dim>
 GasModel<Dim> gas_model() {
   return GasModel<Dim>{
-      {}, pops::EulerND<Dim>{pops::Real(1.4)}, pops::NoSource{}, pops::NoElliptic{}};
+      {}, {}, pops::EulerND<Dim>{pops::Real(1.4)}, pops::NoSource{}, pops::NoElliptic{}};
 }
 
 template <int Dim>
@@ -303,6 +304,8 @@ void verify_prepared_installation_parity() {
   prepared.set_conservative_state("tracer", initial);
   direct.set_program_block_map({0});
   prepared.set_program_block_map({0});
+  direct.refresh_prepared_amr_levels();
+  prepared.refresh_prepared_amr_levels();
 
   {
     auto direct_state_view = direct.prepared_amr_block_state(0, 0);
@@ -487,6 +490,7 @@ void verify_exact_rebuild_distribution_modes() {
   install_direct_tracer(system, "tracer",
                         "tests.amr.system-contract/rebuild-distribution/physical-flux");
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  system.mark_bound();
 
   EXPECT_EQ(system.level_distribution_mode(0), "replicated");
   EXPECT_TRUE(system.level_owner_ranks(0).empty());
@@ -511,6 +515,36 @@ void verify_exact_rebuild_distribution_modes() {
 
   EXPECT_THROW(system.rebuild_hierarchy({replicated_patch, adjacent_patch}, {-1, 0}),
                std::invalid_argument);
+  EXPECT_EQ(system.patch_boxes(), replicated_boxes);
+  EXPECT_EQ(system.level_distribution_mode(1), "replicated");
+  EXPECT_TRUE(system.level_owner_ranks(1).empty());
+
+  // This malformed patch passes the public request-shape checks but fails while the transaction
+  // is constructing the detached successor layout.  It is therefore a candidate-phase fault,
+  // not a preflight refusal: rollback must retain the already accepted replicated hierarchy.
+  pops::Index<Dim> malformed_lower{};
+  pops::Index<Dim> malformed_upper{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    malformed_lower[axis] = 4 * config.shape[axis];
+    malformed_upper[axis] = malformed_lower[axis] + 1;
+  }
+  std::uint64_t topology_before_fault = 0;
+  std::uint64_t generation_before_fault = 0;
+  {
+    const auto accepted_before_fault = system.accepted_amr_runtime();
+    ASSERT_TRUE(accepted_before_fault);
+    topology_before_fault = accepted_before_fault->topology_epoch();
+    generation_before_fault = accepted_before_fault->materialization_generation();
+  }
+  EXPECT_THROW(
+      system.rebuild_hierarchy({pops::AmrPatch<Dim>{1, {malformed_lower, malformed_upper}}}, {-1}),
+      std::invalid_argument);
+  {
+    const auto accepted_after_fault = system.accepted_amr_runtime();
+    ASSERT_TRUE(accepted_after_fault);
+    EXPECT_EQ(accepted_after_fault->topology_epoch(), topology_before_fault);
+    EXPECT_EQ(accepted_after_fault->materialization_generation(), generation_before_fault);
+  }
   EXPECT_EQ(system.patch_boxes(), replicated_boxes);
   EXPECT_EQ(system.level_distribution_mode(1), "replicated");
   EXPECT_TRUE(system.level_owner_ranks(1).empty());
@@ -624,6 +658,7 @@ std::vector<std::vector<double>> run_magnetic_source(pops::Real bz) {
   const auto keys = install_magnetic_provider(system, {consumer_qid});
   system.install_block_state_route("fluid", "tests.amr.system-contract/magnetic/state");
   MagneticModel<Dim> model{{},
+                           {},
                            pops::EulerND<Dim>{pops::Real(1.4)},
                            pops::MagneticLorentzForceND<Dim>{pops::Real(1)},
                            pops::NoElliptic{}};
@@ -809,6 +844,7 @@ MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
 
   for (std::size_t block = 0; block < names.size(); ++block) {
     MagneticModel<Dim> model{{},
+                             {},
                              pops::EulerND<Dim>{pops::Real(1.4)},
                              pops::MagneticLorentzForceND<Dim>{pops::Real(1)},
                              pops::NoElliptic{}};
@@ -856,22 +892,27 @@ MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
   result.patches = system.n_patches();
   {
     const auto accepted_runtime = system.accepted_amr_runtime();
-    ASSERT_TRUE(accepted_runtime);
+    if (!accepted_runtime)
+      throw std::runtime_error("two-block AMR runtime missing before cadence step");
     result.topology_before = accepted_runtime->topology_epoch();
   }
-  auto first_state_view = system.prepared_amr_block_state(0, 0);
-  auto second_state_view = system.prepared_amr_block_state(1, 0);
-  ASSERT_TRUE(first_state_view);
-  ASSERT_TRUE(second_state_view);
-  EXPECT_NE(first_state_view.get(), second_state_view.get());
-  EXPECT_GT(pops::difference_sum_sq_all(*first_state_view, *second_state_view), pops::Real(0));
+  {
+    auto first_state_view = system.prepared_amr_block_state(0, 0);
+    auto second_state_view = system.prepared_amr_block_state(1, 0);
+    if (!first_state_view)
+      throw std::runtime_error("two-block first accepted state is unavailable");
+    if (!second_state_view)
+      throw std::runtime_error("two-block second accepted state is unavailable");
+    EXPECT_NE(first_state_view.get(), second_state_view.get());
+    EXPECT_GT(pops::difference_sum_sq_all(*first_state_view, *second_state_view), pops::Real(0));
+  }
   std::array<std::vector<std::vector<double>>, 2> block_oracles;
   for (std::size_t block = 0; block < names.size(); ++block) {
     block_oracles[block].reserve(static_cast<std::size_t>(system.n_levels()));
     for (int level = 0; level < system.n_levels(); ++level) {
-      auto carrier_view =
-          system.prepared_amr_block_state(static_cast<int>(block), level);
-      ASSERT_TRUE(carrier_view);
+      auto carrier_view = system.prepared_amr_block_state(static_cast<int>(block), level);
+      if (!carrier_view)
+        throw std::runtime_error("two-block accepted state is unavailable for oracle");
       const pops::MultiFab<Dim>& carrier = *carrier_view;
       block_oracles[block].push_back(
           explicit_block_state_oracle(system, static_cast<int>(block), level, carrier.ncomp()));
@@ -897,20 +938,25 @@ MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
   std::vector<double> second_trial = block_oracles[1][0];
   for (double& value : second_trial)
     value += 0.125;
+  pops::test::install_forward_euler_program(system, false);
+  system.mark_bound();
   system.begin_step_transaction();
   system.set_block_level_state(names[1], 0, second_trial);
-  EXPECT_EQ(system.block_level_state_global(names[0], 0), block_oracles[0][0]);
-  EXPECT_EQ(system.block_level_state_global(names[1], 0), second_trial);
+  {
+    auto provisional = system._provisional_read_scope();
+    EXPECT_EQ(system.block_level_state_global(names[0], 0), block_oracles[0][0]);
+    EXPECT_EQ(system.block_level_state_global(names[1], 0), second_trial);
+  }
   system.rollback_step_transaction();
   EXPECT_EQ(system.block_level_state_global(names[0], 0), block_oracles[0][0]);
   EXPECT_EQ(system.block_level_state_global(names[1], 0), block_oracles[1][0]);
 
-  pops::test::install_forward_euler_program(system, false);
   system.step(1.0e-4);
 
   {
     const auto accepted_runtime = system.accepted_amr_runtime();
-    ASSERT_TRUE(accepted_runtime);
+    if (!accepted_runtime)
+      throw std::runtime_error("two-block AMR runtime missing after cadence step");
     result.topology_after = accepted_runtime->topology_epoch();
   }
   result.levels = system.n_levels();
@@ -945,16 +991,19 @@ void verify_stride_window_contract() {
       {"reflux", 4.0},
       {"projection", 5.0},
   }};
+  const pops::test::program_v5::CallbackProgramTransactionAuthorities transaction_authorities{
+      {}, {balance_route}, {}};
   pops::test::install_explicit_amr_callback_program<Dim>(
-      system, "tests.amr.system-contract/cadence@1", "tests.amr.system-contract/cadence/macro",
-      {}, {}, [&](pops::test::explicit_amr_program_detail::context_type& context, double step) {
-    times.push_back(static_cast<double>(context.physical_time()));
-    steps.push_back(step);
-    macro_steps.push_back(context.macro_step());
-    for (const auto& [term, value] : balance_records)
-      context.record_balance_term(balance_route, term, static_cast<pops::Real>(value));
-  });
-  system.set_program_block_map({0});
+      system, "tests.amr.system-contract/cadence@1", "tests.amr.system-contract/cadence/macro", {},
+      {},
+      [&](pops::test::explicit_amr_program_detail::context_type& context, double step) {
+        times.push_back(static_cast<double>(context.physical_time()));
+        steps.push_back(step);
+        macro_steps.push_back(context.macro_step());
+        for (const auto& [term, value] : balance_records)
+          context.record_balance_term(balance_route, term, static_cast<pops::Real>(value));
+      },
+      {}, {}, std::nullopt, transaction_authorities);
   system.set_program_cadence(3, 2);
 
   const auto expect_balance = [&](const std::map<std::string, double>& balance, double scale) {
@@ -1031,6 +1080,105 @@ void verify_stride_window_contract() {
   EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.3);
 }
 
+template <int Dim>
+void verify_cell_local_flux_tables_are_refused_without_mutation() {
+  using Resource = pops::test::program_v5::CallbackProgramResource;
+  using FieldRoute = pops::test::program_v5::CallbackProgramFieldRoute;
+  using FluxBasis = pops::test::program_v5::CallbackProgramFluxBasisOccurrence;
+  using FaceFluxStage = pops::test::program_v5::CallbackProgramFaceFluxStage;
+  using FluxBudget = pops::runtime::program::ProgramFluxBudgetRecord;
+
+  const pops::AmrSystemConfig<Dim> config = single_level_config<Dim>(4);
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "test.amr-system-contract.cell-local-flux-runtime");
+  system.install_block_state_route("tracer", "tests.amr.system-contract/cell-local-flux/state");
+  install_direct_tracer(system, "tracer",
+                        "tests.amr.system-contract/cell-local-flux/physical-flux");
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  system.refresh_prepared_amr_levels();
+  system.set_program_block_map({0});
+
+  const std::vector<Resource> empty_resources;
+  const std::vector<FieldRoute> empty_field_routes;
+  pops::test::install_explicit_amr_callback_program<Dim>(
+      system, "tests.amr.system-contract/cell-local-flux/baseline@1",
+      "tests.amr.system-contract/cell-local-flux/baseline-clock", empty_resources,
+      empty_field_routes, [](auto&, double) {});
+
+  const std::vector<std::uint8_t> accepted_before = system.program_accepted_state();
+  const auto capacity_before = system.checkpoint_program_state_capacity();
+  const std::uint64_t revision_before = system.program_accepted_state_revision();
+  ASSERT_FALSE(accepted_before.empty());
+
+  const std::string clock = "tests.amr.system-contract/cell-local-flux/macro";
+  const std::string rhs_identity = "tests.amr.system-contract/cell-local-flux/tracer/rhs/3000";
+  Resource rhs;
+  rhs.kind = Resource::Kind::rhs;
+  rhs.slot = 0;
+  rhs.subslot = 0;
+  rhs.program_block = 0;
+  rhs.level = 0;
+  {
+    const auto state = system.prepared_amr_block_state(0, 0);
+    ASSERT_TRUE(state);
+    rhs.components = static_cast<std::uint32_t>(state->ncomp());
+    rhs.ghosts = static_cast<std::uint32_t>(state->ghosts()[0]);
+  }
+  rhs.value_id = 3000;
+  rhs.occurrence_path_id = 0x2300;
+  rhs.identity = rhs_identity;
+  rhs.occurrence_path = rhs_identity + "/occurrence";
+  rhs.owner = "tracer";
+  rhs.clock = clock;
+  const std::vector<Resource> resources{rhs};
+
+  const FluxBasis basis{0,
+                        0,
+                        0,
+                        0,
+                        3000,
+                        0,
+                        1,
+                        1,
+                        rhs_identity + "/basis",
+                        rhs_identity + "/basis/occurrence",
+                        "tracer",
+                        clock};
+  const std::vector<FluxBasis> flux_basis_occurrences{basis};
+  const FaceFluxStage stage{0,
+                            0,
+                            0,
+                            1,
+                            1,
+                            1,
+                            rhs_identity + "/face-flux",
+                            rhs_identity + "/face-flux/occurrence",
+                            "tracer",
+                            clock};
+  const std::vector<FaceFluxStage> face_flux_stages{stage};
+  const std::optional<std::vector<FluxBudget>> flux_budgets{std::vector<FluxBudget>{{1, 1, 0, 0}}};
+  const pops::test::program_v5::CallbackProgramCellTemporalAuthority cell_temporal{
+      clock, 100, 0, {{0, -1, 3000}}};
+
+  bool refused = false;
+  std::string refusal_message;
+  try {
+    pops::test::install_explicit_amr_callback_program<Dim>(
+        system, "tests.amr.system-contract/cell-local-flux/invalid@1", clock, resources,
+        empty_field_routes, [](auto&, double) {}, {}, {}, flux_budgets, {}, cell_temporal,
+        flux_basis_occurrences, face_flux_stages);
+  } catch (const std::exception& error) {
+    refused = true;
+    refusal_message = error.what();
+  }
+  EXPECT_TRUE(refused) << "cell-local Programs with non-empty flux tables must be refused; error: "
+                       << refusal_message;
+  EXPECT_EQ(system.program_accepted_state(), accepted_before);
+  EXPECT_EQ(system.checkpoint_program_state_capacity(), capacity_before);
+  EXPECT_EQ(system.program_accepted_state_revision(), revision_before);
+}
+
 }  // namespace
 
 TEST(test_amr_system_contract, RefusesMappedPeriodicityBeforeRankedFillPatchConstruction) {
@@ -1043,30 +1191,18 @@ TEST(test_amr_system_contract, RefusesMappedPeriodicityBeforeRankedFillPatchCons
 }
 
 TEST(test_amr_system_contract, DirectAndPreparedCompiledInstallationsHaveExactRankedParity) {
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard;
-#endif
   verify_prepared_installation_parity<pops::kNativeDimension>();
 }
 
 TEST(test_amr_system_contract, RectangularGeometryPreservesIndependentAxisPeriodicity) {
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard;
-#endif
   verify_rectangular_geometry_and_independent_periodicity<pops::kNativeDimension>();
 }
 
 TEST(test_amr_system_contract, PrimitiveBoundaryMatchesQualifiedConservativeOracle) {
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard;
-#endif
   verify_model_qualified_primitive_boundary_conversion<pops::kNativeDimension>();
 }
 
 TEST(test_amr_system_contract, TwoBlockFacadeRegridsConservativelyAndSharesPreparedBz) {
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard;
-#endif
 #if POPS_NATIVE_DIM == 2
   const MultiblockRegridObservation control = run_two_block_regrid_with_bz<2>(pops::Real(0));
   const MultiblockRegridObservation forced = run_two_block_regrid_with_bz<2>(pops::Real(2));
@@ -1096,16 +1232,14 @@ TEST(test_amr_system_contract, TwoBlockFacadeRegridsConservativelyAndSharesPrepa
 }
 
 TEST(test_amr_system_contract, TemporalFacadeRequiresInstalledWholeSystemProgram) {
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard;
-#endif
   verify_program_required_before_temporal_mutation<pops::kNativeDimension>();
 }
 
+TEST(test_amr_system_contract, RefusesCellLocalFluxTablesBeforeResourceMaterialization) {
+  verify_cell_local_flux_tables_are_refused_without_mutation<pops::kNativeDimension>();
+}
+
 TEST(test_amr_system_contract, PreparedBzRotatesTransverseMomentumInDim2) {
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard;
-#endif
 #if POPS_NATIVE_DIM == 2
   const auto without_field = run_magnetic_source<2>(pops::Real(0));
   const auto with_field = run_magnetic_source<2>(pops::Real(2));
@@ -1124,9 +1258,6 @@ TEST(test_amr_system_contract, PreparedBzRotatesTransverseMomentumInDim2) {
 }
 
 TEST(test_amr_system_contract, PreparedBzHasZeroLongitudinalCrossProductInDim1) {
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard;
-#endif
 #if POPS_NATIVE_DIM == 1
   const auto without_field = run_magnetic_source<1>(pops::Real(0));
   const auto with_field = run_magnetic_source<1>(pops::Real(2));
@@ -1145,30 +1276,18 @@ TEST(test_amr_system_contract, PreparedBzHasZeroLongitudinalCrossProductInDim1) 
 }
 
 TEST(test_amr_system_contract, BootstrapRestrictionSynchronizesOnlyCoveredCoarseCells) {
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard;
-#endif
   verify_bootstrap_covered_cell_synchronization<pops::kNativeDimension>();
 }
 
 TEST(test_amr_system_contract, RebuildDistributionModesPreserveReplicaAndPartitionContracts) {
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard;
-#endif
   verify_exact_rebuild_distribution_modes<pops::kNativeDimension>();
 }
 
 TEST(test_amr_system_contract, VariableDtStrideUsesOneExactPublicWindow) {
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard;
-#endif
   verify_stride_window_contract<pops::kNativeDimension>();
 }
 
 TEST(test_amr_system_contract, CadenceRestoreRejectsClockDriftWithoutMutation) {
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard;
-#endif
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystem<Dim> system(single_level_config<Dim>(4));
   system.set_program_cadence(1, 2);
@@ -1186,9 +1305,6 @@ TEST(test_amr_system_contract, CadenceRestoreRejectsClockDriftWithoutMutation) {
 }
 
 TEST(test_amr_system_contract, AcceptedClockSerializationPreservesNonAssociativeEndpoint) {
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard;
-#endif
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystem<Dim> system(single_level_config<Dim>(4));
   pops::test::install_amr_runtime_authority(system,

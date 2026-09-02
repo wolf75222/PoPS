@@ -15,7 +15,7 @@ CATALOG = ROOT / "schemas" / "component_catalog.v2.json"
 GENERATOR = ROOT / "scripts" / "generate_component_catalog.py"
 PYTHON_ROUTES = ROOT / "python" / "pops" / "runtime" / "_generated_component_routes.py"
 CPP_CATALOG = ROOT / "include" / "pops" / "runtime" / "config" / "generated_component_catalog.hpp"
-CPP_ACCESSORS = ROOT / "include" / "pops" / "runtime" / "config" / "generated_route_accessors.inc"
+CPP_ACCESSORS = ROOT / "include" / "pops" / "runtime" / "config" / "generated_route_accessors.hpp"
 ROUTE_API = ROOT / "include" / "pops" / "runtime" / "config" / "route_ids.hpp"
 DISPATCH_API = ROOT / "include" / "pops" / "runtime" / "config" / "dispatch_tags.hpp"
 MODEL_API = ROOT / "include" / "pops" / "runtime" / "dynamic" / "model_registry.hpp"
@@ -144,7 +144,7 @@ def test_one_new_family_generates_its_cpp_accessors_without_route_ids_edit():
         "POPS_DEFINE_ROUTE_ACCESSORS(contract_family, ContractFamilyRouteId, "
         "kContractFamilyRoutes, kContractFamily)"
     ) in accessor_product
-    assert "generated_route_accessors.inc" in ROUTE_API.read_text(encoding="utf-8")
+    assert "generated_route_accessors.hpp" in ROUTE_API.read_text(encoding="utf-8")
     assert CPP_ACCESSORS.read_text(encoding="utf-8") == generator._render_accessors(
         json.loads(CATALOG.read_text(encoding="utf-8")),
         _load(PYTHON_ROUTES, "_generated_accessors_digest").COMPONENT_CATALOG_SHA256,

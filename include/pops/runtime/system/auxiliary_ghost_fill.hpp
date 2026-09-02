@@ -286,7 +286,7 @@ class PreparedAuxiliaryPhysicalBoundaries final {
         for (int component = 0; component < group->ncomp(); ++component)
           fill_physical_boundary(*group, prepared.components[static_cast<std::size_t>(component)],
                                  component, 1);
-        Kokkos::fence();
+        ::pops::device_fence();
       } catch (...) {
         physical_error = std::current_exception();
       }
@@ -411,7 +411,7 @@ class PreparedAuxiliaryGhostTransport final {
         for (int component = 0; component < group->ncomp(); ++component)
           fill_physical_boundary(*group, prepared.physical[static_cast<std::size_t>(component)],
                                  component, 1);
-        Kokkos::fence();
+        ::pops::device_fence();
       } catch (...) {
         physical_error = std::current_exception();
       }

@@ -177,7 +177,9 @@ def _prepare_cache_slot(prelude: Any, var: Any, *, slot: str, program_block: int
             "step-local cache allocation"
         )
     var[key] = contract
-    prelude.append("ctx.prepare_cache_slot(%s, %d);" % (slot, int(program_block)))
+    getattr(prelude, "append_level_install", prelude.append)(
+        "ctx.prepare_cache_slot(%s, %d);" % (slot, int(program_block))
+    )
 
 
 def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any,

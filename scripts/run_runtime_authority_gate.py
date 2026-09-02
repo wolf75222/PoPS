@@ -73,12 +73,13 @@ REQUIRED_POLARITIES = {
     "pending_marker_barrier": {"positive", "refusal"},
     "transaction_authority": {"positive", "refusal"},
     "prepared_installation": {"positive", "refusal"},
+    "resource_plan_ceiling": {"positive", "refusal"},
     "lowering_refusal": {"refusal"},
     "gate_execution": {"positive", "refusal"},
 }
 REQUIREMENT_ISSUES = {
     "abi_identity": {"ADC-700"},
-    "solve_outcome": {"ADC-700"},
+    "solve_outcome": {"ADC-700", "ADC-702"},
     "common_services": {"ADC-702"},
     "schedule_parity": {"ADC-700", "ADC-702"},
     "cell_local_ordinary": {"ADC-720"},
@@ -90,18 +91,64 @@ REQUIREMENT_ISSUES = {
     "pending_marker_barrier": {"ADC-702"},
     "transaction_authority": {"ADC-702"},
     "prepared_installation": {"ADC-700"},
+    "resource_plan_ceiling": {"ADC-702"},
     "lowering_refusal": {"ADC-700"},
     "gate_execution": set(EXPECTED_ISSUES),
 }
 EXPECTED_BACKENDS = {"serial", "mpi", "openmp"}
 EXPECTED_ALLOCATIONS = {"none", "required"}
-EXPECTED_CHECK_COUNT = 58
+SUPPORTED_NATIVE_DIMENSIONS = (1, 2, 3)
+EXPECTED_CHECK_COUNT = 73
 REQUIRED_LOWERING_REFUSAL_NODEIDS = frozenset(
     {
         "tests/python/unit/codegen/test_scheduler_codegen.py::test_scratch_skip_refuses_unprepared_stale_state",
         "tests/python/unit/codegen/test_scheduler_codegen.py::test_on_end_refuses_to_lower",
     }
 )
+REQUIRED_SEMANTIC_BARRIER_NODEIDS = {
+    "legacy_context_barrier": frozenset(
+        {
+            "tests/python/architecture/test_program_only_temporal_facades.py::test_system_temporal_facades_dispatch_only_through_an_installed_program",
+            "tests/python/architecture/test_program_only_temporal_facades.py::test_historical_block_scheduler_is_not_an_installed_temporal_authority",
+        }
+    ),
+    "legacy_symbol_barrier": frozenset(
+        {
+            "tests/python/architecture/test_no_legacy_runtime_routes.py::test_program_has_one_runtime_branch_spelling",
+            "tests/python/architecture/test_program_only_temporal_facades.py::test_production_has_no_second_amr_time_engine",
+        }
+    ),
+    "legacy_fragment_barrier": frozenset(
+        {
+            "tests/python/architecture/test_amr_program_support_parity.py::test_context_include_parser_authenticates_both_delimiters_and_hidden_fragments",
+            "tests/python/architecture/test_program_only_temporal_facades.py::test_static_system_assembler_is_retired_from_the_final_runtime_surface",
+        }
+    ),
+    "pending_marker_barrier": frozenset(
+        {
+            "tests/python/architecture/test_amr_program_support_parity.py::test_parser_finds_only_explicit_known_deferrals",
+            "tests/python/architecture/test_amr_program_support_parity.py::test_context_sensitive_routes_report_green_or_pending_from_resolved_hierarchy",
+        }
+    ),
+}
+REQUIRED_SEMANTIC_BARRIER_POLARITIES = {
+    "legacy_context_barrier": {
+        "positive": "tests/python/architecture/test_program_only_temporal_facades.py::test_system_temporal_facades_dispatch_only_through_an_installed_program",
+        "refusal": "tests/python/architecture/test_program_only_temporal_facades.py::test_historical_block_scheduler_is_not_an_installed_temporal_authority",
+    },
+    "legacy_symbol_barrier": {
+        "positive": "tests/python/architecture/test_no_legacy_runtime_routes.py::test_program_has_one_runtime_branch_spelling",
+        "refusal": "tests/python/architecture/test_program_only_temporal_facades.py::test_production_has_no_second_amr_time_engine",
+    },
+    "legacy_fragment_barrier": {
+        "positive": "tests/python/architecture/test_amr_program_support_parity.py::test_context_include_parser_authenticates_both_delimiters_and_hidden_fragments",
+        "refusal": "tests/python/architecture/test_program_only_temporal_facades.py::test_static_system_assembler_is_retired_from_the_final_runtime_surface",
+    },
+    "pending_marker_barrier": {
+        "positive": "tests/python/architecture/test_amr_program_support_parity.py::test_parser_finds_only_explicit_known_deferrals",
+        "refusal": "tests/python/architecture/test_amr_program_support_parity.py::test_context_sensitive_routes_report_green_or_pending_from_resolved_hierarchy",
+    },
+}
 CXX_SOURCE_GLOBS = (
     "*.cpp",
     "*.cc",
@@ -114,7 +161,6 @@ CXX_SOURCE_GLOBS = (
     "*.inc",
 )
 CXX_SUFFIXES = frozenset(pattern[1:] for pattern in CXX_SOURCE_GLOBS)
-
 PROGRAM_AUTHORITY_FILES = (
     "include/pops/runtime/program/program_abi.hpp",
     "include/pops/runtime/program/program_loader.hpp",
@@ -135,8 +181,27 @@ DISPATCHER_SOURCES = (
 LEGACY_CONTEXT_TOKENS = (
     "ProgramContext",
     "AmrProgramContext",
+    "RuntimeProgramContext",
     "program_context.hpp",
     "amr_program_context.hpp",
+    "runtime_program_context.hpp",
+)
+# Native bricks have a deliberately separate C ABI. Keep the precise exported spellings here
+# rather than relying on an incidental mismatch with the retired Program-route patterns below:
+# a future broadening of those patterns must not reject one of these independently versioned
+# brick contracts. Conversely, a new brick-looking Program split route is not grandfathered.
+NATIVE_BRICK_ABI_SYMBOLS = frozenset(
+    (
+        "pops_brick_manifest",
+        "pops_brick_nvars",
+        "pops_brick_nproviders",
+        "pops_brick_residual_v5",
+        "pops_brick_install_system_v7",
+        "pops_brick_install_amr_v5",
+        "pops_brick_model_identity",
+        "pops_brick_kokkos_backend",
+        "pops_brick_kokkos_version",
+    )
 )
 LEGACY_SYMBOL_TOKENS = (
     "SystemDriver",
@@ -152,6 +217,61 @@ LEGACY_PROGRAM_AMR_SYMBOL_TOKENS = (
     "pops_register_program_provider_routes_amr",
     "pops_program_dt_bound_amr",
     "pops_install_field_boundaries_amr",
+)
+LEGACY_PROGRAM_QUALIFIED_INSTALL_ABI_PATTERN = re.compile(
+    # `pops_install_program` is the sole ABI-v5 Program entrypoint.  Any target/version suffix
+    # recreates a second install ABI; native-brick `pops_brick_install_amr_v5` is distinct.
+    r"\bpops_install_program(?:_(?:amr|system|uniform|v[0-9]+))+\b"
+)
+# A retired Program installer may have carried a generator/backend qualifier before its target
+# suffix (for example ``pops_install_program_cuda_amr``).  Keep this anchored to the exact
+# ``pops_install_program`` family so native brick exports such as ``pops_brick_install_amr_v5``
+# remain outside the barrier.
+LEGACY_PROGRAM_INSTALL_TARGET_VARIANT_PATTERN = re.compile(
+    r"\bpops_install_program(?:_[A-Za-z0-9]+)*(?:_(?:amr|system|uniform|v[0-9]+))"
+    r"(?:_[A-Za-z0-9]+)*\b"
+)
+# The former System/AMR split also had unversioned route, time-bound and boundary exports.  Keep
+# these Program-prefixed spellings distinct from the native-brick ``pops_register_provider_routes``
+# ABI, and reject only the known split families (including an explicit target/version suffix).
+LEGACY_PROGRAM_SPLIT_SYMBOL_TOKENS = (
+    "pops_program_route_manifest",
+    "pops_program_routes",
+    "pops_program_dt_bound",
+    "pops_program_dt",
+    "pops_program_boundaries",
+    "pops_install_field_boundaries",
+    "pops_install_program_boundaries",
+)
+LEGACY_PROGRAM_SPLIT_ABI_PATTERN = re.compile(
+    # The first cutover used both the long manifest/bound spellings and the shorter
+    # routes/dt/boundaries exports.  All of these names published a second Program ABI; keep
+    # their roots closed while allowing historical target/backend/version suffix chains.
+    r"\b(?:pops_program_(?:route_manifest|routes|dt_bound|dt|boundaries)|"
+    r"pops_install_(?:field|program)_boundaries|pops_register_program_provider_routes)"
+    # Historical generators appended target, backend, and version qualifiers (for example
+    # ``_amr_v7``, ``_v2_system``, or ``_cuda_legacy``).  The base names are retired ABI families,
+    # so consume any identifier suffix while retaining a word boundary.  Native
+    # ``pops_register_provider_routes_amr`` has no ``program_`` component and is not matched.
+    r"(?:_[A-Za-z0-9]+)*\b"
+)
+# A retired split export sometimes carried generator-specific qualifiers before its AMR target
+# (for example ``pops_program_dt_bound_cuda_amr``).  The base names remain deliberately closed;
+# only the suffix chain ending in the retired AMR target is open, so unrelated Program symbols do
+# not become false positives.
+LEGACY_PROGRAM_SPLIT_AMR_VARIANT_PATTERN = re.compile(
+    r"\b(?:pops_program_(?:route_manifest|routes|dt_bound|dt|boundaries)|"
+    r"pops_install_(?:field|program)_boundaries|pops_register_program_provider_routes)"
+    r"(?:_[A-Za-z][A-Za-z0-9]*)*_amr\b"
+)
+# Historical generators also emitted a target-specific Program export that did not retain one of
+# the three names above (for example ``pops_install_program_flux_amr_v2``).  Require ``program``
+# as its own underscore-delimited component so the generic barrier does not reject the native
+# brick exports ``pops_register_provider_routes_amr`` or ``pops_brick_install_amr_v5``.
+LEGACY_PROGRAM_GENERIC_AMR_PATTERN = re.compile(
+    r"\bpops_(?:[A-Za-z0-9]+_)*program(?:_[A-Za-z0-9]+)*_amr"
+    r"(?:_[A-Za-z0-9]+)*\b",
+    re.IGNORECASE,
 )
 LEGACY_INSTALLER_TOKENS = (
     # Only split Program entry/boundary installers belong to this barrier.  The similarly named
@@ -169,6 +289,17 @@ LEGACY_PUBLIC_INSTALLER_TOKENS = (
     "install_program_restart_hooks",
     "install_unverified_step",
 )
+# ``install_program_amr`` was a facade-local Program installer rather than a native-brick ABI.
+# Match its bounded suffix family separately from the cell-temporal routes below so a later
+# target/version spelling cannot recreate the retired AMR authority.
+LEGACY_PROGRAM_AMR_INSTALLER_PATTERN = re.compile(
+    r"\b(?:pops_)?(?:install|register)_program_amr(?:_[A-Za-z0-9]+)*\s*\(",
+    re.IGNORECASE,
+)
+LEGACY_PROGRAM_AMR_INSTALLER_NAME_PATTERN = re.compile(
+    r"(?:pops_)?(?:install|register)_program_amr(?:_[A-Za-z0-9]+)*",
+    re.IGNORECASE,
+)
 FORBIDDEN_PENDING_MARKERS = ("pending:checkpointed_hierarchy_cache",)
 LEGACY_CHECKPOINT_MARKERS = (
     # Historical wire magics are intentionally explicit; migration tests may retain their bytes
@@ -178,9 +309,32 @@ LEGACY_CHECKPOINT_MARKERS = (
     "POPSAUX1",
     "POPSHYS1",
 )
-ABI_VERSION_PATTERN = re.compile(r"\bkProgramInstallAbiVersion\s*=\s*5[uUlL]*\b")
+LEGACY_CHECKPOINT_VERSION_PATTERNS = (
+    re.compile(
+        r"\b(?:k|[A-Za-z_]*)(?:Uniform|uniform)[A-Za-z_]*(?:Checkpoint|checkpoint)"
+        r"[A-Za-z_]*(?:Version|version)\s*=\s*8[uUlL]*\b"
+    ),
+    re.compile(
+        r"\b(?:k|[A-Za-z_]*)(?:Amr|AMR|amr)[A-Za-z_]*(?:Checkpoint|checkpoint)"
+        r"[A-Za-z_]*(?:Version|version)\s*=\s*11[uUlL]*\b"
+    ),
+    re.compile(
+        r"\b(?:k|[A-Za-z_]*)(?:Checkpoint|checkpoint)[A-Za-z_]*(?:Version|version)"
+        r"\s*=\s*(?:8|11)[uUlL]*\b"
+    ),
+)
+LEGACY_CHECKPOINT_CHAR_ARRAY_PATTERNS = {
+    marker: re.compile(
+        r"(?:['\"]" + r"['\"],\s*['\"]".join(re.escape(char) for char in marker) + r"['\"])",
+        re.IGNORECASE,
+    )
+    for marker in LEGACY_CHECKPOINT_MARKERS
+}
+ABI_VERSION_PATTERN = re.compile(
+    r"\bkProgramInstallAbiVersion\s*(?:=|\{)\s*5[uUlL]*\b"
+)
 LEGACY_ABI_VERSION_PATTERN = re.compile(
-    r"\bkProgramInstallAbiVersion\s*=\s*(?!5[uUlL]*\b)\d+[uUlL]*\b"
+    r"\bkProgramInstallAbiVersion\s*(?:=|\{)\s*(?!5[uUlL]*\b)\d+[uUlL]*\b"
 )
 PROGRAM_EXECUTION_PRIMARY_PATTERN = re.compile(
     r"\btemplate\s*<\s*int\s+Dim\s*>\s*"
@@ -194,12 +348,129 @@ PROGRAM_EXECUTION_SECOND_PARAMETER_PATTERN = re.compile(
     r"\bProgramExecutionServices\s*<[^>]*,"
 )
 DISPATCHER_PATTERN = re.compile(r"\bdispatch_cadence_step\s*\(")
+DISPATCHER_DEFINITION_PATTERN = re.compile(
+    r"(?m)^\s*(?:inline\s+)?(?:void|bool|auto|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s+"
+    r"(?:[A-Za-z_]\w*::)?dispatch_cadence_step\s*\([^;{}]*\)\s*(?:const\s*)?\{"
+)
+PARALLEL_AUTHORITY_TABLE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])(?:parallel|Parallel)[A-Za-z0-9_]*(?:table|Table)(?![A-Za-z0-9])|"
+    r"(?<![A-Za-z0-9])(?:table|Table)[A-Za-z0-9_]*(?:parallel|Parallel)(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+PARALLEL_AUTHORITY_DISPATCH_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])(?:parallel|Parallel)[A-Za-z0-9_]*(?:dispatch|Dispatch)(?![A-Za-z0-9])|"
+    r"(?<![A-Za-z0-9])(?:dispatch|Dispatch)[A-Za-z0-9_]*(?:parallel|Parallel)(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+PARALLEL_AUTHORITY_TABLE_NAME_PATTERN = re.compile(
+    r"(?:parallel|Parallel)[A-Za-z0-9_]*(?:table|Table)|"
+    r"(?:table|Table)[A-Za-z0-9_]*(?:parallel|Parallel)",
+    re.IGNORECASE,
+)
+PARALLEL_AUTHORITY_DISPATCH_NAME_PATTERN = re.compile(
+    r"(?:parallel|Parallel)[A-Za-z0-9_]*(?:dispatch|Dispatch)|"
+    r"(?:dispatch|Dispatch)[A-Za-z0-9_]*(?:parallel|Parallel)",
+    re.IGNORECASE,
+)
+# A secondary Program authority can be renamed without retaining the historical ``parallel``
+# qualifier.  These are deliberately exact generic spellings; do not turn this into a broad
+# ``program_*`` ban because candidate metadata and ordinary authoring helpers use that namespace.
+PROGRAM_AUTHORITY_TABLE_PATTERN = re.compile(
+    r"\b(?:ProgramDispatchTable|program_dispatch_table|program_table)"
+    r"(?:_[A-Za-z0-9]+)*\b"
+)
+PROGRAM_AUTHORITY_DISPATCH_PATTERN = re.compile(
+    r"\bprogram_dispatch(?:_[A-Za-z0-9]+)*\b"
+)
+PROGRAM_AUTHORITY_TABLE_NAME_PATTERN = re.compile(
+    r"(?:ProgramDispatchTable|program_dispatch_table|program_table)"
+    r"(?:_[A-Za-z0-9]+)*"
+)
+PROGRAM_AUTHORITY_DISPATCH_NAME_PATTERN = re.compile(
+    r"program_dispatch(?:_[A-Za-z0-9]+)*"
+)
+# One candidate object is deliberately allowed to carry a local dispatch table while it is being
+# prepared.  These exact spellings are not a second published authority: their names encode the
+# candidate ownership.  Do not widen this exception to suffix variants, which would let a second
+# versioned dispatcher hide behind a candidate-looking name.
+CANONICAL_CANDIDATE_AUTHORITY_NAMES = frozenset(
+    {
+        "ProgramDispatchTableCandidate",
+        "program_dispatch_candidate",
+        "program_dispatch_table_candidate",
+        "program_table_candidate",
+    }
+)
 DIRECT_DISPATCH_BYPASS_PATTERN = re.compile(
     r"\bprogram_?(?:\.|->)\s*step_\s*\("
 )
 AMR_RUNTIME_STEP_BYPASS_PATTERN = re.compile(
-    r"\b(?:AmrRuntime(?:\s*<[^>{};\n]+>)?\s*::\s*step|"
-    r"(?:amr_)?runtime_?\s*(?:\.|->)\s*step)\s*\("
+    r"\b(?:"
+    r"(?:Amr|AMR)(?:Runtime|Engine|LevelRuntime|LevelEngine|SubcyclingEngine)"
+    r"(?:\s*<[^>{};\n]+>)?\s*::\s*"
+    r"(?:step|step_level|advance|advance_level|advance_macro_step)|"
+    r"(?:amr_(?:runtime|engine|level_runtime|level_engine|subcycling_engine)|"
+    r"(?:level|subcycling)_engine|level_runtime|(?:amr_)?runtime)_?\s*(?:\.|->)\s*"
+    r"(?:step|step_level|advance|advance_level|advance_macro_step)"
+    r"|(?:Amr|AMR)?(?:Runtime|Engine|LevelRuntime|LevelEngine|SubcyclingEngine)"
+    r"(?:\s*<[^>{};\n]+>)?\s*::\s*"
+    r"(?:step|step_level|advance|advance_level|advance_macro_step)"
+    r"|engine\s*(?:\.|->)\s*"
+    r"(?:step|step_level|advance|advance_level|advance_macro_step)"
+    r")\s*\("
+)
+AMR_RUNTIME_ALIAS_PATTERN = re.compile(
+    r"\busing\s+(?P<alias>[A-Za-z_]\w*)\s*=\s*"
+    r"(?:(?:::)?[A-Za-z_]\w*::)*AmrRuntime(?:\s*<[^;{}\n]+>)?\s*;|"
+    r"\btypedef\s+(?:(?:::)?[A-Za-z_]\w*::)*AmrRuntime(?:\s*<[^;{}\n]+>)?\s+"
+    r"(?P<typedef_alias>[A-Za-z_]\w*)\s*;"
+)
+PYTHON_AMR_RUNTIME_OWNER_NAMES = frozenset(
+    {
+        "amr_runtime",
+        "amr_engine",
+        "amr_level_runtime",
+        "amr_level_engine",
+        "amr_subcycling_engine",
+        "level_runtime",
+        "level_engine",
+        "subcycling_engine",
+        "amrruntime",
+        "amrengine",
+        "amrlevelruntime",
+        "amrlevelengine",
+        "amrsubcyclingengine",
+        "runtime",
+        "engine",
+    }
+)
+PYTHON_AMR_RUNTIME_STEP_NAMES = frozenset(
+    {"step", "step_level", "advance", "advance_level", "advance_macro_step"}
+)
+CELL_LOCAL_INSTALLER_PATTERN = re.compile(
+    r"\b(?:pops_)?(?:install|register)_[A-Za-z0-9_]*cell[_-]?local"
+    r"(?:[_-][A-Za-z0-9]+)*\s*\(|"
+    r"\b(?:pops_)?(?:cell[_-]?local)_[A-Za-z0-9_]*(?:install|register)"
+    r"(?:[_-][A-Za-z0-9]+)*\s*\(|"
+    r"\b(?:pops_)?(?:install|register)_(?:program_)?cell"
+    r"(?:[_-]?(?:local|temporal))?"
+    r"(?:[_-][A-Za-z0-9]+)*\s*\(|"
+    r"\b(?:pops_)?cell[_-]?(?:local|temporal)_[A-Za-z0-9_]*(?:install|register)"
+    r"(?:[_-][A-Za-z0-9]+)*\s*"
+    r"\(",
+    re.IGNORECASE,
+)
+CELL_LOCAL_INSTALLER_NAME_PATTERN = re.compile(
+    r"(?:pops_)?(?:install|register)_[A-Za-z0-9_]*cell[_-]?local"
+    r"(?:[_-][A-Za-z0-9]+)*|"
+    r"(?:pops_)?(?:cell[_-]?local)_[A-Za-z0-9_]*(?:install|register)"
+    r"(?:[_-][A-Za-z0-9]+)*|"
+    r"(?:pops_)?(?:install|register)_(?:program_)?cell"
+    r"(?:[_-]?(?:local|temporal))?"
+    r"(?:[_-][A-Za-z0-9]+)*|"
+    r"(?:pops_)?cell[_-]?(?:local|temporal)_[A-Za-z0-9_]*(?:install|register)"
+    r"(?:[_-][A-Za-z0-9]+)*",
+    re.IGNORECASE,
 )
 CACHE_NODE_ID_ONLY_PATTERN = re.compile(
     r"(?:\bstd::map\s*<\s*int\s*,\s*CacheSlot\b|"
@@ -207,6 +478,28 @@ CACHE_NODE_ID_ONLY_PATTERN = re.compile(
     r"\b(?:node_ids|declare_slot|cache_nodes|program_cache_nodes)\s*\(|"
     r"\bcache_(?:should_update|store_scratch|restore_scratch|accumulate_dt|effective_dt)\s*"
     r"\(\s*(?:int|std::int64_t)\s+(?:node_id|value_id)\b)"
+)
+# Python checkpoint/resource-plan code still needs to inspect a legacy ``cache_nodes`` input in
+# order to reject it.  The source barrier therefore checks AST publications and cache-owned
+# mappings, rather than every occurrence of the key or of the legitimate control-graph ``node_id``
+# label.
+LEGACY_CACHE_WIRE_KEYS = frozenset(("cache_nodes", "cache_node_id", "node_id"))
+PYTHON_SERIALIZATION_NAME_HINTS = frozenset(
+    (
+        "capture",
+        "checkpoint",
+        "dump",
+        "encode",
+        "persist",
+        "serialize",
+        "serialise",
+        "snapshot",
+        "wire",
+        "write",
+    )
+)
+PYTHON_WIRE_CONTAINER_NAME_HINTS = frozenset(
+    ("checkpoint", "data", "out", "payload", "record", "serialized", "serialised", "snapshot", "state", "wire")
 )
 DIRECT_PROVIDER_CONSTRUCTOR_PATTERN = re.compile(
     r"\bProgramExecutionServices\s*\(\s*(?:(?:::)?pops::)?"
@@ -619,15 +912,20 @@ def _registered_gtest_cases(source: str) -> set[str]:
 
 def _validate_execution_service_architecture(errors: list[str]) -> None:
     """Enforce the one generic execution-service root and its canonical cadence entry point."""
-    source_paths = tuple(path for path in _authority_sources() if path.is_file())
+    source_paths = tuple(
+        path for path in _runtime_source_paths() if path.suffix in CXX_SUFFIXES
+    )
     source_texts = {
         path: path.read_text(encoding="utf-8")
         for path in source_paths
     }
     source_code = {path: _cpp_code_only(text) for path, text in source_texts.items()}
 
-    amr_directory = ROOT / "include/pops/runtime/program"
-    fragment_paths = set(amr_directory.rglob("*.inc"))
+    fragment_paths = {
+        path
+        for path in _runtime_source_paths()
+        if path.suffix == ".inc" and path.is_file()
+    }
     if fragment_paths:
         errors.append(
             "runtime authority forbids AMR runtime fragments (.inc): %s"
@@ -639,6 +937,13 @@ def _validate_execution_service_architecture(errors: list[str]) -> None:
             "%s is a forbidden public AMR execution-services root; use the generic "
             "ProgramExecutionServices<Dim> authority" % PUBLIC_AMR_ROOT
         )
+    public_amr_name = Path(PUBLIC_AMR_ROOT).name
+    for path in source_paths:
+        if path.name == public_amr_name and path != amr_root:
+            errors.append(
+                "%s is a forbidden public AMR execution-services root; use the generic "
+                "ProgramExecutionServices<Dim> authority" % _display_source_path(path)
+            )
 
     primary_locations = [
         path
@@ -684,9 +989,21 @@ def _validate_execution_service_architecture(errors: list[str]) -> None:
     runtime_state_code = source_code.get(runtime_state)
     if runtime_state_code is None:
         errors.append("runtime authority is missing ProgramRuntimeState source")
-    elif len(DISPATCHER_PATTERN.findall(runtime_state_code)) != 1:
+    elif (
+        len(DISPATCHER_PATTERN.findall(runtime_state_code)) != 1
+        or len(DISPATCHER_DEFINITION_PATTERN.findall(runtime_state_code)) != 1
+    ):
         errors.append(
             "ProgramRuntimeState must define exactly one canonical dispatch_cadence_step dispatcher"
+        )
+
+    dispatcher_definitions = sum(
+        len(DISPATCHER_DEFINITION_PATTERN.findall(code)) for code in source_code.values()
+    )
+    if dispatcher_definitions != 1:
+        errors.append(
+            "runtime authority must expose exactly one dispatch_cadence_step definition "
+            "across all runtime production roots (found %d)" % dispatcher_definitions
         )
 
     for relative in DISPATCHER_SOURCES:
@@ -698,16 +1015,10 @@ def _validate_execution_service_architecture(errors: list[str]) -> None:
         if DISPATCHER_PATTERN.search(code) is None:
             errors.append("%s does not enter the canonical dispatch_cadence_step" % relative)
 
-    bypass_paths = {
+    bypass_paths = set(source_paths)
+    bypass_paths.update(
         ROOT / relative for relative in (*DISPATCHER_SOURCES, "src/runtime/system/system_io.cpp")
-    }
-    for directory in (ROOT / "src/runtime", ROOT / "include/pops/runtime"):
-        if directory.is_dir():
-            bypass_paths.update(
-                path
-                for suffix in CXX_SOURCE_GLOBS
-                for path in directory.rglob(suffix)
-            )
+    )
     for path in sorted(bypass_paths):
         if not path.is_file():
             continue
@@ -1075,6 +1386,51 @@ def _validate_required_lowering_refusal_rows(
             )
 
 
+def _validate_required_semantic_barrier_rows(
+    checks: Iterable[dict], errors: list[str]
+) -> None:
+    """Pin each semantic legacy barrier to its authenticated source-registered nodeids."""
+    for requirement, expected in REQUIRED_SEMANTIC_BARRIER_NODEIDS.items():
+        rows = [
+            row
+            for row in checks
+            if isinstance(row, dict) and row.get("requirement") == requirement
+        ]
+        actual = {row.get("nodeid") for row in rows}
+        if actual != set(expected):
+            errors.append(
+                "%s must pin exactly the source-registered nodeids %s (found %s)"
+                % (requirement, sorted(expected), sorted(actual, key=str))
+            )
+        actual_polarities = {(row.get("polarity"), row.get("nodeid")) for row in rows}
+        expected_polarities = set(REQUIRED_SEMANTIC_BARRIER_POLARITIES[requirement].items())
+        if actual_polarities != expected_polarities:
+            errors.append(
+                "%s must pin each polarity to its exact source-registered nodeid "
+                "(expected %s, found %s)"
+                % (
+                    requirement,
+                    sorted(expected_polarities),
+                    sorted(actual_polarities, key=str),
+                )
+            )
+        for index, row in enumerate(rows, 1):
+            mismatches = [
+                "%s=%r" % (field, row.get(field))
+                for field, value in {
+                    "kind": "pytest",
+                    "backend": "serial",
+                    "allocation": "none",
+                }.items()
+                if row.get(field) != value
+            ]
+            if mismatches:
+                errors.append(
+                    "%s[%d] has non-canonical proof fields: %s"
+                    % (requirement, index, ", ".join(mismatches))
+                )
+
+
 def _registered_gtest_case_body(source: str, case: str) -> str | None:
     """Return one exact source-registered GTest body, preserving line-oriented diagnostics."""
     matches = list(GTEST_DECLARATION.finditer(_cpp_code_only(source)))
@@ -1194,6 +1550,7 @@ def _production_sources() -> tuple[Path, ...]:
     roots = (
         ROOT / "include/pops/runtime",
         ROOT / "src/runtime",
+        ROOT / "python/bindings",
         ROOT / "python/pops",
     )
     suffixes = (*CXX_SOURCE_GLOBS, "*.py")
@@ -1206,11 +1563,476 @@ def _production_sources() -> tuple[Path, ...]:
     return tuple(sorted(paths))
 
 
+def _runtime_source_paths() -> tuple[Path, ...]:
+    """Return the union of every runtime production root and the authority ownership view."""
+    return tuple(
+        sorted(
+            {
+                path
+                for path in (*_authority_sources(), *_production_sources())
+                if path.is_file()
+            }
+        )
+    )
+
+
 def _display_source_path(path: Path) -> str:
     try:
         return path.relative_to(ROOT).as_posix()
     except ValueError:
         return str(path)
+
+
+def _is_retired_program_context_filename(path: Path) -> bool:
+    """Recognize retired ProgramContext headers, including historical separator spellings."""
+    # Preserve camel-case word boundaries before lowercasing: RuntimeProgramContext.hpp and
+    # RuntimeProgramContextDetail.hpp are the same retired family as
+    # runtime_program_context*.hpp, while runtime_program_contextual.hpp remains unrelated.
+    normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", path.stem)
+    normalized = re.sub(r"[-.]+", "_", normalized).lower()
+    # Keep the suffix boundary explicit: ``program_contextual.hpp`` is an ordinary, unrelated
+    # name, while detail/generated headers such as ``runtime-program-context-detail.hpp`` are
+    # still part of the retired context family.
+    return re.fullmatch(
+        r"(?:(?:amr|runtime)_)*program_context(?:_.+)?", normalized
+    ) is not None or re.fullmatch(r"runtimeprogramcontext(?:v[0-9]+)?", normalized) is not None
+
+
+def _is_canonical_python_program_facade_step(
+    node: ast.Call, path: Path, parents: dict[int, ast.AST]
+) -> bool:
+    """Permit the one public installed-Program facade, and no generic ``engine.step`` escape.
+
+    ``step_adaptive`` is authoring convenience code whose native engine has already received an
+    installed Program.  It is not a second AMR runtime.  Keep its exception structural and exact:
+    a same-named helper elsewhere, another method, another receiver, or another argument shape is
+    still a bypass.  This is intentionally stricter than a path- or owner-wide allowlist.
+    """
+    try:
+        relative = path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return False
+    if relative != "python/pops/runtime/_cadence_install.py":
+        return False
+    if (
+        not isinstance(node.func, ast.Attribute)
+        or not isinstance(node.func.value, ast.Name)
+        or node.func.value.id != "engine"
+        or node.func.attr != "step"
+        or len(node.args) != 1
+        or node.keywords
+        or not isinstance(node.args[0], ast.Name)
+        or node.args[0].id != "dt"
+    ):
+        return False
+    current = parents.get(id(node))
+    while current is not None:
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if current.name != "step_adaptive":
+                return False
+            if not current.body or not isinstance(current.body[0], ast.Expr):
+                return False
+            docstring = current.body[0].value
+            return (
+                isinstance(docstring, ast.Constant)
+                and isinstance(docstring.value, str)
+                and "through the installed Program" in docstring.value
+            )
+        current = parents.get(id(current))
+    return False
+
+
+def _python_amr_runtime_step_bypass(source: str, path: Path) -> bool:
+    """Find direct Python AMR engine/per-level stepping without matching text in prose."""
+    tree = ast.parse(source, filename=str(path))
+    parents = {
+        id(child): owner
+        for owner in ast.walk(tree)
+        for child in ast.iter_child_nodes(owner)
+    }
+    owner_names = set(PYTHON_AMR_RUNTIME_OWNER_NAMES)
+    # A direct alias of a recognized fallback runtime is just as authoritative as the original
+    # receiver.  Follow only plain name/attribute assignments; arbitrary calls or expressions
+    # are intentionally outside this lexical barrier to avoid guessing ownership.
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            value_name = _dotted_name(node.value).rsplit(".", 1)[-1].lower().rstrip("_")
+            if value_name not in owner_names:
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    alias = target.id.lower().rstrip("_")
+                    if alias not in owner_names:
+                        owner_names.add(alias)
+                        changed = True
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        owner = _dotted_name(node.func.value)
+        owner_leaf = owner.rsplit(".", 1)[-1].lower().rstrip("_")
+        method = node.func.attr.lower()
+        if (
+            owner_leaf in owner_names
+            and method in PYTHON_AMR_RUNTIME_STEP_NAMES
+            and not _is_canonical_python_program_facade_step(node, path, parents)
+        ):
+            return True
+    return False
+
+
+def _cpp_amr_runtime_step_bypass(code: str) -> bool:
+    """Find direct AMR stepping, including explicit aliases of ``AmrRuntime`` only."""
+    if AMR_RUNTIME_STEP_BYPASS_PATTERN.search(code) is not None:
+        return True
+    aliases = {
+        match.group("alias") or match.group("typedef_alias")
+        for match in AMR_RUNTIME_ALIAS_PATTERN.finditer(code)
+    }
+    return any(
+        re.search(
+            r"\b%s(?:\s*<[^>{};\n]+>)?\s*::\s*"
+            r"(?:step|step_level|advance|advance_level|advance_macro_step)\s*\("
+            % re.escape(alias),
+            code,
+        )
+        is not None
+        for alias in aliases
+    )
+
+
+def _python_legacy_checkpoint_findings(source: str, path: Path) -> list[str]:
+    """Find legacy checkpoint bytes/versions in Python without trusting comments/docstrings."""
+    tree = ast.parse(source, filename=str(path))
+    docstring_nodes: set[int] = set()
+    for owner in ast.walk(tree):
+        if not isinstance(owner, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if owner.body and isinstance(owner.body[0], ast.Expr):
+            value = owner.body[0].value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                docstring_nodes.add(id(value))
+    findings: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in docstring_nodes
+        ):
+            findings.update(
+                marker for marker in LEGACY_CHECKPOINT_MARKERS if marker in node.value
+            )
+        if isinstance(node, (ast.List, ast.Tuple)):
+            chars = "".join(
+                element.value
+                for element in node.elts
+                if isinstance(element, ast.Constant)
+                and isinstance(element.value, str)
+                and len(element.value) == 1
+            )
+            findings.update(
+                marker for marker in LEGACY_CHECKPOINT_MARKERS if marker in chars
+            )
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            value = node.value
+            if not isinstance(value, ast.Constant) or not isinstance(value.value, int):
+                continue
+            if value.value not in {8, 11}:
+                continue
+            names = [target.id for target in targets if isinstance(target, ast.Name)]
+            if any(
+                "checkpoint" in name.lower() and "version" in name.lower()
+                for name in names
+            ):
+                findings.add("checkpoint-version-%d" % value.value)
+    return sorted(findings)
+
+
+def _python_legacy_abi_findings(source: str, path: Path) -> list[str]:
+    """Find non-v5 Program install ABI assignments in Python production sources."""
+    tree = ast.parse(source, filename=str(path))
+    findings: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        else:
+            continue
+        value = node.value
+        if not isinstance(value, ast.Constant) or not isinstance(value.value, int):
+            continue
+        names = [target.id for target in targets if isinstance(target, ast.Name)]
+        if any("programinstallabiversion" in name.lower() for name in names):
+            if value.value != 5:
+                findings.add("ProgramInstallAbiVersion=%d" % value.value)
+    return sorted(findings)
+
+
+def _python_legacy_cache_wire_findings(source: str, path: Path) -> list[str]:
+    """Find old cache wire keys only where Python constructs or writes serialized data.
+
+    ``cache_nodes`` remains a deliberately supported *input* to the fail-closed legacy-shape
+    check.  Likewise, ``node_id`` is used throughout the temporal control graph.  Looking for
+    either token in the semantic-token stream would therefore reject valid guards and metadata;
+    this AST pass limits the barrier to returned/assigned/serialized mappings and cache-owned
+    node records.  A node-id-only mapping is considered legacy authority data when its enclosing
+    operation is serialization-like or its owner is explicitly cache-specific.
+    """
+    source_lower = source.lower()
+    if "cache_nodes" not in source_lower and "cache_node_id" not in source_lower and not (
+        "node_id" in source_lower
+        and (
+            "cache" in source_lower
+            or any(hint in source_lower for hint in PYTHON_SERIALIZATION_NAME_HINTS)
+        )
+    ):
+        return []
+    tree = ast.parse(source, filename=str(path))
+    parents: dict[int, ast.AST] = {}
+    for owner in ast.walk(tree):
+        for child in ast.iter_child_nodes(owner):
+            parents[id(child)] = owner
+
+    def string_value(node: ast.AST | None) -> str | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        return None
+
+    def target_names(node: ast.AST | None) -> tuple[str, ...]:
+        if isinstance(node, ast.Name):
+            return (node.id,)
+        if isinstance(node, ast.Attribute):
+            return (node.attr,)
+        if isinstance(node, ast.Subscript):
+            return target_names(node.value)
+        return ()
+
+    def ancestors(node: ast.AST) -> Iterable[ast.AST]:
+        current = parents.get(id(node))
+        while current is not None:
+            yield current
+            current = parents.get(id(current))
+
+    def enclosing_function_names(node: ast.AST) -> tuple[str, ...]:
+        return tuple(
+            owner.name
+            for owner in ancestors(node)
+            if isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef))
+        )
+
+    def has_serialization_name(node: ast.AST) -> bool:
+        names: list[str] = list(enclosing_function_names(node))
+        for owner in ancestors(node):
+            if isinstance(owner, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                targets = owner.targets if isinstance(owner, ast.Assign) else [owner.target]
+                if isinstance(owner, ast.AugAssign):
+                    targets = [owner.target]
+                for target in targets:
+                    names.extend(target_names(target))
+            elif isinstance(owner, ast.Call):
+                call_name = _dotted_name(owner.func).lower()
+                leaf = call_name.rsplit(".", 1)[-1]
+                if leaf in {"dump", "dumps", "encode", "save", "serialize", "serialise", "write"}:
+                    return True
+                if "checkpoint" in call_name or "serialize" in call_name or "serialise" in call_name:
+                    return True
+        lowered = " ".join(names).lower()
+        return any(hint in lowered for hint in PYTHON_SERIALIZATION_NAME_HINTS)
+
+    def has_wire_container_name(node: ast.AST) -> bool:
+        names: list[str] = []
+        for owner in ancestors(node):
+            if isinstance(owner, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                targets = owner.targets if isinstance(owner, ast.Assign) else [owner.target]
+                if isinstance(owner, ast.AugAssign):
+                    targets = [owner.target]
+                for target in targets:
+                    names.extend(target_names(target))
+            elif isinstance(owner, ast.Call) and isinstance(owner.func, ast.Attribute):
+                names.extend(target_names(owner.func.value))
+        names.extend(enclosing_function_names(node))
+        lowered = " ".join(names).lower()
+        return any(hint in lowered for hint in PYTHON_WIRE_CONTAINER_NAME_HINTS)
+
+    def is_error_payload(node: ast.AST) -> bool:
+        """Allow old-shape values used only as payloads of an intentional rejection."""
+        return any(isinstance(owner, ast.Raise) for owner in ancestors(node))
+
+    def is_wire_mapping(node: ast.Dict) -> bool:
+        for owner in ancestors(node):
+            if isinstance(owner, ast.Return):
+                return True
+            if isinstance(owner, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                targets = owner.targets if isinstance(owner, ast.Assign) else [owner.target]
+                if isinstance(owner, ast.AugAssign):
+                    targets = [owner.target]
+                if any(target_names(target) for target in targets):
+                    return has_wire_container_name(node) or has_serialization_name(node)
+            if isinstance(owner, ast.Call):
+                call_name = _dotted_name(owner.func).lower()
+                leaf = call_name.rsplit(".", 1)[-1]
+                if leaf in {"dump", "dumps", "encode", "save", "serialize", "serialise", "write"}:
+                    return True
+                if leaf == "update":
+                    return has_wire_container_name(node)
+        return has_serialization_name(node)
+
+    def cache_context(node: ast.AST) -> bool:
+        names: list[str] = list(enclosing_function_names(node))
+        for owner in ancestors(node):
+            if isinstance(owner, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                targets = owner.targets if isinstance(owner, ast.Assign) else [owner.target]
+                if isinstance(owner, ast.AugAssign):
+                    targets = [owner.target]
+                for target in targets:
+                    names.extend(target_names(target))
+            elif isinstance(owner, ast.Call) and isinstance(owner.func, ast.Attribute):
+                names.extend(target_names(owner.func.value))
+        # A cache-owned mapping is itself an authority boundary even before it reaches a
+        # serializer.  This catches a staged ``{\"node_id\": ...}`` cache plan while leaving
+        # ordinary control-graph node metadata and explicit legacy-shape rejection guards alone.
+        return "cache" in " ".join(names).lower()
+
+    def mapping_keys(node: ast.Dict) -> set[str]:
+        return {
+            value
+            for key in node.keys
+            if (value := string_value(key)) is not None
+        }
+
+    legacy_cache_keys = LEGACY_CACHE_WIRE_KEYS - {"node_id"}
+    findings: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            keys = mapping_keys(node)
+            if is_error_payload(node):
+                continue
+            cache_keys = {key for key in keys if key in legacy_cache_keys}
+            # An explicit legacy cache key is itself a wire publication.  Do not require a
+            # serializer-looking container name: generated code may assign the mapping to a
+            # neutral temporary before handing it to the ABI.  Rejection guards use membership
+            # tests and therefore do not enter this branch.
+            if cache_keys:
+                findings.update(cache_keys)
+                if "node_id" in keys:
+                    findings.add("node_id")
+            elif "node_id" in keys and not legacy_cache_keys.intersection(keys):
+                if has_serialization_name(node) or cache_context(node):
+                    findings.add("node_id")
+        elif isinstance(node, ast.Call):
+            call_name = _dotted_name(node.func).lower()
+            if call_name.rsplit(".", 1)[-1] == "dict":
+                keyword_keys = {
+                    keyword.arg
+                    for keyword in node.keywords
+                    if keyword.arg is not None
+                }
+                # ``dict(...)`` is a common generated spelling for the JSON/checkpoint payload;
+                # an explicit cache_nodes key is sufficient evidence even when the temporary
+                # container has an otherwise neutral name.  Keep node_id-only construction scoped
+                # to a cache/serialization context just like literal mappings above.
+                if is_error_payload(node):
+                    continue
+                cache_keys = {
+                    key for key in keyword_keys if key in legacy_cache_keys
+                }
+                if cache_keys:
+                    findings.update(cache_keys)
+                    if "node_id" in keyword_keys:
+                        findings.add("node_id")
+                elif "node_id" in keyword_keys and (
+                    has_serialization_name(node) or cache_context(node)
+                ):
+                    findings.add("node_id")
+                continue
+            if not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr == "setdefault":
+                if (
+                    not is_error_payload(node)
+                    and node.args
+                    and string_value(node.args[0]) in LEGACY_CACHE_WIRE_KEYS - {"node_id"}
+                ):
+                    findings.add(string_value(node.args[0]))
+                continue
+            if node.func.attr == "__setitem__":
+                if (
+                    not is_error_payload(node)
+                    and node.args
+                    and string_value(node.args[0]) in LEGACY_CACHE_WIRE_KEYS - {"node_id"}
+                ):
+                    findings.add(string_value(node.args[0]))
+                continue
+            if node.func.attr != "update":
+                continue
+            for argument in node.args:
+                if not isinstance(argument, ast.Dict):
+                    continue
+                keys = mapping_keys(argument)
+                if is_error_payload(argument):
+                    continue
+                findings.update(
+                    key for key in keys if key in LEGACY_CACHE_WIRE_KEYS - {"node_id"}
+                )
+                if "node_id" in keys and (
+                    has_serialization_name(argument)
+                    or cache_context(argument)
+                    or legacy_cache_keys.intersection(keys)
+                ):
+                    findings.add("node_id")
+            for keyword in node.keywords:
+                if is_error_payload(node):
+                    continue
+                if keyword.arg in legacy_cache_keys:
+                    findings.add(keyword.arg)
+                elif keyword.arg == "node_id" and (
+                    has_serialization_name(node)
+                    or cache_context(node)
+                    or has_wire_container_name(node)
+                ):
+                    findings.add(keyword.arg)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if isinstance(node, ast.AugAssign):
+                targets = [node.target]
+            for target in targets:
+                if not isinstance(target, ast.Subscript):
+                    continue
+                key = string_value(target.slice)
+                if is_error_payload(node):
+                    continue
+                if key in legacy_cache_keys:
+                    # A subscript assignment is an unambiguous wire write even when the
+                    # temporary/container is neutrally named.
+                    findings.add(key)
+                elif key == "node_id" and (
+                    has_serialization_name(target) or cache_context(target)
+                ):
+                    findings.add(key)
+    return sorted(findings)
+
+
+def _legacy_checkpoint_findings(
+    text: str, path: Path, semantic: str
+) -> list[str]:
+    findings = [marker for marker in LEGACY_CHECKPOINT_MARKERS if marker in semantic]
+    if path.suffix in CXX_SUFFIXES:
+        findings.extend(
+            "encoded:%s" % marker
+            for marker, pattern in LEGACY_CHECKPOINT_CHAR_ARRAY_PATTERNS.items()
+            if pattern.search(semantic) is not None
+        )
+        if any(pattern.search(semantic) is not None for pattern in LEGACY_CHECKPOINT_VERSION_PATTERNS):
+            findings.append("checkpoint-version-8-or-11")
+    elif path.suffix == ".py":
+        findings.extend(_python_legacy_checkpoint_findings(text, path))
+    return sorted(set(findings))
 
 
 def _scan_production_barriers(
@@ -1221,14 +2043,9 @@ def _scan_production_barriers(
         if not path.is_file():
             continue
         display = _display_source_path(path)
-        lower_stem = path.stem.lower()
-        if path.suffix == ".inc" and path.is_relative_to(
-            ROOT / "include/pops/runtime/program"
-        ):
+        if path.suffix == ".inc":
             errors.append("runtime authority forbids AMR runtime fragments (.inc): %s" % display)
-        if lower_stem in {"program_context", "amr_program_context"} or lower_stem.startswith(
-            ("program_context_", "amr_program_context_")
-        ):
+        if _is_retired_program_context_filename(path):
             errors.append("retired ProgramContext source remains present: %s" % display)
 
         try:
@@ -1240,6 +2057,7 @@ def _scan_production_barriers(
         if path.suffix in CXX_SUFFIXES:
             code = _cpp_code_only(text)
             semantic = _cpp_without_comments(text)
+            semantic_tokens: tuple[str, ...] = ()
         elif path.suffix == ".py":
             try:
                 tokens = _python_semantic_tokens(text, path)
@@ -1248,6 +2066,7 @@ def _scan_production_barriers(
                 continue
             code = "\n".join(tokens)
             semantic = code
+            semantic_tokens = tokens
         else:
             continue
 
@@ -1258,9 +2077,19 @@ def _scan_production_barriers(
         ]
         symbols = [
             token
-            for token in (*LEGACY_SYMBOL_TOKENS, *LEGACY_PROGRAM_AMR_SYMBOL_TOKENS)
+            for token in (
+                *LEGACY_SYMBOL_TOKENS,
+                *LEGACY_PROGRAM_AMR_SYMBOL_TOKENS,
+                *LEGACY_PROGRAM_SPLIT_SYMBOL_TOKENS,
+            )
             if re.search(r"\b%s\b" % re.escape(token), semantic)
         ]
+        symbols.extend(LEGACY_PROGRAM_SPLIT_ABI_PATTERN.findall(semantic))
+        symbols.extend(LEGACY_PROGRAM_SPLIT_AMR_VARIANT_PATTERN.findall(semantic))
+        symbols.extend(LEGACY_PROGRAM_GENERIC_AMR_PATTERN.findall(semantic))
+        symbols.extend(LEGACY_PROGRAM_QUALIFIED_INSTALL_ABI_PATTERN.findall(semantic))
+        symbols.extend(LEGACY_PROGRAM_INSTALL_TARGET_VARIANT_PATTERN.findall(semantic))
+        symbols = [symbol for symbol in symbols if symbol not in NATIVE_BRICK_ABI_SYMBOLS]
         public_installers = [
             token
             for token in LEGACY_PUBLIC_INSTALLER_TOKENS
@@ -1274,7 +2103,74 @@ def _scan_production_barriers(
         pending = [marker for marker in FORBIDDEN_PENDING_MARKERS if marker in semantic]
         if reject_any_pending and "pending:" in semantic and not pending:
             pending.append("pending:<any>")
-        checkpoint = [marker for marker in LEGACY_CHECKPOINT_MARKERS if marker in semantic]
+        checkpoint = _legacy_checkpoint_findings(text, path, semantic)
+        cell_local_installers = [
+            match.group(0).strip()
+            for match in CELL_LOCAL_INSTALLER_PATTERN.finditer(code)
+        ]
+        if path.suffix == ".py":
+            cell_local_installers.extend(
+                token
+                for token in semantic_tokens
+                if CELL_LOCAL_INSTALLER_NAME_PATTERN.fullmatch(token) is not None
+            )
+        program_amr_installers = [
+            match.group(0).strip()
+            for match in LEGACY_PROGRAM_AMR_INSTALLER_PATTERN.finditer(code)
+        ]
+        if path.suffix == ".py":
+            program_amr_installers.extend(
+                token
+                for token in semantic_tokens
+                if LEGACY_PROGRAM_AMR_INSTALLER_NAME_PATTERN.fullmatch(token) is not None
+            )
+        parallel_tables = [
+            match.group(0)
+            for match in PARALLEL_AUTHORITY_TABLE_PATTERN.finditer(code)
+        ]
+        parallel_dispatches = [
+            match.group(0)
+            for match in PARALLEL_AUTHORITY_DISPATCH_PATTERN.finditer(code)
+        ]
+        program_tables = [
+            match.group(0)
+            for match in PROGRAM_AUTHORITY_TABLE_PATTERN.finditer(code)
+        ]
+        program_dispatches = [
+            match.group(0)
+            for match in PROGRAM_AUTHORITY_DISPATCH_PATTERN.finditer(code)
+        ]
+        if path.suffix == ".py":
+            parallel_tables.extend(
+                token
+                for token in semantic_tokens
+                if PARALLEL_AUTHORITY_TABLE_NAME_PATTERN.fullmatch(token) is not None
+            )
+            parallel_dispatches.extend(
+                token
+                for token in semantic_tokens
+                if PARALLEL_AUTHORITY_DISPATCH_NAME_PATTERN.fullmatch(token) is not None
+            )
+            program_tables.extend(
+                token
+                for token in semantic_tokens
+                if PROGRAM_AUTHORITY_TABLE_NAME_PATTERN.fullmatch(token) is not None
+            )
+            program_dispatches.extend(
+                token
+                for token in semantic_tokens
+                if PROGRAM_AUTHORITY_DISPATCH_NAME_PATTERN.fullmatch(token) is not None
+            )
+        program_tables = [
+            token
+            for token in program_tables
+            if token not in CANONICAL_CANDIDATE_AUTHORITY_NAMES
+        ]
+        program_dispatches = [
+            token
+            for token in program_dispatches
+            if token not in CANONICAL_CANDIDATE_AUTHORITY_NAMES
+        ]
         if contexts:
             errors.append("%s retains retired context names %s" % (display, contexts))
         if symbols:
@@ -1290,12 +2186,59 @@ def _scan_production_barriers(
             errors.append("%s contains forbidden pending marker(s) %s" % (display, pending))
         if checkpoint:
             errors.append("%s retains legacy checkpoint/magic marker(s) %s" % (display, checkpoint))
+        if cell_local_installers:
+            errors.append(
+                "%s retains forbidden cell-local installer route(s) %s"
+                % (display, sorted(set(cell_local_installers)))
+            )
+        if program_amr_installers:
+            errors.append(
+                "%s retains retired Program AMR installer route(s) %s"
+                % (display, sorted(set(program_amr_installers)))
+            )
+        if parallel_tables:
+            errors.append(
+                "%s retains a parallel runtime authority table (%s)"
+                % (display, sorted(set(parallel_tables)))
+            )
+        if parallel_dispatches:
+            errors.append(
+                "%s retains a parallel runtime authority dispatch (%s)"
+                % (display, sorted(set(parallel_dispatches)))
+            )
+        if program_tables:
+            errors.append(
+                "%s retains a secondary Program runtime authority table (%s)"
+                % (display, sorted(set(program_tables)))
+            )
+        if program_dispatches:
+            errors.append(
+                "%s retains a secondary Program runtime authority dispatch (%s)"
+                % (display, sorted(set(program_dispatches)))
+            )
         if LEGACY_ABI_VERSION_PATTERN.search(code) is not None:
             errors.append("%s retains a legacy Program install ABI version" % display)
-        if AMR_RUNTIME_STEP_BYPASS_PATTERN.search(code) is not None:
-            errors.append("%s bypasses the Program authority through AmrRuntime::step" % display)
+        if path.suffix == ".py" and _python_legacy_abi_findings(text, path):
+            errors.append("%s retains a legacy Program install ABI version" % display)
+        amr_step_bypass = (
+            _python_amr_runtime_step_bypass(text, path)
+            if path.suffix == ".py"
+            else _cpp_amr_runtime_step_bypass(code)
+        )
+        if amr_step_bypass:
+            errors.append(
+                "%s bypasses the Program authority through AmrRuntime::step or a direct "
+                "AMR engine/per-level step" % display
+            )
         if CACHE_NODE_ID_ONLY_PATTERN.search(code) is not None:
             errors.append("%s retains a node-id-only scheduler cache" % display)
+        if path.suffix == ".py":
+            cache_wire = _python_legacy_cache_wire_findings(text, path)
+            if cache_wire:
+                errors.append(
+                    "%s retains a node-id-only scheduler cache wire (%s)"
+                    % (display, cache_wire)
+                )
 
 
 def _validate_required_authority_contract(errors: list[str]) -> None:
@@ -1356,17 +2299,22 @@ def _validate_source_barriers(errors: list[str]) -> None:
     _validate_detached_provider_architecture(errors)
     _validate_retired_compatibility_aliases(errors)
     authority_sources = tuple(path for path in _authority_sources() if path.is_file())
-    abi_sources = authority_sources
+    production_sources = tuple(path for path in _production_sources() if path.is_file())
+    runtime_sources = tuple(sorted(set((*authority_sources, *production_sources))))
+    abi_sources = tuple(path for path in runtime_sources if path.suffix in CXX_SUFFIXES)
     if sum(
         len(ABI_VERSION_PATTERN.findall(_cpp_code_only(path.read_text(encoding="utf-8"))))
         for path in abi_sources
     ) != 1:
-        errors.append("runtime authority must expose exactly one ABI version declaration (v5)")
+        errors.append(
+            "runtime authority must expose exactly one ABI version declaration (v5) "
+            "across all runtime production roots"
+        )
     _scan_production_barriers(errors, authority_sources, reject_any_pending=True)
     authority_set = set(authority_sources)
     _scan_production_barriers(
         errors,
-        (path for path in _production_sources() if path not in authority_set),
+        (path for path in production_sources if path not in authority_set),
     )
     _validate_required_authority_contract(errors)
 
@@ -1546,6 +2494,33 @@ def _normalise_allocation(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _validate_row_dimensions(
+    value: object, where: str, errors: list[str]
+) -> tuple[int, ...] | None:
+    """Validate one optional row dimension qualifier and return its canonical values."""
+    if not isinstance(value, list):
+        errors.append("%s dimensions must be a list" % where)
+        return None
+    if not value:
+        errors.append("%s dimensions must be non-empty" % where)
+        return None
+    if any(isinstance(dimension, bool) or not isinstance(dimension, int) for dimension in value):
+        errors.append("%s dimensions must contain integers; bool is not accepted" % where)
+        return None
+    if any(dimension not in SUPPORTED_NATIVE_DIMENSIONS for dimension in value):
+        errors.append(
+            "%s dimensions must contain only supported values 1, 2, or 3" % where
+        )
+        return None
+    if len(set(value)) != len(value):
+        errors.append("%s dimensions must contain unique values" % where)
+        return None
+    if value != sorted(value):
+        errors.append("%s dimensions must use canonical sorted order" % where)
+        return None
+    return tuple(value)
+
+
 def audit_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     """Return deterministic source-only errors for the closed runtime-authority matrix."""
     errors: list[str] = []
@@ -1617,9 +2592,15 @@ def audit_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
             if kind in {"pytest", "mpi_orchestrator"}
             else {"test_regex"}
         )
-        if set(row) != expected:
+        expected_with_optional_dimensions = expected | (
+            {"dimensions"} if "dimensions" in row else set()
+        )
+        if set(row) != expected_with_optional_dimensions:
             errors.append("%s has unknown or missing fields: %s" % (where, sorted(row)))
             continue
+
+        if "dimensions" in row:
+            _validate_row_dimensions(row["dimensions"], where, errors)
 
         issue = row.get("issue")
         requirement = row.get("requirement")
@@ -1730,6 +2711,7 @@ def audit_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
                 native_positive_issues.add(str(issue))
 
     _validate_required_lowering_refusal_rows(checks, errors)
+    _validate_required_semantic_barrier_rows(checks, errors)
 
     duplicates = sorted(identity for identity, count in identities.items() if count > 1)
     if duplicates:
@@ -1757,6 +2739,7 @@ def _required_environment(
 ) -> dict[str, str]:
     environment = os.environ.copy()
     environment["POPS_REQUIRE_NATIVE_TESTS"] = "1"
+    environment["POPS_EXACT_PROCESS_NODEIDS"] = "1"
     if backend == "mpi":
         environment["POPS_REQUIRE_MPI_TESTS"] = "1"
     required_allocations = any(row.get("allocation") == "required" for row in rows)
@@ -1829,9 +2812,40 @@ def _run(command: list[str], *, environment: dict[str, str]) -> None:
 
 def _validated_native_dimension(dimension: int) -> int:
     """Return one supported native dimension, rejecting programmatic bypasses of argparse."""
-    if isinstance(dimension, bool) or dimension not in (1, 2, 3):
+    if (
+        isinstance(dimension, bool)
+        or not isinstance(dimension, int)
+        or dimension not in SUPPORTED_NATIVE_DIMENSIONS
+    ):
         raise ValueError("native dimension must be exactly 1, 2, or 3")
     return dimension
+
+
+def _selected_native_dimension(explicit: object | None) -> int:
+    """Select a dimension from an explicit flag or an authenticated environment value."""
+    environment_value = os.environ.get("POPS_NATIVE_DIM")
+    environment_dimension: int | None = None
+    if environment_value:
+        if environment_value not in {str(value) for value in SUPPORTED_NATIVE_DIMENSIONS}:
+            raise ValueError(
+                "POPS_NATIVE_DIM must be exactly 1, 2, or 3, got %r" % environment_value
+            )
+        environment_dimension = int(environment_value)
+
+    if explicit is not None:
+        selected = _validated_native_dimension(explicit)
+        if environment_dimension is not None and environment_dimension != selected:
+            raise ValueError(
+                "conflicting native dimensions: --dim=%d but POPS_NATIVE_DIM=%d"
+                % (selected, environment_dimension)
+            )
+        return selected
+    if environment_dimension is None:
+        raise ValueError(
+            "native dimension is required for execution: pass --dim 1|2|3 or set "
+            "POPS_NATIVE_DIM=1|2|3"
+        )
+    return environment_dimension
 
 
 def _require_build_native_dimension(build_dir: Path, dimension: int) -> None:
@@ -1870,18 +2884,40 @@ def _require_build_native_dimension(build_dir: Path, dimension: int) -> None:
 def _mpi_python_command(
     mpi_exec: str,
     nproc: int,
-    relative: str,
+    nodeid: str,
     *,
     dimension: int,
 ) -> list[str]:
+    """Build an MPI command that invokes exactly one manifest-owned file::function nodeid."""
     dimension = _validated_native_dimension(dimension)
+    if not isinstance(nodeid, str) or FULL_NODEID.fullmatch(nodeid) is None:
+        raise ValueError("MPI Python execution requires an exact file::function nodeid")
+    relative, function_name = nodeid.split("::", 1)
+    candidate = (ROOT / relative).resolve()
+    try:
+        candidate.relative_to(ROOT.resolve())
+    except ValueError as exc:
+        raise ValueError("MPI Python nodeid must stay inside the repository") from exc
+    if candidate.suffix != ".py":
+        raise ValueError("MPI Python nodeid must select a Python source file")
     if shutil.which(mpi_exec) is None:
         raise RuntimeError("required MPI launcher %r is unavailable" % mpi_exec)
     bootstrap = (
-        "from pops._native_selector import select_native_dimension; "
-        "import runpy, sys; "
-        "select_native_dimension(int(sys.argv[1])); "
-        "runpy.run_path(sys.argv[2], run_name='__main__')"
+        "from pops._native_selector import select_native_dimension\n"
+        "from pathlib import Path\n"
+        "import runpy, sys\n"
+        "select_native_dimension(int(sys.argv[1]))\n"
+        "nodeid = sys.argv[3]\n"
+        "relative, separator, function_name = nodeid.partition('::')\n"
+        "expected_relative = Path(sys.argv[2]).resolve().relative_to(Path.cwd()).as_posix()\n"
+        "if not separator or function_name != %r or relative != expected_relative:\n"
+        "    raise SystemExit('MPI Python nodeid/path mismatch: ' + nodeid)\n"
+        "module = runpy.run_path(sys.argv[2], run_name='__runtime_authority_node__')\n"
+        "test = module.get(function_name)\n"
+        "if not callable(test):\n"
+        "    raise SystemExit('MPI Python nodeid does not resolve to a function: ' + nodeid)\n"
+        "test()\n"
+        "raise SystemExit(int(module.get('_fails', 0)))\n" % function_name
     )
     return [
         mpi_exec,
@@ -1892,6 +2928,7 @@ def _mpi_python_command(
         bootstrap,
         str(dimension),
         str(ROOT / relative),
+        nodeid,
     ]
 
 
@@ -1935,8 +2972,10 @@ def _run_ctest(
             )
 
 
-def _required_ctest_targets(checks: Iterable[dict], *, backend: str = "mpi") -> tuple[str, ...]:
-    selected = _selected_checks(checks, backend=backend)
+def _required_ctest_targets(
+    checks: Iterable[dict], *, backend: str = "mpi", dimension: int
+) -> tuple[str, ...]:
+    selected = _selected_checks(checks, backend=backend, dimension=dimension)
     return tuple(
         sorted(
             {
@@ -1948,10 +2987,28 @@ def _required_ctest_targets(checks: Iterable[dict], *, backend: str = "mpi") -> 
     )
 
 
-def _selected_checks(checks: Iterable[dict], *, backend: str) -> list[dict]:
+def _selected_checks(
+    checks: Iterable[dict], *, backend: str, dimension: int
+) -> list[dict]:
+    dimension = _validated_native_dimension(dimension)
+
+    def supports_dimension(row: dict) -> bool:
+        if "dimensions" not in row:
+            return True
+        dimensions = row["dimensions"]
+        return isinstance(dimensions, list) and dimension in dimensions
+
     if backend == "mpi":
-        return [row for row in checks if row.get("backend") in {"serial", "mpi"}]
-    return [row for row in checks if row.get("backend") == backend]
+        return [
+            row
+            for row in checks
+            if row.get("backend") in {"serial", "mpi"} and supports_dimension(row)
+        ]
+    return [
+        row
+        for row in checks
+        if row.get("backend") == backend and supports_dimension(row)
+    ]
 
 
 def _chunks(values: list[str], size: int) -> Iterable[list[str]]:
@@ -1997,7 +3054,10 @@ def _run_composed_gate(
     module_name = "pops_runtime_composed_" + Path(runner_relative).stem
     module = _load_composed_runner(runner_relative, module_name)
     manifest = ROOT / relative
-    with _temporary_environment(environment):
+    dimension = _validated_native_dimension(dimension)
+    composed_environment = dict(environment)
+    composed_environment["POPS_NATIVE_DIM"] = str(dimension)
+    with _temporary_environment(composed_environment):
         if ctest_only:
             data, errors = module.validate_manifest(manifest)
             if errors:
@@ -2006,7 +3066,15 @@ def _run_composed_gate(
                     % (relative, "; ".join(errors))
                 )
             rows = sorted(
-                (row for row in data["check"] if row["kind"] == "ctest"),
+                (
+                    row
+                    for row in data["check"]
+                    if row["kind"] == "ctest"
+                    and (
+                        "dimensions" not in row
+                        or dimension in row["dimensions"]
+                    )
+                ),
                 key=lambda value: (value["target"], value["test_regex"]),
             )
             for row in rows:
@@ -2017,12 +3085,11 @@ def _run_composed_gate(
                 )
             return
 
-        # M2/M3 do not expose a native-dimension flag.  They inherit the authenticated
-        # POPS_NATIVE_DIM environment established by this runner, including their MPI children.
-        _validated_native_dimension(dimension)
+        # M2 inherits the authenticated environment; M3 also receives an explicit dimension so
+        # its row filtering remains deterministic when called as a composed runner.
         argv = ["--manifest", str(manifest), "--build-dir", str(build_dir)]
         if Path(runner_relative).name == "run_m3_gate.py":
-            argv.extend(("--mpi-exec", mpi_exec))
+            argv.extend(("--dim", str(dimension), "--mpi-exec", mpi_exec))
         if python_only:
             argv.append("--python-only")
         print("+ composed gate %s %s %s" % (relative, runner_relative, " ".join(argv)), flush=True)
@@ -2101,7 +3168,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--python-only", action="store_true")
     parser.add_argument("--ctest-only", action="store_true")
     parser.add_argument("--build-dir", type=Path, default=ROOT / "build-mpi")
-    parser.add_argument("--dim", required=True, type=int, choices=(1, 2, 3))
+    parser.add_argument("--dim", type=int, choices=SUPPORTED_NATIVE_DIMENSIONS)
     parser.add_argument("--mpi-exec", default="mpiexec")
     parser.add_argument("--backend", choices=sorted(EXPECTED_BACKENDS), default="serial")
     parser.add_argument("--openmp", action="store_true", help="select authenticated OpenMP rows")
@@ -2111,7 +3178,6 @@ def main(argv: list[str] | None = None) -> int:
     backend = "openmp" if args.openmp else args.backend
     if args.openmp and args.backend != "serial":
         parser.error("--openmp cannot be combined with --backend")
-    dimension = _validated_native_dimension(args.dim)
 
     if args.audit_only:
         data, errors = audit_manifest(args.manifest)
@@ -2124,15 +3190,33 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     checks = data["check"]
+    if args.check_only or args.audit_only:
+        print(
+            "Runtime authority gate source matrix: %s (%d executable, %d deferred; "
+            "backend=%s, selected=all)"
+            % (
+                "AUDITED CLOSED" if args.audit_only else "CLOSED",
+                len(checks),
+                len(data["deferred"]),
+                backend,
+            )
+        )
+        return 0
+
+    try:
+        dimension = _selected_native_dimension(args.dim)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     if args.list_ctest_targets:
-        targets = _required_ctest_targets(checks, backend=backend)
+        targets = _required_ctest_targets(checks, backend=backend, dimension=dimension)
         if not targets:
             print("runtime authority gate selects no CTest build target", file=sys.stderr)
             return 2
         print("\n".join(targets))
         return 0
 
-    selected = _selected_checks(checks, backend=backend)
+    selected = _selected_checks(checks, backend=backend, dimension=dimension)
     print(
         "Runtime authority gate source matrix: %s (%d executable, %d deferred; backend=%s, selected=%d)"
         % (
@@ -2143,9 +3227,6 @@ def main(argv: list[str] | None = None) -> int:
             len(selected),
         )
     )
-    if args.check_only or args.audit_only:
-        return 0
-
     if not args.python_only:
         _require_build_native_dimension(args.build_dir, dimension)
     environment = _required_environment(selected, backend=backend)
@@ -2162,12 +3243,11 @@ def main(argv: list[str] | None = None) -> int:
         for row in selected:
             if row["kind"] != "mpi_python":
                 continue
-            relative = row["nodeid"].split("::", 1)[0]
             _run(
                 _mpi_python_command(
                     args.mpi_exec,
                     row["nproc"],
-                    relative,
+                    row["nodeid"],
                     dimension=dimension,
                 ),
                 environment=environment,

@@ -121,8 +121,6 @@ void System<Dim>::commit_step_transaction() {
 template <int Dim>
 double System<Dim>::step_change_l2_for_block(std::string_view name) const {
   p_->step_transaction_carrier_.step_change_last_dispatches = 0;
-  if (!p_->external_program_transaction_)
-    throw std::runtime_error("System::step_change_l2 requires an active external step transaction");
   // The external transaction deliberately retains the visibility writer from begin through
   // finalize/rollback.  This diagnostic is part of that writer-owned window: taking a shared
   // lease here would self-deadlock, while releasing the writer would expose the provisional
@@ -130,53 +128,104 @@ double System<Dim>::step_change_l2_for_block(std::string_view name) const {
   // caller is inside the protected window, so an explicit provisional scope must authenticate the
   // resident candidate.  `acquire_accepted_read_lease()` recognizes that scope; without it the
   // writer thread is rejected and a foreign reader blocks on the visibility writer.
+  // This is the internal Program-writer accessor: the public lane observer takes an accepted
+  // read lease and is therefore intentionally unavailable while the candidate writer is held.
+  const ExecutionLane& lane = program_prepared_boundary_execution_lane_();
   [[maybe_unused]] auto provisional_read = p_->acquire_accepted_read_lease();
-  if (!p_->step_transaction_carrier_.accepted || !p_->step_transaction_carrier_.snapshot_active)
-    throw std::logic_error("System::step_change_l2 external transaction image is not active");
-  const std::vector<MultiFab<Dim>>& previous = p_->step_transaction_carrier_.accepted->states;
-  if (previous.size() != p_->sp.size())
-    throw std::runtime_error("System::step_change_l2 snapshot composition mismatch");
-
+  const MultiFab<Dim>* current = nullptr;
+  const MultiFab<Dim>* prior = nullptr;
   double cell_measure = 1.0;
-  for (int axis = 0; axis < Dim; ++axis)
-    cell_measure *= static_cast<double>(p_->geom.spacing(axis));
-
-  for (std::size_t block = 0; block < p_->sp.size(); ++block) {
-    if (p_->sp[block].name != name)
-      continue;
-    const MultiFab<Dim>& current = p_->sp[block].U;
-    const MultiFab<Dim>& prior = previous[block];
-    mf_arith_detail::require_same_layout(current, prior, "System::step_change_l2_for_block");
-    // This is the internal Program-writer accessor: the public lane observer takes an accepted
-    // read lease and is therefore intentionally unavailable while the candidate writer is held.
-    const ExecutionLane& lane = program_prepared_boundary_execution_lane_();
-    // A Program may execute on a prepared subcommunicator, so validate the exact lane rather
-    // than the process-wide communicator used by the generic MultiFab helper.  A malformed rank
-    // space would otherwise silently overcount replicated storage or reduce different fields.
-    if (!lane.active() || current.rank_space().size() != static_cast<std::size_t>(lane.size()) ||
-        current.rank_space().linear_rank(current.local_rank()) !=
-            static_cast<std::size_t>(lane.rank()) ||
-        (current.distribution().replicated() && lane.size() != 1))
-      throw std::logic_error(
-          "System::step_change_l2_for_block ND rank space does not match its prepared lane");
+  std::size_t required_terms = 0;
+  bool local_preflight_invalid = false;
+  try {
+    if (!p_->external_program_transaction_ || !p_->step_transaction_carrier_.accepted ||
+        !p_->step_transaction_carrier_.snapshot_active)
+      local_preflight_invalid = true;
+    else {
+      const std::vector<MultiFab<Dim>>& previous = p_->step_transaction_carrier_.accepted->states;
+      if (previous.size() != p_->sp.size()) {
+        local_preflight_invalid = true;
+      } else {
+        std::size_t matched = 0;
+        for (std::size_t block = 0; block < p_->sp.size(); ++block) {
+          if (p_->sp[block].name == name) {
+            ++matched;
+            current = &p_->sp[block].U;
+            prior = &previous[block];
+          }
+        }
+        if (matched != 1 || current == nullptr || prior == nullptr) {
+          local_preflight_invalid = true;
+        } else {
+          for (int axis = 0; axis < Dim; ++axis) {
+            const double spacing = static_cast<double>(p_->geom.spacing(axis));
+            if (!std::isfinite(spacing) || !(spacing > 0.0))
+              local_preflight_invalid = true;
+            cell_measure *= spacing;
+          }
+          if (!std::isfinite(cell_measure) || !(cell_measure > 0.0) ||
+              current->layout() != prior->layout() ||
+              current->distribution() != prior->distribution() ||
+              current->local_rank() != prior->local_rank() || current->ncomp() != prior->ncomp() ||
+              current->ghosts() != prior->ghosts() ||
+              current->local_size() != prior->local_size() || !lane.active() ||
+              current->rank_space().size() != static_cast<std::size_t>(lane.size()) ||
+              current->rank_space().linear_rank(current->local_rank()) !=
+                  static_cast<std::size_t>(lane.rank()) ||
+              (current->distribution().replicated() && lane.size() != 1)) {
+            local_preflight_invalid = true;
+          }
+          for (std::size_t local = 0; !local_preflight_invalid && local < current->local_size();
+               ++local) {
+            const std::int64_t signed_cells = current->box(local).numPts();
+            if (signed_cells <= 0 || current->global_index(local) != prior->global_index(local) ||
+                current->fab(local).size() != prior->fab(local).size()) {
+              local_preflight_invalid = true;
+              break;
+            }
+            const std::size_t cells = static_cast<std::size_t>(signed_cells);
+            if (cells > std::numeric_limits<std::size_t>::max() /
+                            static_cast<std::size_t>(current->ncomp()) ||
+                required_terms > std::numeric_limits<std::size_t>::max() -
+                                     cells * static_cast<std::size_t>(current->ncomp())) {
+              local_preflight_invalid = true;
+              break;
+            }
+            required_terms += cells * static_cast<std::size_t>(current->ncomp());
+          }
+        }
+      }
+    }
+  } catch (...) {
+    local_preflight_invalid = true;
+  }
+  // Every validation above is deliberately converted to a lane-wide refusal before any rank
+  // launches a reduction kernel or throws.  A rank-local malformed geometry/layout therefore
+  // cannot strand its peers in a later collective.
+  if (all_reduce_max(local_preflight_invalid ? 1L : 0L, lane) != 0)
+    throw std::runtime_error("System::step_change_l2_for_block preflight failed collectively");
+  const MultiFab<Dim>& current_field = *current;
+  const MultiFab<Dim>& prior_field = *prior;
+  {
     auto& terms = p_->step_transaction_carrier_.step_change_terms;
     auto& invalid = p_->step_transaction_carrier_.step_change_invalid;
     const std::size_t capacity = p_->step_transaction_carrier_.step_change_term_capacity;
-    if (terms.data() == nullptr || invalid.data() == nullptr || capacity == 0)
-      throw std::logic_error("System::step_change_l2_for_block reduction workspace is not primed");
+    const bool local_workspace_invalid =
+        terms.data() == nullptr || invalid.data() == nullptr || capacity < required_terms;
+    if (all_reduce_max(local_workspace_invalid ? 1L : 0L, lane) != 0)
+      throw std::runtime_error(
+          "System::step_change_l2_for_block workspace preflight failed collectively");
     // This workspace is exclusively owned by the candidate reader and each prior invocation
     // fences its asynchronous work before returning. Every term below is overwritten exactly
     // once, so the term buffer itself needs no hot reset or pre-launch fence.
     invalid() = 0;
     std::size_t term_offset = 0;
     bool launched_asynchronous_work = false;
-    for (std::size_t local = 0; local < current.local_size(); ++local) {
-      const auto current_view = current.fab(local).view();
-      const auto previous_view = prior.fab(local).view();
-      const Box<Dim> box = current.box(local);
+    for (std::size_t local = 0; local < current_field.local_size(); ++local) {
+      const auto current_view = current_field.fab(local).view();
+      const auto previous_view = prior_field.fab(local).view();
+      const Box<Dim> box = current_field.box(local);
       const std::int64_t signed_cells = box.numPts();
-      if (signed_cells <= 0)
-        throw std::logic_error("System::step_change_l2_for_block encountered an empty valid patch");
       const std::size_t cells = static_cast<std::size_t>(signed_cells);
       if constexpr (!std::is_same_v<Kokkos::DefaultExecutionSpace,
                                     Kokkos::DefaultHostExecutionSpace>) {
@@ -184,10 +233,7 @@ double System<Dim>::step_change_l2_for_block(std::string_view name) const {
       } else if (signed_cells >= detail::foreach_serial_threshold()) {
         launched_asynchronous_work = true;
       }
-      for (int component = 0; component < current.ncomp(); ++component) {
-        if (term_offset > capacity || cells > capacity - term_offset)
-          throw std::logic_error(
-              "System::step_change_l2_for_block exceeded its cold-primed reduction workspace");
+      for (int component = 0; component < current_field.ncomp(); ++component) {
         const std::size_t component_offset = term_offset;
         term_offset += cells;
         for_each_cell(
@@ -211,7 +257,7 @@ double System<Dim>::step_change_l2_for_block(std::string_view name) const {
         ++p_->step_transaction_carrier_.step_change_last_dispatches;
       }
     }
-    if (term_offset > capacity)
+    if (term_offset != required_terms)
       throw std::logic_error(
           "System::step_change_l2_for_block reduction workspace accounting drift");
     // SharedSpace host reads follow a fence whenever `for_each_cell` launched a Kokkos kernel.
@@ -220,7 +266,7 @@ double System<Dim>::step_change_l2_for_block(std::string_view name) const {
     // canonical slot order on the host, then reject non-finite terms collectively before
     // reducing a scientific scalar over the prepared lane.
     if (launched_asynchronous_work)
-      Kokkos::fence();
+      ::pops::device_fence();
     Real local_sum = Real(0);
     for (std::size_t slot = 0; slot < term_offset; ++slot)
       local_sum += terms(slot);
@@ -233,7 +279,6 @@ double System<Dim>::step_change_l2_for_block(std::string_view name) const {
       throw std::runtime_error("System::step_change_l2_for_block produced a non-finite result");
     return result;
   }
-  throw std::out_of_range("System::step_change_l2_for_block unknown block");
 }
 
 template <int Dim>
@@ -567,6 +612,25 @@ int System<Dim>::macro_step() const {
 
 template <int Dim>
 void System<Dim>::mark_bound() {
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  if (p_->program_.artifact_publication_receipt()) {
+    // Program installation recorded the cold coupling footprint while the composition was still
+    // assembling.  Re-derive its complete witness before sealing providers, freezing lifecycle,
+    // or binding the inline arena: a mutation between install_program() and bind must fail closed.
+    if (!p_->prepared_coupling_receipt_)
+      throw std::logic_error("System::mark_bound: Program coupling footprint receipt is absent");
+    const auto current_coupling_receipt =
+        p_->prepare_coupling_receipt(lane, p_->program_.block_map());
+    if (current_coupling_receipt.contract != p_->prepared_coupling_receipt_->contract ||
+        current_coupling_receipt.resident_bytes != p_->prepared_coupling_receipt_->resident_bytes)
+      throw std::logic_error(
+          "System::mark_bound: Program coupling footprint changed after installation");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"system-prepared-coupling-receipt", current_coupling_receipt.contract}}, lane))
+      throw std::runtime_error(
+          "System::mark_bound: Program coupling footprint differs between MPI ranks");
+  }
+
   // The provider graph is the only authority for the compact auxiliary carrier.  Seal it before
   // freezing composition so every rank either agrees on one graph or remains fully mutable after a
   // failed collective preflight.
@@ -614,7 +678,38 @@ void System<Dim>::mark_bound() {
   // Freeze the complete Uniform composition before entering the first transaction. The carrier
   // captures all resident fields, provider storage, and Program state once here; subsequent steps
   // recycle this image instead of constructing MultiFabs/maps from the hot path.
-  p_->prime_step_transaction_image();
+  // A transaction can also carry a prepared consumer without a temporal Program. Seal that empty
+  // Program authority at the same cold boundary so its accepted image remains copyable.
+  std::vector<const MultiFab<Dim>*> coupling_prototypes;
+  coupling_prototypes.reserve(p_->sp.size());
+  for (const typename Impl::Species& block : p_->sp)
+    coupling_prototypes.push_back(&block.U);
+  // Coupling has one resident candidate arena, bound only after all structural provider routes
+  // have frozen.  Program steps subsequently patch pointer slots and cannot allocate a rollback,
+  // conservation image, host mirror, or exact invocation witness.
+  p_->coupling_.bind_workspace(p_->coupling_workspace_, coupling_prototypes);
+  // Sparse generated RHS groups expand to one slot per System block.  This exact count is part of
+  // the bound composition: hot candidate execution must never materialize vectors for it.
+  p_->rhs_group_workspace_.bind(p_->sp.size());
+  // A Program field solve participates in the accepted transaction.  Its default-field owner
+  // therefore has to exist before the carrier captures the accepted image: constructing it from a
+  // candidate would make rollback change ownership and violate the sealed transaction contract.
+  const long default_field_required_local =
+      std::any_of(p_->sp.begin(), p_->sp.end(),
+                  [](const typename Impl::Species& block) {
+                    return static_cast<bool>(block.add_poisson_rhs);
+                  })
+          ? 1L
+          : 0L;
+  const long default_field_required_min = all_reduce_min(default_field_required_local, lane);
+  const long default_field_required_max = all_reduce_max(default_field_required_local, lane);
+  if (default_field_required_min != default_field_required_max)
+    throw std::runtime_error(
+        "System::mark_bound: default field requirement differs between communicator ranks");
+  if (default_field_required_max != 0)
+    prepare_default_field_publication_storage_();
+  p_->program_.bind_transaction_authorities();
+  p_->prime_step_transaction_image(lane);
   p_->lifecycle_.to_bound();
 }
 

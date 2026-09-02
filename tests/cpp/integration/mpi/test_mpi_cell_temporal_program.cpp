@@ -1,10 +1,12 @@
 #include <gtest/gtest.h>
 
+#include "amr_tagging_test_authority.hpp"
 #include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
 #include "test_harness.hpp"
 
 #include <pops/core/foundation/native_dimension.hpp>
+#include <pops/core/foundation/allocator.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/amr_system.hpp>
@@ -13,9 +15,13 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstring>
+#include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <memory>
+#include <new>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -24,6 +30,130 @@
 #if defined(POPS_HAS_KOKKOS)
 #include <Kokkos_Core.hpp>
 #endif
+
+namespace {
+
+// This executable owns the global new/delete replacements.  They are opt-in at runtime so setup,
+// diagnostics, and assertions cannot pollute the transaction allocation witness.
+std::atomic<bool> g_heap_measurement_enabled{false};
+std::atomic<std::uint64_t> g_measured_heap_allocations{0};
+
+void note_measured_heap_allocation() noexcept {
+  if (g_heap_measurement_enabled.load(std::memory_order_relaxed))
+    g_measured_heap_allocations.fetch_add(1, std::memory_order_relaxed);
+}
+
+void* measured_allocate(std::size_t size) {
+  void* pointer = std::malloc(size == 0 ? 1 : size);
+  if (pointer == nullptr)
+    throw std::bad_alloc();
+  note_measured_heap_allocation();
+  return pointer;
+}
+
+void* measured_allocate_nothrow(std::size_t size) noexcept {
+  void* pointer = std::malloc(size == 0 ? 1 : size);
+  if (pointer != nullptr)
+    note_measured_heap_allocation();
+  return pointer;
+}
+
+void* measured_aligned_allocate(std::size_t size, std::size_t alignment) {
+  void* pointer = nullptr;
+  if (posix_memalign(&pointer, alignment, size == 0 ? 1 : size) != 0)
+    pointer = nullptr;
+  if (pointer == nullptr)
+    throw std::bad_alloc();
+  note_measured_heap_allocation();
+  return pointer;
+}
+
+void* measured_aligned_allocate_nothrow(std::size_t size, std::size_t alignment) noexcept {
+  void* pointer = nullptr;
+  if (posix_memalign(&pointer, alignment, size == 0 ? 1 : size) != 0)
+    pointer = nullptr;
+  if (pointer != nullptr)
+    note_measured_heap_allocation();
+  return pointer;
+}
+
+class HeapAllocationWindow {
+ public:
+  HeapAllocationWindow() : before_(g_measured_heap_allocations.load(std::memory_order_relaxed)) {
+    g_heap_measurement_enabled.store(true, std::memory_order_relaxed);
+  }
+
+  [[nodiscard]] std::uint64_t close() noexcept {
+    g_heap_measurement_enabled.store(false, std::memory_order_relaxed);
+    return g_measured_heap_allocations.load(std::memory_order_relaxed) - before_;
+  }
+
+ private:
+  std::uint64_t before_ = 0;
+};
+
+}  // namespace
+
+void* operator new(std::size_t size) {
+  return measured_allocate(size);
+}
+void* operator new[](std::size_t size) {
+  return measured_allocate(size);
+}
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+  return measured_allocate_nothrow(size);
+}
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+  return measured_allocate_nothrow(size);
+}
+void operator delete(void* pointer) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+void* operator new(std::size_t size, std::align_val_t alignment) {
+  return measured_aligned_allocate(size, static_cast<std::size_t>(alignment));
+}
+void* operator new[](std::size_t size, std::align_val_t alignment) {
+  return measured_aligned_allocate(size, static_cast<std::size_t>(alignment));
+}
+void* operator new(std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
+  return measured_aligned_allocate_nothrow(size, static_cast<std::size_t>(alignment));
+}
+void* operator new[](std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
+  return measured_aligned_allocate_nothrow(size, static_cast<std::size_t>(alignment));
+}
+void operator delete(void* pointer, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::size_t, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::size_t, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::align_val_t, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::align_val_t, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
 
 using namespace pops;
 
@@ -127,6 +257,11 @@ struct CollectiveRungFailureDeviceView {
   }
 };
 
+class RankLocalBeginRungFailure final : public std::exception {
+ public:
+  const char* what() const noexcept override { return "rank-local injected begin-rung failure"; }
+};
+
 class CollectiveRungFailureProvider {
  public:
   CollectiveRungFailureProvider(std::shared_ptr<CollectiveRungFailureState> state,
@@ -160,7 +295,7 @@ class CollectiveRungFailureProvider {
     }
     if (state_->fail_next_begin && !state_->failure_consumed) {
       state_->failure_consumed = true;
-      throw std::runtime_error("rank-local injected begin-rung failure");
+      throw RankLocalBeginRungFailure{};
     }
   }
   void materialize_rung_batch_snapshot(runtime::program::CellTemporalRungBatchDescriptor) {}
@@ -203,131 +338,152 @@ static_assert(
 static_assert(
     runtime::program::DistributedCellTemporalStageFluxProvider<CollectiveRungFailureProvider>);
 
-int run_rank_local_begin_rung_failure_regression(const ExecutionLane& lane) {
-  using namespace runtime::program;
-  if (lane.size() != 2)
-    return 30;
+class PreparedCollectiveRungFailureRegression {
+ public:
+  explicit PreparedCollectiveRungFailureRegression(const ExecutionLane& lane) : lane_(&lane) {
+    if (lane.size() != 2)
+      throw std::invalid_argument("collective rung-failure regression requires two ranks");
+    accepted_.kind = runtime::program::TemporalPartitionKind::CellLocal;
+    accepted_.provider_identity = "test.mpi.cell-temporal-program.collective-rung-failure@1";
+    accepted_.topology_epoch = 1;
+    accepted_.synchronization_tick = 0;
+    accepted_.tick_denominator = 4;
+    accepted_.cells = {{0, 0, 0, 0}};
+    state_ = std::make_shared<CollectiveRungFailureState>();
 
-  CellTemporalPartitionAcceptedState accepted;
-  accepted.kind = TemporalPartitionKind::CellLocal;
-  accepted.provider_identity = "test.mpi.cell-temporal-program.collective-rung-failure@1";
-  accepted.topology_epoch = 1;
-  accepted.synchronization_tick = 0;
-  accepted.tick_denominator = 4;
-  accepted.cells = {{0, 0, 0, 0}};
-
-  const auto state = std::make_shared<CollectiveRungFailureState>();
-  CellTemporalPartitionAcceptedState divergent_plan = accepted;
-  if (lane.rank() == 1)
-    divergent_plan.cells.push_back({0, 1, 0, 0});
-  bool divergent_plan_rejected = false;
-  try {
-    PreparedBatchedCellTemporalExecutor divergent_executor{
-        divergent_plan, CollectiveRungFailureProvider(state, lane), lane};
-  } catch (const std::invalid_argument& error) {
-    divergent_plan_rejected =
-        std::string(error.what()).find("fixed plan envelope differs") != std::string::npos;
-  }
-  if (all_reduce_min(divergent_plan_rejected ? 1L : 0L, lane) != 1)
-    return 33;
-
-  state->fail_next_begin = lane.rank() == 0;
-  const auto accepted_bytes_before = state->accepted;
-  PreparedBatchedCellTemporalExecutor executor{accepted, CollectiveRungFailureProvider(state, lane),
-                                               lane};
-  const CellTemporalPartitionAcceptedState checkpoint_before = executor.checkpoint();
-
-  bool collectively_rejected = false;
-  std::string failure_message;
-  try {
-    executor.begin_attempt(1);
-    executor.advance_to_barrier();
-  } catch (const std::exception& error) {
-    collectively_rejected = true;
-    failure_message = error.what();
-  }
-  bool checkpoint_restored = false;
-  if (!executor.attempt_active()) {
+    auto divergent_plan = accepted_;
+    if (lane.rank() == 1)
+      divergent_plan.cells.push_back({0, 1, 0, 0});
+    bool divergent_plan_rejected = false;
     try {
-      checkpoint_restored = executor.checkpoint() == checkpoint_before;
-    } catch (const std::exception&) {
-      checkpoint_restored = false;
+      runtime::program::PreparedBatchedCellTemporalExecutor divergent_executor{
+          std::move(divergent_plan), CollectiveRungFailureProvider(state_, lane), lane};
+    } catch (const std::invalid_argument& error) {
+      divergent_plan_rejected =
+          std::string_view(error.what()).find("fixed plan envelope differs") !=
+          std::string_view::npos;
     }
-  }
-  const bool byte_exact = std::memcmp(state->accepted.data(), accepted_bytes_before.data(),
-                                      accepted_bytes_before.size() * sizeof(std::uint32_t)) == 0 &&
-                          std::memcmp(state->scratch.data(), accepted_bytes_before.data(),
-                                      accepted_bytes_before.size() * sizeof(std::uint32_t)) == 0;
-  const bool collective_diagnostic =
-      lane.rank() == 0
-          ? failure_message == "rank-local injected begin-rung failure"
-          : failure_message == "cell-local temporal rung-batch preparation failed on another rank";
-  const long failed_rollback = !collectively_rejected || executor.attempt_active() ||
-                                       !collective_diagnostic || !checkpoint_restored ||
-                                       !byte_exact || state->commits != 0 ||
-                                       state->rollbacks != 1 || state->device_evaluations[0] != 0
-                                   ? 1L
-                                   : 0L;
-  if (all_reduce_max(failed_rollback, lane) != 0)
-    return 31;
+    if (all_reduce_min(divergent_plan_rejected ? 1L : 0L, lane) != 1)
+      throw std::runtime_error("collective rung-failure divergent preparation was accepted");
 
-  bool retry_failed = false;
-  CellTemporalPartitionAcceptedState retry_checkpoint;
-  try {
-    executor.begin_attempt(1);
-    executor.advance_to_barrier();
-    executor.commit();
-    retry_checkpoint = executor.checkpoint();
-  } catch (const std::exception&) {
-    retry_failed = true;
+    executor_ = std::make_unique<
+        runtime::program::PreparedBatchedCellTemporalExecutor<CollectiveRungFailureProvider>>(
+        accepted_, CollectiveRungFailureProvider(state_, lane), lane);
+    checkpoint_before_ = executor_->checkpoint();
+    retry_checkpoint_ = checkpoint_before_;
+    divergent_restore_ = checkpoint_before_;
+    restored_ = checkpoint_before_;
+    accepted_bytes_before_ = state_->accepted;
+    failure_message_.reserve(128);
   }
-  const long failed_retry = retry_failed || executor.attempt_active() ||
-                                    retry_checkpoint.synchronization_tick != 1 ||
-                                    state->commits != 1 || state->rollbacks != 1 ||
-                                    state->device_evaluations[0] != (lane.rank() == 0 ? 1u : 0u)
-                                ? 1L
-                                : 0L;
-  if (all_reduce_max(failed_retry, lane) != 0)
-    return 32;
 
-  CellTemporalPartitionAcceptedState divergent_restore = retry_checkpoint;
-  if (lane.rank() == 0) {
-    divergent_restore.synchronization_tick = 0;
-    divergent_restore.cells.front().accepted_tick = 0;
-  }
-  bool divergent_restore_rejected = false;
-  try {
-    executor.restore_accepted_boundary(std::move(divergent_restore));
-  } catch (const std::invalid_argument& error) {
-    divergent_restore_rejected =
-        std::string(error.what()).find("restore target differs") != std::string::npos;
-  }
-  const long failed_divergent_restore = !divergent_restore_rejected || executor.attempt_active() ||
-                                                executor.checkpoint() != retry_checkpoint ||
-                                                state->restores != 0
-                                            ? 1L
-                                            : 0L;
-  if (all_reduce_max(failed_divergent_restore, lane) != 0)
-    return 34;
+  int run() {
+    state_->fail_next_begin = lane_->rank() == 0;
+    state_->failure_consumed = false;
+    accepted_bytes_before_ = state_->accepted;
+    bool collectively_rejected = false;
+    failure_message_.clear();
+    try {
+      executor_->begin_attempt(1);
+      executor_->advance_to_barrier();
+    } catch (const std::exception& error) {
+      collectively_rejected = true;
+      failure_message_.assign(error.what());
+    }
+    const bool checkpoint_restored =
+        !executor_->attempt_active() && executor_->accepted_state() == checkpoint_before_;
+    const bool byte_exact =
+        std::memcmp(state_->accepted.data(), accepted_bytes_before_.data(),
+                    accepted_bytes_before_.size() * sizeof(std::uint32_t)) == 0 &&
+        std::memcmp(state_->scratch.data(), accepted_bytes_before_.data(),
+                    accepted_bytes_before_.size() * sizeof(std::uint32_t)) == 0;
+    const bool collective_diagnostic =
+        lane_->rank() == 0
+            ? failure_message_ == "rank-local injected begin-rung failure"
+            : failure_message_ ==
+                  "cell-local temporal rung-batch preparation failed on another rank";
+    if (all_reduce_max(!collectively_rejected || executor_->attempt_active() ||
+                               !collective_diagnostic || !checkpoint_restored || !byte_exact ||
+                               state_->commits != 0 || state_->rollbacks != 1 ||
+                               state_->device_evaluations[0] != 0
+                           ? 1L
+                           : 0L,
+                       *lane_) != 0)
+      return 31;
 
-  CellTemporalPartitionAcceptedState restored = retry_checkpoint;
-  restored.synchronization_tick = 0;
-  restored.cells.front().accepted_tick = 0;
-  try {
-    executor.restore_accepted_boundary(restored);
-    executor.begin_attempt(1);
-    executor.advance_to_barrier();
-    executor.commit();
-  } catch (...) {
-    return 35;
+    bool retry_failed = false;
+    try {
+      executor_->begin_attempt(1);
+      executor_->advance_to_barrier();
+      executor_->commit();
+      retry_checkpoint_ = executor_->accepted_state();
+    } catch (const std::exception&) {
+      retry_failed = true;
+    }
+    if (all_reduce_max(retry_failed || executor_->attempt_active() ||
+                               retry_checkpoint_.synchronization_tick != 1 ||
+                               state_->commits != 1 || state_->rollbacks != 1 ||
+                               state_->device_evaluations[0] != (lane_->rank() == 0 ? 1u : 0u)
+                           ? 1L
+                           : 0L,
+                       *lane_) != 0)
+      return 32;
+
+    divergent_restore_ = retry_checkpoint_;
+    if (lane_->rank() == 0) {
+      divergent_restore_.synchronization_tick = 0;
+      divergent_restore_.cells.front().accepted_tick = 0;
+    }
+    bool divergent_restore_rejected = false;
+    try {
+      executor_->restore_accepted_boundary(std::move(divergent_restore_));
+    } catch (const std::exception& error) {
+      divergent_restore_rejected =
+          std::string_view(error.what()).find("restore target differs") != std::string_view::npos;
+    }
+    if (all_reduce_max(!divergent_restore_rejected || executor_->attempt_active() ||
+                               executor_->accepted_state() != retry_checkpoint_ ||
+                               state_->restores != 0
+                           ? 1L
+                           : 0L,
+                       *lane_) != 0)
+      return 34;
+
+    restored_ = retry_checkpoint_;
+    restored_.synchronization_tick = 0;
+    restored_.cells.front().accepted_tick = 0;
+    try {
+      executor_->restore_accepted_boundary(restored_);
+      executor_->begin_attempt(1);
+      executor_->advance_to_barrier();
+      executor_->commit();
+    } catch (...) {
+      return 35;
+    }
+    return all_reduce_max(executor_->attempt_active() ||
+                                  executor_->accepted_state().synchronization_tick != 1 ||
+                                  state_->restores != 1 || state_->commits != 2
+                              ? 1L
+                              : 0L,
+                          *lane_) == 0
+               ? 0
+               : 36;
   }
-  const long failed_restore_retry = executor.attempt_active() ||
-                                            executor.checkpoint().synchronization_tick != 1 ||
-                                            state->restores != 1 || state->commits != 2
-                                        ? 1L
-                                        : 0L;
-  return all_reduce_max(failed_restore_retry, lane) == 0 ? 0 : 36;
-}
+
+ private:
+  const ExecutionLane* lane_ = nullptr;
+  std::shared_ptr<CollectiveRungFailureState> state_;
+  std::unique_ptr<
+      runtime::program::PreparedBatchedCellTemporalExecutor<CollectiveRungFailureProvider>>
+      executor_;
+  runtime::program::CellTemporalPartitionAcceptedState accepted_;
+  runtime::program::CellTemporalPartitionAcceptedState checkpoint_before_;
+  runtime::program::CellTemporalPartitionAcceptedState retry_checkpoint_;
+  runtime::program::CellTemporalPartitionAcceptedState divergent_restore_;
+  runtime::program::CellTemporalPartitionAcceptedState restored_;
+  std::vector<std::uint32_t, fab_allocator<std::uint32_t>> accepted_bytes_before_;
+  std::string failure_message_;
+};
 
 int run_collective_program_route(int split_axis, bool prove_collective_rollback) {
   constexpr int Dim = kNativeDimension;
@@ -338,11 +494,12 @@ int run_collective_program_route(int split_axis, bool prove_collective_rollback)
     config.upper[axis] = Real(1);
     config.periodicity[axis] = true;
   }
-  config.level_count = 1;
+  config.level_count = 2;
+  constexpr std::int64_t kCellTemporalTickDenominator = 100;
+  // The authored finest rung is zero. With the exact 2:1 level relation the coarsest rung has
+  // stride two, so one ordinary Program FE batch spans two ticks.
+  constexpr double kCellTemporalStepDt = 2.0 / kCellTemporalTickDenominator;
   config.regrid_every = 0;
-  config.transition_ratios.clear();
-  config.transition_buffers.clear();
-  config.transition_lookaheads.clear();
   config.distribute_coarse = true;
   for (int axis = 0; axis < Dim; ++axis)
     config.coarse_max_grid[axis] = axis == split_axis ? 2 : config.shape[axis];
@@ -356,14 +513,12 @@ int run_collective_program_route(int split_axis, bool prove_collective_rollback)
 
   AmrSystem<Dim> system(config);
   test::install_amr_runtime_authority(system, "tests.mpi.cell-temporal-program/runtime@1");
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
   system.install_block_state_route("tracer", "test.mpi.cell-temporal-program/tracer/state@1");
   add_compiled_model<Dim>(system, "tracer", scalar_advection_model<Dim>(split_axis), "minmod",
                           "rusanov", "conservative", "explicit", 1.4, 1, 1, {}, {}, 0.0,
                           static_cast<double>(kWenoEpsilon), false,
                           "test.mpi.cell-temporal-program/physical-flux");
-  if (!system.uses_runtime_engine())
-    return 1;
-
   std::size_t cells = 1;
   std::size_t varying_stride = 1;
   for (int axis = 0; axis < Dim; ++axis) {
@@ -376,6 +531,16 @@ int run_collective_program_route(int split_axis, bool prove_collective_rollback)
     initial_state[cell] = static_cast<double>((cell / varying_stride) %
                                               static_cast<std::size_t>(config.shape[split_axis]));
   system.set_conservative_state("tracer", initial_state);
+  test::install_prepared_threshold_union(
+      system,
+      {{"tracer", "u", 0.0, test::PreparedThresholdRelation::Above,
+        "test.mpi.cell-temporal-program/tracer/state@1"}},
+      "test.mpi.cell-temporal-program/tagging@1");
+  system.refresh_prepared_amr_levels();
+  if (!system.uses_runtime_engine())
+    return 1;
+  if (system.n_levels() != 2)
+    return 29;
   system.set_program_block_map({0});
   const std::string clock = "test.clock.cell-local-mpi-program.axis" + std::to_string(split_axis);
   std::vector<Box<Dim>> initial_boxes;
@@ -431,29 +596,32 @@ int run_collective_program_route(int split_axis, bool prove_collective_rollback)
   using Resource = test::program_v5::CallbackProgramResource;
   const std::vector<Resource> resources{
       {Resource::Kind::rhs, 0, 0, 0, 0, state_components, state_ghosts}};
+  const test::program_v5::CallbackProgramCellTemporalAuthority cell_temporal{
+      clock, kCellTemporalTickDenominator, 0, {{0, -1, 0}}};
   struct CallbackState {
-    bool prepared = false;
     bool inject_failure = false;
     bool failure_consumed = false;
+    bool regression_executed = false;
     int dispatches = 0;
     int regression_result = 0;
   };
   const auto callback_state = std::make_shared<CallbackState>();
-  const std::array route{runtime::program::SameLevelCellTemporalForwardEulerRoute{0, 0, 0}};
+  const auto rollback_regression_fixture =
+      prove_collective_rollback ? std::make_unique<PreparedCollectiveRungFailureRegression>(lane)
+                                : std::unique_ptr<PreparedCollectiveRungFailureRegression>{};
+  PreparedCollectiveRungFailureRegression* const rollback_regression =
+      rollback_regression_fixture.get();
   test::install_explicit_amr_callback_program<Dim>(
       system, "test.mpi.cell-temporal-program/program@1", clock, resources, {},
-      [callback_state, clock, route, prove_collective_rollback, split_axis](auto& context,
-                                                                            double dt) mutable {
+      [callback_state, rollback_regression, prove_collective_rollback, split_axis](
+          auto& context, double dt) mutable {
         context.begin_step(dt);
-        if (!callback_state->prepared) {
-          context.prepare_same_level_cell_temporal_execution(clock, 100, 0, route);
-          callback_state->prepared = true;
-          if (prove_collective_rollback && split_axis == 0)
-            callback_state->regression_result =
-                run_rank_local_begin_rung_failure_regression(context.prepared_execution_lane());
-          if (callback_state->regression_result != 0)
-            throw std::runtime_error("cell-local MPI collective rollback regression failed");
+        if (prove_collective_rollback && split_axis == 0 && !callback_state->regression_executed) {
+          callback_state->regression_result = rollback_regression->run();
+          callback_state->regression_executed = true;
         }
+        if (callback_state->regression_result != 0)
+          throw std::runtime_error("cell-local MPI collective rollback regression failed");
         context.advance_same_level_cell_temporal(dt);
         if (callback_state->inject_failure && !callback_state->failure_consumed) {
           callback_state->failure_consumed = true;
@@ -462,15 +630,47 @@ int run_collective_program_route(int split_axis, bool prove_collective_rollback)
               0x43454C4Cu, "cell-local-mpi-candidate", "injected-cell-local-retry");
         }
         ++callback_state->dispatches;
-      });
+      },
+      std::vector<test::program_v5::CallbackProgramHistory>{},
+      std::vector<test::program_v5::CallbackProgramClockRelation>{}, std::nullopt,
+      test::program_v5::CallbackProgramTransactionAuthorities{}, cell_temporal);
+  // Installation publishes the complete POPSAND5/capacity pair before owner-last.  Re-reading the
+  // public capacity at bind therefore validates the sealed candidate and must not synthesize a
+  // second checkpoint image or change its revision.
+  const auto accepted_bootstrap = system.program_accepted_state();
+  const auto capacity_bootstrap = system.checkpoint_program_state_capacity();
+  const auto accepted_after_capacity = system.program_accepted_state();
+  const auto capacity_after_capacity = system.checkpoint_program_state_capacity();
+  if (accepted_bootstrap.empty() || accepted_after_capacity != accepted_bootstrap ||
+      capacity_bootstrap != capacity_after_capacity ||
+      accepted_bootstrap.size() > capacity_bootstrap.first)
+    return 26;
   if (system.accepted_transaction_generation_() != 0)
     return 27;
+  // The first accepted full step is measured immediately after the candidate has prepared its
+  // cell-local executor and bootstrap image.  Construction of the counters, error handling, and
+  // collective comparison are deliberately outside begin -> step -> commit -> finalize.
+  const AllocationEventStats first_full_step_before = allocation_event_stats();
+  HeapAllocationWindow first_full_step_heap;
+  bool first_full_step_accepted = true;
   try {
-    system.step(0.01);
+    system.begin_step_transaction();
+    system.step(kCellTemporalStepDt);
+    system.commit_step_transaction();
+    system.finalize_step_transaction();
   } catch (...) {
+    first_full_step_accepted = false;
+  }
+  const std::uint64_t first_full_step_heap_allocations = first_full_step_heap.close();
+  const AllocationEventStats first_full_step_after = allocation_event_stats();
+  const bool first_full_step_allocation_free = first_full_step_accepted &&
+                                               first_full_step_heap_allocations == 0 &&
+                                               first_full_step_after == first_full_step_before;
+  if (all_reduce_min(first_full_step_allocation_free ? 1L : 0L, lane) != 1 ||
+      all_reduce_max(first_full_step_allocation_free ? 1L : 0L, lane) != 1) {
     return 3;
   }
-  if (callback_state->dispatches != 1 || !callback_state->prepared)
+  if (callback_state->dispatches != 1)
     return 24;
   long remote_neighbour_proof_failed = 0;
   {
@@ -478,13 +678,43 @@ int run_collective_program_route(int split_axis, bool prove_collective_rollback)
     remote_neighbour_proof_failed = live ? 0L : 1L;
     if (live && live->contains_local(interface_patch)) {
       const std::size_t local = live->local_index_of(interface_patch);
-      const Real expected = Real(interface_cell[split_axis]) - Real(0.01);
+      const Real dx = (config.upper[split_axis] - config.lower[split_axis]) /
+                      static_cast<Real>(config.shape[split_axis]);
+      // The seeded ramp is expressed in index coordinates, so one upwind FE step changes it by
+      // dt / dx rather than dt.
+      const Real expected = Real(interface_cell[split_axis]) - Real(kCellTemporalStepDt) / dx;
       if (copied_host_value(std::as_const(live->fab(local)), interface_cell, 0) != expected)
         remote_neighbour_proof_failed = 1;
     }
   }
   if (all_reduce_max(remote_neighbour_proof_failed, lane) != 0)
     return 4;
+
+  // Repeat the same complete transaction after the first accepted publication.  This keeps the
+  // resident executor witness independent from the first-use path without using an unmeasured
+  // warmup step.
+  const AllocationEventStats repeated_full_step_before = allocation_event_stats();
+  HeapAllocationWindow repeated_full_step_heap;
+  bool repeated_full_step_accepted = true;
+  try {
+    system.begin_step_transaction();
+    system.step(kCellTemporalStepDt);
+    system.commit_step_transaction();
+    system.finalize_step_transaction();
+  } catch (...) {
+    repeated_full_step_accepted = false;
+  }
+  const std::uint64_t repeated_full_step_heap_allocations = repeated_full_step_heap.close();
+  const AllocationEventStats repeated_full_step_after = allocation_event_stats();
+  const bool repeated_full_step_allocation_free =
+      repeated_full_step_accepted && repeated_full_step_heap_allocations == 0 &&
+      repeated_full_step_after == repeated_full_step_before;
+  if (all_reduce_min(repeated_full_step_allocation_free ? 1L : 0L, lane) != 1 ||
+      all_reduce_max(repeated_full_step_allocation_free ? 1L : 0L, lane) != 1)
+    return 5;
+  if (callback_state->dispatches != 2 || system.macro_step() != 2 ||
+      system.accepted_transaction_generation_() != 2)
+    return 30;
   if (!prove_collective_rollback)
     return 0;
 
@@ -492,25 +722,28 @@ int run_collective_program_route(int split_axis, bool prove_collective_rollback)
   callback_state->inject_failure = true;
   bool rejected = false;
   try {
-    system.step(0.01);
+    system.step(kCellTemporalStepDt);
   } catch (const runtime::program::StepAttemptRejected&) {
     rejected = true;
   }
   callback_state->inject_failure = false;
   const auto accepted_after_reject = system.block_level_state_global("tracer", 0);
   if (all_reduce_min(rejected ? 1L : 0L, lane) != 1 ||
-      accepted_after_reject != accepted_before_reject || system.macro_step() != 1 ||
-      system.accepted_transaction_generation_() != 1)
+      accepted_after_reject != accepted_before_reject || system.macro_step() != 2 ||
+      system.accepted_transaction_generation_() != 2)
     return 6;
 
+  const AllocationEventStats warmed_retry_allocations = allocation_event_stats();
   try {
-    system.step(0.01);
+    system.step(kCellTemporalStepDt);
   } catch (...) {
     return 8;
   }
-  if (callback_state->dispatches != 2 || system.macro_step() != 2 ||
-      system.accepted_transaction_generation_() != 2)
+  if (callback_state->dispatches != 3 || system.macro_step() != 3 ||
+      system.accepted_transaction_generation_() != 3)
     return 9;
+  if (allocation_event_stats() != warmed_retry_allocations)
+    return 28;
   return 0;
 }
 

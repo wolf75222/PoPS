@@ -19,6 +19,25 @@
 
 namespace pops {
 
+/// Logical resident-storage result supplied by a prepared extension.  `unknown` is deliberately
+/// distinct from an exact zero: an integrator that must enforce a hard resident-capacity ceiling
+/// must reject an unknown result before it materializes its artifact.
+struct PreparedResidentStorage {
+  enum class State : std::uint8_t {
+    unknown,
+    exact,
+  };
+
+  State state = State::unknown;
+  std::uint64_t bytes = 0;
+
+  [[nodiscard]] constexpr bool is_exact() const noexcept { return state == State::exact; }
+  [[nodiscard]] static constexpr PreparedResidentStorage unknown() noexcept { return {}; }
+  [[nodiscard]] static constexpr PreparedResidentStorage exact(std::uint64_t bytes) noexcept {
+    return {State::exact, bytes};
+  }
+};
+
 namespace detail {
 
 template <class Unsigned>
@@ -283,6 +302,13 @@ class PreparedProvider<Result(Args...)> {
   [[nodiscard]] std::string_view exact_parameters() const noexcept { return exact_parameters_; }
   [[nodiscard]] std::string_view collective_contract() const noexcept {
     return collective_contract_;
+  }
+
+  /// A std::function can retain an arbitrary typed or ABI callback.  PreparedProvider's existing
+  /// extension protocol has no storage hook, so a non-empty callable must remain unknown instead
+  /// of being guessed from an implementation-specific small-buffer representation.
+  [[nodiscard]] PreparedResidentStorage resident_storage() const noexcept {
+    return function_ ? PreparedResidentStorage::unknown() : PreparedResidentStorage::exact(0);
   }
 
   Result operator()(Args... args) const {

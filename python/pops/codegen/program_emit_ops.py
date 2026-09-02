@@ -224,20 +224,21 @@ def _append_resource_preparation(
             "scratch allocation"
         )
     var[key] = contract
+    append_level_install = getattr(prelude, "append_level_install", prelude.append)
     if kind == "state":
-        prelude.append(
+        append_level_install(
             "ctx.prepare_state_scratch(%s, %d, %d);"
             % (slot, int(subslot), int(program_block))
         )
     elif kind == "rhs":
-        prelude.append(
+        append_level_install(
             "ctx.prepare_rhs_scratch(%s, %d, %d);"
             % (slot, int(subslot), int(program_block))
         )
     elif kind == "scalar":
         if ncomp is None or ghost_depth is None:
             raise ValueError("scalar Program resource preparation requires ncomp and ghost depth")
-        prelude.append(
+        append_level_install(
             "ctx.prepare_scalar_scratch(%s, %d, %d, %d, %d);"
             % (slot, int(subslot), int(program_block), int(ncomp), int(ghost_depth))
         )
@@ -276,12 +277,13 @@ def _append_transaction_authority_declaration(
     declaration = (kind, identity)
     if declaration in declarations:
         return
+    append_global_install = getattr(prelude, "append_global_install", prelude.append)
     if kind == "diagnostic":
-        prelude.append("ctx.declare_diagnostic(%s);" % json.dumps(identity))
+        append_global_install("ctx.declare_diagnostic(%s);" % json.dumps(identity))
     elif kind == "balance_route":
-        prelude.append("ctx.declare_balance_route(%s);" % json.dumps(identity))
+        append_global_install("ctx.declare_balance_route(%s);" % json.dumps(identity))
     elif kind == "step_projection":
-        prelude.append("ctx.declare_step_projection(%s);" % json.dumps(identity))
+        append_global_install("ctx.declare_step_projection(%s);" % json.dumps(identity))
     else:
         raise ValueError("unsupported Program transaction authority kind %r" % kind)
     declarations.add(declaration)
@@ -325,7 +327,7 @@ def _append_generated_field_route_preparation(
             )
         return
     var[key] = contract
-    prelude.append(
+    getattr(prelude, "append_level_install", prelude.append)(
         "ctx.prepare_generated_field_route(%s, %s, {%s});"
         % (slot, json.dumps(field), ", ".join(str(block) for block in program_blocks))
     )
@@ -405,9 +407,26 @@ def _append_pointwise_solve_report(
 
 
 def _append_local_nonlinear_report(
-    program: Any, solve: Any, status: str, report: str, lines: list[str]
+    program: Any,
+    solve: Any,
+    status: str,
+    report: str,
+    lines: list[str],
+    *,
+    owner_index: int,
 ) -> str:
-    """Reduce one prepared local solve and return its collective ``SolveOutcome`` token."""
+    """Reduce one prepared local solve and return its collective ``SolveOutcome`` token.
+
+    The failure-count component is a Program-owned reduction, not a free-standing
+    ``all_reduce``.  Keep its owner explicit so the generated route uses the same
+    bind-sealed lane/mask authority as every other Program sum.  A missing or malformed
+    owner is a lowering error: emitting a raw reduction would silently bypass that
+    authority.
+    """
+    if isinstance(owner_index, bool) or not isinstance(owner_index, int) or owner_index < 0:
+        raise ValueError(
+            "local nonlinear status reduction requires an exact authenticated owner index"
+        )
     action_kind, _ = _consumed_solve_action(program, solve)
     failure_action = (
         "pops::SolveAction::kRejectAttempt"
@@ -455,8 +474,8 @@ def _append_local_nonlinear_report(
     reported_failure = "%s_reported_failure" % report
     failed_count = "%s_failed_count" % report
     lines += [
-        "const pops::Real %s = pops::all_reduce_sum("
-        "pops::reduce_sum_local(%s, 9), %s);" % (failed_count, status, lane),
+        "const pops::Real %s = ctx.sum_component(%d, %s, 9);"
+        % (failed_count, owner_index, status),
         "pops::LocalNonlinearFailureLocation<pops::kNativeDimension> %s;" % location,
         "if (%s > pops::Real(0))" % failed_count,
         "  %s = pops::collective_first_local_nonlinear_failure(%s, %s, 10, 8, %s);"
@@ -527,7 +546,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     # Resource ids are authoring identities and are deliberately not passed to
     # the generated runtime. Resolve the sealed dense slot once per emitted
     # occurrence; generated calls contain only this integer.
-    resource_program_block = bidx
+    # Scratch preparation is qualified per (kind, slot, subslot).  A genuinely coupled operation
+    # may therefore own different subslots on different Program blocks.  Keep the complete finite
+    # owner set here; only a cache-backed schedule (one cached field) requires that set to collapse
+    # to one exact block.
+    resource_program_blocks = set(() if bidx is None else (bidx,))
 
     def _resource_slot() -> str:
         return persistent_slot_token(program, v, target=target)
@@ -541,7 +564,6 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         ghost_depth: int | None = None,
         owner: Any = None,
     ) -> None:
-        nonlocal resource_program_block
         resource_owner = owner
         if resource_owner is None:
             resource_owner = v.block if v.block is not None else _value_owner_block(prototype)
@@ -554,13 +576,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         program_block = _required_block_index(
             block_idx, resource_owner, "prepare %s resource %r" % (kind, v.name)
         )
-        if resource_program_block is not None and resource_program_block != program_block:
-            raise ValueError(
-                "resource %r has conflicting owner blocks %d and %d"
-                % (v.name, int(resource_program_block), int(program_block))
-            )
-        if resource_program_block is None:
-            resource_program_block = program_block
+        resource_program_blocks.add(program_block)
         _append_resource_preparation(
             prelude,
             var,
@@ -662,7 +678,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines += field_point_cpp(program, v, field)
         boundary_point = "field_boundary_point_%d" % v.id
         lines.append(
-            "const auto %s = ctx.boundary_evaluation_point(%d);"
+            "const auto& %s = ctx.prepared_boundary_evaluation_point(%d);"
             % (boundary_point, v.id)
         )
         report = "field_report_%d" % v.id
@@ -711,7 +727,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines += field_point_cpp(program, v, field)
         boundary_point = "field_boundary_point_%d" % v.id
         lines.append(
-            "const auto %s = ctx.boundary_evaluation_point(%d);"
+            "const auto& %s = ctx.prepared_boundary_evaluation_point(%d);"
             % (boundary_point, v.id)
         )
         report = "field_report_%d" % v.id
@@ -785,6 +801,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         status = "ci_status_%d" % v.id
         prototype_block = next(iter(components))
         prototype = var[by_block[prototype_block].id]
+        nonlinear_owner_index = _required_block_index(
+            block_idx,
+            prototype_block,
+            "preflight coupled implicit status reduction %r" % v.name,
+        )
         _prepare_resource("scalar", prototype, ncomp=11, ghost_depth=0, owner=prototype_block)
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%s, 0, %s, 11, 0);"
                      % (status, _resource_slot(), prototype))
@@ -792,7 +813,14 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             components, by_block, var, scratch, status,
             controls=v.attrs, coefficient=v.attrs["coefficient"])
         report = "ci_report_%d" % v.id
-        outcome = _append_local_nonlinear_report(program, v, status, report, lines)
+        outcome = _append_local_nonlinear_report(
+            program,
+            v,
+            status,
+            report,
+            lines,
+            owner_index=nonlinear_owner_index,
+        )
         _append_solve_report_guard(
             program, v, outcome, lines, label="coupled_implicit")
         var.update({("coupled_solution", v.id, block): token
@@ -838,7 +866,14 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "fill_boundary":
         # Side effect on the field's ghosts (the valid cells are untouched). The result aliases the
         # input field (any subsequent op reading it sees the same C++ MultiFab, now with filled
-        # halos). Forwards to ctx.fill_boundary (the shared transport-BC ghost exchange).
+        # halos).  Uniform has no retained artifact-owned scalar-boundary capture yet: emitting
+        # the two-argument convenience route would construct its transport in the step body.
+        # Refuse before source/artifact publication instead of reintroducing that hot allocation.
+        if target == "system":
+            raise NotImplementedError(
+                "Uniform fill_boundary requires a cold-bound scalar boundary session; "
+                "this Program artifact has no retained session authority"
+            )
         (x,) = v.inputs
         lines.append("ctx.fill_boundary(%s);" % var[x.id])
         var[v.id] = var[x.id]
@@ -876,9 +911,14 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             "ctx.scratch_state(%s, 0, ctx.state(%d));"
             % (var[v.id], _resource_slot(), bidx))
         _prepare_resource("scalar", state_in, ncomp=1, ghost_depth=0)
-        prelude.append(
-            "auto* %s = &ctx.scalar_scratch(%s, 0, ctx.state(%d), 1, 0);"
-            % (status_resource, _resource_slot(), bidx))
+        if target == "amr_system":
+            prelude.append(
+                "auto %s = ctx.prepared_scalar_scratch_handle(%s, 0, %d, 1, 0);"
+                % (status_resource, _resource_slot(), bidx))
+        else:
+            prelude.append(
+                "auto* %s = &ctx.scalar_scratch(%s, 0, ctx.state(%d), 1, 0);"
+                % (status_resource, _resource_slot(), bidx))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (status, status_resource))
         lines.append(
             "const pops::MultiFab<pops::kNativeDimension>* %s = ctx.pointwise_active_mask(%d, %s);"
@@ -897,8 +937,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         )
         lines.append("if (%s != pops::Real(0)) {" % reduced)
         lines.append(
-            "  throw pops::runtime::program::StepAttemptRejected("
-            "pops::SolveStatus::kInvalidEvaluation, \"local_transform\", %s);"
+            "  program_reject_step(ctx, pops::SolveStatus::kInvalidEvaluation, "
+            "pops::runtime::program::StepAttemptDisposition::kReject, 0u, "
+            "\"local_transform\", %s);"
             % json.dumps("transform '%s' rejected a non-finite or out-of-domain state"
                          % v.attrs["transform"]))
         lines.append("}")
@@ -1199,7 +1240,18 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
         )
         report = "ln_report_%d" % v.id
-        outcome = _append_local_nonlinear_report(program, v, status, report, lines)
+        if bidx is None:
+            raise ValueError(
+                "local nonlinear status reduction requires an exact authenticated owner index"
+            )
+        outcome = _append_local_nonlinear_report(
+            program,
+            v,
+            status,
+            report,
+            lines,
+            owner_index=bidx,
+        )
         _append_solve_report_guard(
             program, v, outcome, lines, label="local_nonlinear")
     elif v.op == "scalar_field":
@@ -1270,33 +1322,30 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "laplacian":
         # Step-body bare Laplacian (e.g. Lap phi^n for the condensed RHS). Inside an apply sub-block
         # this op is handled by _emit_matrix_free_operator; here it is the top-level path.
-        o, i = v.inputs
         if target == "system":
-            owner = _cartesian_generated_owner_index(
-                block_idx, v, where="preflight laplacian %r" % v.name)
-            lines.append(
-                "ctx.require_cartesian_generated_operator(%d, %s);"
-                % (owner, json.dumps("laplacian")))
+            raise NotImplementedError(
+                "Uniform laplacian requires a cold-bound scalar boundary session; "
+                "this Program artifact has no retained session authority"
+            )
+        o, i = v.inputs
         lines.append("ctx.laplacian(%s, %s);" % (_deref(var[o.id]), _deref(var[i.id])))
         var[v.id] = var[o.id]
     elif v.op == "gradient":
-        o, p = v.inputs
         if target == "system":
-            owner = _cartesian_generated_owner_index(
-                block_idx, v, where="preflight gradient %r" % v.name)
-            lines.append(
-                "ctx.require_cartesian_generated_operator(%d, %s);"
-                % (owner, json.dumps("gradient")))
+            raise NotImplementedError(
+                "Uniform gradient requires a cold-bound scalar boundary session; "
+                "this Program artifact has no retained session authority"
+            )
+        o, p = v.inputs
         lines.append("ctx.gradient(%s, %s);" % (_deref(var[o.id]), _deref(var[p.id])))
         var[v.id] = var[o.id]
     elif v.op == "divergence":
-        o, flux = v.inputs
         if target == "system":
-            owner = _cartesian_generated_owner_index(
-                block_idx, v, where="preflight divergence %r" % v.name)
-            lines.append(
-                "ctx.require_cartesian_generated_operator(%d, %s);"
-                % (owner, json.dumps("divergence")))
+            raise NotImplementedError(
+                "Uniform divergence requires a cold-bound scalar boundary session; "
+                "this Program artifact has no retained session authority"
+            )
+        o, flux = v.inputs
         lines.append("ctx.divergence(%s, %s);"
                      % (_deref(var[o.id]), _deref(var[flux.id])))
         var[v.id] = var[o.id]
@@ -1448,8 +1497,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines.append("if (!(%s)) {" % var[condition.id])
         if type(action) is RejectAttempt:
             lines.append(
-                "  throw pops::runtime::program::StepAttemptRejected("
-                "pops::SolveStatus::kInvalidEvaluation, \"guard\", %s);"
+                "  program_reject_step(ctx, pops::SolveStatus::kInvalidEvaluation, "
+                "pops::runtime::program::StepAttemptDisposition::kReject, 0u, "
+                "\"guard\", %s);"
                 % json.dumps(message))
         elif type(action) is FailRun:
             lines.append("  throw std::runtime_error(%s);" % json.dumps(message))
@@ -1520,7 +1570,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         _profile_start,
         target=target,
         prelude=prelude,
-        program_block=resource_program_block,
+        program_block=(
+            next(iter(resource_program_blocks)) if len(resource_program_blocks) == 1 else None
+        ),
     )
     # PER-NODE PROFILING (ADC-459): if this op emitted at least one statement, bracket those
     # statements with the steady_clock pair (see the note at the top of _emit_op). A ProfileScope is

@@ -20,6 +20,72 @@ from pops.codegen.program_persistent_plan import persistent_slot_token
 from pops.time.references import block_name
 
 
+class PreludeSections:
+    """Explicit lifetime partition for generated candidate source.
+
+    A flat prelude was sufficient for Uniform, but AMR rebuilds topology-bound
+    closure bundles after a regrid.  Keeping all declarations behind an
+    ``if (prepare_resources)`` made those closures either ill-formed or forced
+    a replay of preparation through an accepted context.  This collector keeps
+    the original insertion order for Uniform while making the AMR authority
+    explicit: global candidate registration, per-level cold preparation, and
+    topology-bound bindings.
+    """
+
+    def __init__(self) -> None:
+        self._all: list[str] = []
+        self.global_install: list[str] = []
+        self.level_install: list[str] = []
+        self.bindings: list[str] = []
+
+    def append(self, line: str) -> None:
+        """Append a topology-bound declaration/binding.
+
+        Existing emitters use ``append`` for C++ declarations and closures.
+        Deliberately making that the default prevents a new binding from being
+        accidentally hidden behind the cold-preparation branch.
+        """
+        self.bindings.append(line)
+        self._all.append(line)
+
+    def extend(self, lines: Any) -> None:
+        for line in lines:
+            self.append(line)
+
+    def __iadd__(self, lines: Any) -> "PreludeSections":
+        self.extend(lines)
+        return self
+
+    def append_global_install(self, line: str) -> None:
+        self.global_install.append(line)
+        self._all.append(line)
+
+    def prepend_global_install(self, line: str) -> None:
+        self.global_install.insert(0, line)
+        self._all.insert(0, line)
+
+    def append_level_install(self, line: str) -> None:
+        self.level_install.append(line)
+        self._all.append(line)
+
+    @staticmethod
+    def _render(lines: list[str], indent: int) -> str:
+        prefix = " " * indent
+        return "\n".join(prefix + line for line in lines)
+
+    def render_uniform(self, indent: int = 2) -> str:
+        return self._render(self._all, indent)
+
+    def render_global_install(self, indent: int) -> str:
+        return self._render(self.global_install, indent)
+
+    def render_level_install(self, indent: int) -> str:
+        return self._render(self.level_install, indent)
+
+    def render_bindings(self, indent: int) -> str:
+        return self._render(self.bindings, indent)
+
+
 def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dict:
     """Resolve a ``coupled_rate`` node @p v to its per-block component formulas (Spec 3 criterion
     27, ADC-457), validated for the cons-only MVP. Returns ``{block: [Expr, ...]}`` (one formula
@@ -252,13 +318,11 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     """Generate the C++ of the install function in TWO phases (each list indented uniformly by the
     template). Assumes `_check_lowerable` has passed. @p model supplies the symbolic coefficients of
     the Phase-4b source / apply / solve_local_linear ops. Returns
-    ``(prelude, body, post_synchronization, authorities)``:
+    ``(prelude_sections, body, post_synchronization, authorities)``:
 
-      - ``prelude``: INSTALL-TIME C++ executed by the common v5 candidate preparation callback --
-        persistent scratch fields (held via ``std::shared_ptr`` so they outlive preparation and are
-        reused across every step and every Krylov iteration) and the matrix-free apply lambdas.
-        Captured by value into the candidate step closure (shared_ptr / lambda / ctx all copy
-        cheaply).
+      - ``prelude_sections``: explicit candidate-global registration, per-level cold preparation,
+        and replayable topology bindings.  Uniform renders the sections in the historical source
+        order; AMR only rebuilds the bindings after requalification.
       - ``body``: the STEP closure body (one macro-step over dt).
 
     Multi-block (ADC-426): the SSA walk allocates a per-block base (``ctx.state(idx)`` for each
@@ -283,7 +347,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     }
     if provider_plans is not None:
         var[("program_provider_plans",)] = provider_plans
-    prelude = []
+    prelude = PreludeSections()
     lines = []
     # ``var`` also carries emission-local schedule/coupled scratch tokens under tuple keys. Nothing
     # is written back into Program authoring state, so codegen remains pure after deep freeze.
@@ -302,9 +366,11 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     # carries the logical state and field-space identities used by clock-qualified history slots.
     histories_ncomp = getattr(program, "_histories_ncomp", {})
     temporal = program.temporal_manifest()
-    prelude.append("ctx.configure_primary_clock(%s);" % json.dumps(temporal["primary_clock"]))
+    prelude.append_global_install(
+        "ctx.configure_primary_clock(%s);" % json.dumps(temporal["primary_clock"])
+    )
     for relation in temporal["subcycles"]:
-        prelude.append(
+        prelude.append_global_install(
             "ctx.declare_clock_relation(%s, %s, %d);"
             % (json.dumps(relation["parent_clock"]), json.dumps(relation["child_clock"]),
                int(relation["count"])))
@@ -325,7 +391,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         row = history_manifest[name]
         interpolation = json.dumps(
             row["interpolation"], sort_keys=True, separators=(",", ":"))
-        prelude.append("ctx.register_history(%s, %d, %d, %d, %s, %s, %s, %s);"
+        prelude.append_global_install("ctx.register_history(%s, %d, %d, %d, %s, %s, %s, %s);"
                        % (json.dumps(name), int(lag), -1 if ncomp is None else int(ncomp),
                           -1 if owner_index is None else int(owner_index),
                           json.dumps(state_identity), json.dumps(space_identity),
@@ -409,12 +475,11 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         field_plans=field_plans,
         has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
     )
-    prelude_src = "\n".join("  " + ln for ln in prelude)
     body_src = "\n".join("    " + ln for ln in lines)
     post_sync_src = "\n".join("        " + ln for ln in post_sync_lines)
     authorities = tuple(dict.fromkeys(
         var.get(("compiled_program_operator_authorities",), ())))
-    return prelude_src, body_src, post_sync_src, authorities
+    return prelude, body_src, post_sync_src, authorities
 
 def _emit_post_synchronization_phase(
     program: Any,
@@ -566,7 +631,56 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
         if value.op == "state" and value.block not in bases:
             bases[value.block] = value
     committed_ids = frozenset()
-    binding_ops = frozenset({"state", "history", "scalar_field", "matrix_free_operator"})
+    value_indices = {id(value): index for index, value in enumerate(program._values)}
+
+    def phase_values(phase: str) -> list[Any]:
+        """Return the complete local production set for one hierarchy phase.
+
+        A phase may carry only storage whose representation is portable across the
+        gather/solve/publish barrier.  In particular, do not populate ``var`` by
+        lowering a filtered producer and then discard its declarations: a later
+        commit would retain its ``u<N>`` token without a declaration.  The portable
+        closure is emitted in every consumer phase, while ordinary values remain
+        owned by exactly one chronological phase.
+        """
+        if phase == "gather":
+            selected = program._values[:split]
+        elif phase == "solve":
+            selected = [
+                value for value in program._values
+                if value is solve or (value_indices[id(value)] < split and value.id in portable)
+            ]
+        else:
+            selected = [
+                value for value in program._values
+                if (value_indices[id(value)] > split or
+                    (value_indices[id(value)] < split and value.id in portable))
+            ]
+        return [value for value in selected if id(value) in reachable_ids]
+
+    def commit_pairs_for_phase(phase: str, var: dict[Any, str]) -> list[str]:
+        pairs = []
+        for state_ref, committed in program._commits.items():
+            producer_index = value_indices.get(id(committed))
+            if producer_index is None:
+                raise NotImplementedError(
+                    "hierarchy commit value %r is not a top-level barrier production"
+                    % committed.name)
+            # A solve result becomes available only after the solve-once phase and
+            # therefore commits with publish.  All pre-solve commits belong to the
+            # gather phase; post-solve commits belong to publish.  This keeps every
+            # commit beside the declaration/production of its source for every
+            # block, rather than relying on a stale var token from another phase.
+            commit_phase = "gather" if producer_index < split else "publish"
+            if commit_phase != phase:
+                continue
+            base = bases[state_ref.block_ref]
+            if base.id not in var or committed.id not in var:
+                raise NotImplementedError(
+                    "hierarchy %s commit for block %r lacks a local producer"
+                    % (phase, state_ref.block_ref))
+            pairs.append("{&%s, &%s}" % (var[base.id], var[committed.id]))
+        return pairs
 
     def registrations() -> list[str]:
         lines = []
@@ -605,10 +719,14 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
             # The normal AMR body is the provider-declared flat fallback branch. This gathered
             # phase owns one provider-direct hierarchy solve, independently of solver family.
             var[("direct_hierarchy_solve", solve.id)] = True
+        elif phase == "publish":
+            # The direct hierarchy solve produces its field during the preceding
+            # solve-once closure.  Publish may consume the explicit outcome
+            # projections without re-emitting that solve; seed the same public
+            # service token that _emit_solve_linear uses for a direct provider.
+            var[solve.id] = "ctx.hierarchy_solution()"
         lines = registrations() if phase == "gather" else []
-        for index, value in enumerate(program._values):
-            if id(value) not in reachable_ids:
-                continue
+        for value in phase_values(phase):
             emitted = []
             ignored_prelude = []
             _emit_op(program, value, bases.get(value.block), committed_ids, var, model, emitted,
@@ -617,32 +735,22 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
                      has_shared_interface_implicit_jacvec=(
                          has_shared_interface_implicit_jacvec
                      ))
-            if phase == "gather":
-                keep = index < split
-            elif phase == "solve":
-                keep = index == split or (index < split and value.op in binding_ops)
+            lines.extend(emitted)
+        if phase == "gather":
+            # The ordinary solve emitter seeds one level-local iterate immediately before the
+            # solve.  A hierarchy solve instead needs one initial guess per level, gathered at the
+            # same barrier as its coefficients/RHS.  Stage it in context-owned hierarchy storage;
+            # the solve pass later consumes the complete tower exactly once.  This is also what
+            # makes the ADC-427 scalar phi^n history carry compose on refined AMR.
+            if solve.attrs.get("has_guess"):
+                guess = solve.inputs[2]
+                lines.append("ctx.stage_linear_initial_guess(%s);" % var[guess.id])
             else:
-                keep = index > split or (index < split and value.op in binding_ops)
-            if keep:
-                lines.extend(emitted)
-            if phase == "gather" and index == split:
-                # The ordinary solve emitter seeds one level-local iterate immediately before the
-                # solve.  A hierarchy solve instead needs one initial guess per level, gathered at the
-                # same barrier as its coefficients/RHS.  Stage it in context-owned hierarchy storage;
-                # the solve pass later consumes the complete tower exactly once.  This is also what
-                # makes the ADC-427 scalar phi^n history carry compose on refined AMR.
-                if value.attrs.get("has_guess"):
-                    guess = value.inputs[2]
-                    lines.append("ctx.stage_linear_initial_guess(%s);" % var[guess.id])
-                else:
-                    lines.append("ctx.stage_linear_initial_guess();")
+                lines.append("ctx.stage_linear_initial_guess();")
+        commit_pairs = commit_pairs_for_phase(phase, var)
+        if commit_pairs:
+            lines.append("ctx.commit_many({%s});" % ", ".join(commit_pairs))
         if phase == "publish":
-            commit_pairs = []
-            for state_ref, committed in program._commits.items():
-                base = bases[state_ref.block_ref]
-                commit_pairs.append("{&%s, &%s}" % (var[base.id], var[committed.id]))
-            if commit_pairs:
-                lines.append("ctx.commit_many({%s});" % ", ".join(commit_pairs))
             histories = program.temporal_manifest()["histories"]
             if any(row["clock"] == program.clock.qualified_id for row in histories):
                 lines.append(

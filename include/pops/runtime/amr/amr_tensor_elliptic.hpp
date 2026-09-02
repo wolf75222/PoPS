@@ -97,6 +97,59 @@ inline PreparedProviderOptions default_options() {
   return options;
 }
 
+inline void checked_add_resident_storage(std::uint64_t& total, std::uint64_t value) {
+  if (value > std::numeric_limits<std::uint64_t>::max() - total)
+    throw std::overflow_error("tensor elliptic resident storage size overflows uint64");
+  total += value;
+}
+
+template <class Value>
+std::uint64_t vector_storage_bytes(const std::vector<Value>& values) {
+  if (values.capacity() > std::numeric_limits<std::uint64_t>::max() / sizeof(Value))
+    throw std::overflow_error("tensor elliptic resident vector storage overflows uint64");
+  return static_cast<std::uint64_t>(values.capacity()) * sizeof(Value);
+}
+
+inline std::uint64_t external_string_storage_bytes(const std::string& value) noexcept {
+  const auto object_begin = reinterpret_cast<std::uintptr_t>(&value);
+  const auto object_end = object_begin + sizeof(value);
+  const auto data = reinterpret_cast<std::uintptr_t>(value.data());
+  return data >= object_begin && data < object_end
+             ? 0
+             : static_cast<std::uint64_t>(value.capacity()) + 1U;
+}
+
+template <int Dim>
+std::uint64_t request_resident_storage_bytes(
+    const HierarchyTensorSolverBuildRequest<Dim>& request) {
+  std::uint64_t total = 0;
+  checked_add_resident_storage(total, vector_storage_bytes(request.levels));
+  for (const auto& level : request.levels) {
+    checked_add_resident_storage(total, vector_storage_bytes(level.layout.boxes()));
+    checked_add_resident_storage(total, vector_storage_bytes(level.distribution.layout().boxes()));
+    checked_add_resident_storage(total, vector_storage_bytes(level.distribution.owners()));
+  }
+  checked_add_resident_storage(total, vector_storage_bytes(request.ratios));
+  checked_add_resident_storage(total, external_string_storage_bytes(request.plan_identity));
+  checked_add_resident_storage(total,
+                               external_string_storage_bytes(request.operator_contract_identity));
+  checked_add_resident_storage(total, vector_storage_bytes(request.assembly_field_slots));
+  for (const std::string& slot : request.assembly_field_slots)
+    checked_add_resident_storage(total, external_string_storage_bytes(slot));
+  checked_add_resident_storage(total, external_string_storage_bytes(request.solution_field_slot));
+  checked_add_resident_storage(total,
+                               external_string_storage_bytes(request.options.schema_identity));
+  for (const auto& option : request.options.values) {
+    // std::map node allocator overhead is deliberately outside the logical-storage contract.  The
+    // value object and every externally allocated string it retains are stable provider payload.
+    checked_add_resident_storage(total, sizeof(option));
+    checked_add_resident_storage(total, external_string_storage_bytes(option.first));
+    if (const auto* string_value = std::get_if<std::string>(&option.second))
+      checked_add_resident_storage(total, external_string_storage_bytes(*string_value));
+  }
+  return total;
+}
+
 inline std::string coefficient_slot(int row_axis, int column_axis) {
   if (row_axis < 0 || column_axis < 0)
     throw std::invalid_argument("tensor coefficient slot axes must be non-negative");
@@ -140,7 +193,7 @@ void copy_valid(MultiFab<Dim, MemorySpace>& destination, const MultiFab<Dim, Mem
     for (int component = 0; component < destination.ncomp(); ++component)
       for_each_cell(destination.box(local), CopyValidKernel<Dim>{output, input, component});
   }
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 template <int Dim>
@@ -194,6 +247,10 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
   using kernel_type = PreparedHierarchyTensorKernel<Dim, MemorySpace>;
   using level_fields_type = HierarchyTensorLevelFields<Dim, MemorySpace>;
 
+ private:
+  struct LevelBuffers;
+
+ public:
   AmrTensorElliptic(request_type request, kernel_type kernel,
                     tensor_elliptic_detail::TensorFacControls controls,
                     std::string prepared_contract, const ExecutionLane& lane)
@@ -270,6 +327,12 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
     return tensor_fac_ && tensor_fac_->uses_replicated_parent_restriction();
   }
 
+  /// Object-array size charged by a configured provider ceiling.  The buffers themselves remain
+  /// private, but the provider must account their vector element array before materialization.
+  [[nodiscard]] static constexpr std::uint64_t configured_level_buffer_object_bytes() noexcept {
+    return sizeof(LevelBuffers);
+  }
+
   field_type& assembly_target(std::string_view slot, int level) override {
     LevelBuffers& storage = level_at_(level);
     for (std::size_t coefficient = 0; coefficient < static_cast<std::size_t>(Dim * Dim);
@@ -294,6 +357,8 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
   }
 
  protected:
+  PreparedResidentStorage derived_resident_storage() const override;
+
   SolveReport solve(const HierarchyTensorSolveControls& controls,
                     const ExecutionLane& lane) override {
     if (kernel_)
@@ -361,11 +426,281 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
   std::unique_ptr<tensor_fac::FullTensorCompositeFac<Dim, MemorySpace>> tensor_fac_{};
 };
 
+template <int Dim, class MemorySpace>
+PreparedResidentStorage AmrTensorElliptic<Dim, MemorySpace>::derived_resident_storage() const {
+  // A PreparedProvider callback is type-erased behind std::function.  It is intentionally
+  // unknown until that extension protocol supplies its own logical-storage hook.
+  if (!this->preparation_sealed() || !kernel_.resident_storage().is_exact())
+    return PreparedResidentStorage::unknown();
+
+  std::uint64_t total = sizeof(AmrTensorElliptic<Dim, MemorySpace>);
+  tensor_elliptic_detail::checked_add_resident_storage(
+      total, tensor_elliptic_detail::request_resident_storage_bytes(request_));
+  tensor_elliptic_detail::checked_add_resident_storage(
+      total, tensor_elliptic_detail::external_string_storage_bytes(prepared_contract_));
+  tensor_elliptic_detail::checked_add_resident_storage(
+      total, tensor_elliptic_detail::vector_storage_bytes(slots_));
+  for (const std::string& slot : slots_)
+    tensor_elliptic_detail::checked_add_resident_storage(
+        total, tensor_elliptic_detail::external_string_storage_bytes(slot));
+  tensor_elliptic_detail::checked_add_resident_storage(
+      total, tensor_elliptic_detail::vector_storage_bytes(levels_));
+  for (const LevelBuffers& level : levels_) {
+    for (const field_type& coefficient : level.coefficients)
+      tensor_elliptic_detail::checked_add_resident_storage(total,
+                                                           coefficient.resident_storage_bytes());
+    for (const field_type* field : {&level.rhs, &level.flux, &level.initial_guess, &level.solution})
+      tensor_elliptic_detail::checked_add_resident_storage(total, field->resident_storage_bytes());
+  }
+  tensor_elliptic_detail::checked_add_resident_storage(
+      total, tensor_elliptic_detail::vector_storage_bytes(invocation_levels_));
+  if (tensor_fac_) {
+    const PreparedResidentStorage fac_storage = tensor_fac_->resident_storage();
+    if (!fac_storage.is_exact())
+      return PreparedResidentStorage::unknown();
+    tensor_elliptic_detail::checked_add_resident_storage(
+        total, sizeof(tensor_fac::FullTensorCompositeFac<Dim, MemorySpace>));
+    tensor_elliptic_detail::checked_add_resident_storage(total, fac_storage.bytes);
+  }
+  return PreparedResidentStorage::exact(total);
+}
+
+namespace tensor_elliptic_detail {
+
+inline void checked_add_configured_storage(std::uint64_t& total, std::uint64_t value) {
+  if (value > std::numeric_limits<std::uint64_t>::max() - total)
+    throw std::overflow_error("tensor elliptic configured storage size overflows uint64");
+  total += value;
+}
+
+inline std::uint64_t checked_configured_storage_product(std::uint64_t left, std::uint64_t right) {
+  if (left != 0 && right > std::numeric_limits<std::uint64_t>::max() / left)
+    throw std::overflow_error("tensor elliptic configured storage product overflows uint64");
+  return left * right;
+}
+
+inline std::uint64_t configured_external_string_storage(std::uint64_t characters) {
+  std::uint64_t result = characters;
+  checked_add_configured_storage(result, 1U);
+  return result;
+}
+
+template <int Dim>
+std::uint64_t configured_power(std::uint64_t base) {
+  std::uint64_t result = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    result = checked_configured_storage_product(result, base);
+  return result;
+}
+
+template <int Dim, class MemorySpace>
+std::uint64_t configured_multifab_storage(std::uint64_t cells, std::uint64_t patches,
+                                          int components, bool one_ghost_layer) {
+  if (cells == 0 || patches == 0 || components < 1)
+    throw std::invalid_argument("tensor elliptic configured field capacity is incomplete");
+  std::uint64_t total = 0;
+  const std::uint64_t growth = one_ghost_layer ? configured_power<Dim>(3) : 1U;
+  // The envelope authenticates a level domain and a finite patch count, not one already
+  // materialized decomposition.  Charge every permitted patch as a full-domain image: that is
+  // conservative for the disjoint FAC path and remains a valid bound for a flat candidate whose
+  // input layout has not yet been normalized by FAC validation.
+  const std::uint64_t patch_cells = checked_configured_storage_product(cells, patches);
+  const std::uint64_t values =
+      checked_configured_storage_product(checked_configured_storage_product(patch_cells, growth),
+                                         static_cast<std::uint64_t>(components));
+  checked_add_configured_storage(
+      total, checked_configured_storage_product(values, static_cast<std::uint64_t>(sizeof(Real))));
+  // Mirror MultiFab::resident_storage_bytes(): two BoxArray images, one owner image, two index
+  // maps, and the local Fab array.  A configured rank can own every patch, so global P is the
+  // only safe detached bound.
+  for (const std::size_t element_size :
+       {sizeof(Box<Dim>), sizeof(Box<Dim>), sizeof(Index<Dim>), sizeof(std::size_t),
+        sizeof(std::size_t), sizeof(Fab<Dim, MemorySpace>)})
+    checked_add_configured_storage(total, checked_configured_storage_product(
+                                              patches, static_cast<std::uint64_t>(element_size)));
+  return total;
+}
+
+template <int Dim>
+std::uint64_t configured_request_contract_bytes(
+    const HierarchyTensorConfiguredStorageRequest<Dim>& request) {
+  constexpr std::uint64_t kFrameBytes = 9;
+  constexpr std::uint64_t kScalarFrameBytes = 20;
+  constexpr std::uint64_t kSequenceCountBytes = 8;
+  const std::uint64_t levels = static_cast<std::uint64_t>(request.level_cell_bounds.size());
+  std::uint64_t total = 0;
+  const auto text = [&total](std::string_view value) {
+    checked_add_configured_storage(total, kFrameBytes + static_cast<std::uint64_t>(value.size()));
+  };
+  const auto scalar = [&total](std::uint64_t count = 1U) {
+    checked_add_configured_storage(total,
+                                   checked_configured_storage_product(count, kScalarFrameBytes));
+  };
+  const auto sequence = [&total](std::uint64_t count, std::uint64_t item_bytes) {
+    checked_add_configured_storage(total, kFrameBytes + kSequenceCountBytes);
+    checked_add_configured_storage(
+        total, checked_configured_storage_product(count, kFrameBytes + item_bytes));
+  };
+
+  text("pops.hierarchy.tensor-solver-request");
+  scalar(4);  // version, dimension, block, components
+  text(request.plan_identity);
+  text(request.operator_contract_identity);
+  checked_add_configured_storage(total, kFrameBytes + kSequenceCountBytes);
+  for (const std::string& slot : request.assembly_field_slots)
+    checked_add_configured_storage(
+        total, kFrameBytes + kFrameBytes + static_cast<std::uint64_t>(slot.size()));
+  text(request.solution_field_slot);
+  const std::string options_contract = request.options.exact_contract();
+  checked_add_configured_storage(total,
+                                 kFrameBytes + static_cast<std::uint64_t>(options_contract.size()));
+  scalar();  // level count
+  for (std::size_t level = 0; level < request.level_cell_bounds.size(); ++level) {
+    const std::uint64_t patches = request.patch_bounds[level];
+    scalar(static_cast<std::uint64_t>(16 * Dim + 1));
+    // BoxArray and owner sequences retain their own outer frame, count, and nested item frame.
+    sequence(patches, checked_configured_storage_product(static_cast<std::uint64_t>(2 * Dim),
+                                                         kScalarFrameBytes));
+    sequence(patches, checked_configured_storage_product(static_cast<std::uint64_t>(Dim),
+                                                         kScalarFrameBytes));
+  }
+  scalar();  // ratio count
+  scalar(checked_configured_storage_product(levels - 1U, static_cast<std::uint64_t>(Dim)));
+  return total;
+}
+
+template <int Dim>
+std::uint64_t configured_prepared_contract_bytes(
+    const HierarchyTensorConfiguredStorageRequest<Dim>& request) {
+  constexpr std::uint64_t kFrameBytes = 9;
+  constexpr std::uint64_t kScalarFrameBytes = 20;
+  const std::uint64_t request_contract = configured_request_contract_bytes(request);
+  std::uint64_t total = 0;
+  checked_add_configured_storage(
+      total,
+      kFrameBytes + static_cast<std::uint64_t>(
+                        std::string_view{"pops.hierarchy.composite-tensor-prepared"}.size()));
+  checked_add_configured_storage(total, checked_configured_storage_product(2U, kScalarFrameBytes));
+  checked_add_configured_storage(total, kFrameBytes + request_contract);
+  // PreparedProvider::optional_collective_contract(empty) stores a one-byte presence frame.
+  checked_add_configured_storage(total, kFrameBytes + 1U);
+  return total;
+}
+
+template <int Dim>
+std::uint64_t configured_request_resident_storage(
+    const HierarchyTensorConfiguredStorageRequest<Dim>& request) {
+  const std::uint64_t levels = static_cast<std::uint64_t>(request.level_cell_bounds.size());
+  std::uint64_t total = 0;
+  checked_add_configured_storage(
+      total,
+      checked_configured_storage_product(
+          levels, static_cast<std::uint64_t>(sizeof(HierarchyTensorLevelBuildRequest<Dim>))));
+  for (std::size_t level = 0; level < request.level_cell_bounds.size(); ++level) {
+    const std::uint64_t patches = request.patch_bounds[level];
+    checked_add_configured_storage(
+        total,
+        checked_configured_storage_product(patches, static_cast<std::uint64_t>(sizeof(Box<Dim>))));
+    checked_add_configured_storage(
+        total,
+        checked_configured_storage_product(patches, static_cast<std::uint64_t>(sizeof(Box<Dim>))));
+    checked_add_configured_storage(
+        total, checked_configured_storage_product(patches,
+                                                  static_cast<std::uint64_t>(sizeof(Index<Dim>))));
+  }
+  checked_add_configured_storage(
+      total,
+      checked_configured_storage_product(
+          levels - 1U, static_cast<std::uint64_t>(sizeof(::pops::amr::RefinementRatio<Dim>))));
+  for (const std::string_view value : {std::string_view{request.plan_identity},
+                                       std::string_view{request.operator_contract_identity},
+                                       std::string_view{request.solution_field_slot},
+                                       std::string_view{request.options.schema_identity}})
+    checked_add_configured_storage(
+        total, configured_external_string_storage(static_cast<std::uint64_t>(value.size())));
+  checked_add_configured_storage(
+      total, checked_configured_storage_product(
+                 static_cast<std::uint64_t>(request.assembly_field_slots.size()),
+                 static_cast<std::uint64_t>(sizeof(std::string))));
+  for (const std::string& slot : request.assembly_field_slots)
+    checked_add_configured_storage(
+        total, configured_external_string_storage(static_cast<std::uint64_t>(slot.size())));
+  using option_entry = std::pair<const std::string, PreparedProviderOptionValue>;
+  for (const auto& option : request.options.values) {
+    checked_add_configured_storage(total, sizeof(option_entry));
+    checked_add_configured_storage(
+        total, configured_external_string_storage(static_cast<std::uint64_t>(option.first.size())));
+    if (const auto* value = std::get_if<std::string>(&option.second))
+      checked_add_configured_storage(
+          total, configured_external_string_storage(static_cast<std::uint64_t>(value->size())));
+  }
+  return total;
+}
+
+template <int Dim, class MemorySpace>
+std::uint64_t composite_configured_storage_upper_bound(
+    const HierarchyTensorConfiguredStorageRequest<Dim>& request) {
+  hierarchy_tensor_detail::validate_configured_storage_request(request);
+  const std::uint64_t levels = static_cast<std::uint64_t>(request.level_cell_bounds.size());
+  std::uint64_t total = sizeof(AmrTensorElliptic<Dim, MemorySpace>);
+  checked_add_configured_storage(total, configured_request_resident_storage(request));
+  checked_add_configured_storage(
+      total, configured_external_string_storage(configured_prepared_contract_bytes(request)));
+  checked_add_configured_storage(
+      total, checked_configured_storage_product(
+                 static_cast<std::uint64_t>(request.assembly_field_slots.size()),
+                 static_cast<std::uint64_t>(sizeof(std::string))));
+  for (const std::string& slot : request.assembly_field_slots)
+    checked_add_configured_storage(
+        total, configured_external_string_storage(static_cast<std::uint64_t>(slot.size())));
+  checked_add_configured_storage(
+      total,
+      checked_configured_storage_product(
+          levels, AmrTensorElliptic<Dim, MemorySpace>::configured_level_buffer_object_bytes()));
+  for (std::size_t level = 0; level < request.level_cell_bounds.size(); ++level) {
+    const std::uint64_t cells = request.level_cell_bounds[level];
+    const std::uint64_t patches = request.patch_bounds[level];
+    // coefficients, flux, initial guess, and solution carry one ghost layer; RHS is valid-only.
+    for (int field = 0; field < Dim * Dim + Dim + 2; ++field)
+      checked_add_configured_storage(
+          total, configured_multifab_storage<Dim, MemorySpace>(cells, patches, 1, true));
+    checked_add_configured_storage(
+        total, configured_multifab_storage<Dim, MemorySpace>(cells, patches, 1, false));
+  }
+  checked_add_configured_storage(
+      total, checked_configured_storage_product(
+                 levels,
+                 static_cast<std::uint64_t>(sizeof(HierarchyTensorLevelFields<Dim, MemorySpace>))));
+  if (levels > 1U) {
+    using fac_type = tensor_fac::FullTensorCompositeFac<Dim, MemorySpace>;
+    checked_add_configured_storage(total, sizeof(fac_type));
+    checked_add_configured_storage(total, fac_type::configured_resident_storage_upper_bound(
+                                              request.level_cell_bounds, request.patch_bounds,
+                                              request.parent_child_pair_bounds, request.rank_bound,
+                                              request.execution_lane_identity));
+  }
+  // PreparedHierarchyTensorSolver owns two solution rollback images in addition to the concrete
+  // provider image above.
+  checked_add_configured_storage(
+      total, checked_configured_storage_product(
+                 checked_configured_storage_product(2U, levels),
+                 static_cast<std::uint64_t>(sizeof(MultiFab<Dim, MemorySpace>))));
+  for (std::size_t level = 0; level < request.level_cell_bounds.size(); ++level)
+    for (int image = 0; image < 2; ++image)
+      checked_add_configured_storage(
+          total, configured_multifab_storage<Dim, MemorySpace>(
+                     request.level_cell_bounds[level], request.patch_bounds[level], 1, true));
+  return total;
+}
+
+}  // namespace tensor_elliptic_detail
+
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 class CompositeTensorHierarchyProvider final
     : public HierarchyTensorSolverProvider<Dim, MemorySpace> {
  public:
   using request_type = HierarchyTensorSolverBuildRequest<Dim>;
+  using configured_storage_request_type = HierarchyTensorConfiguredStorageRequest<Dim>;
   using solver_type = PreparedHierarchyTensorSolver<Dim, MemorySpace>;
   using kernel_type = PreparedHierarchyTensorKernel<Dim, MemorySpace>;
 
@@ -435,6 +770,21 @@ class CompositeTensorHierarchyProvider final
                ? PreparedProviderSupport::accept()
                : PreparedProviderSupport::reject(
                      17, "tensor provider execution does not match its exact hierarchy depth");
+  }
+  [[nodiscard]] HierarchyTensorConfiguredStorageLimit configured_storage_limit(
+      const configured_storage_request_type& request) const override {
+    hierarchy_tensor_detail::validate_configured_storage_request(request);
+    if (request.provider_identity != identity() ||
+        request.provider_interface_version != interface_version() || request.components != 1 ||
+        request.operator_contract_identity !=
+            tensor_elliptic_detail::kScalarTensorEllipticContract ||
+        request.assembly_field_slots != tensor_elliptic_detail::assembly_slots<Dim>() ||
+        request.solution_field_slot != "pops.tensor-elliptic.solution" ||
+        !accepts_options(request.options).accepted() || !kernel_.resident_storage().is_exact())
+      return HierarchyTensorConfiguredStorageLimit::unknown();
+    return HierarchyTensorConfiguredStorageLimit::exact(
+        tensor_elliptic_detail::composite_configured_storage_upper_bound<Dim, MemorySpace>(
+            request));
   }
   std::string expected_prepared_contract(const request_type& request) const override {
     if (!supports(request).accepted())

@@ -25,9 +25,11 @@ from pops.output._checkpoint_contract import (
     capture_program_persistent_value_checkpoint,
     decode_program_persistent_value_checkpoint,
     encode_program_persistent_value_checkpoint,
+    materialized_program_resource_plan_capacity_authority,
     prepare_program_persistent_value_restore,
     program_persistent_checkpoint_from_payload,
     program_persistent_checkpoint_manifest_from_payload,
+    program_persistent_value_checkpoint_capacity,
     publish_program_persistent_value_restore,
     require_program_persistent_checkpoint_plan,
     require_program_persistent_value_checkpoint_capture,
@@ -77,8 +79,10 @@ def _row(*, slot=0, path="root/0", path_id=1, **changes):
     return row
 
 
-def _image(*rows, maximum_bytes=None, metadata=None):
-    rows = tuple(rows or (_row(),))
+def _image(*rows, maximum_bytes=None, metadata=None, empty=False):
+    if not rows and not empty:
+        rows = (_row(),)
+    rows = tuple(rows)
     if maximum_bytes is None:
         maximum_bytes = sum(row["maximum_bytes"] for row in rows)
     if metadata is None:
@@ -158,6 +162,47 @@ def test_roundtrip_is_bit_exact_and_keeps_cold_invalid_metadata():
     assert restored.metadata[0]["cold"] is True
     assert program_persistent_checkpoint_from_payload(_payload(image))[1] == restored
     assert program_persistent_checkpoint_manifest_from_payload(_payload(image))["plan_digest"] == "a" * 64
+
+
+def test_materialized_capacity_authority_uses_the_sealed_native_image() -> None:
+    image = _image(maximum_bytes=32)
+    authority = materialized_program_resource_plan_capacity_authority(image)
+
+    assert authority.maximum_bytes == 32
+    assert len(authority) == image.slot_count
+    assert program_persistent_value_checkpoint_capacity(authority) == len(
+        encode_program_persistent_value_checkpoint(image)
+    )
+    assert authority.to_data()["digest"] == image.plan_digest
+
+    unbound = ProgramPersistentValueCheckpoint(
+        bound=False,
+        schema=PROGRAM_PERSISTENT_CHECKPOINT_SCHEMA,
+        plan_schema="",
+        plan_digest="",
+        maximum_bytes=0,
+        slot_count=0,
+        rows=(),
+        metadata=(),
+        offsets=(),
+        value_bytes=(),
+        storage=b"",
+    )
+    with pytest.raises(RuntimeError, match="materialized native Program resource plan"):
+        materialized_program_resource_plan_capacity_authority(unbound)
+
+
+def test_empty_value_plan_accepts_nonzero_materialized_host_only_ceiling():
+    image = _image(empty=True, maximum_bytes=32)
+
+    encoded = encode_program_persistent_value_checkpoint(image)
+    restored = decode_program_persistent_value_checkpoint(encoded)
+
+    assert restored == image
+    assert restored.rows == ()
+    assert restored.offsets == (0,)
+    assert restored.storage == b""
+    assert restored.maximum_bytes == 32
 
 
 def test_valid_slot_retains_exact_value_bytes_while_invalid_slot_is_zero_sized():
@@ -290,11 +335,13 @@ def test_malformed_digest_offsets_duplicate_and_provider_are_refused():
     with pytest.raises(ValueError, match="offset"):
         encode_program_persistent_value_checkpoint(malformed_offsets)
 
-    incomplete_ceiling = dataclasses.replace(
-        image, maximum_bytes=image.maximum_bytes + 1
+    offsets_over_ceiling = dataclasses.replace(
+        image,
+        offsets=(0, image.maximum_bytes + 1),
+        storage=image.storage + b"\x00",
     )
-    with pytest.raises(ValueError, match="exact checkpoint memory ceiling"):
-        encode_program_persistent_value_checkpoint(incomplete_ceiling)
+    with pytest.raises(ValueError, match="authenticated memory bound"):
+        encode_program_persistent_value_checkpoint(offsets_over_ceiling)
 
 
 def test_payload_scalars_and_native_capability_are_strict():

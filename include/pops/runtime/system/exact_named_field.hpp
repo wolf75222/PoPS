@@ -253,7 +253,7 @@ class ExactNamedField final {
           provider.evaluate(*states[block], *contribution_scratch_);
           saxpy(solver_->rhs(), provider.coefficient, *contribution_scratch_);
         }
-      Kokkos::fence();
+      ::pops::device_fence();
     } catch (...) {
       rhs_error = std::current_exception();
     }
@@ -293,7 +293,7 @@ class ExactNamedField final {
       copy_all_cells_(solver_->candidate(), accepted_);
       copy_all_cells_(candidate_outputs_, accepted_outputs_);
       accepted_topology_report_ = std::move(candidate_topology_report_);
-      Kokkos::fence();
+      ::pops::device_fence();
       clear_candidate_();
     } catch (...) {
       std::terminate();

@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <pops/core/foundation/allocator.hpp>
 #include <pops/mesh/layout/distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/runtime/program/source_mask.hpp>
 
 #include <Kokkos_Core.hpp>
 
@@ -20,6 +22,7 @@ using pops::Real;
 using pops::mesh::BoxArray;
 using pops::mesh::Distribution;
 using pops::mesh::RankSpace;
+using pops::runtime::program::apply_component_keep_mask;
 
 namespace {
 
@@ -66,6 +69,8 @@ TEST(test_multifab, exact_metadata_and_local_global_index_spaces_are_explicit) {
   EXPECT_THROW((void)fields.fab_global(1), std::out_of_range);
   EXPECT_THROW((void)fields.global_index(2), std::out_of_range);
   EXPECT_THROW((void)fields.local_index_of(layout.size()), std::out_of_range);
+  // The Program capacity receipt includes copied metadata, not only Kokkos RankSpace payload.
+  EXPECT_GT(fields.resident_storage_bytes(), fields.resident_payload_bytes());
 
   using HostMultiFab = MultiFab<2, Kokkos::HostSpace>;
   EXPECT_THROW((void)HostMultiFab(layout, distribution, local_rank, 0, Extent<2>{}),
@@ -127,5 +132,45 @@ TEST(test_multifab, communication_is_explicitly_unavailable_and_fails_closed) {
     EXPECT_NE(std::string(error.what()).find("halo exchange"), std::string::npos);
     EXPECT_NE(std::string(error.what()).find("no halo, parallel-copy, or MPI schedule"),
               std::string::npos);
+  }
+}
+
+TEST(test_multifab, program_source_mask_reuses_storage_and_refuses_drift_without_clobbering) {
+  const BoxArray<1> layout =
+      BoxArray<1>::from_domain(Box<1>{Index<1>{0}, Index<1>{3}}, Extent<1>{1});
+  const RankSpace<1> ranks{Index<1>{0}, Extent<1>{1}};
+  const auto distribution = Distribution<1>::replicated(layout, ranks);
+  MultiFab<1, Kokkos::HostSpace> residual(layout, distribution, Index<1>{0}, 3, Extent<1>{});
+  residual.set_val(Real(7));
+
+  const auto before = pops::allocation_event_stats();
+  apply_component_keep_mask(residual, {0});
+  const auto after = pops::allocation_event_stats();
+  EXPECT_EQ(after.fab_calls, before.fab_calls);
+  EXPECT_EQ(after.fab_bytes, before.fab_bytes);
+
+  ASSERT_GT(residual.local_size(), 0U);
+  for (std::size_t local = 0; local < residual.local_size(); ++local) {
+    const auto& fab = residual.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    const std::size_t component_stride = fab.size() / 3U;
+    for (std::size_t cell = 0; cell < component_stride; ++cell) {
+      EXPECT_DOUBLE_EQ(host(cell), Real(7));
+      EXPECT_DOUBLE_EQ(host(component_stride + cell), Real(0));
+      EXPECT_DOUBLE_EQ(host(2U * component_stride + cell), Real(0));
+    }
+  }
+
+  // Validate every authored component before the first write: a stale mask must leave the
+  // already prepared residual entirely intact.
+  residual.set_val(Real(11));
+  EXPECT_THROW(apply_component_keep_mask(residual, {0, 3}), std::invalid_argument);
+  for (std::size_t local = 0; local < residual.local_size(); ++local) {
+    const auto& fab = residual.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for (std::size_t element = 0; element < host.size(); ++element)
+      EXPECT_DOUBLE_EQ(host(element), Real(11));
   }
 }

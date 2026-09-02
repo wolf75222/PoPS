@@ -6,12 +6,14 @@
 #include <pops/mesh/index/index.hpp>
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -39,6 +41,18 @@ struct LevelTransition {
 };
 
 namespace detail {
+
+/// ``std::string::capacity`` includes its inline SSO buffer on common implementations.  The
+/// enclosing object is already counted by callers, so only report storage whose data pointer
+/// lies outside the string object itself.
+inline std::uint64_t external_string_storage_bytes(const std::string& value) noexcept {
+  const auto object_begin = reinterpret_cast<std::uintptr_t>(&value);
+  const auto object_end = object_begin + sizeof(value);
+  const auto data = reinterpret_cast<std::uintptr_t>(value.data());
+  if (data >= object_begin && data < object_end)
+    return 0;
+  return static_cast<std::uint64_t>(value.capacity()) + 1U;
+}
 
 inline auto clock_coordinate(const ClockStamp& stamp) {
   return std::tuple{stamp.level, stamp.macro_step, stamp.phase.numerator, stamp.phase.denominator};
@@ -203,10 +217,24 @@ class TransactionalFaceFluxLedger {
 
   using Entry = FaceFluxFragment<Dim, Payload>;
 
+  /// Cold description of one topology-bound Program contribution slot.  Its identity strings,
+  /// face coordinates and payload extent are allocated before an attempt starts; the hot path
+  /// supplies only the time-varying clock, attempt, metric scalars and component span.
+  struct PreparedSlot {
+    FaceFluxFragmentKey<Dim> key;
+    std::size_t payload_components = 0;
+  };
+
   explicit TransactionalFaceFluxLedger(FaceFluxLedgerBudget budget) : budget_(budget) {
     if (budget_.max_pending_entries == 0 || budget_.max_published_entries == 0 ||
         budget_.max_transaction_depth == 0)
       throw std::invalid_argument("ND face-flux ledger budgets must be strictly positive");
+    savepoints_.reserve(budget_.max_transaction_depth);
+    for (int axis = 0; axis < Dim; ++axis) {
+      pending_[static_cast<std::size_t>(axis)].reserve(budget_.max_pending_entries);
+      published_[static_cast<std::size_t>(axis)].reserve(budget_.max_published_entries);
+      publication_staging_[static_cast<std::size_t>(axis)].reserve(budget_.max_published_entries);
+    }
   }
 
   void begin(std::uint64_t attempt) {
@@ -225,7 +253,8 @@ class TransactionalFaceFluxLedger {
     Savepoint savepoint{};
     for (int axis = 0; axis < Dim; ++axis)
       savepoint.pending_sizes[static_cast<std::size_t>(axis)] =
-          pending_[static_cast<std::size_t>(axis)].size();
+          resident_slots_bound_ ? resident_pending_sizes_[static_cast<std::size_t>(axis)]
+                                : pending_[static_cast<std::size_t>(axis)].size();
     savepoints_.push_back(savepoint);
     if (outer)
       active_attempt_ = attempt;
@@ -244,26 +273,92 @@ class TransactionalFaceFluxLedger {
         pending_count > budget_.max_published_entries - published_count)
       throw std::length_error("ND face-flux publication exceeds its prepared budget");
 
-    auto candidate = published_;
-    for (int axis = 0; axis < Dim; ++axis) {
-      auto& destination = candidate[static_cast<std::size_t>(axis)];
-      const auto& source = pending_[static_cast<std::size_t>(axis)];
-      destination.reserve(destination.size() + source.size());
-      for (const Entry& entry : source)
-        destination.push_back(entry);
+    if (resident_slots_bound_) {
+      if constexpr (!std::is_copy_assignable_v<Entry>) {
+        throw std::logic_error(
+            "ND face-flux resident slots require an assignable preallocated payload");
+      } else {
+        for (int axis = 0; axis < Dim; ++axis) {
+          const std::size_t dimension = static_cast<std::size_t>(axis);
+          const std::size_t accepted = resident_published_sizes_[dimension];
+          const std::size_t source = resident_pending_sizes_[dimension];
+          const std::size_t required = accepted + source;
+          if (required > resident_publication_staging_[dimension].size())
+            throw std::logic_error("ND face-flux resident publication exceeded its frozen slots");
+          for (std::size_t index = 0; index < accepted; ++index)
+            require_preallocated_entry_contract_(resident_publication_staging_[dimension][index],
+                                                 resident_published_[dimension][index]);
+          for (std::size_t index = 0; index < source; ++index)
+            require_preallocated_entry_contract_(
+                resident_publication_staging_[dimension][accepted + index],
+                resident_pending_[dimension][index]);
+          for (std::size_t index = 0; index < accepted; ++index)
+            resident_publication_staging_[dimension][index] = resident_published_[dimension][index];
+          for (std::size_t index = 0; index < source; ++index)
+            resident_publication_staging_[dimension][accepted + index] =
+                resident_pending_[dimension][index];
+          resident_published_sizes_[dimension] = required;
+          resident_pending_sizes_[dimension] = 0;
+        }
+        resident_published_.swap(resident_publication_staging_);
+        close_outer_transaction_();
+        return;
+      }
     }
-    published_.swap(candidate);
-    for (auto& entries : pending_)
-      entries.clear();
-    close_outer_transaction_();
+
+    if constexpr (!std::is_copy_assignable_v<Entry>) {
+      auto candidate = published_;
+      for (int axis = 0; axis < Dim; ++axis) {
+        auto& destination = candidate[static_cast<std::size_t>(axis)];
+        const auto& source = pending_[static_cast<std::size_t>(axis)];
+        destination.reserve(destination.size() + source.size());
+        for (const Entry& entry : source)
+          destination.push_back(entry);
+      }
+      published_.swap(candidate);
+      for (auto& entries : pending_)
+        entries.clear();
+      close_outer_transaction_();
+      return;
+    } else {
+      for (int axis = 0; axis < Dim; ++axis) {
+        auto& destination = publication_staging_[static_cast<std::size_t>(axis)];
+        const auto& accepted = published_[static_cast<std::size_t>(axis)];
+        const auto& source = pending_[static_cast<std::size_t>(axis)];
+        const std::size_t required = accepted.size() + source.size();
+        if (required > destination.capacity())
+          throw std::logic_error("ND face-flux publication staging lost its prepared capacity");
+        std::size_t index = 0;
+        const auto overwrite = [&](const Entry& entry) {
+          if (index < destination.size())
+            destination[index] = entry;
+          else
+            destination.push_back(entry);
+          ++index;
+        };
+        for (const Entry& entry : accepted)
+          overwrite(entry);
+        for (const Entry& entry : source)
+          overwrite(entry);
+        destination.resize(required);
+      }
+      published_.swap(publication_staging_);
+      for (auto& entries : pending_)
+        entries.clear();
+      close_outer_transaction_();
+    }
   }
 
   void rollback() {
     require_transaction_("rollback");
     const Savepoint savepoint = savepoints_.back();
-    for (int axis = 0; axis < Dim; ++axis)
-      pending_[static_cast<std::size_t>(axis)].resize(
-          savepoint.pending_sizes[static_cast<std::size_t>(axis)]);
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::size_t dimension = static_cast<std::size_t>(axis);
+      if (resident_slots_bound_)
+        resident_pending_sizes_[dimension] = savepoint.pending_sizes[dimension];
+      else
+        pending_[dimension].resize(savepoint.pending_sizes[dimension]);
+    }
     savepoints_.pop_back();
     if (savepoints_.empty()) {
       last_closed_attempt_ = active_attempt_;
@@ -274,14 +369,215 @@ class TransactionalFaceFluxLedger {
   void clear() {
     if (in_transaction())
       throw std::runtime_error("cannot clear an active ND face-flux ledger transaction");
-    for (auto& entries : pending_)
-      entries.clear();
-    for (auto& entries : published_)
-      entries.clear();
+    if (resident_slots_bound_) {
+      resident_pending_sizes_.fill(0);
+      resident_published_sizes_.fill(0);
+    } else {
+      for (auto& entries : pending_)
+        entries.clear();
+      for (auto& entries : published_)
+        entries.clear();
+    }
     last_closed_attempt_.reset();
   }
 
+  /// Freeze all Program-visible contributions before ``begin``.  This intentionally has no
+  /// fallback allocation path: a late shape, owner, stage, or payload-size change is rejected.
+  void prepare_resident_slots(std::span<const PreparedSlot> slots) {
+    if (in_transaction())
+      throw std::logic_error("ND face-flux resident slots cannot bind during a transaction");
+    if (slots.size() > budget_.max_pending_entries || slots.size() > budget_.max_published_entries)
+      throw std::length_error("ND face-flux resident slots exceed the prepared ledger budget");
+
+    std::array<std::size_t, Dim> counts{};
+    for (const PreparedSlot& slot : slots) {
+      validate_prepared_slot_(slot);
+      ++counts[static_cast<std::size_t>(slot.key.axis)];
+    }
+    std::array<std::vector<Entry>, Dim> pending;
+    std::array<std::vector<Entry>, Dim> published;
+    std::array<std::vector<Entry>, Dim> staging;
+    std::vector<PreparedSlotLocation> locations;
+    locations.resize(slots.size());
+    std::array<std::size_t, Dim> cursors{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::size_t dimension = static_cast<std::size_t>(axis);
+      pending[dimension].resize(counts[dimension]);
+      published[dimension].resize(counts[dimension]);
+      staging[dimension].resize(counts[dimension]);
+    }
+    for (std::size_t slot_index = 0; slot_index < slots.size(); ++slot_index) {
+      const PreparedSlot& description = slots[slot_index];
+      const std::size_t dimension = static_cast<std::size_t>(description.key.axis);
+      const std::size_t local = cursors[dimension]++;
+      locations[slot_index] = {static_cast<std::uint32_t>(dimension), local};
+      Entry entry{description.key, {}, Payload{}};
+      entry.payload.resize(description.payload_components);
+      pending[dimension][local] = entry;
+      published[dimension][local] = entry;
+      staging[dimension][local] = std::move(entry);
+    }
+
+    using std::swap;
+    swap(resident_pending_, pending);
+    swap(resident_published_, published);
+    swap(resident_publication_staging_, staging);
+    swap(resident_slot_locations_, locations);
+    resident_pending_sizes_.fill(0);
+    resident_published_sizes_.fill(0);
+    resident_slots_bound_ = true;
+  }
+
+  /// Exact logical storage retained by this ledger, including the pre-slot retry images.  Vector
+  /// allocation is charged by capacity; dynamic string and payload arenas are charged only for
+  /// constructed entries.  This retains the three retry images and the compact slot-location
+  /// index without treating an inline SSO buffer as an external allocation.
+  [[nodiscard]] std::uint64_t retained_storage_bytes() const {
+    const auto checked_add = [](std::uint64_t left, std::uint64_t right) {
+      if (right > std::numeric_limits<std::uint64_t>::max() - left)
+        throw std::overflow_error("ND face-flux resident footprint overflows uint64");
+      return left + right;
+    };
+    const auto entry_dynamic_bytes = [&](const Entry& entry) -> std::uint64_t {
+      std::uint64_t bytes = 0;
+      const auto add_string = [&](const std::string& value) {
+        bytes = checked_add(bytes, detail::external_string_storage_bytes(value));
+      };
+      add_string(entry.key.owner);
+      add_string(entry.key.state);
+      add_string(entry.key.stage);
+      if constexpr (requires {
+                      entry.payload.capacity();
+                      typename Payload::value_type;
+                    }) {
+        const auto capacity = static_cast<std::uint64_t>(entry.payload.capacity());
+        if (capacity >
+            std::numeric_limits<std::uint64_t>::max() / sizeof(typename Payload::value_type))
+          throw std::overflow_error("ND face-flux resident payload footprint overflows uint64");
+        bytes = checked_add(bytes, capacity * sizeof(typename Payload::value_type));
+      }
+      return bytes;
+    };
+    const auto vector_bytes = [&](std::size_t capacity, std::size_t element_size) {
+      if (element_size != 0 && capacity > std::numeric_limits<std::uint64_t>::max() / element_size)
+        throw std::overflow_error("ND face-flux resident vector footprint overflows uint64");
+      return static_cast<std::uint64_t>(capacity) * element_size;
+    };
+    std::uint64_t result =
+        vector_bytes(resident_slot_locations_.capacity(), sizeof(PreparedSlotLocation));
+    result = checked_add(result, vector_bytes(savepoints_.capacity(), sizeof(Savepoint)));
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::size_t dimension = static_cast<std::size_t>(axis);
+      const auto append_image = [&](const std::vector<Entry>& entries) {
+        result = checked_add(result, vector_bytes(entries.capacity(), sizeof(Entry)));
+        for (const Entry& entry : entries)
+          result = checked_add(result, entry_dynamic_bytes(entry));
+      };
+      append_image(resident_pending_[dimension]);
+      append_image(resident_published_[dimension]);
+      append_image(resident_publication_staging_[dimension]);
+      // These legacy images remain allocated even when the prepared-slot path is selected.
+      // Account for their retained capacities too; otherwise an exact Program ceiling would
+      // omit a live arena that can survive across resident attempts.
+      append_image(pending_[dimension]);
+      append_image(published_[dimension]);
+      append_image(publication_staging_[dimension]);
+    }
+    return result;
+  }
+
+  /// Exact retained storage of a cold-bound resident ledger.  The bound check preserves the
+  /// generated-slot authority for callers that require it; unbound accepted retry images use
+  /// ``retained_storage_bytes()`` during Program capacity accounting.
+  [[nodiscard]] std::uint64_t resident_storage_bytes() const {
+    if (!resident_slots_bound_)
+      throw std::logic_error("ND face-flux resident footprint has no prepared slots");
+    return retained_storage_bytes();
+  }
+
+  /// Verify that a bind-sealed ledger image can receive @p source without growing an entry,
+  /// payload, identity, or transaction carrier.  This is the preflight half of accepted-context
+  /// rollback: callers perform it for every ledger before changing a single mutable image.
+  void require_preallocated_copy_from(const TransactionalFaceFluxLedger& source) const {
+    if (this == &source)
+      return;
+    if (in_transaction() || source.in_transaction() || !resident_slots_bound_ ||
+        !source.resident_slots_bound_ ||
+        budget_.max_pending_entries != source.budget_.max_pending_entries ||
+        budget_.max_published_entries != source.budget_.max_published_entries ||
+        budget_.max_transaction_depth != source.budget_.max_transaction_depth ||
+        resident_slot_locations_.size() != source.resident_slot_locations_.size())
+      throw std::logic_error("ND face-flux ledger copy differs from its bind-sealed authority");
+    for (std::size_t slot = 0; slot < resident_slot_locations_.size(); ++slot)
+      if (resident_slot_locations_[slot].axis != source.resident_slot_locations_[slot].axis ||
+          resident_slot_locations_[slot].index != source.resident_slot_locations_[slot].index)
+        throw std::logic_error("ND face-flux ledger copy changed its resident slot ordering");
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::size_t dimension = static_cast<std::size_t>(axis);
+      const auto require_image = [&](const std::vector<Entry>& destination,
+                                     const std::vector<Entry>& input) {
+        if (destination.size() != input.size())
+          throw std::logic_error("ND face-flux ledger copy changed its resident slot shape");
+        for (std::size_t index = 0; index < input.size(); ++index)
+          require_preallocated_entry_contract_(destination[index], input[index]);
+      };
+      require_image(resident_pending_[dimension], source.resident_pending_[dimension]);
+      require_image(resident_published_[dimension], source.resident_published_[dimension]);
+      require_image(resident_publication_staging_[dimension],
+                    source.resident_publication_staging_[dimension]);
+    }
+  }
+
+  /// Copy only mutable values into an already validated resident ledger image.  The complete
+  /// slot topology remains immutable, so assignment stays within strings/payloads reserved at
+  /// cold bind and cannot allocate during rollback.
+  void copy_from_preallocated(const TransactionalFaceFluxLedger& source) {
+    require_preallocated_copy_from(source);
+    if (this == &source)
+      return;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::size_t dimension = static_cast<std::size_t>(axis);
+      resident_pending_[dimension] = source.resident_pending_[dimension];
+      resident_published_[dimension] = source.resident_published_[dimension];
+      resident_publication_staging_[dimension] = source.resident_publication_staging_[dimension];
+      resident_pending_sizes_[dimension] = source.resident_pending_sizes_[dimension];
+      resident_published_sizes_[dimension] = source.resident_published_sizes_[dimension];
+    }
+    last_closed_attempt_ = source.last_closed_attempt_;
+    active_attempt_.reset();
+    savepoints_.clear();
+  }
+
+  /// Commit a dense, cold-bound slot without reconstructing its key or payload container.
+  /// ``slot`` must be emitted in the frozen per-axis order; that ordering is part of the exact
+  /// Program/topology authority and makes duplicate and omission drift fail before publication.
+  template <class Element>
+  void accumulate_prepared(std::uint32_t slot, ClockStamp clock, std::uint64_t attempt,
+                           FaceFluxFragmentMeasure measure, std::span<const Element> payload) {
+    require_transaction_("prepared accumulation");
+    if (!resident_slots_bound_ || slot >= resident_slot_locations_.size())
+      throw std::invalid_argument("ND face-flux prepared accumulation has no resident slot");
+    if (attempt != *active_attempt_)
+      throw std::invalid_argument("ND face-flux prepared fragment uses a stale attempt identity");
+    const PreparedSlotLocation location = resident_slot_locations_[slot];
+    const std::size_t axis = location.axis;
+    if (location.index != resident_pending_sizes_[axis])
+      throw std::invalid_argument("ND face-flux prepared slot order differs from its frozen plan");
+    Entry& entry = resident_pending_[axis][location.index];
+    if (entry.payload.size() != payload.size())
+      throw std::invalid_argument(
+          "ND face-flux prepared payload shape differs from its frozen slot");
+    entry.key.clock = clock;
+    entry.key.attempt = attempt;
+    entry.measure = measure;
+    validate_face_flux_fragment(entry.key, entry.measure);
+    std::copy(payload.begin(), payload.end(), entry.payload.begin());
+    ++resident_pending_sizes_[axis];
+  }
+
   void accumulate(FaceFluxFragmentKey<Dim> key, FaceFluxFragmentMeasure measure, Payload payload) {
+    if (resident_slots_bound_)
+      throw std::logic_error("ND face-flux resident ledger requires compact prepared slots");
     require_transaction_("accumulation");
     if (key.attempt != *active_attempt_)
       throw std::invalid_argument("ND face-flux fragment uses a stale attempt identity");
@@ -296,24 +592,77 @@ class TransactionalFaceFluxLedger {
   }
 
   bool in_transaction() const noexcept { return !savepoints_.empty(); }
+  bool resident_slots_bound() const noexcept { return resident_slots_bound_; }
+  const FaceFluxLedgerBudget& budget() const noexcept { return budget_; }
   std::size_t transaction_depth() const noexcept { return savepoints_.size(); }
   std::optional<std::uint64_t> active_attempt() const noexcept { return active_attempt_; }
 
-  std::size_t pending_size() const noexcept { return total_size_(pending_); }
-  std::size_t published_size() const noexcept { return total_size_(published_); }
-
-  const std::vector<Entry>& pending_entries(int axis) const {
-    return pending_[static_cast<std::size_t>(detail::checked_axis(axis, Dim))];
+  std::size_t pending_size() const noexcept {
+    if (!resident_slots_bound_)
+      return total_size_(pending_);
+    return total_size_(resident_pending_sizes_);
+  }
+  std::size_t published_size() const noexcept {
+    if (!resident_slots_bound_)
+      return total_size_(published_);
+    return total_size_(resident_published_sizes_);
   }
 
-  const std::vector<Entry>& published_entries(int axis) const {
-    return published_[static_cast<std::size_t>(detail::checked_axis(axis, Dim))];
+  std::span<const Entry> pending_entries(int axis) const {
+    const std::size_t dimension = static_cast<std::size_t>(detail::checked_axis(axis, Dim));
+    if (resident_slots_bound_)
+      return {resident_pending_[dimension].data(), resident_pending_sizes_[dimension]};
+    return pending_[dimension];
+  }
+
+  std::span<const Entry> published_entries(int axis) const {
+    const std::size_t dimension = static_cast<std::size_t>(detail::checked_axis(axis, Dim));
+    if (resident_slots_bound_)
+      return {resident_published_[dimension].data(), resident_published_sizes_[dimension]};
+    return published_[dimension];
+  }
+
+  /// Cold-only topology-bound slot image.  Unlike ``published_entries()``, this retains the
+  /// complete resident shape even before the first accepted attempt.  Snapshot builders use it
+  /// to prime their detached string/payload carriers; it must never be consulted from a hot
+  /// attempt.
+  std::span<const Entry> resident_slot_templates(int axis) const {
+    const std::size_t dimension = static_cast<std::size_t>(detail::checked_axis(axis, Dim));
+    if (!resident_slots_bound_)
+      throw std::logic_error("ND face-flux resident templates were not bound");
+    return resident_published_[dimension];
   }
 
   std::size_t discard_published_attempt(std::uint64_t attempt) {
     if (in_transaction())
       throw std::runtime_error(
           "cannot discard published ND face fluxes during an active transaction");
+    if (resident_slots_bound_) {
+      if constexpr (!std::is_copy_assignable_v<Entry>) {
+        throw std::logic_error(
+            "ND face-flux resident slots require an assignable preallocated payload");
+      } else {
+        std::size_t removed = 0;
+        for (int axis = 0; axis < Dim; ++axis) {
+          const std::size_t dimension = static_cast<std::size_t>(axis);
+          std::size_t write = 0;
+          for (std::size_t read = 0; read < resident_published_sizes_[dimension]; ++read) {
+            Entry& entry = resident_published_[dimension][read];
+            if (entry.key.attempt == attempt) {
+              ++removed;
+              continue;
+            }
+            if (write != read)
+              require_preallocated_entry_contract_(resident_published_[dimension][write], entry);
+            if (write != read)
+              resident_published_[dimension][write] = entry;
+            ++write;
+          }
+          resident_published_sizes_[dimension] = write;
+        }
+        return removed;
+      }
+    }
     std::array<std::vector<Entry>, Dim> candidate;
     std::size_t removed = 0;
     for (int axis = 0; axis < Dim; ++axis) {
@@ -332,6 +681,10 @@ class TransactionalFaceFluxLedger {
   }
 
  private:
+  struct PreparedSlotLocation {
+    std::uint32_t axis = 0;
+    std::size_t index = 0;
+  };
   struct Savepoint {
     std::array<std::size_t, Dim> pending_sizes{};
   };
@@ -356,6 +709,43 @@ class TransactionalFaceFluxLedger {
     return result;
   }
 
+  static std::size_t total_size_(const std::array<std::size_t, Dim>& entries) noexcept {
+    std::size_t result = 0;
+    for (const std::size_t axis : entries)
+      result += axis;
+    return result;
+  }
+
+  static void validate_prepared_slot_(const PreparedSlot& slot) {
+    if (slot.key.owner.empty() || slot.key.state.empty() || slot.key.stage.empty() ||
+        slot.payload_components == 0)
+      throw std::invalid_argument("ND face-flux resident slot has incomplete identity or payload");
+    if (slot.key.levels.coarse < 0 || slot.key.levels.fine != slot.key.levels.coarse + 1 ||
+        slot.key.centering != FaceLedgerCentering::Face ||
+        slot.key.contribution != FaceLedgerContribution::NumericalFlux)
+      throw std::invalid_argument("ND face-flux resident slot has an invalid static route");
+    detail::checked_axis(slot.key.axis, Dim);
+    if ((slot.key.role == FaceLedgerRole::Coarse &&
+         slot.key.clock.level != slot.key.levels.coarse) ||
+        (slot.key.role == FaceLedgerRole::Fine && slot.key.clock.level != slot.key.levels.fine))
+      throw std::invalid_argument("ND face-flux resident slot clock level differs from its role");
+  }
+
+  static void require_preallocated_entry_contract_(const Entry& destination, const Entry& source) {
+    if (destination.key.owner.capacity() < source.key.owner.size() ||
+        destination.key.state.capacity() < source.key.state.size() ||
+        destination.key.stage.capacity() < source.key.stage.size())
+      throw std::logic_error(
+          "ND face-flux resident entry copy would exceed its frozen identity or payload capacity");
+    if constexpr (requires {
+                    destination.payload.capacity();
+                    source.payload.size();
+                  })
+      if (destination.payload.capacity() < source.payload.size())
+        throw std::logic_error(
+            "ND face-flux resident entry copy would exceed its frozen payload capacity");
+  }
+
   void require_transaction_(const char* operation) const {
     if (!in_transaction())
       throw std::runtime_error(std::string("ND face-flux ledger ") + operation +
@@ -370,6 +760,14 @@ class TransactionalFaceFluxLedger {
 
   std::array<std::vector<Entry>, Dim> pending_{};
   std::array<std::vector<Entry>, Dim> published_{};
+  std::array<std::vector<Entry>, Dim> publication_staging_{};
+  std::array<std::vector<Entry>, Dim> resident_pending_{};
+  std::array<std::vector<Entry>, Dim> resident_published_{};
+  std::array<std::vector<Entry>, Dim> resident_publication_staging_{};
+  std::array<std::size_t, Dim> resident_pending_sizes_{};
+  std::array<std::size_t, Dim> resident_published_sizes_{};
+  std::vector<PreparedSlotLocation> resident_slot_locations_;
+  bool resident_slots_bound_ = false;
   std::vector<Savepoint> savepoints_;
   std::optional<std::uint64_t> active_attempt_;
   std::optional<std::uint64_t> last_closed_attempt_;

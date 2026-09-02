@@ -36,12 +36,12 @@ def program_module_records(program: Any, model: Any = None) -> tuple[tuple[Any, 
             identity = (owner_name, _space_identity(space))
             if identity not in seen_states:
                 seen_states.add(identity)
-                states.append((space.name, "state-space", "", "{}", owner_name))
+                states.append((space.name, "state-space", _space_signature(space), "{}", owner_name))
         for space in _declared_spaces(declared_module, "field_spaces", "field_space"):
             identity = (owner_name, _space_identity(space))
             if identity not in seen_fields:
                 seen_fields.add(identity)
-                fields.append((space.name, "field-space", "", "{}", owner_name))
+                fields.append((space.name, "field-space", _space_signature(space), "{}", owner_name))
     return tuple(operators), tuple(states), tuple(fields)
 
 
@@ -65,6 +65,17 @@ def _space_identity(space: Any) -> Any:
         payload = space.to_data() if hasattr(space, "to_data") else repr(space)
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return space
+
+
+def _space_signature(space: Any) -> str:
+    """Return the exact canonical structural signature carried by a v5 module-space row."""
+    to_data = getattr(space, "to_data", None)
+    if not callable(to_data):
+        raise TypeError("Program module space metadata requires a structural to_data() projection")
+    signature = json.dumps(to_data(), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    if not signature:
+        raise ValueError("Program module space metadata produced an empty structural signature")
+    return signature
 
 
 __all__ = ["program_module_records"]

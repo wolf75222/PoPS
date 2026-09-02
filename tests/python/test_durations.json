@@ -180,6 +180,7 @@
   "tests/python/unit/codegen/test_prepared_native_dependencies.py": 2.0,
   "tests/python/unit/codegen/test_prepared_preconditioner_registry.py": 2.0,
   "tests/python/unit/codegen/test_program_codegen_multimodel.py": 2.0,
+  "tests/python/unit/codegen/test_program_flux_lowering.py": 140.0,
   "tests/python/unit/codegen/test_program_persistent_plan.py": 2.0,
   "tests/python/unit/codegen/test_program_emit_kernels_nd.py": 0.5,
   "tests/python/unit/codegen/test_program_emit_params_multimodel.py": 2.0,
@@ -708,6 +709,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 435
+    "total_files": 436
   }
 }

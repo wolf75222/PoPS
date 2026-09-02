@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -256,6 +257,7 @@ void prove_program_embedded_boundary_contract(const std::string& mode) {
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   materialize_centered_fine_level(system);
   ASSERT_EQ(system.n_levels(), 2) << mode;
+  const int level_count = system.n_levels();
 
   using Context = pops::runtime::program::ProgramExecutionServices<Dim>;
   using Field = pops::MultiFab<Dim>;
@@ -304,40 +306,96 @@ void prove_program_embedded_boundary_contract(const std::string& mode) {
   const int block_count = system.n_blocks();
   if (block_count < 1)
     throw std::logic_error("embedded-boundary callback requires at least one Program block");
+  const std::string program_identity = "tests.amr.program-eb/" + mode + "/command@1";
+  const std::string program_clock = "test.clock.macro";
+  const std::vector<std::string> program_blocks = system.block_names();
+  if (program_blocks.size() != static_cast<std::size_t>(block_count))
+    throw std::logic_error("embedded-boundary callback Program block authority is incomplete");
   std::vector<Resource> resources;
-  resources.reserve(static_cast<std::size_t>(2 * block_count + 2));
-  for (int level = 0; level < 2; ++level) {
+  resources.reserve(static_cast<std::size_t>(level_count * block_count + 2));
+  std::vector<pops::test::program_v5::CallbackProgramFluxBasisOccurrence> flux_basis_occurrences;
+  std::vector<pops::test::program_v5::CallbackProgramFaceFluxStage> face_flux_stages;
+  flux_basis_occurrences.reserve(static_cast<std::size_t>(level_count * block_count));
+  face_flux_stages.reserve(static_cast<std::size_t>(level_count * block_count));
+  for (int level = 0; level < level_count; ++level) {
     for (int block = 0; block < block_count; ++block) {
       const auto state_view = system.prepared_amr_block_state(block, level);
       ASSERT_TRUE(state_view) << mode << " level=" << level << " block=" << block;
-      resources.push_back({Resource::Kind::rhs, resources.size(), 0, block, level,
-                           static_cast<std::uint32_t>(state_view->ncomp()),
-                           static_cast<std::uint32_t>(state_view->ghosts()[0])});
+      const std::size_t slot = resources.size();
+      const int rhs_identity = 3000 + block;
+      const std::string resource_identity = "tests.amr.program-eb/" + mode + "/rhs/" +
+                                            std::to_string(block) + "/level/" +
+                                            std::to_string(level);
+      Resource resource{Resource::Kind::rhs,
+                        slot,
+                        0,
+                        block,
+                        level,
+                        static_cast<std::uint32_t>(state_view->ncomp()),
+                        static_cast<std::uint32_t>(state_view->ghosts()[0])};
+      resource.value_id = static_cast<std::uint64_t>(rhs_identity);
+      resource.identity = resource_identity;
+      resource.occurrence_path = resource_identity + "/occurrence";
+      resource.owner = program_blocks.at(static_cast<std::size_t>(block));
+      resource.clock = program_clock;
+      resources.push_back(std::move(resource));
+
+      const auto dense_slot = static_cast<std::uint32_t>(slot);
+      flux_basis_occurrences.push_back(
+          {dense_slot, dense_slot, block, level, rhs_identity, 0, 0, 1,
+           resource_identity + "/flux-basis", resource_identity + "/flux-basis/occurrence",
+           program_blocks.at(static_cast<std::size_t>(block)), program_clock});
+      face_flux_stages.push_back(
+          {dense_slot, dense_slot, dense_slot, 1, 1, 1, resource_identity + "/face-flux",
+           resource_identity + "/face-flux/occurrence",
+           program_blocks.at(static_cast<std::size_t>(block)), program_clock});
     }
   }
   const auto status_slot = resources.size();
   resources.push_back({Resource::Kind::scalar, status_slot, 0, 0, 0, 1, 0});
   resources.push_back({Resource::Kind::scalar, status_slot + 1, 0, 0, 1, 1, 0});
+  const std::optional<std::vector<pops::runtime::program::ProgramFluxBudgetRecord>> flux_budgets{
+      std::vector<pops::runtime::program::ProgramFluxBudgetRecord>(
+          static_cast<std::size_t>(block_count), {1, 1, 0, 0})};
 
   Command command;
   Result result;
   pops::test::install_explicit_amr_callback_program<Dim>(
-      system, "tests.amr.program-eb/" + mode + "/command@1", "test.clock.macro", resources, {},
+      system, program_identity, program_clock, program_blocks, resources, {},
       [&command, &result, &active, status_slot, block_count](Context& context, double macro_dt) {
+        // Static ABI-v5 flux authority is complete for every active level group, including the
+        // seed/status/publication probes below. This fixture's advection speed is exactly zero,
+        // so those probes evaluate their authenticated RHS without changing state; only `advance`
+        // applies it to the candidate.
+        const auto evaluate_static_rhs = [&context, block_count](double level_dt,
+                                                                 bool advance_state) {
+          context.set_stage_time(0, 1);
+          for (int block = 0; block < block_count; ++block) {
+            auto& state = context.state(block);
+            const auto slot = static_cast<pops::runtime::program::ProgramCacheSlot>(
+                context.level() * block_count + block);
+            auto& residual = context.rhs_scratch(slot, 0, state);
+            context.rhs_into(block, state, residual, 3000 + block);
+            if (advance_state)
+              context.axpy(state, pops::Real(level_dt), residual);
+          }
+        };
         result = {};
         result.invoked = true;
         switch (command.operation) {
           case Operation::seed: {
             std::array<bool, 2> observed{};
-            context.advance_hierarchy(macro_dt, [&context, &result, &active, &observed](double) {
+            context.advance_hierarchy(macro_dt, [&context, &result, &active, &observed,
+                                                 &evaluate_static_rhs](double level_dt) {
+              evaluate_static_rhs(level_dt, false);
               const int level = context.level();
               auto& state = context.state(0);
               const auto& mask = *active[static_cast<std::size_t>(level)];
               state.set_val(pops::Real(1));
               seed_inactive_and_ghosts(state, mask, pops::Real(31 + level), pops::Real(71 + level));
               if (!observed[static_cast<std::size_t>(level)]) {
-                result.active_count += pops::all_reduce_sum(pops::reduce_sum_local(mask, 0));
                 if (level == 0) {
+                  result.active_count = pops::all_reduce_sum(pops::reduce_sum_local(mask, 0));
                   result.state_sum =
                       pops::all_reduce_sum(pops::reduce_active_sum_local(state, 0, &mask));
                   result.state_abs_sum =
@@ -356,65 +414,63 @@ void prove_program_embedded_boundary_contract(const std::string& mode) {
           }
           case Operation::status: {
             std::array<bool, 2> observed{};
-            context.advance_hierarchy(
-                macro_dt, [&context, &result, &active, &observed, status_slot](double) {
-                  const int level = context.level();
-                  auto& state = context.state(0);
-                  const auto& mask = *active[static_cast<std::size_t>(level)];
-                  auto& status = context.scalar_scratch(status_slot + level, 0, state, 1, 0);
-                  if (level == 0)
-                    write_status(status, mask, pops::Real(0),
-                                 std::numeric_limits<pops::Real>::quiet_NaN());
-                  else
-                    write_status(status, mask, std::numeric_limits<pops::Real>::quiet_NaN(),
-                                 pops::Real(0));
-                  if (!observed[static_cast<std::size_t>(level)]) {
-                    const auto local = pops::reduce_masked_max_local(status, 0, &mask);
-                    const long has_active = pops::all_reduce_max(local.has_active ? 1L : 0L);
-                    const long has_invalid = pops::all_reduce_max(local.has_invalid ? 1L : 0L);
-                    const pops::Real maximum = pops::all_reduce_max(local.maximum);
-                    const pops::Real value = has_invalid != 0 ? pops::Real(3) : maximum;
-                    if (level == 0)
-                      result.status_max_before = has_active != 0 ? value : pops::Real(0);
-                    else
-                      result.status_max_after = has_invalid != 0 ? pops::Real(3) : value;
-                    observed[static_cast<std::size_t>(level)] = true;
-                  }
-                });
-            break;
-          }
-          case Operation::publish:
-            context.advance_hierarchy(macro_dt, [&context, &active](double) {
+            context.advance_hierarchy(macro_dt, [&context, &result, &active, &observed, status_slot,
+                                                 &evaluate_static_rhs](double level_dt) {
+              evaluate_static_rhs(level_dt, false);
               const int level = context.level();
               auto& state = context.state(0);
-              set_active_valid(state, *active[static_cast<std::size_t>(level)],
-                               pops::Real(5 + level));
-            });
-            break;
-          case Operation::reject:
-            context.advance_hierarchy(macro_dt, [&context, &active](double) {
-              if (context.level() != 1)
-                return;
-              auto& state = context.state(0);
-              set_active_valid(state, *active[1], std::numeric_limits<pops::Real>::quiet_NaN());
-              throw std::runtime_error("injected embedded-boundary candidate rejection");
-            });
-            break;
-          case Operation::advance:
-            context.advance_hierarchy(macro_dt, [&context, block_count](double level_dt) {
-              context.set_stage_time(0, 1);
-              for (int block = 0; block < block_count; ++block) {
-                auto& state = context.state(block);
-                const auto slot = static_cast<pops::runtime::program::ProgramCacheSlot>(
-                    context.level() * block_count + block);
-                auto& residual = context.rhs_scratch(slot, 0, state);
-                context.rhs_into(block, state, residual, 3000 + block);
-                context.axpy(state, pops::Real(level_dt), residual);
+              const auto& mask = *active[static_cast<std::size_t>(level)];
+              auto& status = context.scalar_scratch(status_slot + level, 0, state, 1, 0);
+              if (level == 0)
+                write_status(status, mask, pops::Real(0),
+                             std::numeric_limits<pops::Real>::quiet_NaN());
+              else
+                write_status(status, mask, std::numeric_limits<pops::Real>::quiet_NaN(),
+                             pops::Real(0));
+              if (!observed[static_cast<std::size_t>(level)]) {
+                const auto local = pops::reduce_masked_max_local(status, 0, &mask);
+                const long has_active = pops::all_reduce_max(local.has_active ? 1L : 0L);
+                const long has_invalid = pops::all_reduce_max(local.has_invalid ? 1L : 0L);
+                const pops::Real maximum = pops::all_reduce_max(local.maximum);
+                const pops::Real value = has_invalid != 0 ? pops::Real(3) : maximum;
+                if (level == 0)
+                  result.status_max_before = has_active != 0 ? value : pops::Real(0);
+                else
+                  result.status_max_after = has_invalid != 0 ? pops::Real(3) : value;
+                observed[static_cast<std::size_t>(level)] = true;
               }
             });
             break;
+          }
+          case Operation::publish:
+            context.advance_hierarchy(
+                macro_dt, [&context, &active, &evaluate_static_rhs](double level_dt) {
+                  evaluate_static_rhs(level_dt, false);
+                  const int level = context.level();
+                  auto& state = context.state(0);
+                  set_active_valid(state, *active[static_cast<std::size_t>(level)],
+                                   pops::Real(5 + level));
+                });
+            break;
+          case Operation::reject:
+            context.advance_hierarchy(
+                macro_dt, [&context, &active, &evaluate_static_rhs](double level_dt) {
+                  evaluate_static_rhs(level_dt, false);
+                  if (context.level() != 1)
+                    return;
+                  auto& state = context.state(0);
+                  set_active_valid(state, *active[1], std::numeric_limits<pops::Real>::quiet_NaN());
+                  throw std::runtime_error("injected embedded-boundary candidate rejection");
+                });
+            break;
+          case Operation::advance:
+            context.advance_hierarchy(macro_dt, [&evaluate_static_rhs](double level_dt) {
+              evaluate_static_rhs(level_dt, true);
+            });
+            break;
         }
-      });
+      },
+      {}, {}, flux_budgets, {}, std::nullopt, flux_basis_occurrences, face_flux_stages);
   const auto run_command = [&](Operation operation) {
     command.operation = operation;
     result = {};
@@ -463,11 +519,21 @@ void prove_program_embedded_boundary_contract(const std::string& mode) {
   const Result publish_result = run_command(Operation::publish);
   EXPECT_TRUE(publish_result.invoked && !publish_result.threw) << mode;
   for (int level = 0; level < 2; ++level) {
-    pops::MultiFab<Dim> expected(accepted_before[static_cast<std::size_t>(level)]);
-    set_active_valid(expected, *active[static_cast<std::size_t>(level)], pops::Real(5 + level));
     const auto state_view = system.prepared_amr_block_state(0, level);
     ASSERT_TRUE(state_view) << mode << " level=" << level;
-    EXPECT_EQ(pops::difference_sum_sq_all(*state_view, expected), pops::Real(0))
+    EXPECT_TRUE(inactive_valid_and_ghosts_equal(*state_view,
+                                                accepted_before[static_cast<std::size_t>(level)],
+                                                *active[static_cast<std::size_t>(level)]))
+        << mode << " level=" << level;
+    const auto& mask = *active[static_cast<std::size_t>(level)];
+    EXPECT_EQ(pops::all_reduce_min(pops::reduce_active_min_local(*state_view, 0, &mask)),
+              pops::Real(5 + level))
+        << mode << " level=" << level;
+    // Fine active cells are six. The terminal AMR publication average-downs covered fine cells
+    // into level zero, so six is also the coarse active maximum while uncovered coarse cells stay
+    // five. This is the accepted hierarchy authority, not a per-level independent copy oracle.
+    EXPECT_EQ(pops::all_reduce_max(pops::reduce_active_max_local(*state_view, 0, &mask)),
+              pops::Real(6))
         << mode << " level=" << level;
   }
 

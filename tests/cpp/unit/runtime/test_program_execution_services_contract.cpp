@@ -39,12 +39,15 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <limits>
 #include <memory>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -54,6 +57,143 @@
 #if defined(POPS_HAS_KOKKOS)
 #include <Kokkos_Core.hpp>
 #endif
+
+namespace {
+
+std::atomic<bool> g_boundary_point_heap_window_enabled{false};
+std::atomic<std::uint64_t> g_boundary_point_heap_allocations{0};
+
+void note_boundary_point_heap_allocation() noexcept {
+  if (g_boundary_point_heap_window_enabled.load(std::memory_order_relaxed))
+    g_boundary_point_heap_allocations.fetch_add(1, std::memory_order_relaxed);
+}
+
+void* boundary_point_allocate(std::size_t size) {
+  void* pointer = std::malloc(size == 0 ? 1 : size);
+  if (pointer == nullptr)
+    throw std::bad_alloc();
+  note_boundary_point_heap_allocation();
+  return pointer;
+}
+
+class BoundaryPointHeapWindow final {
+ public:
+  BoundaryPointHeapWindow()
+      : before_(g_boundary_point_heap_allocations.load(std::memory_order_relaxed)) {
+    g_boundary_point_heap_window_enabled.store(true, std::memory_order_relaxed);
+  }
+
+  [[nodiscard]] std::uint64_t close() noexcept {
+    g_boundary_point_heap_window_enabled.store(false, std::memory_order_relaxed);
+    return g_boundary_point_heap_allocations.load(std::memory_order_relaxed) - before_;
+  }
+
+ private:
+  std::uint64_t before_ = 0;
+};
+
+}  // namespace
+
+void* operator new(std::size_t size) {
+  return boundary_point_allocate(size);
+}
+void* operator new[](std::size_t size) {
+  return boundary_point_allocate(size);
+}
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+  try {
+    return boundary_point_allocate(size);
+  } catch (...) {
+    return nullptr;
+  }
+}
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+  return ::operator new(size, std::nothrow);
+}
+void operator delete(void* pointer) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+void* operator new(std::size_t size, std::align_val_t alignment) {
+  void* pointer = nullptr;
+  if (posix_memalign(&pointer, static_cast<std::size_t>(alignment), size == 0 ? 1 : size) != 0)
+    pointer = nullptr;
+  if (pointer == nullptr)
+    throw std::bad_alloc();
+  note_boundary_point_heap_allocation();
+  return pointer;
+}
+void* operator new[](std::size_t size, std::align_val_t alignment) {
+  return ::operator new(size, alignment);
+}
+void* operator new(std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
+  try {
+    return ::operator new(size, alignment);
+  } catch (...) {
+    return nullptr;
+  }
+}
+void* operator new[](std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
+  return ::operator new(size, alignment, std::nothrow);
+}
+void operator delete(void* pointer, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::size_t, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::size_t, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::align_val_t, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::align_val_t, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+
+namespace pops::runtime::program::detail {
+
+template <int Dim>
+struct ProgramExecutionServicesForwardOverlayTestAccess final {
+  using services_type = ProgramExecutionServices<Dim>;
+
+  static void mark_accepted(services_type& services) {
+    services.binding_ = services_type::Binding::accepted;
+  }
+
+  static std::shared_ptr<services_type> make_uniform_accepted() {
+    return std::shared_ptr<services_type>(new services_type(services_type::Binding::accepted));
+  }
+
+  static bool has_live_preparation_image(const services_type& services) {
+    return services.preparation_image_ != nullptr && services.preparation_image_->execution_ready();
+  }
+
+  static std::map<std::string, std::int64_t> accepted_amr_clock_ticks(const services_type& services,
+                                                                      std::int64_t macro_step) {
+    return services.amr_test_backend_().accepted_clock_schedule().accepted_ticks(macro_step);
+  }
+};
+
+}  // namespace pops::runtime::program::detail
 
 using namespace pops;
 
@@ -68,9 +208,64 @@ static_assert(std::is_nothrow_move_assignable_v<NativeSystem>);
 static_assert(!std::is_copy_constructible_v<NativeSystem>);
 static_assert(!std::is_copy_assignable_v<NativeSystem>);
 using NativeProgramExecutionServices = runtime::program::ProgramExecutionServices<kTestDimension>;
+using NativeAmrStorageTopologyAdapter = runtime::program::detail::AmrStorageTopologyAdapter<
+    kTestDimension, typename Kokkos::DefaultExecutionSpace::memory_space>;
+static_assert(!std::is_copy_constructible_v<NativeProgramExecutionServices>);
+static_assert(!std::is_copy_assignable_v<NativeProgramExecutionServices>);
+static_assert(!std::is_move_constructible_v<NativeProgramExecutionServices>);
+static_assert(!std::is_move_assignable_v<NativeProgramExecutionServices>);
+static_assert(!std::is_copy_constructible_v<NativeAmrStorageTopologyAdapter>);
+static_assert(!std::is_copy_assignable_v<NativeAmrStorageTopologyAdapter>);
+static_assert(!std::is_move_constructible_v<NativeAmrStorageTopologyAdapter>);
+static_assert(!std::is_move_assignable_v<NativeAmrStorageTopologyAdapter>);
 using NativeField = MultiFab<kTestDimension>;
 using NativeConstView = FieldView<const Real, kTestDimension>;
 using NativeBox = Box<kTestDimension>;
+using NativeAmrTopology = NativeProgramExecutionServices::AmrPreparationTopologyView;
+using NativeAmrRegistry =
+    NativeProgramExecutionServices::AmrBackend::hierarchy_tensor_registry_type;
+
+class EmptyAcceptedExecutionSnapshot final
+    : public runtime::program::AcceptedProgramExecutionServicesSnapshot {
+ public:
+  std::unique_ptr<runtime::program::AcceptedProgramExecutionServicesSnapshot> prepare_restore()
+      const override {
+    return std::make_unique<EmptyAcceptedExecutionSnapshot>();
+  }
+  void publish_restore() noexcept override {}
+};
+
+struct ForwardOverlayTopologyFixture final {
+  runtime::program::ProgramRuntimeState<kTestDimension> program_state{};
+  std::shared_ptr<ExecutionLane> lane =
+      std::make_shared<ExecutionLane>(ExecutionLane::world("pops.test.program-forward-overlay"));
+  std::shared_ptr<const NativeAmrRegistry> tensor_registry = std::make_shared<NativeAmrRegistry>();
+  std::shared_ptr<NativeAmrTopology> topology = std::make_shared<NativeAmrTopology>();
+
+  ForwardOverlayTopologyFixture() {
+    topology->forward_detached = true;
+    topology->program_state = &program_state;
+    topology->lane = lane.get();
+    topology->hierarchy_tensor_registry = tensor_registry;
+    topology->program_block_map = {0};
+    topology->block_prototypes = {{NativeField{}}};
+    topology->runtime_block_boundary_linearizations = {false};
+    topology->spatial_contract = "pops.test.program-forward-overlay.spatial";
+    NativeBox domain{};
+    RealVector<kTestDimension> upper{};
+    for (int axis = 0; axis < kTestDimension; ++axis) {
+      domain.lo[axis] = 0;
+      domain.hi[axis] = 0;
+      upper[axis] = Real(1);
+    }
+    topology->level_geometries = {
+        Geometry<kTestDimension>::from_bounds(domain, RealVector<kTestDimension>{}, upper)};
+    topology->periodic_faces.assign(static_cast<std::size_t>(2 * kTestDimension), false);
+    topology->topology_epoch = 17;
+    topology->materialization_generation = 23;
+    topology->validate();
+  }
+};
 
 void install_execution_lane(NativeSystem& system, std::string identity) {
   system.install_prepared_boundary_execution_lane(
@@ -89,6 +284,20 @@ static_assert(
     std::is_same_v<decltype(std::declval<const runtime::program::ProgramExecutionServices<3>&>()
                                 .template provider_values_view<0>("", 0, 0)),
                    ProviderStorageView<3, 0>>);
+
+/// Generated Program sources intentionally use a bare braced exact-dt list.  This must bind to the
+/// concrete common facade overload; routing it through the variadic dispatcher would make the list
+/// non-deducible and reject otherwise valid Uniform Program artifacts at compilation.
+template <int Dim>
+concept HasPublicExactAxpy =
+    requires(const runtime::program::ProgramExecutionServices<Dim>& context,
+             MultiFab<Dim>& destination, const MultiFab<Dim>& source) {
+      context.axpy(destination, Real(1), source, Real(1), {{0, 1, 1}});
+    };
+
+static_assert(HasPublicExactAxpy<1>);
+static_assert(HasPublicExactAxpy<2>);
+static_assert(HasPublicExactAxpy<3>);
 
 NativeSystemConfig native_config(std::int64_t cells, Real length = Real(1)) {
   NativeSystemConfig config;
@@ -257,6 +466,80 @@ void add_gas(NativeSystem& s) {
   s.set_poisson("charge_density", "cartesian_cg");
 }
 
+void add_scalar_block(NativeSystem& s, const std::string& name) {
+  s.install_block_state_route(name, "test::state::" + name);
+  PreparedSystemBlock<kTestDimension> prepared;
+  prepared.name = name;
+  prepared.provider_identity = "test.program-context.scalar";
+  prepared.ncomp = 1;
+  prepared.conservative_variables = {VariableKind::Conservative, {"q"}, 1, {VariableRole::Scalar}};
+  prepared.primitive_variables = {VariableKind::Primitive, {"q"}, 1, {VariableRole::Scalar}};
+  prepared.gamma = 1.0;
+  for (int axis = 0; axis < kTestDimension; ++axis)
+    prepared.ghosts[axis] = 1;
+
+  const auto residual = [](NativeField&, NativeField& output) { output.set_val(Real(0)); };
+  const auto point_residual = [](const auto&, NativeField&, NativeField& output) {
+    output.set_val(Real(0));
+  };
+  const auto prepared_point_residual = [](const auto&, NativeField&, NativeField& output,
+                                          const auto&) { output.set_val(Real(0)); };
+  prepared.closures.rhs_into = residual;
+  prepared.closures.rhs_flux_only = residual;
+  prepared.closures.source_only = residual;
+  prepared.closures.source_only_masked = residual;
+  prepared.closures.rhs_at_point = point_residual;
+  prepared.closures.rhs_flux_only_at_point = point_residual;
+  prepared.closures.rhs_without_prepared_interfaces = point_residual;
+  prepared.closures.rhs_flux_only_without_prepared_interfaces = point_residual;
+  prepared.closures.rhs_core_at_point = point_residual;
+  prepared.closures.rhs_flux_only_core_at_point = point_residual;
+  prepared.closures.rhs_core_at_point_prepared = prepared_point_residual;
+  prepared.closures.rhs_flux_only_core_at_point_prepared = prepared_point_residual;
+  prepared.closures.prepare_generated_state_at_point = [](const auto&, NativeField&) {};
+  prepared.closures.prepare_generated_state_at_point_prepared = [](const auto&, NativeField&,
+                                                                   const auto&) {};
+  prepared.closures.prepare_generated_state_with_transport_prepared =
+      [](const auto&, NativeField&, const auto&, const ExecutionLane&, const auto&) {};
+  prepared.closures.external_ghost_boundary =
+      std::make_shared<SystemBlockClosures<kTestDimension>::ExternalGhostBoundary>(
+          [](const auto&, NativeField&, const auto&, const ExecutionLane&) {});
+  prepared.maximum_speed = [](const NativeField&, const ExecutionLane&) { return Real(1); };
+  prepared.poisson_rhs = [](const NativeField&, NativeField& output) { output.set_val(Real(0)); };
+  prepared.primitive_to_conservative = [](const double* primitive, double* conservative) {
+    conservative[0] = primitive[0];
+  };
+  prepared.conservative_to_primitive = [](const double* conservative, double* primitive) {
+    RecoveryReport report;
+    report.status = RecoveryStatus::kRecovered;
+    report.attempted_methods = 1;
+    report.selected_method = 0;
+    report.last_method = 0;
+    if (!std::isfinite(conservative[0])) {
+      report.status = RecoveryStatus::kRejected;
+      report.cause = RecoveryCause::kNonFiniteCandidate;
+      report.failing_component = 0;
+      return report;
+    }
+    primitive[0] = conservative[0];
+    return report;
+  };
+  prepared.batch_conservative_to_primitive = [](const std::vector<double>& conserved,
+                                                std::vector<double>& primitive) {
+    primitive = conserved;
+    UniformRecoveryBatchReport report;
+    report.recovery.status = RecoveryStatus::kRecovered;
+    report.recovery.attempted_methods = 1;
+    report.recovery.selected_method = 0;
+    report.recovery.last_method = 0;
+    report.cell_count = conserved.size();
+    report.recovered_cells = conserved.size();
+    report.published = true;
+    return report;
+  };
+  s.install_prepared_block(std::move(prepared));
+}
+
 /// Build the test provider through the same detached v5 preparation authority as a generated DSO.
 /// The image and provider are kept together so no test callback can retain a stack-owned host
 /// descriptor or accidentally exercise a direct System constructor.
@@ -275,6 +558,37 @@ PreparedNativeProgramServices prepare_native_program_services(NativeSystem& syst
   return {std::move(image), std::move(provider)};
 }
 
+std::string install_long_qid_auxiliary_plan(NativeSystem& system) {
+  using runtime::system::AuxiliaryComponentContract;
+  using runtime::system::AuxiliaryComponentKey;
+  using runtime::system::AuxiliaryConsumerProviderPlan;
+  using runtime::system::AuxiliaryEvaluationEvent;
+  using runtime::system::AuxiliaryFreshness;
+  using runtime::system::AuxiliaryOutput;
+  using runtime::system::AuxiliaryProviderKind;
+  using runtime::system::AuxiliaryStorageShape;
+  using runtime::system::PreparedAuxiliaryProvider;
+
+  // Keep this longer than every supported short-string representation: the hot lookup must borrow
+  // these bytes directly rather than manufacture a temporary std::string for the registry.
+  const std::string qid =
+      "pops.test.program-context.provider-values-view.consumer-qualified-id-over-sso";
+  const AuxiliaryComponentKey key{"pops.test.program-context.provider-values-view", "input",
+                                  "long-qid", "value"};
+  const AuxiliaryComponentContract contract{"cell-average", "cell", "unitless", "input", "scalar"};
+  AuxiliaryStorageShape<kTestDimension> shape;
+  system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<kTestDimension>{
+      "pops.test.program-context.provider-values-view.provider",
+      AuxiliaryProviderKind::input,
+      {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
+      {{key, contract, shape}},
+      {}});
+  system.install_auxiliary_consumer_plan(
+      AuxiliaryConsumerProviderPlan<kTestDimension>{qid, {{{key, contract, shape}, 0}}});
+  system.seal_auxiliary_providers();
+  return qid;
+}
+
 PreparedNativeProgramServices prepare_native_scratch_services(NativeSystem& system) {
   auto host = system.program_host_descriptor();
   auto image = runtime::program::make_program_preparation_image<kTestDimension>(&system, 1);
@@ -287,7 +601,11 @@ PreparedNativeProgramServices prepare_native_scratch_services(NativeSystem& syst
   scratch.flags = runtime::program::kProgramResourceRuntimeSized;
   scratch.resource_type = runtime::program::ProgramResourcePlanType::runtime_sized;
   scratch.components = GasModel::n_vars;
-  scratch.ghosts = 1;
+  // Symbolic lowering cannot know the accepted System's actual ghost width.
+  // The candidate prelude must capture that width from its immutable prototype
+  // and authenticate it in the materialized ResourcePrototype, rather than
+  // priming a zero-ghost field that will drift on its first hot access.
+  scratch.ghosts = 0;
   runtime::program::bind_staged_uniform_program_resource_declaration<kTestDimension>(
       image, declaration, system.program_block_map());
   runtime::program::bind_program_preparation_image(host, image);
@@ -325,6 +643,51 @@ PreparedNativeProgramServices prepare_native_field_route_services(NativeSystem& 
   return {std::move(image), std::move(provider)};
 }
 
+PreparedNativeProgramServices prepare_uniform_host_footprint_services(NativeSystem& system,
+                                                                      std::string field,
+                                                                      int scratch_subslot) {
+  auto host = system.program_host_descriptor();
+  auto image = runtime::program::make_program_preparation_image<kTestDimension>(&system, 1);
+  std::vector<runtime::program::ProgramInstallationTables::ResourcePlan> declaration(1);
+  auto& scratch = declaration.front();
+  scratch.slot = 0;
+  scratch.flags = runtime::program::kProgramResourceRuntimeSized;
+  scratch.resource_type = runtime::program::ProgramResourcePlanType::runtime_sized;
+  scratch.components = GasModel::n_vars;
+  scratch.ghosts = 1;
+  runtime::program::bind_staged_uniform_program_resource_declaration<kTestDimension>(
+      image, declaration, system.program_block_map());
+  runtime::program::bind_program_preparation_image(host, image);
+  auto provider =
+      runtime::program::make_program_execution_provider<kTestDimension>(host.preparation);
+  provider->prepare_rhs_scratch(0, scratch_subslot, 0);
+  provider->prepare_generated_field_route(0, field, {0});
+  provider->configure_primary_clock("clock.host-footprint");
+  provider->declare_clock_relation("clock.host-footprint", "clock.host-footprint.child", 2);
+  provider->seal_uniform_preparation();
+  return {std::move(image), std::move(provider)};
+}
+
+using ResourcePrototype = runtime::program::ProgramInstallationTables::ResourcePrototype;
+using ResourcePrototypeKind = runtime::program::ProgramInstallationTables::ResourcePrototypeKind;
+
+const ResourcePrototype& prepared_resource_row(const std::vector<ResourcePrototype>& prototypes,
+                                               ResourcePrototypeKind kind) {
+  const auto found = std::find_if(prototypes.begin(), prototypes.end(),
+                                  [kind](const auto& row) { return row.kind == kind; });
+  if (found == prototypes.end() || !found->layout.maximum_bytes)
+    throw std::logic_error(
+        "prepared resource family '" +
+        runtime::program::ProgramInstallationTables::resource_prototype_kind_name(kind) +
+        "' is absent from the host footprint");
+  return *found;
+}
+
+std::uint64_t prepared_host_bytes(const std::vector<ResourcePrototype>& prototypes,
+                                  ResourcePrototypeKind kind) {
+  return *prepared_resource_row(prototypes, kind).layout.maximum_bytes;
+}
+
 using NativeProgramCallback = std::function<void(NativeProgramExecutionServices&, double)>;
 
 std::vector<NativeProgramCallback>& native_program_callbacks() {
@@ -341,15 +704,274 @@ extern "C" void pops_test_program_execution_services_callback(std::uint64_t iden
       *static_cast<NativeProgramExecutionServices*>(opaque), dt);
 }
 
+TEST(ProgramExecutionServicesContract,
+     ForwardOverlayBuildsDetachedProviderFromAcceptedPreparationAnchor) {
+  ensure_kokkos();
+  using Access =
+      runtime::program::detail::ProgramExecutionServicesForwardOverlayTestAccess<kTestDimension>;
+  ForwardOverlayTopologyFixture fixture;
+  runtime::program::ProgramHostDescriptor source{};
+  source.native_dimension = static_cast<std::uint32_t>(kTestDimension);
+  source.runtime_kind = runtime::program::ProgramRuntimeKind::amr;
+  auto image = std::make_shared<runtime::program::ProgramExecutionPreparationImage<kTestDimension>>(
+      source, fixture.topology, 1);
+  auto accepted_provider = image->provider();
+  constexpr std::string_view kPrimaryClock = "clock.macro";
+  constexpr std::string_view kQualifiedClock =
+      "pops.clock.v1::sha256:71ed5d5a72c7ef2868f5325da57e0db7e4c902e4d95d42dc04ca76260525e029";
+  accepted_provider->configure_primary_clock(std::string(kPrimaryClock));
+  EXPECT_NO_THROW(accepted_provider->declare_clock_relation(std::string(kPrimaryClock),
+                                                            std::string(kQualifiedClock), 3));
+  ASSERT_NO_THROW(image->reconcile_staged_amr_checkpoint_clock_identities(
+      {std::string(kPrimaryClock), std::string(kQualifiedClock)}));
+  const std::map<std::string, std::int64_t> expected_ticks{{std::string(kPrimaryClock), 7},
+                                                           {std::string(kQualifiedClock), 21}};
+  EXPECT_EQ(image->staged_clock_schedule().accepted_ticks(7), expected_ticks);
+  EXPECT_EQ(Access::accepted_amr_clock_ticks(*accepted_provider, 7), expected_ticks);
+  runtime::multiblock::BoundaryEvaluationPoint detached_point;
+  EXPECT_NO_THROW(accepted_provider->prepare_boundary_evaluation_point(detached_point));
+  EXPECT_EQ(detached_point.clock, kPrimaryClock)
+      << "detached cold preparation must reserve its clock without an accepted AMR facade";
+  runtime::program::PreparedForwardAmrExecutionAuthorityView<kTestDimension> authority(
+      fixture.topology);
+  EmptyAcceptedExecutionSnapshot snapshot;
+
+  EXPECT_THROW(accepted_provider->with_forward_execution_overlay(
+                   authority, snapshot,
+                   [](std::shared_ptr<NativeProgramExecutionServices>) { return true; }),
+               std::logic_error)
+      << "a preparation-bound provider is not an accepted forward anchor";
+
+  Access::mark_accepted(*accepted_provider);
+  EXPECT_THROW(
+      accepted_provider->register_hierarchy_tensor_solver_provider(
+          std::shared_ptr<
+              const NativeProgramExecutionServices::AmrBackend::hierarchy_tensor_provider_type>{}),
+      std::logic_error)
+      << "an accepted Program cannot grow its image-owned provider registry";
+  EXPECT_THROW(accepted_provider->configure_hierarchy_tensor_solver(
+                   0, 1, "pops.hierarchy.composite-tensor-fac", "pops.test.plan",
+                   "pops.test.operator", std::vector<std::string>{"pops.test.assembly"},
+                   "pops.test.solution", PreparedProviderOptions{"pops.test.options", {}}),
+               std::logic_error)
+      << "an accepted Program cannot rebuild a tensor solver outside preparation";
+  auto forward_provider = accepted_provider->with_forward_execution_overlay(
+      authority, snapshot,
+      [](std::shared_ptr<NativeProgramExecutionServices> provider) { return provider; });
+  ASSERT_TRUE(forward_provider);
+  EXPECT_NE(forward_provider.get(), accepted_provider.get());
+  EXPECT_TRUE(forward_provider->is_amr());
+  EXPECT_TRUE(Access::has_live_preparation_image(*forward_provider));
+  const auto forward_topology = forward_provider->program_resource_topology();
+  EXPECT_EQ(forward_topology.levels, 1);
+  EXPECT_EQ(forward_topology.epoch, fixture.topology->topology_epoch);
+  EXPECT_EQ(forward_topology.generation, fixture.topology->materialization_generation);
+  std::vector<int> visited_levels;
+  forward_provider->for_each_program_resource_level(
+      [&](int level) { visited_levels.push_back(level); });
+  EXPECT_EQ(visited_levels, std::vector<int>({0}));
+  runtime::multiblock::BoundaryEvaluationPoint forward_point;
+  EXPECT_NO_THROW(forward_provider->prepare_boundary_evaluation_point(forward_point));
+  EXPECT_EQ(forward_point.clock, kPrimaryClock)
+      << "a forward overlay must inherit the complete bind-sealed clock schedule";
+  EXPECT_EQ(Access::accepted_amr_clock_ticks(*forward_provider, 7), expected_ticks)
+      << "activation/publication must retain both staged clock identities and their exact ticks";
+
+  fixture.topology->periodic_faces[0] = true;
+  EXPECT_THROW((void)forward_provider->bind_mesh_boundary_session(
+                   fixture.topology->block_prototypes.front().front(), *fixture.topology->lane),
+               std::invalid_argument)
+      << "an asymmetric detached periodic image must fail before a boundary session is built";
+  fixture.topology->periodic_faces[0] = false;
+
+  image.reset();
+  EXPECT_TRUE(Access::has_live_preparation_image(*forward_provider))
+      << "the aliasing return must retain its detached forward image after factory return";
+  EXPECT_EQ(forward_provider->program_resource_topology().generation,
+            fixture.topology->materialization_generation)
+      << "the retained forward image must remain its own generation authority";
+
+  fixture.topology->block_prototypes.front().push_back(NativeField{});
+  EXPECT_THROW((void)forward_provider->program_resource_topology(), std::invalid_argument)
+      << "a detached topology whose field shape drifts from its geometry must fail closed";
+  fixture.topology->block_prototypes.front().pop_back();
+
+  auto wrong_runtime = Access::make_uniform_accepted();
+  EXPECT_THROW(wrong_runtime->with_forward_execution_overlay(
+                   authority, snapshot,
+                   [](std::shared_ptr<NativeProgramExecutionServices>) { return true; }),
+               std::logic_error);
+
+  auto malformed_topology = std::make_shared<NativeAmrTopology>(*fixture.topology);
+  malformed_topology->program_state = nullptr;
+  EXPECT_THROW((runtime::program::PreparedForwardAmrExecutionAuthorityView<kTestDimension>(
+                   std::move(malformed_topology))),
+               std::invalid_argument);
+}
+
+TEST(ProgramExecutionServicesContract,
+     FrozenCheckpointMacroClockIsReconciledIntoDetachedAmrSchedule) {
+  ensure_kokkos();
+  using Access =
+      runtime::program::detail::ProgramExecutionServicesForwardOverlayTestAccess<kTestDimension>;
+  ForwardOverlayTopologyFixture fixture;
+  runtime::program::ProgramHostDescriptor source{};
+  source.native_dimension = static_cast<std::uint32_t>(kTestDimension);
+  source.runtime_kind = runtime::program::ProgramRuntimeKind::amr;
+  auto image = std::make_shared<runtime::program::ProgramExecutionPreparationImage<kTestDimension>>(
+      source, fixture.topology, 1);
+  auto provider = image->provider();
+  constexpr std::string_view kQualifiedClock =
+      "pops.clock.v1::sha256:8ad8aef533351288f8d2255203718219df1f4a5866f3e0ab331c24fd2ff1f5b3";
+  provider->configure_primary_clock(std::string(kQualifiedClock));
+
+  ASSERT_NO_THROW(image->reconcile_staged_amr_checkpoint_clock_identities(
+      {"clock.macro", std::string(kQualifiedClock)}));
+  const std::map<std::string, std::int64_t> expected_ticks{{"clock.macro", 5},
+                                                           {std::string(kQualifiedClock), 5}};
+  EXPECT_EQ(image->staged_clock_schedule().accepted_ticks(5), expected_ticks);
+  EXPECT_EQ(Access::accepted_amr_clock_ticks(*provider, 5), expected_ticks)
+      << "the detached live service must carry the complete frozen checkpoint clock set";
+}
+
+TEST(ProgramExecutionServicesContract,
+     MarkBoundWithoutProgramDoesNotRequirePreparedCouplingReceipt) {
+  ensure_kokkos();
+  NativeSystem system(native_config(4));
+  install_execution_lane(system, "pops.test.program-context.bound-without-program");
+  add_gas(system);
+
+  EXPECT_NO_THROW(system.mark_bound());
+  EXPECT_EQ(system.lifecycle_state(), "bound");
+}
+
+TEST(ProgramExecutionServicesContract,
+     ClockScheduleResidentStorageTracksExternalStringsAndFrameCapacityExactly) {
+  runtime::program::ClockScheduleState short_schedule;
+  short_schedule.configure_primary_clock("macro");
+  short_schedule.declare_relation("macro", "fast", 2);
+  const std::uint64_t short_bytes = short_schedule.resident_storage_bytes();
+
+  runtime::program::ClockScheduleState long_schedule;
+  const std::string primary(192, 'p');
+  const std::string child(224, 'c');
+  long_schedule.configure_primary_clock(primary);
+  long_schedule.declare_relation(primary, child, 2);
+  long_schedule.seal_for_execution();
+  const std::uint64_t relation_bytes = long_schedule.resident_storage_bytes();
+  EXPECT_GT(relation_bytes, short_bytes);
+  std::uint64_t frame_bytes = 0;
+  {
+    BoundaryPointHeapWindow heap_window;
+    auto scope = long_schedule.subcycle(primary, child, 2);
+    scope.iteration(0);
+    frame_bytes = long_schedule.resident_storage_bytes();
+    EXPECT_EQ(heap_window.close(), 0u)
+        << "bind-sealed long logical-clock frames must not allocate heap storage";
+    EXPECT_EQ(frame_bytes, relation_bytes)
+        << "bind-sealed frames retain compact ids, not copied clock strings";
+    EXPECT_EQ(frame_bytes, long_schedule.resident_storage_bytes());
+  }
+  const std::uint64_t retained_frame_capacity = long_schedule.resident_storage_bytes();
+  EXPECT_EQ(retained_frame_capacity, relation_bytes)
+      << "ending a subcycle changes no bind-sealed frame allocation";
+  EXPECT_EQ(retained_frame_capacity, long_schedule.resident_storage_bytes());
+}
+
+TEST(ProgramExecutionServicesContract,
+     UniformHostFootprintSeparatesCarrierCapacityFromPreparedMultiFabPayloads) {
+  ensure_kokkos();
+  NativeSystemConfig cfg = native_config(8);
+
+  NativeSystem unsealed_system(cfg);
+  install_execution_lane(unsealed_system, "pops.test.program-context.host-footprint-unsealed");
+  add_gas(unsealed_system);
+  unsealed_system.set_program_block_map({0});
+  auto unsealed_image =
+      runtime::program::make_program_preparation_image<kTestDimension>(&unsealed_system, 1);
+  auto unsealed_host = unsealed_system.program_host_descriptor();
+  runtime::program::bind_program_preparation_image(unsealed_host, unsealed_image);
+  auto unsealed_provider =
+      runtime::program::make_program_execution_provider<kTestDimension>(unsealed_host.preparation);
+  EXPECT_THROW((void)unsealed_provider->prepared_uniform_host_resident_resource_prototypes(),
+               std::logic_error);
+
+  NativeSystem short_system(cfg);
+  install_execution_lane(short_system, "pops.test.program-context.host-footprint-short");
+  add_gas(short_system);
+  short_system.set_program_block_map({0});
+  auto short_prepared = prepare_uniform_host_footprint_services(short_system, "f", 0);
+  const auto short_first =
+      short_prepared.provider->prepared_uniform_host_resident_resource_prototypes();
+  const auto short_second =
+      short_prepared.provider->prepared_uniform_host_resident_resource_prototypes();
+  const auto short_route = std::find_if(
+      short_first.begin(), short_first.end(),
+      [](const auto& row) { return row.kind == ResourcePrototypeKind::generated_route; });
+  const auto short_scratch = std::find_if(
+      short_first.begin(), short_first.end(),
+      [](const auto& row) { return row.kind == ResourcePrototypeKind::prepared_scratch; });
+  ASSERT_NE(short_route, short_first.end());
+  ASSERT_NE(short_scratch, short_first.end());
+  ASSERT_TRUE(short_route->layout.maximum_bytes.has_value());
+  ASSERT_TRUE(short_scratch->layout.maximum_bytes.has_value());
+  ASSERT_GT(*short_route->layout.maximum_bytes, 0u);
+  ASSERT_GT(*short_scratch->layout.maximum_bytes, 0u);
+  ASSERT_EQ(short_first.size(), short_second.size());
+  for (std::size_t index = 0; index < short_first.size(); ++index) {
+    EXPECT_EQ(short_first[index].kind, short_second[index].kind);
+    EXPECT_EQ(short_first[index].slot, short_second[index].slot);
+    EXPECT_EQ(short_first[index].subslot, short_second[index].subslot);
+    EXPECT_EQ(short_first[index].layout.maximum_bytes, short_second[index].layout.maximum_bytes);
+  }
+  const auto short_rows = runtime::program::take_staged_uniform_resource_prototypes<kTestDimension>(
+      short_prepared.image);
+
+  NativeSystem long_system(cfg);
+  install_execution_lane(long_system, "pops.test.program-context.host-footprint-long");
+  add_gas(long_system);
+  long_system.set_program_block_map({0});
+  auto long_prepared =
+      prepare_uniform_host_footprint_services(long_system, std::string(256, 'f'), 7);
+  const auto long_rows = runtime::program::take_staged_uniform_resource_prototypes<kTestDimension>(
+      long_prepared.image);
+  EXPECT_GT(prepared_host_bytes(long_rows, ResourcePrototypeKind::generated_route),
+            prepared_host_bytes(short_rows, ResourcePrototypeKind::generated_route));
+  EXPECT_GT(prepared_host_bytes(long_rows, ResourcePrototypeKind::prepared_scratch),
+            prepared_host_bytes(short_rows, ResourcePrototypeKind::prepared_scratch));
+
+  NativeSystemConfig wider_cfg = native_config(16);
+  NativeSystem wider_system(wider_cfg);
+  install_execution_lane(wider_system, "pops.test.program-context.host-footprint-wider");
+  add_gas(wider_system);
+  wider_system.set_program_block_map({0});
+  auto wider_prepared = prepare_uniform_host_footprint_services(wider_system, "f", 0);
+  const auto wider_rows = runtime::program::take_staged_uniform_resource_prototypes<kTestDimension>(
+      wider_prepared.image);
+  EXPECT_EQ(prepared_host_bytes(wider_rows, ResourcePrototypeKind::prepared_scratch),
+            prepared_host_bytes(short_rows, ResourcePrototypeKind::prepared_scratch));
+  const auto short_rhs = std::find_if(short_rows.begin(), short_rows.end(), [](const auto& row) {
+    return row.kind == ResourcePrototypeKind::rhs;
+  });
+  const auto wider_rhs = std::find_if(wider_rows.begin(), wider_rows.end(), [](const auto& row) {
+    return row.kind == ResourcePrototypeKind::rhs;
+  });
+  ASSERT_NE(short_rhs, short_rows.end()) << "the short staged image lost its numerical rhs row";
+  ASSERT_NE(wider_rhs, wider_rows.end()) << "the wider staged image lost its numerical rhs row";
+  EXPECT_GT(wider_rhs->layout.cells, short_rhs->layout.cells)
+      << "the numerical MultiFab payload remains in its rhs ResourcePlan row";
+}
+
 void install_native_v5_program(
     NativeSystem& system, std::string_view identity,
     const std::vector<test::program_v5::CallbackProgramResource>& resources,
-    NativeProgramCallback callback) {
+    NativeProgramCallback callback, const std::vector<std::string>* blocks = nullptr) {
 #if !defined(POPS_TEST_TMPDIR)
   (void)system;
   (void)identity;
   (void)resources;
   (void)callback;
+  (void)blocks;
   throw std::runtime_error("ProgramExecutionServices ABI-v5 fixture requires POPS_TEST_TMPDIR");
 #else
   auto& callbacks = native_program_callbacks();
@@ -364,8 +986,8 @@ void install_native_v5_program(
   if (!source)
     throw std::runtime_error("cannot create ProgramExecutionServices ABI-v5 fixture source");
   source << test::program_v5::callback_program_source(
-      identifier, identity, "clock.macro", system.block_names(), resources,
-      "pops_test_program_execution_services_callback", "uniform");
+      identifier, identity, "clock.macro", blocks != nullptr ? *blocks : system.block_names(),
+      resources, "pops_test_program_execution_services_callback", "uniform");
   source.close();
   const auto compiled = test::native_dso::compile_shared(source_path, library_path);
   if (!compiled.ok) {
@@ -374,6 +996,40 @@ void install_native_v5_program(
   }
   system.install_program(library_path);
 #endif
+}
+
+TEST(ProgramExecutionServicesContract,
+     CoupledProgramInstallRequiresACompleteSystemBlockBijectionBeforePublication) {
+  ensure_kokkos();
+  NativeSystem system(native_config(4));
+  install_execution_lane(system, "pops.test.program-context.coupled-program-map");
+  add_gas_block(system, "left");
+  add_gas_block(system, "right");
+  system.install_prepared_coupling_operator("test.coupled-program-map",
+                                            "test.coupled-program-map/provider@1", {},
+                                            [](Real, const std::vector<NativeField*>&) {});
+
+  const std::vector<std::string> complete_blocks{"left", "right"};
+  install_native_v5_program(
+      system, "tests.program-execution-services/coupled-map-complete@1", {},
+      [](NativeProgramExecutionServices&, double) {}, &complete_blocks);
+  EXPECT_EQ(system.program_block_map(), std::vector<int>({0, 1}));
+
+  const std::vector<std::string> subset_blocks{"left"};
+  EXPECT_THROW(install_native_v5_program(
+                   system, "tests.program-execution-services/coupled-map-subset@1", {},
+                   [](NativeProgramExecutionServices&, double) {}, &subset_blocks),
+               std::invalid_argument);
+  EXPECT_EQ(system.program_block_map(), std::vector<int>({0, 1}))
+      << "a rejected coupled subset Program must retain the prior accepted block map";
+
+  const std::vector<std::string> reordered_blocks{"right", "left"};
+  EXPECT_NO_THROW(install_native_v5_program(
+      system, "tests.program-execution-services/coupled-map-reordered@1", {},
+      [](NativeProgramExecutionServices&, double) {}, &reordered_blocks));
+  EXPECT_EQ(system.program_block_map(), std::vector<int>({1, 0}));
+  EXPECT_NO_THROW(system.mark_bound())
+      << "the installed receipt must authenticate the replacement Program's detached block map";
 }
 
 // Non-uniform pressure IC (u = v = 0): -div F has a non-zero momentum component so the step actually
@@ -421,6 +1077,39 @@ TEST(ProgramExecutionServicesContract, SystemMoveTransfersPreparedExecutionLane)
   EXPECT_THROW(static_cast<void>(moved.prepared_boundary_execution_lane()), std::logic_error);
 }
 
+TEST(ProgramExecutionServicesContract,
+     BoundDefaultFieldOwnerIsColdPrimedAndRejectRollbackPreservesIt) {
+  ensure_kokkos();
+  NativeSystem system(native_config(4));
+  install_execution_lane(system, "pops.test.program-context.bound-default-field-rollback");
+  add_gas(system);
+  const std::vector<double> initial = ic(4);
+  system.set_state("gas", initial);
+  system.set_program_block_map({0});
+
+  install_native_v5_program(system,
+                            "tests.program-execution-services/bound-default-field-rollback@1", {},
+                            [](NativeProgramExecutionServices& context, double dt) {
+                              context.begin_step(dt);
+                              auto outcome = context.solve_fields();
+                              (void)outcome.consume(SolveConsumption::kAccept);
+                              throw runtime::program::StepAttemptRejected(
+                                  SolveStatus::kIterationLimit, "test rollback",
+                                  "reject after default-field candidate publication");
+                            });
+
+  ASSERT_NO_THROW(system.mark_bound());
+  EXPECT_EQ(system.field_provider_slots(), std::vector<std::string>{"pops.system.default-field"})
+      << "the transaction image must capture the default field before the first candidate";
+  EXPECT_THROW(system.step(1.0e-3), runtime::program::StepAttemptRejected);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_DOUBLE_EQ(system.time(), 0.0);
+  EXPECT_EQ(system.get_state("gas"), initial);
+  EXPECT_EQ(system.field_provider_slots(), std::vector<std::string>{"pops.system.default-field"})
+      << "rollback must restore data without changing the bind-sealed owner";
+
+}
+
 TEST(ProgramExecutionServicesContract, AnonymousRateIdentityIsRejectedBeforeTopologyLookup) {
   ensure_kokkos();
   NativeSystem sim(native_config(2));
@@ -429,6 +1118,80 @@ TEST(ProgramExecutionServicesContract, AnonymousRateIdentityIsRejectedBeforeTopo
   auto prepared = prepare_native_program_services(sim);
   auto& context = *prepared.provider;
   EXPECT_THROW((void)context.boundary_evaluation_point(-1), std::invalid_argument);
+}
+
+TEST(ProgramExecutionServicesContract,
+     PreparedBoundaryPointWriteCopyIsAllocationFreeAndRejectsCapacityDrift) {
+  ensure_kokkos();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.program-context.resident-boundary-point");
+  add_gas(sim);
+  sim.set_program_block_map({0});
+  auto prepared = prepare_native_program_services(sim);
+  auto& context = *prepared.provider;
+  constexpr std::string_view kClock =
+      "pops.test.program-context.resident-boundary-point.long-clock-identity";
+  context.configure_primary_clock(std::string(kClock));
+
+  // This is the cold source shape retained by a matrix-free session template.  Each identity is
+  // deliberately longer than SSO so preparation must reserve all four strings before a step.
+  runtime::multiblock::BoundaryEvaluationPoint capacity_source;
+  capacity_source.clock.assign(kClock);
+  capacity_source.graph_identity =
+      "pops.test.program-context.resident-boundary-point.graph-identity";
+  capacity_source.rate_identity = "pops.test.program-context.resident-boundary-point.rate-identity";
+  capacity_source.application_identity =
+      "pops.test.program-context.resident-boundary-point.application-identity";
+  runtime::multiblock::BoundaryEvaluationPoint source;
+  runtime::multiblock::BoundaryEvaluationPoint destination;
+  runtime::multiblock::BoundaryEvaluationPoint retry;
+  context.prepare_boundary_evaluation_point(source, capacity_source);
+  context.prepare_boundary_evaluation_point(destination, capacity_source);
+  context.prepare_boundary_evaluation_point(retry, capacity_source);
+
+  context.begin_step(0.01);
+  context.write_boundary_evaluation_point_into(source, 0);
+  source.graph_identity.assign(capacity_source.graph_identity);
+  source.rate_identity.assign(capacity_source.rate_identity);
+  source.application_identity.assign(capacity_source.application_identity);
+
+  const AllocationEventStats event_before = allocation_event_stats();
+  {
+    BoundaryPointHeapWindow heap_window;
+    context.copy_boundary_evaluation_point_into(destination, source);
+    EXPECT_EQ(heap_window.close(), 0u);
+  }
+  EXPECT_EQ(allocation_event_stats(), event_before);
+  EXPECT_EQ(destination, source);
+
+  // An unprepared external point cannot acquire capacity inside the candidate.  The rejection
+  // happens before either scalar or string state of the destination is changed.
+  runtime::multiblock::BoundaryEvaluationPoint unprimed;
+  EXPECT_THROW(context.copy_boundary_evaluation_point_into(unprimed, source), std::logic_error);
+  // ``BoundaryEvaluationPoint`` deliberately initializes its time coordinates to NaN, so its
+  // defaulted equality operator is not a valid no-clobber witness.  Check every logical member
+  // explicitly instead of comparing NaN to itself.
+  EXPECT_TRUE(unprimed.clock.empty());
+  EXPECT_EQ(unprimed.tick, 0);
+  EXPECT_EQ(unprimed.level, 0);
+  EXPECT_EQ(unprimed.substep, 0);
+  EXPECT_EQ(unprimed.stage, 0);
+  EXPECT_EQ(unprimed.stage_fraction, (pops::amr::Rational{0, 1}));
+  EXPECT_TRUE(std::isnan(unprimed.dt));
+  EXPECT_TRUE(std::isnan(unprimed.physical_time));
+  EXPECT_TRUE(unprimed.graph_identity.empty());
+  EXPECT_TRUE(unprimed.rate_identity.empty());
+  EXPECT_TRUE(unprimed.application_identity.empty());
+
+  {
+    BoundaryPointHeapWindow heap_window;
+    context.copy_boundary_evaluation_point_into(retry, source);
+    EXPECT_EQ(retry, source);
+    context.write_boundary_evaluation_point_into(source, 0);
+    context.copy_boundary_evaluation_point_into(destination, source);
+    EXPECT_EQ(heap_window.close(), 0u);
+  }
+  EXPECT_EQ(destination, source);
 }
 
 TEST(ProgramExecutionServicesContract, ProviderFreeViewDoesNotRequireAPlanOrStorageCarrier) {
@@ -445,6 +1208,82 @@ TEST(ProgramExecutionServicesContract, ProviderFreeViewDoesNotRequireAPlanOrStor
   const auto providers = context.template provider_values_view<0>("not-resolved", 73, 19);
   EXPECT_TRUE(providers.storage.empty());
   EXPECT_TRUE(providers.storage_components.empty());
+}
+
+TEST(ProgramExecutionServicesContract, AuxiliaryStorageGroupFindBorrowsLongIdentityWithoutHeap) {
+  const std::string group_identity =
+      "pops.test.program-context.provider-values-view.storage-group-identity-over-sso";
+  runtime::system::AuxiliaryStorageGroups<kTestDimension> groups;
+  groups.groups.emplace(group_identity, NativeField{});
+  ASSERT_NE(groups.find(group_identity), nullptr);
+
+  const AllocationEventStats allocations_before = allocation_event_stats();
+  const NativeField* found = nullptr;
+  {
+    BoundaryPointHeapWindow heap_window;
+    for (int repeat = 0; repeat < 8; ++repeat)
+      found = groups.find(group_identity);
+    EXPECT_EQ(heap_window.close(), 0u);
+  }
+  EXPECT_EQ(found, groups.find(group_identity));
+  EXPECT_EQ(allocation_event_stats(), allocations_before);
+}
+
+TEST(ProgramExecutionServicesContract,
+     BoundUniformProviderViewBorrowsLongConsumerQidWithoutHeapAllocation) {
+  ensure_kokkos();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.program-context.provider-values-view");
+  add_gas(sim);
+  sim.set_program_block_map({0});
+  const std::string qid = install_long_qid_auxiliary_plan(sim);
+  ASSERT_GT(qid.size(), std::size_t{15});
+
+  auto prepared = prepare_native_program_services(sim);
+  auto& context = *prepared.provider;
+  // Prime the exact carrier and plan before opening the witness window.  The repeated calls below
+  // exercise the accepted Uniform route with a qid that cannot use SSO.
+  const auto primed = context.template provider_values_view<1>(qid, 0, 0);
+  ASSERT_EQ(primed.storage.size(), std::size_t{1});
+
+  const AllocationEventStats allocations_before = allocation_event_stats();
+  {
+    BoundaryPointHeapWindow heap_window;
+    for (int repeat = 0; repeat < 8; ++repeat) {
+      const auto providers = context.template provider_values_view<1>(qid, 0, 0);
+      (void)providers;
+    }
+    EXPECT_EQ(heap_window.close(), 0u);
+  }
+  EXPECT_EQ(allocation_event_stats(), allocations_before);
+}
+
+TEST(ProgramExecutionServicesContract,
+     PreparedUniformSumUsesTheBindSealedWorkspaceOnItsFirstAcceptedCall) {
+  ensure_kokkos();
+  NativeSystem sim(native_config(8));
+  install_execution_lane(sim, "pops.test.program-context.prepared-sum");
+  add_gas(sim);
+  sim.set_state("gas", ic(8));
+  sim.set_program_block_map({0});
+
+  auto prepared = prepare_native_program_services(sim);
+  auto& context = *prepared.provider;
+  NativeField& state = context.state(0);
+
+  // No SUM is performed before this point: the first call after accepted activation must use the
+  // capacity prepared from the detached state prototype, with no Fab/communication allocation.
+  const AllocationEventStats allocations_before = allocation_event_stats();
+  const Real first = context.sum_component(0, state, GasSchema::density);
+  EXPECT_EQ(allocation_event_stats(), allocations_before);
+  EXPECT_NEAR(first, static_cast<Real>(uniform_cell_count(8)), Real(1e-12));
+
+  const auto first_bits = std::bit_cast<std::uint64_t>(first);
+  for (int repeat = 0; repeat < 8; ++repeat) {
+    const Real repeated = context.sum_component(0, state, GasSchema::density);
+    EXPECT_EQ(std::bit_cast<std::uint64_t>(repeated), first_bits);
+    EXPECT_EQ(allocation_event_stats(), allocations_before);
+  }
 }
 
 TEST(ProgramExecutionServicesContract,
@@ -636,37 +1475,50 @@ TEST(ProgramExecutionServicesContract,
   add_gas_block(sim, "right", &projection_calls);
   const int selected_block = my_rank() == 0 ? 0 : 1;
   sim.set_program_block_map({selected_block});
-  auto prepared = prepare_native_program_services(sim);
-  auto& context = *prepared.provider;
-
-  bool system_refused = false;
-  try {
-    NativeField selected_state = [&] {
-      const auto state_view = sim.block_state(selected_block);
-      return NativeField(*state_view.get());
-    }();
-    sim.block_project(selected_block, selected_state);
-  } catch (const std::runtime_error& error) {
-    system_refused = true;
-    EXPECT_STREQ(error.what(), "System projection block index differs across MPI ranks");
-  }
-  EXPECT_TRUE(system_refused);
-  EXPECT_EQ(projection_calls, 0)
-      << "the System seam must agree its block route before invoking a projection provider";
-
   bool refused = false;
   try {
-    context.apply_projection(0, context.state(0));
+    (void)prepare_native_program_services(sim);
   } catch (const std::runtime_error& error) {
     refused = true;
-    EXPECT_STREQ(error.what(), "Program projection block differs across MPI ranks");
+    EXPECT_STREQ(error.what(), "Program projection/speed block routes differ across MPI ranks");
   }
   EXPECT_TRUE(refused);
   EXPECT_EQ(projection_calls, 0)
-      << "the exact lane route must refuse before a projection provider is invoked";
-  EXPECT_EQ(all_reduce_min(system_refused ? 1L : 0L, context.prepared_execution_lane()), 1L);
-  EXPECT_EQ(all_reduce_min(refused ? 1L : 0L, context.prepared_execution_lane()), 1L);
+      << "the bind receipt must refuse route drift before a projection provider is reachable";
+  EXPECT_EQ(all_reduce_min(refused ? 1L : 0L, sim.prepared_boundary_execution_lane()), 1L);
 #endif
+}
+
+TEST(ProgramExecutionServicesContract,
+     ProjectionAndMaximumSpeedUseBindSealedRoutesWithoutAllocationOrDynamicConsensus) {
+  ensure_kokkos();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.program-context.projection-speed-hot");
+  int projection_calls = 0;
+  add_gas_block(sim, "gas", &projection_calls);
+  sim.set_program_block_map({0});
+  auto prepared = prepare_native_program_services(sim);
+  auto& context = *prepared.provider;
+  NativeField& state = context.state(0);
+
+  // Warm the providers before the witness window: the assertion is about route/consensus work,
+  // not a first-use provider implementation detail.
+  context.apply_projection(0, state);
+  EXPECT_GT(context.max_wave_speed(0, state), Real(0));
+  const AllocationEventStats allocations_before = allocation_event_stats();
+  const std::uint64_t consensus_before = exact_consensus_dynamic_storage_calls();
+  const int calls_before = projection_calls;
+  for (int repeat = 0; repeat < 8; ++repeat) {
+    context.apply_projection(0, state);
+    EXPECT_GT(context.max_wave_speed(0, state), Real(0));
+  }
+  EXPECT_EQ(projection_calls, calls_before + 8);
+  EXPECT_EQ(allocation_event_stats(), allocations_before)
+      << "bind-sealed projection/speed routes must not allocate in the Program hot loop";
+  EXPECT_EQ(exact_consensus_dynamic_storage_calls(), consensus_before)
+      << "bind-sealed projection/speed routes must not rebuild exact consensus in the hot loop";
+  EXPECT_THROW(context.apply_projection(1, state), std::logic_error)
+      << "a block index outside the sealed route table must fail closed";
 }
 
 TEST(ProgramExecutionServicesContract, ProjectionReportUsesOneBindSealedIdentity) {
@@ -816,6 +1668,7 @@ TEST(ProgramExecutionServicesContract, ForwardEulerViaContextMatchesReference) {
                                 ctx.lincomb(U, Real(0), U, Real(1), next);
                               }
                             });
+  sim.mark_bound();
   sim.step(dt);
   const std::vector<double> Up = sim.get_state("gas");
 
@@ -883,6 +1736,13 @@ TEST(ProgramExecutionServicesContract, GeneratedScratchIsPersistentExactAndNonAl
   auto& ctx = *prepared.provider;
   NativeField& state = ctx.state(0);
 
+  // `activate_staged_uniform_program_execution_services` has made this the
+  // accepted provider.  A regrid/refresh callback may consume its resident
+  // scratch, but it must never replay the candidate prelude or allocate a new
+  // family through the accepted facade.
+  EXPECT_THROW(ctx.prepare_rhs_scratch(41, 0, 0), std::logic_error);
+  EXPECT_THROW(ctx.prepare_state_scratch(41, 0, 0), std::logic_error);
+
   NativeField& rhs = ctx.rhs_scratch(41, 0, state);
   ASSERT_GT(rhs.local_size(), 0);
   Real* const rhs_storage = rhs.fab(0).view().data;
@@ -913,6 +1773,130 @@ TEST(ProgramExecutionServicesContract, GeneratedScratchIsPersistentExactAndNonAl
   EXPECT_EQ(after_shape_drift.communication_calls, before_shape_drift.communication_calls);
   EXPECT_EQ(rhs.fab(0).view().data, rhs_storage);
   EXPECT_EQ(rhs.ghosts(), state.ghosts());
+}
+
+TEST(ProgramExecutionServicesContract,
+     RuntimeSizedSlotSealsDistinctTypedSubslotsAndReusesTheirPreparedStorage) {
+  ensure_kokkos();
+  NativeSystem sim(native_config(8));
+  install_execution_lane(sim, "pops.test.program-context.runtime-sized-typed-subslots");
+  add_scalar_block(sim, "scalar");
+  sim.set_program_block_map({0});
+
+  auto host = sim.program_host_descriptor();
+  auto image = runtime::program::make_program_preparation_image<kTestDimension>(&sim, 1);
+  std::vector<runtime::program::ProgramInstallationTables::ResourcePlan> declaration(1);
+  auto& resource = declaration.front();
+  resource.slot = 0;
+  resource.flags = runtime::program::kProgramResourceRuntimeSized;
+  resource.resource_type = runtime::program::ProgramResourcePlanType::runtime_sized;
+  resource.value_id = 1;
+  resource.occurrence_path_id = 101;
+  // The row-level components/ghosts are symbolic for a runtime-sized value.  The two typed
+  // subslots below are the authoritative shapes captured by the detached preparation image.
+  resource.components = 1;
+  resource.ghosts = 0;
+  resource.schema = "program-resource-plan:v1";
+  resource.identity = "test.runtime-sized.scalar";
+  resource.occurrence_path = "root/runtime-sized/scalar";
+  resource.owner = "scalar";
+  resource.space = "cell";
+  resource.clock = "macro";
+  resource.lifetime = "transient";
+  resource.centering = "cell";
+  resource.off_policy = "none";
+  resource.communication = "none";
+  resource.transfer_provider = "none";
+  resource.restart_provider = "none";
+  resource.component_names = "[]";
+  resource.shape = "[]";
+  runtime::program::bind_staged_uniform_program_resource_declaration<kTestDimension>(
+      image, declaration, sim.program_block_map());
+  runtime::program::bind_program_preparation_image(host, image);
+  auto provider =
+      runtime::program::make_program_execution_provider<kTestDimension>(host.preparation);
+
+  provider->prepare_state_scratch(0, 0, 0);
+  provider->prepare_scalar_scratch(0, 0, 0, 11, 0);
+  // Replaying either prelude entry is idempotent and must retain the exact prepared layout.
+  provider->prepare_state_scratch(0, 0, 0);
+  provider->prepare_scalar_scratch(0, 0, 0, 11, 0);
+
+  NativeField& state = provider->state(0);
+  NativeField& state_scratch = provider->scratch_state(0, 0, state);
+  NativeField& scalar_scratch = provider->scalar_scratch(0, 0, state, 11, 0);
+  NativeField& state_again = provider->scratch_state(0, 0, state);
+  NativeField& scalar_again = provider->scalar_scratch(0, 0, state, 11, 0);
+  EXPECT_EQ(state_scratch.ncomp(), 1);
+  EXPECT_EQ(state_scratch.ghosts()[0], state.ghosts()[0]);
+  EXPECT_EQ(scalar_scratch.ncomp(), 11);
+  EXPECT_EQ(scalar_scratch.ghosts()[0], 0);
+  EXPECT_EQ(&state_scratch, &state_again);
+  EXPECT_EQ(&scalar_scratch, &scalar_again);
+  EXPECT_NE(&state_scratch, &scalar_scratch);
+
+  provider->seal_uniform_preparation_without_clock();
+  const auto prototypes =
+      runtime::program::take_staged_uniform_resource_prototypes<kTestDimension>(image);
+  const auto state_prototype =
+      std::find_if(prototypes.begin(), prototypes.end(), [](const ResourcePrototype& prototype) {
+        return prototype.slot == 0 && prototype.subslot == 0 &&
+               prototype.kind == ResourcePrototypeKind::state;
+      });
+  const auto scalar_prototype =
+      std::find_if(prototypes.begin(), prototypes.end(), [](const ResourcePrototype& prototype) {
+        return prototype.slot == 0 && prototype.subslot == 0 &&
+               prototype.kind == ResourcePrototypeKind::scalar;
+      });
+  ASSERT_NE(state_prototype, prototypes.end());
+  ASSERT_NE(scalar_prototype, prototypes.end());
+  EXPECT_EQ(state_prototype->layout.components, 1u);
+  EXPECT_EQ(scalar_prototype->layout.components, 11u);
+  EXPECT_EQ(state_prototype->layout.ghosts, state.ghosts()[0]);
+  EXPECT_EQ(scalar_prototype->layout.ghosts, 0u);
+  EXPECT_NE(state_prototype->layout.cells, scalar_prototype->layout.cells);
+  EXPECT_EQ(state_prototype->layout.itemsize, sizeof(Real));
+  EXPECT_EQ(scalar_prototype->layout.itemsize, sizeof(Real));
+
+  runtime::program::ProgramInstallationTables tables;
+  tables.resource_plan = declaration;
+  const auto materialized = tables.materialize_resource_plan(prototypes);
+  ASSERT_EQ(materialized.entries().size(), 1u);
+  const auto& materialized_row = materialized.entries().front();
+  EXPECT_EQ(
+      materialized_row.bytes,
+      state_prototype->layout.cells * sizeof(Real) * state_prototype->layout.components +
+          scalar_prototype->layout.cells * sizeof(Real) * scalar_prototype->layout.components);
+  EXPECT_EQ(materialized_row.maximum_bytes, materialized_row.bytes);
+  EXPECT_FALSE(materialized_row.cells.has_value())
+      << "one slot with differently shaped typed subslots has no single cell extent";
+  EXPECT_FALSE(materialized_row.itemsize.has_value());
+  EXPECT_NE(materialized.digest().size(), 0u);
+}
+
+TEST(ProgramExecutionServicesContract,
+     ExactUniformScratchRejectsCapturedPrototypeMismatchDuringPreparation) {
+  ensure_kokkos();
+  NativeSystemConfig cfg = native_config(8);
+  NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.exact-scratch-mismatch");
+  add_gas(sim);
+  sim.set_program_block_map({0});
+
+  auto host = sim.program_host_descriptor();
+  auto image = runtime::program::make_program_preparation_image<kTestDimension>(&sim, 1);
+  std::vector<runtime::program::ProgramInstallationTables::ResourcePlan> declaration(1);
+  auto& scratch = declaration.front();
+  scratch.slot = 0;
+  scratch.components = GasModel::n_vars;
+  scratch.ghosts = 0;
+  runtime::program::bind_staged_uniform_program_resource_declaration<kTestDimension>(
+      image, declaration, sim.program_block_map());
+  runtime::program::bind_program_preparation_image(host, image);
+  auto provider =
+      runtime::program::make_program_execution_provider<kTestDimension>(host.preparation);
+  ASSERT_NE(provider->state(0).ghosts()[0], 0);
+  EXPECT_THROW(provider->prepare_rhs_scratch(0, 0, 0), std::invalid_argument);
 }
 
 TEST(ProgramExecutionServicesContract,
@@ -988,11 +1972,9 @@ TEST(ProgramExecutionServicesContract,
   // A Program may own only a subset of a larger NativeSystem. The exact block map selects NativeSystem block b,
   // while the context-owned native vector retains the required NativeSystem-sized nullptr padding.
   sim.set_program_block_map({1});
-  NativeField stale_subset_stage =
-      native_field_like(live_a, live_a.ncomp(), live_a.ghosts());
+  NativeField stale_subset_stage = native_field_like(live_a, live_a.ncomp(), live_a.ghosts());
   stale_subset_stage.set_val(Real(11));
-  EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(point(501), 501,
-                                                     {{0, &stale_subset_stage}}),
+  EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(point(501), 501, {{0, &stale_subset_stage}}),
                std::logic_error)
       << "a runtime block-map rematerialization must not teach an existing IR value a new pack";
 
@@ -1006,8 +1988,7 @@ TEST(ProgramExecutionServicesContract,
   subset_stage.set_val(Real(11));
   const auto subset_point = [&](int stage) { return subset_ctx.boundary_evaluation_point(stage); };
 
-  EXPECT_THROW(
-      (void)subset_ctx.solve_fields_from_blocks_at(subset_point(505), 505, {{0, &live_a}}),
+  EXPECT_THROW((void)subset_ctx.solve_fields_from_blocks_at(subset_point(505), 505, {{0, &live_a}}),
                std::invalid_argument)
       << "a subset Program must not borrow an unlisted NativeSystem block's live state as its "
          "stage";
@@ -1031,16 +2012,14 @@ TEST(ProgramExecutionServicesContract,
   rebound_stage.set_val(Real(13));
   const AllocationEventStats before_layout_change = allocation_event_stats();
   EXPECT_THROW(
-      (void)subset_ctx.solve_fields_from_blocks_at(subset_point(504), 504,
-                                                   {{0, &rebound_stage}}),
+      (void)subset_ctx.solve_fields_from_blocks_at(subset_point(504), 504, {{0, &rebound_stage}}),
       std::out_of_range);
   const AllocationEventStats after_layout_change = allocation_event_stats();
   EXPECT_EQ(after_layout_change.fab_calls, before_layout_change.fab_calls);
   EXPECT_EQ(after_layout_change.communication_calls, before_layout_change.communication_calls);
   const AllocationEventStats before_rebound_retry = allocation_event_stats();
   EXPECT_THROW(
-      (void)subset_ctx.solve_fields_from_blocks_at(subset_point(504), 504,
-                                                   {{0, &rebound_stage}}),
+      (void)subset_ctx.solve_fields_from_blocks_at(subset_point(504), 504, {{0, &rebound_stage}}),
       std::out_of_range);
   const AllocationEventStats after_rebound_retry = allocation_event_stats();
   EXPECT_EQ(after_rebound_retry.fab_calls, before_rebound_retry.fab_calls);
@@ -1129,6 +2108,7 @@ TEST(ProgramExecutionServicesContract, SsprkTwoStageViaContextMatchesReference) 
           ctx.lincomb(U, Real(0.5), U, Real(0.5), u1);  // U <- 1/2 U + 1/2 (U1 + dt R(U1))
         }
       });
+  sim.mark_bound();
   sim.step(dt);
   const std::vector<double> Up = sim.get_state("gas");
 
@@ -1153,6 +2133,9 @@ TEST(ProgramExecutionServicesContract, SeamSurfaceIsConsistent) {
   auto& ctx = *prepared.provider;
   ctx.configure_primary_clock("clock.macro");
   ctx.declare_clock_relation("clock.macro", "clock.fast", 2);
+  ctx.register_history("h", 2);
+  ctx.register_history("scalar_h", 1, 1);
+  sim.mark_bound();
   ctx.begin_step(dt);
   ctx.set_stage_time(0, 1);
   {
@@ -1200,13 +2183,13 @@ TEST(ProgramExecutionServicesContract, SeamSurfaceIsConsistent) {
                std::invalid_argument);
 
   // rhs_into == neg_div_flux_default_into + source_default_into (the split-then-sum identity, ADC-425).
-  NativeField Rfull = ctx.rhs_scratch_like(U);
-  NativeField Rflux = ctx.rhs_scratch_like(U);
-  NativeField Rsrc = ctx.rhs_scratch_like(U);
+  NativeField Rfull(U.layout(), U.distribution(), U.local_rank(), U.ncomp(), U.ghosts());
+  NativeField Rflux(U.layout(), U.distribution(), U.local_rank(), U.ncomp(), U.ghosts());
+  NativeField Rsrc(U.layout(), U.distribution(), U.local_rank(), U.ncomp(), U.ghosts());
   ctx.rhs_into(b, U, Rfull, 0);
   ctx.neg_div_flux_default_into(b, U, Rflux, 0);
   ctx.source_default_into(b, U, Rsrc);
-  NativeField Rsum = ctx.rhs_scratch_like(U);
+  NativeField Rsum(U.layout(), U.distribution(), U.local_rank(), U.ncomp(), U.ghosts());
   ctx.lincomb(Rsum, Real(1), Rflux, Real(1), Rsrc);  // Rsum = -div F + S
   {
     // The exact Euler package has no source provider, so Rsrc is zero and Rsum == Rflux == Rfull.
@@ -1225,36 +2208,49 @@ TEST(ProgramExecutionServicesContract, SeamSurfaceIsConsistent) {
       << "density sum covers every valid cell exactly once";
 
   // laplacian(phi) == divergence(gradient(phi)) on a smooth periodic field (the stencil identity the
-  // matrix-free operators rely on). Build phi = density (component 0) into a scalar field.
+  // matrix-free operators rely on).  The two-argument overloads deliberately fail before creating
+  // a transport: bind the two exact session contracts while preparation owns allocation, then prove
+  // every accepted stencil/fill reuses that fixed authority.
   NativeField phi = ctx.alloc_scalar_field(1, 1);
   NativeField lap = ctx.alloc_scalar_field(1, 1);
   NativeField grad = ctx.alloc_scalar_field(kTestDimension, 1);
   NativeField divg = ctx.alloc_scalar_field(1, 1);
+  phi.set_val(Real(1));
+  auto scalar_boundary = ctx.prepare_mesh_boundary_session(phi, ctx.prepared_execution_lane());
+  auto gradient_boundary =
+      ctx.prepare_mesh_boundary_session(grad, ctx.prepared_execution_lane());
+  auto state_boundary = ctx.prepare_mesh_boundary_session(U, ctx.prepared_execution_lane());
+  EXPECT_THROW(ctx.laplacian(lap, phi), std::logic_error);
+  EXPECT_THROW(ctx.gradient(grad, phi), std::logic_error);
+  EXPECT_THROW(ctx.divergence(divg, grad), std::logic_error);
+  EXPECT_THROW(ctx.fill_boundary(U), std::logic_error);
+  const AllocationEventStats stencil_allocations_before = allocation_event_stats();
   {
     // seed phi with a smooth field: reuse density; copy component 0 of U into phi via lincomb on a
     // 1-comp scratch is not directly possible (ncomp differs), so seed phi from a fresh smooth pattern.
     // Instead assert the operators run and produce finite output of the right shape.
-    phi.set_val(Real(1));
-    ctx.laplacian(lap, phi);     // Lap(const) == 0
-    ctx.gradient(grad, phi);     // grad(const) == 0
-    ctx.divergence(divg, grad);  // div(0) == 0
-    EXPECT_TRUE(ctx.max_component(lap, 0) < 1e-12) << "laplacian of a constant is 0";
-    EXPECT_TRUE(ctx.max_component(divg, 0) < 1e-12) << "divergence(gradient(const)) is 0";
+    BoundaryPointHeapWindow heap_window;
+    ctx.laplacian(lap, phi, *scalar_boundary);     // Lap(const) == 0
+    ctx.gradient(grad, phi, *scalar_boundary);     // grad(const) == 0
+    ctx.divergence(divg, grad, *gradient_boundary);  // div(0) == 0
+    state_boundary->fill(U);
+    EXPECT_EQ(heap_window.close(), 0u);
   }
+  EXPECT_EQ(allocation_event_stats(), stencil_allocations_before);
+  EXPECT_TRUE(ctx.max_component(lap, 0) < 1e-12) << "laplacian of a constant is 0";
+  EXPECT_TRUE(ctx.max_component(divg, 0) < 1e-12) << "divergence(gradient(const)) is 0";
 
-  // fill_boundary runs (halo exchange; valid cells unchanged). Projection is an explicit block
+  // The cold-bound fill left valid cells unchanged. Projection is an explicit block
   // capability: this block declares none, so applying one must fail rather than silently become an
   // identity operation.
   const std::vector<double> before = sim.get_state("gas");
-  ctx.fill_boundary(U);
   EXPECT_TRUE(max_abs_diff(sim.get_state("gas"), before) < 1e-15)
       << "fill_boundary left the valid cells unchanged";
   EXPECT_THROW(ctx.apply_projection(b, U), std::runtime_error)
       << "an undeclared projection capability must fail loud";
 
   // history register/store/read/rotate through the context seam.
-  ctx.register_history("h", 2);
-  NativeField hv = ctx.rhs_scratch_like(U);
+  NativeField hv(U.layout(), U.distribution(), U.local_rank(), U.ncomp(), U.ghosts());
   hv.set_val(Real(3));
   ctx.store_history("h", hv);
   for (int slot = 0; slot < 3; ++slot)
@@ -1267,7 +2263,6 @@ TEST(ProgramExecutionServicesContract, SeamSurfaceIsConsistent) {
                           Real(3) * static_cast<Real>(uniform_cell_count(n))) < 1e-9)
         << "history lag1 read";
   }
-  ctx.register_history("scalar_h", 1, 1);
   NativeField& scalar_history = ctx.history_zero_start("scalar_h", 1, 1);
   EXPECT_TRUE(scalar_history.ncomp() == 1) << "narrow history is a scalar NativeField";
   EXPECT_TRUE(std::fabs(ctx.sum_component(scalar_history, 0)) < 1e-12)
@@ -1285,7 +2280,7 @@ TEST(ProgramExecutionServicesContract, SeamSurfaceIsConsistent) {
   EXPECT_EQ(sim.history_slot_dt("h", 0), next_dt);
   EXPECT_EQ(sim.history_slot_dt("h", 1), dt);
   EXPECT_EQ(sim.history_slot_dt("h", 2), dt);
-  NativeField interpolated = ctx.rhs_scratch_like(U);
+  NativeField interpolated(U.layout(), U.distribution(), U.local_rank(), U.ncomp(), U.ghosts());
   ctx.interpolate_history_linear(interpolated, "h", 2, 0, "clock.macro", "clock.fast", -1, Real(0));
   EXPECT_EQ(first_value(interpolated), Real(3.5));
   ctx.rotate_histories();
@@ -1302,7 +2297,7 @@ TEST(ProgramExecutionServicesContract, SeamSurfaceIsConsistent) {
   EXPECT_TRUE(ctx.hmin() > 0) << "hmin positive";
   EXPECT_TRUE(ctx.max_wave_speed(b, U) > 0) << "max wave speed positive";
 
-  // scratch allocators produce the requested shape.
+  // Direct cold scratch allocators remain available outside a candidate transaction.
   NativeField sc = ctx.scratch_state_like(U);
   EXPECT_TRUE(sc.ncomp() == U.ncomp()) << "scratch_state_like ncomp";
   NativeField sf = ctx.alloc_scalar_field(1, 1);
@@ -1323,6 +2318,7 @@ TEST(ProgramExecutionServicesContract,
   ctx.configure_primary_clock("clock.macro");
   ctx.declare_clock_relation("clock.macro", "clock.fast", 2);
   ctx.declare_clock_relation("clock.fast", "clock.micro", 2);
+  ctx.seal_clock_schedule_for_execution();
   constexpr double parent_dt = 0.4;
   ctx.begin_step(parent_dt);
   ctx.set_stage_time(1, 3);
@@ -1459,4 +2455,27 @@ TEST(ProgramExecutionServicesContract, BlockResolutionRequiresACompleteExplicitM
   EXPECT_THROW(sim.set_program_block_map({1}), std::out_of_range)
       << "mapped NativeSystem index outside n_blocks must fail before publication";
   EXPECT_EQ(sim.program_block_map(), (std::vector<int>{0}));
+}
+
+TEST(ProgramExecutionServicesContract, UniformSourceMaskUsesThePreparedHotPrimitive) {
+  ensure_kokkos();
+  NativeSystem sim(native_config(8));
+  install_execution_lane(sim, "pops.test.program-context.uniform-source-mask");
+  add_gas(sim);
+  sim.set_program_block_map({0});
+  auto prepared = prepare_native_program_services(sim);
+  auto& ctx = *prepared.provider;
+
+  NativeField residual = ctx.state(0);
+  residual.set_val(Real(5));
+  const AllocationEventStats before = allocation_event_stats();
+  ctx.apply_source_mask(residual, {0});
+  const AllocationEventStats after = allocation_event_stats();
+
+  EXPECT_EQ(after.fab_calls, before.fab_calls);
+  EXPECT_EQ(after.fab_bytes, before.fab_bytes);
+  EXPECT_EQ(first_value(residual), Real(5));
+  residual.set_val(Real(13));
+  EXPECT_THROW(ctx.apply_source_mask(residual, {residual.ncomp()}), std::invalid_argument);
+  EXPECT_EQ(first_value(residual), Real(13));
 }

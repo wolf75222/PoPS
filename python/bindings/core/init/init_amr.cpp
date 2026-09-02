@@ -7,6 +7,7 @@
 
 #include <pops/runtime/amr/prepared_tagging_execution.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
+#include <pops/runtime/program/program_persistent_value_checkpoint.hpp>
 
 #include <array>
 #include <cstdint>

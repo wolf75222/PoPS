@@ -540,22 +540,22 @@ class PreparedGeneratedAmrLevelBlock {
   using SourceEvaluator = std::function<void(const point_type&, field_type&, field_type&)>;
   using ImplicitSourceSolver =
       std::function<SolveOutcome(const point_type&, field_type&, Real, const NewtonOptions&)>;
+  using implicit_workspace_type = PreparedImplicitSourceWorkspace<Dim, MemorySpace>;
   using PointwiseProjection = std::function<void(field_type&)>;
   using Speed = std::function<Real(const field_type&)>;
   using PoissonRhs = std::function<void(const field_type&, field_type&)>;
 
-  PreparedGeneratedAmrLevelBlock(const topology_view_type& runtime, std::size_t level,
-                                 field_type& state, std::string state_identity,
-                                 std::string provider_identity, std::string collective_contract,
-                                 const ExecutionLane& lane, StatePreparation prepare_state,
-                                 PhysicalBoundaryPreparation prepare_physical, Evaluator evaluator,
-                                 Evaluator flux_evaluator, Evaluator core_evaluator,
-                                 Evaluator flux_core_evaluator, Evaluator boundary_evaluator,
-                                 BoundaryJvp boundary_jvp, SourceEvaluator source_evaluator,
-                                 ImplicitSourceSolver implicit_source_solver, Speed maximum_speed,
-                                 PoissonRhs poisson_rhs, PointwiseProjection pointwise_projection,
-                                 Speed source_frequency, std::optional<Real> parabolic_frequency,
-                                 Speed stability_dt)
+  PreparedGeneratedAmrLevelBlock(
+      const topology_view_type& runtime, std::size_t level, field_type& state,
+      std::string state_identity, std::string provider_identity, std::string collective_contract,
+      const ExecutionLane& lane, StatePreparation prepare_state,
+      PhysicalBoundaryPreparation prepare_physical, Evaluator evaluator, Evaluator flux_evaluator,
+      Evaluator core_evaluator, Evaluator flux_core_evaluator, Evaluator boundary_evaluator,
+      BoundaryJvp boundary_jvp, SourceEvaluator source_evaluator,
+      std::shared_ptr<implicit_workspace_type> implicit_workspace,
+      std::uint64_t implicit_workspace_generation, ImplicitSourceSolver implicit_source_solver,
+      Speed maximum_speed, PoissonRhs poisson_rhs, PointwiseProjection pointwise_projection,
+      Speed source_frequency, std::optional<Real> parabolic_frequency, Speed stability_dt)
       // RuntimeTopologyView is a cold-build adapter and may itself live only for the duration of
       // graph construction.  Retain the immutable generation witness by value; the owning
       // PreparedHierarchy publishes or discards this block together with the fields it addresses.
@@ -576,6 +576,8 @@ class PreparedGeneratedAmrLevelBlock {
         boundary_evaluator_(std::move(boundary_evaluator)),
         boundary_jvp_(std::move(boundary_jvp)),
         source_evaluator_(std::move(source_evaluator)),
+        implicit_workspace_(std::move(implicit_workspace)),
+        implicit_workspace_generation_(implicit_workspace_generation),
         implicit_source_solver_(std::move(implicit_source_solver)),
         maximum_speed_(std::move(maximum_speed)),
         poisson_rhs_(std::move(poisson_rhs)),
@@ -589,7 +591,10 @@ class PreparedGeneratedAmrLevelBlock {
         state_identity_.empty() || provider_identity_.empty() || collective_contract_.empty() ||
         !prepare_state_ || !prepare_physical_ || !evaluator_ || !flux_evaluator_ ||
         !core_evaluator_ || !flux_core_evaluator_ || !boundary_evaluator_ || !boundary_jvp_ ||
-        !source_evaluator_ || !implicit_source_solver_ || !maximum_speed_ || !poisson_rhs_)
+        !source_evaluator_ || !implicit_workspace_ || !implicit_workspace_->prepared() ||
+        implicit_workspace_->state_generation() != implicit_workspace_generation_ ||
+        implicit_workspace_generation_ != materialization_generation_ || !implicit_source_solver_ ||
+        !maximum_speed_ || !poisson_rhs_)
       throw std::invalid_argument("generated AMR level block preparation is incomplete");
   }
 
@@ -699,6 +704,9 @@ class PreparedGeneratedAmrLevelBlock {
                                                    Real dt, const NewtonOptions& options) const {
     require_live_();
     require_state_(point, state);
+    if (!implicit_workspace_ || !implicit_workspace_->prepared() ||
+        implicit_workspace_->state_generation() != implicit_workspace_generation_)
+      return SolveOutcome::collective_lane(SolveReport::capability_failure(), *lane_);
     return implicit_source_solver_(point, state, dt, options);
   }
 
@@ -871,6 +879,11 @@ class PreparedGeneratedAmrLevelBlock {
   Evaluator boundary_evaluator_;
   BoundaryJvp boundary_jvp_;
   SourceEvaluator source_evaluator_;
+  /// One cold-primed source workspace for this exact (block, level, implicit-route) image.  Its
+  /// shape prototype is the materialized level state; Program candidates are checked against that
+  /// immutable contract before the workspace is reserved.
+  std::shared_ptr<implicit_workspace_type> implicit_workspace_;
+  std::uint64_t implicit_workspace_generation_ = 0;
   ImplicitSourceSolver implicit_source_solver_;
   Speed maximum_speed_;
   PoissonRhs poisson_rhs_;
@@ -1157,6 +1170,12 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
     const Geometry<Dim> geometry = context.geometry;
     const std::size_t level = context.level;
     const ExecutionLane* const lane = context.lane;
+    // This is deliberately constructed while the generated hierarchy image is cold.  The
+    // workspace belongs to this exact block/level route and is never resized or rebound during a
+    // Program attempt; hierarchy materialization publishes a replacement bundle after regrid.
+    auto implicit_workspace = std::make_shared<PreparedImplicitSourceWorkspace<Dim>>();
+    const std::uint64_t implicit_workspace_generation = runtime.materialization_generation();
+    implicit_workspace->bind(*context.state, implicit_workspace_generation);
 
     struct EvaluationScratch {
       static PreparedAmrLevelEvaluation<Dim> make_evaluation(
@@ -1405,10 +1424,10 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
           "generated AMR source publication failed collectively");
     };
     auto implicit_source_solver = [model, provider_storage, provider_plan, prepare_state,
-                                   embedded_boundary, lane](
+                                   embedded_boundary, lane, implicit_workspace,
+                                   implicit_workspace_generation](
                                       const runtime::multiblock::BoundaryEvaluationPoint& point,
                                       MultiFab<Dim>& state, Real dt, const NewtonOptions& options) {
-      prepare_state(point, state);
       const auto provider_at = [provider_storage, provider_plan](std::size_t local) {
         if constexpr (provider_count == 0)
           return ProviderStorageView<Dim, 0>{};
@@ -1421,8 +1440,10 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
           embedded_boundary->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive)
         active_cells = &embedded_boundary->active_mask();
       if constexpr (generated_system_detail::GeneratedSourceModel<Dim, Model>) {
-        return backward_euler_source(model, provider_at, state, dt, options, *lane, {}, nullptr,
-                                     active_cells);
+        return detail::backward_euler_source_prepared(
+            model, provider_at, state, *implicit_workspace, implicit_workspace_generation, dt,
+            options, *lane, {}, active_cells, std::static_pointer_cast<void>(implicit_workspace),
+            [&prepare_state, &point, &state] { prepare_state(point, state); });
       } else {
         return SolveOutcome::collective_lane(SolveReport::capability_failure(), *lane);
       }
@@ -1628,8 +1649,9 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
         std::move(contract), *lane, std::move(prepare_state), std::move(prepare_physical),
         std::move(evaluator), std::move(flux_evaluator), std::move(core_evaluator),
         std::move(flux_core_evaluator), std::move(boundary_evaluator), std::move(boundary_jvp),
-        std::move(source_evaluator), std::move(implicit_source_solver), std::move(speed),
-        std::move(poisson_rhs), std::move(pointwise_projection), std::move(source_frequency_bound),
+        std::move(source_evaluator), std::move(implicit_workspace), implicit_workspace_generation,
+        std::move(implicit_source_solver), std::move(speed), std::move(poisson_rhs),
+        std::move(pointwise_projection), std::move(source_frequency_bound),
         std::move(parabolic_frequency_bound), std::move(stability_dt_bound));
   };
 

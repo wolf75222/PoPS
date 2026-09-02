@@ -1058,8 +1058,9 @@ class AmrSystem {
   /// @p so_path, checks its ABI key against this module (fail-loud on mismatch), runs the section-24
   /// install-time requirement validation (aux / solver / block instance, verbatim spec messages), binds
   /// the Program's blocks to the AMR blocks BY NAME, seeds each block's RuntimeParams from the .so
-  /// candidate parameter records, then calls the .so's pops_install_program(this), whose shared
-  /// facade factory selects the hierarchy provider and installs the macro-step closure. Mirrors
+  /// candidate parameter records, then calls the .so's unique v5 `pops_install_program` entry with a
+  /// detached AMR host descriptor. The retained preparation image selects the hierarchy provider and
+  /// publishes the macro-step closure only after collective validation. Mirrors
   /// add_native_block and System::install_program; the .so stays loaded for the process lifetime.
   POPS_EXPORT void install_program(const std::string& so_path);
   /// IR hash of the installed compiled Program candidate, or
@@ -1428,11 +1429,23 @@ class AmrSystem {
   POPS_EXPORT RuntimeParams program_params_(int runtime_block) const;
   POPS_EXPORT std::vector<std::uint8_t> program_accepted_state_() const;
   POPS_EXPORT std::uint64_t program_accepted_state_revision_() const noexcept;
-  POPS_EXPORT std::vector<::pops::amr::ParentChildClockRelation>
+  /// Private DSO seam: copy the current accepted tagging authority into a caller-owned,
+  /// bind-primed buffer.  It deliberately does not expose a compact vector to a hot Program
+  /// refresh.
+  POPS_EXPORT void program_copy_tagging_hysteresis_state_into_(
+      std::vector<std::uint8_t>& destination) const;
+  /// Borrow the immutable, prepared temporal-chain witness.  This private Program seam is
+  /// intentionally a view: constructing a vector here would allocate once per warmed Program
+  /// attempt and silently turn a prepared authority back into a live query.
+  POPS_EXPORT std::span<const ::pops::amr::ParentChildClockRelation>
   program_prepared_temporal_relations_() const;
   POPS_EXPORT ::pops::amr::InterfaceFluxLedgerBudget
   program_prepared_amr_interface_flux_ledger_budget_() const;
   POPS_EXPORT std::pair<std::size_t, std::size_t> program_checkpoint_state_capacity_() const;
+  /// Accepted-step publication of bytes which the friend Program adapter has already serialized,
+  /// capacity-checked and collectively authenticated.  This never decodes or re-encodes POPSAND5.
+  POPS_EXPORT void program_publish_prevalidated_accepted_state_(
+      const std::vector<std::uint8_t>& state);
   POPS_EXPORT int program_configured_n_levels_() const noexcept;
   POPS_EXPORT const std::vector<int>& program_block_map_() const;
   POPS_EXPORT const std::string& program_installed_hash_() const noexcept;
@@ -1444,7 +1457,7 @@ class AmrSystem {
   POPS_EXPORT runtime::amr::AmrRuntime<Dim, memory_space>* program_engine_() const noexcept;
   POPS_EXPORT runtime::program::Profiler& program_profiler_() noexcept;
   POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
-  program_prepared_amr_auxiliary_consumer_plan_(const std::string& consumer_qid, int level) const;
+  program_prepared_amr_auxiliary_consumer_plan_(std::string_view consumer_qid, int level) const;
   POPS_EXPORT const ProgramBlockMap& program_prepared_amr_program_block_map_() const;
   POPS_EXPORT const PreparedAmrProgramFluxExpressionBudget&
   program_prepared_amr_program_flux_expression_budget_() const;
@@ -1454,6 +1467,11 @@ class AmrSystem {
       std::string_view reason, const runtime::multiblock::BoundaryEvaluationPoint& accepted_point);
   POPS_EXPORT PreparedMultiBlockHierarchy& prepared_amr_multiblock_hierarchy_();
   POPS_EXPORT const PreparedMultiBlockHierarchy& prepared_amr_multiblock_hierarchy_() const;
+  /// Borrow the exact generated-hierarchy lane retained by the accepted Program image.  This is
+  /// deliberately distinct from the multi-block carrier lane: generated providers are prepared
+  /// and collectively authenticated on the child graph lane and must keep using that same
+  /// authority after owner-last publication.
+  POPS_EXPORT const ExecutionLane& program_prepared_amr_execution_lane_() const;
   POPS_EXPORT void prepare_generated_amr_block_level_state(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
@@ -1490,8 +1508,9 @@ class AmrSystem {
   POPS_EXPORT const PreparedLevelEvaluation& prepare_prepared_amr_block_level_flux_at(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
-  /// The validation phase is collective and must complete before any caller publishes another
-  /// transaction member.  The companion publication only performs proven-noexcept swaps/stores.
+  /// Validate an attempt-local target span against the sealed prepared-hierarchy witness before
+  /// publication.  It performs no new collective or dynamic contract construction; the companion
+  /// publication only performs proven-noexcept swaps/stores.
   POPS_EXPORT void validate_prepared_amr_block_level_batch(
       std::span<const std::pair<int, int>> targets) const;
   POPS_EXPORT void publish_prepared_amr_block_level_batch(

@@ -832,7 +832,7 @@ class GeometricMG {
           destination(cell, 0) = source(cell, 0);
         });
       }
-      Kokkos::fence();
+      ::pops::device_fence();
     }
     last_report_ = report;
     return last_report_;
@@ -846,7 +846,7 @@ class GeometricMG {
 
   void synchronize_boundary_failure_(FieldBoundaryExecutionContext<Dim>& context,
                                      const char* message) {
-    Kokkos::fence();
+    ::pops::device_fence();
     if (context.failure->synchronize_across_ranks(*lane_))
       throw std::runtime_error(message);
   }
@@ -934,7 +934,7 @@ class GeometricMG {
           out(cell, component) = in(cell, component);
       });
     }
-    Kokkos::fence();
+    ::pops::device_fence();
   }
 
   void smooth_(Level& level, int sweeps) {

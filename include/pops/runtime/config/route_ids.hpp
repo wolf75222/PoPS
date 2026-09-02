@@ -58,7 +58,7 @@ constexpr bool route_indices_sequential(const RouteInfo (&table)[N]) {
   }                                                                                                \
   static_assert(detail::route_indices_sequential(Table), #Name " route index drift")
 
-#include <pops/runtime/config/generated_route_accessors.inc>
+#include <pops/runtime/config/generated_route_accessors.hpp>
 
 #undef POPS_DEFINE_ROUTE_ACCESSORS
 

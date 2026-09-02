@@ -90,10 +90,11 @@ def _write_release_wheel(
             "abi_key": f"test-abi;dim={dimension}",
             "has_mpi": False,
             "has_kokkos": True,
+            "kokkos_execution_space": "Serial",
         })
     payloads["pops/_native/variants.json"] = (
         json.dumps(
-            {"schema_version": 1, "variants": native_rows},
+            {"schema_version": 2, "variants": native_rows},
             sort_keys=True,
             indent=2,
         )
@@ -916,7 +917,7 @@ def test_installed_wheel_proof_requires_exact_manifest_variant_set_and_direct_ur
     suffix = importlib.machinery.EXTENSION_SUFFIXES[0]
     native_member = f"pops/_native/dim2/_pops{suffix}"
     manifest_payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "variants": [{
             "dimension": 2,
             "path": f"dim2/_pops{suffix}",
@@ -925,6 +926,7 @@ def test_installed_wheel_proof_requires_exact_manifest_variant_set_and_direct_ur
             "abi_key": "abi-dim2",
             "has_mpi": False,
             "has_kokkos": True,
+            "kokkos_execution_space": "Serial",
         }],
     }
     with zipfile.ZipFile(wheel, "w") as archive:

@@ -1,6 +1,10 @@
 """Fail-closed generic multi-block implicit Program lowering (ADC-690)."""
 from __future__ import annotations
 from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen.program_persistent_plan import (
+    get_program_resource_plan,
+    persistent_slot_token,
+)
 
 import pytest
 
@@ -9,6 +13,7 @@ from typed_program_support import typed_state
 time = pytest.importorskip("pops.time")
 from pops import model  # noqa: E402
 from pops._ir.expr import Const  # noqa: E402
+from pops.codegen.program_emit_ops import _append_local_nonlinear_report  # noqa: E402
 from pops.solvers.nonlinear import LocalNewton  # noqa: E402
 
 
@@ -63,9 +68,21 @@ def _program(*, consume=True, coefficient=1, action=None):
     return module, program, solved
 
 
+def _coupled_implicit_resource_slot(program):
+    """Resolve the solve-owned dense slot used by its prepared scratch family."""
+
+    solve = next(value for value in program._values if value.op == "solve_coupled_implicit")
+    plan = get_program_resource_plan(program, target="system")
+    slot = persistent_slot_token(program, solve, target="system")
+    entry = next(entry for entry in plan.entries if entry.slot == int(slot))
+    assert entry.key.value_id == solve.id
+    return slot
+
+
 def test_coupled_implicit_uses_one_prepared_provider_with_explicit_action():
     _module, program, solved = _program()
     source = emit_cpp_program(program, model=None)
+    slot = _coupled_implicit_resource_slot(program)
 
     assert len(solved) == 2
     assert source.count("pops::for_each_cell") == 1
@@ -75,17 +92,20 @@ def test_coupled_implicit_uses_one_prepared_provider_with_explicit_action():
     assert "Jinv_" not in source
     assert "for (int it_ =" not in source
     assert "Ueval[0] - G_[0] - static_cast<pops::Real>(pops::Real(1)) * dt *" in source
-    assert "ctx.scalar_scratch(2, 0, u0, 11, 0)" in source
+    scalar_prepare = "ctx.prepare_scalar_scratch(%s, 0, 0, 11, 0);" % slot
+    scalar_access = "ctx.scalar_scratch(%s, 0, u0, 11, 0)" % slot
+    assert scalar_prepare in source
+    assert scalar_access in source
+    assert source.index(scalar_prepare) < source.index(scalar_access)
     assert "encode_ranked_local_nonlinear_failure" not in source
     assert "const pops::ExecutionLane& ci_report_2_lane = ctx.prepared_execution_lane();" in source
     assert (
         "pops::all_reduce_max(pops::reduce_max_local(ci_status_2, 10), "
         "ci_report_2_lane)" in source
     )
-    assert (
-        "pops::all_reduce_sum(pops::reduce_sum_local(ci_status_2, 9), "
-        "ci_report_2_lane)" in source
-    )
+    assert source.count("ctx.sum_component(0, ci_status_2, 9)") == 1
+    assert "pops::all_reduce_sum(pops::reduce_sum_local(ci_status_2, 9)" not in source
+    assert "pops::reduce_sum_local(ci_status_2, 9)" not in source
     assert "pops::local_nonlinear_status_priority(solved_.status)" in source
     assert "pops::local_nonlinear_status_from_priority(" in source
     assert (
@@ -95,7 +115,8 @@ def test_coupled_implicit_uses_one_prepared_provider_with_explicit_action():
     assert "collective status/location precedence mismatch" in source
     assert "pops::SolveAction::kRejectAttempt" in source
     assert "SolveStatus::kSingular" in source
-    assert "StepAttemptRejected" in source
+    assert "program_reject_step(ctx," in source
+    assert "throw pops::runtime::program::StepAttemptRejected" not in source
     assert source.count("ctx.commit_many(") == 1
     assert "{&u0, &ci2_electrons}" in source
     assert "{&u1, &ci2_ions}" in source
@@ -113,7 +134,8 @@ def test_coupled_reject_attempt_codegen_filters_selected_statuses_and_fails_clos
     assert "SolveStatus::kSingular" not in guard
     assert "SolveStatus::kInvalidEvaluation" not in guard
     assert ".action == pops::SolveAction::kRejectAttempt" in guard
-    assert "StepAttemptRejected" in guard
+    assert "program_reject_step(ctx," in guard
+    assert "throw pops::runtime::program::StepAttemptRejected" not in guard
 
 
 def test_coupled_implicit_euler_carries_exact_stage_coefficient_and_typed_problem_kind():
@@ -141,13 +163,33 @@ def test_unconsumed_coupled_implicit_is_rejected_by_graph_validation_and_codegen
 def test_failed_coupled_implicit_never_aliases_live_state_before_guard():
     _module, program, _solved = _program()
     source = emit_cpp_program(program, model=None)
+    slot = _coupled_implicit_resource_slot(program)
     guard = source.index("if (!ci_outcome_")
     first_commit = source.index("ctx.commit_many(", guard)
 
-    assert "ctx.scratch_state(2, 0, u0)" in source
-    assert "ctx.scratch_state(2, 1, u1)" in source
+    for subslot, block, state in ((0, 0, "u0"), (1, 1, "u1")):
+        prepare = "ctx.prepare_state_scratch(%s, %d, %d);" % (slot, subslot, block)
+        access = "ctx.scratch_state(%s, %d, %s)" % (slot, subslot, state)
+        assert prepare in source
+        assert access in source
+        assert source.index(prepare) < source.index(access) < guard
     assert "ctx.commit_many(" not in source[:guard]
     assert guard < first_commit
+
+
+def test_nonlinear_status_reduction_requires_an_authenticated_owner():
+    _module, program, _solved = _program()
+    solve = next(value for value in program._values if value.op == "solve_coupled_implicit")
+
+    with pytest.raises(ValueError, match="exact authenticated owner index"):
+        _append_local_nonlinear_report(
+            program,
+            solve,
+            "ci_status",
+            "ci_report",
+            [],
+            owner_index=None,
+        )
 
 
 def test_same_component_names_are_qualified_by_state_space():

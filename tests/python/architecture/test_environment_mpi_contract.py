@@ -78,3 +78,21 @@ def test_macos_build_keeps_mpich_wrappers_on_the_pinned_compiler() -> None:
     build_command = 'python -m pip "${pip_args[@]}"'
     assert build.index(activate) < build.index(platform_guard) < build.index(mpi_cc)
     assert build.index(mpi_cc) < build.index(mpi_cxx) < build.index(build_command)
+
+
+def test_parallel_hdf5_authenticates_the_complete_selected_mpi_loader_closure() -> None:
+    contract = (REPOSITORY / "cmake" / "PopsMpiContract.cmake").read_text(encoding="utf-8")
+    scanner = (REPOSITORY / "cmake" / "PopsRuntimeDependencyScan.cmake").read_text(
+        encoding="utf-8"
+    )
+
+    # MPI implementations may expose shared companions whose basename is not `mpi` (for example
+    # OpenMPI's libopen-pal).  They are accepted only when MPI_C and MPI_CXX name identical path
+    # and bytes, and the HDF5 dependency walk must then match the complete selected loader closure.
+    assert "_pops_common_mpi_core" in contract
+    assert "FindMPI may expose required shared companions" in contract
+    assert "_pops_expected_runtime_closure" in scanner
+    assert "LIBRARIES ${_pops_expected_mpi_files}" in scanner
+    assert "foreach(_pops_expected IN LISTS _pops_expected_runtime_closure)" in scanner
+    assert "file(REAL_PATH" in scanner
+    assert "file(SHA256" in scanner

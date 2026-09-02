@@ -65,7 +65,7 @@ void copy_field_storage(const MultiFab<Dim>& source, MultiFab<Dim>& destination)
   require_same_block_field(source, destination, "prepared boundary field copy");
   for (std::size_t local = 0; local < source.local_size(); ++local)
     Kokkos::deep_copy(destination.fab(local).storage(), source.fab(local).storage());
-  Kokkos::fence();
+  ::pops::device_fence();
 }
 
 template <int Dim>
@@ -311,6 +311,10 @@ int System<Dim>::program_n_blocks_() const {
 template <int Dim>
 std::size_t System<Dim>::apply_coupling_operators(
     Real dt, const std::vector<MultiFab<Dim>*>& candidate_states) {
+  if (!p_->coupling_workspace_.bound())
+    throw std::logic_error(
+        "System::apply_coupling_operators requires mark_bound before candidate execution");
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
   std::exception_ptr local_error;
   try {
     if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
@@ -344,72 +348,67 @@ std::size_t System<Dim>::apply_coupling_operators(
           throw std::invalid_argument(
               "System::apply_coupling_operators cannot alias two block candidates");
     }
+    // Only fixed pointer slots are updated here.  Layout/alias drift is refused before either a
+    // rollback image or an operator sees a mutable candidate.
+    p_->coupling_workspace_.bind_candidates(candidate_states);
   } catch (...) {
     local_error = std::current_exception();
   }
-  if (all_reduce_max(local_error ? 1L : 0L) != 0) {
-    if (n_ranks() == 1 && local_error)
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("System coupling application preflight failed collectively");
   }
+  if (p_->coupling_.operators.empty())
+    return 0;
 
-  ExactContractBuilder invocation;
-  invocation.text("pops.system.coupling-application")
-      .scalar(std::uint32_t{1})
-      .scalar(std::int32_t{Dim})
-      .scalar(dt)
-      .scalar(static_cast<std::uint64_t>(candidate_states.size()))
-      .sequence(
-          p_->coupling_.operator_contracts,
-          [](ExactContractBuilder& item, const std::string& provider) { item.bytes(provider); });
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("system-coupling-application"), invocation.view()}}))
+  // The identity bytes and pair slots were built at mark_bound.  Patch only the fixed-width dt
+  // witness before exact consensus; no ExactContractBuilder or string growth is permitted in an
+  // active Program candidate.
+  p_->coupling_workspace_.patch_invocation_dt(dt);
+  if (!all_ranks_agree_exact_ordered_byte_pairs(p_->coupling_workspace_.invocation_pairs(), lane))
     throw std::invalid_argument(
         "System coupling application identity or time step differs between MPI ranks");
 
-  // Allocate and deep-copy every rollback image before the first operator can mutate a candidate.
-  // MultiFab/Fab copies stay in the active Kokkos memory space; no host mirror participates.
-  std::vector<MultiFab<Dim>> rollback;
   try {
-    rollback.reserve(candidate_states.size());
-    for (const MultiFab<Dim>* candidate : candidate_states)
-      rollback.emplace_back(*candidate);
-    Kokkos::fence();
+    p_->coupling_workspace_.capture_rollback();
   } catch (...) {
     local_error = std::current_exception();
   }
-  if (all_reduce_max(local_error ? 1L : 0L) != 0) {
-    if (n_ranks() == 1 && local_error)
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
       std::rethrow_exception(local_error);
-    throw std::runtime_error("System coupling rollback allocation failed collectively");
+    throw std::runtime_error("System coupling rollback snapshot failed collectively");
   }
 
   local_error = nullptr;
+  bool local_numeric_failure = false;
   try {
-    p_->coupling_.apply(dt, candidate_states);
-    Kokkos::fence();
+    p_->coupling_.apply(dt, p_->coupling_workspace_);
+    // The resident workspace fences before every raw host read; keeping that synchronization
+    // adjacent to the read avoids a second backend fence and preserves the HostSpace contract.
+    local_numeric_failure = p_->coupling_workspace_.numeric_failure();
   } catch (...) {
     local_error = std::current_exception();
   }
-  const bool failed = all_reduce_max(local_error ? 1L : 0L) != 0;
+  const bool failed = all_reduce_max(local_error || local_numeric_failure ? 1L : 0L, lane) != 0;
   if (!failed)
     return p_->coupling_.operators.size();
 
   std::exception_ptr restore_error;
   try {
-    for (std::size_t block = 0; block < candidate_states.size(); ++block) {
-      MultiFab<Dim>& candidate = *candidate_states[block];
-      const MultiFab<Dim>& snapshot = rollback[block];
-      for (std::size_t local = 0; local < candidate.local_size(); ++local)
-        Kokkos::deep_copy(candidate.fab(local).storage(), snapshot.fab(local).storage());
-    }
-    Kokkos::fence();
+    p_->coupling_workspace_.restore_rollback();
   } catch (...) {
     restore_error = std::current_exception();
   }
-  if (all_reduce_max(restore_error ? 1L : 0L) != 0)
+  if (all_reduce_max(restore_error ? 1L : 0L, lane) != 0)
     throw std::runtime_error("System coupling rollback failed collectively");
-  if (n_ranks() == 1 && local_error)
+  // Finite/conservation failure is encoded in the resident workspace and intentionally does not
+  // construct an exception while candidate fields are mutable.  Report it only after the complete
+  // rollback has restored every rank's detached image.
+  if (local_numeric_failure)
+    throw std::runtime_error("System coupling validation failed and rolled back collectively");
+  if (lane.size() == 1 && local_error)
     std::rethrow_exception(local_error);
   throw std::runtime_error("System coupling application failed and rolled back collectively");
 }
@@ -471,7 +470,24 @@ void System<Dim>::block_rhs_into(int block, MultiFab<Dim>& state, MultiFab<Dim>&
 template <int Dim>
 void System<Dim>::block_rhs_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                     int block, MultiFab<Dim>& state, MultiFab<Dim>& residual) {
-  block_rhs_group(point, {block}, {&state}, {&residual}, {0});
+  if (block < 0 || block >= p_->blocks_.size())
+    throw std::out_of_range("System::block_rhs_into_at block index is out of range");
+  p_->rhs_group_workspace_.clear_for_request(p_->sp.size());
+  const std::size_t index = static_cast<std::size_t>(block);
+  p_->rhs_group_workspace_.states[index] = &state;
+  p_->rhs_group_workspace_.residuals[index] = &residual;
+  if (p_->embedded_boundary_ &&
+      p_->embedded_boundary_->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    typename Impl::Species& selected = p_->sp[index];
+    auto& family = select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+    require_embedded_residual_route<Dim>(p_->blocks_, selected, block, static_cast<bool>(family.full),
+                                         "System::block_rhs_into_at");
+    family.full(state, residual, *p_->embedded_boundary_);
+    return;
+  }
+  p_->blocks_.evaluate_rhs_with_interfaces(point, p_->rhs_group_workspace_.states,
+                                           p_->rhs_group_workspace_.residuals,
+                                           p_->rhs_group_workspace_.flux_only);
 }
 
 template <int Dim>
@@ -485,9 +501,10 @@ void System<Dim>::block_rhs_group(const runtime::multiblock::BoundaryEvaluationP
       requested_blocks.size() != requested_flux_only.size())
     throw std::invalid_argument("System::block_rhs_group has inconsistent request vectors");
 
-  std::vector<MultiFab<Dim>*> states(p_->sp.size(), nullptr);
-  std::vector<MultiFab<Dim>*> residuals(p_->sp.size(), nullptr);
-  std::vector<int> flux_only(p_->sp.size(), 0);
+  p_->rhs_group_workspace_.clear_for_request(p_->sp.size());
+  auto& states = p_->rhs_group_workspace_.states;
+  auto& residuals = p_->rhs_group_workspace_.residuals;
+  auto& flux_only = p_->rhs_group_workspace_.flux_only;
   for (std::size_t request = 0; request < requested_blocks.size(); ++request) {
     const int block = requested_blocks[request];
     if (block < 0 || block >= p_->blocks_.size())
@@ -794,7 +811,26 @@ template <int Dim>
 void System<Dim>::block_neg_div_flux_into_at(
     const runtime::multiblock::BoundaryEvaluationPoint& point, int block, MultiFab<Dim>& state,
     MultiFab<Dim>& residual) {
-  block_rhs_group(point, {block}, {&state}, {&residual}, {1});
+  if (block < 0 || block >= p_->blocks_.size())
+    throw std::out_of_range("System::block_neg_div_flux_into_at block index is out of range");
+  p_->rhs_group_workspace_.clear_for_request(p_->sp.size());
+  const std::size_t index = static_cast<std::size_t>(block);
+  p_->rhs_group_workspace_.states[index] = &state;
+  p_->rhs_group_workspace_.residuals[index] = &residual;
+  p_->rhs_group_workspace_.flux_only[index] = 1;
+  if (p_->embedded_boundary_ &&
+      p_->embedded_boundary_->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    typename Impl::Species& selected = p_->sp[index];
+    auto& family = select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+    require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
+                                         static_cast<bool>(family.flux_only),
+                                         "System::block_neg_div_flux_into_at");
+    family.flux_only(state, residual, *p_->embedded_boundary_);
+    return;
+  }
+  p_->blocks_.evaluate_rhs_with_interfaces(point, p_->rhs_group_workspace_.states,
+                                           p_->rhs_group_workspace_.residuals,
+                                           p_->rhs_group_workspace_.flux_only);
 }
 
 template <int Dim>
@@ -1003,6 +1039,7 @@ void System<Dim>::set_program_block_map(const std::vector<int>& program_to_syste
         throw std::invalid_argument("System::set_program_block_map has duplicate block routes");
   }
   p_->program_.block_map_ = program_to_system;
+  p_->prepared_coupling_receipt_.reset();
 }
 
 template <int Dim>

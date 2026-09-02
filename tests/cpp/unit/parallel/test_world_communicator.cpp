@@ -1,9 +1,11 @@
 #include <gtest/gtest.h>
 
 #include <pops/parallel/execution_lane.hpp>
+#include <pops/parallel/comm.hpp>
 #include <pops/parallel/world_communicator.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
 
+#include <array>
 #include <atomic>
 #include <stdexcept>
 #include <string>
@@ -182,6 +184,31 @@ TEST(WorldCommunicator, TransfersEmptyNullAndVariableSizedBytes) {
   }
   EXPECT_NO_THROW(world.barrier());
   EXPECT_THROW((void)world.broadcast_bytes({}, size), std::out_of_range);
+}
+
+TEST(WorldCommunicator, ExactOrderedBytePairConsensusIsExactAndUsesNoDynamicScratch) {
+  const pops::WorldCommunicator& world = pops::WorldCommunicator::world();
+  const std::array<pops::ExactOrderedBytePair, 2> equal = {
+      pops::ExactOrderedBytePair{"contract", std::string_view("alpha\0beta", 10)},
+      pops::ExactOrderedBytePair{"payload", "0123456789"}};
+  const std::array<pops::ExactOrderedBytePair, 2> different_lengths = {
+      pops::ExactOrderedBytePair{"contract", "alpha"},
+      pops::ExactOrderedBytePair{"payload", world.rank() == 0 ? "short" : "longer"}};
+  const std::array<pops::ExactOrderedBytePair, 2> different_bytes = {
+      pops::ExactOrderedBytePair{"contract", "alpha"},
+      pops::ExactOrderedBytePair{"payload", world.rank() == 0 ? "same-size-a" : "same-size-b"}};
+
+  const std::uint64_t dynamic_before = pops::exact_consensus_dynamic_storage_calls();
+  for (int iteration = 0; iteration < 8; ++iteration)
+    EXPECT_TRUE(pops::all_ranks_agree_exact_ordered_byte_pairs(equal));
+  EXPECT_EQ(pops::exact_consensus_dynamic_storage_calls(), dynamic_before)
+      << "repeated exact consensus must use call-local fixed-size scratch only";
+
+  const bool expect_mismatch = world.size() > 1;
+  EXPECT_EQ(pops::all_ranks_agree_exact_ordered_byte_pairs(different_lengths), !expect_mismatch)
+      << "every pair component length is authenticated collectively";
+  EXPECT_EQ(pops::all_ranks_agree_exact_ordered_byte_pairs(different_bytes), !expect_mismatch)
+      << "same-length payloads require byte-for-byte equality";
 }
 
 TEST(WorldCommunicator, OutputPieceWirePreservesExactRankedBounds) {

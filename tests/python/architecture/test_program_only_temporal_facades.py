@@ -713,7 +713,7 @@ def test_ranked_program_execution_services_owns_candidate_state_coupling_not_a_l
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
     assert not retired.exists()
     assert uniform.count("struct CouplingStateOverride") == 1
-    assert uniform.count("void apply_coupling_operators(") == 1
+    assert uniform.count("void apply_coupling_operators(Real dt,") == 1
     assert "ProgramExecutionServices coupling requires every runtime block candidate" in uniform
     assert "system_->apply_coupling_operators(dt, workspace.coupling_states)" in uniform
     assert "count_kernel_(" in uniform

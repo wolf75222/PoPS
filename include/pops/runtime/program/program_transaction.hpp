@@ -163,9 +163,10 @@ struct ProgramEffectInfo final {
   ProgramEffectSlotStatus status = ProgramEffectSlotStatus::kUnregistered;
 };
 
-/// Aggregate budget frozen by `bind()`.  A zero maximum means "the exact count/total declared at
-/// bind", not unlimited growth.  This makes an accidental late registration impossible in either
-/// interpretation of a zero-valued generated manifest.
+/// Aggregate budget frozen by `bind()`.  Every member is an exact inclusive upper bound: zero
+/// admits exactly zero participants, bytes, or effects.  The registry intentionally has no
+/// implicit unbounded spelling; a producer that needs one must provide its own finite manifest
+/// bound before registration.
 struct ProgramTransactionBudget final {
   std::size_t max_participants = 0;
   std::size_t max_restore_bytes = 0;
@@ -188,7 +189,7 @@ struct ProgramTransactionConsensus final {
 };
 
 /// Erased participant lifecycle.  The registry's typed handle (see `ParticipantHandle<T>`) keeps
-/// the authoring side type-safe; these five pointers are the only calls retained in the hot path.
+/// the authoring side type-safe; these six pointers are the only calls retained in the hot path.
 /// `publish` returns false before mutating the accepted image.  Rollback is allowed to restore a
 /// participant from the pre-step image and must never throw.
 struct ProgramParticipantOps final {
@@ -196,6 +197,7 @@ struct ProgramParticipantOps final {
   using Restore = void (*)(void* object, const void* image, std::size_t image_bytes) noexcept;
   using Publish = bool (*)(void* object) noexcept;
   using Rollback = void (*)(void* object, const void* image, std::size_t image_bytes) noexcept;
+  using AbortSnapshot = void (*)(void* object) noexcept;
   /// Optional detached candidate carrier.  When supplied, `ProvisionalView<T>` points at this
   /// carrier, keeping the accepted object readable until hidden publication.  A null pointer is
   /// permitted for runtimes whose participant object already owns its candidate storage.
@@ -206,6 +208,10 @@ struct ProgramParticipantOps final {
   Publish publish = nullptr;
   Rollback rollback = nullptr;
   Candidate candidate = nullptr;
+  /// Optional cleanup for a completed snapshot whose candidate admission was refused.  It may
+  /// release only capture bookkeeping; it must not mutate accepted state because a foreign
+  /// AcceptedReadLease can still be observing that state.
+  AbortSnapshot abort_snapshot = nullptr;
 };
 
 /// A typed, non-owning participant token.  It is cheap to copy and cannot be forged for another
@@ -662,6 +668,7 @@ class ProgramTransaction final {
              std::uint32_t ordinal, std::uint32_t reason_code = 0) noexcept;
   [[nodiscard]] bool consensus_(ProgramTransactionPhase phase, std::uint32_t status) const noexcept;
   [[nodiscard]] bool prepare_effects_collectively_() noexcept;
+  void abort_snapshots_() noexcept;
   void restore_participants_() noexcept;
   void discard_prepared_() noexcept;
   void compensate_published_() noexcept;
@@ -725,10 +732,9 @@ class ProgramTransactionRegistry final {
 
   template <class T>
     requires detail::MethodParticipant<T>
-  [[nodiscard]] ParticipantHandle<T> try_register_participant(
-      T& object, ProgramParticipantBudget budget = {}) noexcept {
-    if (budget.restore_bytes == 0 && budget.candidate_bytes == 0)
-      budget = {sizeof(T), sizeof(T)};
+  [[nodiscard]] ParticipantHandle<T> try_register_participant(T& object,
+                                                              ProgramParticipantBudget budget = {
+                                                                  sizeof(T), sizeof(T)}) noexcept {
     return try_register_participant(object, detail::method_participant_ops<T>(), budget);
   }
 
@@ -746,9 +752,8 @@ class ProgramTransactionRegistry final {
   template <class T>
     requires detail::MethodParticipant<T>
   [[nodiscard]] ParticipantHandle<T> register_participant(T& object,
-                                                          ProgramParticipantBudget budget = {}) {
-    if (budget.restore_bytes == 0 && budget.candidate_bytes == 0)
-      budget = {sizeof(T), sizeof(T)};
+                                                          ProgramParticipantBudget budget = {
+                                                              sizeof(T), sizeof(T)}) {
     return register_participant(object, detail::method_participant_ops<T>(), budget);
   }
 
@@ -871,6 +876,24 @@ class ProgramTransactionRegistry final {
           "ProgramTransactionRegistry requires complete participant callbacks");
     if (participants_.size() == std::numeric_limits<std::uint32_t>::max())
       throw std::length_error("ProgramTransactionRegistry participant index overflow");
+    if (participants_.size() >= budget_.max_participants)
+      throw std::length_error("ProgramTransactionRegistry participant budget exceeded");
+    std::size_t restore_total = 0;
+    std::size_t candidate_total = 0;
+    for (const ParticipantEntry& existing : participants_) {
+      if (existing.budget.restore_bytes > std::numeric_limits<std::size_t>::max() - restore_total ||
+          existing.budget.candidate_bytes >
+              std::numeric_limits<std::size_t>::max() - candidate_total)
+        throw std::length_error("ProgramTransactionRegistry participant budget overflow");
+      restore_total += existing.budget.restore_bytes;
+      candidate_total += existing.budget.candidate_bytes;
+    }
+    if (budget.restore_bytes > std::numeric_limits<std::size_t>::max() - restore_total ||
+        restore_total + budget.restore_bytes > budget_.max_restore_bytes)
+      throw std::length_error("ProgramTransactionRegistry restore budget exceeded");
+    if (budget.candidate_bytes > std::numeric_limits<std::size_t>::max() - candidate_total ||
+        candidate_total + budget.candidate_bytes > budget_.max_candidate_bytes)
+      throw std::length_error("ProgramTransactionRegistry candidate budget exceeded");
     for (const ParticipantEntry& existing : participants_)
       if (existing.object == object)
         throw std::invalid_argument(
@@ -1425,9 +1448,10 @@ inline void ProgramTransaction::snapshot_() {
           collectively_success ? 0u : 1u);
     if (read_lock.owns_lock())
       read_lock.unlock();
+    abort_snapshots_();
     // No candidate has been entered and the callback contract says snapshot is read-only with
-    // respect to the participant.  Do not restore partially written image bytes: the next begin
-    // recaptures the complete image before it can enter candidate.
+    // respect to accepted state.  Do not restore partially written image bytes: a participant
+    // may have captured private bookkeeping, but it cannot safely rewrite accepted state here.
     phase_ = ProgramTransactionPhase::kRolledBack;
     active_ = false;
     if (registry_ != nullptr)
@@ -1516,6 +1540,15 @@ inline bool ProgramTransaction::begin_candidate() noexcept {
     publication_lock_borrowed_ = false;
     fail_(ProgramTransactionPhase::kCandidate, ProgramTransactionFailure::kCandidate,
           kInvalidProgramTransactionIndex, lock_status == 0 ? 3U : lock_status);
+    // Snapshot completed, but no Candidate callback has run and no participant has been
+    // mutated.  In particular, a failed writer try-lock means an accepted reader still owns the
+    // shared visibility lease: restoring the snapshot here would race with that reader.  Release
+    // only participant-owned capture bookkeeping, then close this unentered attempt directly.
+    abort_snapshots_();
+    phase_ = ProgramTransactionPhase::kRolledBack;
+    publication_complete_ = false;
+    registry_->clear_active_();
+    active_ = false;
     return false;
   }
   if (acquired_writer) {
@@ -1706,6 +1739,14 @@ inline void ProgramTransaction::discard_prepared_() noexcept {
   }
 }
 
+inline void ProgramTransaction::abort_snapshots_() noexcept {
+  if (registry_ == nullptr)
+    return;
+  for (auto& participant : registry_->participants_)
+    if (participant.ops.abort_snapshot != nullptr)
+      participant.ops.abort_snapshot(participant.object);
+}
+
 inline void ProgramTransaction::restore_participants_() noexcept {
   if (registry_ == nullptr)
     return;
@@ -1758,10 +1799,11 @@ inline ProgramPublishReceipt ProgramTransaction::publish() noexcept {
   }
   const bool lock_consensus = consensus_(ProgramTransactionPhase::kHiddenPublish, lock_status);
   if (lock_status != 0 || !lock_consensus) {
-    if (publication_lock_.owns_lock())
-      publication_lock_.unlock();
     fail_(ProgramTransactionPhase::kHiddenPublish, ProgramTransactionFailure::kHiddenPublish,
           kInvalidProgramTransactionIndex, lock_status == 0 ? 3U : lock_status);
+    // A Candidate has already run.  Keep any acquired writer lease through participant restore;
+    // close_rollback_ releases it and unlinks the thread marker only after the accepted image is
+    // complete again.  Unlocking here exposes a torn rollback and strands the writer marker.
     close_rollback_();
     return failed_publish_();
   }
@@ -1933,7 +1975,7 @@ inline EffectHandle ProgramTransactionRegistry::register_effect(std::uint64_t id
   for (const EffectEntry& existing : effects_)
     if (existing.identity == identity)
       throw std::invalid_argument("ProgramTransactionRegistry refuses duplicate effect identity");
-  if (budget_.max_effects != 0 && effects_.size() >= budget_.max_effects)
+  if (effects_.size() >= budget_.max_effects)
     throw std::length_error("ProgramTransactionRegistry effect budget exceeded");
   EffectEntry entry;
   entry.identity = identity;
@@ -1957,13 +1999,13 @@ inline EffectHandle ProgramTransactionRegistry::try_register_effect(
 inline void ProgramTransactionRegistry::bind() {
   if (bound_)
     throw std::logic_error("ProgramTransactionRegistry::bind called twice");
-  if (budget_.max_participants != 0 && participants_.size() > budget_.max_participants)
+  if (participants_.size() > budget_.max_participants)
     throw std::length_error("ProgramTransactionRegistry participant budget exceeded");
   if (participants_.size() > std::numeric_limits<std::uint32_t>::max())
     throw std::length_error("ProgramTransactionRegistry participant count is not representable");
   if (budget_.max_effects > std::numeric_limits<std::uint32_t>::max())
     throw std::length_error("ProgramTransactionRegistry effect count is not representable");
-  if (budget_.max_effects != 0 && effects_.size() > budget_.max_effects)
+  if (effects_.size() > budget_.max_effects)
     throw std::length_error("ProgramTransactionRegistry effect budget exceeded");
   std::size_t restore_total = 0;
   std::size_t candidate_total = 0;
@@ -1976,9 +2018,9 @@ inline void ProgramTransactionRegistry::bind() {
     restore_total += participant.budget.restore_bytes;
     candidate_total += participant.budget.candidate_bytes;
   }
-  if (budget_.max_restore_bytes != 0 && restore_total > budget_.max_restore_bytes)
+  if (restore_total > budget_.max_restore_bytes)
     throw std::length_error("ProgramTransactionRegistry restore budget exceeded");
-  if (budget_.max_candidate_bytes != 0 && candidate_total > budget_.max_candidate_bytes)
+  if (candidate_total > budget_.max_candidate_bytes)
     throw std::length_error("ProgramTransactionRegistry candidate budget exceeded");
   participants_.reserve(participants_.size());
   effects_.reserve(effects_.size());

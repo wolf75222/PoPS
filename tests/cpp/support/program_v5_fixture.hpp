@@ -7,20 +7,29 @@
 // (for example, that a selective history replay is refused without a history-authority table).
 
 #include <pops/runtime/program/owned_program_installation.hpp>
+#include <pops/runtime/program/same_level_cell_temporal_provider.hpp>
+#include <pops/runtime/system/derived_aux_provider.hpp>
+#include <pops/core/foundation/native_dimension.hpp>
 
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <iomanip>
+#include <numeric>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace pops::test::program_v5 {
+
+// FluxBasisProvider::PreparedDefaultFlux is the closed ABI value one.
+inline constexpr std::uint32_t kPreparedDefaultFluxProvider = 1;
 
 inline std::string cxx_string_literal(std::string_view value) {
   std::string result{"\""};
@@ -110,6 +119,60 @@ struct CallbackProgramTransactionAuthorities final {
   std::vector<std::string> diagnostics;
   std::vector<std::string> balance_routes;
   std::vector<std::string> step_projections;
+};
+
+/// Declarative AMR-only authority emitted into the ABI-v5 candidate preparation image.  The
+/// generated MODULE owns no executable route state: it materializes these exact rows before the
+/// first candidate step, then the host callback only advances the prepared subengine.
+struct CallbackProgramCellTemporalAuthority final {
+  std::string clock;
+  std::int64_t tick_denominator = 0;
+  int rung = -1;
+  std::vector<runtime::program::SameLevelCellTemporalForwardEulerRoute> routes;
+};
+
+/// One builtin hierarchy-tensor selection installed into the detached AMR preparation image.
+/// The generic fixture deliberately uses the provider's authenticated default options; extension
+/// option serialization belongs to a provider-specific fixture rather than the ABI carrier.
+struct CallbackProgramHierarchyTensorAuthority final {
+  int program_block = -1;
+  int components = 0;
+  std::string provider;
+  std::string plan;
+  std::string operator_contract;
+  std::vector<std::string> assembly_field_slots;
+  std::string solution_field_slot;
+  std::string option_schema;
+};
+
+struct CallbackProgramFluxBasisOccurrence final {
+  std::uint32_t basis_slot = 0;
+  std::uint32_t expression_slot = 0;
+  int block = -1;
+  int level = -1;
+  int rhs_identity = -1;
+  std::uint32_t provider = 0;
+  std::int64_t stage_numerator = 0;
+  std::int64_t stage_denominator = 1;
+  std::string identity;
+  std::string occurrence_path;
+  std::string owner;
+  std::string clock;
+};
+
+/// One final dt-integrated face-flux term.  Basis metadata lives in the separate occurrence table;
+/// this row only references that basis and carries the canonical coefficient.
+struct CallbackProgramFaceFluxStage final {
+  std::uint32_t slot = 0;
+  std::uint32_t basis_slot = 0;
+  std::uint32_t expression_slot = 0;
+  std::uint32_t dt_power = 1;
+  std::int64_t coefficient_numerator = 0;
+  std::int64_t coefficient_denominator = 1;
+  std::string identity;
+  std::string occurrence_path;
+  std::string owner;
+  std::string clock;
 };
 
 inline std::string callback_resource_kind_name(CallbackProgramResource::Kind kind) {
@@ -236,7 +299,13 @@ inline std::string callback_program_source(
     const std::vector<CallbackProgramHistory>& histories = {},
     const std::vector<CallbackProgramClockRelation>& clock_relations = {},
     const std::optional<std::vector<pops::runtime::program::ProgramFluxBudgetRecord>>&
-        flux_budgets = std::nullopt) {
+        flux_budgets = std::nullopt,
+    const std::optional<CallbackProgramCellTemporalAuthority>& cell_temporal = std::nullopt,
+    const std::vector<CallbackProgramFluxBasisOccurrence>& flux_basis_occurrences = {},
+    const std::vector<CallbackProgramFaceFluxStage>& face_flux_stages = {},
+    const std::optional<CallbackProgramHierarchyTensorAuthority>& hierarchy_tensor = std::nullopt,
+    const std::vector<pops::runtime::system::AuxiliaryConsumerProviderPlan<pops::kNativeDimension>>&
+        auxiliary_consumer_plans = {}) {
   if (identity.empty())
     throw std::invalid_argument("ABI-v5 callback fixture identity must not be empty");
   if (runtime_kind != "uniform" && runtime_kind != "amr")
@@ -278,6 +347,104 @@ inline std::string callback_program_source(
         relation.count < 1)
       throw std::invalid_argument("ABI-v5 callback fixture clock relation is invalid");
   }
+  const auto canonical_rational = [](std::int64_t numerator, std::int64_t denominator) noexcept {
+    return denominator > 0 && std::gcd(numerator, denominator) == 1;
+  };
+  std::unordered_set<std::string> basis_identities;
+  std::unordered_set<std::string> basis_paths;
+  std::vector<std::size_t> basis_counts(blocks.size(), 0);
+  for (std::size_t slot = 0; slot < flux_basis_occurrences.size(); ++slot) {
+    const auto& basis = flux_basis_occurrences[slot];
+    if (basis.basis_slot != slot || basis.block < 0 ||
+        static_cast<std::size_t>(basis.block) >= blocks.size() || basis.level < -1 ||
+        basis.rhs_identity < 0 || basis.provider > 3 || basis.stage_numerator < 0 ||
+        basis.stage_denominator <= 0 || basis.stage_numerator > basis.stage_denominator ||
+        !canonical_rational(basis.stage_numerator, basis.stage_denominator) ||
+        basis.identity.empty() || basis.occurrence_path.empty() || basis.owner.empty() ||
+        basis.clock.empty() || basis.owner != blocks[static_cast<std::size_t>(basis.block)] ||
+        !basis_identities.emplace(basis.identity).second ||
+        !basis_paths.emplace(basis.occurrence_path).second)
+      throw std::invalid_argument("ABI-v5 callback fixture flux basis occurrence is invalid");
+    ++basis_counts[static_cast<std::size_t>(basis.block)];
+  }
+  struct FluxExpressionGroup final {
+    int block = -1;
+    std::string owner;
+    std::string clock;
+    std::unordered_set<std::uint32_t> basis_slots;
+  };
+  std::unordered_map<std::uint32_t, FluxExpressionGroup> expressions;
+  std::unordered_map<std::uint64_t, std::size_t> terms_by_expression_basis;
+  std::unordered_set<std::string> face_flux_identities;
+  for (std::size_t slot = 0; slot < face_flux_stages.size(); ++slot) {
+    const auto& stage = face_flux_stages[slot];
+    if (stage.slot != slot || stage.basis_slot >= flux_basis_occurrences.size() ||
+        stage.dt_power != 1 || stage.coefficient_numerator == 0 ||
+        !canonical_rational(stage.coefficient_numerator, stage.coefficient_denominator) ||
+        stage.identity.empty() || stage.occurrence_path.empty() || stage.owner.empty() ||
+        stage.clock.empty() || stage.owner != flux_basis_occurrences[stage.basis_slot].owner ||
+        stage.clock != flux_basis_occurrences[stage.basis_slot].clock ||
+        !face_flux_identities.emplace(stage.identity).second)
+      throw std::invalid_argument("ABI-v5 callback fixture face-flux stage is invalid");
+    const auto& basis = flux_basis_occurrences[stage.basis_slot];
+    auto [expression, inserted] = expressions.emplace(
+        stage.expression_slot, FluxExpressionGroup{basis.block, basis.owner, basis.clock, {}});
+    if (!inserted &&
+        (expression->second.block != basis.block || expression->second.owner != stage.owner ||
+         expression->second.clock != stage.clock))
+      throw std::invalid_argument(
+          "ABI-v5 callback fixture final expression mixes block, owner, or clock provenance");
+    expression->second.basis_slots.emplace(stage.basis_slot);
+    const std::uint64_t pair_key = (static_cast<std::uint64_t>(stage.expression_slot) << 32) |
+                                   static_cast<std::uint64_t>(stage.basis_slot);
+    ++terms_by_expression_basis[pair_key];
+  }
+  const CallbackProgramCellTemporalAuthority* cell_temporal_authority = nullptr;
+  if (cell_temporal) {
+    const CallbackProgramCellTemporalAuthority& authority = *cell_temporal;
+    if (runtime_kind != "amr" || authority.clock.empty() || authority.clock != clock ||
+        authority.tick_denominator < 1 || authority.rung < 0 || authority.routes.empty())
+      throw std::invalid_argument("ABI-v5 callback fixture cell-temporal authority is invalid");
+    if (authority.routes.size() != blocks.size())
+      throw std::invalid_argument(
+          "ABI-v5 callback fixture cell-temporal routes must cover every Program block");
+    std::vector<bool> seen_program_blocks(blocks.size(), false);
+    for (std::size_t index = 0; index < authority.routes.size(); ++index) {
+      const auto& route = authority.routes[index];
+      if (route.program_block < 0 || route.runtime_block < -1 || route.rhs_id < 0 ||
+          static_cast<std::size_t>(route.program_block) >= blocks.size() ||
+          (route.runtime_block >= 0 &&
+           static_cast<std::size_t>(route.runtime_block) >= blocks.size()) ||
+          seen_program_blocks[static_cast<std::size_t>(route.program_block)])
+        throw std::invalid_argument(
+            "ABI-v5 callback fixture cell-temporal route identity is invalid");
+      seen_program_blocks[static_cast<std::size_t>(route.program_block)] = true;
+    }
+    cell_temporal_authority = &authority;
+  }
+  if (hierarchy_tensor) {
+    const CallbackProgramHierarchyTensorAuthority& authority = *hierarchy_tensor;
+    if (runtime_kind != "amr" || authority.program_block < 0 || authority.components < 1 ||
+        static_cast<std::size_t>(authority.program_block) >= blocks.size() ||
+        authority.provider.empty() || authority.plan.empty() ||
+        authority.operator_contract.empty() || authority.assembly_field_slots.empty() ||
+        authority.solution_field_slot.empty() || authority.option_schema.empty() ||
+        std::any_of(
+            authority.assembly_field_slots.begin(), authority.assembly_field_slots.end(),
+            [](const std::string& slot) { return slot.empty(); }))
+      throw std::invalid_argument("ABI-v5 callback fixture hierarchy tensor authority is invalid");
+    std::vector<std::string> ordered_slots = authority.assembly_field_slots;
+    std::sort(ordered_slots.begin(), ordered_slots.end());
+    if (std::adjacent_find(ordered_slots.begin(), ordered_slots.end()) != ordered_slots.end())
+      throw std::invalid_argument("ABI-v5 callback fixture hierarchy tensor slots must be unique");
+  }
+  std::unordered_set<std::string> auxiliary_consumer_identities;
+  for (const auto& plan : auxiliary_consumer_plans) {
+    plan.validate();
+    if (!auxiliary_consumer_identities.emplace(plan.consumer_qid).second)
+      throw std::invalid_argument(
+          "ABI-v5 callback fixture auxiliary consumer identities must be unique");
+  }
 
   const auto resource_tables = callback_resource_tables(resources, clock);
   const auto [resource_digest, resource_manifest] = callback_resource_manifest(resource_tables);
@@ -285,21 +452,41 @@ inline std::string callback_program_source(
   std::vector<pops::runtime::program::ProgramFluxBudgetRecord> default_flux_budgets;
   const std::vector<pops::runtime::program::ProgramFluxBudgetRecord>* flux_budget_rows = nullptr;
   if (flux_budgets.has_value()) {
-    if (!flux_budgets->empty() && flux_budgets->size() != blocks.size())
+    if (flux_budgets->size() != blocks.size())
       throw std::invalid_argument(
           "ABI-v5 callback fixture flux budget table must contain exactly one row per Program "
           "block");
-    flux_budget_rows = &*flux_budgets;
-  } else if (runtime_kind == "amr" && !blocks.empty()) {
-    default_flux_budgets.reserve(blocks.size());
-    for (std::size_t index = 0; index < blocks.size(); ++index) {
-      if (blocks.size() == 1)
-        default_flux_budgets.push_back({1, 1, 0, 0});
-      else
-        default_flux_budgets.push_back({2, 1, 1, 4096});
+    for (std::size_t block = 0; block < blocks.size(); ++block) {
+      const auto& budget = flux_budgets->at(block);
+      if ((budget.rhs_basis_bound != 0) != (basis_counts[block] != 0))
+        throw std::invalid_argument(
+            "ABI-v5 callback fixture flux budget activity differs from its basis table");
     }
+    for (const auto& [expression_slot, expression] : expressions) {
+      const auto& budget = flux_budgets->at(static_cast<std::size_t>(expression.block));
+      if (expression.basis_slots.size() > budget.rhs_basis_bound)
+        throw std::invalid_argument(
+            "ABI-v5 callback fixture final expression exceeds its RHS-basis bound");
+      for (const auto basis_slot : expression.basis_slots) {
+        const std::uint64_t pair_key =
+            (static_cast<std::uint64_t>(expression_slot) << 32) | basis_slot;
+        if (terms_by_expression_basis.at(pair_key) > budget.coefficient_term_bound)
+          throw std::invalid_argument(
+              "ABI-v5 callback fixture basis exceeds its coefficient-term bound");
+      }
+    }
+    flux_budget_rows = &*flux_budgets;
+  } else if (flux_basis_occurrences.empty() && !blocks.empty()) {
+    default_flux_budgets.reserve(blocks.size());
+    default_flux_budgets.assign(blocks.size(), {0, 0, 0, 0});
     flux_budget_rows = &default_flux_budgets;
+  } else if (!flux_basis_occurrences.empty()) {
+    throw std::invalid_argument(
+        "ABI-v5 callback fixture active flux basis tables require explicit live budgets");
   }
+  const std::vector<CallbackProgramFluxBasisOccurrence>* flux_basis_occurrence_rows =
+      &flux_basis_occurrences;
+  const std::vector<CallbackProgramFaceFluxStage>* face_flux_stage_rows = &face_flux_stages;
 
   // clang-format off
   std::ostringstream source;
@@ -309,6 +496,7 @@ inline std::string callback_program_source(
 #include <pops/runtime/program/program_abi.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/config/route_ids.hpp>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -399,6 +587,50 @@ bool candidate_prepare(void* opaque,
            << cxx_string_literal(history.space) << ", " << cxx_string_literal(history.clock)
            << ", " << cxx_string_literal(history.interpolation) << "); });\n";
   }
+  for (std::size_t plan_index = 0; plan_index < auxiliary_consumer_plans.size(); ++plan_index) {
+    const auto& plan = auxiliary_consumer_plans[plan_index];
+    source << "    candidate_prepare_stage(\"auxiliary consumer plan\", [&] {\n"
+              "      pops::runtime::system::AuxiliaryConsumerProviderPlan<"
+              "pops::kNativeDimension> plan;\n"
+              "      plan.consumer_qid = "
+           << cxx_string_literal(plan.consumer_qid) << ";\n";
+    for (std::size_t value_index = 0; value_index < plan.values.size(); ++value_index) {
+      const auto& value = plan.values[value_index];
+      const auto& dependency = value.dependency;
+      source << "      pops::runtime::system::AuxiliaryConsumerValue<pops::kNativeDimension> "
+                "value;\n"
+                "      value.dependency.key.owner_qid = "
+             << cxx_string_literal(dependency.key.owner_qid)
+             << ";\n      value.dependency.key.space_kind = "
+             << cxx_string_literal(dependency.key.space_kind)
+             << ";\n      value.dependency.key.space_name = "
+             << cxx_string_literal(dependency.key.space_name)
+             << ";\n      value.dependency.key.component = "
+             << cxx_string_literal(dependency.key.component)
+             << ";\n      value.dependency.contract.representation = "
+             << cxx_string_literal(dependency.contract.representation)
+             << ";\n      value.dependency.contract.centering = "
+             << cxx_string_literal(dependency.contract.centering) << ";\n";
+      if (dependency.contract.unit)
+        source << "      value.dependency.contract.unit = std::string("
+               << cxx_string_literal(*dependency.contract.unit) << ");\n";
+      source << "      value.dependency.contract.layout = "
+             << cxx_string_literal(dependency.contract.layout) << ";\n";
+      if (dependency.contract.value_kind)
+        source << "      value.dependency.contract.value_kind = std::string("
+               << cxx_string_literal(*dependency.contract.value_kind) << ");\n";
+      source << "      value.dependency.shape.spatial_rank = " << dependency.shape.spatial_rank
+             << ";\n      value.dependency.shape.value_components = "
+             << dependency.shape.value_components << ";\n";
+      for (int axis = 0; axis < pops::kNativeDimension; ++axis)
+        source << "      value.dependency.shape.halo[" << axis << "] = "
+               << dependency.shape.halo[axis] << ";\n";
+      source << "      value.consumer_slot = " << value.consumer_slot
+             << ";\n      plan.values.push_back(std::move(value));\n";
+    }
+    source << "      state.context->stage_auxiliary_consumer_plan(std::move(plan));\n"
+              "    });\n";
+  }
   for (const auto& resource : resources) {
     switch (resource.kind) {
       case CallbackProgramResource::Kind::rhs:
@@ -430,6 +662,41 @@ bool candidate_prepare(void* opaque,
     }
     source << "});\n";
   }
+  if (hierarchy_tensor) {
+    const CallbackProgramHierarchyTensorAuthority& authority = *hierarchy_tensor;
+    source << "    candidate_prepare_stage(\"hierarchy tensor solver\", [&] { "
+              "state.context->configure_hierarchy_tensor_solver("
+           << authority.program_block << ", " << authority.components << ", "
+           << cxx_string_literal(authority.provider) << ", " << cxx_string_literal(authority.plan)
+           << ", " << cxx_string_literal(authority.operator_contract)
+           << ", std::vector<std::string>{";
+    for (std::size_t index = 0; index < authority.assembly_field_slots.size(); ++index) {
+      if (index != 0)
+        source << ", ";
+      source << cxx_string_literal(authority.assembly_field_slots[index]);
+    }
+    source << "}, " << cxx_string_literal(authority.solution_field_slot)
+           << ", pops::PreparedProviderOptions{" << cxx_string_literal(authority.option_schema)
+           << ", {}}); });\n";
+  }
+  if (cell_temporal_authority != nullptr) {
+    source << "    static constexpr std::array<"
+              "pops::runtime::program::SameLevelCellTemporalForwardEulerRoute, "
+           << cell_temporal_authority->routes.size() << "> kCellTemporalRoutes{{";
+    for (std::size_t index = 0; index < cell_temporal_authority->routes.size(); ++index) {
+      if (index != 0)
+        source << ", ";
+      const auto& route = cell_temporal_authority->routes[index];
+      source << "{" << route.program_block << ", " << route.runtime_block << ", "
+             << route.rhs_id << "}";
+    }
+    source << "}};\n";
+    source << "    candidate_prepare_stage(\"same-level cell-temporal\", [&] { "
+              "state.context->prepare_same_level_cell_temporal_execution("
+           << cxx_string_literal(cell_temporal_authority->clock) << ", "
+           << cell_temporal_authority->tick_denominator << ", " << cell_temporal_authority->rung
+           << ", kCellTemporalRoutes); });\n";
+  }
   source << R"CPP(
     return true;
   } catch (const std::exception& error) {
@@ -443,11 +710,37 @@ bool candidate_prepare(void* opaque,
 )CPP";
   if (runtime_kind == "amr") {
     source << R"CPP(
-void candidate_hierarchy_refresh(void*) {}
-void candidate_history_remap(void*, const void*) {}
-void candidate_restart_preflight(void*) {}
-void candidate_restart_regrid(void*) {}
-void candidate_restart_resync(void*) {}
+void candidate_hierarchy_refresh(void* opaque) {
+  auto& state = *static_cast<ProgramCandidateState*>(opaque);
+  if (!state.context)
+    throw std::logic_error("ABI-v5 callback fixture refreshes its AMR hierarchy before prepare");
+  state.context->refresh_accepted_hierarchy();
+}
+void candidate_history_remap(void* opaque, const void* descriptor) {
+  auto& state = *static_cast<ProgramCandidateState*>(opaque);
+  if (!state.context || descriptor == nullptr)
+    throw std::logic_error("ABI-v5 callback fixture received an invalid AMR history remap");
+  state.context->accept_history_remap(
+      *static_cast<const pops::runtime::program::AmrProgramHistoryRemapDescriptor*>(descriptor));
+}
+void candidate_restart_preflight(void* opaque) {
+  auto& state = *static_cast<ProgramCandidateState*>(opaque);
+  if (!state.context)
+    throw std::logic_error("ABI-v5 callback fixture preflights AMR restart before prepare");
+  state.context->preflight_restart_regrid();
+}
+void candidate_restart_regrid(void* opaque) {
+  auto& state = *static_cast<ProgramCandidateState*>(opaque);
+  if (!state.context)
+    throw std::logic_error("ABI-v5 callback fixture regrids AMR restart before prepare");
+  state.context->restart_regrid();
+}
+void candidate_restart_resync(void* opaque) {
+  auto& state = *static_cast<ProgramCandidateState*>(opaque);
+  if (!state.context)
+    throw std::logic_error("ABI-v5 callback fixture resyncs AMR restart before prepare");
+  state.context->resync_after_restart();
+}
 pops::runtime::program::AcceptedProgramExecutionServicesSnapshot*
 candidate_create_snapshot(void* opaque) {
   auto& state = *static_cast<ProgramCandidateState*>(opaque);
@@ -523,9 +816,10 @@ candidate_create_snapshot(void* opaque) {
     source << "};\n}\n";
   }
 
-  // When no explicit table is supplied, AMR installation authenticates one default
-  // flux-expression budget row per Program block.  An engaged empty vector deliberately omits
-  // the table, while an engaged non-empty vector is emitted exactly as supplied.
+  // Every ABI-v5 installation carries one flux-expression budget row per Program block.  A
+  // fixture without flux tables emits zero bounds; active basis tables require caller-supplied
+  // live bounds because static basis occurrences can include terms canceled from every final
+  // expression.
   if (flux_budget_rows != nullptr && !flux_budget_rows->empty()) {
     source << "namespace { constexpr pops::runtime::program::ProgramFluxBudgetRecord "
                "kProgramFluxBudgets[] = {";
@@ -538,6 +832,72 @@ candidate_create_snapshot(void* opaque) {
              << row.interface_identity_character_bound << "ULL}";
     }
     source << "}; }\n";
+  }
+
+  if (!flux_basis_occurrence_rows->empty()) {
+    source << "namespace {\n";
+    for (std::size_t index = 0; index < flux_basis_occurrence_rows->size(); ++index) {
+      const auto& basis = flux_basis_occurrence_rows->at(index);
+      source << "static constexpr char kFluxBasisIdentity" << index << "[] = "
+             << cxx_string_literal(basis.identity) << ";\n";
+      source << "static constexpr char kFluxBasisOccurrence" << index << "[] = "
+             << cxx_string_literal(basis.occurrence_path) << ";\n";
+      source << "static constexpr char kFluxBasisOwner" << index << "[] = "
+             << cxx_string_literal(basis.owner) << ";\n";
+      source << "static constexpr char kFluxBasisClock" << index << "[] = "
+             << cxx_string_literal(basis.clock) << ";\n";
+    }
+    source << "constexpr pops::runtime::program::ProgramFluxBasisOccurrenceRecord "
+              "kProgramFluxBasisOccurrences[] = {";
+    for (std::size_t index = 0; index < flux_basis_occurrence_rows->size(); ++index) {
+      if (index != 0)
+        source << ", ";
+      const auto& basis = flux_basis_occurrence_rows->at(index);
+      source << "{sizeof(pops::runtime::program::ProgramFluxBasisOccurrenceRecord), "
+             << "pops::runtime::program::kProgramFluxBasisOccurrenceSchemaVersion, "
+             << basis.basis_slot << ", " << basis.expression_slot << ", " << basis.block << ", "
+             << basis.level << ", " << basis.rhs_identity << ", " << basis.provider << ", "
+             << basis.stage_numerator << "LL, " << basis.stage_denominator
+             << "LL, {kFluxBasisIdentity" << index << ", sizeof(kFluxBasisIdentity" << index
+             << ") - 1}, {kFluxBasisOccurrence" << index
+             << ", sizeof(kFluxBasisOccurrence" << index
+             << ") - 1}, {kFluxBasisOwner" << index << ", sizeof(kFluxBasisOwner" << index
+             << ") - 1}, {kFluxBasisClock" << index << ", sizeof(kFluxBasisClock" << index
+             << ") - 1}}";
+    }
+    source << "};\n}\n";
+  }
+
+  if (!face_flux_stage_rows->empty()) {
+    source << "namespace {\n";
+    for (std::size_t index = 0; index < face_flux_stage_rows->size(); ++index) {
+      const auto& stage = face_flux_stage_rows->at(index);
+      source << "static constexpr char kFaceFluxIdentity" << index << "[] = "
+             << cxx_string_literal(stage.identity) << ";\n";
+      source << "static constexpr char kFaceFluxOccurrence" << index << "[] = "
+             << cxx_string_literal(stage.occurrence_path) << ";\n";
+      source << "static constexpr char kFaceFluxOwner" << index << "[] = "
+             << cxx_string_literal(stage.owner) << ";\n";
+      source << "static constexpr char kFaceFluxClock" << index << "[] = "
+             << cxx_string_literal(stage.clock) << ";\n";
+    }
+    source << "constexpr pops::runtime::program::ProgramFaceFluxStageRecord "
+              "kProgramFaceFluxStages[] = {";
+    for (std::size_t index = 0; index < face_flux_stage_rows->size(); ++index) {
+      if (index != 0)
+        source << ", ";
+      const auto& stage = face_flux_stage_rows->at(index);
+      source << "{sizeof(pops::runtime::program::ProgramFaceFluxStageRecord), "
+             << "pops::runtime::program::kProgramFaceFluxStageSchemaVersion, " << stage.slot
+             << ", " << stage.basis_slot << ", " << stage.expression_slot << ", "
+             << stage.dt_power << ", " << stage.coefficient_numerator << "LL, "
+             << stage.coefficient_denominator << "LL, {kFaceFluxIdentity" << index
+             << ", sizeof(kFaceFluxIdentity" << index << ") - 1}, {kFaceFluxOccurrence" << index
+             << ", sizeof(kFaceFluxOccurrence" << index << ") - 1}, {kFaceFluxOwner" << index
+             << ", sizeof(kFaceFluxOwner" << index << ") - 1}, {kFaceFluxClock" << index
+             << ", sizeof(kFaceFluxClock" << index << ") - 1}}";
+    }
+    source << "};\n}\n";
   }
 
   if (!resources.empty()) {
@@ -683,9 +1043,16 @@ extern "C" bool pops_install_program(
   if (flux_budget_rows != nullptr && !flux_budget_rows->empty())
     source << "    descriptor.flux_budgets = {kProgramFluxBudgets, sizeof(kProgramFluxBudgets) / "
                "sizeof(kProgramFluxBudgets[0]), sizeof(ProgramFluxBudgetRecord)};\n";
+  if (!flux_basis_occurrence_rows->empty())
+    source << "    descriptor.flux_basis_occurrences = {kProgramFluxBasisOccurrences, "
+               "sizeof(kProgramFluxBasisOccurrences) / sizeof(kProgramFluxBasisOccurrences[0]), "
+               "sizeof(ProgramFluxBasisOccurrenceRecord)};\n";
+  if (!face_flux_stage_rows->empty())
+    source << "    descriptor.face_flux_stages = {kProgramFaceFluxStages, "
+               "sizeof(kProgramFaceFluxStages) / sizeof(kProgramFaceFluxStages[0]), "
+               "sizeof(ProgramFaceFluxStageRecord)};\n";
   source << R"CPP(
-    descriptor.maximum_bytes = )CPP"
-         << (resources.empty() ? "0" : "kProgramResourcePlanUnknownExtent") << R"CPP(;
+    descriptor.maximum_bytes = kProgramResourcePlanUnknownExtent;
     descriptor.context = state.release();
     descriptor.prepare = &candidate_prepare;
     descriptor.step = &candidate_step;
@@ -883,7 +1250,7 @@ extern "C" bool pops_install_program(
                                                 sizeof(kResourceManifest) - 1};
     descriptor.checkpoint_identity = {%HISTORY%, sizeof(%HISTORY%) - 1};
     descriptor.blocks = {kProgramBlocks, %BLOCK_COUNT%, sizeof(ProgramBlockRecord)};
-    descriptor.maximum_bytes = 0;
+    descriptor.maximum_bytes = kProgramResourcePlanUnknownExtent;
     descriptor.context = state.get();
     descriptor.prepare = &candidate_prepare;
     descriptor.step = &candidate_step;
@@ -962,6 +1329,7 @@ inline std::string authority_program_source(std::string_view mode, std::string_v
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 
 extern "C" void pops_test_v5_public_reader_probe() noexcept;
@@ -974,6 +1342,23 @@ struct ProgramCandidateState final {
   std::function<void(double)> step;
   std::uint64_t calls = 0;
 };
+
+struct ProgramStepRejectSentinel final : pops::runtime::program::ProgramStepRejectSignal {
+  using ProgramStepRejectSignal::ProgramStepRejectSignal;
+};
+struct ProgramStepRejectPublishFailure final {};
+
+template <class Context>
+[[noreturn]] void program_reject_step(Context& context, pops::SolveStatus status,
+                                      pops::runtime::program::StepAttemptDisposition disposition,
+                                      std::uint32_t reason_code, std::string_view phase,
+                                      std::string_view detail) {
+  pops::runtime::program::ProgramStepRejectRecord record{};
+  if (!context.publish_step_attempt_rejection(status, disposition, reason_code, phase, detail,
+                                              record))
+    throw ProgramStepRejectPublishFailure{};
+  throw ProgramStepRejectSentinel{record};
+}
 
 void candidate_destroy(void* opaque) noexcept { delete static_cast<ProgramCandidateState*>(opaque); }
 
@@ -991,7 +1376,13 @@ void candidate_error(pops::runtime::program::ProgramInstallDiagnostic* diagnosti
 }
 
 void candidate_step(void* opaque, double dt) {
-  static_cast<ProgramCandidateState*>(opaque)->step(dt);
+  auto* state = static_cast<ProgramCandidateState*>(opaque);
+  try {
+    state->step(dt);
+  } catch (const pops::runtime::program::ProgramStepRejectSignal& signal) {
+    if (!state->context->adopt_step_attempt_rejection(signal.record))
+      throw ProgramStepRejectPublishFailure{};
+  }
 }
 
 bool candidate_prepare(void* opaque,
@@ -1022,8 +1413,10 @@ bool candidate_prepare(void* opaque,
       if (%REJECT_FIRST_ATTEMPT% && state->calls == 1)
         throw std::runtime_error("injected v5 authority attempt failure");
       if (%REJECT_FIRST_DT% && state->calls == 1)
-        throw pops::runtime::program::StepAttemptRejected(
-            pops::SolveStatus::kIterationLimit, "authority", "injected v5 authority dt failure");
+        program_reject_step(*context, pops::SolveStatus::kIterationLimit,
+                            pops::runtime::program::StepAttemptDisposition::kReject,
+                            UINT32_C(0x41555448), "authority",
+                            "injected v5 authority dt failure");
       context->record_scalar("test.program.v5.authority.calls",
                              static_cast<pops::Real>(state->calls));
       context->record_scalar("test.program.v5.authority.last_dt", static_cast<pops::Real>(dt));
@@ -1067,6 +1460,14 @@ bool candidate_prepare(void* opaque,
   }
   block_table += "}; }\n";
   source << block_table;
+  source << "namespace { constexpr pops::runtime::program::ProgramFluxBudgetRecord "
+            "kProgramFluxBudgets[] = {";
+  for (std::size_t index = 0; index < blocks.size(); ++index) {
+    if (index != 0)
+      source << ", ";
+    source << "{0, 0, 0, 0}";
+  }
+  source << "}; }\n";
 
   const std::string identity_literal = cxx_string_literal(identity);
   const std::string marker_literal = cxx_string_literal(marker_path);
@@ -1111,7 +1512,8 @@ extern "C" bool pops_install_program(
                                                 sizeof(kResourceManifest) - 1};
     descriptor.checkpoint_identity = {kIdentity, sizeof(kIdentity) - 1};
     descriptor.blocks = {kProgramBlocks, %BLOCK_COUNT%, sizeof(ProgramBlockRecord)};
-    descriptor.maximum_bytes = 0;
+    descriptor.flux_budgets = {kProgramFluxBudgets, %BLOCK_COUNT%, sizeof(ProgramFluxBudgetRecord)};
+    descriptor.maximum_bytes = kProgramResourcePlanUnknownExtent;
     descriptor.context = state.get();
     descriptor.prepare = &candidate_prepare;
     descriptor.step = &candidate_step;

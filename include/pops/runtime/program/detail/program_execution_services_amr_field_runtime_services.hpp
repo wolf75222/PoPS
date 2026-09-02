@@ -48,7 +48,7 @@ void require_history_free_for_topology_change_(std::string_view operation) const
 /// flat Krylov boundary session. Keep one retained instance per prepared level; consumers never
 /// reconstruct this law from topology alone.
 PhysicalBoundaryConditions<Dim> hierarchy_tensor_boundary_(const Geometry<Dim>& geometry) const {
-  const BoundaryTopology<Dim> topology = facade_->program_prepared_amr_boundary_topology_();
+  const BoundaryTopology<Dim> topology = prepared_boundary_topology_();
   std::array<PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
   RealVector<Dim> spacing{};
   for (int axis = 0; axis < Dim; ++axis) {
@@ -80,20 +80,31 @@ PreparedHierarchyTensorState prepare_hierarchy_tensor_solver_(
     request.assembly_field_slots = selection.assembly_field_slots;
     request.solution_field_slot = selection.solution_field_slot;
     request.options = selection.options;
-    request.levels.reserve(runtime_->hierarchy().num_levels());
-    boundaries.reserve(runtime_->hierarchy().num_levels());
-    if (runtime_->hierarchy().num_levels() > 1)
-      request.ratios.reserve(runtime_->hierarchy().num_levels() - 1);
-    for (std::size_t level = 0; level < runtime_->hierarchy().num_levels(); ++level) {
-      const field_type& level_state = runtime_->hierarchy().state(level);
+    const std::size_t levels = preparation_view_ != nullptr
+                                   ? preparation_view_->level_geometries.size()
+                                   : runtime_->hierarchy().num_levels();
+    request.levels.reserve(levels);
+    boundaries.reserve(levels);
+    if (levels > 1)
+      request.ratios.reserve(levels - 1U);
+    for (std::size_t level = 0; level < levels; ++level) {
+      const field_type& level_state =
+          preparation_view_ != nullptr
+              ? preparation_view_->block_prototypes.at(static_cast<std::size_t>(runtime_block))
+                    .at(level)
+              : runtime_->hierarchy().state(level);
       const Geometry<Dim> level_geometry =
-          facade_->program_prepared_amr_level_geometry_(static_cast<int>(level));
+          preparation_view_ != nullptr
+              ? preparation_view_->level_geometries.at(level)
+              : facade_->program_prepared_amr_level_geometry_(static_cast<int>(level));
       const PhysicalBoundaryConditions<Dim> boundary = hierarchy_tensor_boundary_(level_geometry);
       request.levels.push_back({level_geometry, boundary, level_state.layout(),
                                 level_state.distribution(), level_state.local_rank()});
       boundaries.push_back({level_geometry, boundary});
       if (level != 0)
-        request.ratios.push_back(runtime_->hierarchy().layout(level).ratio_from_parent());
+        request.ratios.push_back(preparation_view_ != nullptr
+                                     ? preparation_view_->spatial_refinement_ratios.at(level - 1U)
+                                     : runtime_->hierarchy().layout(level).ratio_from_parent());
     }
   } catch (...) {
     local_failure = 1;
@@ -116,15 +127,21 @@ hierarchy_tensor_solver_type& configured_hierarchy_tensor_solver_() const {
   if (!hierarchy_tensor_selection_)
     throw std::logic_error(
         "AMR hierarchy tensor solver must be configured before hierarchy access");
-  refresh_resources_();
-  if (!hierarchy_tensor_solver_ || hierarchy_tensor_topology_epoch_ != runtime_->topology_epoch() ||
-      hierarchy_tensor_materialization_generation_ != runtime_->materialization_generation()) {
+  if (preparation_view_ == nullptr)
+    refresh_resources_();
+  const std::uint64_t topology_epoch =
+      preparation_view_ != nullptr ? preparation_view_->topology_epoch : runtime_->topology_epoch();
+  const std::uint64_t materialization_generation =
+      preparation_view_ != nullptr ? preparation_view_->materialization_generation
+                                   : runtime_->materialization_generation();
+  if (!hierarchy_tensor_solver_ || hierarchy_tensor_topology_epoch_ != topology_epoch ||
+      hierarchy_tensor_materialization_generation_ != materialization_generation) {
     PreparedHierarchyTensorState prepared =
         prepare_hierarchy_tensor_solver_(*hierarchy_tensor_selection_);
     hierarchy_tensor_solver_ = std::move(prepared.solver);
     hierarchy_tensor_boundaries_ = std::move(prepared.boundaries);
-    hierarchy_tensor_topology_epoch_ = runtime_->topology_epoch();
-    hierarchy_tensor_materialization_generation_ = runtime_->materialization_generation();
+    hierarchy_tensor_topology_epoch_ = topology_epoch;
+    hierarchy_tensor_materialization_generation_ = materialization_generation;
   }
   return *hierarchy_tensor_solver_;
 }
@@ -325,7 +342,7 @@ struct CoupledJacvecScratch {
 };
 
 void prepare_coupled_jacvec_scratch_() const {
-  if (facade_ == nullptr)
+  if (facade_ == nullptr && preparation_view_ == nullptr)
     return;
   const std::uint64_t topology_epoch = runtime_->topology_epoch();
   const std::uint64_t materialization_generation = runtime_->materialization_generation();
@@ -337,7 +354,10 @@ void prepare_coupled_jacvec_scratch_() const {
   std::unique_ptr<CoupledJacvecScratch> candidate;
   std::exception_ptr preparation_error;
   try {
-    if (facade_->program_n_blocks_() == 2) {
+    const std::size_t block_count = preparation_view_ != nullptr
+                                        ? preparation_view_->block_prototypes.size()
+                                        : static_cast<std::size_t>(facade_->program_n_blocks_());
+    if (block_count == 2) {
       candidate = std::make_unique<CoupledJacvecScratch>();
       candidate->topology_epoch = topology_epoch;
       candidate->materialization_generation = materialization_generation;
@@ -345,7 +365,11 @@ void prepare_coupled_jacvec_scratch_() const {
       for (std::size_t level = 0; level < candidate->levels.size(); ++level)
         for (int runtime_block = 0; runtime_block < 2; ++runtime_block) {
           const field_type& prototype =
-              facade_->program_prepared_amr_block_state_(runtime_block, static_cast<int>(level));
+              preparation_view_ != nullptr
+                  ? preparation_view_->block_prototypes.at(static_cast<std::size_t>(runtime_block))
+                        .at(level)
+                  : facade_->program_prepared_amr_block_state_(runtime_block,
+                                                               static_cast<int>(level));
           auto residual = std::make_unique<field_type>(prototype.layout(), prototype.distribution(),
                                                        prototype.local_rank(), prototype.ncomp(),
                                                        prototype.ghosts());
@@ -405,28 +429,41 @@ CoupledJacvecLevelScratch& require_coupled_jacvec_scratch_(
 }
 
 field_type& persistent_scratch_(ScratchKind kind, ProgramCacheSlot slot, int subslot,
-                                const field_type& prototype, int ncomp, Extent<Dim> ghosts) const {
+                                const field_type& prototype, int ncomp, Extent<Dim> ghosts,
+                                bool reset = true) const {
   if (subslot < 0)
     throw std::invalid_argument("AMR Program scratch identity must be non-negative");
   if (slot >= prepared_scratch_.size() || active_level_ < 0)
     throw std::logic_error("AMR Program scratch is outside the bind-sealed resource plan");
   auto& family = prepared_scratch_[slot][static_cast<std::size_t>(kind)];
+  auto& descriptors = prepared_scratch_descriptors_[slot][static_cast<std::size_t>(kind)];
   const auto index = static_cast<std::size_t>(subslot);
-  if (index >= family.size() || !family[index] ||
-      static_cast<std::size_t>(active_level_) >= family[index]->size())
+  if (index >= family.size() || index >= descriptors.size() || !family[index] ||
+      !descriptors[index])
     throw std::logic_error("AMR Program scratch was not primed during installation");
-  field_type& result = family[index]->at(static_cast<std::size_t>(active_level_));
+  const PreparedScratchDescriptor& declaration = *descriptors[index];
+  std::size_t storage_level = 0;
+  if (declaration.declared_level < 0)
+    storage_level = static_cast<std::size_t>(active_level_);
+  else if (active_level_ != declaration.declared_level)
+    throw std::logic_error("AMR Program scratch was used outside its declared hierarchy level");
+  if (storage_level >= family[index]->size())
+    throw std::logic_error("AMR Program scratch was not primed during installation");
+  field_type& result = family[index]->at(storage_level);
   if (result.layout() != prototype.layout() || result.distribution() != prototype.distribution() ||
       result.local_rank() != prototype.local_rank() || result.ncomp() != ncomp ||
       result.ghosts() != ghosts)
     throw std::runtime_error("AMR Program scratch identity changed its exact field contract");
-  result.set_val(Real(0));
-  clear_active_flux_expression_(result);
+  if (reset) {
+    result.set_val(Real(0));
+    clear_active_flux_expression_(result);
+  }
   return result;
 }
 
 void prime_prepared_scratch(std::uint8_t kind_code, std::size_t slot, int subslot,
-                            int program_block, int ncomp, int ghost_depth) const {
+                            int program_block, int declared_level, int ncomp,
+                            int ghost_depth) const {
   if (preparation_view_ == nullptr || subslot < 0 || ncomp < 1 || ghost_depth < 0 ||
       kind_code > static_cast<std::uint8_t>(ScratchKind::Scalar) ||
       slot >= prepared_scratch_.size())
@@ -435,27 +472,47 @@ void prime_prepared_scratch(std::uint8_t kind_code, std::size_t slot, int subslo
   const int runtime_block = sys_block(program_block);
   const auto required = static_cast<std::size_t>(subslot) + 1;
   auto& family = prepared_scratch_[slot][static_cast<std::size_t>(kind)];
+  auto& descriptors = prepared_scratch_descriptors_[slot][static_cast<std::size_t>(kind)];
   if (family.size() < required)
     family.resize(required);
+  if (descriptors.size() < required)
+    descriptors.resize(required);
   auto& entry = family[static_cast<std::size_t>(subslot)];
+  auto& descriptor = descriptors[static_cast<std::size_t>(subslot)];
+  const Extent<Dim> ghosts = uniform_ghosts_(ghost_depth);
+  const PreparedScratchDescriptor requested{runtime_block, declared_level, ncomp, ghosts};
+  if (descriptor &&
+      (descriptor->runtime_block != requested.runtime_block ||
+       descriptor->declared_level != requested.declared_level ||
+       descriptor->ncomp != requested.ncomp || descriptor->ghosts != requested.ghosts))
+    throw std::logic_error("AMR Program scratch prime changed its sealed owner or shape");
   const auto& prototypes =
       preparation_view_->block_prototypes.at(static_cast<std::size_t>(runtime_block));
+  if (declared_level < -1 ||
+      (declared_level >= 0 && static_cast<std::size_t>(declared_level) >= prototypes.size()))
+    throw std::invalid_argument("AMR Program scratch prime has an invalid declared level");
+  const std::size_t first_level =
+      declared_level < 0 ? 0U : static_cast<std::size_t>(declared_level);
+  const std::size_t level_count = declared_level < 0 ? prototypes.size() : 1U;
   if (!entry) {
     entry.emplace();
-    entry->reserve(prototypes.size());
-    for (const field_type& prototype : prototypes)
-      entry->emplace_back(make_scratch_(prototype, ncomp, uniform_ghosts_(ghost_depth)));
+    entry->reserve(level_count);
+    for (std::size_t index = 0; index < level_count; ++index)
+      entry->emplace_back(make_scratch_(prototypes.at(first_level + index), ncomp, ghosts));
+    descriptor.emplace(requested);
     return;
   }
-  if (entry->size() != prototypes.size())
+  if (!descriptor)
+    throw std::logic_error("AMR Program scratch prime lost its sealed declaration");
+  if (entry->size() != level_count)
     throw std::logic_error("AMR Program scratch prime changed its prepared level count");
-  for (std::size_t level = 0; level < prototypes.size(); ++level) {
-    const field_type& prepared = entry->at(level);
-    const field_type& prototype = prototypes[level];
+  for (std::size_t index = 0; index < level_count; ++index) {
+    const field_type& prepared = entry->at(index);
+    const field_type& prototype = prototypes.at(first_level + index);
     if (prepared.layout() != prototype.layout() ||
         prepared.distribution() != prototype.distribution() ||
         prepared.local_rank() != prototype.local_rank() || prepared.ncomp() != ncomp ||
-        prepared.ghosts() != uniform_ghosts_(ghost_depth))
+        prepared.ghosts() != ghosts)
       throw std::logic_error("AMR Program scratch prime changed an exact layout");
   }
 }
@@ -504,16 +561,44 @@ int scratch_prototype_owner_(const field_type& prototype) const {
 
 int projection_candidate_owner_(const field_type& detached_candidate) const {
   std::optional<int> owner;
-  for (const auto& [key, scratch] : scratches_) {
-    if (&detached_candidate != &scratch)
-      continue;
-    if (std::get<0>(key) != ScratchKind::State || std::get<1>(key) != active_level_)
-      throw std::invalid_argument(
-          "AMR Program projection candidate is not an active-level state scratch");
-    const int candidate_owner = std::get<2>(key);
+  const auto record = [&](int candidate_owner) {
+    if (candidate_owner < 0 || candidate_owner >= n_blocks())
+      throw std::logic_error("AMR Program projection scratch has an invalid runtime owner");
     if (owner && *owner != candidate_owner)
       throw std::logic_error("AMR Program projection candidate aliases multiple scratch owners");
     owner = candidate_owner;
+  };
+  // Accepted Program execution is bound only to the dense prepared-scratch arena.  The legacy
+  // map is a preparation-only carrier; probing it here would turn a projection callback into a
+  // hot associative lookup and permit post-bind scratch drift.
+  if (preparation_mode_) {
+    for (const auto& [key, scratch] : scratches_) {
+      if (&detached_candidate != &scratch)
+        continue;
+      if (std::get<0>(key) != ScratchKind::State || std::get<1>(key) != active_level_)
+        throw std::invalid_argument(
+            "AMR Program projection candidate is not an active-level state scratch");
+      record(std::get<2>(key));
+    }
+  }
+  constexpr std::size_t state_family = static_cast<std::size_t>(ScratchKind::State);
+  for (std::size_t slot = 0; slot < prepared_scratch_.size(); ++slot) {
+    const auto& family = prepared_scratch_[slot][state_family];
+    const auto& descriptors = prepared_scratch_descriptors_[slot][state_family];
+    if (family.size() != descriptors.size())
+      throw std::logic_error("AMR Program projection scratch lost its descriptors");
+    for (std::size_t subslot = 0; subslot < family.size(); ++subslot) {
+      if (!family[subslot] || !descriptors[subslot])
+        continue;
+      const PreparedScratchDescriptor& declaration = *descriptors[subslot];
+      const std::size_t storage_level =
+          declaration.declared_level < 0 ? static_cast<std::size_t>(active_level_) : std::size_t{0};
+      if ((declaration.declared_level >= 0 && declaration.declared_level != active_level_) ||
+          storage_level >= family[subslot]->size())
+        continue;
+      if (&detached_candidate == &family[subslot]->at(storage_level))
+        record(declaration.runtime_block);
+    }
   }
   if (!owner)
     throw std::invalid_argument(

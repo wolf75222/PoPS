@@ -70,8 +70,13 @@ def test_amr_codegen_selects_only_the_prepared_cell_local_driver() -> None:
     assert "{0, -1," in source
     assert "kProgramCandidateCheckpointShape" in source
     assert "kProgramCandidateResourcePlan" in source
+    assert "ProgramAbiTable kProgramCandidateFluxBasisOccurrences{}" in source
+    assert "ProgramAbiTable kProgramCandidateFaceFluxStages{}" in source
     assert program.clock.qualified_id in source
     assert "ctx_owner->advance_same_level_cell_temporal(dt);" in source
+    assert "state->accepted_snapshot = [ctx_owner = state->ctx_owner]() {" in source
+    assert "return ctx_owner->create_accepted_context_snapshot();" in source
+    assert "_PopsAcceptedProgramExecutionServicesSnapshot" not in source
     assert "ctx.advance_hierarchy(dt" not in source
     assert "ctx.advance_synchronized_hierarchy(dt" not in source
     assert "ctx.install(" not in source

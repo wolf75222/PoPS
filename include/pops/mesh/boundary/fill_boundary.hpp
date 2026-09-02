@@ -11,10 +11,16 @@
 #include <Kokkos_Core.hpp>
 
 #include <stdexcept>
+#include <string>
 
 namespace pops {
 
 namespace fill_boundary_detail {
+
+// Kokkos::fence() materializes its long default OpenMP label for every call.  The prepared
+// boundary replay is hot, so keep an explicit short resident label and pass it by reference.
+// Its 15-byte spelling remains inline for the supported standard-library SSO representations.
+inline const std::string kPreparedFenceLabel{"pops.halo.fence"};
 
 template <int Dim>
 struct CopyShiftedKernel {
@@ -51,7 +57,7 @@ void fill_boundary(MultiFab<Dim, MemorySpace>& fields, const HaloSchedule<Dim>& 
   schedule.require_local_execution();
   for (const HaloJob<Dim>& job : schedule.local_jobs())
     fill_boundary_detail::replay_local_job(fields, job);
-  Kokkos::fence();
+  ::pops::device_fence(fill_boundary_detail::kPreparedFenceLabel);
 }
 
 /// Execute one prepared asynchronous transport synchronously.  Callers that overlap interior work

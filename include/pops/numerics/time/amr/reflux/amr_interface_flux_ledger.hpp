@@ -771,6 +771,42 @@ class TransactionalInterfaceFluxLedger {
     for_each_(published_, std::forward<Visitor>(visitor));
   }
 
+  /// Copy the dense published image into caller-owned, cold-primed checkpoint entries.  This is
+  /// the accepted-step counterpart to `cold_published_fragments()`: it never materializes a
+  /// vector, inserts a map node, or allocates identity/payload storage.
+  void copy_published_into_preallocated(std::vector<Entry>& destination) const {
+    if (destination.size() != published_.size)
+      throw std::logic_error("AMR interface-flux checkpoint shape was not primed");
+    std::size_t index = 0;
+    const auto copy_string = [](std::string& target, std::string_view source) {
+      if (source.size() > target.capacity())
+        throw std::logic_error("AMR interface-flux checkpoint identity capacity was not primed");
+      target.resize(source.size());
+      std::copy(source.begin(), source.end(), target.begin());
+    };
+    for_each_published([&](FragmentView source) {
+      Entry& target = destination[index++];
+      copy_string(target.key.interface_identity, source.key.interface_identity);
+      copy_string(target.key.stage_identity, source.key.stage_identity);
+      copy_string(target.key.graph_identity, source.key.graph_identity);
+      copy_string(target.key.rate_identity, source.key.rate_identity);
+      copy_string(target.key.application_identity, source.key.application_identity);
+      target.key.topology_epoch = source.key.topology_epoch;
+      target.key.coarse_level = source.key.coarse_level;
+      target.key.fine_level = source.key.fine_level;
+      target.key.clock = source.key.clock;
+      target.key.interval = source.key.interval;
+      target.key.orientation = source.key.orientation;
+      target.key.left_block = source.key.left_block;
+      target.key.right_block = source.key.right_block;
+      target.measure = source.measure;
+      if (source.payload.size() > target.payload.capacity())
+        throw std::logic_error("AMR interface-flux checkpoint payload capacity was not primed");
+      target.payload.resize(source.payload.size());
+      std::copy(source.payload.begin(), source.payload.end(), target.payload.begin());
+    });
+  }
+
   /// Cold checkpoint/diagnostic materialization only.
   std::vector<Entry> cold_pending_fragments() const { return materialize_all_(pending_); }
   std::vector<Entry> cold_published_fragments() const { return materialize_all_(published_); }
@@ -802,6 +838,54 @@ class TransactionalInterfaceFluxLedger {
     }
   };
 
+ public:
+  /// Exact logical storage retained by a bound interface-flux ledger.  This counts only dynamic
+  /// allocations owned by the ledger: its three dense images, three cursor/savepoint carriers and
+  /// four authenticated contract strings.  Object-inline storage and allocator bookkeeping are
+  /// deliberately outside the Program resource-plan contract.
+  [[nodiscard]] std::uint64_t resident_storage_bytes() const {
+    const auto checked_add = [](std::uint64_t& total, std::uint64_t value) {
+      if (value > std::numeric_limits<std::uint64_t>::max() - total)
+        throw std::overflow_error("AMR interface-flux resident storage overflows uint64");
+      total += value;
+    };
+    const auto vector_bytes = [](const auto& values) -> std::uint64_t {
+      using value_type = typename std::remove_reference_t<decltype(values)>::value_type;
+      if (values.capacity() > std::numeric_limits<std::uint64_t>::max() / sizeof(value_type))
+        throw std::overflow_error("AMR interface-flux resident vector storage overflows uint64");
+      return static_cast<std::uint64_t>(values.capacity()) * sizeof(value_type);
+    };
+    const auto external_string_bytes = [](const std::string& value) -> std::uint64_t {
+      const auto begin = reinterpret_cast<std::uintptr_t>(std::addressof(value));
+      const auto end = begin + sizeof(value);
+      const auto data = reinterpret_cast<std::uintptr_t>(value.data());
+      if (data >= begin && data < end)
+        return 0;
+      if (value.capacity() == std::numeric_limits<std::uint64_t>::max())
+        throw std::overflow_error("AMR interface-flux resident string storage overflows uint64");
+      return static_cast<std::uint64_t>(value.capacity()) + 1U;
+    };
+    const auto add_image = [&](const DenseImage& image, std::uint64_t& total) {
+      checked_add(total, vector_bytes(image.slots));
+      checked_add(total, vector_bytes(image.identity));
+      checked_add(total, vector_bytes(image.payload));
+    };
+
+    std::uint64_t total = 0;
+    add_image(pending_, total);
+    add_image(published_, total);
+    add_image(prepared_accumulation_, total);
+    checked_add(total, vector_bytes(savepoints_));
+    checked_add(total, vector_bytes(prepared_begin_savepoints_));
+    checked_add(total, vector_bytes(prepared_commit_savepoints_));
+    checked_add(total, external_string_bytes(budget_.exact_contract));
+    checked_add(total, external_string_bytes(prepared_begin_contract_));
+    checked_add(total, external_string_bytes(prepared_commit_contract_));
+    checked_add(total, external_string_bytes(prepared_accumulation_contract_));
+    return total;
+  }
+
+ private:
   static FragmentKeyView key_view_(const InterfaceFluxFragmentKey& key) {
     return {key.interface_identity, key.topology_epoch, key.coarse_level,
             key.fine_level,         key.clock,          key.stage_identity,

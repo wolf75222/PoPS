@@ -182,8 +182,11 @@ def runtime_authority_source_errors(root: Path) -> list[str]:
     """Check that the closed ADC-700/702/720 ledger is wired into every release lane.
 
     This is intentionally a small source contract rather than another runtime execution.  The
-    reusable CI workflow owns the full MPI/OpenMP execution; release validation must still refuse
-    a tag when the ledger, its runner, or either source/release control is silently removed.
+    reusable CI workflow owns the full Serial/OpenMP/MPI execution matrix; release validation must
+    still refuse a tag when the ledger, its runner, or either source/release control is silently
+    removed.  The release workflow does not manufacture a second receipt format: the executable
+    gate runners currently expose no durable cross-job receipt, so this contract authenticates the
+    commands and the release dependency that actually executes them.
     """
     errors: list[str] = []
     manifest = root / RUNTIME_AUTHORITY_MANIFEST
@@ -240,17 +243,104 @@ def runtime_authority_source_errors(root: Path) -> list[str]:
         ci,
     ):
         errors.append("runtime authority CI wiring lacks the executable MPI gate command")
+
+    # The source-only architecture job above is useful for fast routing, but it is not release
+    # evidence.  A release must select this explicit 3 x 3 executable matrix: M2 and runtime
+    # authority run for Serial/OpenMP/MPI at every native dimension, while M3 remains MPI-only.
+    matrix_start = ci.find("\n  final-authority-matrix:")
+    matrix_end = ci.find("\n  # Agregation REQUISE", matrix_start + 1)
+    if matrix_start < 0:
+        errors.append("runtime authority CI lacks the final-authority-matrix job")
+        matrix_source = ""
+    else:
+        matrix_source = ci[matrix_start:matrix_end if matrix_end >= 0 else len(ci)]
+    matrix_rows = re.findall(
+        r"(?m)^\s+- backend:\s*(serial|openmp|mpi)\s*\n\s+dimension:\s*([123])\b",
+        matrix_source,
+    )
+    for backend in ("serial", "openmp", "mpi"):
+        dimensions = sorted(
+            int(dimension) for selected_backend, dimension in matrix_rows
+            if selected_backend == backend
+        )
+        if dimensions != [1, 2, 3]:
+            errors.append(
+                "runtime authority %s matrix must execute exactly dimensions 1/2/3 (found %s)"
+                % (backend, dimensions)
+            )
+
+    def step_source(title: str, next_title: str | None = None) -> str:
+        start = matrix_source.find(title)
+        if start < 0:
+            errors.append("runtime authority matrix lacks step %r" % title)
+            return ""
+        end = matrix_source.find(next_title, start + len(title)) if next_title else -1
+        return matrix_source[start:end if end >= 0 else len(matrix_source)]
+
+    serial_step = step_source(
+        "Execute serial M2 and runtime authority",
+        "Execute OpenMP M2 and runtime authority",
+    )
+    openmp_step = step_source(
+        "Execute OpenMP M2 and runtime authority",
+        "Execute MPI M2, M3, and runtime authority",
+    )
+    mpi_step = step_source("Execute MPI M2, M3, and runtime authority")
+    executable_patterns = (
+        ("Serial M2", serial_step,
+         r"scripts/run_m2_gate\.py[\s\\\n]+--backend\s+serial\b"),
+        ("Serial runtime authority", serial_step,
+         r"scripts/run_runtime_authority_gate\.py[\s\\\n]+--backend\s+serial\b"),
+        ("OpenMP M2", openmp_step,
+         r"scripts/run_m2_gate\.py[\s\\\n]+--backend\s+serial\b"),
+        ("OpenMP runtime authority", openmp_step,
+         r"scripts/run_runtime_authority_gate\.py[\s\\\n]+--openmp\b"),
+        ("OpenMP CTest", openmp_step,
+         r"ctest\s+--test-dir\s+build-kokkos\s+--output-on-failure\b"),
+        ("MPI M2", mpi_step,
+         r"scripts/run_m2_gate\.py[\s\\\n]+--backend\s+mpi\b"),
+        ("MPI M3", mpi_step,
+         r"scripts/run_m3_gate\.py[\s\\\n]+--dim\b"),
+        ("MPI runtime authority", mpi_step,
+         r"scripts/run_runtime_authority_gate\.py[\s\\\n]+--backend\s+mpi\b"),
+    )
+    for label, source, pattern in executable_patterns:
+        if not re.search(pattern, source):
+            errors.append("runtime authority matrix lacks executable %s invocation" % label)
+    if re.search(
+        r"scripts/run_(?:m2|m3|runtime_authority)_gate\.py[\s\\\n]+--check-only\b",
+        matrix_source,
+    ):
+        errors.append("runtime authority final matrix must not use --check-only")
+    if len(re.findall(r"scripts/run_m3_gate\.py[\s\\\\n]+--", matrix_source)) != 1:
+        errors.append("runtime authority final matrix must contain exactly one M3 invocation")
+    if "KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-authority-${{ matrix.backend }}-dim${{ matrix.dimension }}" \
+            not in matrix_source:
+        errors.append("runtime authority matrix lacks distinct backend/dimension Kokkos prefixes")
+    for label, marker in (
+        ("Python module configuration", "-DPOPS_BUILD_PYTHON=ON"),
+        ("Kokkos native build", "cmake --build --preset ci-kokkos --parallel 2"),
+        ("MPI native build", "cmake --build --preset ci-mpi --parallel 2"),
+        ("Python module verification", "Verify Python module for authority gates"),
+        ("Python native leaf", "native_module=\"$(find \"$native_root\" -maxdepth 1 -type f -name '_pops*.so'"),
+        ("Kokkos Python gate path", "PYTHONPATH: ${{ github.workspace }}/build-kokkos/python"),
+        ("MPI Python gate path", "PYTHONPATH: ${{ github.workspace }}/build-mpi/python"),
+    ):
+        if marker not in matrix_source:
+            errors.append("runtime authority matrix lacks %s" % label)
+
     release_markers = (
         "full-source-matrix:",
         "force_full: true",
-        "Runtime authority source ledger",
-        "for dim in 1 2 3; do",
-        'python scripts/run_runtime_authority_gate.py --check-only --dim "$dim"',
         "needs: [full-source-matrix, wheel, validate]",
     )
     missing = [marker for marker in release_markers if marker not in release]
     if missing:
         errors.append("runtime authority release wiring lacks markers %s" % missing)
+    if re.search(
+        r"scripts/run_runtime_authority_gate\.py[\s\\\n]+--check-only\b", release
+    ):
+        errors.append("release workflow must not substitute a check-only runtime authority audit")
     return errors
 
 
@@ -368,6 +458,13 @@ def release_matrix_source_errors(root: Path) -> list[str]:
             Path(".github/workflows/wheels.yml"),
             "Kokkos wheel version",
             "git clone --depth 1 -b %s " % version,
+        )
+        require(
+            Path(".github/workflows/wheels.yml"),
+            "dimension-specific wheel Kokkos prefixes",
+            'export KOKKOS_PREFIX="/tmp/kokkos-install-dim${dim}"',
+            'output_dir="$PWD/wheel-leaves/dim${dim}"',
+            'CIBW_ENVIRONMENT="$cibw_environment"',
         )
         execution_space_proofs = {
             "Serial": (

@@ -10,6 +10,116 @@ void materialize_active_flux_expression_(std::size_t runtime_block,
       active_block_identities_[runtime_block].empty())
     throw std::logic_error("AMR Program final flux expression has no canonical block candidate");
 
+  if (static_flux_tables_.bound) {
+    if (runtime_block >= static_flux_tables_.basis_slots_by_runtime_block.size() ||
+        runtime_block >= static_flux_tables_.term_slots_by_runtime_block.size())
+      throw std::logic_error("AMR Program final flux has no compact runtime block carrier");
+    const auto& basis_slots = static_flux_tables_.basis_slots_by_runtime_block[runtime_block];
+    const auto applicable_basis_count = std::count_if(
+        basis_slots.begin(), basis_slots.end(), [&](std::uint32_t basis_slot) {
+          if (basis_slot >= static_flux_tables_.bases.size())
+            throw std::logic_error("AMR Program final flux has an invalid basis carrier slot");
+          const int declared_level = static_flux_tables_.bases[basis_slot].level;
+          return declared_level < 0 || declared_level == active_level_;
+        });
+    if (static_flux_tables_.next_basis_by_runtime_block[runtime_block] !=
+        static_cast<std::size_t>(applicable_basis_count))
+      throw std::invalid_argument(
+          "AMR Program final flux omitted one or more declared basis occurrences");
+    const auto active_slot_slice = [&](const auto& route) -> std::span<const std::uint32_t> {
+      if (route.substep_count == 0 || route.slots.size() % route.substep_count != 0)
+        throw std::logic_error(
+            "AMR Program final flux route has an invalid resident substep shape");
+      const std::size_t substep = route.role == fragment_role_type::Fine
+                                      ? static_cast<std::size_t>(logical_substep_)
+                                      : std::size_t{0};
+      if (logical_substep_ < 0 || substep >= route.substep_count)
+        throw std::invalid_argument(
+            "AMR Program final flux active child substep exceeds its resident route slices");
+      const std::size_t faces_per_substep = route.slots.size() / route.substep_count;
+      return std::span<const std::uint32_t>(route.slots)
+          .subspan(substep * faces_per_substep, faces_per_substep);
+    };
+    for (const std::uint32_t term_slot :
+         static_flux_tables_.term_slots_by_runtime_block[runtime_block]) {
+      const auto& term = static_flux_tables_.terms.at(term_slot);
+      if (term.basis_slot >= static_flux_tables_.bases.size())
+        throw std::logic_error("AMR Program final flux term has no declared basis");
+      const int declared_level = static_flux_tables_.bases[term.basis_slot].level;
+      if (declared_level >= 0 && declared_level != active_level_)
+        continue;
+      if (term.basis_slot >= static_flux_basis_payloads_.size() ||
+          term.basis_slot >= static_flux_basis_active_.size() ||
+          static_flux_basis_active_[term.basis_slot] == 0)
+        throw std::invalid_argument("AMR Program final flux term has no active resident basis");
+      const FluxBasis& basis = static_flux_basis_payloads_[term.basis_slot];
+      if (basis.identity != term.basis_slot || basis.runtime_block != runtime_block ||
+          basis.level != active_level_)
+        throw std::invalid_argument(
+            "AMR Program final flux resident basis differs from its table slot");
+      const double duration = basis.window.end.physical_time - basis.window.begin.physical_time;
+      if (!std::isfinite(duration) || !(duration > 0.0))
+        throw std::invalid_argument("AMR Program final flux resident basis has invalid duration");
+      const ::pops::amr::Rational stage_phase =
+          basis.window.begin.phase +
+          (basis.window.end.phase - basis.window.begin.phase) * basis.point.stage_fraction;
+      const double stage_physical_time =
+          basis.window.begin.physical_time + basis.point.stage_fraction.value() * duration;
+      std::size_t coarse_face = 0;
+      std::size_t fine_face = 0;
+      if (basis.face_count > basis.faces.size())
+        throw std::logic_error("AMR Program resident basis face count exceeds its frozen slots");
+      for (const FluxBasisFace& face :
+           std::span<const FluxBasisFace>(basis.faces).first(basis.face_count)) {
+        multiblock_flux_ledger_type* ledger = face.role == fragment_role_type::Coarse
+                                                  ? active_outgoing_flux_[runtime_block]
+                                                  : active_incoming_flux_[runtime_block];
+        if (ledger == nullptr)
+          throw std::logic_error(
+              "AMR Program flux basis targets no active hierarchy-transition ledger");
+        const auto route = std::find_if(
+            term.ledger_routes.begin(), term.ledger_routes.end(), [&](const auto& candidate) {
+              return candidate.ledger == ledger && candidate.level == active_level_ &&
+                     candidate.role == face.role;
+            });
+        if (route == term.ledger_routes.end())
+          throw std::invalid_argument(
+              "AMR Program flux table has no topology-bound resident ledger route");
+        const std::span<const std::uint32_t> active_slots = active_slot_slice(*route);
+        const std::size_t face_slot =
+            face.role == fragment_role_type::Coarse ? coarse_face++ : fine_face++;
+        if (face_slot >= active_slots.size())
+          throw std::invalid_argument(
+              "AMR Program flux topology has more faces than its prepared resident slots");
+        ledger->accumulate_prepared(
+            active_slots[face_slot],
+            {active_level_, basis.window.begin.macro_step, stage_phase, stage_physical_time},
+            active_subcycling_attempt_,
+            {term.coefficient, basis.window.begin.phase, basis.window.end.phase, duration,
+             face.face_measure},
+            std::span<const Real>(face.flux_density));
+      }
+      const auto require_complete_route = [&](multiblock_flux_ledger_type* ledger,
+                                              fragment_role_type role, std::size_t consumed) {
+        if (ledger == nullptr)
+          return;
+        const auto route = std::find_if(
+            term.ledger_routes.begin(), term.ledger_routes.end(), [&](const auto& candidate) {
+              return candidate.ledger == ledger && candidate.level == active_level_ &&
+                     candidate.role == role;
+            });
+        if (route == term.ledger_routes.end() || consumed != active_slot_slice(*route).size())
+          throw std::invalid_argument(
+              "AMR Program flux topology differs from its complete resident face route");
+      };
+      require_complete_route(active_outgoing_flux_[runtime_block], fragment_role_type::Coarse,
+                             coarse_face);
+      require_complete_route(active_incoming_flux_[runtime_block], fragment_role_type::Fine,
+                             fine_face);
+    }
+    return;
+  }
+
   const FluxExpression expression = active_flux_expression_(candidate);
   require_flux_expression_budget_(expression);
   std::vector<std::string> stage_identities;
@@ -129,6 +239,7 @@ void materialize_active_flux_expression_(std::size_t runtime_block,
 
   std::size_t stage_index = 0;
   for (const auto& [identity, term] : expression) {
+    (void)identity;
     const FluxBasis& basis = *term.basis;
     const ::pops::amr::Rational weight = term.coefficient.begin()->second;
     const double duration = basis.window.end.physical_time - basis.window.begin.physical_time;

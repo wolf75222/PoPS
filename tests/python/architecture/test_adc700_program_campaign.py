@@ -21,6 +21,7 @@ VERIFIER = ADC / "verify.py"
 ORACLE = ADC / "program_cutover.cpp"
 CMAKE = ADC / "CMakeLists.txt"
 SBATCH = ROOT / "benchmarks" / "romeo" / "adc700_program_cutover.sbatch"
+SUBMIT = ROOT / "benchmarks" / "romeo" / "submit_adc700_program_cutover.sh"
 MANIFEST = ROOT / "benchmarks" / "manifest.toml"
 BASELINE = "db3d390f43dfb14f12e88db31a9b3e631ff50488"
 
@@ -204,6 +205,9 @@ def test_adc700_verifier_rejects_non_archived_candidate_source(tmp_path: Path) -
 
 def test_adc700_romeo_job_is_four_gpu_abba_and_runs_python_candidate() -> None:
     text = SBATCH.read_text(encoding="utf-8")
+    submit = SUBMIT.read_text(encoding="utf-8")
+    assert 'export POPS_ADC700_REPO_ROOT="${REPO_ROOT}"' in submit
+    assert '"${SCRIPT_DIR}/../.."' in submit
     assert "#SBATCH --ntasks=4" in text
     assert "#SBATCH --gpus-per-node=4" in text
     assert "#SBATCH --gpus-per-task=1" in text

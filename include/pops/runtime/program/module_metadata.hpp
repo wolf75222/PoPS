@@ -79,20 +79,24 @@ inline ModuleMetadata read_module_metadata(const ProgramInstallationTables& tabl
   meta.operators.reserve(tables.module_operators.size());
   for (std::size_t i = 0; i != tables.module_operators.size(); ++i) {
     const auto& row = tables.module_operators[i];
-    if (row.identity.empty() || row.owner.empty() || row.kind.empty() || row.requirements.size() < 2 ||
-        row.requirements.front() != '{' || row.requirements.back() != '}')
+    if (row.identity.empty() || row.owner.empty() || row.kind.empty() ||
+        row.requirements.size() < 2 || row.requirements.front() != '{' ||
+        row.requirements.back() != '}')
       throw std::runtime_error("prepared Program module operator metadata is malformed");
     meta.operators.push_back({static_cast<OperatorId>(i), row.owner, row.identity, row.kind,
                               row.signature, row.requirements});
   }
   const auto copy_spaces = [](const std::vector<ProgramInstallationTables::Module>& rows,
                               std::vector<std::string>& names, std::vector<std::string>& owners) {
-    names.reserve(rows.size()); owners.reserve(rows.size());
+    names.reserve(rows.size());
+    owners.reserve(rows.size());
     std::set<std::pair<std::string, std::string>> seen;
     for (const auto& row : rows) {
-      if (row.identity.empty() || row.owner.empty() || !seen.emplace(row.owner, row.identity).second)
+      if (row.identity.empty() || row.owner.empty() ||
+          !seen.emplace(row.owner, row.identity).second)
         throw std::runtime_error("prepared Program module space metadata is malformed");
-      names.push_back(row.identity); owners.push_back(row.owner);
+      names.push_back(row.identity);
+      owners.push_back(row.owner);
     }
   };
   copy_spaces(tables.module_state_spaces, meta.state_spaces, meta.state_space_owners);
@@ -161,15 +165,19 @@ inline ProgramCheckpointMetadata read_program_checkpoint_metadata(
         row.components < -1 || !identities.emplace(row.identity).second)
       throw std::runtime_error("prepared Program checkpoint metadata is malformed");
     metadata.histories.push_back({row.identity, row.block, row.owner, row.space, row.clock,
-                                  row.transfer, static_cast<int>(row.retained_images), row.components});
+                                  row.transfer, static_cast<int>(row.retained_images),
+                                  row.components});
     clocks.emplace(row.clock);
   }
+  // POPSAND5 serializes history descriptors in canonical identity order.  The ABI table is a
+  // set-valued declaration and may be emitted in authoring order, so normalize it once at the
+  // metadata boundary before it becomes the frozen capacity/shape authority.  Without this sort,
+  // equivalent Programs could prepare identical rings yet fail installation solely because the
+  // generated declaration order differed from the map-backed accepted runtime order.
+  std::sort(metadata.histories.begin(), metadata.histories.end(),
+            [](const ProgramCheckpointHistoryMetadata& left,
+               const ProgramCheckpointHistoryMetadata& right) { return left.name < right.name; });
   metadata.logical_clock_identities.assign(clocks.begin(), clocks.end());
-  // A Program with no retained checkpoint component still advances on the canonical macro clock.
-  // The v5 table carries no synthetic zero-history row, so retain that explicit host-owned clock
-  // authority instead of treating an empty component table as absent checkpoint metadata.
-  if (metadata.logical_clock_identities.empty())
-    metadata.logical_clock_identities.emplace_back("clock.macro");
   // An empty checkpoint table still carries the global temporal partition.  Cell-local lowering
   // will replace this with its explicit provider/capacity record in the candidate resource plan.
   metadata.temporal_provider_identity = kGlobalTemporalPartitionProvider;

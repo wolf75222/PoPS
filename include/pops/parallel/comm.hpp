@@ -29,14 +29,13 @@
 #include <pops/core/foundation/types.hpp>
 
 #include <algorithm>
-#include <atomic>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <initializer_list>
 #include <limits>
 #include <mutex>
-#include <new>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -49,20 +48,20 @@ namespace pops {
 
 namespace detail {
 
-inline std::atomic<std::uint64_t>& exact_consensus_dynamic_storage_counter() noexcept {
-  static std::atomic<std::uint64_t> value{0};
-  return value;
-}
+inline constexpr std::size_t kExactConsensusLengthChunk = 256;
+inline constexpr std::size_t kExactConsensusByteChunk = 4096;
 
 template <class T>
 inline constexpr bool kControlDouble = std::is_same_v<T, double> && !std::is_same_v<Real, double>;
 
 }  // namespace detail
 
-/// Diagnostic count of calls to the exact-consensus helper that materializes dynamic vectors.
-/// Prepared hot paths can snapshot this after bind and prove they never re-enter that helper.
-inline std::uint64_t exact_consensus_dynamic_storage_calls() noexcept {
-  return detail::exact_consensus_dynamic_storage_counter().load(std::memory_order_relaxed);
+/// Dynamic materializations by the exact-consensus helper.
+///
+/// Kept as a compatibility observer for prepared-path diagnostics.  Exact consensus now uses only
+/// call-local fixed-size chunks, so this value is always zero.
+inline constexpr std::uint64_t exact_consensus_dynamic_storage_calls() noexcept {
+  return 0;
 }
 
 #ifdef POPS_HAS_MPI
@@ -989,7 +988,6 @@ using ExactOrderedBytePair = std::pair<std::string_view, std::string_view>;
 
 inline bool all_ranks_agree_exact_ordered_byte_pairs(std::span<const ExactOrderedBytePair> values,
                                                      const CommunicatorView& communicator) {
-  detail::exact_consensus_dynamic_storage_counter().fetch_add(1, std::memory_order_relaxed);
   const long invalid_count =
       all_reduce_max(values.size() > static_cast<std::size_t>(std::numeric_limits<long>::max()) ||
                              values.size() > std::numeric_limits<std::size_t>::max() / 2u
@@ -1020,47 +1018,65 @@ inline bool all_ranks_agree_exact_ordered_byte_pairs(std::span<const ExactOrdere
   if (all_reduce_max(invalid_lengths_local, communicator) != 0)
     throw std::length_error("exact collective consensus payload size overflows capacity");
 
-  std::vector<long> minimum_lengths;
-  std::vector<long> maximum_lengths;
-  long length_allocation_failure_local = 0;
-  try {
-    minimum_lengths.resize(values.size() * 2u);
-    maximum_lengths.resize(values.size() * 2u);
-  } catch (...) {
-    length_allocation_failure_local = 1;
+  // The input is unbounded, but the consensus workspace is not.  Fixed chunks give the same
+  // exact min/max witness as one large reduction while avoiding a per-call heap allocation or
+  // shared scratch state.  Every rank has the same number of slots after the count reduction.
+  const std::size_t length_count = values.size() * 2u;
+  std::array<long, detail::kExactConsensusLengthChunk> minimum_lengths{};
+  std::array<long, detail::kExactConsensusLengthChunk> maximum_lengths{};
+  for (std::size_t first = 0; first < length_count;) {
+    const std::size_t count = std::min(minimum_lengths.size(), length_count - first);
+    for (std::size_t offset = 0; offset < count; ++offset) {
+      const std::size_t slot = first + offset;
+      const std::string_view component =
+          (slot % 2u == 0u) ? values[slot / 2u].first : values[slot / 2u].second;
+      minimum_lengths[offset] = static_cast<long>(component.size());
+      maximum_lengths[offset] = minimum_lengths[offset];
+    }
+    all_reduce_min_inplace(minimum_lengths.data(), count, communicator);
+    all_reduce_max_inplace(maximum_lengths.data(), count, communicator);
+    if (!std::equal(minimum_lengths.begin(), minimum_lengths.begin() + count,
+                    maximum_lengths.begin()))
+      return false;
+    first += count;
   }
-  if (all_reduce_max(length_allocation_failure_local, communicator) != 0)
-    throw std::bad_alloc();
-  for (std::size_t index = 0; index < values.size(); ++index) {
-    minimum_lengths[2u * index] = static_cast<long>(values[index].first.size());
-    minimum_lengths[2u * index + 1u] = static_cast<long>(values[index].second.size());
-  }
-  std::copy(minimum_lengths.begin(), minimum_lengths.end(), maximum_lengths.begin());
-  all_reduce_min_inplace(minimum_lengths.data(), minimum_lengths.size(), communicator);
-  all_reduce_max_inplace(maximum_lengths.data(), maximum_lengths.size(), communicator);
-  if (minimum_lengths != maximum_lengths)
-    return false;
 
-  std::vector<char> minimum;
-  std::vector<char> maximum;
-  long payload_allocation_failure_local = 0;
-  try {
-    minimum.resize(payload_size);
-    maximum.resize(payload_size);
-  } catch (...) {
-    payload_allocation_failure_local = 1;
+  std::array<char, detail::kExactConsensusByteChunk> minimum_bytes{};
+  std::array<char, detail::kExactConsensusByteChunk> maximum_bytes{};
+  std::size_t pair_index = 0;
+  std::size_t component_index = 0;
+  std::size_t component_offset = 0;
+  auto copy_next_bytes = [&](char* destination, std::size_t count) {
+    while (count != 0) {
+      const std::string_view component =
+          component_index == 0 ? values[pair_index].first : values[pair_index].second;
+      const std::size_t available = component.size() - component_offset;
+      if (available == 0) {
+        component_offset = 0;
+        if (++component_index == 2) {
+          component_index = 0;
+          ++pair_index;
+        }
+        continue;
+      }
+      const std::size_t copied = std::min(count, available);
+      std::copy_n(component.data() + component_offset, copied, destination);
+      destination += copied;
+      count -= copied;
+      component_offset += copied;
+    }
+  };
+  for (std::size_t remaining = payload_size; remaining != 0;) {
+    const std::size_t count = std::min(minimum_bytes.size(), remaining);
+    copy_next_bytes(minimum_bytes.data(), count);
+    std::copy_n(minimum_bytes.data(), count, maximum_bytes.data());
+    all_reduce_min_inplace(minimum_bytes.data(), count, communicator);
+    all_reduce_max_inplace(maximum_bytes.data(), count, communicator);
+    if (!std::equal(minimum_bytes.begin(), minimum_bytes.begin() + count, maximum_bytes.begin()))
+      return false;
+    remaining -= count;
   }
-  if (all_reduce_max(payload_allocation_failure_local, communicator) != 0)
-    throw std::bad_alloc();
-  auto destination = minimum.begin();
-  for (const auto& value : values) {
-    destination = std::copy(value.first.begin(), value.first.end(), destination);
-    destination = std::copy(value.second.begin(), value.second.end(), destination);
-  }
-  std::copy(minimum.begin(), minimum.end(), maximum.begin());
-  all_reduce_min_inplace(minimum.data(), minimum.size(), communicator);
-  all_reduce_max_inplace(maximum.data(), maximum.size(), communicator);
-  return minimum == maximum;
+  return true;
 }
 
 inline bool all_ranks_agree_exact_ordered_byte_pairs(
@@ -1073,6 +1089,10 @@ inline bool all_ranks_agree_exact_ordered_byte_pairs(
     const std::vector<ExactOrderedBytePair>& values, const CommunicatorView& communicator) {
   return all_ranks_agree_exact_ordered_byte_pairs(
       std::span<const ExactOrderedBytePair>(values.data(), values.size()), communicator);
+}
+
+inline bool all_ranks_agree_exact_ordered_byte_pairs(std::span<const ExactOrderedBytePair> values) {
+  return all_ranks_agree_exact_ordered_byte_pairs(values, world_communicator_view());
 }
 
 inline bool all_ranks_agree_exact_ordered_byte_pairs(

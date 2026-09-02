@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
@@ -14,6 +16,15 @@ ROOT = Path(__file__).resolve().parents[3]
 BUILD = ROOT / "scripts" / "build_python.sh"
 FINAL_GATE = ROOT / "scripts" / "run_final_gate.py"
 PARAVIEW = ROOT / "scripts" / "paraview_python.sh"
+
+
+def _load_final_gate():
+    spec = importlib.util.spec_from_file_location("_native_dimension_final_gate", FINAL_GATE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _run_build_entry(*arguments: str, native_dimension: str | None = None):
@@ -72,6 +83,29 @@ def test_live_and_release_entry_points_require_explicit_dimension_sets():
     assert "native dimension is required" in paraview
     assert 'export POPS_NATIVE_DIM="$NATIVE_DIM"' in paraview
     assert 'verify_installed_native.py" --expect-dim "$NATIVE_DIM"' in paraview
+
+
+def test_final_gate_passes_requested_dimension_to_serial_configure_and_ctest():
+    source = FINAL_GATE.read_text(encoding="utf-8")
+    main = source[source.index("def main(") :]
+
+    assert '"cmake", "--preset", "serial", f"-DPOPS_NATIVE_DIM={args.dim}"' in main
+    assert '"cmake", "--build", "--preset", "serial"' in main
+    assert '_resolve_ctest_dir(args.ctest_dir, expected_dimension=args.dim)' in main
+    assert '"cmake", "--preset", "serial"])' not in main
+
+
+def test_final_gate_rejects_ctest_tree_with_a_different_native_dimension(tmp_path):
+    gate = _load_final_gate()
+    ctest_dir = tmp_path / "build"
+    ctest_dir.mkdir()
+    (ctest_dir / "CTestTestfile.cmake").write_text("# generated\n", encoding="utf-8")
+    (ctest_dir / "CMakeCache.txt").write_text(
+        "POPS_BUILD_TESTS:BOOL=ON\nPOPS_NATIVE_DIM:STRING=2\n", encoding="utf-8"
+    )
+
+    with pytest.raises(gate.FinalGateError, match=r"POPS_NATIVE_DIM=2, but --dim=3"):
+        gate._resolve_ctest_dir(ctest_dir, expected_dimension=3)
 
 
 def test_every_checked_in_preset_inherits_an_explicit_dimension():

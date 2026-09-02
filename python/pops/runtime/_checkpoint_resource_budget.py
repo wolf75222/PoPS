@@ -18,9 +18,12 @@ from pops.output._checkpoint_contract import (
     PROGRAM_PERSISTENT_CHECKPOINT_SCHEMA_KEY,
     PROGRAM_PERSISTENT_PLAN_DIGEST_KEY,
     PROGRAM_PERSISTENT_PLAN_MAXIMUM_BYTES_KEY,
+    PROGRAM_PERSISTENT_PLAN_SCHEMA,
     PROGRAM_PERSISTENT_PLAN_SCHEMA_KEY,
     PROGRAM_PERSISTENT_SLOT_COUNT_KEY,
     _capacity,
+    capture_program_persistent_value_checkpoint,
+    materialized_program_resource_plan_capacity_authority,
     program_persistent_value_checkpoint_capacity,
     program_persistent_value_checkpoint_capture_available,
     require_checkpoint_resource_budget,
@@ -240,7 +243,44 @@ def _cache_capacity(
     the native materialization state is therefore evidence only, never the source of the envelope.
     """
     native = owner._s
-    temporal = program.temporal_manifest()
+
+    # ``Program.temporal_manifest()`` is the authoring-only contract.  The resource-plan fields
+    # and dense ``cache_slots`` rows are added by the codegen adapter and are retained on the
+    # installed TemporalRestartState.  Prefer that already-authenticated copy; direct callers
+    # (including small unit fixtures) get the same codegen adapter explicitly.  A fixture that
+    # already supplies the codegen surface is consumed as-is so malformed schema/slot rows still
+    # reach the strict checks below.  In particular, this branch never translates a legacy
+    # singular ``slot`` or ``node_id`` into a cache slot.
+    temporal_state = getattr(owner, "_temporal_restart_state", None)
+    temporal = getattr(temporal_state, "program_schedule", None)
+    if temporal is None:
+        raw_temporal = program.temporal_manifest()
+        if not isinstance(raw_temporal, Mapping):
+            temporal = raw_temporal
+        else:
+            raw_schedules = raw_temporal.get("schedules")
+            has_codegen_surface = (
+                "resource_plan_schema" in raw_temporal
+                or "resource_plan_digest" in raw_temporal
+                or (
+                    isinstance(raw_schedules, list)
+                    and any(
+                        isinstance(row, Mapping)
+                        and (
+                            "cache_nodes" in row
+                            or "cache_slots" in row
+                            or "slot" in row
+                        )
+                        for row in raw_schedules
+                    )
+                )
+            )
+            if has_codegen_surface or not hasattr(program, "_values"):
+                temporal = raw_temporal
+            else:
+                from pops.codegen.temporal_manifest import build_temporal_manifest
+
+                temporal = build_temporal_manifest(program, target="system")
     if not isinstance(temporal, Mapping):
         raise TypeError("checkpoint cache authority requires a temporal manifest mapping")
     schedules = temporal.get("schedules")
@@ -248,7 +288,7 @@ def _cache_capacity(
         raise TypeError("checkpoint cache authority requires temporal schedule rows")
     manifest_schema = temporal.get("resource_plan_schema")
     manifest_digest = temporal.get("resource_plan_digest")
-    if type(manifest_schema) is not str or manifest_schema != "program-resource-plan:v1":
+    if type(manifest_schema) is not str or manifest_schema != PROGRAM_PERSISTENT_PLAN_SCHEMA:
         raise ValueError(
             "checkpoint cache authority has an invalid temporal resource-plan schema"
         )
@@ -260,6 +300,36 @@ def _cache_capacity(
         raise ValueError(
             "checkpoint cache authority has an invalid temporal resource-plan digest"
         )
+    # The nested compiler plan is the canonical Python witness.  Native bind may materialize
+    # host-resident prototypes/prepared layouts (including for rows whose value bytes are already
+    # exact), so its final digest is not required to be byte-identical to the compiler digest.
+    # CacheManager copies each compiler ABI-row identity unchanged when it binds that plan; exact
+    # dense slot count plus those opaque identity strings therefore authenticate the compiler ->
+    # materialized continuity without manufacturing a native digest in Python.
+    manifest_plan = None
+    compiler_slot_names = None
+    if "resource_plan" in temporal:
+        from pops.codegen.program_persistent_plan import ProgramResourcePlan
+
+        raw_plan = temporal["resource_plan"]
+        try:
+            manifest_plan = ProgramResourcePlan.from_data(raw_plan)
+        except (TypeError, ValueError, KeyError, OverflowError) as error:
+            raise ValueError(
+                "checkpoint cache authority has an invalid temporal ProgramResourcePlan"
+            ) from error
+        if raw_plan != manifest_plan.to_data():
+            raise ValueError(
+                "checkpoint cache authority temporal ProgramResourcePlan is not canonical"
+            )
+        if (
+            manifest_plan.schema != manifest_schema
+            or manifest_plan.digest != manifest_digest
+        ):
+            raise ValueError(
+                "checkpoint cache authority temporal resource-plan identity disagrees with its plan"
+            )
+        compiler_slot_names = tuple(row.identity for row in manifest_plan.abi_rows())
     declared_slots = []
     potential_slots = []
     for index, row in enumerate(schedules):
@@ -322,24 +392,40 @@ def _cache_capacity(
             raise ValueError("checkpoint cache authority has invalid exact slot indices")
         slots.append(slot)
     slots = tuple(slots)
+    if len(slots) != len(set(slots)):
+        raise ValueError("checkpoint cache authority has duplicate exact slot indices")
     if slots != tuple(range(len(slots))):
         raise ValueError("checkpoint cache authority has non-dense exact slot indices")
     if any(slot >= len(slots) for slot in potential):
         raise ValueError("checkpoint cache schedule refers to an absent prepared slot")
+    if manifest_plan is not None and len(manifest_plan) != len(slots):
+        raise ValueError(
+            "checkpoint cache authority native slot count differs from the temporal resource plan"
+        )
     plan_schema = plan_schema_provider()
     plan_digest = plan_digest_provider()
     if (
         type(plan_schema) is not str
-        or plan_schema != "program-resource-plan:v1"
+        or plan_schema != PROGRAM_PERSISTENT_PLAN_SCHEMA
         or type(plan_digest) is not str
         or len(plan_digest) != 64
         or any(character not in "0123456789abcdef" for character in plan_digest)
     ):
         raise ValueError("checkpoint cache authority has an invalid resource-plan identity")
+    if compiler_slot_names is not None:
+        native_names = tuple(name_provider(slot) for slot in slots)
+        if native_names != compiler_slot_names:
+            raise ValueError(
+                "checkpoint cache authority materialized plan differs from its compiler temporal plan"
+            )
     if plan_schema != manifest_schema or plan_digest != manifest_digest:
-        raise ValueError(
-            "checkpoint cache authority resource-plan identity differs from the temporal manifest"
-        )
+        # A canonical nested compiler plan crosses this materialization boundary only after the
+        # exact slot count and every opaque compiler ABI-row identity have been authenticated above.
+        # Minimal fixtures without that nested witness remain byte-identical by construction.
+        if manifest_plan is None or compiler_slot_names is None:
+            raise ValueError(
+                "checkpoint cache authority resource-plan identity differs from the temporal manifest"
+            )
 
     width = _sum(block_nvars_by_name.values(), where="checkpoint cache scalar width")
     valid_cells = _product(shape, where="checkpoint cache valid cells")
@@ -387,17 +473,25 @@ def _cache_capacity(
                 raise ValueError("checkpoint cache component count exceeds the Program width")
         # This evidence is stable even when a slot is cold and carries only metadata.
         evidence.append((slot, name, width))
-    return (
-        tuple(names),
-        data_bytes,
-        {"plan_schema": plan_schema, "plan_digest": plan_digest, "slots": tuple(evidence)},
-    )
+    cache_evidence = {
+        # ``plan_digest`` is the installed native CacheManager identity and remains the wire-facing
+        # field.  Keep the compiler receipt separately whenever a canonical nested plan exists so
+        # materialization is auditable rather than silently replacing the symbolic identity.
+        "plan_schema": plan_schema,
+        "plan_digest": plan_digest,
+        "slots": tuple(evidence),
+    }
+    if manifest_plan is not None:
+        cache_evidence["compiler_plan_schema"] = manifest_schema
+        cache_evidence["compiler_plan_digest"] = manifest_digest
+    return tuple(names), data_bytes, cache_evidence
 
 
 def _persistent_checkpoint_capacity(
     program: Any,
     *,
     target: str,
+    native: Any,
 ) -> tuple[tuple[str, ...], int, Any, Any]:
     """Reserve the complete native ProgramPersistentValueCheckpoint image.
 
@@ -419,7 +513,22 @@ def _persistent_checkpoint_capacity(
         if "requires Program values" not in str(error):
             raise
         return (), 0, {}, None
-    encoded_capacity = program_persistent_value_checkpoint_capacity(plan)
+    # A runtime-sized declaration is deliberately unbounded at lowering.  The native host seals
+    # its exact prototype-derived slots before this post-bind budget is installed; capture that
+    # authenticated POPSPVS1 witness instead of inventing a geometry-derived or zero bound.
+    captured = capture_program_persistent_value_checkpoint(native)
+    if captured is not None:
+        raw, image = captured
+        plan = materialized_program_resource_plan_capacity_authority(image)
+        encoded_capacity = program_persistent_value_checkpoint_capacity(plan)
+        if encoded_capacity != len(raw):
+            raise RuntimeError(
+                "native Program persistent checkpoint capacity disagrees with its sealed image"
+            )
+    else:
+        # Producer-only callers may have no installed native Program.  They can only budget an
+        # already exact compiler plan; a symbolic declaration must fail before owner mutation.
+        encoded_capacity = program_persistent_value_checkpoint_capacity(plan)
     import numpy as np
 
     string_itemsize = int(np.dtype("U1").itemsize)
@@ -728,6 +837,7 @@ def _common_budget(
         _persistent_checkpoint_capacity(
             program,
             target="amr_system" if runtime_kind == "amr" else "system",
+            native=owner._s,
         )
         if persistent_carrier_available or runtime_kind == "amr"
         else ((), 0, {}, None)

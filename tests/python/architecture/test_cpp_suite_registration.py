@@ -52,6 +52,15 @@ _ADD_MPI_STANDALONE_RANKS = re.compile(
     r"pops_add_mpi_standalone_suite\(\s*(test_[A-Za-z0-9_]+)\s+RANKS\s+([0-9 ]+)\)"
 )
 _ADD_TEST = re.compile(r"pops_add_test\(\s*(test_[A-Za-z0-9_]+)\s*\)")
+_EXPLICIT_PROGRAM_DSO_LIST = re.compile(
+    r"set\(POPS_EXPLICIT_PROGRAM_DSO_TESTS\b(.*?)\)", re.DOTALL
+)
+_EXPLICIT_PROGRAM_HELPER_INCLUDE = re.compile(
+    r'#include\s+["<]explicit_(?:amr|system)_program\.hpp[">]'
+)
+_EXPLICIT_PROGRAM_HELPER_CALL = re.compile(
+    r"install_(?:explicit_amr_callback_program|forward_euler_program(?:_execution_services)?)"
+)
 
 
 def _cpp_suite_names():
@@ -73,6 +82,37 @@ def _registered_names():
     registered.update(_ADD_MPI_STANDALONE.findall(text))
     registered.update(_ADD_TEST.findall(text))
     return registered
+
+
+def test_explicit_program_dso_users_are_closed_over_the_native_loader_contract():
+    """Every real explicit Program helper consumer gets the exact DSO authority."""
+    cmake = CMAKELISTS.read_text()
+    match = _EXPLICIT_PROGRAM_DSO_LIST.search(cmake)
+    assert match is not None
+    registered = set(_TEST_WORD.findall(match.group(1)))
+
+    source_rows = dict(_SOURCE_ROW.findall(SOURCES_CMAKE.read_text()))
+    helper_users = {
+        name
+        for name, relative_path in source_rows.items()
+        if (
+            source := (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        )
+        and _EXPLICIT_PROGRAM_HELPER_INCLUDE.search(source)
+        and _EXPLICIT_PROGRAM_HELPER_CALL.search(source)
+    }
+    assert registered == helper_users
+
+    for witness in (
+        "pops_native_loader_definitions(_pops_explicit_program_dso_definitions)",
+        "set(ARG_ENABLE_EXPORTS TRUE)",
+        "set(ARG_RESOURCE_LOCK native_loader)",
+        "POPS_EXPLICIT_PROGRAM_DSO_WIRED TRUE",
+        "function(pops_validate_explicit_program_dso_registration)",
+        "Explicit Program DSO source inventory does not match",
+        "RESOURCE_LOCK native_loader",
+    ):
+        assert witness in cmake
 
 
 def _manifest_mpi_variants():
@@ -189,6 +229,57 @@ def test_cpp_source_map_matches_manifest_and_filesystem_exactly():
     )
     missing_files = sorted(path for path in rows.values() if not (REPO_ROOT / path).is_file())
     assert not missing_files, "C++ source-map rows reference absent files: %r" % missing_files
+
+
+def test_dim3_corner_mpi_registration_is_guarded_and_runtime_core_owned():
+    """The eight-rank corner proof is a real Dim=3 CTest obligation only."""
+    cmake = CMAKELISTS.read_text(encoding="utf-8")
+    manifest_rows = {
+        row["name"]: row
+        for row in tomllib.loads(MANIFEST.read_text(encoding="utf-8"))["cpp"]["suite"]
+    }
+    corner = manifest_rows["test_mpi_amr_program_3d_corner_authority"]
+    assert corner["labels"] == ["backend", "mpi", "amr", "nd", "authority", "corner", "medium"]
+    assert corner["mpi_nproc"] == [8]
+
+    rank_guard = re.search(
+        r'if\(POPS_NATIVE_DIM\s+EQUAL\s+3\)\s*'
+        r'set\(POPS_MPI_RANKS_test_mpi_amr_program_3d_corner_authority\s+8\)\s*'
+        r'endif\(\)',
+        cmake,
+        re.DOTALL,
+    )
+    assert rank_guard is not None
+
+    list_guard = re.search(
+        r'if\(POPS_NATIVE_DIM\s+EQUAL\s+3\)\s*'
+        r'list\(APPEND\s+POPS_CPP_MPI_ONLY_TESTS\s+'
+        r'test_mpi_amr_program_3d_corner_authority\)\s*endif\(\)',
+        cmake,
+        re.DOTALL,
+    )
+    assert list_guard is not None
+
+    property_guard = re.search(
+        r'if\(POPS_NATIVE_DIM\s+EQUAL\s+3\)\s*'
+        r'set_tests_properties\(test_mpi_amr_program_3d_corner_authority_np8\s+'
+        r'PROPERTIES\s+ENVIRONMENT\s+"OMP_NUM_THREADS=1"\s+TIMEOUT\s+180\)\s*'
+        r'set_property\(\s*TEST\s+test_mpi_amr_program_3d_corner_authority_np8\s+'
+        r'APPEND\s+PROPERTY\s+LABELS\s+amr\s+nd\s+checkpoint\s+authority\s+corner\s*\)\s*'
+        r'endif\(\)',
+        cmake,
+        re.DOTALL,
+    )
+    assert property_guard is not None
+
+    assert re.search(
+        r'elseif\(_test\s+STREQUAL\s+"test_mpi_amr_program_3d_corner_authority"\)'
+        r'.*?list\(APPEND\s+_extra_libs\s+pops_runtime_core\)',
+        cmake,
+        re.DOTALL,
+    )
+    assert cmake.count("POPS_MPI_RANKS_test_mpi_amr_program_3d_corner_authority") == 1
+    assert cmake.count("POPS_CPP_MPI_ONLY_TESTS test_mpi_amr_program_3d_corner_authority") == 1
 
 
 def test_manifest_mpi_variants_match_cmake_registrations_exactly():

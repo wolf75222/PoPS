@@ -1,22 +1,76 @@
 #include <gtest/gtest.h>
 
 #include <pops/amr/reflux/metric_reflux.hpp>
+#include <pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp>
 
 #include <array>
+#include <atomic>
+#include <cstdlib>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <new>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
+namespace prepared_metric_reflux_test_detail {
+std::atomic<bool> count_allocations{false};
+std::atomic<std::size_t> allocation_count{0};
+
+void record_allocation() noexcept {
+  if (count_allocations.load(std::memory_order_relaxed))
+    allocation_count.fetch_add(1, std::memory_order_relaxed);
+}
+}  // namespace prepared_metric_reflux_test_detail
+
+void* operator new(std::size_t size) {
+  if (void* pointer = std::malloc(size == 0 ? 1 : size)) {
+    prepared_metric_reflux_test_detail::record_allocation();
+    return pointer;
+  }
+  throw std::bad_alloc{};
+}
+
+void* operator new[](std::size_t size) {
+  return ::operator new(size);
+}
+
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+  try {
+    return ::operator new(size);
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+  return ::operator new(size, std::nothrow);
+}
+
+void operator delete(void* pointer) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
+
 namespace {
 
 using pops::Index;
 using pops::amr::ClockStamp;
+using pops::amr::InterfaceFluxLedgerBudget;
 using pops::amr::Rational;
+using pops::amr::TransactionalInterfaceFluxLedger;
 using pops::amr::reflux::CoarseCellFaceSide;
 using pops::amr::reflux::CoarseFaceRefluxKey;
 using pops::amr::reflux::FaceFluxFragmentKey;
@@ -28,10 +82,12 @@ using pops::amr::reflux::FaceLedgerRole;
 using pops::amr::reflux::FaceRefinementMapping;
 using pops::amr::reflux::LevelTransition;
 using pops::amr::reflux::MetricRefluxBudget;
+using pops::amr::reflux::PreparedMetricRefluxWorkspace;
 using pops::amr::reflux::TransactionalFaceFluxLedger;
 using pops::amr::reflux::coarse_cell_reflux_correction;
 using pops::amr::reflux::fine_faces_for_coarse_face;
 using pops::amr::reflux::metric_reflux;
+using pops::amr::reflux::metric_reflux_prepared;
 using pops::amr::RefinementRatio;
 
 constexpr FaceFluxLedgerBudget ledger_budget() {
@@ -44,6 +100,16 @@ constexpr MetricRefluxBudget reflux_budget() {
 
 void scalar_axpy(double& destination, double coefficient, const double& source) {
   destination += coefficient * source;
+}
+
+void vector_axpy(std::vector<double>& destination, double coefficient,
+                 const std::vector<double>& source) {
+  if (destination.empty())
+    destination.assign(source.size(), 0.0);
+  if (destination.size() != source.size())
+    throw std::invalid_argument("vector payload components disagree");
+  for (std::size_t component = 0; component < destination.size(); ++component)
+    destination[component] += coefficient * source[component];
 }
 
 struct ThrowingPayload {
@@ -154,6 +220,55 @@ void accumulate_stage(TransactionalFaceFluxLedger<Dim, double>& ledger,
                       FaceFluxFragmentMeasure{stage_weight, substep_begin, substep_end, duration,
                                               fine_face_measure},
                       fine_flux);
+}
+
+TransactionalFaceFluxLedger<2, std::vector<double>> prepared_vector_ledger(
+    const CoarseFaceRefluxKey<2>& query, bool complete = true, bool duplicate = false,
+    bool temporal_drift = false) {
+  const RefinementRatio<2> ratio{2, 2};
+  const auto mapping = sample_mapping<2>();
+  const auto budget = reflux_budget();
+  TransactionalFaceFluxLedger<2, std::vector<double>> ledger{ledger_budget()};
+  const auto faces = fine_faces_for_coarse_face(query, ratio, mapping, budget);
+  const Rational phase =
+      query.window_begin + (query.window_end - query.window_begin) / Rational{2, 1};
+  ledger.begin(query.attempt);
+  ledger.accumulate(
+      fragment_key(query, FaceLedgerRole::Coarse, query.coarse_face, "prepared", phase),
+      FaceFluxFragmentMeasure{Rational{1, 1}, query.window_begin, query.window_end, 1.0, 2.0},
+      std::vector<double>{1.0, 2.0});
+  if (duplicate) {
+    ledger.accumulate(
+        fragment_key(query, FaceLedgerRole::Coarse, query.coarse_face, "prepared", phase),
+        FaceFluxFragmentMeasure{Rational{1, 1}, query.window_begin, query.window_end, 1.0, 2.0},
+        std::vector<double>{1.0, 2.0});
+  }
+  const std::size_t count = complete ? faces.size() : faces.size() - 1;
+  for (std::size_t index = 0; index < count; ++index) {
+    ledger.accumulate(fragment_key(query, FaceLedgerRole::Fine, faces[index], "prepared", phase),
+                      FaceFluxFragmentMeasure{Rational{1, 1}, query.window_begin, query.window_end,
+                                              temporal_drift && index == 1 ? 1.25 : 1.0, 1.0},
+                      std::vector<double>{2.0, 4.0});
+  }
+  ledger.commit();
+  return ledger;
+}
+
+std::size_t prepared_metric_allocations(
+    PreparedMetricRefluxWorkspace<2, std::vector<double>>& workspace,
+    const TransactionalFaceFluxLedger<2, std::vector<double>>& ledger,
+    const CoarseFaceRefluxKey<2>& query) {
+  const RefinementRatio<2> ratio{2, 2};
+  const auto mapping = sample_mapping<2>();
+  const auto budget = reflux_budget();
+  const std::size_t before =
+      prepared_metric_reflux_test_detail::allocation_count.load(std::memory_order_relaxed);
+  prepared_metric_reflux_test_detail::count_allocations.store(true, std::memory_order_relaxed);
+  (void)metric_reflux_prepared(workspace, ledger, query, ratio, mapping, budget, vector_axpy);
+  (void)workspace.reconcile_coarse_cell_correction(2.0, CoarseCellFaceSide::Upper, vector_axpy);
+  prepared_metric_reflux_test_detail::count_allocations.store(false, std::memory_order_relaxed);
+  return prepared_metric_reflux_test_detail::allocation_count.load(std::memory_order_relaxed) -
+         before;
 }
 
 template <int Dim>
@@ -353,6 +468,126 @@ TEST(test_nd_flux_ledger, exact_stage_weights_are_applied_before_metric_reflux) 
   EXPECT_NEAR(result.mismatch, 0.0, 1e-14);
   EXPECT_EQ(ledger.published_entries(0).size(), 6u);
   EXPECT_TRUE(ledger.published_entries(1).empty());
+}
+
+TEST(test_nd_flux_ledger,
+     prepared_metric_reflux_matches_vector_oracle_and_reuses_one_static_workspace) {
+  const RefinementRatio<2> ratio{2, 2};
+  const auto mapping = sample_mapping<2>();
+  const auto budget = reflux_budget();
+  const auto initial_query = sample_query<2>(0, 70);
+  const auto initial = prepared_vector_ledger(initial_query);
+  const auto expected = metric_reflux(initial, initial_query, ratio, mapping, budget, vector_axpy);
+
+  PreparedMetricRefluxWorkspace<2, std::vector<double>> workspace;
+  workspace.prepare(initial, initial_query, ratio, mapping, budget);
+  const auto& actual = metric_reflux_prepared(workspace, initial, initial_query, ratio, mapping,
+                                              budget, vector_axpy);
+  EXPECT_EQ(actual.coarse_integrated, expected.coarse_integrated);
+  EXPECT_EQ(actual.fine_integrated, expected.fine_integrated);
+  EXPECT_EQ(actual.mismatch, expected.mismatch);
+  EXPECT_EQ(actual.coarse_weighted_measure, expected.coarse_weighted_measure);
+  EXPECT_EQ(actual.fine_weighted_measure, expected.fine_weighted_measure);
+  EXPECT_EQ(actual.fine_face_count, expected.fine_face_count);
+
+  auto retry_query = initial_query;
+  retry_query.attempt = 71;
+  retry_query.macro_step = 10;
+  retry_query.window_begin = Rational{2, 1};
+  retry_query.window_end = Rational{3, 1};
+  const auto retry = prepared_vector_ledger(retry_query);
+  const auto& retried =
+      metric_reflux_prepared(workspace, retry, retry_query, ratio, mapping, budget, vector_axpy);
+  EXPECT_EQ(retried.coarse_integrated, expected.coarse_integrated);
+  EXPECT_EQ(retried.fine_integrated, expected.fine_integrated);
+  EXPECT_EQ(retried.mismatch, expected.mismatch);
+
+  PreparedMetricRefluxWorkspace<2, std::vector<double>> cold_copy;
+  cold_copy.prime_copied_capacities_from_cold_source(workspace);
+  cold_copy.require_preallocated_copy_from(workspace);
+  const auto& copied =
+      metric_reflux_prepared(cold_copy, retry, retry_query, ratio, mapping, budget, vector_axpy);
+  EXPECT_EQ(copied.mismatch, expected.mismatch);
+  EXPECT_GT(cold_copy.resident_storage_bytes(), 0u);
+}
+
+TEST(test_nd_flux_ledger, prepared_metric_reflux_primes_from_empty_resident_slot_templates) {
+  const RefinementRatio<2> ratio{2, 2};
+  const auto mapping = sample_mapping<2>();
+  const auto budget = reflux_budget();
+  const auto query = sample_query<2>(0, 75);
+  TransactionalFaceFluxLedger<2, std::vector<double>> ledger{ledger_budget()};
+  using Ledger = TransactionalFaceFluxLedger<2, std::vector<double>>;
+  typename Ledger::PreparedSlot slot;
+  slot.key =
+      fragment_key(query, FaceLedgerRole::Coarse, query.coarse_face, "prepared", Rational{1, 2});
+  slot.payload_components = 2;
+  ledger.prepare_resident_slots(std::span<const typename Ledger::PreparedSlot>{&slot, 1});
+  ASSERT_EQ(ledger.published_size(), 0u);
+
+  PreparedMetricRefluxWorkspace<2, std::vector<double>> workspace;
+  EXPECT_NO_THROW(workspace.prepare(ledger, query, ratio, mapping, budget));
+  EXPECT_TRUE(workspace.prepared());
+}
+
+TEST(test_nd_flux_ledger, prepared_metric_reflux_rejects_incomplete_duplicate_and_temporal_drift) {
+  const RefinementRatio<2> ratio{2, 2};
+  const auto mapping = sample_mapping<2>();
+  const auto budget = reflux_budget();
+  const auto initial_query = sample_query<2>(0, 80);
+  const auto initial = prepared_vector_ledger(initial_query);
+  PreparedMetricRefluxWorkspace<2, std::vector<double>> workspace;
+  workspace.prepare(initial, initial_query, ratio, mapping, budget);
+  const auto& accepted = metric_reflux_prepared(workspace, initial, initial_query, ratio, mapping,
+                                                budget, vector_axpy);
+  const auto accepted_bytes = accepted.mismatch;
+
+  auto incomplete_query = initial_query;
+  incomplete_query.attempt = 81;
+  const auto incomplete = prepared_vector_ledger(incomplete_query, false);
+  EXPECT_THROW((void)metric_reflux_prepared(workspace, incomplete, incomplete_query, ratio, mapping,
+                                            budget, vector_axpy),
+               std::runtime_error);
+  EXPECT_EQ(workspace.result().mismatch, accepted_bytes);
+
+  auto duplicate_query = initial_query;
+  duplicate_query.attempt = 82;
+  // The ledger refuses this exact duplicate before publication; the prepared route consequently
+  // never observes an ambiguous resident face slot.
+  EXPECT_THROW((void)prepared_vector_ledger(duplicate_query, true, true), std::runtime_error);
+  EXPECT_EQ(workspace.result().mismatch, accepted_bytes);
+
+  auto temporal_query = initial_query;
+  temporal_query.attempt = 83;
+  const auto temporal = prepared_vector_ledger(temporal_query, true, false, true);
+  EXPECT_THROW((void)metric_reflux_prepared(workspace, temporal, temporal_query, ratio, mapping,
+                                            budget, vector_axpy),
+               std::runtime_error);
+  EXPECT_EQ(workspace.result().mismatch, accepted_bytes);
+}
+
+TEST(test_nd_flux_ledger, prepared_metric_reflux_is_allocation_free_after_cold_prepare) {
+  const RefinementRatio<2> ratio{2, 2};
+  const auto mapping = sample_mapping<2>();
+  const auto budget = reflux_budget();
+  const auto initial_query = sample_query<2>(0, 90);
+  const auto initial = prepared_vector_ledger(initial_query);
+  auto retry_query = initial_query;
+  retry_query.attempt = 91;
+  retry_query.macro_step = 12;
+  retry_query.window_begin = Rational{4, 1};
+  retry_query.window_end = Rational{5, 1};
+  const auto retry = prepared_vector_ledger(retry_query);
+
+  PreparedMetricRefluxWorkspace<2, std::vector<double>> workspace;
+  workspace.prepare(initial, initial_query, ratio, mapping, budget);
+  const std::size_t first = prepared_metric_allocations(workspace, initial, initial_query);
+  const std::size_t retry_allocations = prepared_metric_allocations(workspace, retry, retry_query);
+  const std::size_t repeat = prepared_metric_allocations(workspace, retry, retry_query);
+  EXPECT_EQ(first, 0u);
+  EXPECT_EQ(retry_allocations, 0u);
+  EXPECT_EQ(repeat, 0u);
+  EXPECT_EQ(workspace.result().mismatch, (std::vector<double>{2.0, 4.0}));
 }
 
 TEST(test_nd_flux_ledger, coarse_window_matches_two_exact_fine_substeps) {
@@ -697,4 +932,57 @@ TEST(test_nd_flux_ledger, sources_cell_centering_and_stale_attempts_fail_closed)
   EXPECT_EQ(ledger.pending_size(), 0u);
   ledger.rollback();
   EXPECT_EQ(ledger.published_size(), 0u);
+}
+
+TEST(test_nd_flux_ledger, resident_slots_commit_and_retry_without_shape_drift) {
+  using Ledger = TransactionalFaceFluxLedger<1, std::vector<double>>;
+  Ledger ledger{FaceFluxLedgerBudget{2, 2, 1}};
+  const auto query = sample_query<1>(0, 0);
+  auto key =
+      fragment_key(query, FaceLedgerRole::Coarse, query.coarse_face, "resident", Rational{1, 2});
+  key.clock = {2, 0, Rational{0, 1}, 0.0};
+  const typename Ledger::PreparedSlot slot{key, 2};
+  ledger.prepare_resident_slots(std::span<const typename Ledger::PreparedSlot>(&slot, 1));
+  const FaceFluxFragmentMeasure measure{Rational{1, 1}, Rational{0, 1}, Rational{1, 1}, 1.0, 1.0};
+  const std::array<double, 2> first{2.0, 3.0};
+  ledger.begin(1);
+  ledger.accumulate_prepared(0, {2, 1, Rational{1, 2}, 0.5}, 1, measure,
+                             std::span<const double>(first));
+  ledger.commit();
+  ASSERT_EQ(ledger.published_size(), 1u);
+  EXPECT_EQ(ledger.published_entries(0).front().payload, (std::vector<double>{2.0, 3.0}));
+
+  ledger.clear();
+  const std::array<double, 2> retry{5.0, 7.0};
+  ledger.begin(2);
+  ledger.accumulate_prepared(0, {2, 2, Rational{1, 2}, 1.5}, 2, measure,
+                             std::span<const double>(retry));
+  ledger.rollback();
+  EXPECT_EQ(ledger.pending_size(), 0u);
+  ledger.begin(3);
+  ledger.accumulate_prepared(0, {2, 3, Rational{1, 2}, 2.5}, 3, measure,
+                             std::span<const double>(retry));
+  ledger.commit();
+  ASSERT_EQ(ledger.published_size(), 1u);
+  EXPECT_EQ(ledger.published_entries(0).front().payload, (std::vector<double>{5.0, 7.0}));
+}
+
+TEST(test_nd_flux_ledger, interface_ledger_resident_footprint_covers_dense_and_hot_carriers) {
+  using Ledger = TransactionalInterfaceFluxLedger<std::vector<double>>;
+  const auto footprint = [](std::size_t fragments, std::size_t payload, std::size_t depth,
+                            std::size_t identities, std::size_t contract_characters = 512) {
+    Ledger ledger{7, InterfaceFluxLedgerBudget{fragments, payload, depth, identities,
+                                               std::string(contract_characters, 'c')}};
+    return ledger.resident_storage_bytes();
+  };
+
+  const std::uint64_t baseline = footprint(1, 1, 1, 32);
+  // Each dimension changes a distinct resident arena: dense identity image, dense payload image,
+  // and the three savepoint carriers.  The long contract also keeps all four contract strings
+  // external to the ledger object rather than relying on implementation-specific SSO storage.
+  EXPECT_GT(footprint(1, 1, 1, 4096), baseline);
+  EXPECT_GT(footprint(1, 512, 1, 32), baseline);
+  EXPECT_GT(footprint(1, 1, 16, 32), baseline);
+  EXPECT_GT(footprint(8, 1, 1, 32), baseline);
+  EXPECT_GT(footprint(1, 1, 1, 32, 512), footprint(1, 1, 1, 32, 1));
 }

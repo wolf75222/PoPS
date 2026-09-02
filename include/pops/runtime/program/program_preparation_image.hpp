@@ -9,15 +9,128 @@
 /// registry.  The typed specialisation lives with ProgramExecutionServices so this lightweight ABI
 /// header remains independent of the two runtime facades.
 
+#include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/runtime/program/program_abi.hpp>
 
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
+#include <string_view>
 #include <type_traits>
 
 namespace pops::runtime::program {
+
+/// Fixed host-owned rejection transport for one v5 callback attempt.  It is deliberately POD:
+/// generated code publishes only compact enums, a reason code and bounded bytes; it never creates
+/// a foreign `StepAttemptRejected`, map or diagnostic buffer across `ProgramCandidateDescriptor::StepFn`.
+struct ProgramStepRejectRecord final {
+  std::uint64_t generation = 0;
+  std::uint64_t attempt = 0;
+  std::uint32_t status = 0;
+  std::uint32_t disposition = static_cast<std::uint32_t>(StepAttemptDisposition::kReject);
+  std::uint32_t reason_code = 0;
+  std::uint32_t reserved = 0;
+  char phase[kProgramStepRejectTextCapacity]{};
+  char detail[kProgramStepRejectTextCapacity]{};
+};
+
+static_assert(std::is_standard_layout_v<ProgramStepRejectRecord> &&
+              std::is_trivially_copyable_v<ProgramStepRejectRecord>);
+static_assert(sizeof(ProgramStepRejectRecord) == 416);
+static_assert(std::has_unique_object_representations_v<ProgramStepRejectRecord>);
+
+/// Marker base for a DSO-local rejection sentinel.  It carries only the fixed record so nested
+/// AMR callbacks can authenticate their collective rejection before the DSO wrapper absorbs the
+/// derived sentinel and returns normally through StepFn.
+struct ProgramStepRejectSignal {
+  explicit ProgramStepRejectSignal(ProgramStepRejectRecord value) noexcept : record(value) {}
+  ProgramStepRejectRecord record{};
+};
+
+/// Synchronous mailbox shared only by the typed host image and the provider it created.  The host
+/// arms it for one `{generation, attempt}` immediately before StepFn; a DSO may publish exactly
+/// once, and the host consumes the complete record only after StepFn returns normally.
+class ProgramStepRejectMailbox final {
+ public:
+  enum class ConsumeResult : std::uint8_t { none, valid, invalid };
+  void arm(std::uint64_t generation, std::uint64_t attempt) noexcept {
+    record_ = {};
+    record_.generation = generation;
+    record_.attempt = attempt;
+    armed_ = generation != 0 && attempt != 0;
+    published_ = false;
+  }
+
+  [[nodiscard]] bool publish(SolveStatus status, StepAttemptDisposition disposition,
+                             std::uint32_t reason_code, std::string_view phase,
+                             std::string_view detail, ProgramStepRejectRecord& out) noexcept {
+    if (!armed_ || published_ || phase.size() >= kProgramStepRejectTextCapacity ||
+        detail.size() >= kProgramStepRejectTextCapacity)
+      return false;
+    record_.status = static_cast<std::uint32_t>(status);
+    record_.disposition = static_cast<std::uint32_t>(disposition);
+    record_.reason_code = reason_code;
+    if (!phase.empty())
+      std::memcpy(record_.phase, phase.data(), phase.size());
+    if (!detail.empty())
+      std::memcpy(record_.detail, detail.data(), detail.size());
+    published_ = true;
+    out = record_;
+    return true;
+  }
+
+  [[nodiscard]] ConsumeResult consume(std::uint64_t generation, std::uint64_t attempt,
+                                      ProgramStepRejectRecord& out) noexcept {
+    if (!armed_ || !published_ || record_.generation != generation || record_.attempt != attempt)
+      return ConsumeResult::none;
+    if (!valid_record_(record_)) {
+      armed_ = false;
+      published_ = false;
+      return ConsumeResult::invalid;
+    }
+    out = record_;
+    armed_ = false;
+    published_ = false;
+    return ConsumeResult::valid;
+  }
+
+  [[nodiscard]] bool adopt(const ProgramStepRejectRecord& value) noexcept {
+    if (!armed_ || value.generation != record_.generation || value.attempt != record_.attempt)
+      return false;
+    if (!valid_record_(value))
+      return false;
+    if (published_)
+      return std::memcmp(&record_, &value, sizeof(record_)) == 0;
+    record_ = value;
+    published_ = true;
+    return true;
+  }
+
+  [[nodiscard]] bool published_for(std::uint64_t generation, std::uint64_t attempt) const noexcept {
+    return armed_ && published_ && record_.generation == generation && record_.attempt == attempt;
+  }
+
+  void disarm(std::uint64_t generation, std::uint64_t attempt) noexcept {
+    if (armed_ && record_.generation == generation && record_.attempt == attempt) {
+      armed_ = false;
+      published_ = false;
+    }
+  }
+
+ private:
+  static bool valid_record_(const ProgramStepRejectRecord& value) noexcept {
+    return value.generation != 0 && value.attempt != 0 && value.reserved == 0 &&
+           value.status <= static_cast<std::uint32_t>(SolveStatus::kSafeguardFailure) &&
+           value.disposition <= static_cast<std::uint32_t>(StepAttemptDisposition::kReject) &&
+           std::memchr(value.phase, '\0', kProgramStepRejectTextCapacity) != nullptr &&
+           std::memchr(value.detail, '\0', kProgramStepRejectTextCapacity) != nullptr;
+  }
+
+  ProgramStepRejectRecord record_{};
+  bool armed_ = false;
+  bool published_ = false;
+};
 
 class ProgramPreparationImage {
  public:
@@ -33,6 +146,9 @@ class ProgramPreparationImage {
   [[nodiscard]] const ProgramExecutionServicesRef& services() const noexcept { return services_; }
   [[nodiscard]] std::uint64_t generation() const noexcept { return generation_; }
   [[nodiscard]] std::uint64_t service_witness() const noexcept { return service_witness_; }
+  [[nodiscard]] ProgramStepRejectMailbox& step_reject_mailbox() const noexcept {
+    return step_reject_mailbox_;
+  }
   /// Inspection images carry a complete POD service table solely so a v5 descriptor remains
   /// structurally self-consistent.  They are deliberately not execution images: a candidate may
   /// describe itself through `pops_install_program`, but cannot recover a provider until the host
@@ -120,6 +236,7 @@ class ProgramPreparationImage {
   std::uint64_t service_witness_ = service_witness_for_(services_);
   std::uint64_t source_service_witness_ = 0;
   bool execution_ready_ = false;
+  mutable ProgramStepRejectMailbox step_reject_mailbox_{};
 };
 
 static_assert(std::is_standard_layout_v<ProgramPreparationImage>);

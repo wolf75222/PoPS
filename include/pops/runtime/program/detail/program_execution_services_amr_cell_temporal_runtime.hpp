@@ -1,5 +1,9 @@
 [[nodiscard]] std::uint64_t cell_temporal_level_cell_count_(int runtime_block, int level) const {
-  const field_type& state = facade_->program_prepared_amr_block_state_(runtime_block, level);
+  const field_type& state =
+      preparation_view_ != nullptr
+          ? preparation_view_->block_prototypes.at(static_cast<std::size_t>(runtime_block))
+                .at(static_cast<std::size_t>(level))
+          : facade_->program_prepared_amr_block_state_(runtime_block, level);
   std::uint64_t count = 0;
   for (const Box<Dim>& patch : state.layout().boxes()) {
     const std::int64_t points = patch.numPts();
@@ -28,7 +32,10 @@
 }
 
 [[nodiscard]] std::vector<int> cell_temporal_level_rungs_(int finest_rung) const {
-  const auto relations = facade_->program_prepared_temporal_relations_();
+  const std::span<const ::pops::amr::ParentChildClockRelation> relations =
+      preparation_view_ != nullptr ? std::span<const ::pops::amr::ParentChildClockRelation>(
+                                         preparation_view_->temporal_relations)
+                                   : facade_->program_prepared_temporal_relations_();
   if (nlev() <= 0 || relations.size() + 1 != static_cast<std::size_t>(nlev()))
     throw std::logic_error(
         "cell-local AMR rung derivation lacks one exact relation per live transition");
@@ -53,6 +60,23 @@
   return level_rungs;
 }
 
+void require_cell_temporal_configured_relations_() const {
+  const std::span<const ::pops::amr::ParentChildClockRelation> relations =
+      preparation_view_ != nullptr ? std::span<const ::pops::amr::ParentChildClockRelation>(
+                                         preparation_view_->configured_temporal_relations)
+                                   : facade_->program_prepared_temporal_relations_();
+  for (const auto& relation : relations) {
+    const auto ratio = relation.temporal_ratio();
+    if (ratio.numerator <= 0 || ratio.denominator != 1)
+      throw std::invalid_argument(
+          "cell-local AMR requires integral power-of-two temporal refinement ratios");
+    const auto refinement = static_cast<std::uint64_t>(ratio.numerator);
+    if ((refinement & (refinement - 1)) != 0)
+      throw std::invalid_argument(
+          "cell-local AMR requires power-of-two temporal refinement ratios");
+  }
+}
+
 [[nodiscard]] CellTemporalPartitionAcceptedState cell_temporal_full_partition_(
     const CellTemporalConfiguration& configuration, std::int64_t synchronization_tick) const {
   CellTemporalPartitionAcceptedState result;
@@ -65,7 +89,11 @@
     for (std::size_t route = 0; route < configuration.routes.size(); ++route) {
       const int block = configuration.routes[route].runtime_block;
       std::uint64_t cell = cell_temporal_block_major_offset_(configuration, route, level);
-      const field_type& state = facade_->program_prepared_amr_block_state_(block, level);
+      const field_type& state =
+          preparation_view_ != nullptr
+              ? preparation_view_->block_prototypes.at(static_cast<std::size_t>(block))
+                    .at(static_cast<std::size_t>(level))
+              : facade_->program_prepared_amr_block_state_(block, level);
       for (const Box<Dim>& patch : state.layout().boxes())
         for (std::int64_t ordinal = 0; ordinal < patch.numPts(); ++ordinal)
           result.cells.push_back({level, cell++,
@@ -84,32 +112,107 @@ void require_cell_temporal_execution_envelope_() const {
   if constexpr (!cell_temporal_host_execution_supported_)
     throw std::invalid_argument(
         "cell-local AMR execution requires a host default execution and memory space");
-  const BoundaryTopology<Dim> topology = facade_->program_prepared_amr_boundary_topology_();
-  for (int axis = 0; axis < Dim; ++axis)
-    if (!topology.is_periodic(Face<Dim>{axis, BoundarySide::lower}) ||
-        !topology.is_periodic(Face<Dim>{axis, BoundarySide::upper}))
+  for (int axis = 0; axis < Dim; ++axis) {
+    const bool lower =
+        preparation_view_ != nullptr
+            ? preparation_view_->periodic_faces.at(static_cast<std::size_t>(2 * axis))
+            : facade_->program_prepared_amr_boundary_topology_().is_periodic(
+                  Face<Dim>{axis, BoundarySide::lower});
+    const bool upper =
+        preparation_view_ != nullptr
+            ? preparation_view_->periodic_faces.at(static_cast<std::size_t>(2 * axis + 1))
+            : facade_->program_prepared_amr_boundary_topology_().is_periodic(
+                  Face<Dim>{axis, BoundarySide::upper});
+    if (!lower || !upper)
       throw std::invalid_argument(
           "cell-local AMR execution requires periodic boundaries on every physical face");
+  }
 }
 
-void prepare_same_level_cell_temporal_execution_(
+void prepare_cell_temporal_resident_levels_(
+    const CellTemporalConfiguration& configuration, std::int64_t synchronization_tick,
+    const std::vector<std::shared_ptr<SameLevelCellIntegratedFluxPackDiagnostic<Dim>>>& diagnostics)
+    const {
+  if (!preparation_mode_ || preparation_view_ == nullptr)
+    throw std::logic_error("cell-local AMR resident construction requires a detached topology");
+  const std::size_t levels = static_cast<std::size_t>(nlev());
+  if (!cell_temporal_resident_levels_.empty() || diagnostics.size() < levels)
+    throw std::logic_error("cell-local AMR resident level arena differs from its prepared plan");
+  std::vector<std::shared_ptr<CellTemporalResidentLevel>> prepared;
+  prepared.reserve(levels);
+  for (std::size_t level = 0; level < levels; ++level) {
+    auto resident = std::make_shared<CellTemporalResidentLevel>();
+    resident->runtime =
+        std::make_unique<CellTemporalLevelRuntime>(*this, configuration, static_cast<int>(level));
+    const auto partition = prepare_same_level_transport_euler_partition_pack<Dim>(
+        *resident->runtime, static_cast<int>(level), synchronization_tick,
+        configuration.tick_denominator, configuration.level_rungs.at(level),
+        prepared_execution_lane());
+    using provider_type = cell_temporal_provider_type;
+    provider_type provider(*resident->runtime, partition, diagnostics[level], configuration.clock,
+                           prepared_execution_lane());
+    resident->executor = std::make_unique<cell_temporal_executor_type>(
+        partition, std::move(provider), prepared_execution_lane());
+    resident->diagnostic_slot = level;
+    prepared.push_back(std::move(resident));
+  }
+  cell_temporal_resident_levels_.swap(prepared);
+}
+
+/// Cold candidate-time prime for the generic subcycling callback's transient pointer pack.
+/// The vectors are deliberately retained by ``clear_active_multiblock_group_``; every cell-local
+/// group below only resizes/fills this sealed capacity and is rejected rather than grown.
+void prime_cell_temporal_active_group_storage_() const {
+  const std::size_t blocks = static_cast<std::size_t>(n_blocks());
+  if (blocks == 0)
+    throw std::logic_error("cell-local AMR execution has no prepared runtime blocks");
+  active_attempt_states_.reserve(blocks);
+  active_staged_parents_.reserve(blocks);
+  active_incoming_flux_.reserve(blocks);
+  active_outgoing_flux_.reserve(blocks);
+  active_block_identities_.reserve(blocks);
+  active_flux_basis_counts_.reserve(blocks);
+  active_flux_expressions_.clear();
+}
+
+[[nodiscard]] std::optional<PreparedCellTemporalExecution<Dim>>
+prepare_same_level_cell_temporal_execution_(
     std::string clock, std::int64_t tick_denominator, int rung,
     std::span<const SameLevelCellTemporalForwardEulerRoute> authored_routes) const {
-  require_facade_execution_();
+  // This is an installation-only operation.  An accepted provider must requalify its retained
+  // configuration through the explicit hierarchy path below; it must never construct a fresh
+  // cell-temporal image by consulting the live facade during a Program callback.
+  if (!preparation_mode_ || preparation_view_ == nullptr)
+    throw std::logic_error(
+        "cell-local AMR execution preparation requires one detached topology image");
   const ExecutionLane& lane = prepared_execution_lane();
+  const auto& configured_relations = preparation_view_->configured_temporal_relations;
   std::optional<CellTemporalConfiguration> candidate;
   std::optional<CellTemporalPartitionAcceptedState> partition;
+  std::vector<std::shared_ptr<SameLevelCellIntegratedFluxPackDiagnostic<Dim>>> diagnostic_workspace;
+  std::vector<std::shared_ptr<SameLevelCellIntegratedFluxPackDiagnostic<Dim>>> accepted_diagnostics;
+  std::vector<std::shared_ptr<SameLevelCellIntegratedFluxPackDiagnostic<Dim>>> rollback_diagnostics;
   std::exception_ptr local_error;
   try {
     if (cell_temporal_configuration_ || clock.empty() || tick_denominator <= 0 || rung < 0 ||
         rung > 30 || authored_routes.empty() ||
-        authored_routes.size() != static_cast<std::size_t>(facade_->program_n_blocks_()))
+        authored_routes.size() != static_cast<std::size_t>(n_blocks()))
       throw std::invalid_argument(
           "cell-local AMR execution requires one complete FE route per runtime block");
     require_cell_temporal_execution_envelope_();
-    const auto& prepared_hierarchy = facade_->prepared_amr_multiblock_hierarchy_();
-    if (prepared_hierarchy.coupling_count() != 0 ||
-        prepared_hierarchy.has_interface_flux_provider())
+    // The active hierarchy may be a single explicit-bootstrap level, while the configured
+    // authority already contains later regrid transitions.  Reject an unsupported future
+    // ratio now, before an artifact can be installed and become an accepted authority.
+    require_cell_temporal_configured_relations_();
+    const std::size_t coupling_count =
+        preparation_view_ != nullptr
+            ? preparation_view_->coupling_count
+            : facade_->prepared_amr_multiblock_hierarchy_().coupling_count();
+    const bool has_interface_flux_provider =
+        preparation_view_ != nullptr
+            ? preparation_view_->has_interface_flux_provider
+            : facade_->prepared_amr_multiblock_hierarchy_().has_interface_flux_provider();
+    if (coupling_count != 0 || has_interface_flux_provider)
       throw std::invalid_argument(
           "cell-local AMR execution currently requires an uncoupled multi-block hierarchy");
     candidate.emplace();
@@ -138,10 +241,16 @@ void prepare_same_level_cell_temporal_execution_(
         throw std::invalid_argument(
             "cell-local AMR routes are not a bijection over the complete block pack");
       for (int level = 0; level < nlev(); ++level) {
-        const field_type& reference = facade_->program_prepared_amr_block_state_(0, level);
+        const field_type& reference =
+            preparation_view_ != nullptr
+                ? preparation_view_->block_prototypes.at(0).at(static_cast<std::size_t>(level))
+                : facade_->program_prepared_amr_block_state_(0, level);
+        const int runtime_block = candidate->routes[index].runtime_block;
         const field_type& state =
-            facade_->program_prepared_amr_block_state_(candidate->routes[index].runtime_block,
-                                                       level);
+            preparation_view_ != nullptr
+                ? preparation_view_->block_prototypes.at(static_cast<std::size_t>(runtime_block))
+                      .at(static_cast<std::size_t>(level))
+                : facade_->program_prepared_amr_block_state_(runtime_block, level);
         if (state.layout() != reference.layout() ||
             state.distribution() != reference.distribution() ||
             state.local_rank() != reference.local_rank())
@@ -170,25 +279,46 @@ void prepare_same_level_cell_temporal_execution_(
         .text("host-default-execution-and-memory")
         .presence(cell_temporal_host_execution_supported_)
         .scalar(std::uint64_t{2 * Dim})
-        .scalar(static_cast<std::uint64_t>(prepared_hierarchy.coupling_count()))
-        .presence(prepared_hierarchy.has_interface_flux_provider())
+        .scalar(static_cast<std::uint64_t>(coupling_count))
+        .presence(has_interface_flux_provider)
         .scalar(static_cast<std::uint64_t>(candidate->routes.size()))
+        .sequence(
+            configured_relations,
+            [](ExactContractBuilder& item, const ::pops::amr::ParentChildClockRelation& relation) {
+              const auto ratio = relation.temporal_ratio();
+              item.scalar(std::int32_t{relation.parent_level()})
+                  .scalar(std::int32_t{relation.child_level()})
+                  .scalar(ratio.numerator)
+                  .scalar(ratio.denominator)
+                  .scalar(static_cast<std::uint8_t>(relation.remainder_policy()));
+            })
         .sequence(candidate->level_rungs,
                   [](ExactContractBuilder& item, int level_rung) {
                     item.scalar(std::int32_t{level_rung});
                   })
         .sequence(candidate->level_cell_counts,
                   [](ExactContractBuilder& item, std::uint64_t count) { item.scalar(count); });
-    const BoundaryTopology<Dim> topology = facade_->program_prepared_amr_boundary_topology_();
-    for (int axis = 0; axis < Dim; ++axis)
-      contract.presence(topology.is_periodic(Face<Dim>{axis, BoundarySide::lower}))
-          .presence(topology.is_periodic(Face<Dim>{axis, BoundarySide::upper}));
+    for (int axis = 0; axis < Dim; ++axis) {
+      const bool lower =
+          preparation_view_ != nullptr
+              ? preparation_view_->periodic_faces.at(static_cast<std::size_t>(2 * axis))
+              : facade_->program_prepared_amr_boundary_topology_().is_periodic(
+                    Face<Dim>{axis, BoundarySide::lower});
+      const bool upper =
+          preparation_view_ != nullptr
+              ? preparation_view_->periodic_faces.at(static_cast<std::size_t>(2 * axis + 1))
+              : facade_->program_prepared_amr_boundary_topology_().is_periodic(
+                    Face<Dim>{axis, BoundarySide::upper});
+      contract.presence(lower).presence(upper);
+    }
     for (const auto& route : candidate->routes)
       contract.scalar(std::int32_t{route.program_block})
           .scalar(std::int32_t{route.runtime_block})
           .scalar(std::int32_t{route.rhs_id});
     candidate->exact_contract = std::move(contract).release();
-    const double scaled_time = facade_->program_time_() * static_cast<double>(tick_denominator);
+    const double accepted_time =
+        preparation_view_ != nullptr ? preparation_view_->accepted_time : facade_->program_time_();
+    const double scaled_time = accepted_time * static_cast<double>(tick_denominator);
     if (!std::isfinite(scaled_time) || scaled_time < 0.0 ||
         !(scaled_time < static_cast<double>(std::numeric_limits<std::int64_t>::max())) ||
         std::floor(scaled_time) != scaled_time)
@@ -198,6 +328,65 @@ void prepare_same_level_cell_temporal_execution_(
       throw std::invalid_argument(
           "cell-local AMR accepted time is not aligned to its coarsest derived rung");
     partition.emplace(cell_temporal_full_partition_(*candidate, synchronization_tick));
+
+    // Allocate the complete finite diagnostic arena while the Program still owns its detached
+    // candidate image.  A level group can select any prepared level after subcycling, so every
+    // slot receives the maximum exact local face payload.  ``prepare_shape_`` subsequently only
+    // resizes inside this capacity and fails closed if a topology drift would need new storage.
+    std::size_t diagnostic_groups = 1;
+    std::size_t diagnostic_multiplicity = 1;
+    for (const auto& relation : configured_relations) {
+      const auto ratio = relation.temporal_ratio();
+      const auto children = static_cast<std::size_t>(ratio.numerator);
+      diagnostic_multiplicity = checked_product_(diagnostic_multiplicity, children,
+                                                 "cell-local AMR diagnostic level-group count");
+      if (diagnostic_multiplicity > std::numeric_limits<std::size_t>::max() - diagnostic_groups)
+        throw std::length_error("cell-local AMR diagnostic level-group count exceeds size_t");
+      diagnostic_groups += diagnostic_multiplicity;
+    }
+    std::size_t diagnostic_capacity = 0;
+    for (int level = 0; level < nlev(); ++level)
+      for (const auto& route : candidate->routes) {
+        const field_type& state =
+            preparation_view_->block_prototypes.at(static_cast<std::size_t>(route.runtime_block))
+                .at(static_cast<std::size_t>(level));
+        for (std::size_t local = 0; local < state.local_size(); ++local) {
+          const auto points = state.fab(local).box().numPts();
+          if (points < 0)
+            throw std::overflow_error("cell-local AMR diagnostic has a negative local extent");
+          const std::size_t width = checked_product_(
+              static_cast<std::size_t>(points),
+              checked_product_(std::size_t{2} * Dim, static_cast<std::size_t>(state.ncomp()),
+                               "cell-local AMR diagnostic face width"),
+              "cell-local AMR diagnostic local payload");
+          if (width > std::numeric_limits<std::size_t>::max() - diagnostic_capacity)
+            throw std::length_error("cell-local AMR diagnostic payload exceeds size_t");
+          diagnostic_capacity += width;
+        }
+      }
+    diagnostic_workspace.reserve(diagnostic_groups);
+    for (std::size_t slot = 0; slot < diagnostic_groups; ++slot) {
+      auto diagnostic = std::make_shared<SameLevelCellIntegratedFluxPackDiagnostic<Dim>>();
+      diagnostic->prime_capacity(diagnostic_capacity);
+      diagnostic_workspace.push_back(std::move(diagnostic));
+    }
+    // The accepted diagnostics are a distinct preallocated pool.  Sharing the candidate objects
+    // would let a provisional FE attempt mutate a public checkpoint/inspection object before the
+    // outer Program transaction seals it.
+    accepted_diagnostics.reserve(diagnostic_groups);
+    for (std::size_t slot = 0; slot < diagnostic_groups; ++slot) {
+      auto diagnostic = std::make_shared<SameLevelCellIntegratedFluxPackDiagnostic<Dim>>();
+      diagnostic->prime_capacity(diagnostic_capacity);
+      accepted_diagnostics.push_back(std::move(diagnostic));
+    }
+    rollback_diagnostics.reserve(diagnostic_groups);
+    for (std::size_t slot = 0; slot < diagnostic_groups; ++slot) {
+      auto diagnostic = std::make_shared<SameLevelCellIntegratedFluxPackDiagnostic<Dim>>();
+      diagnostic->prime_capacity(diagnostic_capacity);
+      rollback_diagnostics.push_back(std::move(diagnostic));
+    }
+    prepare_cell_temporal_resident_levels_(*candidate, synchronization_tick, diagnostic_workspace);
+    prime_cell_temporal_active_group_storage_();
   } catch (...) {
     local_error = std::current_exception();
   }
@@ -209,9 +398,9 @@ void prepare_same_level_cell_temporal_execution_(
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{"cell-local-amr-route-pack", candidate->exact_contract}}, lane))
     throw std::invalid_argument("cell-local AMR route table differs between execution ranks");
-  cell_temporal_configuration_.emplace(std::move(*candidate));
-  accepted_temporal_partition_ = std::move(*partition);
-  cell_temporal_diagnostics_.clear();
+  return PreparedCellTemporalExecution<Dim>{
+      std::move(*candidate), std::move(*partition), std::move(diagnostic_workspace),
+      std::move(accepted_diagnostics), std::move(rollback_diagnostics)};
 }
 
 static std::int64_t cell_temporal_phase_tick_(std::int64_t begin, std::int64_t extent,
@@ -250,48 +439,24 @@ void advance_same_level_cell_temporal_(double dt) const {
   if (extent > std::numeric_limits<std::int64_t>::max() - begin)
     throw std::overflow_error("cell-local AMR target tick exceeds int64_t");
   const std::int64_t target = begin + extent;
-  std::vector<std::shared_ptr<SameLevelCellIntegratedFluxPackDiagnostic<Dim>>> diagnostics;
-  std::vector<std::string> diagnostic_clock_identities;
-  std::size_t diagnostic_slot = 0;
-  CellTemporalPartitionAcceptedState target_partition;
-  std::string target_partition_contract;
+  // The full level-group cardinality and every diagnostic capacity were collectively validated
+  // while the detached image was prepared.  The warmed route cannot reconstruct that relation
+  // graph without making a fresh facade call; topology/generation requalification above binds
+  // this sealed arena to the same authority, so retain only scalar/pointer checks here.
   std::exception_ptr preparation_error;
   try {
-    target_partition = cell_temporal_full_partition_(*cell_temporal_configuration_, target);
-    ExactContractBuilder target_contract;
-    target_contract.text("pops.amr-program.cell-local-target-partition")
-        .scalar(std::uint32_t{1})
-        .text(target_partition.provider_identity)
-        .scalar(target_partition.topology_epoch)
-        .scalar(target_partition.synchronization_tick)
-        .scalar(target_partition.tick_denominator)
-        .sequence(target_partition.cells,
-                  [](ExactContractBuilder& item, const CellTemporalPartitionRecord& cell) {
-                    item.scalar(std::int32_t{cell.level})
-                        .scalar(cell.cell)
-                        .scalar(std::int32_t{cell.rung})
-                        .scalar(cell.accepted_tick);
-                  });
-    target_partition_contract = std::move(target_contract).release();
-    std::size_t level_groups = 1;
-    std::size_t level_multiplicity = 1;
-    for (const auto& relation : facade_->program_prepared_temporal_relations_()) {
-      const auto ratio = relation.temporal_ratio();
-      if (ratio.numerator <= 0 || ratio.denominator <= 0)
-        throw std::logic_error("cell-local AMR temporal relation has an invalid ratio");
-      const auto quotient = static_cast<std::size_t>(ratio.numerator / ratio.denominator);
-      const auto remainder = ratio.numerator % ratio.denominator;
-      const std::size_t children = quotient + (remainder == 0 ? 0 : 1);
-      level_multiplicity = checked_product_(level_multiplicity, children,
-                                            "cell-local AMR diagnostic level-group count");
-      if (level_multiplicity > std::numeric_limits<std::size_t>::max() - level_groups)
-        throw std::length_error("cell-local AMR diagnostic level-group count exceeds size_t");
-      level_groups += level_multiplicity;
-    }
-    diagnostics.resize(level_groups);
-    diagnostic_clock_identities.assign(level_groups, cell_temporal_configuration_->clock);
-    for (auto& diagnostic : diagnostics)
-      diagnostic = std::make_shared<SameLevelCellIntegratedFluxPackDiagnostic<Dim>>();
+    const std::size_t level_count = cell_temporal_configuration_->level_rungs.size();
+    if (level_count == 0 || cell_temporal_configuration_->level_cell_counts.size() != level_count ||
+        cell_temporal_resident_levels_.size() != level_count ||
+        level_count != static_cast<std::size_t>(nlev()) ||
+        cell_temporal_diagnostic_workspace_.empty() ||
+        cell_temporal_diagnostics_.size() != cell_temporal_diagnostic_workspace_.size() ||
+        cell_temporal_diagnostic_rollback_.size() != cell_temporal_diagnostic_workspace_.size())
+      throw std::logic_error(
+          "cell-local AMR diagnostic arena differs from its candidate-prepared topology");
+    for (const auto& diagnostic : cell_temporal_diagnostic_workspace_)
+      if (!diagnostic)
+        throw std::logic_error("cell-local AMR diagnostic arena contains a null slot");
   } catch (...) {
     preparation_error = std::current_exception();
   }
@@ -301,63 +466,66 @@ void advance_same_level_cell_temporal_(double dt) const {
       std::rethrow_exception(preparation_error);
     throw std::runtime_error("cell-local AMR target partition preparation failed collectively");
   }
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"cell-local-amr-target-partition", target_partition_contract}}, lane))
-    throw std::invalid_argument("cell-local AMR target partition differs between execution ranks");
-  advance_prepared_hierarchy_(
-      dt,
-      [&](double) {
-        int level = 0;
-        std::int64_t level_begin = 0;
-        std::int64_t level_target = 0;
-        std::optional<CellTemporalLevelRuntime> runtime;
-        std::shared_ptr<SameLevelCellIntegratedFluxPackDiagnostic<Dim>> diagnostic;
-        std::string clock_identity;
-        std::exception_ptr local_error;
-        try {
-          level = active_level_;
-          level_begin =
-              cell_temporal_phase_tick_(begin, extent, active_subcycling_window_.begin.phase);
-          level_target =
-              cell_temporal_phase_tick_(begin, extent, active_subcycling_window_.end.phase);
-          cell_temporal_interval_begin_tick_ = level_begin;
-          cell_temporal_interval_target_tick_ = level_target;
-          runtime.emplace(*this, *cell_temporal_configuration_, level);
-          if (diagnostic_slot >= diagnostics.size())
-            throw std::logic_error(
-                "cell-local AMR execution exceeded its preallocated level-group slots");
-          diagnostic = diagnostics[diagnostic_slot];
-          clock_identity = std::move(diagnostic_clock_identities[diagnostic_slot]);
-          ++diagnostic_slot;
-        } catch (...) {
-          local_error = std::current_exception();
-        }
-        if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
-          if (lane.size() == 1 && local_error)
-            std::rethrow_exception(local_error);
-          throw std::runtime_error("cell-local AMR level runtime preparation failed collectively");
-        }
-        auto partition = prepare_same_level_transport_euler_partition_pack<Dim>(
-            *runtime, level, level_begin, cell_temporal_configuration_->tick_denominator,
-            cell_temporal_configuration_->level_rungs.at(static_cast<std::size_t>(level)),
-            prepared_execution_lane());
-        using provider_type =
-            PreparedSameLevelTransportEulerPackStageFluxProvider<Dim, CellTemporalLevelRuntime>;
-        provider_type provider(*runtime, partition, diagnostic, std::move(clock_identity),
-                               prepared_execution_lane());
-        PreparedBatchedCellTemporalExecutor<provider_type> executor(
-            std::move(partition), std::move(provider), prepared_execution_lane());
-        executor.begin_attempt(level_target);
-        executor.advance_to_barrier();
-        executor.commit();
-      },
-      "advance_same_level_cell_temporal");
-  // ``diagnostics`` is a preallocated upper bound. Shrinking destroys only unused trailing
-  // shared_ptr slots and cannot allocate; every used slot was already closed collectively.
-  diagnostics.resize(diagnostic_slot);
-  static_assert(std::is_nothrow_move_assignable_v<CellTemporalPartitionAcceptedState>);
-  accepted_temporal_partition_ = std::move(target_partition);
-  cell_temporal_diagnostics_.swap(diagnostics);
+  if (target > static_cast<std::int64_t>(std::numeric_limits<long>::max()))
+    throw std::overflow_error("cell-local AMR target tick exceeds collective range");
+  const long collective_target = static_cast<long>(target);
+  if (all_reduce_min(collective_target, lane) != all_reduce_max(collective_target, lane))
+    throw std::invalid_argument("cell-local AMR target tick differs between execution ranks");
+  if (active_cell_temporal_execution_)
+    throw std::logic_error("cell-local AMR execution cannot nest its flux authority");
+  active_cell_temporal_execution_ = true;
+  try {
+    advance_prepared_hierarchy_(
+        dt,
+        [&](double) {
+          int level = 0;
+          std::int64_t level_begin = 0;
+          std::int64_t level_target = 0;
+          CellTemporalResidentLevel* resident = nullptr;
+          std::exception_ptr local_error;
+          try {
+            level = active_level_;
+            level_begin =
+                cell_temporal_phase_tick_(begin, extent, active_subcycling_window_.begin.phase);
+            level_target =
+                cell_temporal_phase_tick_(begin, extent, active_subcycling_window_.end.phase);
+            cell_temporal_interval_begin_tick_ = level_begin;
+            cell_temporal_interval_target_tick_ = level_target;
+            if (level < 0 ||
+                static_cast<std::size_t>(level) >= cell_temporal_resident_levels_.size())
+              throw std::logic_error(
+                  "cell-local AMR execution selected an unprepared resident level");
+            const auto& resident_owner =
+                cell_temporal_resident_levels_[static_cast<std::size_t>(level)];
+            if (!resident_owner || !resident_owner->runtime || !resident_owner->executor)
+              throw std::logic_error("cell-local AMR execution lost its resident level workspace");
+            resident = resident_owner.get();
+            resident->executor->rebind_active_candidates();
+            resident->executor->reset_accepted_tick_noexcept(level_begin);
+          } catch (...) {
+            local_error = std::current_exception();
+          }
+          if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+            if (lane.size() == 1 && local_error)
+              std::rethrow_exception(local_error);
+            throw std::runtime_error(
+                "cell-local AMR level runtime preparation failed collectively");
+          }
+          resident->executor->begin_attempt(level_target);
+          resident->executor->advance_to_barrier();
+          resident->executor->commit();
+        },
+        "advance_same_level_cell_temporal");
+  } catch (...) {
+    active_cell_temporal_execution_ = false;
+    throw;
+  }
+  active_cell_temporal_execution_ = false;
+  // The accepted partition has a bind-sealed record vector.  Only its clocks change after the
+  // collective barrier, so update them in place instead of constructing a new public image.
+  accepted_temporal_partition_.synchronization_tick = target;
+  for (CellTemporalPartitionRecord& cell : accepted_temporal_partition_.cells)
+    cell.accepted_tick = target;
   cell_temporal_interval_begin_tick_ = target;
   cell_temporal_interval_target_tick_ = target;
 }
@@ -368,76 +536,11 @@ void requalify_cell_temporal_configuration_() const {
        cell_temporal_configuration_->materialization_generation ==
            runtime_->materialization_generation()))
     return;
-  const ExecutionLane& lane = prepared_execution_lane();
-  std::optional<CellTemporalConfiguration> candidate;
-  std::optional<CellTemporalPartitionAcceptedState> partition;
-  std::exception_ptr local_error;
-  try {
-    candidate.emplace(*cell_temporal_configuration_);
-    require_cell_temporal_execution_envelope_();
-    const auto& prepared_hierarchy = facade_->prepared_amr_multiblock_hierarchy_();
-    if (prepared_hierarchy.coupling_count() != 0 ||
-        prepared_hierarchy.has_interface_flux_provider())
-      throw std::invalid_argument(
-          "cell-local AMR hierarchy requalification found unsupported global coupling");
-    candidate->topology_epoch = runtime_->topology_epoch();
-    candidate->materialization_generation = runtime_->materialization_generation();
-    candidate->level_rungs = cell_temporal_level_rungs_(candidate->rung);
-    candidate->level_cell_counts.clear();
-    candidate->level_cell_counts.reserve(static_cast<std::size_t>(nlev()));
-    for (int level = 0; level < nlev(); ++level)
-      candidate->level_cell_counts.push_back(cell_temporal_level_cell_count_(0, level));
-    ExactContractBuilder contract;
-    contract.text("pops.amr-program.cell-local-forward-euler")
-        .scalar(std::uint32_t{1})
-        .scalar(std::int32_t{Dim})
-        .text(candidate->clock)
-        .scalar(candidate->tick_denominator)
-        .scalar(std::int32_t{candidate->rung})
-        .scalar(candidate->topology_epoch)
-        .scalar(candidate->materialization_generation)
-        .text(lane.identity())
-        .bytes(runtime_->spatial_contract())
-        .text("host-default-execution-and-memory")
-        .presence(cell_temporal_host_execution_supported_)
-        .scalar(std::uint64_t{2 * Dim})
-        .scalar(static_cast<std::uint64_t>(prepared_hierarchy.coupling_count()))
-        .presence(prepared_hierarchy.has_interface_flux_provider())
-        .scalar(static_cast<std::uint64_t>(candidate->routes.size()))
-        .sequence(candidate->level_rungs,
-                  [](ExactContractBuilder& item, int level_rung) {
-                    item.scalar(std::int32_t{level_rung});
-                  })
-        .sequence(candidate->level_cell_counts,
-                  [](ExactContractBuilder& item, std::uint64_t count) { item.scalar(count); });
-    const BoundaryTopology<Dim> topology = facade_->program_prepared_amr_boundary_topology_();
-    for (int axis = 0; axis < Dim; ++axis)
-      contract.presence(topology.is_periodic(Face<Dim>{axis, BoundarySide::lower}))
-          .presence(topology.is_periodic(Face<Dim>{axis, BoundarySide::upper}));
-    for (const auto& route : candidate->routes) {
-      if (sys_block(route.program_block) != route.runtime_block)
-        throw std::logic_error(
-            "cell-local AMR retained route changed its authenticated Program block map");
-      contract.scalar(std::int32_t{route.program_block})
-          .scalar(std::int32_t{route.runtime_block})
-          .scalar(std::int32_t{route.rhs_id});
-    }
-    candidate->exact_contract = std::move(contract).release();
-    partition.emplace(cell_temporal_full_partition_(
-        *candidate, accepted_temporal_partition_.synchronization_tick));
-  } catch (...) {
-    local_error = std::current_exception();
-  }
-  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && local_error)
-      std::rethrow_exception(local_error);
-    throw std::runtime_error("cell-local AMR hierarchy requalification failed collectively");
-  }
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"cell-local-amr-requalified-route-pack", candidate->exact_contract}}, lane))
-    throw std::invalid_argument(
-        "cell-local AMR requalified route table differs between execution ranks");
-  cell_temporal_configuration_.emplace(std::move(*candidate));
-  accepted_temporal_partition_ = std::move(*partition);
-  cell_temporal_diagnostics_.clear();
+  // A changed topology changes the number/layout of route cells and diagnostic bytes.  Rebuilding
+  // that authority from inside a step would allocate and would let a candidate escape the
+  // installation transaction.  The next Program installation/restart must provide a new detached
+  // PreparedCellTemporalExecution instead.
+  throw std::logic_error(
+      "cell-local AMR topology changed after candidate preparation; install a new prepared "
+      "cell-temporal Program before stepping");
 }

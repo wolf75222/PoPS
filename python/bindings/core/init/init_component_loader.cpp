@@ -2,7 +2,7 @@
 
 #include <pops/runtime/dynamic/component_loader.hpp>
 
-#include "generated_component_invokers.inc"
+#include "generated_component_invokers.hpp"
 
 #include <cstdint>
 #include <memory>

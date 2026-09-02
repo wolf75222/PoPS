@@ -467,12 +467,13 @@ def validate_program_persistent_value_checkpoint(
         if total > _UINT64_MAX - row["maximum_bytes"]:
             raise OverflowError("Program persistent checkpoint memory bound overflows uint64")
         total += row["maximum_bytes"]
-    # The dense carrier owns every byte reserved by its sealed resource plan.  Treating the
-    # header as merely an upper bound would admit a truncated/incomplete plan with a larger
-    # resigned ceiling, particularly on rank-redistribution and regrid routes where the source
-    # and target digests are intentionally allowed to differ.
-    if total != maximum or image.offsets[-1] != maximum:
-        _persistent_fail("resource rows do not cover the exact checkpoint memory ceiling")
+    # ``maximum_bytes`` is the global materialized ceiling from the native ProgramResourcePlan.
+    # The dense carrier owns only the value-backed rows; prepared host-only arenas can account for
+    # the remaining reserved bytes without appearing in POPSPVS1.  Keep every row and storage
+    # extent exact above, while accepting that the dense image may consume a strict subset of the
+    # authenticated ceiling (the native contract is ``offsets.back() <= maximum_bytes``).
+    if total > maximum or image.offsets[-1] > maximum:
+        _persistent_fail("resource rows exceed the checkpoint memory ceiling")
     return image
 
 
@@ -801,6 +802,134 @@ def _persistent_plan_row_strings(row: Any) -> tuple[str, ...]:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _MaterializedProgramResourcePlanKey:
+    occurrence_path: str
+    owner: str
+    space: str
+    clock: str
+
+
+@dataclass(frozen=True, slots=True)
+class _MaterializedProgramResourcePlanRow:
+    """One exact resource row reconstructed from the sealed native POPSPVS1 image."""
+
+    slot: int
+    key: _MaterializedProgramResourcePlanKey
+    identity: str
+    communication: str
+    transfer_provider: str
+    restart_provider: str
+    component_names: str
+    shape: str
+    components: int
+    ghosts: int
+    bytes: int
+    maximum_bytes: int
+    communicates: bool
+    restart_required: bool
+    cells: int | None
+    itemsize: int | None
+
+
+class MaterializedProgramResourcePlanCapacityAuthority(ProgramResourcePlanCapacityAuthority):
+    """Read-only capacity authority projected from one authenticated native plan image.
+
+    Runtime-sized compiler declarations intentionally have no byte bound.  Once native bind has
+    materialized their exact prototypes, POPSPVS1 is the host-owned, SHA-authenticated witness of
+    the resulting dense slots and ceiling.  This small projection preserves that witness for the
+    output budget without attempting to re-lower it from live geometry.
+    """
+
+    __slots__ = ("schema", "digest", "maximum_bytes", "_rows")
+
+    def __init__(self, image: ProgramPersistentValueCheckpoint) -> None:
+        validate_program_persistent_value_checkpoint(image)
+        if not image.bound:
+            raise RuntimeError(
+                "checkpoint capacity requires a materialized native Program resource plan"
+            )
+        rows = []
+        for source in image.rows:
+            key = source["key"]
+            rows.append(
+                _MaterializedProgramResourcePlanRow(
+                    slot=source["slot"],
+                    key=_MaterializedProgramResourcePlanKey(
+                        occurrence_path=source["occurrence_path"],
+                        owner=source["owner_identity"],
+                        space=source["space_identity"],
+                        clock=source["clock_identity"],
+                    ),
+                    identity=source["identity"],
+                    communication=source["communication"],
+                    transfer_provider=source["transfer_identity"],
+                    restart_provider=source["restart_identity"],
+                    component_names=source["component_names"],
+                    shape=source["shape"],
+                    components=source["components"],
+                    ghosts=source["ghosts"],
+                    bytes=source["bytes"],
+                    maximum_bytes=source["maximum_bytes"],
+                    communicates=source["communicates"],
+                    restart_required=source["restart_required"],
+                    cells=source["cells"],
+                    itemsize=source["itemsize"],
+                )
+            )
+        self.schema = image.plan_schema
+        self.digest = image.plan_digest
+        self.maximum_bytes = image.maximum_bytes
+        self._rows = tuple(rows)
+
+    def __len__(self) -> int:
+        return len(self._rows)
+
+    def abi_rows(self) -> tuple[_MaterializedProgramResourcePlanRow, ...]:
+        return self._rows
+
+    def to_data(self) -> dict[str, Any]:
+        """Return a stable budget receipt, retaining the native materialized slot witness."""
+
+        return {
+            "schema": self.schema,
+            "digest": self.digest,
+            "maximum_bytes": self.maximum_bytes,
+            "entries": [
+                {
+                    "slot": row.slot,
+                    "occurrence_path": row.key.occurrence_path,
+                    "owner": row.key.owner,
+                    "space": row.key.space,
+                    "clock": row.key.clock,
+                    "identity": row.identity,
+                    "communication": row.communication,
+                    "transfer_provider": row.transfer_provider,
+                    "restart_provider": row.restart_provider,
+                    "components": row.components,
+                    "ghosts": row.ghosts,
+                    "bytes": row.bytes,
+                    "maximum_bytes": row.maximum_bytes,
+                    "communicates": row.communicates,
+                    "restart_required": row.restart_required,
+                    "component_names": row.component_names,
+                    "shape": row.shape,
+                    "cells": row.cells,
+                    "itemsize": row.itemsize,
+                }
+                for row in self._rows
+            ],
+        }
+
+
+def materialized_program_resource_plan_capacity_authority(
+    image: ProgramPersistentValueCheckpoint,
+) -> MaterializedProgramResourcePlanCapacityAuthority:
+    """Project the native bind-sealed POPSPVS1 image into its exact capacity authority."""
+
+    return MaterializedProgramResourcePlanCapacityAuthority(image)
+
+
 def program_persistent_value_checkpoint_capacity(plan: Any) -> int:
     """Return an exact upper bound for the native image serialized from one sealed plan.
 
@@ -812,6 +941,10 @@ def program_persistent_value_checkpoint_capacity(plan: Any) -> int:
     if not isinstance(plan, ProgramResourcePlanCapacityAuthority):
         raise TypeError(
             "Program persistent checkpoint capacity requires an exact sealed ProgramResourcePlan"
+        )
+    if getattr(plan, "maximum_bytes", None) is None:
+        raise RuntimeError(
+            "checkpoint capacity requires a materialized Program resource plan with an exact ceiling"
         )
     rows = plan.abi_rows()
     storage = 0
@@ -974,6 +1107,7 @@ __all__ = [
     "CheckpointResourceBudget",
     "IDENTITY_KEY",
     "MANIFEST_KEY",
+    "MaterializedProgramResourcePlanCapacityAuthority",
     "PROGRAM_PERSISTENT_CHECKPOINT_KEY",
     "PROGRAM_PERSISTENT_CHECKPOINT_SCHEMA",
     "PROGRAM_PERSISTENT_CHECKPOINT_SCHEMA_KEY",
@@ -987,6 +1121,7 @@ __all__ = [
     "capture_program_persistent_value_checkpoint",
     "decode_program_persistent_value_checkpoint",
     "encode_program_persistent_value_checkpoint",
+    "materialized_program_resource_plan_capacity_authority",
     "prepare_program_persistent_value_restore",
     "program_persistent_checkpoint_manifest",
     "program_persistent_checkpoint_manifest_from_payload",

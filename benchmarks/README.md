@@ -61,6 +61,9 @@ distinct GPUs.
 benchmarks/romeo/submit_adc700_program_cutover.sh
 ```
 
+The submit wrapper resolves and exports the checkout's absolute repository root before `sbatch`;
+the spooled batch copy therefore never infers Git provenance from its temporary Slurm path.
+
 The default comparison pins the baseline to
 `db3d390f43dfb14f12e88db31a9b3e631ff50488`; the candidate defaults to the submitted checkout
 (`HEAD`). Before archiving, the batch script requires every campaign file (including the Python

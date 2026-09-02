@@ -42,6 +42,7 @@ def _fake_variant(path: Path, dimension: int = 2) -> selector._Variant:
         abi_key="abi;dim=%d" % dimension,
         has_mpi=False,
         has_kokkos=True,
+        kokkos_execution_space="Serial",
     )
 
 
@@ -60,6 +61,7 @@ def _fake_module(path: Path, dimension: int = 2) -> ModuleType:
     module.__has_mpi__ = False
     module.__has_kokkos__ = True
     module.abi_key = lambda: "abi;dim=%d" % dimension
+    module.runtime_environment_report = lambda: {"kokkos_backend": "Serial"}
     module.mpi_world = World
     return module
 
@@ -161,7 +163,7 @@ def test_manifest_selects_and_hashes_only_requested_leaf(
     first.write_bytes(b"one")
     second.write_bytes(b"two-corrupt-after-manifest")
     document = {
-        "schema_version": 1,
+        "schema_version": 2,
         "variants": [
             {
                 "dimension": 1,
@@ -171,6 +173,7 @@ def test_manifest_selects_and_hashes_only_requested_leaf(
                 "abi_key": "abi;dim=1",
                 "has_mpi": False,
                 "has_kokkos": True,
+                "kokkos_execution_space": "Serial",
             },
             {
                 "dimension": 2,
@@ -180,6 +183,7 @@ def test_manifest_selects_and_hashes_only_requested_leaf(
                 "abi_key": "abi;dim=2",
                 "has_mpi": False,
                 "has_kokkos": True,
+                "kokkos_execution_space": "Serial",
             },
         ],
     }

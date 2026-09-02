@@ -10,10 +10,13 @@
 
 #include <Kokkos_Core.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <string>
+#include <type_traits>
 #include <utility>
 
 namespace pops {
@@ -142,17 +145,55 @@ class Fab {
   }
   void copy_to_host(const host_mirror_type& host) const {
     validate_mirror(host);
-    if (size_ != 0)
+    if (size_ == 0)
+      return;
+    if constexpr (std::is_same_v<MemorySpace, Kokkos::HostSpace>) {
+      device_fence();
+      std::copy_n(data_.data(), size_, host.values_.data());
+    } else {
       Kokkos::deep_copy(host.values_, data_);
+    }
   }
   void copy_from_host(const host_mirror_type& host) {
     validate_mirror(host);
-    if (size_ != 0)
+    if (size_ == 0)
+      return;
+    if constexpr (std::is_same_v<MemorySpace, Kokkos::HostSpace>) {
+      device_fence();
+      std::copy_n(host.values_.data(), size_, data_.data());
+    } else {
       Kokkos::deep_copy(data_, host.values_);
+    }
+  }
+
+  static raw_host_mirror_type create_raw_host_buffer(std::size_t size, const std::string& label) {
+    if (size == 0)
+      return {};
+    return raw_host_mirror_type(label, size);
+  }
+
+  template <class ExecutionSpace>
+  void copy_to_host_buffer(const raw_host_mirror_type& host,
+                           const ExecutionSpace& execution) const {
+    if (host.extent(0) != size_)
+      throw std::invalid_argument("pops::Fab raw host buffer does not match this Fab size");
+    if (size_ == 0)
+      return;
+    if constexpr (std::is_same_v<MemorySpace, Kokkos::HostSpace>) {
+      std::copy_n(data_.data(), size_, host.data());
+    } else {
+      Kokkos::deep_copy(execution, host, data_);
+    }
   }
   void set_val(Real value) {
-    if (size_ != 0)
+    if (size_ == 0)
+      return;
+    if constexpr (std::is_same_v<MemorySpace, Kokkos::HostSpace>) {
+      device_fence();
+      std::fill_n(data_.data(), size_, value);
+    } else {
       Kokkos::deep_copy(data_, value);
+    }
   }
 
  private:

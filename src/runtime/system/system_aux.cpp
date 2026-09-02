@@ -378,7 +378,7 @@ void System<Dim>::refresh_auxiliary(const AuxiliaryEvaluationPoint& point) {
         });
     std::exception_ptr fence_error;
     try {
-      Kokkos::fence();
+      ::pops::device_fence();
     } catch (...) {
       fence_error = std::current_exception();
     }
@@ -430,7 +430,7 @@ System<Dim>::prepared_auxiliary_consumer_plan(const std::string& consumer_qid) c
 
 template <int Dim>
 const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>*
-System<Dim>::program_prepared_auxiliary_consumer_plan_(const std::string& consumer_qid) const {
+System<Dim>::program_prepared_auxiliary_consumer_plan_(std::string_view consumer_qid) const {
   return &p_->auxiliary_registry_.consumer_plan(consumer_qid);
 }
 
@@ -774,7 +774,7 @@ template std::string System<kNativeDimension>::auxiliary_registry_contract() con
 template const runtime::system::ResolvedAuxiliaryConsumerPlan<kNativeDimension>&
 System<kNativeDimension>::prepared_auxiliary_consumer_plan(const std::string&) const;
 template const runtime::system::ResolvedAuxiliaryConsumerPlan<kNativeDimension>*
-System<kNativeDimension>::program_prepared_auxiliary_consumer_plan_(const std::string&) const;
+    System<kNativeDimension>::program_prepared_auxiliary_consumer_plan_(std::string_view) const;
 template runtime::system::AuxiliaryCheckpointAcceptedState<kNativeDimension>
 System<kNativeDimension>::capture_auxiliary_checkpoint_accepted_state() const;
 template std::pair<std::size_t, std::size_t>

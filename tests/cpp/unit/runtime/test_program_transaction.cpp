@@ -64,6 +64,22 @@ struct State final {
   }
 };
 
+struct MethodParticipantState final {
+  int accepted = 0;
+
+  bool snapshot(void* image, std::size_t bytes) noexcept {
+    if (bytes != sizeof(accepted))
+      return false;
+    *static_cast<int*>(image) = accepted;
+    return true;
+  }
+  void restore(const void* image, std::size_t bytes) noexcept {
+    if (bytes == sizeof(accepted))
+      accepted = *static_cast<const int*>(image);
+  }
+  bool publish() noexcept { return true; }
+};
+
 struct EffectLog final {
   std::mutex mutex;
   std::vector<int> events;
@@ -157,6 +173,8 @@ TEST(ProgramTransaction, BindFreezesTypedOrderBudgetsAndHotCapacity) {
   EXPECT_EQ(registry.effect_info(0).status, ProgramEffectSlotStatus::kDeclared);
   EXPECT_THROW((void)registry.register_effect(1), std::invalid_argument);
   EXPECT_FALSE(registry.try_register_effect(1));
+  EXPECT_THROW((void)registry.register_effect(2), std::length_error);
+  EXPECT_FALSE(registry.try_register_effect(2));
 
   registry.bind();
   EXPECT_TRUE(registry.bound());
@@ -187,6 +205,60 @@ TEST(ProgramTransaction, BindFreezesTypedOrderBudgetsAndHotCapacity) {
   transaction.rollback();
   EXPECT_EQ(registry.effect_info(0).status, ProgramEffectSlotStatus::kFrozen);
   EXPECT_EQ(registry.accepted_generation().value, 0u);
+}
+
+TEST(ProgramTransaction, ZeroBudgetsAreExactAndNonzeroBudgetsAdmitOnlyTheirDeclaredCapacity) {
+  State state;
+  const ProgramParticipantBudget state_budget{sizeof(int), sizeof(int)};
+
+  ProgramTransactionRegistry zero_participants({0, sizeof(int), sizeof(int), 0});
+  EXPECT_THROW((void)zero_participants.register_participant(state, state_ops(), state_budget),
+               std::length_error);
+  EXPECT_FALSE(zero_participants.try_register_participant(state, state_ops(), state_budget));
+  zero_participants.bind();
+  EXPECT_EQ(zero_participants.participant_count(), 0u);
+
+  ProgramTransactionRegistry zero_restore({1, 0, sizeof(int), 0});
+  EXPECT_THROW((void)zero_restore.register_participant(state, state_ops(), state_budget),
+               std::length_error);
+  EXPECT_FALSE(zero_restore.try_register_participant(state, state_ops(), state_budget));
+  zero_restore.bind();
+  EXPECT_EQ(zero_restore.restore_bytes(), 0u);
+
+  ProgramTransactionRegistry zero_candidate({1, sizeof(int), 0, 0});
+  EXPECT_THROW((void)zero_candidate.register_participant(state, state_ops(), state_budget),
+               std::length_error);
+  EXPECT_FALSE(zero_candidate.try_register_participant(state, state_ops(), state_budget));
+  zero_candidate.bind();
+  EXPECT_EQ(zero_candidate.candidate_bytes(), 0u);
+
+  ProgramTransactionRegistry zero_effects({1, sizeof(int), sizeof(int), 0});
+  EXPECT_THROW((void)zero_effects.register_effect(17), std::length_error);
+  EXPECT_FALSE(zero_effects.try_register_effect(17));
+  zero_effects.bind();
+  EXPECT_EQ(zero_effects.effect_capacity(), 0u);
+}
+
+TEST(ProgramTransaction, MethodParticipantDefaultBudgetIsInferredButExplicitZeroStaysExact) {
+  MethodParticipantState inferred;
+  ProgramTransactionRegistry inferred_registry({1, sizeof(inferred), sizeof(inferred), 0});
+  const auto inferred_handle = inferred_registry.register_participant(inferred);
+  ASSERT_TRUE(inferred_handle);
+  EXPECT_EQ(inferred_registry.participant_info(inferred_handle.index).budget.restore_bytes,
+            sizeof(inferred));
+  EXPECT_EQ(inferred_registry.participant_info(inferred_handle.index).budget.candidate_bytes,
+            sizeof(inferred));
+  inferred_registry.bind();
+
+  MethodParticipantState explicit_zero;
+  ProgramTransactionRegistry zero_byte_registry({1, 0, 0, 0});
+  EXPECT_THROW((void)zero_byte_registry.register_participant(explicit_zero), std::length_error);
+  const auto zero_handle =
+      zero_byte_registry.register_participant(explicit_zero, ProgramParticipantBudget{0, 0});
+  ASSERT_TRUE(zero_handle);
+  EXPECT_EQ(zero_byte_registry.participant_info(zero_handle.index).budget.restore_bytes, 0u);
+  EXPECT_EQ(zero_byte_registry.participant_info(zero_handle.index).budget.candidate_bytes, 0u);
+  zero_byte_registry.bind();
 }
 
 TEST(ProgramTransaction, FrozenEffectSlotsRefuseOutOfOrderAndMissingSubmissionsCollectively) {
@@ -344,8 +416,10 @@ TEST(ProgramTransaction, CandidateAndPrepareFaultsLeaveGenerationUnchanged) {
 
   auto candidate_fault = registry.begin();
   EXPECT_FALSE(candidate_fault.begin_candidate());
-  EXPECT_EQ(candidate_fault.phase(), ProgramTransactionPhase::kCandidate);
+  EXPECT_EQ(candidate_fault.phase(), ProgramTransactionPhase::kRolledBack);
   EXPECT_EQ(candidate_fault.fault().phase, ProgramTransactionPhase::kCandidate);
+  EXPECT_FALSE(candidate_fault.active());
+  EXPECT_EQ(state.restores, 0);
   candidate_fault.rollback();
 
   reject = false;
@@ -556,8 +630,10 @@ TEST(ProgramTransaction, ForeignAcceptedReaderRejectsWriterWithoutBlockingCollec
     EXPECT_EQ(transaction.fault().failure, ProgramTransactionFailure::kCandidate);
     EXPECT_EQ(transaction.fault().reason_code, 1u);
     transaction.rollback();
+    EXPECT_EQ(state.restores, 0);
     release.set_value();
     reader.join();
+    EXPECT_EQ(state.restores, 0);
   }
 
   {
@@ -585,6 +661,45 @@ TEST(ProgramTransaction, ForeignAcceptedReaderRejectsWriterWithoutBlockingCollec
     release.set_value();
     reader.join();
   }
+}
+
+TEST(ProgramTransaction, HiddenPublishConsensusRollbackRetainsWriterAndUnlinksMarker) {
+  State state;
+  state.accepted = 7;
+  state.candidate = 19;
+  std::uint32_t rejected_phase =
+      static_cast<std::uint32_t>(ProgramTransactionPhase::kHiddenPublish);
+  ProgramTransactionConsensus consensus;
+  consensus.context = &rejected_phase;
+  consensus.function = [](void* context, std::uint32_t phase, std::uint32_t) noexcept {
+    return phase != *static_cast<std::uint32_t*>(context);
+  };
+  ProgramTransactionRegistry registry({1, sizeof(int), sizeof(int), 0}, consensus);
+  const auto handle = registry.register_participant(state, state_ops(), {sizeof(int), sizeof(int)});
+  registry.set_candidate_visibility_lock(true);
+  registry.bind();
+
+  auto transaction = registry.begin();
+  ASSERT_TRUE(transaction.begin_candidate());
+  transaction.provisional(handle)->candidate = 19;
+  ASSERT_TRUE(transaction.begin_solve_guard_effect_prepare());
+  EXPECT_FALSE(transaction.publish());
+  EXPECT_EQ(transaction.phase(), ProgramTransactionPhase::kRolledBack);
+  EXPECT_EQ(transaction.fault().phase, ProgramTransactionPhase::kHiddenPublish);
+  EXPECT_EQ(state.accepted, 7);
+  EXPECT_EQ(state.restores, 1);
+
+  {
+    auto reader = registry.acquire_read();
+    ASSERT_TRUE(reader);
+    ASSERT_NE(reader.read(handle), nullptr);
+    EXPECT_EQ(reader.read(handle)->accepted, 7);
+  }
+
+  rejected_phase = std::numeric_limits<std::uint32_t>::max();
+  auto retry = registry.begin();
+  ASSERT_TRUE(retry.begin_candidate());
+  retry.rollback();
 }
 
 TEST(ProgramTransaction, ReaderSeesOldGenerationAndNewReadersBlockUntilSeal) {

@@ -158,6 +158,53 @@ def _prime_matrix_free_scalar(
     return slot, program_block
 
 
+def _matrix_free_scalar_binding(
+    *, target: str, slot: str, subslot: int, program_block: int, ncomp: int, ghost_depth: int
+) -> str:
+    """Return the install-time template binding for one matrix-free scalar resource.
+
+    AMR templates retain only a dense ``PreparedScratchHandle``.  Uniform keeps its historical
+    shared field template; those fields are owned by the Uniform preparation image and do not
+    change identity during a step.  The distinction is made at emission time so the generated
+    AMR closure cannot capture an active-level ``MultiFab`` address.
+    """
+    if target == "amr_system":
+        return (
+            "ctx.prepared_scalar_scratch_handle(%s, %d, %d, %d, %d)"
+            % (slot, subslot, program_block, ncomp, ghost_depth)
+        )
+    return (
+        "std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+        "ctx.scalar_scratch(%s, %d, ctx.state(%d), %d, %d))"
+        % (slot, subslot, program_block, ncomp, ghost_depth)
+    )
+
+
+def _next_prepared_resource_subslot(
+        var: Any, *, kind: str, slot: str, minimum: int = 0) -> int:
+    """Return the first unclaimed dense subslot in one prepared scratch family.
+
+    A ProgramResourcePlan slot identifies the authored value occurrence, while one value may own
+    several resident images (for example a live tensor coefficient and one frozen Krylov copy).
+    Subslots are therefore allocated from the emission-local preparation ledger instead of using a
+    magic index that can collide with another exact shape or owner.
+    """
+    if not isinstance(kind, str) or not kind or not isinstance(slot, str) or not slot:
+        raise TypeError("prepared resource subslot allocation requires an exact kind and slot")
+    if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum < 0:
+        raise ValueError("prepared resource subslot allocation requires a non-negative minimum")
+    used = {
+        int(key[3])
+        for key in var
+        if isinstance(key, tuple) and len(key) == 4
+        and key[:3] == ("program_resource_preparation", kind, slot)
+    }
+    subslot = minimum
+    while subslot in used:
+        subslot += 1
+    return subslot
+
+
 def _program_nodes(program: Any) -> Any:
     """Iterate top-level and nested ProgramValue nodes without importing lowerability helpers."""
     def walk(value: Any) -> Any:
@@ -269,9 +316,10 @@ def _append_solve_report_guard(
     if action_kind == "reject_attempt":
         lines.append("  if (%s.action == pops::SolveAction::kRejectAttempt) {" % report)
         lines.append(
-            "    throw pops::runtime::program::StepAttemptRejected("
-            "%s.status, %s, std::string(%s) + %s.reason);"
-            % (report, json.dumps(failure_phase), json.dumps(label + " failed: "), report))
+            "    program_reject_step(ctx, %s.status, "
+            "pops::runtime::program::StepAttemptDisposition::kReject, "
+            "static_cast<std::uint32_t>(%s.status), %s, %s);"
+            % (report, report, json.dumps(failure_phase), json.dumps(label + " failed")))
         lines.append("  }")
     lines.append(
         "  throw std::runtime_error(std::string(%s) + %s.status_name() + "
@@ -573,6 +621,22 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     session_direct = ["ctx_owner"]
     session_dynamic = []
     prepare_refresh = []
+
+    def append_prepared_boundary_point(name: str) -> None:
+        """Declare and prime one topology-binding-local evaluation point.
+
+        Unlike plan-slotted scratch, the point is newly owned by every rebuilt
+        level closure.  Keep its capacity preparation in the same binding
+        expression so the declaration is in scope and a requalified closure
+        can never retain an unprimed long clock string.
+        """
+        prelude.append(
+            "auto %s = [&ctx]() { "
+            "auto point = std::make_shared<"
+            "pops::runtime::multiblock::BoundaryEvaluationPoint>(); "
+            "ctx.prepare_boundary_evaluation_point(*point); return point; }();" % name
+        )
+
     operator_dt = "operator_dt%d" % apply_id
     prelude.append(
         "auto %s = std::make_shared<pops::Real>(static_cast<pops::Real>(0));"
@@ -602,9 +666,10 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             where="matrix-free scratch %r" % w.name,
         )
         prelude.append(
-            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-            "ctx.scalar_scratch(%s, 0, ctx.state(%d), %d, 1));"
-            % (sp, slot, owner_index, ncomp))
+            "auto %s = %s;"
+            % (sp, _matrix_free_scalar_binding(target=target, slot=slot, subslot=0,
+                                               program_block=owner_index, ncomp=ncomp,
+                                               ghost_depth=1)))
         captures.append(sp)
         session_fields.append(sp)
     # The affine result-write accumulator: one PERSISTENT shared_ptr (alloc-once, like the scratch),
@@ -628,9 +693,10 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         where="matrix-free result accumulator %r" % v.name,
     )
     prelude.append(
-        "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-        "ctx.scalar_scratch(%s, 0, ctx.state(%d), %d, 1));"
-        % (acc_sp, acc_slot, acc_owner_index, op_ncomp))
+        "auto %s = %s;"
+        % (acc_sp, _matrix_free_scalar_binding(target=target, slot=acc_slot, subslot=0,
+                                               program_block=acc_owner_index, ncomp=op_ncomp,
+                                               ghost_depth=1)))
     captures.append(acc_sp)
     session_fields.append(acc_sp)
     # The ApplyFn is constructed by the common v5 preparation callback, before the candidate step
@@ -663,6 +729,9 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                         % coeffs.name
                     )
                 coeff_ncomp = len(coeff_subset) * len(coeff_subset)
+                coeff_slot = persistent_slot_token(program, coeffs, target=target)
+                frozen_subslot = _next_prepared_resource_subslot(
+                    var, kind="scalar", slot=coeff_slot)
                 coeff_slot, coeff_owner_index = _prime_matrix_free_scalar(
                     program,
                     v,
@@ -671,15 +740,16 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                     prelude,
                     program._block_indices(),
                     target=target,
-                    subslot=0,
+                    subslot=frozen_subslot,
                     ncomp=coeff_ncomp,
                     ghost_depth=1,
                     where="matrix-free frozen coefficient %r" % coeffs.name,
                 )
                 prelude.append(
-                    "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-                    "ctx.scalar_scratch(%s, 0, ctx.state(%d), %d, 1));"
-                    % (frozen, coeff_slot, coeff_owner_index, coeff_ncomp))
+                    "auto %s = %s;"
+                    % (frozen, _matrix_free_scalar_binding(
+                        target=target, slot=coeff_slot, subslot=frozen_subslot,
+                        program_block=coeff_owner_index, ncomp=coeff_ncomp, ghost_depth=1)))
                 frozen_coefficients[sp] = frozen
                 freeze_pairs.append((sp, frozen))
                 captures.append(frozen)
@@ -740,15 +810,14 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             where="matrix-free coupled packed iterate %r" % v.name,
         )
         prelude.append(
-            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-            "ctx.scalar_scratch(%s, 1, ctx.state(%d), %d, 1));"
-            % (coupled_packed_uk, packed_slot, packed_owner_index, op_ncomp))
+            "auto %s = %s;"
+            % (coupled_packed_uk, _matrix_free_scalar_binding(
+                target=target, slot=packed_slot, subslot=1,
+                program_block=packed_owner_index, ncomp=op_ncomp, ghost_depth=1)))
         captures.append(coupled_packed_uk)
         session_fields.append(coupled_packed_uk)
         coupled_point = "jac_pair_point%d" % apply_id
-        prelude.append(
-            "auto %s = std::make_shared<"
-            "pops::runtime::multiblock::BoundaryEvaluationPoint>();" % coupled_point)
+        append_prepared_boundary_point(coupled_point)
         captures.append(coupled_point)
         session_points.append(coupled_point)
         coupled_cdt = "jac_pair_cdt%d" % apply_id
@@ -801,16 +870,15 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                 where="matrix-free Jacobian scratch %r (%s)" % (w.name, sp),
             )
             prelude.append(
-                "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-                "ctx.scalar_scratch(%s, %d, ctx.state(%d), %d, 1));"
-                % (sp, jac_slot, subslot, jac_owner_index, jac_ncomp))
+                "auto %s = %s;"
+                % (sp, _matrix_free_scalar_binding(
+                    target=target, slot=jac_slot, subslot=subslot,
+                    program_block=jac_owner_index, ncomp=jac_ncomp, ghost_depth=1)))
             captures.append(sp)
             session_fields.append(sp)
         if coupled_jacvec is None:
             point = "jac_point%d_%d" % (apply_id, w.id)
-            prelude.append(
-                "auto %s = std::make_shared<"
-                "pops::runtime::multiblock::BoundaryEvaluationPoint>();" % point)
+            append_prepared_boundary_point(point)
             captures.append(point)
             session_points.append(point)
             has_boundary = "jac_has_boundary%d_%d" % (apply_id, w.id)
@@ -846,13 +914,18 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                 ghost_depth=1,
                 where="matrix-free optional boundary scratch %r (%s)" % (w.name, sp),
             )
-            prelude.append(
-                "auto %s = %s ? "
-                "std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-                "ctx.scalar_scratch(%s, %d, ctx.state(%d), %d, 1)) : "
-                "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>>{};"
-                % (sp, has_boundary, optional_slot, optional_subslot, optional_owner_index,
-                   jac_ncomp))
+            binding = _matrix_free_scalar_binding(
+                target=target, slot=optional_slot, subslot=optional_subslot,
+                program_block=optional_owner_index, ncomp=jac_ncomp, ghost_depth=1)
+            if target == "amr_system":
+                prelude.append(
+                    "auto %s = %s ? %s : decltype(%s){};"
+                    % (sp, has_boundary, binding, binding))
+            else:
+                prelude.append(
+                    "auto %s = %s ? %s : "
+                    "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>>{};"
+                    % (sp, has_boundary, binding))
             captures.append(sp)
             session_optional_fields.append(sp)
         field_slot = None
@@ -898,7 +971,8 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             prepare_refresh.append(
                 "ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
             prepare_refresh.append(
-                "*%s = ctx.boundary_evaluation_point(%d);" % (point, evaluation_identity))
+                "ctx.write_boundary_evaluation_point_into(*%s, %d);"
+                % (point, evaluation_identity))
         prepare_refresh.append(
             "pops::PureFieldAlgebra::copy(*%s, %s);" % (uk, var[iterate_in.id]))
         prepare_refresh.append(
@@ -923,10 +997,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             )
         tensor_block_idx = next(iter(tensor_blocks))
         tensor_point = "tensor_point%d" % apply_id
-        prelude.append(
-            "auto %s = std::make_shared<"
-            "pops::runtime::multiblock::BoundaryEvaluationPoint>();" % tensor_point
-        )
+        append_prepared_boundary_point(tensor_point)
         captures.append(tensor_point)
         session_points.append(tensor_point)
         tensor_boundary = "operator_tensor_boundary_session%d" % apply_id
@@ -1199,42 +1270,67 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     for name in session_fields:
         local = "session_%s" % name
         template = "template_%s" % name
-        prelude.append(
-            "  auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(*%s);"
-            % (local, name))
-        template_capture_initializers.append("%s = %s" % (template, name))
-        session_capture_initializers.append("%s = %s" % (name, local))
-        session_refresh.append(
-            "pops::PureFieldAlgebra::copy_allocated(*%s, *%s);" % (name, template))
+        if target == "amr_system":
+            # A level bundle owns dense PreparedScratchHandle instances.  Copying
+            # their resolved MultiFabs here would allocate once per candidate
+            # session and retain a stale active-level address after regrid.  The
+            # handle is value-like and resolves through the current level image.
+            prelude.append("  auto %s = %s;" % (local, name))
+            session_capture_initializers.append("%s = %s" % (name, local))
+        else:
+            prelude.append(
+                "  auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(*%s);"
+                % (local, name))
+            template_capture_initializers.append("%s = %s" % (template, name))
+            session_capture_initializers.append("%s = %s" % (name, local))
+            session_refresh.append(
+                "pops::PureFieldAlgebra::copy_allocated(*%s, *%s);" % (name, template))
     for name in session_optional_fields:
         local = "session_%s" % name
         template = "template_%s" % name
-        prelude.append(
-            "  auto %s = %s ? "
-            "std::make_shared<pops::MultiFab<pops::kNativeDimension>>(*%s) : "
-            "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>>{};"
-            % (local, name, name))
-        template_capture_initializers.append("%s = %s" % (template, name))
-        session_capture_initializers.append("%s = %s" % (name, local))
-        session_refresh.append(
-            "if (%s && %s) pops::PureFieldAlgebra::copy_allocated(*%s, *%s);"
-            % (name, template, name, template))
+        if target == "amr_system":
+            prelude.append("  auto %s = %s;" % (local, name))
+            session_capture_initializers.append("%s = %s" % (name, local))
+        else:
+            prelude.append(
+                "  auto %s = %s ? "
+                "std::make_shared<pops::MultiFab<pops::kNativeDimension>>(*%s) : "
+                "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>>{};"
+                % (local, name, name))
+            template_capture_initializers.append("%s = %s" % (template, name))
+            session_capture_initializers.append("%s = %s" % (name, local))
+            session_refresh.append(
+                "if (%s && %s) pops::PureFieldAlgebra::copy_allocated(*%s, *%s);"
+                % (name, template, name, template))
     for name in session_scalars:
         local = "session_%s" % name
         template = "template_%s" % name
-        prelude.append("  auto %s = std::make_shared<pops::Real>(*%s);" % (local, name))
-        template_capture_initializers.append("%s = %s" % (template, name))
-        session_capture_initializers.append("%s = %s" % (name, local))
-        session_refresh.append("*%s = *%s;" % (name, template))
+        if target == "amr_system":
+            prelude.append("  auto %s = %s;" % (local, name))
+            session_capture_initializers.append("%s = %s" % (name, local))
+        else:
+            prelude.append("  auto %s = std::make_shared<pops::Real>(*%s);" % (local, name))
+            template_capture_initializers.append("%s = %s" % (template, name))
+            session_capture_initializers.append("%s = %s" % (name, local))
+            session_refresh.append("*%s = *%s;" % (name, template))
     for name in session_points:
         local = "session_%s" % name
         template = "template_%s" % name
-        prelude.append(
-            "  auto %s = std::make_shared<"
-            "pops::runtime::multiblock::BoundaryEvaluationPoint>(*%s);" % (local, name))
-        template_capture_initializers.append("%s = %s" % (template, name))
-        session_capture_initializers.append("%s = %s" % (name, local))
-        session_refresh.append("*%s = *%s;" % (name, template))
+        if target == "amr_system":
+            prelude.append("  auto %s = %s;" % (local, name))
+            session_capture_initializers.append("%s = %s" % (name, local))
+        else:
+            prelude.append(
+                "  auto %s = std::make_shared<"
+                "pops::runtime::multiblock::BoundaryEvaluationPoint>();" % local)
+            prelude.append(
+                "  ctx_owner->prepare_boundary_evaluation_point(*%s, *%s);"
+                % (local, name))
+            template_capture_initializers.append("%s = %s" % (template, name))
+            session_capture_initializers.append("%s = %s" % (name, local))
+            session_refresh.append(
+                "ctx_owner->copy_boundary_evaluation_point_into(*%s, *%s);"
+                % (name, template))
     for name in session_arrays:
         local = "session_%s" % name
         prelude.append("  auto %s = %s;" % (local, name))
@@ -1247,11 +1343,16 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         session_refresh.append(
             "%s->refresh_point(*%s);" % (tensor_boundary, tensor_point)
         )
-    allocation_terms = ["std::size_t{%d}" % len(session_fields)]
-    allocation_terms.extend(
-        "(%s ? std::size_t{1} : std::size_t{0})" % name
-        for name in session_optional_fields
+    allocation_terms = (
+        ["std::size_t{0}"]
+        if target == "amr_system"
+        else ["std::size_t{%d}" % len(session_fields)]
     )
+    if target != "amr_system":
+        allocation_terms.extend(
+            "(%s ? std::size_t{1} : std::size_t{0})" % name
+            for name in session_optional_fields
+        )
     prelude.append(
         "  const std::size_t session_field_count = %s;"
         % " + ".join(allocation_terms)
@@ -1303,7 +1404,13 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         "[session_field_count]() { return session_field_count; }};")
     prelude.append("};")
     exact_parameters = "%s:%d" % (program._ir_hash(), apply_id)
-    exclusive_context = any(
+    # AMR session fields are PreparedScratchHandle aliases into the one
+    # topology-bound level bundle.  They intentionally avoid per-session
+    # allocation, but are consequently mutable shared state: two applies may
+    # not enter concurrently.  Uniform retains private copied templates and
+    # stays Independent unless its existing coupled/field route requires an
+    # exclusive context.
+    exclusive_context = target == "amr_system" or any(
         w.op == "rhs_jacvec" and bool(w.attrs["field_coupled"]) for w in block)
     exclusive_context = exclusive_context or coupled_jacvec is not None
     concurrency = (
@@ -1455,9 +1562,18 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
             ncomp=op_ncomp,
             ghost_depth=input_ghosts,
         )
-        prelude.append(
-            "auto %s = &ctx.scalar_scratch(%s, 0, ctx.state(%d), %d, %d);"
-            % (sol_sp, solution_slot, solve_block, op_ncomp, input_ghosts))
+        if target == "amr_system":
+            prelude.append(
+                "auto %s = %s;"
+                % (sol_sp, _matrix_free_scalar_binding(
+                    target=target, slot=solution_slot, subslot=0, program_block=solve_block,
+                    ncomp=op_ncomp, ghost_depth=input_ghosts)))
+        else:
+            # Preserve the Uniform installation contract: the solve token is a pointer into its
+            # accepted preparation image, whose topology is immutable across a step.
+            prelude.append(
+                "auto %s = &ctx.scalar_scratch(%s, 0, ctx.state(%d), %d, %d);"
+                % (sol_sp, solution_slot, solve_block, op_ncomp, input_ghosts))
     else:
         footprint = None
         problem_contract = None
@@ -1669,7 +1785,8 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         if not isinstance(tensor_point, str) or target != "amr_system":
             raise ValueError("matrix-free tensor boundary point is not AMR-authenticated")
         lines.append(
-            "*%s = ctx.boundary_evaluation_point(%d);" % (tensor_point, int(v.id))
+            "ctx.write_boundary_evaluation_point_into(*%s, %d);"
+            % (tensor_point, int(v.id))
         )
     for capture in dt_captures:
         lines.append("*%s = static_cast<pops::Real>(dt);" % capture)

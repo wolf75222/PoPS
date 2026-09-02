@@ -20,6 +20,8 @@ import tempfile
 
 import pytest
 
+from tests.python.support.requirements import run_process_test_cases
+
 
 def test_cache_v9_preflight_accepts_complete_payload_and_rejects_truncation():
     try:
@@ -90,5 +92,10 @@ def test_cache_v9_preflight_accepts_complete_payload_and_rejects_truncation():
 
 
 if __name__ == "__main__":
-    test_cache_v9_preflight_accepts_complete_payload_and_rejects_truncation()
+    run_process_test_cases(
+        {
+            "test_cache_v9_preflight_accepts_complete_payload_and_rejects_truncation":
+                test_cache_v9_preflight_accepts_complete_payload_and_rejects_truncation,
+        }
+    )
     print("OK test_scheduler_cache_checkpoint")

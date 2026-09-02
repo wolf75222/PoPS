@@ -158,10 +158,12 @@ TEST(test_amr_multiblock_implicit_transaction,
   auto state = one_patch_field<Dim>(2, 1);
   state.set_val(pops::Real(2));
   const pops::ExecutionLane lane = pops::ExecutionLane::world();
+  pops::PreparedImplicitSourceWorkspace<Dim> workspace;
+  workspace.bind(state, 1);
 
   pops::SolveOutcome outcome = pops::backward_euler_source(
       StiffLinearSource{}, [](std::size_t) { return pops::ProviderStorageView<Dim, 0>{}; }, state,
-      pops::Real(0.25), pops::NewtonOptions{}, lane);
+      workspace, 1, pops::Real(0.25), pops::NewtonOptions{}, lane);
   ASSERT_TRUE(outcome.report().solved_value_available());
   EXPECT_EQ(pops::reduce_min_local(state), pops::Real(2));
   const pops::SolveReport accepted = outcome.consume(pops::SolveConsumption::kAccept);
@@ -170,6 +172,7 @@ TEST(test_amr_multiblock_implicit_transaction,
               64.0 * std::numeric_limits<double>::epsilon());
   EXPECT_NEAR(static_cast<double>(pops::reduce_max_local(state)), 1.6,
               64.0 * std::numeric_limits<double>::epsilon());
+  EXPECT_FALSE(workspace.in_flight());
 }
 
 TEST(test_amr_multiblock_implicit_transaction,

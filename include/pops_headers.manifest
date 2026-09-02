@@ -1,5 +1,5 @@
 # PoPS installed-header contract.
-# Paths are relative to include/ and every tracked pops .h/.hpp/.inc is classified exactly once.
+# Paths are relative to include/ and every tracked pops .h/.hpp is classified exactly once.
 #
 # api: supported standalone C++ surface; consumers may include these headers directly.
 # abi: standalone versioned wire/dynamic-module contracts; changes require ABI regeneration.
@@ -153,6 +153,7 @@ api pops/numerics/spatial_operator.hpp
 api pops/numerics/time/amr/levels/amr_clock.hpp
 api pops/numerics/time/amr/levels/amr_patch_range.hpp
 sdk-support pops/numerics/time/amr/levels/amr_subcycling_engine.hpp
+sdk-support pops/numerics/time/amr/levels/amr_subcycling_engine_execution.hpp
 sdk-support pops/numerics/time/amr/levels/amr_subcycling_plan.hpp
 api pops/numerics/time/amr/levels/amr_subcycling.hpp
 api pops/numerics/time/amr/prepared_coarse_fine_operator.hpp
@@ -163,6 +164,7 @@ api pops/numerics/time/amr/reflux/amr_flux_ledger.hpp
 api pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp
 api pops/numerics/time/amr/reflux/amr_reflux_mf.hpp
 api pops/numerics/time/integrators/implicit_stepper.hpp
+sdk-support pops/numerics/time/integrators/prepared_implicit_source_workspace.hpp
 api pops/numerics/time/integrators/time_integrator.hpp
 api pops/numerics/time/integrators/time_steppers.hpp
 test-only pops/numerics/time/schemes/imex.hpp
@@ -232,7 +234,7 @@ sdk-support pops/runtime/config/dispatch_tags.hpp
 abi pops/runtime/config/generated_component_abi.hpp
 abi pops/runtime/config/generated_component_catalog.hpp
 abi pops/runtime/config/generated_release_contract.hpp
-sdk-support pops/runtime/config/generated_route_accessors.inc
+sdk-support pops/runtime/config/generated_route_accessors.hpp
 sdk-support pops/runtime/config/model_spec.hpp
 sdk-support pops/runtime/config/platform_manifest.hpp
 abi pops/runtime/config/route_ids.hpp
@@ -259,6 +261,8 @@ sdk-support pops/runtime/output_piece.hpp
 sdk-support pops/runtime/output_piece_collective.hpp
 sdk-support pops/runtime/program/amr_program_checkpoint.hpp
 sdk-support pops/runtime/program/detail/program_execution_services_amr_backend.hpp
+sdk-support pops/runtime/program/detail/program_execution_services_amr_backend_preparation.hpp
+sdk-support pops/runtime/program/detail/program_execution_services_amr_backend_state.hpp
 sdk-support pops/runtime/program/detail/program_execution_services_amr_cell_temporal_runtime.hpp
 sdk-support pops/runtime/program/detail/program_execution_services_amr_cell_temporal_configuration.hpp
 sdk-support pops/runtime/program/detail/program_execution_services_amr_cell_temporal_level_runtime.hpp
@@ -276,6 +280,10 @@ sdk-support pops/runtime/program/detail/program_execution_services_amr_flux_expr
 sdk-support pops/runtime/program/detail/program_execution_services_amr_flux_expression_services.hpp
 sdk-support pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_public.hpp
 sdk-support pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_definitions.hpp
+sdk-support pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_forward.hpp
+sdk-support pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_history_reseed.hpp
+sdk-support pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_lifecycle.hpp
+sdk-support pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_snapshot.hpp
 sdk-support pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_capacity.hpp
 sdk-support pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_runtime.hpp
 sdk-support pops/runtime/program/detail/program_execution_services_amr_history_checkpoint_services.hpp
@@ -284,6 +292,7 @@ sdk-support pops/runtime/program/detail/program_execution_services_amr_spatial.h
 sdk-support pops/runtime/program/detail/program_execution_services_amr_spatial_operations.hpp
 sdk-support pops/runtime/program/detail/program_execution_services_amr_spatial_operations_services.hpp
 sdk-support pops/runtime/program/detail/program_execution_services_amr_subcycling_runtime.hpp
+sdk-support pops/runtime/program/detail/program_execution_services_amr_subcycling_interface_payload.hpp
 sdk-support pops/runtime/program/cache_manager.hpp
 abi pops/runtime/program/program_abi.hpp
 sdk-root pops/runtime/program/accepted_read_view.hpp
@@ -322,6 +331,7 @@ sdk-support pops/runtime/system/exact_field_marshaling.hpp
 sdk-support pops/runtime/system/exact_field_solver_backend.hpp
 sdk-support pops/runtime/system/provider_storage_binding.hpp
 sdk-support pops/runtime/system/prepared_embedded_boundary.hpp
+sdk-support pops/runtime/system/prepared_coupling_workspace.hpp
 sdk-support pops/runtime/system/prepared_field_solver_component.hpp
 sdk-support pops/runtime/system/system_block_store.hpp
 sdk-support pops/runtime/system/system_block_closures.hpp

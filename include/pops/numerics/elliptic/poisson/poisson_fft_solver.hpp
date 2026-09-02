@@ -375,7 +375,7 @@ class PoissonFFTSolver {
     std::exception_ptr local_error;
     try {
       std::forward<Operation>(operation)();
-      Kokkos::fence();
+      ::pops::device_fence();
     } catch (...) {
       local_error = std::current_exception();
     }

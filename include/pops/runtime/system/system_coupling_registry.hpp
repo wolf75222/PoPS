@@ -4,6 +4,7 @@
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperatorView (inspect metadata)
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/runtime/system/exact_field_marshaling.hpp>
+#include <pops/runtime/system/prepared_coupling_workspace.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -158,7 +159,27 @@ struct SystemCouplingRegistry {
   /// registration order. METADATA ONLY: never read by the stepper.
   std::vector<CouplingOperatorView> coupled_operators;
 
+  /// Cold bind for the sole resident coupling arena.  The workspace is deliberately supplied by
+  /// the facade instead of stored here so a detached Uniform or AMR image owns its own buffers.
+  void bind_workspace(PreparedCouplingWorkspace<Dim>& workspace,
+                      const std::vector<const MultiFab<Dim>*>& prototypes,
+                      bool requires_mutation_rollback = false) const {
+    if (operator_contracts.size() != operators.size() ||
+        operators.size() != coupled_operators.size())
+      throw std::logic_error("prepared coupling registry lost its exact provider contracts");
+    validate_conservation_workspace_(prototypes);
+    bool requires_conservation = false;
+    for (const PreparedCouplingOperator<Dim>& op : operators)
+      requires_conservation = requires_conservation || !op.conservation_groups().empty();
+    workspace.bind(prototypes, operator_contracts, requires_conservation,
+                   requires_mutation_rollback);
+    prepared_workspace_bound_ = true;
+  }
+
   std::size_t apply(Real dt, const std::vector<MultiFab<Dim>*>& states) const {
+    if (prepared_workspace_bound_)
+      throw std::logic_error(
+          "allocating coupling apply is unavailable after the resident workspace is bound");
     for (std::size_t index = 0; index < operators.size(); ++index) {
       const auto& op = operators[index];
       std::vector<MultiFab<Dim>> before;
@@ -177,7 +198,122 @@ struct SystemCouplingRegistry {
     return operators.size();
   }
 
+  /// Allocation-free application over an image prepared at bind.  The caller owns the outer
+  /// candidate rollback because it must restore after rank-local operator failure; this method
+  /// owns the per-operator conservation image and host inspection buffers.
+  std::size_t apply(Real dt, PreparedCouplingWorkspace<Dim>& workspace) const {
+    if (!workspace.bound())
+      throw std::logic_error("prepared coupling workspace was not bound during installation");
+    workspace.clear_numeric_failure();
+    for (std::size_t index = 0; index < operators.size(); ++index) {
+      const auto& op = operators[index];
+      if (!op.conservation_groups().empty())
+        workspace.capture_conservation_before();
+      op(dt, workspace.canonical_states());
+      workspace.copy_candidates_to_host();
+      if (!require_finite_candidates_(workspace, index) ||
+          !require_conservative_candidates_(workspace, op.conservation_groups(), index))
+        return operators.size();
+    }
+    return operators.size();
+  }
+
  private:
+  void validate_conservation_workspace_(const std::vector<const MultiFab<Dim>*>& prototypes) const {
+    for (const PreparedCouplingOperator<Dim>& op : operators)
+      for (const PreparedCouplingConservationGroup& group : op.conservation_groups()) {
+        const PreparedCouplingStateRole& prototype_role = group.members.front();
+        if (prototype_role.canonical_block >= prototypes.size() ||
+            prototypes[prototype_role.canonical_block] == nullptr)
+          throw std::out_of_range("prepared coupling conservation owner is out of range");
+        const MultiFab<Dim>& prototype = *prototypes[prototype_role.canonical_block];
+        for (const PreparedCouplingStateRole& role : group.members) {
+          if (role.canonical_block >= prototypes.size() ||
+              prototypes[role.canonical_block] == nullptr)
+            throw std::out_of_range("prepared coupling conservation state role is out of range");
+          const MultiFab<Dim>& field = *prototypes[role.canonical_block];
+          if (role.component >= field.ncomp() || field.layout() != prototype.layout() ||
+              field.distribution() != prototype.distribution() ||
+              field.local_rank() != prototype.local_rank() ||
+              field.local_size() != prototype.local_size())
+            throw std::invalid_argument(
+                "prepared coupling conservation roles do not share one exact cell layout");
+        }
+      }
+  }
+
+  static bool require_finite_candidates_(PreparedCouplingWorkspace<Dim>& workspace,
+                                         std::size_t operator_index) {
+    const auto& states = workspace.canonical_states();
+    for (std::size_t block = 0; block < states.size(); ++block) {
+      const MultiFab<Dim>* field = states[block];
+      if (field == nullptr)
+        throw std::invalid_argument("prepared coupling candidate pack contains a null state");
+      for (std::size_t local = 0; local < field->local_size(); ++local) {
+        const Fab<Dim>& fab = field->fab(local);
+        const auto& patch = workspace.host_patch(block, local);
+        runtime::system::marshaling::for_each_host_index(
+            field->box(local), [&](const Index<Dim>& cell, std::size_t) {
+              for (int component = 0; component < field->ncomp(); ++component) {
+                const auto ordinal =
+                    runtime::system::marshaling::storage_ordinal(fab, cell, component);
+                if (!std::isfinite(static_cast<double>(patch.candidate(ordinal)))) {
+                  workspace.mark_numeric_failure(operator_index);
+                  return;
+                }
+              }
+            });
+      }
+    }
+    return !workspace.numeric_failure();
+  }
+
+  static bool require_conservative_candidates_(
+      PreparedCouplingWorkspace<Dim>& workspace,
+      const std::vector<PreparedCouplingConservationGroup>& groups, std::size_t operator_index) {
+    if (groups.empty())
+      return true;
+    const auto& states = workspace.canonical_states();
+    for (std::size_t group_index = 0; group_index < groups.size(); ++group_index) {
+      const PreparedCouplingConservationGroup& group = groups[group_index];
+      const PreparedCouplingStateRole& prototype_role = group.members.front();
+      if (prototype_role.canonical_block >= states.size())
+        throw std::out_of_range("prepared coupling conservation owner is out of range");
+      const MultiFab<Dim>& prototype = workspace.prototype(prototype_role.canonical_block);
+      for (const PreparedCouplingStateRole& role : group.members) {
+        if (role.canonical_block >= states.size() || states[role.canonical_block] == nullptr)
+          throw std::out_of_range("prepared coupling conservation state role is out of range");
+      }
+      for (std::size_t local = 0; local < prototype.local_size(); ++local) {
+        runtime::system::marshaling::for_each_host_index(
+            prototype.box(local), [&](const Index<Dim>& cell, std::size_t) {
+              Real prior = Real(0);
+              Real candidate = Real(0);
+              for (const PreparedCouplingStateRole& role : group.members) {
+                const Fab<Dim>& before_fab =
+                    workspace.conservation_before(role.canonical_block).fab(local);
+                const Fab<Dim>& candidate_fab = states[role.canonical_block]->fab(local);
+                const auto& patch = workspace.host_patch(role.canonical_block, local);
+                prior += patch.before(
+                    runtime::system::marshaling::storage_ordinal(before_fab, cell, role.component));
+                candidate += patch.candidate(runtime::system::marshaling::storage_ordinal(
+                    candidate_fab, cell, role.component));
+              }
+              const Real tolerance =
+                  group.absolute_tolerance +
+                  group.relative_tolerance * std::max(std::abs(prior), std::abs(candidate));
+              if (!std::isfinite(static_cast<double>(prior)) ||
+                  !std::isfinite(static_cast<double>(candidate)) ||
+                  std::abs(candidate - prior) > tolerance) {
+                workspace.mark_numeric_failure(operator_index, group_index);
+                return;
+              }
+            });
+      }
+    }
+    return !workspace.numeric_failure();
+  }
+
   static void require_finite_candidates_(const std::vector<MultiFab<Dim>*>& states,
                                          std::size_t operator_index) {
     for (std::size_t block = 0; block < states.size(); ++block) {
@@ -265,6 +401,10 @@ struct SystemCouplingRegistry {
       }
     }
   }
+
+  // `bind_workspace` is a cold installation operation.  The legacy overload remains available
+  // only for an unbound/direct compatibility caller; it must never become a hot fallback.
+  mutable bool prepared_workspace_bound_ = false;
 };
 
 }  // namespace system

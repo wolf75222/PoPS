@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 
@@ -13,6 +13,42 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 #: report SKIPPED instead of a silent pass. Kept in sync with
 #: ``conftest.PROCESS_SKIP_MARKER``.
 SKIP_MARKER = "POPS_SKIP:"
+
+#: Gate-only collection asks the process-isolated pytest collector to expose exact ``test_*``
+#: nodeids instead of its ordinary whole-file item.  The selected child receives one authenticated
+#: function name through ``PROCESS_TEST_FILTER_ENV`` and must emit ``PROCESS_TEST_RESULT_PREFIX``
+#: after that function returns.  Keeping both witnesses explicit makes an ignored selector fail
+#: closed instead of silently executing a different proof in the same script.
+EXACT_PROCESS_NODEIDS_ENV = "POPS_EXACT_PROCESS_NODEIDS"
+PROCESS_TEST_FILTER_ENV = "POPS_PROCESS_TEST_FILTER"
+PROCESS_TEST_RESULT_PREFIX = "POPS_PROCESS_TEST_OK:"
+
+
+def run_process_test_cases(cases: Mapping[str, Callable[[], None]]) -> tuple[str, ...]:
+    """Run either every script case or one exact gate-selected process case.
+
+    Script-mode tests retain their ordinary all-cases entrypoint for developer execution.  Release
+    gates set an exact filter through the process collector; unknown/missing case names are hard
+    failures, and the success marker is emitted only after the selected callable returns.
+    """
+
+    requested = os.environ.get(PROCESS_TEST_FILTER_ENV)
+    if requested is not None:
+        case = cases.get(requested)
+        if case is None:
+            raise RuntimeError(
+                "unknown exact process test %r; available cases are %s"
+                % (requested, ", ".join(sorted(cases)))
+            )
+        case()
+        print(PROCESS_TEST_RESULT_PREFIX + requested)
+        return (requested,)
+
+    executed: list[str] = []
+    for name in sorted(cases):
+        cases[name]()
+        executed.append(name)
+    return tuple(executed)
 
 
 def repo_include() -> str:

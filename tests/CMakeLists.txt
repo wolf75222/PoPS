@@ -15,6 +15,9 @@ if(NOT GTest_FOUND)
   # `cmake --install` for the PoPS SDK (and must not require unbuilt gmock archives when a package
   # consumer smoke installs the header-only core).
   set(INSTALL_GTEST OFF CACHE BOOL "Do not install PoPS' private GoogleTest dependency" FORCE)
+  # PoPS uses GoogleTest only.  Disabling the unused GoogleMock subproject also avoids exposing
+  # its parent-scope helper macros to newer CMake policy behavior during a FetchContent fallback.
+  set(BUILD_GMOCK OFF CACHE BOOL "Do not build PoPS' unused private GoogleMock dependency" FORCE)
   FetchContent_Declare(
     googletest
     GIT_REPOSITORY https://github.com/google/googletest.git
@@ -81,6 +84,44 @@ function(pops_infer_test_labels out source)
   set(${out} ${_labels} PARENT_SCOPE)
 endfunction()
 
+# These sources compile an ABI-v5 Program MODULE during the test through the
+# explicit AMR/System helpers.  They are deliberately enumerated rather than
+# inferred from broad AMR/native-loader labels: only a real helper consumer is
+# an authenticated DSO proof and therefore needs the host's exact compiler
+# contract, exported callbacks and serialized runtime compilation.
+set(POPS_EXPLICIT_PROGRAM_DSO_TESTS
+  test_amr_composite_poisson
+  test_amr_distribute_coarse_serial
+  test_amr_history_ring
+  test_amr_multiblock_coupled_source
+  test_amr_multiblock_implicit_transaction
+  test_amr_named_field
+  test_amr_potential
+  test_amr_program_diffusion
+  test_amr_program_embedded_boundary
+  test_amr_program_positivity_floor
+  test_amr_riemann_native
+  test_amr_system_contract
+  test_amr_transaction_authority
+  test_generated_amr_system_block
+  test_step_change_l2_uniform_allocation
+  test_amr_regrid_mpi_parity
+  test_mpi_amr_compiled_parity
+  test_mpi_cell_temporal_program
+  test_mpi_cell_temporal_program_multibox
+  test_mpi_cell_temporal_program_collective_rollback
+  test_mpi_cell_temporal_program_refusal
+  test_mpi_system_gather_scatter)
+
+set(POPS_EXPLICIT_PROGRAM_DSO_MPI_TESTS
+  test_amr_regrid_mpi_parity
+  test_mpi_amr_compiled_parity
+  test_mpi_cell_temporal_program
+  test_mpi_cell_temporal_program_multibox
+  test_mpi_cell_temporal_program_collective_rollback
+  test_mpi_cell_temporal_program_refusal
+  test_mpi_system_gather_scatter)
+
 function(pops_add_gtest_suite)
   set(options ENABLE_EXPORTS NO_DISCOVER RUNTIME_DISCOVERY)
   set(oneValueArgs NAME TIMEOUT RESOURCE_LOCK)
@@ -101,6 +142,25 @@ function(pops_add_gtest_suite)
     set(ARG_TIMEOUT 600)
   endif()
 
+  set(_pops_explicit_program_dso FALSE)
+  if(ARG_NAME IN_LIST POPS_EXPLICIT_PROGRAM_DSO_TESTS)
+    if(ARG_RESOURCE_LOCK AND NOT ARG_RESOURCE_LOCK STREQUAL "native_loader")
+      message(FATAL_ERROR
+        "Explicit Program DSO suite ${ARG_NAME} must use the native_loader resource lock")
+    endif()
+    # One authority supplies the compiler, native header signature, Kokkos and
+    # MPI replay definitions.  No explicit-program suite may hand-roll or
+    # weaken those definitions.
+    pops_native_loader_definitions(_pops_explicit_program_dso_definitions)
+    list(APPEND ARG_EXTRA_LIBS ${CMAKE_DL_LIBS})
+    list(APPEND ARG_COMPILE_DEFINITIONS ${_pops_explicit_program_dso_definitions})
+    list(REMOVE_DUPLICATES ARG_EXTRA_LIBS)
+    list(REMOVE_DUPLICATES ARG_COMPILE_DEFINITIONS)
+    set(ARG_ENABLE_EXPORTS TRUE)
+    set(ARG_RESOURCE_LOCK native_loader)
+    set(_pops_explicit_program_dso TRUE)
+  endif()
+
   add_executable(${ARG_NAME} ${ARG_SOURCES})
   set_target_properties(${ARG_NAME} PROPERTIES NO_SYSTEM_FROM_IMPORTED ON)
   target_link_libraries(${ARG_NAME} PRIVATE pops::pops pops_dev_options GTest::gtest pops_gtest_main ${ARG_EXTRA_LIBS})
@@ -118,6 +178,12 @@ function(pops_add_gtest_suite)
   endif()
   if(ARG_COMPILE_DEFINITIONS)
     target_compile_definitions(${ARG_NAME} PRIVATE ${ARG_COMPILE_DEFINITIONS})
+  endif()
+  if(_pops_explicit_program_dso)
+    set_target_properties(${ARG_NAME} PROPERTIES
+      POPS_EXPLICIT_PROGRAM_DSO_WIRED TRUE
+      POPS_EXPLICIT_PROGRAM_DSO_DL_WIRED TRUE
+      POPS_EXPLICIT_PROGRAM_DSO_RESOURCE_LOCK native_loader)
   endif()
 
   set(_pops_test_labels "${ARG_LABELS};cpp-target:${ARG_NAME}")
@@ -230,6 +296,10 @@ function(pops_add_mpi_rank_test name nproc)
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=${nproc}"
     PROCESSORS ${nproc}
     TIMEOUT 600)
+  get_target_property(_pops_explicit_program_dso ${name} POPS_EXPLICIT_PROGRAM_DSO_WIRED)
+  if(_pops_explicit_program_dso)
+    set_tests_properties(${name}_np${nproc} PROPERTIES RESOURCE_LOCK native_loader)
+  endif()
 endfunction()
 
 function(pops_add_mpi_rank_parity_test name)
@@ -282,6 +352,10 @@ function(pops_add_mpi_rank_parity_test name)
     LABELS "backend;mpi;medium"
     PROCESSORS ${_max_rank}
     TIMEOUT 600)
+  get_target_property(_pops_explicit_program_dso ${name} POPS_EXPLICIT_PROGRAM_DSO_WIRED)
+  if(_pops_explicit_program_dso)
+    set_tests_properties(${_test_name} PROPERTIES RESOURCE_LOCK native_loader)
+  endif()
 endfunction()
 
 function(pops_add_mpi_gtest_suite name)
@@ -360,10 +434,17 @@ function(pops_native_loader_definitions out)
   # host test executable.  Keep this authority in one helper: a native-loader suite must never
   # compile a serial DSO and then skip or silently accept it in a Kokkos build.
   if(POPS_HAS_KOKKOS)
+    if(NOT DEFINED POPS_NATIVE_KOKKOS_INCLUDE OR
+       NOT DEFINED POPS_NATIVE_KOKKOS_DEFINITIONS OR
+       NOT DEFINED POPS_NATIVE_KOKKOS_OPTIONS OR
+       NOT POPS_NATIVE_KOKKOS_INCLUDE)
+      message(FATAL_ERROR
+        "Runtime-compiled test DSOs require the complete finite POPS_NATIVE_KOKKOS_* authority")
+    endif()
     list(APPEND _definitions
-      POPS_TEST_KOKKOS_INC="$<JOIN:$<TARGET_PROPERTY:Kokkos::kokkos,INTERFACE_INCLUDE_DIRECTORIES>, >"
-      POPS_TEST_KOKKOS_DEFS="$<JOIN:$<TARGET_PROPERTY:Kokkos::kokkos,INTERFACE_COMPILE_DEFINITIONS>, >"
-      POPS_TEST_KOKKOS_OPTS="$<JOIN:$<TARGET_PROPERTY:Kokkos::kokkos,INTERFACE_COMPILE_OPTIONS>, >")
+      POPS_TEST_KOKKOS_INC="${POPS_NATIVE_KOKKOS_INCLUDE}"
+      POPS_TEST_KOKKOS_DEFS="${POPS_NATIVE_KOKKOS_DEFINITIONS}"
+      POPS_TEST_KOKKOS_OPTS="${POPS_NATIVE_KOKKOS_OPTIONS}")
   endif()
   if(POPS_HAS_MPI)
     if(NOT POPS_NATIVE_MPI_ABI OR NOT POPS_NATIVE_MPI_INCLUDE OR
@@ -380,6 +461,98 @@ function(pops_native_loader_definitions out)
       POPS_TEST_MPI_LINK_LIBRARIES="${POPS_NATIVE_MPI_LINK_LIBRARIES}")
   endif()
   set(${out} ${_definitions} PARENT_SCOPE)
+endfunction()
+
+function(pops_validate_explicit_program_dso_registration)
+  # The finite source inventory keeps this opt-in path honest: adding a helper
+  # consumer without registering its target must stop configure, and adding an
+  # unrelated target to the list is equally invalid.
+  set(_pops_explicit_program_source_targets)
+  get_cmake_property(_pops_explicit_program_variables VARIABLES)
+  foreach(_pops_explicit_program_variable IN LISTS _pops_explicit_program_variables)
+    if(NOT _pops_explicit_program_variable MATCHES
+       "^POPS_CPP_TEST_SOURCE_(test_[A-Za-z0-9_]+)$")
+      continue()
+    endif()
+    set(_pops_explicit_program_target "${CMAKE_MATCH_1}")
+    set(_pops_explicit_program_source
+      "${CMAKE_SOURCE_DIR}/${${_pops_explicit_program_variable}}")
+    file(READ "${_pops_explicit_program_source}" _pops_explicit_program_text)
+    if(_pops_explicit_program_text MATCHES
+       "#include[ \t]+[\"<]explicit_(amr|system)_program\\.hpp[\">]" AND
+       _pops_explicit_program_text MATCHES
+       "install_(explicit_amr_callback_program(_rank_isolated)?|forward_euler_program(_execution_services)?)")
+      list(APPEND _pops_explicit_program_source_targets
+        "${_pops_explicit_program_target}")
+    endif()
+  endforeach()
+  list(REMOVE_DUPLICATES _pops_explicit_program_source_targets)
+  list(SORT _pops_explicit_program_source_targets)
+  set(_pops_explicit_program_registered_targets ${POPS_EXPLICIT_PROGRAM_DSO_TESTS})
+  list(SORT _pops_explicit_program_registered_targets)
+  if(NOT "${_pops_explicit_program_source_targets}" STREQUAL
+     "${_pops_explicit_program_registered_targets}")
+    message(FATAL_ERROR
+      "Explicit Program DSO source inventory does not match its registered target list; "
+      "sources=${_pops_explicit_program_source_targets}; "
+      "registered=${_pops_explicit_program_registered_targets}")
+  endif()
+
+  set(_pops_explicit_program_active_targets ${POPS_EXPLICIT_PROGRAM_DSO_TESTS})
+  if(NOT POPS_HAS_MPI)
+    list(REMOVE_ITEM _pops_explicit_program_active_targets
+      ${POPS_EXPLICIT_PROGRAM_DSO_MPI_TESTS})
+  endif()
+  foreach(_pops_explicit_program_target IN LISTS _pops_explicit_program_active_targets)
+    if(NOT TARGET "${_pops_explicit_program_target}")
+      message(FATAL_ERROR
+        "Explicit Program DSO target ${_pops_explicit_program_target} was not registered")
+    endif()
+    get_target_property(_pops_explicit_program_wired
+      "${_pops_explicit_program_target}" POPS_EXPLICIT_PROGRAM_DSO_WIRED)
+    get_target_property(_pops_explicit_program_exports
+      "${_pops_explicit_program_target}" ENABLE_EXPORTS)
+    get_target_property(_pops_explicit_program_dl
+      "${_pops_explicit_program_target}" POPS_EXPLICIT_PROGRAM_DSO_DL_WIRED)
+    get_target_property(_pops_explicit_program_lock
+      "${_pops_explicit_program_target}" POPS_EXPLICIT_PROGRAM_DSO_RESOURCE_LOCK)
+    if(NOT _pops_explicit_program_wired OR NOT _pops_explicit_program_exports OR
+       NOT _pops_explicit_program_dl OR
+       NOT _pops_explicit_program_lock STREQUAL "native_loader")
+      message(FATAL_ERROR
+        "Explicit Program DSO target ${_pops_explicit_program_target} is not fully wired")
+    endif()
+    get_target_property(_pops_explicit_program_definitions
+      "${_pops_explicit_program_target}" COMPILE_DEFINITIONS)
+    set(_pops_explicit_program_required_definitions
+      POPS_TEST_CXX POPS_TEST_CXX_STD POPS_TEST_INCLUDE POPS_TEST_TMPDIR)
+    if(POPS_HAS_KOKKOS)
+      list(APPEND _pops_explicit_program_required_definitions
+        POPS_TEST_KOKKOS_INC POPS_TEST_KOKKOS_DEFS POPS_TEST_KOKKOS_OPTS)
+    endif()
+    if(POPS_HAS_MPI)
+      list(APPEND _pops_explicit_program_required_definitions
+        POPS_TEST_MPI_ABI POPS_TEST_MPI_INCLUDE POPS_TEST_MPI_COMPILE_OPTIONS
+        POPS_TEST_MPI_COMPILE_DEFINITIONS POPS_TEST_MPI_LINK_OPTIONS
+        POPS_TEST_MPI_LINK_LIBRARIES)
+    endif()
+    foreach(_pops_explicit_program_required_definition IN LISTS
+        _pops_explicit_program_required_definitions)
+      set(_pops_explicit_program_found_definition FALSE)
+      foreach(_pops_explicit_program_definition IN LISTS _pops_explicit_program_definitions)
+        if(_pops_explicit_program_definition MATCHES
+           "^${_pops_explicit_program_required_definition}=")
+          set(_pops_explicit_program_found_definition TRUE)
+          break()
+        endif()
+      endforeach()
+      if(NOT _pops_explicit_program_found_definition)
+        message(FATAL_ERROR
+          "Explicit Program DSO target ${_pops_explicit_program_target} is missing "
+          "${_pops_explicit_program_required_definition} from pops_native_loader_definitions")
+      endif()
+    endforeach()
+  endforeach()
 endfunction()
 
 function(pops_cap_opt_for_kokkos_ram target)
@@ -656,12 +829,13 @@ target_link_libraries(test_amr_transaction_authority PRIVATE ${CMAKE_DL_LIBS} po
 set_tests_properties(
   SystemTransactionAuthority.RejectRestoresProgramImageAndRetryCommitsOnce
   SystemTransactionAuthority.ExternalAcceptedWindowRemainsComposableWithInternalStep
-  SystemTransactionAuthority.ReusedImageDoesNotAllocateFabStorageAfterWarmup
+  SystemTransactionAuthority.PreparedFullAcceptedTransactionsAllocateNothing
   SystemTransactionAuthority.ConcurrentAcceptedReaderBlocksDuringCandidate
   SystemTransactionAuthority.PublicReaderCannotReenterUniformCandidate
   SystemTransactionAuthority.ProvisionalScopeReadsCandidateAndRefusesAfterHiddenPublish
   SystemTransactionAuthority.AcceptedMultiFabReadViewOwnsReadLeaseUntilDestruction
   SystemTransactionAuthority.AcceptedMultiFabReadViewDoesNotBypassSameThreadWriter
+  SystemTransactionAuthority.ProvisionalMailboxLeasePreventsStaleBalanceOrProjectionRetry
   PROPERTIES RESOURCE_LOCK native_loader)
 set_tests_properties(AmrTransactionAuthority.ExternalCandidateBlocksReadersAndSealsOnce
   PROPERTIES RESOURCE_LOCK native_loader)
@@ -675,10 +849,18 @@ endif()
 # Tests that need runtime object libraries, dlopen symbols, or injected native-loader compiler data.
 pops_native_loader_definitions(_native_defs)
 pops_test_source(_src test_facade_routing)
-pops_add_gtest_suite(NAME test_facade_routing SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
+# This suite compiles and invokes the single runtime-kind-dispatched ProgramExecutionServices
+# surface.  Its scientific cases are Uniform, but the public authority deliberately owns both
+# private storage/topology adapters; link both runtime implementations instead of treating this as
+# a System-only facade test.
+pops_add_gtest_suite(NAME test_facade_routing SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS}
+  pops_runtime_system pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader
+  COMPILE_DEFINITIONS ${_native_defs})
 
 pops_test_source(_src test_exb_seam)
-pops_add_gtest_suite(NAME test_exb_seam SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
+pops_add_gtest_suite(NAME test_exb_seam SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS}
+  pops_runtime_system pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader
+  COMPILE_DEFINITIONS ${_native_defs})
 
 pops_test_source(_src test_coupled_fieldsolve)
 pops_add_gtest_suite(NAME test_coupled_fieldsolve SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS}
@@ -916,7 +1098,9 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANK_PARITY_test_mpi_amr_compiled_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_twoblock_parity 1 2 4)
   set(POPS_MPI_RANK_PARITY_test_mpi_amr_distributed_coarse 1 2 4)
-  set(POPS_MPI_RANKS_test_mpi_amr_program_3d_corner_authority 8)
+  if(POPS_NATIVE_DIM EQUAL 3)
+    set(POPS_MPI_RANKS_test_mpi_amr_program_3d_corner_authority 8)
+  endif()
   set(POPS_MPI_RANKS_test_mpi_amr_program_reflux 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_rebalance_migration 2 4)
   set(POPS_MPI_RANKS_test_mpi_composite_fac 1 2 4)
@@ -976,7 +1160,6 @@ if(POPS_HAS_MPI)
     test_mpi_amr_compiled_parity
     test_mpi_amr_twoblock_parity
     test_mpi_amr_distributed_coarse
-    test_mpi_amr_program_3d_corner_authority
     test_mpi_amr_program_reflux
     test_mpi_amr_rebalance_migration
     test_mpi_composite_fac
@@ -1019,6 +1202,12 @@ if(POPS_HAS_MPI)
     test_mpi_smoke
   )
 
+  # This test proves the {2,2,2} corner topology itself. Its source treats a non-3D artifact as
+  # a failure, so registering it in Dim=1/2 would manufacture an invalid CTest obligation.
+  if(POPS_NATIVE_DIM EQUAL 3)
+    list(APPEND POPS_CPP_MPI_ONLY_TESTS test_mpi_amr_program_3d_corner_authority)
+  endif()
+
   # The HDF5 proof exists only when the collective native backend was actually configured.  The
   # standard `mpi` and `ci-mpi` presets request that backend strictly; a custom MPI-only consumer
   # does not receive a green skipped target that would pretend to validate absent HDF5 code.
@@ -1050,10 +1239,18 @@ if(POPS_HAS_MPI)
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
     elseif(_test STREQUAL "test_mpi_multiblock_interface_scheduler")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
-    elseif(_test MATCHES "^test_mpi_system_" OR _test STREQUAL "test_mpi_coupled_source")
+    elseif(_test STREQUAL "test_mpi_coupled_source")
+      # The callback is authored against the single runtime-kind-dispatched Program services,
+      # just like the native-loader suites above, even though this scenario executes a System.
+      list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
+    elseif(_test MATCHES "^test_mpi_system_")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system)
-    elseif(_test STREQUAL "test_mpi_amr_program_3d_corner_authority" OR
-           _test STREQUAL "test_mpi_amr_program_reflux" OR
+    elseif(_test STREQUAL "test_mpi_amr_program_3d_corner_authority")
+      # The exact-rank corner/subcycling proof is a direct consumer of the shared runtime-core
+      # transaction ABI; keep the AMR facade out of this target so its authority boundary remains
+      # explicit.
+      list(APPEND _extra_libs pops_runtime_core)
+    elseif(_test STREQUAL "test_mpi_amr_program_reflux" OR
            _test STREQUAL "test_mpi_amr_rebalance_migration")
       # These exact-ND checkpoint/ledger proofs instantiate only header-owned authorities. Linking
       # AmrSystem would make them depend on an unrelated runtime facade and weaken that boundary.
@@ -1137,12 +1334,16 @@ if(POPS_HAS_MPI)
   # threading. Keep one Kokkos worker per rank so the CTest PROCESSORS=2 accounting is honest.
   set_tests_properties(test_mpi_amr_program_reflux_np2 test_mpi_amr_program_reflux_np4 PROPERTIES
     ENVIRONMENT "OMP_NUM_THREADS=1")
-  set_tests_properties(test_mpi_amr_program_3d_corner_authority_np8 PROPERTIES
-    ENVIRONMENT "OMP_NUM_THREADS=1"
-    TIMEOUT 180)
+  if(POPS_NATIVE_DIM EQUAL 3)
+    set_tests_properties(test_mpi_amr_program_3d_corner_authority_np8 PROPERTIES
+      ENVIRONMENT "OMP_NUM_THREADS=1"
+      TIMEOUT 180)
+    set_property(
+      TEST test_mpi_amr_program_3d_corner_authority_np8
+      APPEND PROPERTY LABELS amr nd checkpoint authority corner)
+  endif()
   set_property(
-    TEST test_mpi_amr_program_3d_corner_authority_np8
-         test_mpi_amr_program_reflux_np2 test_mpi_amr_program_reflux_np4
+    TEST test_mpi_amr_program_reflux_np2 test_mpi_amr_program_reflux_np4
          test_mpi_amr_rebalance_migration_np2 test_mpi_amr_rebalance_migration_np4
     APPEND PROPERTY LABELS amr nd checkpoint authority corner)
   # This regression proves MPI trace transport and intentionally does not exercise on-node
@@ -1242,7 +1443,7 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance")
+            "GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance:GeneratedAmrSystemBlock.ForwardSubcyclingStorageCeilingAcceptsConfiguredAPlusB:GeneratedAmrSystemBlock.ForwardSubcyclingStorageCeilingRejectsOverflowWithoutClobber")
       else()
         pops_add_mpi_rank_test(${_test} ${_np})
       endif()
@@ -1256,11 +1457,19 @@ if(POPS_HAS_MPI)
     TIMEOUT 30)
   set_tests_properties(test_amr_multiblock_coupled_source_np2 PROPERTIES
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
-    TIMEOUT 30)
-  set_tests_properties(test_program_runtime_np2 test_generated_amr_system_block_np2 PROPERTIES
+    TIMEOUT 180)
+  set_tests_properties(test_program_runtime_np2 PROPERTIES
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
     TIMEOUT 30)
+  # The generated AMR authority selector contains three heavyweight topology/storage proofs.  The
+  # collective overflow/rollback/retry witness alone takes about 190 seconds on the qualified
+  # OpenMP host; the complete selector is still bounded below six minutes.
+  set_tests_properties(test_generated_amr_system_block_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
+    TIMEOUT 360)
 endif()
+
+pops_validate_explicit_program_dso_registration()
 
 get_property(_pops_dir_targets DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY BUILDSYSTEM_TARGETS)
 set(_pops_capped 0)

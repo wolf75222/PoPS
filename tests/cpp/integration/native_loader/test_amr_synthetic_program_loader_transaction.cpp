@@ -13,14 +13,18 @@
 #include "native_dso_compiler.hpp"
 
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/core/foundation/allocator.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/dynamic/authenticated_native_file.hpp>
 #include <pops/runtime/dynamic/prepared_execution_context.hpp>
 #include <pops/runtime/program/program_execution_services.hpp>
+#include <pops/runtime/program/owned_program_installation.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -30,15 +34,139 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <new>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <type_traits>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
 #include <Kokkos_Core.hpp>
 #endif
+
+namespace {
+
+std::atomic<bool> g_heap_measurement_enabled{false};
+std::atomic<std::uint64_t> g_measured_heap_allocations{0};
+void note_measured_heap_allocation() noexcept {
+  if (g_heap_measurement_enabled.load(std::memory_order_relaxed))
+    g_measured_heap_allocations.fetch_add(1, std::memory_order_relaxed);
+}
+
+void* measured_allocate(std::size_t size) {
+  void* pointer = std::malloc(size == 0 ? 1 : size);
+  if (pointer == nullptr)
+    throw std::bad_alloc();
+  note_measured_heap_allocation();
+  return pointer;
+}
+
+void* measured_allocate_nothrow(std::size_t size) noexcept {
+  void* pointer = std::malloc(size == 0 ? 1 : size);
+  if (pointer != nullptr)
+    note_measured_heap_allocation();
+  return pointer;
+}
+
+void* measured_aligned_allocate(std::size_t size, std::size_t alignment) {
+  void* pointer = nullptr;
+  if (posix_memalign(&pointer, alignment, size == 0 ? 1 : size) != 0)
+    pointer = nullptr;
+  if (pointer == nullptr)
+    throw std::bad_alloc();
+  note_measured_heap_allocation();
+  return pointer;
+}
+
+void* measured_aligned_allocate_nothrow(std::size_t size, std::size_t alignment) noexcept {
+  void* pointer = nullptr;
+  if (posix_memalign(&pointer, alignment, size == 0 ? 1 : size) != 0)
+    pointer = nullptr;
+  if (pointer != nullptr)
+    note_measured_heap_allocation();
+  return pointer;
+}
+
+class HeapAllocationWindow final {
+ public:
+  HeapAllocationWindow() : before_(g_measured_heap_allocations.load(std::memory_order_relaxed)) {
+    g_heap_measurement_enabled.store(true, std::memory_order_relaxed);
+  }
+
+  [[nodiscard]] std::uint64_t close() noexcept {
+    g_heap_measurement_enabled.store(false, std::memory_order_relaxed);
+    return g_measured_heap_allocations.load(std::memory_order_relaxed) - before_;
+  }
+
+ private:
+  std::uint64_t before_ = 0;
+};
+
+}  // namespace
+
+void* operator new(std::size_t size) {
+  return measured_allocate(size);
+}
+void* operator new[](std::size_t size) {
+  return measured_allocate(size);
+}
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+  return measured_allocate_nothrow(size);
+}
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+  return measured_allocate_nothrow(size);
+}
+void operator delete(void* pointer) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+void* operator new(std::size_t size, std::align_val_t alignment) {
+  return measured_aligned_allocate(size, static_cast<std::size_t>(alignment));
+}
+void* operator new[](std::size_t size, std::align_val_t alignment) {
+  return measured_aligned_allocate(size, static_cast<std::size_t>(alignment));
+}
+void* operator new(std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
+  return measured_aligned_allocate_nothrow(size, static_cast<std::size_t>(alignment));
+}
+void* operator new[](std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
+  return measured_aligned_allocate_nothrow(size, static_cast<std::size_t>(alignment));
+}
+void operator delete(void* pointer, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::size_t, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::size_t, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::align_val_t, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::align_val_t, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
 
 namespace {
 
@@ -63,6 +191,35 @@ std::size_t marker_index(const std::vector<std::string>& markers, const std::str
     if (markers[index] == needle)
       return index;
   return markers.size();
+}
+
+std::size_t marker_index_with_prefix(const std::vector<std::string>& markers,
+                                     const std::string& prefix) {
+  for (std::size_t index = 0; index < markers.size(); ++index)
+    if (markers[index].starts_with(prefix))
+      return index;
+  return markers.size();
+}
+
+std::optional<std::string> marker_with_prefix(const std::vector<std::string>& markers,
+                                              const std::string& prefix) {
+  const auto found = std::find_if(markers.begin(), markers.end(), [&](const std::string& marker) {
+    return marker.starts_with(prefix);
+  });
+  if (found == markers.end())
+    return std::nullopt;
+  return *found;
+}
+
+std::optional<std::string> marker_attribute(const std::string& marker, const std::string& key) {
+  const std::string prefix = key + "=";
+  const std::size_t begin = marker.find(prefix);
+  if (begin == std::string::npos)
+    return std::nullopt;
+  const std::size_t value_begin = begin + prefix.size();
+  const std::size_t end = marker.find(';', value_begin);
+  const std::size_t value_size = end == std::string::npos ? std::string::npos : end - value_begin;
+  return marker.substr(value_begin, value_size);
 }
 
 std::shared_ptr<const pops::component::PreparedExecutionContextV1> prepared_execution() {
@@ -126,7 +283,9 @@ std::vector<double> initial_state(const pops::Extent<Dim>& shape) {
 }
 
 std::string loader_source(const std::string& marker_path = {}, const std::string& marker_tag = {},
-                          bool malformed_candidate = false, bool prepare_throws = false) {
+                          bool malformed_candidate = false, bool prepare_throws = false,
+                          bool observe_preparation_authority = false,
+                          bool mutate_detached_preparation_state = false) {
   // clang-format off
   std::string result = R"CPP(
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
@@ -137,13 +296,21 @@ std::string loader_source(const std::string& marker_path = {}, const std::string
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/program/program_abi.hpp>
 #include <pops/runtime/program/program_execution_services.hpp>
+#include <pops/runtime/program/owned_program_installation.hpp>
+#include <pops/runtime/program/program_preparation_image.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <utility>
+#include <vector>
 #if !defined(POPS_RUNTIME_SHARED_EXCEPTION_ABI)
 #error "synthetic Program loader requires the shared runtime exception ABI"
 #endif
@@ -263,10 +430,132 @@ struct ProgramCandidateState final {
   std::shared_ptr<ExecutionServices> ctx_owner;
   std::function<void(double)> step;
   std::function<void(const pops::runtime::program::ProgramPreparationHostRef&)> prepare;
+  std::array<pops::runtime::program::ProgramResourcePlanRecord, 11> resources{};
+  std::string resource_digest;
+  std::string resource_manifest;
 };
 
+constexpr std::array<std::uint64_t, 11> kScratchValueIds = {
+    UINT64_C(1000), UINT64_C(3000), UINT64_C(3001), UINT64_C(3002),
+    UINT64_C(3003), UINT64_C(3004), UINT64_C(3005), UINT64_C(3006),
+    UINT64_C(3007), UINT64_C(3008), UINT64_C(3009)};
+constexpr std::array<const char*, 11> kScratchIdentities = {
+    "tests.synthetic-loader/scratch/state/1000",
+    "tests.synthetic-loader/scratch/rhs/3000",
+    "tests.synthetic-loader/scratch/rhs/3001",
+    "tests.synthetic-loader/scratch/rhs/3002",
+    "tests.synthetic-loader/scratch/rhs/3003",
+    "tests.synthetic-loader/scratch/rhs/3004",
+    "tests.synthetic-loader/scratch/rhs/3005",
+    "tests.synthetic-loader/scratch/rhs/3006",
+    "tests.synthetic-loader/scratch/rhs/3007",
+    "tests.synthetic-loader/scratch/rhs/3008",
+    "tests.synthetic-loader/scratch/rhs/3009"};
+
+pops::runtime::program::ProgramAbiView program_view(const char* value) {
+  return {value, static_cast<std::uint64_t>(std::strlen(value))};
+}
+
+void prepare_candidate_resource_plan(ProgramCandidateState& state) {
+  using namespace pops::runtime::program;
+  static constexpr char kSchema[] = "program-resource-plan:v1";
+  static constexpr char kOwner[] = "tracer";
+  static constexpr char kSpace[] = "cell";
+  static constexpr char kClock[] = "clock.macro";
+  static constexpr char kLifetime[] = "transient";
+  static constexpr char kCentering[] = "cell";
+  static constexpr char kOffPolicy[] = "none";
+  static constexpr char kCommunication[] = "none";
+  static constexpr char kTransfer[] = "none";
+  static constexpr char kRestart[] = "none";
+  static constexpr char kComponents[] = "[\"u\"]";
+  static constexpr char kShape[] = "[]";
+
+  ProgramInstallationTables tables;
+  tables.resource_plan.reserve(kScratchValueIds.size());
+  for (std::size_t slot = 0; slot < kScratchValueIds.size(); ++slot) {
+    ProgramInstallationTables::ResourcePlan row;
+    row.slot = static_cast<std::uint32_t>(slot);
+    row.flags = kProgramResourceRuntimeSized;
+    row.value_id = kScratchValueIds[slot];
+    row.occurrence_path_id = UINT64_C(0x2000) + slot;
+    row.level = -1;
+    row.components = 1;
+    row.ghosts = pops::Minmod::n_ghost;
+    row.resource_type = ProgramResourcePlanType::runtime_sized;
+    row.schema = kSchema;
+    row.identity = kScratchIdentities[slot];
+    row.occurrence_path = kScratchIdentities[slot];
+    row.owner = kOwner;
+    row.space = kSpace;
+    row.clock = kClock;
+    row.lifetime = kLifetime;
+    row.centering = kCentering;
+    row.off_policy = kOffPolicy;
+    row.communication = kCommunication;
+    row.transfer_provider = kTransfer;
+    row.restart_provider = kRestart;
+    row.component_names = kComponents;
+    row.shape = kShape;
+    tables.resource_plan.push_back(std::move(row));
+  }
+  const std::string payload = tables.canonical_resource_digest_payload(std::nullopt);
+  state.resource_digest =
+      pops::identity::sha256_hex(std::vector<std::uint8_t>(payload.begin(), payload.end()));
+  for (auto& row : tables.resource_plan)
+    row.plan_digest = state.resource_digest;
+  state.resource_manifest =
+      "{\"resource_plan\":" +
+      tables.canonical_resource_manifest(std::nullopt, state.resource_digest) +
+      ",\"resource_plan_digest\":\"" + state.resource_digest + "\"}";
+
+  for (std::size_t slot = 0; slot < state.resources.size(); ++slot) {
+    ProgramResourcePlanRecord& row = state.resources[slot];
+    row = {};
+    row.slot = static_cast<std::uint32_t>(slot);
+    row.flags = kProgramResourceRuntimeSized;
+    row.value_id = kScratchValueIds[slot];
+    row.occurrence_path_id = UINT64_C(0x2000) + slot;
+    row.level = -1;
+    row.components = 1;
+    row.ghosts = pops::Minmod::n_ghost;
+    row.bytes = kProgramResourcePlanUnknownExtent;
+    row.maximum_bytes = kProgramResourcePlanUnknownExtent;
+    row.cells = kProgramResourcePlanUnknownExtent;
+    row.itemsize = kProgramResourcePlanUnknownExtent;
+    row.schema = program_view(kSchema);
+    row.plan_digest = {state.resource_digest.data(),
+                       static_cast<std::uint64_t>(state.resource_digest.size())};
+    row.identity = program_view(kScratchIdentities[slot]);
+    row.occurrence_path = program_view(kScratchIdentities[slot]);
+    row.owner = program_view(kOwner);
+    row.space = program_view(kSpace);
+    row.clock = program_view(kClock);
+    row.lifetime = program_view(kLifetime);
+    row.centering = program_view(kCentering);
+    row.off_policy = program_view(kOffPolicy);
+    row.communication = program_view(kCommunication);
+    row.transfer_provider = program_view(kTransfer);
+    row.restart_provider = program_view(kRestart);
+    row.component_names = program_view(kComponents);
+    row.shape = program_view(kShape);
+    row.resource_type = ProgramResourcePlanType::runtime_sized;
+  }
+}
+
+struct ProgramStepRejectSentinel final : pops::runtime::program::ProgramStepRejectSignal {
+  using ProgramStepRejectSignal::ProgramStepRejectSignal;
+};
+struct ProgramStepRejectPublishFailure final {};
+
 void program_candidate_step(void* opaque, double dt) {
-  static_cast<ProgramCandidateState*>(opaque)->step(dt);
+  auto* state = static_cast<ProgramCandidateState*>(opaque);
+  try {
+    state->step(dt);
+  } catch (const pops::runtime::program::ProgramStepRejectSignal& signal) {
+    if (!state->ctx_owner->adopt_step_attempt_rejection(signal.record))
+      throw ProgramStepRejectPublishFailure{};
+  }
 }
 void program_candidate_hierarchy_refresh(void* opaque) {
   static_cast<ProgramCandidateState*>(opaque)->ctx_owner->refresh_accepted_hierarchy();
@@ -295,6 +584,50 @@ void program_candidate_destroy(void* opaque) noexcept {
   program_marker("destroy");
   delete static_cast<ProgramCandidateState*>(opaque);
 }
+void observe_preparation_authority(
+    const pops::runtime::program::ProgramPreparationHostRef& preparation) {
+  using namespace pops::runtime::program;
+  // The marker path is an opaque host-owned test sink.  The DSO receives neither an AMR facade
+  // nor a callback to one: every observed value below comes from the tagged preparation image and
+  // its detached ProgramExecutionServices provider.
+  const auto& image = require_program_execution_preparation_image(
+      preparation, static_cast<std::uint32_t>(pops::kNativeDimension), ProgramRuntimeKind::amr);
+  auto context_owner =
+      make_program_execution_provider<pops::kNativeDimension>(preparation);
+  auto& context = *context_owner;
+  const auto topology = context.program_resource_topology();
+  const auto& lane = context.prepared_execution_lane();
+  int prototype_components = -1;
+  int prototype_ghosts = -1;
+  std::size_t prototype_local_fabs = 0;
+  context.with_program_resource_level(0, [&] {
+    const auto& prototype = context.state(0);
+    prototype_components = prototype.ncomp();
+    prototype_ghosts = prototype.ghosts()[0];
+    prototype_local_fabs = prototype.local_size();
+#if @@MUTATE_DETACHED_PREPARATION_STATE@@
+    // This mutation is deliberately made through B's detached preparation provider.  The host
+    // must discard it with the refused candidate; A's published POPSAND5 image remains immutable.
+    auto& detached = context.state(0);
+    detached.set_val(pops::Real(7));
+#endif
+  });
+  const std::string marker =
+      "prepare-authority:generation=" + std::to_string(image.generation()) +
+      ";levels=" + std::to_string(topology.levels) + ";epoch=" +
+      std::to_string(topology.epoch) + ";topology-generation=" +
+      std::to_string(topology.generation) + ";blocks=" + std::to_string(context.n_blocks()) +
+      ";lane=" + std::string(lane.identity()) + ";lane-size=" + std::to_string(lane.size()) +
+      ";prototype-ncomp=" + std::to_string(prototype_components) +
+      ";prototype-ghosts=" + std::to_string(prototype_ghosts) +
+      ";prototype-local-fabs=" + std::to_string(prototype_local_fabs);
+  program_marker(marker.c_str());
+#if @@MUTATE_DETACHED_PREPARATION_STATE@@
+  program_marker("prepare-authority:mutated-detached-prototype");
+#endif
+}
+void program_install_error(pops::runtime::program::ProgramInstallDiagnostic* diagnostic,
+                           const char* message) noexcept;
 bool program_candidate_prepare(void* opaque,
                                const pops::runtime::program::ProgramHostDescriptor* host,
                                pops::runtime::program::ProgramInstallDiagnostic* diagnostic) noexcept {
@@ -305,13 +638,20 @@ bool program_candidate_prepare(void* opaque,
   if (state->ctx_owner || !state->prepare)
     return false;
   try {
+#if @@OBSERVE_PREPARATION_AUTHORITY@@
+    observe_preparation_authority(host->preparation);
+#endif
 #if @@PREPARE_THROWS@@
     throw std::runtime_error("injected AMR candidate preparation failure");
 #endif
     state->prepare(host->preparation);
     state->prepare = {};
     return true;
+  } catch (const std::exception& error) {
+    program_install_error(diagnostic, error.what());
+    return false;
   } catch (...) {
+    program_install_error(diagnostic, "unknown AMR candidate preparation failure");
     return false;
   }
 }
@@ -344,22 +684,115 @@ constexpr std::uint64_t kCandidateServices =
     pops::runtime::program::kProgramServiceTransaction |
     pops::runtime::program::kProgramServicePersistentValues;
 constexpr char kCandidateIdentity[] = "tests.synthetic-loader.v5";
-constexpr char kCandidateArtifact[] = "tests.synthetic-loader/program/loader-transaction-v1";
+constexpr char kCandidateArtifact[] = "@@CANDIDATE_ARTIFACT@@";
 constexpr char kCandidateAbiKey[] = POPS_ABI_KEY_LITERAL;
 constexpr const char* kCandidateRouteManifest = pops::kRouteRegistrySignature;
 constexpr char kCandidateBoundaryManifest[] = "tests.synthetic-loader.boundary.v5";
-constexpr char kCandidateResourceManifest[] =
-    R"JSON({"resource_plan":{"digest":"4ca46764b074a0c691ab69f5853aad7492d5a0ed2bb899f8ceb1ed94e3f477df","entries":[],"maximum_bytes":0,"schema":"program-resource-plan:v1","schema_version":1},"resource_plan_digest":"4ca46764b074a0c691ab69f5853aad7492d5a0ed2bb899f8ceb1ed94e3f477df"})JSON";
 constexpr char kCandidateCheckpointIdentity[] = "tests.synthetic-loader.checkpoint.v5";
 constexpr char kCandidateBlockName[] = "tracer";
 constexpr pops::runtime::program::ProgramBlockRecord kCandidateBlocks[] = {
     {{kCandidateBlockName, sizeof(kCandidateBlockName) - 1}}};
 constexpr pops::runtime::program::ProgramFluxBudgetRecord kCandidateFluxBudgets[] = {
     {UINT64_C(10), UINT64_C(1), UINT64_C(0), UINT64_C(0)}};
+constexpr char kCandidateFaceFluxOwner[] = "tracer";
+constexpr char kCandidateFaceFluxClock[] = "clock.macro";
+constexpr std::uint32_t kCandidatePreparedDefaultFluxProvider = 1;
+
+template <std::size_t Size>
+constexpr pops::runtime::program::ProgramAbiView candidate_view(const char (&value)[Size]) {
+  return {value, static_cast<std::uint64_t>(Size - 1)};
+}
+
+constexpr pops::runtime::program::ProgramFluxBasisOccurrenceRecord candidate_flux_basis(
+    std::uint32_t basis_slot, std::uint32_t expression_slot,
+    pops::runtime::program::ProgramAbiView identity,
+    pops::runtime::program::ProgramAbiView occurrence_path) {
+  using namespace pops::runtime::program;
+  return {sizeof(ProgramFluxBasisOccurrenceRecord),
+          kProgramFluxBasisOccurrenceSchemaVersion,
+          basis_slot,
+          expression_slot,
+          0,
+          -1,
+          static_cast<std::int32_t>(3000 + basis_slot),
+          kCandidatePreparedDefaultFluxProvider,
+          0,
+          1,
+          identity,
+          occurrence_path,
+          candidate_view(kCandidateFaceFluxOwner),
+          candidate_view(kCandidateFaceFluxClock)};
+}
+
+constexpr pops::runtime::program::ProgramFaceFluxStageRecord candidate_flux_term(
+    std::uint32_t slot, std::uint32_t basis_slot, std::uint32_t expression_slot,
+    std::int64_t denominator, pops::runtime::program::ProgramAbiView identity,
+    pops::runtime::program::ProgramAbiView occurrence_path) {
+  using namespace pops::runtime::program;
+  return {sizeof(ProgramFaceFluxStageRecord),
+          kProgramFaceFluxStageSchemaVersion,
+          slot,
+          basis_slot,
+          expression_slot,
+          1,
+          1,
+          denominator,
+          identity,
+          occurrence_path,
+          candidate_view(kCandidateFaceFluxOwner),
+          candidate_view(kCandidateFaceFluxClock)};
+}
+
+constexpr pops::runtime::program::ProgramFluxBasisOccurrenceRecord kCandidateFluxBases[] = {
+    candidate_flux_basis(0, 1, candidate_view("synthetic.default-flux.basis.0"),
+                        candidate_view("synthetic.default-flux.loop.basis.0")),
+    candidate_flux_basis(1, 2, candidate_view("synthetic.default-flux.basis.1"),
+                        candidate_view("synthetic.default-flux.loop.basis.1")),
+    candidate_flux_basis(2, 3, candidate_view("synthetic.default-flux.basis.2"),
+                        candidate_view("synthetic.default-flux.loop.basis.2")),
+    candidate_flux_basis(3, 4, candidate_view("synthetic.default-flux.basis.3"),
+                        candidate_view("synthetic.default-flux.loop.basis.3")),
+    candidate_flux_basis(4, 5, candidate_view("synthetic.default-flux.basis.4"),
+                        candidate_view("synthetic.default-flux.loop.basis.4")),
+    candidate_flux_basis(5, 6, candidate_view("synthetic.default-flux.basis.5"),
+                        candidate_view("synthetic.default-flux.loop.basis.5")),
+    candidate_flux_basis(6, 7, candidate_view("synthetic.default-flux.basis.6"),
+                        candidate_view("synthetic.default-flux.loop.basis.6")),
+    candidate_flux_basis(7, 8, candidate_view("synthetic.default-flux.basis.7"),
+                        candidate_view("synthetic.default-flux.loop.basis.7")),
+    candidate_flux_basis(8, 9, candidate_view("synthetic.default-flux.basis.8"),
+                        candidate_view("synthetic.default-flux.loop.basis.8")),
+    candidate_flux_basis(9, 10, candidate_view("synthetic.default-flux.basis.9"),
+                        candidate_view("synthetic.default-flux.loop.basis.9"))};
+constexpr pops::runtime::program::ProgramFaceFluxStageRecord kCandidateFluxTerms[] = {
+    candidate_flux_term(0, 0, 0, 2, candidate_view("synthetic.default-flux.stage.0"),
+                       candidate_view("synthetic.default-flux.loop.basis.0")),
+    candidate_flux_term(1, 1, 0, 4, candidate_view("synthetic.default-flux.stage.1"),
+                       candidate_view("synthetic.default-flux.loop.basis.1")),
+    candidate_flux_term(2, 2, 0, 8, candidate_view("synthetic.default-flux.stage.2"),
+                       candidate_view("synthetic.default-flux.loop.basis.2")),
+    candidate_flux_term(3, 3, 0, 16, candidate_view("synthetic.default-flux.stage.3"),
+                       candidate_view("synthetic.default-flux.loop.basis.3")),
+    candidate_flux_term(4, 4, 0, 32, candidate_view("synthetic.default-flux.stage.4"),
+                       candidate_view("synthetic.default-flux.loop.basis.4")),
+    candidate_flux_term(5, 5, 0, 64, candidate_view("synthetic.default-flux.stage.5"),
+                       candidate_view("synthetic.default-flux.loop.basis.5")),
+    candidate_flux_term(6, 6, 0, 128, candidate_view("synthetic.default-flux.stage.6"),
+                       candidate_view("synthetic.default-flux.loop.basis.6")),
+    candidate_flux_term(7, 7, 0, 256, candidate_view("synthetic.default-flux.stage.7"),
+                       candidate_view("synthetic.default-flux.loop.basis.7")),
+    candidate_flux_term(8, 8, 0, 512, candidate_view("synthetic.default-flux.stage.8"),
+                       candidate_view("synthetic.default-flux.loop.basis.8")),
+    candidate_flux_term(9, 9, 0, 512, candidate_view("synthetic.default-flux.stage.9"),
+                       candidate_view("synthetic.default-flux.loop.basis.9"))};
 constexpr pops::runtime::program::ProgramAbiTable kCandidateBlockTable{
     kCandidateBlocks, 1, sizeof(kCandidateBlocks[0])};
 constexpr pops::runtime::program::ProgramAbiTable kCandidateFluxTable{
     kCandidateFluxBudgets, 1, sizeof(kCandidateFluxBudgets[0])};
+constexpr pops::runtime::program::ProgramAbiTable kCandidateFluxBasisTable{
+    kCandidateFluxBases, 10, sizeof(kCandidateFluxBases[0])};
+constexpr pops::runtime::program::ProgramAbiTable kCandidateFaceFluxStageTable{
+    kCandidateFluxTerms, 10, sizeof(kCandidateFluxTerms[0])};
 }  // namespace
 
 extern "C" bool pops_install_program(
@@ -377,11 +810,17 @@ extern "C" bool pops_install_program(
   *candidate = {};
   try {
   auto state = std::make_unique<ProgramCandidateState>();
+  prepare_candidate_resource_plan(*state);
   state->prepare = [state_ptr = state.get()](
                        const pops::runtime::program::ProgramPreparationHostRef& preparation) {
   state_ptr->ctx_owner = pops::runtime::program::make_program_execution_provider<pops::kNativeDimension>(
       preparation);
   auto& context = *state_ptr->ctx_owner;
+  // The semantic value identities remain 1000 and 3000..3009 above, while the bind-sealed
+  // runtime indices below are the compact dense ProgramResourcePlan slots 0..10.
+  context.prepare_state_scratch(0, 0, 0);
+  for (std::size_t slot = 1; slot <= 10; ++slot)
+    context.prepare_rhs_scratch(slot, 0, 0);
   auto inject_retry = std::make_shared<bool>(true);
   context.configure_primary_clock("clock.macro");
   state_ptr->step = [context_owner = state_ptr->ctx_owner, inject_retry](double macro_dt) {
@@ -390,16 +829,31 @@ extern "C" bool pops_install_program(
           auto& context = *context_owner;
           context.set_stage_time(0, 1);
           auto& accepted = context.state(0);
-          auto& candidate = context.scratch_state(1000, 0, accepted);
-          auto& explicit_rate = context.rhs_scratch(2000, 0, accepted);
-          context.neg_div_flux_default_into(0, accepted, explicit_rate, 3000);
+          auto& candidate = context.scratch_state(0, 0, accepted);
+          auto& explicit_rate = context.rhs_scratch(1, 0, accepted);
+          // Exercise the grouped static-table route before the injected rejection.  The request
+          // materializes basis 0 and its authenticated face term into the resident carrier; the
+          // rejected attempt below must restore that carrier before the retry reuses it.
+          context.rhs_group(3010, {{0, &accepted, &explicit_rate, 3000, 1}});
+          if (*inject_retry) {
+            *inject_retry = false;
+            pops::runtime::program::ProgramStepRejectRecord record{};
+            if (!context.publish_step_attempt_rejection(
+                    pops::SolveStatus::kIterationLimit,
+                    pops::runtime::program::StepAttemptDisposition::kRetry,
+                    UINT32_C(0x534C5452), "rhs-group-static-flux",
+                    "injected-after-rhs-group-resident-write", record))
+              throw ProgramStepRejectPublishFailure{};
+            throw ProgramStepRejectSentinel{record};
+          }
           context.lincomb(candidate, pops::Real(1), accepted, pops::Real(0), accepted);
           // Materialize ten independent, authenticated default-flux bases. The dyadic weights
           // sum exactly to one, so this decimal-boundary capacity witness preserves the fixture's
           // physical update while forcing identities 1 through 10 into the live expression.
           for (int basis = 0; basis < 10; ++basis) {
             auto& rate = basis == 0 ? explicit_rate
-                                    : context.rhs_scratch(2000 + basis, 0, accepted);
+                                    : context.rhs_scratch(static_cast<std::size_t>(basis + 1), 0,
+                                                          accepted);
             if (basis != 0)
               context.neg_div_flux_default_into(0, accepted, rate, 3000 + basis);
             const int exponent = basis == 9 ? 9 : basis + 1;
@@ -410,13 +864,6 @@ extern "C" bool pops_install_program(
           const pops::SolveReport solved = implicit.consume(pops::SolveConsumption::kAccept);
           if (!solved.solved())
             throw std::runtime_error("source-built AMR implicit source did not converge");
-          if (*inject_retry) {
-            *inject_retry = false;
-            throw pops::runtime::program::StepAttemptRejected(
-                pops::SolveStatus::kIterationLimit,
-                pops::runtime::program::StepAttemptDisposition::kRetry, UINT32_C(0x534C5452),
-                "implicit-source", "injected-synthetic-loader-transaction-retry");
-          }
           context.commit_many({{&accepted, &candidate}});
         });
   };
@@ -438,15 +885,17 @@ extern "C" bool pops_install_program(
   descriptor.route_manifest = {kCandidateRouteManifest,
                                static_cast<std::uint64_t>(std::strlen(kCandidateRouteManifest))};
   descriptor.boundary_manifest = {kCandidateBoundaryManifest, sizeof(kCandidateBoundaryManifest) - 1};
-  descriptor.persistent_resource_manifest = {kCandidateResourceManifest,
-                                             sizeof(kCandidateResourceManifest) - 1};
+  descriptor.persistent_resource_manifest = {
+      state->resource_manifest.data(), static_cast<std::uint64_t>(state->resource_manifest.size())};
   descriptor.checkpoint_identity = {kCandidateCheckpointIdentity,
                                     sizeof(kCandidateCheckpointIdentity) - 1};
   descriptor.blocks = kCandidateBlockTable;
   descriptor.flux_budgets = kCandidateFluxTable;
-  // The host/DSO carrier belongs to ProgramCandidateDescriptor::context; it is not a scientific
-  // Program buffer.  Authenticate the canonical empty resource plan instead of inventing a row.
-  descriptor.maximum_bytes = 0;
+  descriptor.flux_basis_occurrences = kCandidateFluxBasisTable;
+  descriptor.face_flux_stages = kCandidateFaceFluxStageTable;
+  descriptor.resource_plan = {state->resources.data(), state->resources.size(),
+                              sizeof(ProgramResourcePlanRecord)};
+  descriptor.maximum_bytes = kProgramResourcePlanUnknownExtent;
   descriptor.context = state.get();
   descriptor.prepare = &program_candidate_prepare;
   descriptor.step = &program_candidate_step;
@@ -476,15 +925,25 @@ static_assert(std::is_same_v<decltype(&pops_install_program),
                              pops::runtime::program::ProgramInstallFn>);
 )CPP";
   const auto replace = [&](const std::string& from, const std::string& to) {
-    const std::size_t position = result.find(from);
+    std::size_t position = result.find(from);
     if (position == std::string::npos)
       throw std::logic_error("synthetic AMR loader source placeholder is missing");
-    result.replace(position, from.size(), to);
+    do {
+      result.replace(position, from.size(), to);
+      position = result.find(from, position + to.size());
+    } while (position != std::string::npos);
   };
   replace("@@MARKER_PATH@@", marker_path);
   replace("@@MARKER_TAG@@", marker_tag);
   replace("@@MALFORMED_CANDIDATE@@", malformed_candidate ? "1" : "0");
   replace("@@PREPARE_THROWS@@", prepare_throws ? "1" : "0");
+  replace("@@OBSERVE_PREPARATION_AUTHORITY@@", observe_preparation_authority ? "1" : "0");
+  replace("@@MUTATE_DETACHED_PREPARATION_STATE@@",
+          mutate_detached_preparation_state ? "1" : "0");
+  const std::string artifact_identity = marker_tag.empty()
+                                            ? kSyntheticLoaderProgramHash
+                                            : std::string(kSyntheticLoaderProgramHash) + "/" + marker_tag;
+  replace("@@CANDIDATE_ARTIFACT@@", artifact_identity);
   return result;
   // clang-format on
 }
@@ -650,7 +1109,7 @@ TEST(test_amr_synthetic_program_loader_transaction,
   ASSERT_EQ(continuous.n_levels(), 2);
   ASSERT_GT(continuous.n_patches(), 0);
   EXPECT_EQ(continuous.installed_program_hash(), kSyntheticLoaderProgramHash);
-    const auto budget = continuous.prepared_amr_program_flux_expression_budget();
+  const auto budget = continuous.prepared_amr_program_flux_expression_budget();
   EXPECT_EQ(budget.program_hash, kSyntheticLoaderProgramHash);
   ASSERT_EQ(budget.blocks.size(), 1u);
   ASSERT_EQ(budget.program_block_map.canonical_indices.size(), 1u);
@@ -667,23 +1126,48 @@ TEST(test_amr_synthetic_program_loader_transaction,
   EXPECT_GT(max_departure_from_equilibrium(fine_interior_before), 0.0);
   EXPECT_LT(max_departure_from_equilibrium(fine_interior_before), 0.25);
 
+  // This is the sealed A image before `rhs_group` materializes basis 0 in the rejected
+  // candidate.  It is deliberately captured before the heap window: checkpoint inspection is
+  // cold/read-only and must not be attributed to the bind-primed hot route below.
+  const std::vector<std::uint8_t> accepted_before_fault = continuous.program_accepted_state();
+
+  bool retry_rejected = false;
+  bool retry_fields_reported = false;
+  const pops::AllocationEventStats allocation_before_fault = pops::allocation_event_stats();
+  HeapAllocationWindow fault_heap;
   try {
     continuous.step(dt);
-    FAIL() << "the injected implicit-source retry was not surfaced";
-  } catch (const std::runtime_error& rejected) {
-    // v5 callbacks translate DSO exception objects while the image is still resident.  The host
-    // retains the failure's durable semantic bytes rather than allowing a foreign exception to
-    // escape into the facade.
-    const std::string message = rejected.what();
-    EXPECT_NE(message.find("implicit-source"), std::string::npos);
-    EXPECT_NE(message.find(std::to_string(kSyntheticLoaderRetryReason)), std::string::npos);
+  } catch (const pops::runtime::program::StepAttemptRejected& rejected) {
+    retry_rejected = true;
+    retry_fields_reported =
+        rejected.status() == pops::SolveStatus::kIterationLimit &&
+        rejected.disposition() == pops::runtime::program::StepAttemptDisposition::kRetry &&
+        rejected.reason_code() == UINT32_C(0x534C5452) &&
+        rejected.phase() == "rhs-group-static-flux" &&
+        rejected.detail() == "injected-after-rhs-group-resident-write";
   }
+  const std::uint64_t fault_heap_allocations = fault_heap.close();
+  EXPECT_TRUE(retry_rejected) << "the injected rhs_group retry was not surfaced";
+  EXPECT_TRUE(retry_fields_reported);
+  // Fault construction and cross-DSO exception propagation are deliberately outside the
+  // successful accepted-step allocation contract.  Keep this number in the native result so a
+  // regression remains visible, but qualify the retry/repeat windows below independently: they
+  // are the paths which must reuse the bind-sealed POPSAND5 staging image without allocation.
+  ::testing::Test::RecordProperty("fault_heap_allocations", std::to_string(fault_heap_allocations));
+  EXPECT_EQ(pops::allocation_event_stats(), allocation_before_fault);
   EXPECT_EQ(continuous.macro_step(), 0);
   EXPECT_DOUBLE_EQ(continuous.time(), 0.0);
   EXPECT_TRUE(byte_exact_equal(continuous.block_level_state_global(kBlock, 0), coarse_before));
   EXPECT_TRUE(byte_exact_equal(continuous.block_level_state_global(kBlock, 1), fine_before));
+  EXPECT_EQ(continuous.program_accepted_state(), accepted_before_fault)
+      << "the rejected rhs_group attempt leaked its resident flux/ledger image into A";
 
+  const pops::AllocationEventStats allocation_before_retry = pops::allocation_event_stats();
+  HeapAllocationWindow retry_heap;
   continuous.step(dt);
+  const std::uint64_t retry_heap_allocations = retry_heap.close();
+  EXPECT_EQ(retry_heap_allocations, 0u);
+  EXPECT_EQ(pops::allocation_event_stats(), allocation_before_retry);
   const std::vector<double> coarse_first = continuous.block_level_state_global(kBlock, 0);
   const std::vector<double> fine_first = continuous.block_level_state_global(kBlock, 1);
   const std::vector<double> fine_interior_first = select_indices(fine_first, fine_interior_indices);
@@ -707,13 +1191,29 @@ TEST(test_amr_synthetic_program_loader_transaction,
     for (const auto& fragment : fragments)
       materialized_stages.insert(fragment.key.stage);
   EXPECT_EQ(materialized_stages.size(), 10u);
-  EXPECT_TRUE(std::any_of(
-      materialized_stages.begin(), materialized_stages.end(),
-      [](const std::string& stage) { return stage.find("/basis/10/") != std::string::npos; }));
+  EXPECT_TRUE(std::any_of(materialized_stages.begin(), materialized_stages.end(),
+                          [](const std::string& stage) {
+                            return stage.find("/basis/9/expression/0/") != std::string::npos;
+                          }));
+  EXPECT_TRUE(std::any_of(materialized_stages.begin(), materialized_stages.end(),
+                          [](const std::string& stage) {
+                            return stage.find("/basis/0/expression/0/") != std::string::npos;
+                          }))
+      << "the retry did not publish the static basis produced by rhs_group";
   EXPECT_LE(accepted_bytes.size(), continuous.checkpoint_program_state_capacity().first);
 
+  const pops::AllocationEventStats allocation_before_repeat = pops::allocation_event_stats();
+  HeapAllocationWindow repeat_heap;
   continuous.step(dt);
+  const std::uint64_t repeat_heap_allocations = repeat_heap.close();
+  EXPECT_EQ(repeat_heap_allocations, 0u);
+  EXPECT_EQ(pops::allocation_event_stats(), allocation_before_repeat);
+  const pops::AllocationEventStats allocation_before_second_repeat = pops::allocation_event_stats();
+  HeapAllocationWindow second_repeat_heap;
   continuous.step(dt);
+  const std::uint64_t second_repeat_heap_allocations = second_repeat_heap.close();
+  EXPECT_EQ(second_repeat_heap_allocations, 0u);
+  EXPECT_EQ(pops::allocation_event_stats(), allocation_before_second_repeat);
   const std::vector<double> coarse_accepted = continuous.block_level_state_global(kBlock, 0);
   const std::vector<double> fine_accepted = continuous.block_level_state_global(kBlock, 1);
   const std::vector<double> fine_interior_accepted =
@@ -726,6 +1226,19 @@ TEST(test_amr_synthetic_program_loader_transaction,
             max_departure_from_equilibrium(fine_interior_first));
   EXPECT_EQ(continuous.macro_step(), 3);
   EXPECT_DOUBLE_EQ(continuous.time(), 3.0 * dt);
+
+  // The accepted POPSAND5 image now has a nonempty logical face-flux vector while its
+  // bind-sealed resident slots remain the larger capacity envelope.  A forward regrid must
+  // detach and cold-prime that exact image without treating the logical fragment count as the
+  // slot-pool shape.  This is deliberately after the warm repeat windows: regrid preparation is
+  // cold, whereas the assertion protects the copy/reprime contract used to construct B.
+  const std::uint64_t topology_before_forward_copy = continuous.checkpoint_topology_epoch();
+  ASSERT_NO_THROW(continuous.execute_prepared_tagging(0));
+  ASSERT_TRUE(continuous.regrid_from_prepared_tagging(0));
+  EXPECT_GT(continuous.checkpoint_topology_epoch(), topology_before_forward_copy);
+  const auto regridded_checkpoint = continuous.program_accepted_state();
+  EXPECT_FALSE(regridded_checkpoint.empty());
+  EXPECT_LE(regridded_checkpoint.size(), continuous.checkpoint_program_state_capacity().first);
   verify_v5_candidate_ownership();
 }
 
@@ -769,12 +1282,15 @@ void verify_v5_candidate_ownership() {
   const char* configured_marker_path = std::getenv("POPS_AMR_PROGRAM_MARKER_PATH");
   const std::string marker_path =
       configured_marker_path ? configured_marker_path : stem + ".markers";
-  const auto compile_fixture = [&](const std::string& tag, bool malformed, bool prepare_throws) {
+  const auto compile_fixture = [&](const std::string& tag, bool malformed, bool prepare_throws,
+                                   bool observe_authority = false,
+                                   bool mutate_detached_state = false) {
     const std::string source_path = stem + "_" + tag + ".cpp";
     const std::string shared_object = stem + "_" + tag + ".so";
     {
       std::ofstream source(source_path);
-      source << loader_source(marker_path, tag, malformed, prepare_throws);
+      source << loader_source(marker_path, tag, malformed, prepare_throws, observe_authority,
+                              mutate_detached_state);
     }
     const auto package = pops::test::native_dso::compile_shared(
         source_path, shared_object, "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");
@@ -788,8 +1304,9 @@ void verify_v5_candidate_ownership() {
   const std::string failed_first = compile_fixture("first-failure", true, false);
   const std::string failed_first_prepare = compile_fixture("first-prepare-failure", false, true);
   const std::string accepted_a = compile_fixture("accepted-a", false, false);
-  const std::string failed_replacement = compile_fixture("failed-replacement", false, true);
-  const std::string replacement_b = compile_fixture("replacement-b", false, false);
+  const std::string failed_replacement =
+      compile_fixture("failed-replacement", false, true, true, true);
+  const std::string replacement_b = compile_fixture("replacement-b", false, false, true);
 
   const auto system_config = config();
   const std::vector<double> initial = initial_state(system_config.shape);
@@ -820,6 +1337,15 @@ void verify_v5_candidate_ownership() {
     const std::vector<int> accepted_map = system.program_block_map();
     const auto accepted_budget = system.prepared_amr_program_flux_expression_budget();
     const std::string accepted_budget_contract = accepted_budget.exact_contract;
+    // The complete POPSAND5 image and its configured-depth capacity pair are published before
+    // owner-last. Re-validating the public capacity is therefore read-only, and a refused B
+    // candidate cannot clobber either half of A's bootstrap authority.
+    const std::vector<std::uint8_t> accepted_bootstrap = system.program_accepted_state();
+    const auto accepted_capacity = system.checkpoint_program_state_capacity();
+    EXPECT_FALSE(accepted_bootstrap.empty());
+    EXPECT_LE(accepted_bootstrap.size(), accepted_capacity.first);
+    EXPECT_EQ(system.program_accepted_state(), accepted_bootstrap);
+    EXPECT_EQ(system.checkpoint_program_state_capacity(), accepted_capacity);
     EXPECT_THROW(system.install_program(failed_replacement), std::runtime_error);
     // A DSO prepare fault has no live rollback phase: the prior Program authority, block map and
     // flux ledger remain byte-for-byte the accepted A image until B is collectively published.
@@ -827,9 +1353,79 @@ void verify_v5_candidate_ownership() {
     EXPECT_EQ(system.program_block_map(), accepted_map);
     EXPECT_EQ(system.prepared_amr_program_flux_expression_budget().exact_contract,
               accepted_budget_contract);
+    EXPECT_EQ(system.program_accepted_state(), accepted_bootstrap);
+    EXPECT_EQ(system.checkpoint_program_state_capacity(), accepted_capacity);
+    // B is permitted to inspect only the opaque, tagged preparation image.  It observes the
+    // detached topology, lane and exact prototype, then mutates that detached prototype before
+    // throwing.  None of that state is permitted to reach already accepted A.
+    const auto markers_after_refusal = read_program_markers(marker_path);
+    const auto refused_authority =
+        marker_with_prefix(markers_after_refusal, "failed-replacement:prepare-authority:");
+    ASSERT_TRUE(refused_authority.has_value());
+    const auto refused_generation = marker_attribute(*refused_authority, "generation");
+    const auto refused_levels = marker_attribute(*refused_authority, "levels");
+    const auto refused_epoch = marker_attribute(*refused_authority, "epoch");
+    const auto refused_topology_generation =
+        marker_attribute(*refused_authority, "topology-generation");
+    const auto refused_blocks = marker_attribute(*refused_authority, "blocks");
+    const auto refused_lane = marker_attribute(*refused_authority, "lane");
+    const auto refused_lane_size = marker_attribute(*refused_authority, "lane-size");
+    const auto refused_components = marker_attribute(*refused_authority, "prototype-ncomp");
+    const auto refused_ghosts = marker_attribute(*refused_authority, "prototype-ghosts");
+    const auto refused_fabs = marker_attribute(*refused_authority, "prototype-local-fabs");
+    ASSERT_TRUE(refused_generation.has_value());
+    ASSERT_TRUE(refused_levels.has_value());
+    ASSERT_TRUE(refused_epoch.has_value());
+    ASSERT_TRUE(refused_topology_generation.has_value());
+    ASSERT_TRUE(refused_blocks.has_value());
+    ASSERT_TRUE(refused_lane.has_value());
+    ASSERT_TRUE(refused_lane_size.has_value());
+    ASSERT_TRUE(refused_components.has_value());
+    ASSERT_TRUE(refused_ghosts.has_value());
+    ASSERT_TRUE(refused_fabs.has_value());
+    EXPECT_GT(std::stoull(*refused_generation), 0u);
+    EXPECT_EQ(*refused_levels, "1");
+    EXPECT_EQ(*refused_blocks, "1");
+    EXPECT_FALSE(refused_lane->empty());
+    EXPECT_EQ(*refused_lane_size, "1");
+    EXPECT_EQ(*refused_components, "1");
+    EXPECT_EQ(*refused_ghosts, std::to_string(pops::Minmod::n_ghost));
+    EXPECT_GT(std::stoull(*refused_fabs), 0u);
+    EXPECT_NE(marker_index(markers_after_refusal,
+                           "failed-replacement:prepare-authority:mutated-detached-prototype"),
+              markers_after_refusal.size());
+    EXPECT_LT(
+        marker_index_with_prefix(markers_after_refusal, "failed-replacement:prepare-authority:"),
+        marker_index(markers_after_refusal, "failed-replacement:destroy"));
     // The old accepted owner must survive the rejected replacement.  A successful candidate then
-    // atomically replaces it while the runtime remains in its assembling/bootstrap window.
+    // atomically replaces it while the runtime remains in its assembling/bootstrap window.  Its
+    // distinct artifact identity proves that the replacement crossed the sole owner-last publish
+    // boundary, rather than being an alias of A's accepted DSO.
     system.install_program(replacement_b);
+    EXPECT_EQ(system.installed_program_hash(),
+              std::string(kSyntheticLoaderProgramHash) + "/replacement-b");
+    EXPECT_NE(system.installed_program_hash(), accepted_hash);
+    const auto markers_after_accept = read_program_markers(marker_path);
+    const auto accepted_authority =
+        marker_with_prefix(markers_after_accept, "replacement-b:prepare-authority:");
+    ASSERT_TRUE(accepted_authority.has_value());
+    const auto accepted_generation = marker_attribute(*accepted_authority, "generation");
+    ASSERT_TRUE(accepted_generation.has_value());
+    EXPECT_GT(std::stoull(*accepted_generation), 0u);
+    EXPECT_EQ(marker_attribute(*accepted_authority, "levels"), refused_levels);
+    EXPECT_EQ(marker_attribute(*accepted_authority, "epoch"), refused_epoch);
+    EXPECT_EQ(marker_attribute(*accepted_authority, "topology-generation"),
+              refused_topology_generation);
+    EXPECT_EQ(marker_attribute(*accepted_authority, "blocks"), refused_blocks);
+    EXPECT_EQ(marker_attribute(*accepted_authority, "lane"), refused_lane);
+    EXPECT_EQ(marker_attribute(*accepted_authority, "lane-size"), refused_lane_size);
+    EXPECT_EQ(marker_attribute(*accepted_authority, "prototype-ncomp"), refused_components);
+    EXPECT_EQ(marker_attribute(*accepted_authority, "prototype-ghosts"), refused_ghosts);
+    EXPECT_EQ(marker_attribute(*accepted_authority, "prototype-local-fabs"), refused_fabs);
+    // Candidate B observes its detached image before A can be retired.  This ordering, combined
+    // with the bit-identical POPSAND5 checks above, forbids any pre-publish leakage from B to A.
+    EXPECT_LT(marker_index_with_prefix(markers_after_accept, "replacement-b:prepare-authority:"),
+              marker_index(markers_after_accept, "accepted-a:destroy"));
     bind_refined_system(system);
   }
 }

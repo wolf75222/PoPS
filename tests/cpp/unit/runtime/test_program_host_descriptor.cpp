@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "program_v5_fixture.hpp"
+
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/program/owned_program_installation.hpp>
@@ -7,9 +9,12 @@
 #include <pops/runtime/program/program_preparation_image.hpp>
 #include <pops/runtime/system.hpp>
 
+#include <atomic>
+#include <cstdlib>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <new>
 #include <optional>
 #include <span>
 #include <string>
@@ -20,6 +25,113 @@
 #if defined(POPS_HAS_KOKKOS)
 #include <Kokkos_Core.hpp>
 #endif
+
+namespace {
+
+std::atomic<bool> g_seal_allocation_fault_enabled{false};
+std::atomic<std::uint64_t> g_seal_allocation_fault_after{0};
+std::atomic<std::uint64_t> g_seal_allocation_attempts{0};
+
+void* seal_test_allocate(std::size_t size) {
+  if (g_seal_allocation_fault_enabled.load(std::memory_order_relaxed) &&
+      g_seal_allocation_attempts.fetch_add(1, std::memory_order_relaxed) + 1 ==
+          g_seal_allocation_fault_after.load(std::memory_order_relaxed))
+    throw std::bad_alloc();
+  void* pointer = std::malloc(size == 0 ? 1 : size);
+  if (pointer == nullptr)
+    throw std::bad_alloc();
+  return pointer;
+}
+
+class SealAllocationFault final {
+ public:
+  explicit SealAllocationFault(std::uint64_t fail_after) {
+    g_seal_allocation_attempts.store(0, std::memory_order_relaxed);
+    g_seal_allocation_fault_after.store(fail_after, std::memory_order_relaxed);
+    g_seal_allocation_fault_enabled.store(true, std::memory_order_relaxed);
+  }
+  SealAllocationFault(const SealAllocationFault&) = delete;
+  SealAllocationFault& operator=(const SealAllocationFault&) = delete;
+  ~SealAllocationFault() { close(); }
+
+  void close() noexcept { g_seal_allocation_fault_enabled.store(false, std::memory_order_relaxed); }
+};
+
+}  // namespace
+
+void* operator new(std::size_t size) {
+  return seal_test_allocate(size);
+}
+void* operator new[](std::size_t size) {
+  return seal_test_allocate(size);
+}
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+  try {
+    return seal_test_allocate(size);
+  } catch (...) {
+    return nullptr;
+  }
+}
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+  return ::operator new(size, std::nothrow);
+}
+void operator delete(void* pointer) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+void* operator new(std::size_t size, std::align_val_t alignment) {
+  void* pointer = nullptr;
+  if (posix_memalign(&pointer, static_cast<std::size_t>(alignment), size == 0 ? 1 : size) != 0)
+    pointer = nullptr;
+  if (pointer == nullptr)
+    throw std::bad_alloc();
+  return pointer;
+}
+void* operator new[](std::size_t size, std::align_val_t alignment) {
+  return ::operator new(size, alignment);
+}
+void* operator new(std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
+  try {
+    return ::operator new(size, alignment);
+  } catch (...) {
+    return nullptr;
+  }
+}
+void* operator new[](std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
+  return ::operator new(size, alignment, std::nothrow);
+}
+void operator delete(void* pointer, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::size_t, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::size_t, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::align_val_t, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::align_val_t, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
 
 namespace {
 
@@ -196,12 +308,20 @@ pops::runtime::program::PreparedProgramInstallation prepared_installation(
   resource.component_names = "[\"value\"]";
   resource.shape = "[1]";
   tables.resource_plan.push_back(std::move(resource));
+  const std::string payload = tables.canonical_resource_digest_payload(std::uint64_t{64});
+  const std::string digest =
+      pops::identity::sha256_hex(std::vector<std::uint8_t>(payload.begin(), payload.end()));
+  tables.resource_plan.front().plan_digest = digest;
+  const std::string manifest = tables.canonical_resource_manifest(std::uint64_t{64}, digest);
 
-  OwnedProgramInstallation owner(pops::dynlib::UniqueHandle{nullptr},
-                                 prepared_installation_descriptor(candidate),
-                                 ProgramInstallationMetadata{"artifact", "abi", "route", "boundary",
-                                                             "persistent", "checkpoint", "program"},
-                                 std::move(tables));
+  OwnedProgramInstallation owner(
+      pops::dynlib::UniqueHandle{nullptr}, prepared_installation_descriptor(candidate),
+      ProgramInstallationMetadata{"artifact", "abi", "route", "boundary",
+                                  "{\"resource_plan\":" + manifest +
+                                      ",\"resource_plan_digest\":\"" + digest +
+                                      "\",\"resource_plan_maximum_bytes\":64}",
+                                  "checkpoint", "program"},
+      std::move(tables));
   owner.set_preparation_image(image);
   owner.prepare(host);
   return PreparedProgramInstallation(std::move(owner));
@@ -279,6 +399,9 @@ TEST(PreparedProgramInstallation, RetainsOneImmutableDescriptionAndPreparationWi
   ASSERT_EQ(prepared.tables().resource_plan.size(), 1u);
   EXPECT_EQ(&prepared.resource_plan(), &prepared.tables().resource_plan);
   EXPECT_EQ(prepared.resource_plan().front().identity, "resource");
+  EXPECT_FALSE(prepared.resource_plan_sealed());
+  EXPECT_THROW((void)prepared.resource_ceiling(), std::logic_error);
+  prepared.seal_resource_plan(std::span<const ProgramInstallationTables::ResourcePrototype>{});
   EXPECT_EQ(prepared.resource_ceiling(), 64u);
   EXPECT_EQ(prepared.maximum_bytes(), 64u);
   EXPECT_EQ(prepared.generation(), image->generation());
@@ -286,6 +409,58 @@ TEST(PreparedProgramInstallation, RetainsOneImmutableDescriptionAndPreparationWi
   EXPECT_EQ(prepared.sealed_resource_plan().entries().front().slot, 0u);
   EXPECT_TRUE(prepared.persistent_values().bound());
   EXPECT_EQ(candidate.destroy_calls, 0);
+}
+
+TEST(PreparedProgramInstallation,
+     FaultedSealKeepsTheSymbolicAuthorityRetryableAndConsumesTheSealExactlyOnce) {
+  using namespace pops::runtime::program;
+  bool observed_bad_alloc = false;
+  bool completed = false;
+
+  // Run every allocation ordinal through the whole seal path.  This includes the persistent-value
+  // bind allocation after materialization; each failed image must leave the live owner symbolic and
+  // a retry must still publish the same exact authority.
+  for (std::uint64_t fail_after = 1; fail_after != 128 && !completed; ++fail_after) {
+    PreparedInstallationCandidate candidate;
+    std::shared_ptr<ProgramPreparationImage> image;
+    auto prepared = prepared_installation(candidate, image);
+    const std::string manifest_before = prepared.metadata().persistent_resource_manifest;
+    const auto type_before = prepared.resource_plan().front().resource_type;
+    const auto flags_before = prepared.resource_plan().front().flags;
+    bool faulted = false;
+    {
+      SealAllocationFault fault(fail_after);
+      try {
+        prepared.seal_resource_plan(
+            std::span<const ProgramInstallationTables::ResourcePrototype>{});
+      } catch (const std::bad_alloc&) {
+        faulted = true;
+      }
+      fault.close();
+    }
+
+    if (faulted) {
+      observed_bad_alloc = true;
+      EXPECT_FALSE(prepared.resource_plan_sealed());
+      EXPECT_EQ(prepared.metadata().persistent_resource_manifest, manifest_before);
+      EXPECT_EQ(prepared.resource_plan().front().resource_type, type_before);
+      EXPECT_EQ(prepared.resource_plan().front().flags, flags_before);
+      EXPECT_TRUE(prepared.tables().prepared_layout_manifest().empty());
+
+      prepared.seal_resource_plan(std::span<const ProgramInstallationTables::ResourcePrototype>{});
+      EXPECT_TRUE(prepared.resource_plan_sealed());
+      EXPECT_TRUE(prepared.persistent_values().bound());
+      EXPECT_THROW(prepared.seal_resource_plan(
+                       std::span<const ProgramInstallationTables::ResourcePrototype>{}),
+                   std::logic_error);
+    } else {
+      completed = true;
+      EXPECT_TRUE(prepared.resource_plan_sealed());
+    }
+  }
+
+  EXPECT_TRUE(observed_bad_alloc);
+  EXPECT_TRUE(completed);
 }
 
 TEST(ProgramResourceMaterializer, AggregatesExactBytesAcrossAllSubslots) {
@@ -389,6 +564,176 @@ TEST(ProgramResourceMaterializer, NeverProjectsSymbolicRowToTheFormerEightByteFa
                std::invalid_argument);
 }
 
+TEST(ProgramResourceMaterializer, SealsHostOnlyFamiliesForAnExactEmptyValuePlan) {
+  using namespace pops::runtime::program;
+  ProgramInstallationTables tables;
+  const std::vector<ProgramInstallationTables::ResourcePrototype> prototypes{
+      {0, 0, {96, 1, 1, 0, 96, 96}, ProgramInstallationTables::ResourcePrototypeKind::hot_snapshot},
+      {0, 1, {32, 1, 1, 0, 32, 32}, ProgramInstallationTables::ResourcePrototypeKind::reduction},
+      {0,
+       2,
+       {64, 1, 1, 0, 64, 64},
+       ProgramInstallationTables::ResourcePrototypeKind::prepared_coupling},
+  };
+  const auto plan = tables.materialize_resource_plan(prototypes);
+  EXPECT_TRUE(plan.entries().empty());
+  EXPECT_EQ(plan.maximum_bytes(), 192u);
+  EXPECT_NE(tables.prepared_layout_manifest().find("\"hot_snapshot\""), std::string::npos);
+  EXPECT_NE(tables.prepared_layout_manifest().find("\"reduction\""), std::string::npos);
+  EXPECT_NE(tables.prepared_layout_manifest().find("\"prepared_coupling\""), std::string::npos);
+  EXPECT_THROW(tables.materialize_resource_plan(prototypes, 191), std::invalid_argument);
+}
+
+TEST(ProgramResourcePlan, BindsZeroPersistentSlotsForAnExactHostOnlyCeiling) {
+  using namespace pops::runtime::program;
+  ProgramInstallationTables tables;
+  const std::string payload = tables.canonical_resource_digest_payload(std::uint64_t{128});
+  const std::string digest =
+      pops::identity::sha256_hex(std::vector<std::uint8_t>(payload.begin(), payload.end()));
+  const ProgramResourcePlan plan({}, 128, "program-resource-plan:v1", digest);
+  EXPECT_TRUE(plan.entries().empty());
+  EXPECT_EQ(plan.slot_count(), 0u);
+  EXPECT_EQ(plan.maximum_bytes(), 128u);
+
+  ProgramPersistentValueStore store;
+  store.bind(plan);
+  EXPECT_TRUE(store.bound());
+  EXPECT_EQ(store.size(), 0u);
+  EXPECT_EQ(store.maximum_bytes(), 128u);
+}
+
+TEST(PreparedProgramInstallation, SealsAnEmptyValuePlanWithHostCapacityExactly) {
+  using namespace pops::runtime::program;
+  const std::vector<ProgramInstallationTables::ResourcePrototype> prototypes{
+      {0, 0, {96, 1, 1, 0, 96, 96}, ProgramInstallationTables::ResourcePrototypeKind::hot_snapshot},
+      {0, 1, {32, 1, 1, 0, 32, 32}, ProgramInstallationTables::ResourcePrototypeKind::reduction},
+  };
+  const auto make_prepared = [&](std::uint64_t maximum_bytes,
+                                 std::optional<std::uint64_t> manifest_ceiling) {
+    auto candidate = std::make_shared<PreparedInstallationCandidate>();
+    auto host = prepared_installation_host(candidate->service_token);
+    auto image =
+        std::make_shared<TestPreparationImage>(2, ProgramRuntimeKind::uniform, host.services);
+    bind_program_preparation_image(host, image);
+    ProgramInstallationTables tables;
+    const std::string payload = tables.canonical_resource_digest_payload(manifest_ceiling);
+    const std::string digest =
+        pops::identity::sha256_hex(std::vector<std::uint8_t>(payload.begin(), payload.end()));
+    ProgramInstallationMetadata metadata{
+        "artifact",
+        "abi",
+        "route",
+        "boundary",
+        "{\"resource_plan\":" + tables.canonical_resource_manifest(manifest_ceiling, digest) +
+            ",\"resource_plan_digest\":\"" + digest + "\",\"resource_plan_maximum_bytes\":" +
+            (manifest_ceiling ? std::to_string(*manifest_ceiling) : std::string{"null"}) + "}",
+        "checkpoint",
+        "program"};
+    auto descriptor = prepared_installation_descriptor(*candidate);
+    descriptor.maximum_bytes = maximum_bytes;
+    OwnedProgramInstallation owner(pops::dynlib::UniqueHandle{nullptr}, descriptor,
+                                   std::move(metadata), std::move(tables));
+    owner.set_preparation_image(image);
+    owner.prepare(host);
+    // The candidate context must outlive the descriptor in this small direct-construction test.
+    return std::pair{PreparedProgramInstallation(std::move(owner)), std::move(candidate)};
+  };
+
+  auto symbolic_prepared = make_prepared(kProgramResourcePlanUnknownExtent, std::uint64_t{0});
+  auto candidate = std::move(symbolic_prepared.second);
+  auto prepared = std::move(symbolic_prepared.first);
+  prepared.seal_resource_plan(prototypes);
+  EXPECT_TRUE(prepared.resource_plan_sealed());
+  EXPECT_TRUE(prepared.sealed_resource_plan().entries().empty());
+  EXPECT_EQ(prepared.sealed_resource_plan().maximum_bytes(), 128u);
+  EXPECT_NE(prepared.metadata().persistent_resource_manifest.find("\"maximum_bytes\":128"),
+            std::string::npos);
+  EXPECT_NE(prepared.metadata().persistent_resource_manifest.find("\"prepared_layouts\":"),
+            std::string::npos);
+
+  auto exact_zero_prepared = make_prepared(0, std::uint64_t{0});
+  auto zero_candidate = std::move(exact_zero_prepared.second);
+  auto zero_ceiling = std::move(exact_zero_prepared.first);
+  const std::string before = zero_ceiling.metadata().persistent_resource_manifest;
+  EXPECT_THROW(zero_ceiling.seal_resource_plan(prototypes), std::invalid_argument);
+  EXPECT_FALSE(zero_ceiling.resource_plan_sealed());
+  EXPECT_EQ(zero_ceiling.metadata().persistent_resource_manifest, before);
+
+  auto state_free_prepared = make_prepared(0, std::uint64_t{0});
+  auto state_free_candidate = std::move(state_free_prepared.second);
+  auto state_free = std::move(state_free_prepared.first);
+  state_free.seal_resource_plan(std::span<const ProgramInstallationTables::ResourcePrototype>{});
+  EXPECT_TRUE(state_free.resource_plan_sealed());
+  EXPECT_TRUE(state_free.sealed_resource_plan().entries().empty());
+  EXPECT_EQ(state_free.sealed_resource_plan().maximum_bytes(), 0u);
+}
+
+TEST(PreparedProgramInstallation, ExactValueRowsRemainSymbolicUntilHostCarriersAreSealed) {
+  using namespace pops::runtime::program;
+  PreparedInstallationCandidate candidate;
+  auto host = prepared_installation_host(candidate.service_token);
+  auto image =
+      std::make_shared<TestPreparationImage>(2, ProgramRuntimeKind::uniform, host.services);
+  bind_program_preparation_image(host, image);
+  ProgramInstallationTables tables;
+  ProgramInstallationTables::ResourcePlan row;
+  row.slot = 0;
+  row.value_id = 7;
+  row.occurrence_path_id = 11;
+  row.level = -1;
+  row.components = 1;
+  row.bytes = 64;
+  row.maximum_bytes = 64;
+  row.schema = "program-resource-plan:v1";
+  row.identity = "resource";
+  row.occurrence_path = "root/0";
+  row.owner = "block";
+  row.space = "cell";
+  row.clock = "macro";
+  row.lifetime = "persistent_schedule";
+  row.centering = "cell";
+  row.off_policy = "hold";
+  row.communication = "none";
+  row.transfer_provider = "redistribute_exact";
+  row.restart_provider = "none";
+  row.component_names = "[\"value\"]";
+  row.shape = "[8]";
+  tables.resource_plan.push_back(std::move(row));
+  const std::string payload = tables.canonical_resource_digest_payload(std::uint64_t{64});
+  tables.resource_plan.front().plan_digest =
+      pops::identity::sha256_hex(std::vector<std::uint8_t>(payload.begin(), payload.end()));
+  const std::string manifest = tables.canonical_resource_manifest(
+      std::uint64_t{64}, tables.resource_plan.front().plan_digest);
+  ProgramInstallationMetadata metadata{
+      "artifact",
+      "abi",
+      "route",
+      "boundary",
+      "{\"resource_plan\":" + manifest + ",\"resource_plan_digest\":\"" +
+          tables.resource_plan.front().plan_digest + "\",\"resource_plan_maximum_bytes\":64}",
+      "checkpoint",
+      "program"};
+  auto descriptor = prepared_installation_descriptor(candidate);
+  descriptor.maximum_bytes = kProgramResourcePlanUnknownExtent;
+  OwnedProgramInstallation owner(pops::dynlib::UniqueHandle{nullptr}, descriptor,
+                                 std::move(metadata), std::move(tables));
+  owner.set_preparation_image(image);
+  owner.prepare(host);
+  PreparedProgramInstallation prepared(std::move(owner));
+  const std::vector<ProgramInstallationTables::ResourcePrototype> prototypes{
+      {0, 0, {32, 1, 1, 0, 32, 32}, ProgramInstallationTables::ResourcePrototypeKind::hot_snapshot},
+  };
+  prepared.seal_resource_plan(prototypes);
+  ASSERT_EQ(prepared.sealed_resource_plan().entries().size(), 1u);
+  EXPECT_EQ(prepared.sealed_resource_plan().entries().front().maximum_bytes, 64u);
+  EXPECT_EQ(prepared.sealed_resource_plan().maximum_bytes(), 96u);
+  EXPECT_NE(prepared.metadata().persistent_resource_manifest.find("\"maximum_bytes\":96"),
+            std::string::npos);
+  EXPECT_NE(
+      prepared.metadata().persistent_resource_manifest.find("\"resource_plan_maximum_bytes\":96"),
+      std::string::npos);
+}
+
 TEST(PreparedProgramInstallation, SymbolicPlanMustBeExplicitlySealedAfterPreparation) {
   using namespace pops::runtime::program;
   PreparedInstallationCandidate candidate;
@@ -455,20 +800,111 @@ TEST(PreparedProgramInstallation, RefusesAnOwnerThatWasNotPrepared) {
   EXPECT_EQ(candidate.destroy_calls, 1);
 }
 
-TEST(PreparedProgramInstallation, ExplicitOwnerTransferPreservesPreparedStateUntilDestruction) {
+TEST(PreparedProgramInstallation, SealedPayloadConsumesOwnerAndRefusesSecondOrMovedFromRelease) {
+  using namespace pops::runtime::program;
   PreparedInstallationCandidate candidate;
-  std::shared_ptr<pops::runtime::program::ProgramPreparationImage> image;
+  std::shared_ptr<ProgramPreparationImage> image;
   auto prepared = prepared_installation(candidate, image);
+  prepared.seal_resource_plan(std::span<const ProgramInstallationTables::ResourcePrototype>{});
 
-  auto owner = std::move(prepared).release_owner();
-  EXPECT_TRUE(owner.prepared());
-  EXPECT_EQ(owner.metadata().artifact_identity, "artifact");
-  ASSERT_EQ(owner.tables().resource_plan.size(), 1u);
-  EXPECT_EQ(owner.tables().resource_plan.front().identity, "resource");
+  auto moved = std::move(prepared);
+  EXPECT_THROW(std::move(prepared).release_publication_payload(), std::logic_error);
+
+  auto payload = std::move(moved).release_publication_payload();
+  EXPECT_THROW(std::move(moved).release_publication_payload(), std::logic_error);
+  EXPECT_TRUE(payload.owner.prepared());
+  EXPECT_EQ(payload.generation, image->generation());
+  EXPECT_TRUE(payload.persistent_values.bound());
+  EXPECT_EQ(payload.resource_plan.maximum_bytes(), 64u);
+  EXPECT_EQ(payload.owner.metadata().artifact_identity, "artifact");
+  ASSERT_EQ(payload.owner.tables().resource_plan.size(), 1u);
+  EXPECT_EQ(payload.owner.tables().resource_plan.front().identity, "resource");
   EXPECT_EQ(candidate.destroy_calls, 0);
 
-  owner.reset();
+  payload.owner.reset();
   EXPECT_EQ(candidate.destroy_calls, 1);
+}
+
+TEST(ProgramV5Fixture, RefusesMalformedFluxBasisAndFinalTermRows) {
+  using pops::test::program_v5::CallbackProgramFaceFluxStage;
+  using pops::test::program_v5::CallbackProgramFluxBasisOccurrence;
+  using pops::test::program_v5::callback_program_source;
+  using pops::runtime::program::ProgramFluxBudgetRecord;
+
+  const auto source = [&](std::vector<CallbackProgramFluxBasisOccurrence> bases,
+                          std::vector<CallbackProgramFaceFluxStage> terms) {
+    return callback_program_source(17, "fixture-flux", "clock.macro", {"tracer"}, {},
+                                   "pops_test_program_callback", "amr", {}, {}, {}, {},
+                                   std::nullopt, std::nullopt, bases, terms);
+  };
+  EXPECT_NE(source({}, {}).find("kProgramFluxBudgets[] = {{0ULL, 0ULL, 0ULL, 0ULL}}"),
+            std::string::npos);
+  CallbackProgramFluxBasisOccurrence basis;
+  basis.basis_slot = 0;
+  basis.expression_slot = 1;
+  basis.block = 0;
+  basis.level = 0;
+  basis.rhs_identity = 3000;
+  basis.provider = pops::test::program_v5::kPreparedDefaultFluxProvider;
+  basis.identity = "fixture-flux/basis/0";
+  basis.occurrence_path = "fixture-flux/loop/basis/0";
+  basis.owner = "tracer";
+  basis.clock = "clock.macro";
+
+  auto malformed_basis = basis;
+  malformed_basis.block = -1;
+  EXPECT_THROW(source({malformed_basis}, {}), std::invalid_argument);
+
+  auto duplicate_basis = basis;
+  duplicate_basis.identity = "fixture-flux/basis/1";
+  duplicate_basis.occurrence_path = "fixture-flux/loop/basis/1";
+  EXPECT_THROW(source({basis, duplicate_basis}, {}), std::invalid_argument);
+
+  CallbackProgramFaceFluxStage malformed_term;
+  malformed_term.slot = 0;
+  malformed_term.basis_slot = 0;
+  malformed_term.expression_slot = 0;
+  malformed_term.dt_power = 2;
+  malformed_term.coefficient_numerator = 1;
+  malformed_term.coefficient_denominator = 2;
+  malformed_term.identity = "fixture-flux/stage/0";
+  malformed_term.occurrence_path = "fixture-flux/loop/basis/0";
+  malformed_term.owner = "tracer";
+  malformed_term.clock = "clock.macro";
+  EXPECT_THROW(source({basis}, {malformed_term}), std::invalid_argument);
+
+  const auto source_with_budget = [&](std::vector<CallbackProgramFluxBasisOccurrence> bases,
+                                      std::vector<CallbackProgramFaceFluxStage> terms,
+                                      std::vector<ProgramFluxBudgetRecord> budgets) {
+    return callback_program_source(17, "fixture-flux", "clock.macro", {"tracer"}, {},
+                                   "pops_test_program_callback", "amr", {}, {}, {}, {}, budgets,
+                                   std::nullopt, bases, terms);
+  };
+  auto canceled_basis = basis;
+  canceled_basis.basis_slot = 1;
+  canceled_basis.expression_slot = 2;
+  canceled_basis.identity = "fixture-flux/basis/1";
+  canceled_basis.occurrence_path = "fixture-flux/loop/basis/1";
+  CallbackProgramFaceFluxStage live_term;
+  live_term.slot = 0;
+  live_term.basis_slot = 0;
+  live_term.expression_slot = 0;
+  live_term.coefficient_numerator = 1;
+  live_term.coefficient_denominator = 2;
+  live_term.identity = "fixture-flux/stage/0";
+  live_term.occurrence_path = "fixture-flux/loop/basis/0";
+  live_term.owner = "tracer";
+  live_term.clock = "clock.macro";
+  EXPECT_NO_THROW(source_with_budget({basis, canceled_basis}, {live_term}, {{1, 1, 0, 0}}));
+
+  auto second_live_term = live_term;
+  second_live_term.slot = 1;
+  second_live_term.basis_slot = 1;
+  second_live_term.identity = "fixture-flux/stage/1";
+  second_live_term.occurrence_path = "fixture-flux/loop/basis/1";
+  EXPECT_THROW(
+      source_with_budget({basis, canceled_basis}, {live_term, second_live_term}, {{1, 1, 0, 0}}),
+      std::invalid_argument);
 }
 
 }  // namespace

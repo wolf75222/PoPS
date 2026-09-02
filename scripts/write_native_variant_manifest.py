@@ -23,7 +23,9 @@ from types import ModuleType
 from typing import Any
 
 
-MANIFEST_SCHEMA_VERSION = 1
+# Adding an execution-space identity changes the closed row wire format.  Do not accept the old
+# v1 rows with a default: a manifest that omits the identity is unauthenticated.
+MANIFEST_SCHEMA_VERSION = 2
 SUPPORTED_DIMENSIONS = (1, 2, 3)
 MANIFEST_NAME = "variants.json"
 _ROW_KEYS = {
@@ -34,8 +36,10 @@ _ROW_KEYS = {
     "abi_key",
     "has_mpi",
     "has_kokkos",
+    "kokkos_execution_space",
 }
 _DIGEST = re.compile(r"[0-9a-f]{64}")
+_EXECUTION_SPACE = re.compile(r"[A-Za-z][A-Za-z0-9_.:+-]*")
 
 
 class NativeVariantManifestError(RuntimeError):
@@ -92,6 +96,19 @@ def _validate_row(row: Any) -> dict[str, Any]:
     for name in ("has_mpi", "has_kokkos"):
         if type(row[name]) is not bool:
             raise NativeVariantManifestError("native variant %s must be a boolean" % name)
+    execution_space = row["kokkos_execution_space"]
+    if not isinstance(execution_space, str) or _EXECUTION_SPACE.fullmatch(execution_space) is None:
+        raise NativeVariantManifestError(
+            "native variant kokkos_execution_space is not an exact identity"
+        )
+    if row["has_kokkos"] and execution_space == "none":
+        raise NativeVariantManifestError(
+            "Kokkos-enabled native variant must name its execution space"
+        )
+    if not row["has_kokkos"] and execution_space != "none":
+        raise NativeVariantManifestError(
+            "non-Kokkos native variant must use execution space 'none'"
+        )
     return dict(row)
 
 
@@ -256,6 +273,7 @@ def native_variant_row(
         "abi_key": "pending",
         "has_mpi": False,
         "has_kokkos": False,
+        "kokkos_execution_space": "none",
     }
     _validate_row(placeholder)
 
@@ -283,6 +301,34 @@ def native_variant_row(
         if type(value) is not bool:
             raise NativeVariantManifestError("native extension %s fact is not boolean" % attribute)
         facts[field] = value
+    runtime_report_provider = getattr(module, "runtime_environment_report", None)
+    if not callable(runtime_report_provider):
+        raise NativeVariantManifestError(
+            "native extension has no callable runtime_environment_report"
+        )
+    runtime_report = runtime_report_provider()
+    if not isinstance(runtime_report, Mapping):
+        raise NativeVariantManifestError(
+            "native extension runtime_environment_report is not a mapping"
+        )
+    execution_space = runtime_report.get("kokkos_backend")
+    if not isinstance(execution_space, str) \
+            or _EXECUTION_SPACE.fullmatch(execution_space) is None:
+        raise NativeVariantManifestError(
+            "native extension does not expose an exact Kokkos execution space identity"
+        )
+    if facts["has_kokkos"]:
+        if execution_space == "none":
+            raise NativeVariantManifestError(
+                "Kokkos-enabled native extension must name its execution space"
+            )
+        expected_execution_space = execution_space
+    else:
+        if execution_space != "none":
+            raise NativeVariantManifestError(
+                "non-Kokkos native extension must report execution space 'none'"
+            )
+        expected_execution_space = "none"
     return {
         "dimension": expected_dimension,
         "path": relative_value,
@@ -291,6 +337,7 @@ def native_variant_row(
         "abi_key": abi_key,
         "has_mpi": facts["has_mpi"],
         "has_kokkos": facts["has_kokkos"],
+        "kokkos_execution_space": expected_execution_space,
     }
 
 

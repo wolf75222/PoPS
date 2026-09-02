@@ -40,12 +40,19 @@ _STRUCTURED_BLOCK_KEYS = (
     "false_block",
 )
 
-# Values in these families either bind a resident field or allocate a field-backed
-# scratch.  A scheduled value is included even when it is an alias (for example a
-# scheduled field solve), because its schedule/cache decision still needs a slot.
-_RESOURCE_OPS = frozenset(
+# These are the only Program operations that own storage consumed by a generated
+# ``prepare_*`` call.  This is deliberately an allow-list rather than a broad
+# ``state``/``rhs`` vtype test: a State input is an accepted read lease and a
+# ``solve_outcome_component`` is an alias of an already prepared solve result.
+# Neither owns a field allocation, so admitting either as a runtime-sized row
+# makes host materialization fail correctly with an unresolved slot.  Schedule
+# users are handled separately below because their dense cache identity is a
+# genuine persistent-slot consumer even when the wrapped operation is an alias.
+_STORAGE_OWNING_OPS = frozenset(
     {
-        "state",
+        # Generic external IR/test-double spelling for an already materialized
+        # scratch family.  Native Program values use the typed operations below.
+        "scratch",
         "rhs",
         "source",
         "apply",
@@ -56,27 +63,72 @@ _RESOURCE_OPS = frozenset(
         "solve_local_nonlinear",
         "solve_coupled_implicit",
         "coupled_rate",
-        "coupled_rate_out",
         "local_transform",
-        "history",
-        "store_history",
         "while",
         "range",
         "subcycle",
         "branch",
-        "synchronize",
-        "solve_fields",
         "solve_fields_from_blocks",
+        # A reachable coupled-interface operator owns the prepared apply
+        # family represented by its nested block; dead declarations are removed
+        # by the executable reachability closure before this predicate runs.
+        "coupled_interface_jacobian",
         "cell_compare",
         "where",
         "scalar_field",
         "vector_field",
         "condensed_coeffs",
         "condensed_rhs",
-        "condensed_reconstruct",
-        "condensed_energy",
+        "solve_linear",
+        # The matrix-free apply result is the identity used by the prelude to
+        # reserve its reusable accumulator.  ``apply_in`` is a read-only
+        # callback argument, but ``apply_out`` is the owned accumulator shape.
+        "apply_out",
+        # ``rhs_jacvec`` is nested under a matrix-free operator; the prepared
+        # matrix-free emitter allocates its four fixed scalar families through
+        # this exact occurrence.
+        "rhs_jacvec",
     }
 )
+
+
+def _owns_materialized_program_storage(
+    value: Any,
+    metadata: Mapping[str, Any],
+    *,
+    inline_local_residual: bool = False,
+) -> bool:
+    """Return whether one occurrence must retain a ProgramResourcePlan row.
+
+    The result is the lowering-side authority for runtime-sized materialization:
+    every ``True`` path has a generated ``prepare_*`` or dense schedule consumer;
+    every ``False`` path is an accepted/read-only alias and therefore must never
+    manufacture a symbolic allocation row.  Keeping this decision beside the
+    immutable plan prevents the C++ host from guessing a field shape or allowing
+    an unprimed hot allocation.
+    """
+
+    # A LocalNewton residual block is lowered directly into the device-local
+    # residual expression.  Its source/apply/affine nodes are neither fields
+    # nor persistent-slot consumers, even though the same operation spellings
+    # own scratch in the outer Program body.  Retaining them would manufacture
+    # runtime-sized rows with no possible ``prepare_*`` prototype.
+    if inline_local_residual:
+        return False
+    if metadata.get("schedule") is not None:
+        return True
+    op = getattr(value, "op", None)
+    if op in _STORAGE_OWNING_OPS:
+        return True
+    if op != "synchronize":
+        return False
+    # Sample-and-hold is a reference alias.  Linear history interpolation is
+    # the one synchronization route that emits ``scratch_state`` for its own
+    # result occurrence.
+    relation = metadata.get("relation")
+    if relation is None:
+        relation = getattr(value, "attrs", {}).get("relation")
+    return isinstance(relation, Mapping) and relation.get("kind") == "history_interpolation"
 
 
 def _canonical(value: Any) -> Any:
@@ -1511,14 +1563,12 @@ def _entry_for_occurrence(
     resolved_level: int | None | object = _LEVEL_UNSPECIFIED,
     level_index: int = 0,
     resolved_levels: tuple[int | None, ...] | None = None,
+    inline_local_residual: bool = False,
 ) -> ProgramResourcePlanEntry | None:
     metadata = _resource_descriptor(value)
-    op = getattr(value, "op", None)
-    vtype = getattr(value, "vtype", None)
-    schedule = metadata.get("schedule")
-    if op not in _RESOURCE_OPS and schedule is None and vtype not in {
-        "state", "rhs", "scalar_field", "fields"
-    }:
+    if not _owns_materialized_program_storage(
+        value, metadata, inline_local_residual=inline_local_residual
+    ):
         return None
     lifetime, off, scheduled, _always = _schedule_metadata(value, target=target)
     explicit_lifetime = metadata.get("lifetime")
@@ -1776,6 +1826,18 @@ def lower_program_resource_plan(program: Any, *, target: str | None = None,
 
     rows = []
     occurrences = list(_reachable_program_occurrences(program))
+    # This is intentionally a *path* predicate, rather than an object-id set:
+    # operation values have one canonical static occurrence, but equivalent
+    # source/apply nodes can occur both inside a LocalNewton residual expression
+    # and in the outer Program body.  Only the lexical residual subtree is
+    # device-inline; its outer occurrence still owns a prepared field slot.
+    inline_local_residual_prefixes = tuple(
+        "%s/residual_block/" % owner_path
+        for owner, owner_path in occurrences
+        if getattr(owner, "op", None) == "solve_local_nonlinear"
+        and isinstance(getattr(owner, "attrs", {}), Mapping)
+        and isinstance(getattr(owner, "attrs", {}).get("residual_block"), (list, tuple))
+    )
     occurrence_values: dict[int, list[ProgramPersistentValueKey]] = {}
     for value, path in occurrences:
         metadata = _resource_descriptor(value)
@@ -1788,6 +1850,9 @@ def lower_program_resource_plan(program: Any, *, target: str | None = None,
                 resolved_level=resolved_level,
                 level_index=level_index,
                 resolved_levels=resolved_levels,
+                inline_local_residual=any(
+                    path.startswith(prefix) for prefix in inline_local_residual_prefixes
+                ),
             )
             if row is not None:
                 rows.append(row)

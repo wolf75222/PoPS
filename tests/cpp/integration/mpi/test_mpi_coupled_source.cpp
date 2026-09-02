@@ -285,6 +285,10 @@ static int run_test_mpi_coupled_source_body(int argc, char** argv) {
     sys.apply_coupling_operators(Real(dt), {&state_electrons, &state_ions, &state_neutrals});
   } catch (const std::invalid_argument&) {
     live_state_rejected = true;
+  } catch (const std::logic_error&) {
+    // The resident authority is deliberately unavailable before mark_bound; this cold/direct
+    // probe must not silently fall back to the allocating registry overload.
+    live_state_rejected = true;
   } catch (const std::runtime_error&) {
     // Multi-rank preflight reports one collective error after every rank rejects its live carrier.
     live_state_rejected = true;
@@ -316,6 +320,20 @@ static int run_test_mpi_coupled_source_body(int argc, char** argv) {
   const Real rollback_electrons = reduce_max_local(candidate_electrons, 0);
   const Real rollback_ions = reduce_max_local(candidate_ions, 0);
   const Real rollback_neutrals = reduce_max_local(candidate_neutrals, 0);
+  // The resident invocation witness carries dt as a fixed canonical IEEE scalar pair.  A rank
+  // mismatch must be refused before the workspace captures or exposes one mutable candidate.
+  bool invocation_mismatch_rejected = false;
+  try {
+    sys.apply_coupling_operators(me == 0 ? Real(dt) : Real(2 * dt),
+                                 {&candidate_electrons, &candidate_ions, &candidate_neutrals});
+  } catch (const std::invalid_argument&) {
+    invocation_mismatch_rejected = true;
+  }
+  chk(invocation_mismatch_rejected &&
+          reduce_max_local(candidate_electrons, 0) == rollback_electrons &&
+          reduce_max_local(candidate_ions, 0) == rollback_ions &&
+          reduce_max_local(candidate_neutrals, 0) == rollback_neutrals,
+      "prepared coupling fixed dt witness rejects rank mismatch before mutation");
   *fail_rollback_probe = true;
   bool rejected_and_rolled_back = false;
   try {

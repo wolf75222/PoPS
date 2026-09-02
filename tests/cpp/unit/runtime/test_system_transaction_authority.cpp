@@ -10,13 +10,20 @@
 #include <pops/runtime/builders/compiled/dsl_block.hpp>
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/program/program_execution_services.hpp>
+#include <pops/runtime/system/prepared_coupling_workspace.hpp>
+#include <pops/runtime/system/system_coupling_registry.hpp>
 #include <pops/runtime/system.hpp>
 
+#include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <fstream>
 #include <future>
 #include <memory>
+#include <new>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -37,6 +44,130 @@ PreparedSystemBlock<Dim> prepare_exact_system_block(
 }
 
 }  // namespace pops
+
+namespace {
+
+// This test binary intercepts every ordinary, aligned, and nothrow global allocation form, but
+// only counts while a witness explicitly arms its window.
+std::atomic<bool> g_heap_measurement_enabled{false};
+std::atomic<std::uint64_t> g_measured_heap_allocations{0};
+
+void note_measured_heap_allocation() noexcept {
+  if (g_heap_measurement_enabled.load(std::memory_order_relaxed))
+    g_measured_heap_allocations.fetch_add(1, std::memory_order_relaxed);
+}
+
+void* measured_allocate(std::size_t size) {
+  void* pointer = std::malloc(size == 0 ? 1 : size);
+  if (pointer == nullptr)
+    throw std::bad_alloc();
+  note_measured_heap_allocation();
+  return pointer;
+}
+
+void* measured_allocate_nothrow(std::size_t size) noexcept {
+  void* pointer = std::malloc(size == 0 ? 1 : size);
+  if (pointer != nullptr)
+    note_measured_heap_allocation();
+  return pointer;
+}
+
+void* measured_aligned_allocate(std::size_t size, std::size_t alignment) {
+  void* pointer = nullptr;
+  if (posix_memalign(&pointer, alignment, size == 0 ? 1 : size) != 0)
+    pointer = nullptr;
+  if (pointer == nullptr)
+    throw std::bad_alloc();
+  note_measured_heap_allocation();
+  return pointer;
+}
+
+void* measured_aligned_allocate_nothrow(std::size_t size, std::size_t alignment) noexcept {
+  void* pointer = nullptr;
+  if (posix_memalign(&pointer, alignment, size == 0 ? 1 : size) != 0)
+    pointer = nullptr;
+  if (pointer != nullptr)
+    note_measured_heap_allocation();
+  return pointer;
+}
+
+class HeapAllocationWindow {
+ public:
+  HeapAllocationWindow() : before_(g_measured_heap_allocations.load(std::memory_order_relaxed)) {
+    g_heap_measurement_enabled.store(true, std::memory_order_relaxed);
+  }
+
+  [[nodiscard]] std::uint64_t close() noexcept {
+    g_heap_measurement_enabled.store(false, std::memory_order_relaxed);
+    return g_measured_heap_allocations.load(std::memory_order_relaxed) - before_;
+  }
+
+ private:
+  std::uint64_t before_ = 0;
+};
+
+}  // namespace
+
+void* operator new(std::size_t size) {
+  return measured_allocate(size);
+}
+void* operator new[](std::size_t size) {
+  return measured_allocate(size);
+}
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+  return measured_allocate_nothrow(size);
+}
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+  return measured_allocate_nothrow(size);
+}
+void operator delete(void* pointer) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+void* operator new(std::size_t size, std::align_val_t alignment) {
+  return measured_aligned_allocate(size, static_cast<std::size_t>(alignment));
+}
+void* operator new[](std::size_t size, std::align_val_t alignment) {
+  return measured_aligned_allocate(size, static_cast<std::size_t>(alignment));
+}
+void* operator new(std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
+  return measured_aligned_allocate_nothrow(size, static_cast<std::size_t>(alignment));
+}
+void* operator new[](std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
+  return measured_aligned_allocate_nothrow(size, static_cast<std::size_t>(alignment));
+}
+void operator delete(void* pointer, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::size_t, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::size_t, std::align_val_t) noexcept {
+  std::free(pointer);
+}
+void operator delete(void* pointer, std::align_val_t, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
+void operator delete[](void* pointer, std::align_val_t, const std::nothrow_t&) noexcept {
+  std::free(pointer);
+}
 
 namespace {
 
@@ -64,6 +195,35 @@ void add_authority_block(pops::System<Dim>& system) {
   system.seal_auxiliary_providers();
   pops::add_compiled_model(system, "gas", pops::nd::ScalarAdvection<Dim>{}, "none", "rusanov",
                            "conservative", "explicit");
+}
+
+template <int Dim>
+void add_coupling_blocks(pops::System<Dim>& system) {
+  system.install_block_state_route("donor", "test.system-coupling.donor.state");
+  system.install_block_state_route("receiver", "test.system-coupling.receiver.state");
+  system.seal_auxiliary_providers();
+  pops::add_compiled_model(system, "donor", pops::nd::ScalarAdvection<Dim>{}, "none", "rusanov",
+                           "conservative", "explicit");
+  pops::add_compiled_model(system, "receiver", pops::nd::ScalarAdvection<Dim>{}, "none", "rusanov",
+                           "conservative", "explicit");
+}
+
+template <int Dim>
+void add_unit_to_first_coupling_candidate(const std::vector<pops::MultiFab<Dim>*>& candidates) {
+  if (candidates.size() != 2 || candidates.front() == nullptr)
+    throw std::logic_error("coupling test received an incomplete candidate pack");
+  pops::MultiFab<Dim>& donor = *candidates.front();
+  if (donor.local_size() != 0) {
+    const auto values = donor.fab(0).view();
+    if constexpr (std::is_same_v<typename pops::MultiFab<Dim>::memory_space, Kokkos::HostSpace>)
+      values(donor.box(0).lo, 0) += pops::Real(1);
+    else
+      pops::for_each_cell(
+          pops::Box<Dim>{donor.box(0).lo, donor.box(0).lo},
+          [=] POPS_HD(const pops::Index<Dim>& index) { values(index, 0) += pops::Real(1); });
+  }
+  if constexpr (!std::is_same_v<typename pops::MultiFab<Dim>::memory_space, Kokkos::HostSpace>)
+    Kokkos::fence();
 }
 
 template <int Dim>
@@ -266,7 +426,10 @@ TEST(SystemTransactionAuthority, ExternalAcceptedWindowRemainsComposableWithInte
     auto scope = system._provisional_read_scope();
     EXPECT_TRUE(scope.valid());
     EXPECT_NO_THROW((void)system.step_change_l2_for_block("gas"));
-    EXPECT_THROW((void)system.step_change_l2_for_block("unknown"), std::out_of_range);
+    // Candidate diagnostics validate their input collectively before any rank reaches the
+    // reduction.  A local unknown block is therefore deliberately surfaced as one lane-wide
+    // refusal instead of leaking a rank-local out_of_range exception.
+    EXPECT_THROW((void)system.step_change_l2_for_block("unknown"), std::runtime_error);
   }
   // The outer savepoint retains the visibility writer until rollback/finalize. Public reads from
   // this writer thread are refused rather than manufacturing a lease over provisional state.
@@ -343,7 +506,7 @@ TEST(SystemTransactionAuthority, ProvisionalMailboxLeasePreventsStaleBalanceOrPr
   EXPECT_EQ(mailbox_callback_calls, 2u);
 }
 
-TEST(SystemTransactionAuthority, ReusedImageDoesNotAllocateFabStorageAfterWarmup) {
+TEST(SystemTransactionAuthority, PreparedFullAcceptedTransactionsAllocateNothing) {
   constexpr int dim = pops::kNativeDimension;
   pops::System<dim> system(unit_config<dim>(4));
   install_lane(system, "pops.test.system-transaction-authority.allocations");
@@ -351,18 +514,153 @@ TEST(SystemTransactionAuthority, ReusedImageDoesNotAllocateFabStorageAfterWarmup
   install_authority_program(system, "noop", "test.system-transaction-authority.allocations.v5");
   system.mark_bound();
 
-  // The first step is the cold bind/prime path for runtimes whose Program is installed after
-  // mark_bound. The measured interval starts only after the complete resident image exists.
-  ASSERT_NO_THROW(system.step(0.125));
-  const pops::AllocationEventStats before = pops::allocation_event_stats();
-  ASSERT_NO_THROW(system.step(0.125));
-  ASSERT_NO_THROW(system.step(0.125));
-  EXPECT_EQ(system.accepted_transaction_generation_(), 3u);
-  const pops::AllocationEventStats after = pops::allocation_event_stats();
-  EXPECT_EQ(after.fab_calls, before.fab_calls);
-  EXPECT_EQ(after.fab_bytes, before.fab_bytes);
-  EXPECT_EQ(after.communication_calls, before.communication_calls);
-  EXPECT_EQ(after.communication_bytes, before.communication_bytes);
+  // The Program candidate is installed and mark_bound before this point.  The interval below is
+  // exactly one external accepted transaction: begin -> step -> commit -> finalize.
+  const pops::AllocationEventStats first_before = pops::allocation_event_stats();
+  HeapAllocationWindow first_heap;
+  bool first_accepted = true;
+  try {
+    system.begin_step_transaction();
+    system.step(0.125);
+    system.commit_step_transaction();
+    system.finalize_step_transaction();
+  } catch (...) {
+    first_accepted = false;
+  }
+  const std::uint64_t first_heap_allocations = first_heap.close();
+  const pops::AllocationEventStats first_after = pops::allocation_event_stats();
+  ASSERT_TRUE(first_accepted);
+  EXPECT_EQ(first_heap_allocations, 0u);
+  EXPECT_EQ(first_after, first_before);
+  EXPECT_EQ(system.accepted_transaction_generation_(), 1u);
+
+  const pops::AllocationEventStats repeated_before = pops::allocation_event_stats();
+  HeapAllocationWindow repeated_heap;
+  bool repeated_accepted = true;
+  try {
+    system.begin_step_transaction();
+    system.step(0.125);
+    system.commit_step_transaction();
+    system.finalize_step_transaction();
+  } catch (...) {
+    repeated_accepted = false;
+  }
+  const std::uint64_t repeated_heap_allocations = repeated_heap.close();
+  const pops::AllocationEventStats repeated_after = pops::allocation_event_stats();
+  ASSERT_TRUE(repeated_accepted);
+  EXPECT_EQ(repeated_heap_allocations, 0u);
+  EXPECT_EQ(repeated_after, repeated_before);
+  EXPECT_EQ(system.accepted_transaction_generation_(), 2u);
+}
+
+TEST(SystemTransactionAuthority, PreparedCouplingWorkspaceReusesImagesAndRestoresEveryFailure) {
+  constexpr int dim = pops::kNativeDimension;
+  pops::System<dim> system(unit_config<dim>(4));
+  install_lane(system, "pops.test.system-transaction-authority.coupling");
+  add_coupling_blocks(system);
+
+  enum class Fault { none, throw_after_mutation, nonfinite };
+  auto fault = std::make_shared<Fault>(Fault::none);
+  system.install_prepared_coupling_operator(
+      "test.system-coupling.operator", "test.system-coupling/operator@1", {},
+      [fault](pops::Real, const std::vector<pops::MultiFab<dim>*>& candidates) {
+        add_unit_to_first_coupling_candidate(candidates);
+        if (*fault == Fault::nonfinite) {
+          pops::MultiFab<dim>& donor = *candidates.front();
+          if (donor.local_size() != 0) {
+            const auto values = donor.fab(0).view();
+            const pops::Index<dim> cell = donor.box(0).lo;
+            pops::for_each_cell(pops::Box<dim>{cell, cell}, [=] POPS_HD(const pops::Index<dim>& i) {
+              values(i, 0) = std::numeric_limits<pops::Real>::quiet_NaN();
+            });
+            Kokkos::fence();
+          }
+        }
+        if (*fault == Fault::throw_after_mutation) {
+          // Deliberately leave a launched kernel unfinished when the operator reports its fault.
+          // The resident rollback image must fence before copying it back to the HostSpace field.
+          pops::MultiFab<dim>& donor = *candidates.front();
+          if (donor.local_size() != 0) {
+            const auto values = donor.fab(0).view();
+            const pops::Index<dim> cell = donor.box(0).lo;
+            pops::for_each_cell(pops::Box<dim>{cell, cell},
+                                [=] POPS_HD(const pops::Index<dim>& i) { values(i, 0) += 5; });
+          }
+          throw std::runtime_error("injected prepared coupling failure");
+        }
+      });
+  system.mark_bound();
+
+  pops::MultiFab<dim> donor = [&] {
+    const auto accepted = system.block_state(0);
+    return pops::MultiFab<dim>(*accepted);
+  }();
+  pops::MultiFab<dim> receiver = [&] {
+    const auto accepted = system.block_state(1);
+    return pops::MultiFab<dim>(*accepted);
+  }();
+  const std::vector<pops::MultiFab<dim>*> candidates{&donor, &receiver};
+
+  // The first post-bind application is included: the workspace is fully cold-primed by mark_bound,
+  // so neither first use nor repeated use may allocate an image, mirror, exact witness, or vector.
+  const pops::AllocationEventStats first_before = pops::allocation_event_stats();
+  HeapAllocationWindow first_heap;
+  ASSERT_EQ(system.apply_coupling_operators(pops::Real(1), candidates), 1u);
+  const std::uint64_t first_heap_allocations = first_heap.close();
+  const pops::AllocationEventStats first_after = pops::allocation_event_stats();
+  EXPECT_EQ(first_heap_allocations, 0u);
+  EXPECT_EQ(first_after, first_before);
+
+  const pops::AllocationEventStats repeated_before = pops::allocation_event_stats();
+  HeapAllocationWindow repeated_heap;
+  ASSERT_EQ(system.apply_coupling_operators(pops::Real(1), candidates), 1u);
+  ASSERT_EQ(system.apply_coupling_operators(pops::Real(1), candidates), 1u);
+  const std::uint64_t repeated_heap_allocations = repeated_heap.close();
+  const pops::AllocationEventStats repeated_after = pops::allocation_event_stats();
+  EXPECT_EQ(repeated_heap_allocations, 0u);
+  EXPECT_EQ(repeated_after, repeated_before);
+  EXPECT_EQ(pops::norm_inf(donor, 0), pops::Real(3));
+
+  *fault = Fault::throw_after_mutation;
+  EXPECT_THROW(system.apply_coupling_operators(pops::Real(1), candidates), std::runtime_error);
+  EXPECT_EQ(pops::norm_inf(donor, 0), pops::Real(3));
+  *fault = Fault::nonfinite;
+  EXPECT_THROW(system.apply_coupling_operators(pops::Real(1), candidates), std::runtime_error);
+  EXPECT_EQ(pops::norm_inf(donor, 0), pops::Real(3));
+  *fault = Fault::none;
+
+  EXPECT_THROW(system.apply_coupling_operators(pops::Real(1), {&donor, &donor}),
+               std::invalid_argument);
+  pops::MultiFab<dim> wrong(donor.layout(), donor.distribution(), donor.local_rank(),
+                            donor.ncomp() + 1, donor.ghosts());
+  EXPECT_THROW(system.apply_coupling_operators(pops::Real(1), {&wrong, &receiver}),
+               std::invalid_argument);
+  EXPECT_EQ(pops::norm_inf(donor, 0), pops::Real(3));
+
+  // The registry-level conservation ledger uses the same reusable workspace.  It is intentionally
+  // constructed here because System's public typed installer currently has no conservation-group
+  // argument; no alternative dynamic image or host mirror is allowed in the hot overload.
+  using Registry = pops::runtime::system::SystemCouplingRegistry<dim>;
+  using Operator = pops::runtime::system::PreparedCouplingOperator<dim>;
+  using Group = pops::runtime::system::PreparedCouplingConservationGroup;
+  Registry registry;
+  registry.operator_contracts = {"test.system-coupling/conservation@1"};
+  registry.coupled_operators = {pops::CouplingOperatorView{}};
+  registry.operators.emplace_back(Operator(
+      [](pops::Real, const std::vector<pops::MultiFab<dim>*>& states) {
+        add_unit_to_first_coupling_candidate(states);
+      },
+      std::vector<Group>{
+          {"donor-receiver", {{"donor", 0, 0, "scalar"}, {"receiver", 1, 0, "scalar"}}}}));
+  pops::runtime::system::PreparedCouplingWorkspace<dim> conservation_workspace;
+  const std::vector<const pops::MultiFab<dim>*> prototypes{&donor, &receiver};
+  registry.bind_workspace(conservation_workspace, prototypes);
+  conservation_workspace.bind_candidates(candidates);
+  conservation_workspace.capture_rollback();
+  EXPECT_EQ(registry.apply(pops::Real(1), conservation_workspace), 1u);
+  EXPECT_TRUE(conservation_workspace.numeric_failure());
+  conservation_workspace.restore_rollback();
+  EXPECT_EQ(pops::norm_inf(donor, 0), pops::Real(3));
 }
 
 TEST(SystemTransactionAuthority, ConcurrentAcceptedReaderBlocksDuringCandidate) {

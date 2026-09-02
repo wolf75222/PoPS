@@ -390,84 +390,94 @@ inline void preflight_field_nullspace_fields(
     std::span<const PreparedVectorDistribution<Dim>> distributions, int first_level,
     FieldNullspaceCollectiveBoundary boundary, const ExecutionLane& lane) {
   FieldNullspacePreflightPayload<Dim> payload;
-  payload.append_scalar(first_level);
-  payload.append_plan(plan, first_level, distributions);
-  validate_field_nullspace_plan_locally(payload, plan);
+  long payload_construction_failed = 0;
+  bool active = false;
+  try {
+    payload.append_scalar(first_level);
+    payload.append_plan(plan, first_level, distributions);
+    validate_field_nullspace_plan_locally(payload, plan);
 
-  const bool active = boundary == FieldNullspaceCollectiveBoundary::Gauge ? !plan.gauges.empty()
-                                                                          : !plan.bases.empty();
-  // An empty nullspace performs no scientific field reduction, so its field layouts are outside
-  // this collective contract. This also avoids forcing an irrelevant ownership declaration on an
-  // invertible operator.
-  payload.append_size(active ? fields.size() : 0u);
-  const bool level_range_valid =
-      field_nullspace_level_capacity_is_valid(fields.size(), first_level);
-  if (active) {
-    payload.require(distributions.size() == fields.size());
-    for (std::size_t level = 0; level < fields.size(); ++level) {
-      const bool resolved = level_range_valid && level < distributions.size();
-      payload.require(resolved);
-      if (resolved)
-        payload.append_layout(fields[level], distributions[level]);
-      else
-        payload.append_absent_layout();
-    }
-  }
-  if (active) {
-    payload.require(!fields.empty());
-    payload.require(field_nullspace_level_capacity_is_valid(fields.size(), first_level));
-    if (boundary == FieldNullspaceCollectiveBoundary::Gauge)
-      payload.require(plan.gauges.size() == plan.bases.size());
-    try {
-      if (boundary == FieldNullspaceCollectiveBoundary::BasisValidation)
-        (void)checked_field_nullspace_collective_product(plan.bases.size(), plan.bases.size(),
-                                                         "field nullspace Gram matrix");
-      else
-        (void)checked_field_nullspace_collective_product(plan.bases.size(), std::size_t{2},
-                                                         "field nullspace moments");
-    } catch (const std::exception&) {
-      payload.require(false);
-    }
-
-    for (std::size_t level = 0; level < fields.size(); ++level) {
-      const MultiFab<Dim>* field = fields[level];
-      payload.require(field != nullptr);
-      if (field == nullptr)
-        continue;
-      payload.require(field_nullspace_layout_is_materialized(*field));
-      if (!level_range_valid)
-        continue;
-      const std::size_t resolved_level = static_cast<std::size_t>(first_level) + level;
-      for (const FieldNullspaceBasis<Dim>& basis : plan.bases) {
-        payload.require(basis.field_component >= 0 && basis.field_component < field->ncomp());
-        if (!basis.masks.empty()) {
-          payload.require(resolved_level < basis.masks.size() &&
-                          basis.masks[resolved_level] != nullptr);
-          if (resolved_level < basis.masks.size() && basis.masks[resolved_level] != nullptr)
-            payload.require(field_nullspace_layouts_match(*field, *basis.masks[resolved_level]));
-        }
-        if (resolved_level < basis.coverage.size() && basis.coverage[resolved_level] != nullptr)
-          payload.require(field_nullspace_layouts_match(*field, *basis.coverage[resolved_level]));
-        payload.require(resolved_level < basis.cell_measure.size());
-        if (resolved_level < basis.cell_measure.size()) {
-          const Real measure = basis.cell_measure[resolved_level];
-          payload.require(std::isfinite(static_cast<double>(measure)) && measure > Real(0));
-        }
+    active = boundary == FieldNullspaceCollectiveBoundary::Gauge ? !plan.gauges.empty()
+                                                                 : !plan.bases.empty();
+    // An empty nullspace performs no scientific field reduction, so its field layouts are outside
+    // this collective contract. This also avoids forcing an irrelevant ownership declaration on an
+    // invertible operator.
+    payload.append_size(active ? fields.size() : 0u);
+    const bool level_range_valid =
+        field_nullspace_level_capacity_is_valid(fields.size(), first_level);
+    if (active) {
+      payload.require(distributions.size() == fields.size());
+      for (std::size_t level = 0; level < fields.size(); ++level) {
+        const bool resolved = level_range_valid && level < distributions.size();
+        payload.require(resolved);
+        if (resolved)
+          payload.append_layout(fields[level], distributions[level]);
+        else
+          payload.append_absent_layout();
       }
-      if (boundary == FieldNullspaceCollectiveBoundary::BasisValidation) {
-        for (std::size_t left = 0; left < plan.bases.size(); ++left) {
-          for (std::size_t right = left + 1; right < plan.bases.size(); ++right) {
-            if (plan.bases[left].field_component != plan.bases[right].field_component ||
-                resolved_level >= plan.bases[left].cell_measure.size() ||
-                resolved_level >= plan.bases[right].cell_measure.size())
-              continue;
-            payload.require(plan.bases[left].cell_measure[resolved_level] ==
-                            plan.bases[right].cell_measure[resolved_level]);
+    }
+    if (active) {
+      payload.require(!fields.empty());
+      payload.require(field_nullspace_level_capacity_is_valid(fields.size(), first_level));
+      if (boundary == FieldNullspaceCollectiveBoundary::Gauge)
+        payload.require(plan.gauges.size() == plan.bases.size());
+      try {
+        if (boundary == FieldNullspaceCollectiveBoundary::BasisValidation)
+          (void)checked_field_nullspace_collective_product(plan.bases.size(), plan.bases.size(),
+                                                           "field nullspace Gram matrix");
+        else
+          (void)checked_field_nullspace_collective_product(plan.bases.size(), std::size_t{2},
+                                                           "field nullspace moments");
+      } catch (const std::exception&) {
+        payload.require(false);
+      }
+
+      for (std::size_t level = 0; level < fields.size(); ++level) {
+        const MultiFab<Dim>* field = fields[level];
+        payload.require(field != nullptr);
+        if (field == nullptr)
+          continue;
+        payload.require(field_nullspace_layout_is_materialized(*field));
+        if (!level_range_valid)
+          continue;
+        const std::size_t resolved_level = static_cast<std::size_t>(first_level) + level;
+        for (const FieldNullspaceBasis<Dim>& basis : plan.bases) {
+          payload.require(basis.field_component >= 0 && basis.field_component < field->ncomp());
+          if (!basis.masks.empty()) {
+            payload.require(resolved_level < basis.masks.size() &&
+                            basis.masks[resolved_level] != nullptr);
+            if (resolved_level < basis.masks.size() && basis.masks[resolved_level] != nullptr)
+              payload.require(field_nullspace_layouts_match(*field, *basis.masks[resolved_level]));
+          }
+          if (resolved_level < basis.coverage.size() && basis.coverage[resolved_level] != nullptr)
+            payload.require(field_nullspace_layouts_match(*field, *basis.coverage[resolved_level]));
+          payload.require(resolved_level < basis.cell_measure.size());
+          if (resolved_level < basis.cell_measure.size()) {
+            const Real measure = basis.cell_measure[resolved_level];
+            payload.require(std::isfinite(static_cast<double>(measure)) && measure > Real(0));
+          }
+        }
+        if (boundary == FieldNullspaceCollectiveBoundary::BasisValidation) {
+          for (std::size_t left = 0; left < plan.bases.size(); ++left) {
+            for (std::size_t right = left + 1; right < plan.bases.size(); ++right) {
+              if (plan.bases[left].field_component != plan.bases[right].field_component ||
+                  resolved_level >= plan.bases[left].cell_measure.size() ||
+                  resolved_level >= plan.bases[right].cell_measure.size())
+                continue;
+              payload.require(plan.bases[left].cell_measure[resolved_level] ==
+                              plan.bases[right].cell_measure[resolved_level]);
+            }
           }
         }
       }
     }
+  } catch (...) {
+    payload_construction_failed = 1;
   }
+  if (all_reduce_max(payload_construction_failed, lane) != 0)
+    throw std::runtime_error(
+        "field nullspace collective preflight construction failed on at least one communicator "
+        "rank");
   finish_field_nullspace_preflight(payload, boundary, lane);
 
   if (!active)
@@ -475,8 +485,16 @@ inline void preflight_field_nullspace_fields(
   for (std::size_t level = 0; level < fields.size(); ++level) {
     const int resolved_level = first_level + static_cast<int>(level);
     const PreparedVectorDistribution<Dim>& distribution = distributions[level];
-    std::vector<char, comm_allocator<char>> validation_storage(
-        distribution.validation_scratch_byte_count(), char{0});
+    std::vector<char, comm_allocator<char>> validation_storage;
+    long validation_allocation_failed = 0;
+    try {
+      validation_storage.assign(distribution.validation_scratch_byte_count(), char{0});
+    } catch (...) {
+      validation_allocation_failed = 1;
+    }
+    if (all_reduce_max(validation_allocation_failed, lane) != 0)
+      throw std::runtime_error(
+          "field nullspace validation scratch allocation failed on at least one communicator rank");
     if (boundary == FieldNullspaceCollectiveBoundary::Compatibility ||
         boundary == FieldNullspaceCollectiveBoundary::Gauge)
       distribution.require_exact_values(*fields[level], validation_storage,

@@ -522,8 +522,13 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
         transfer->capture(1, 1);
         const auto receipt = transfer->apply(1, 1);
         check_receipt(receipt, 1, 1);
-        check(coarse->get_state("coarse") == (rank == 0 ? coarse_average : std::vector<double>{}),
-              "accepted apply writes only the target owner");
+        {
+          const auto target_read = coarse->_provisional_read_scope();
+          check(target_read.valid(), "target provisional read scope authenticates the candidate");
+          check(coarse->get_state("coarse") ==
+                    (rank == 0 ? coarse_average : std::vector<double>{}),
+                "accepted apply writes only the target owner");
+        }
         fine->commit_step_transaction();
         coarse->commit_step_transaction();
         fine->finalize_step_transaction();
@@ -540,8 +545,14 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
         transfer->begin_transaction(2);
         transfer->capture(2, 1);
         check_receipt(transfer->apply(2, 1), 2, 1);
-        check(coarse->get_state("coarse") == (rank == 0 ? coarse_retry : std::vector<double>{}),
-              "first retry attempt applied its captured source");
+        {
+          const auto target_read = coarse->_provisional_read_scope();
+          check(target_read.valid(),
+                "target provisional read scope authenticates the retry candidate");
+          check(coarse->get_state("coarse") ==
+                    (rank == 0 ? coarse_retry : std::vector<double>{}),
+                "first retry attempt applied its captured source");
+        }
 
         transfer->reject_attempt(2, 1);
         coarse->rollback_step_transaction();
@@ -578,9 +589,14 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
         fine->set_state("fine", transient);
         transfer->capture(3, 1);
         check_receipt(transfer->apply(3, 1), 3, 1);
-        check(
-            coarse->get_state("coarse") == (rank == 0 ? transient_average : std::vector<double>{}),
-            "rollback candidate reaches the target before rejection");
+        {
+          const auto target_read = coarse->_provisional_read_scope();
+          check(target_read.valid(),
+                "target provisional read scope authenticates the rollback candidate");
+          check(coarse->get_state("coarse") ==
+                    (rank == 0 ? transient_average : std::vector<double>{}),
+                "rollback candidate reaches the target before rejection");
+        }
         coarse->rollback_step_transaction();
         fine->rollback_step_transaction();
         transfer->rollback_transaction(3);

@@ -11,7 +11,7 @@ the codegen still cannot lower -- named sources beyond 'default', a commit of an
 must be REFUSED with a clear error, never silently mis-lowered. Pure Python (no compile); skips if pops
 is unavailable.
 """
-from tests.python.support.requirements import require_native_or_skip
+from tests.python.support.requirements import require_native_or_skip, run_process_test_cases
 from pops.codegen.program_codegen import emit_cpp_program
 from types import SimpleNamespace
 
@@ -126,7 +126,7 @@ def test_forward_euler_algorithm(t):
     # exact provider/level/stage solve (ADC-409/ADC-759); for FE the stage state is the base U^n, so
     # it matches the historical solve_fields() semantics.
     src = _emit(_forward_euler(t))
-    for frag in ("const auto field_boundary_point_",
+    for frag in ("const auto& field_boundary_point_",
                  'ctx.solve_fields_from_state_at(field_boundary_point_',
                  '"potential", 0, ',
                  "= ctx.state(0);",
@@ -155,9 +155,19 @@ def test_multistage_lowers(t):
 def test_canonical_ssprk_amr_codegen_preserves_exact_distinct_ledger_weights(t):
     from pops.lib import time as lt
 
+    exact_coefficient_term = (
+        "std::initializer_list<pops::runtime::program::ExactCoefficientTerm>"
+    )
     expected = {
-        lt.SSPRK2: ("{{1, 1, 2}}", "{{1, 1, 2}}"),
-        lt.SSPRK3: ("{{1, 1, 6}}", "{{1, 1, 6}}", "{{1, 2, 3}}"),
+        lt.SSPRK2: (
+            exact_coefficient_term + "{{1, 1, 2}}",
+            exact_coefficient_term + "{{1, 1, 2}}",
+        ),
+        lt.SSPRK3: (
+            exact_coefficient_term + "{{1, 1, 6}}",
+            exact_coefficient_term + "{{1, 1, 6}}",
+            exact_coefficient_term + "{{1, 2, 3}}",
+        ),
     }
     for factory, stage_metadata in expected.items():
         src = emit_cpp_program(
@@ -169,6 +179,7 @@ def test_canonical_ssprk_amr_codegen_preserves_exact_distinct_ledger_weights(t):
         assert len(final_stage_axpy) == len(stage_metadata)
         for line, metadata in zip(final_stage_axpy, stage_metadata, strict=True):
             assert line.endswith(", dt, %s);" % metadata), line
+        assert ", dt, {{" not in src
 
 
 def test_includes_present(t):
@@ -234,7 +245,7 @@ def test_multiblock_lowers(t):
     assert "ctx.state(0)" in src, "block a should bind ctx.state(0)"
     assert "ctx.state(1)" in src, "block b should bind ctx.state(1)"
     assert "ctx.rhs_group(" in src, "sibling residuals should execute as one native round"
-    assert "const auto field_boundary_point_" in src
+    assert "const auto& field_boundary_point_" in src
     assert "ctx.solve_fields_from_blocks_at(field_boundary_point_" in src, \
         "coupled blocks should publish one point-qualified simultaneous field solve"
 
@@ -294,11 +305,15 @@ def test_uncommitted_refused(t):
 
 def _run():
     t = _pops_time()
-    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    for fn in fns:
-        fn(t)
-        print("ok", fn.__name__)
-    print("PASS test_time_codegen (%d checks)" % len(fns))
+    functions = {
+        name: (lambda fn=fn: fn(t))
+        for name, fn in sorted(globals().items())
+        if name.startswith("test_") and callable(fn)
+    }
+    executed = run_process_test_cases(functions)
+    for name in executed:
+        print("ok", name)
+    print("PASS test_time_codegen (%d checks)" % len(executed))
 
 
 if __name__ == "__main__":

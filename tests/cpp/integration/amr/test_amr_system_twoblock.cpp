@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "explicit_amr_program.hpp"
+#include "amr_runtime_authority.hpp"
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>

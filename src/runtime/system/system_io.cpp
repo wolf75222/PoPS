@@ -289,7 +289,8 @@ void System<Dim>::restore_history(const std::string& name, int slot,
     // register_history's idempotent growth.
     const int ncomp = ring[0].ncomp();
     for (int k = static_cast<int>(ring.size()); k <= slot; ++k) {
-      MultiFab<Dim> s(p_->ba, p_->dm, p_->local_rank, ncomp, uniform_ghosts<Dim>(1));
+      MultiFab<Dim> s(ring.front().layout(), ring.front().distribution(),
+                      ring.front().local_rank(), ncomp, ring.front().ghosts());
       s.set_val(Real(0));
       ring.push_back(std::move(s));
     }
@@ -665,6 +666,39 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
   pops::runtime::program::bind_staged_uniform_program_resource_declaration<Dim>(
       preparation_image, candidate_tables.resource_declarations(), preparation_block_map);
 
+  // Coupled execution receives a System-sized state vector.  Until the Program ABI carries an
+  // explicit coupling subset capability, a nonempty registry therefore requires one exact route
+  // for every materialized System block.  Validate it collectively before the DSO can prepare a
+  // candidate or any accepted authority changes.
+  std::exception_ptr coupling_block_map_error;
+  try {
+    if (!p_->coupling_.operators.empty()) {
+      if (preparation_block_map.size() != p_->sp.size())
+        throw std::invalid_argument(
+            "System::install_program: coupled Program block map must exactly cover System blocks");
+      std::vector<bool> seen(p_->sp.size(), false);
+      for (const int block : preparation_block_map) {
+        if (block < 0 || static_cast<std::size_t>(block) >= seen.size() ||
+            seen[static_cast<std::size_t>(block)])
+          throw std::invalid_argument(
+              "System::install_program: coupled Program block map must be a System block "
+              "bijection");
+        seen[static_cast<std::size_t>(block)] = true;
+      }
+      if (std::find(seen.begin(), seen.end(), false) != seen.end())
+        throw std::invalid_argument(
+            "System::install_program: coupled Program block map must exactly cover System blocks");
+    }
+  } catch (...) {
+    coupling_block_map_error = std::current_exception();
+  }
+  if (all_reduce_max(coupling_block_map_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && coupling_block_map_error)
+      std::rethrow_exception(coupling_block_map_error);
+    throw std::runtime_error(
+        "System::install_program: coupled Program block map is invalid on at least one MPI rank");
+  }
+
   using preparation_boundary_registry =
       runtime::program::ArtifactFieldBoundaryAuthorityRegistry<Dim>;
   preparation_boundary_registry preparation_boundary_baseline;
@@ -727,12 +761,15 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
     staged_transaction_state.emplace(
         pops::runtime::program::take_staged_uniform_transaction_authority_state<Dim>(
             preparation_image));
-    if (!staged.empty()) {
-      candidate_auxiliary_registry.emplace(p_->auxiliary_registry_);
-      for (auto& plan : staged)
-        candidate_auxiliary_registry->add_consumer_plan(std::move(plan));
-      has_staged_auxiliary_registry = true;
-    }
+    // A Program replacement owns the complete consumer-plan set.  Rebuild from the accepted
+    // native providers only, never from A's consumer declarations: an empty B must remove A.
+    candidate_auxiliary_registry.emplace();
+    for (std::size_t provider = 0; provider < p_->auxiliary_registry_.provider_count(); ++provider)
+      candidate_auxiliary_registry->add(p_->auxiliary_registry_.provider(provider));
+    for (auto& plan : staged)
+      candidate_auxiliary_registry->add_consumer_plan(std::move(plan));
+    candidate_auxiliary_registry->seal();
+    has_staged_auxiliary_registry = true;
   } catch (...) {
     detached_prepare_error = std::current_exception();
   }
@@ -763,10 +800,29 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
   // using max (rather than a global-cell sum) preserves the exact worst-rank memory ceiling.
   using resource_prototype = runtime::program::ProgramInstallationTables::ResourcePrototype;
   std::vector<resource_prototype> prepared_resource_prototypes;
+  std::string prepared_coupling_contract;
+  std::optional<typename Impl::PreparedCouplingReceipt> prepared_coupling_receipt;
   std::exception_ptr resource_materialization_error;
   try {
     prepared_resource_prototypes =
         pops::runtime::program::take_staged_uniform_resource_prototypes<Dim>(preparation_image);
+    // `mark_bound()` installs this one inline System workspace after Program publication.  The
+    // receipt therefore derives an identical *detached* cold workspace and stores a full
+    // composition witness; `mark_bound()` re-derives it before mutating the live carrier.
+    {
+      prepared_coupling_receipt.emplace(
+          p_->prepare_coupling_receipt(prepared_boundary_execution_lane(), preparation_block_map));
+      const std::uint64_t coupling_bytes = prepared_coupling_receipt->resident_bytes;
+      if (coupling_bytes != 0)
+        prepared_resource_prototypes.push_back(
+            {0,
+             0,
+             {coupling_bytes, 1, 1, 0, coupling_bytes, coupling_bytes},
+             runtime::program::ProgramInstallationTables::ResourcePrototypeKind::
+                 prepared_coupling});
+
+      prepared_coupling_contract = prepared_coupling_receipt->contract;
+    }
     std::sort(prepared_resource_prototypes.begin(), prepared_resource_prototypes.end(),
               [](const resource_prototype& left, const resource_prototype& right) {
                 return std::tie(left.kind, left.slot, left.subslot) <
@@ -817,7 +873,8 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
         "System::install_program: Program resource-family contract preparation failed collectively");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"system-detached-uniform-resource-families", resource_family_contract}})) {
+          {{"system-detached-uniform-resource-families", resource_family_contract},
+           {"system-prepared-coupling-footprint", prepared_coupling_contract}})) {
     throw std::runtime_error(
         "System::install_program: detached Program resource families differ between MPI ranks");
   }
@@ -1106,19 +1163,16 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
           history.program_owner < 0
               ? -1
               : preparation_block_map.at(static_cast<std::size_t>(history.program_owner));
-      const int components = history.components < 0
-                                 ? program_block_state_(owner < 0 ? 0 : owner).ncomp()
-                                 : history.components;
+      const MultiFab<Dim>& prototype = program_block_state_(owner < 0 ? 0 : owner);
+      const int components = history.components < 0 ? prototype.ncomp() : history.components;
       if (components < 1)
         throw std::invalid_argument("System::install_program: staged history has no components");
       const int depth = history.lag + 1;
-      Extent<Dim> ghosts{};
-      for (int axis = 0; axis < Dim; ++axis)
-        ghosts[axis] = 1;
       std::vector<MultiFab<Dim>> ring;
       ring.reserve(static_cast<std::size_t>(depth));
       for (int slot = 0; slot < depth; ++slot)
-        ring.emplace_back(p_->ba, p_->dm, p_->local_rank, components, ghosts);
+        ring.emplace_back(prototype.layout(), prototype.distribution(), prototype.local_rank(),
+                          components, prototype.ghosts());
       const auto [found, inserted] =
           prepared_histories.histories.emplace(history.name, std::move(ring));
       if (!inserted)
@@ -1303,6 +1357,10 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
       std::terminate();
     field->second->replace_boundary_kernel(std::move(kernel));
   }
+  if (!prepared_coupling_receipt)
+    std::terminate();
+  static_assert(std::is_nothrow_swappable_v<decltype(p_->prepared_coupling_receipt_)>);
+  p_->prepared_coupling_receipt_.swap(prepared_coupling_receipt);
   p_->program_.publish_prepared_artifact(std::move(*prepared_publication));
   (void)program_has_dt_bound;
   // The committed ProgramRuntimeState keeps the DSO resident until its candidate and closures are gone.

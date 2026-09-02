@@ -74,8 +74,11 @@ std::shared_ptr<const component::PreparedExecutionContextV1> prepared_execution(
 
 ProdModel make_model() {
   // alpha=0 : elliptic_rhs nul -> phi=0, parite stricte.
-  return ProdModel{
-      {}, NativeEuler{static_cast<Real>(kGamma)}, NoSource{}, BackgroundDensity{Real(0), Real(0)}};
+  return ProdModel{{},
+                   {},
+                   NativeEuler{static_cast<Real>(kGamma)},
+                   NoSource{},
+                   BackgroundDensity{Real(0), Real(0)}};
 }
 
 template <int Dim>
@@ -308,10 +311,10 @@ extern "C" void pops_install_native_amr(void* sys, const char* name, const char*
   pops::PreparedNativeAmrPackage<pops_generated::Dim> package;
   package.block = pops::prepare_compiled_amr_system_block<pops_generated::Dim>(
       name,
-      pops_generated::ProdModel{
-          {},
-          pops::EulerND<pops_generated::Dim>{static_cast<pops::Real>(gamma)}, pops::NoSource{},
-          pops::BackgroundDensity{pops::Real(0), pops::Real(0)}},
+      pops_generated::ProdModel{{}, {},
+                                 pops::EulerND<pops_generated::Dim>{static_cast<pops::Real>(gamma)},
+                                 pops::NoSource{},
+                                 pops::BackgroundDensity{pops::Real(0), pops::Real(0)}},
       limiter, riemann, recon, time, gamma, substeps, stride, pos_floor, weno_epsilon,
       wave_speed_cache, "tests.amr-riemann-native/physical-flux", newton,
       newton_diagnostics != 0);

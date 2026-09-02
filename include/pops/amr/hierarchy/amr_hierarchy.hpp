@@ -52,6 +52,15 @@ class AmrLevelState {
     return {layout_.exact_identity(), field_.local_rank(), field_.ncomp(), field_.ghosts()};
   }
 
+  /// Validate the resident field/layout against one prepared contract without allocating a new
+  /// identity.  Shape mutation remains fail-closed while the accepted hot path stays allocation
+  /// free.
+  bool matches_spatial_contract(const LevelStateSpatialContract<Dim>& contract) const {
+    return layout_.matches_exact_identity(contract.layout) &&
+           field_.local_rank() == contract.local_rank && field_.ncomp() == contract.components &&
+           field_.ghosts() == contract.ghosts;
+  }
+
  private:
   void validate_() const {
     if (field_.layout() != layout_.patches() || field_.distribution() != layout_.distribution())
