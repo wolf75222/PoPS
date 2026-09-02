@@ -392,7 +392,10 @@ class HaloExchange {
     return total;
   }
 
- private:
+ public:
+  // Kokkos' CUDA launcher names the functor type from a generated namespace. Keep the lowered
+  // POD job and functors public so nvcc can instantiate that launcher; all exchange state and
+  // mutation remain private below.
   struct KernelJob {
     int destination_lower[Dim]{};
     execution_index_type destination_extent[Dim]{};
@@ -441,6 +444,7 @@ class HaloExchange {
     }
   };
 
+ private:
   KernelJob lower_job_(const job_type& job) const {
     const std::size_t execution_max =
         static_cast<std::size_t>(std::numeric_limits<execution_index_type>::max());
