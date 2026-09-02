@@ -28,18 +28,24 @@
 
 namespace {
 
-// The generated problem.so surface: the sole v5 entry a real codegen emits. Hand-written here for an
-// autonomous symbol-presence test (no numeric body needed -- the install entry is a no-op stub, it
-// only has to EXIST and be resolvable). The ABI key is the preprocessor LITERAL, like test_program_loader.
+// The generated problem.so surface: a non-installing v5 probe plus the sole v5 installation entry
+// a real codegen emits. Hand-written here for an autonomous symbol-presence test (no numeric body
+// needed -- the install entry is a no-op stub, it only has to EXIST and be resolvable).
 std::string stub_source() {
   // clang-format off
   return R"CPP(
 #include <pops/runtime/program/program_abi.hpp>
 #include <type_traits>
+extern "C" pops::runtime::program::ProgramInstallAbiProbe
+pops_program_install_abi_probe_v5() noexcept {
+  return pops::runtime::program::make_program_install_abi_probe();
+}
 extern "C" bool pops_install_program(
     const pops::runtime::program::ProgramHostDescriptor*,
     pops::runtime::program::ProgramCandidateDescriptor*,
     pops::runtime::program::ProgramInstallDiagnostic*) noexcept { return false; }
+static_assert(std::is_same_v<decltype(&pops_program_install_abi_probe_v5),
+                             pops::runtime::program::ProgramInstallAbiProbeFn>);
 static_assert(std::is_same_v<decltype(&pops_install_program),
                              pops::runtime::program::ProgramInstallFn>);
 )CPP";
@@ -73,17 +79,24 @@ static int pops_run_test_program_abi_symbols(int argc, char** argv) {
   }
 
   int fails = 0;
-  // ABI v5 has one entry point.  All identity and metadata travel in its fixed-layout candidate
-  // tables; no legacy accessor family is part of the dynamic surface.
-  const char* required[] = {"pops_install_program"};
+  // ABI v5 has one installation entry.  The separately named probe is identification only: it
+  // must be present and validate before the loader can resolve the historic installation name.
+  const char* required[] = {pops::runtime::program::kProgramInstallAbiProbeSymbol,
+                            pops::runtime::program::kProgramInstallSymbol};
   for (const char* name : required) {
     if (!pops::dynlib::sym(h, name)) {
       std::printf("FAIL required ABI symbol '%s' absent from the stub .so\n", name);
       ++fails;
     }
   }
+  const auto probe = reinterpret_cast<pops::runtime::program::ProgramInstallAbiProbeFn>(
+      pops::dynlib::sym(h, pops::runtime::program::kProgramInstallAbiProbeSymbol));
+  if (!probe || !pops::runtime::program::valid_program_install_abi_probe(probe())) {
+    std::printf("FAIL v5 ABI probe is absent or malformed\n");
+    ++fails;
+  }
   auto install = reinterpret_cast<pops::runtime::program::ProgramInstallFn>(
-      pops::dynlib::sym(h, "pops_install_program"));
+      pops::dynlib::sym(h, pops::runtime::program::kProgramInstallSymbol));
   pops::runtime::program::ProgramInstallDiagnostic diagnostic{};
   if (!install || install(nullptr, nullptr, &diagnostic)) {
     std::printf("FAIL pops_install_program does not satisfy the v5 bool candidate ABI\n");
@@ -94,7 +107,7 @@ static int pops_run_test_program_abi_symbols(int argc, char** argv) {
 
   if (fails == 0)
     std::printf(
-        "OK test_program_abi_symbols (sole v5 Program install entry resolves)\n");
+        "OK test_program_abi_symbols (v5 ABI probe and sole Program install entry resolve)\n");
   return fails ? 1 : 0;
 }
 

@@ -95,6 +95,7 @@ def test_forward_euler_abi(t):
     P = _forward_euler(t)
     src = _emit(P)
     for tok in ('extern "C"', "POPS_RUNTIME_SHARED_EXCEPTION_ABI", "POPS_ABI_KEY_LITERAL",
+                "pops_program_install_abi_probe_v5", "make_program_install_abi_probe()",
                 "pops_install_program", "program_candidate_prepare",
                 "kProgramCandidateBlocks", "kProgramCandidateParameters",
                 "kProgramCandidateOperatorAuthorities", "kProgramCandidateResourcePlan",

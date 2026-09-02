@@ -684,8 +684,9 @@ def _emit_where_kernel(mask_var: Any, a_var: Any, b_var: Any, out_var: Any) -> l
     ]
 
 
-# Source of a generated problem.so. The includes + pops_install_program candidate match the shape
-# tests/test_program_loader compiles+runs in CI. The descriptor carries the cache/restart identity.
+# Source of a generated problem.so. The ABI-v5 probe plus the single pops_install_program candidate
+# match the shape tests/test_program_loader compiles+runs in CI. The descriptor carries the
+# cache/restart identity.
 # {name} is a JSON-escaped C
 # string literal, {hash} the IR hash, {prelude} the INSTALL-TIME C++ (persistent scratch + matrix-free
 # apply lambdas, captured into the step closure by [=]), {body} the step-closure body (both already
@@ -738,6 +739,14 @@ void write_program_install_diagnostic(
 }}
 
 }}  // namespace
+
+// This probe is ABI identification only, not a second installation entry.  It is emitted once in
+// the common Uniform/AMR source container so the loader can reject a legacy
+// void(System*) ``pops_install_program`` before resolving that historic symbol.
+extern "C" pops::runtime::program::ProgramInstallAbiProbe
+pops_program_install_abi_probe_v5() noexcept {{
+  return pops::runtime::program::make_program_install_abi_probe();
+}}
 
 {model_helpers}
 {candidate_tables}

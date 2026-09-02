@@ -795,6 +795,11 @@ constexpr pops::runtime::program::ProgramAbiTable kCandidateFaceFluxStageTable{
     kCandidateFluxTerms, 10, sizeof(kCandidateFluxTerms[0])};
 }  // namespace
 
+extern "C" pops::runtime::program::ProgramInstallAbiProbe
+pops_program_install_abi_probe_v5() noexcept {
+  return pops::runtime::program::make_program_install_abi_probe();
+}
+
 extern "C" bool pops_install_program(
     const pops::runtime::program::ProgramHostDescriptor* host,
     pops::runtime::program::ProgramCandidateDescriptor* candidate,

@@ -424,6 +424,13 @@ constexpr pops::runtime::program::ProgramResourcePlanRecord kProgramResources[] 
               empty_manifest + ")JSON\";\n";
   }
   (void)incomplete_dt_bound;  // v5 has no auxiliary dt symbol: nullptr means no authored bound.
+  source += R"CPP(
+extern "C" pops::runtime::program::ProgramInstallAbiProbe
+pops_program_install_abi_probe_v5() noexcept {
+  return pops::runtime::program::make_program_install_abi_probe();
+}
+
+)CPP";
   if (install_step) {
     source += R"CPP(
 extern "C" bool pops_install_program(
@@ -532,6 +539,22 @@ extern "C" bool pops_install_program(
   return source;
 }
 
+// This is an actual historical Program entry shape.  It intentionally has no v5 probe: the test
+// below proves the loader rejects it before this body can receive a v5 host descriptor.
+std::string legacy_uniform_source(const std::string& marker_path) {
+  return std::string("#include <pops/runtime/system.hpp>\n"
+                     "#include <cstdlib>\n"
+                     "#include <fstream>\n"
+                     "\n"
+                     "extern \"C\" void pops_install_program("
+                     "pops::System<pops::kNativeDimension>*) {\n"
+                     "  std::ofstream marker(\"") +
+         marker_path + "\", std::ios::app);\n"
+                       "  marker << \"legacy-install-invoked\\n\";\n"
+                       "  std::abort();\n"
+                       "}\n";
+}
+
 }  // namespace
 
 static int pops_run_test_program_loader(int argc, char** argv) {
@@ -618,6 +641,9 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   const std::string so = tmp + ".so";
   const std::string legacy_src = tmp + "_missing_block_identities.cpp";
   const std::string legacy_so = tmp + "_missing_block_identities.so";
+  const std::string legacy_signature_src = tmp + "_legacy_signature.cpp";
+  const std::string legacy_signature_so = tmp + "_legacy_signature.so";
+  const std::string legacy_signature_marker = tmp + "_legacy_signature.markers";
   const std::string no_op_src = tmp + "_no_op_installer.cpp";
   const std::string no_op_so = tmp + "_no_op_installer.so";
   const std::string incomplete_dt_src = tmp + "_incomplete_dt.cpp";
@@ -638,6 +664,10 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   {
     std::ofstream f(legacy_src);
     f << loader_source(false, true, false, {}, false, false, marker_path, "first-failure");
+  }
+  {
+    std::ofstream f(legacy_signature_src);
+    f << legacy_uniform_source(legacy_signature_marker);
   }
   {
     std::ofstream f(no_op_src);
@@ -687,6 +717,13 @@ static int pops_run_test_program_loader(int argc, char** argv) {
                                                    legacy_package);
     return 1;
   }
+  const auto legacy_signature_package =
+      pops::test::native_dso::compile_shared(legacy_signature_src, legacy_signature_so);
+  if (!legacy_signature_package.ok) {
+    pops::test::native_dso::report_compile_failure("test_program_loader legacy-signature package",
+                                                   legacy_signature_package);
+    return 1;
+  }
   const auto no_op_package = pops::test::native_dso::compile_shared(no_op_src, no_op_so);
   if (!no_op_package.ok) {
     pops::test::native_dso::report_compile_failure("test_program_loader no-op package",
@@ -723,6 +760,28 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   }
 
   int fails = 0;
+  // The legacy Uniform ABI used the same installation symbol but took System*.  The v5 loader
+  // must refuse its missing non-colliding probe before resolving or invoking that symbol.
+  NativeSystem legacy_signature(cfg);
+  install_runtime_authority(legacy_signature, "test.program-loader/runtime-legacy-signature@1");
+  add_gas(legacy_signature);
+  try {
+    legacy_signature.install_program(legacy_signature_so);
+    std::printf("FAIL legacy void(System*) Program entry was accepted\n");
+    ++fails;
+  } catch (const std::runtime_error& error) {
+    if (std::string(error.what()).find("refusing unprobed pops_install_program") ==
+            std::string::npos ||
+        std::string(error.what()).find("pops_program_install_abi_probe_v5") == std::string::npos) {
+      std::printf("FAIL legacy void(System*) Program diagnostic: %s\n", error.what());
+      ++fails;
+    }
+  }
+  if (!read_program_markers(legacy_signature_marker).empty()) {
+    std::printf("FAIL legacy void(System*) Program entry was invoked before refusal\n");
+    ++fails;
+  }
+
   // An artifact with an empty block table is state-free authority.  It must never install onto a
   // stateful System by add-order: the old positional fallback could silently bind the right
   // equations to the wrong instances.

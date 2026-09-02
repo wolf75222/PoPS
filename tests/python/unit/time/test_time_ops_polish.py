@@ -881,6 +881,8 @@ def test_install_program_rejects_mismatched_abi(
     src = (
         '#include <pops/runtime/program/program_abi.hpp>\n'
         'using namespace pops::runtime::program;\n'
+        'extern "C" ProgramInstallAbiProbe pops_program_install_abi_probe_v5() noexcept {\n'
+        '  return make_program_install_abi_probe(); }\n'
         'static bool prepare(void*, const ProgramHostDescriptor*, ProgramInstallDiagnostic*) noexcept { return true; }\n'
         'static void step(void*, double) {}\n'
         'extern "C" bool pops_install_program(const ProgramHostDescriptor*, ProgramCandidateDescriptor* c, ProgramInstallDiagnostic*) noexcept {\n'

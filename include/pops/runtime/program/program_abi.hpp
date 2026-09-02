@@ -21,6 +21,25 @@ struct ProgramInstallDiagnostic;
 struct ProgramHostDescriptor;
 
 inline constexpr std::uint32_t kProgramInstallAbiVersion = 5;
+/// The native Program installation entry remains intentionally unversioned.  A separately named,
+/// fixed-layout probe lets the loader identify ABI-v5 images before it ever resolves or invokes
+/// that historic entry name, which was used by the legacy ``void(System*)`` ABI.
+inline constexpr char kProgramInstallSymbol[] = "pops_install_program";
+inline constexpr char kProgramInstallAbiProbeSymbol[] = "pops_program_install_abi_probe_v5";
+inline constexpr std::uint32_t kProgramInstallAbiProbeMagic = UINT32_C(0x50505635);
+
+/// Fixed scalar returned by the unique v5 probe symbol.  Returning a scalar keeps the C-linkage
+/// boundary free of DSO-owned storage and of compiler-specific aggregate-return conventions.
+using ProgramInstallAbiProbe = std::uint32_t;
+
+[[nodiscard]] constexpr ProgramInstallAbiProbe make_program_install_abi_probe() noexcept {
+  return kProgramInstallAbiProbeMagic;
+}
+
+[[nodiscard]] constexpr bool valid_program_install_abi_probe(ProgramInstallAbiProbe value) noexcept {
+  return value == kProgramInstallAbiProbeMagic;
+}
+
 /// Canonical inline text extent used by host-owned v5 callback rejection records and the public
 /// compatibility exception.  It is ABI vocabulary, not a dynamically sized diagnostic buffer.
 inline constexpr std::size_t kProgramStepRejectTextCapacity = 192;
@@ -352,6 +371,7 @@ struct ProgramInstallDiagnostic final {
 
 using ProgramInstallFn = bool (*)(const ProgramHostDescriptor*, ProgramCandidateDescriptor*,
                                   ProgramInstallDiagnostic*) noexcept;
+using ProgramInstallAbiProbeFn = ProgramInstallAbiProbe (*)() noexcept;
 
 [[nodiscard]] inline bool valid_program_host_descriptor(
     const ProgramHostDescriptor& value) noexcept {

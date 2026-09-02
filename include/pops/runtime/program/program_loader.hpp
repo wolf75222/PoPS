@@ -23,7 +23,21 @@ inline OwnedProgramInstallation inspect_program_installation(pops::dynlib::Uniqu
     throw std::invalid_argument("Program loader received an incoherent preparation image");
   if (!pops::dynlib::valid(image.get()))
     throw std::runtime_error("Program loader received an invalid program image");
-  const auto install = reinterpret_cast<ProgramInstallFn>(pops::dynlib::sym(image.get(), "pops_install_program"));
+  // Do not even resolve the long-lived installation name until the non-colliding v5 probe has
+  // authenticated the image.  Legacy DSOs exported that same name as ``void(System*)``; invoking
+  // it through ProgramInstallFn would be undefined behavior before a descriptor could refuse it.
+  const auto probe = reinterpret_cast<ProgramInstallAbiProbeFn>(
+      pops::dynlib::sym(image.get(), kProgramInstallAbiProbeSymbol));
+  if (!probe)
+    throw std::runtime_error(std::string("Program loader: refusing unprobed ") +
+                             kProgramInstallSymbol + "; required " + kProgramInstallAbiProbeSymbol +
+                             " is missing; recompile the Program artifact");
+  if (!valid_program_install_abi_probe(probe()))
+    throw std::runtime_error(std::string("Program loader: ABI-v5 probe ") +
+                             kProgramInstallAbiProbeSymbol +
+                             " is incompatible; recompile the Program artifact");
+  const auto install =
+      reinterpret_cast<ProgramInstallFn>(pops::dynlib::sym(image.get(), kProgramInstallSymbol));
   if (!install)
     throw std::runtime_error("Program loader: pops_install_program v5 entry is missing");
   ProgramCandidateDescriptor candidate{};

@@ -125,6 +125,7 @@ def test_amr_codegen_emits_one_typed_cell_local_route_per_block() -> None:
 
     assert "SameLevelCellTemporalForwardEulerRoute, 2>" in source
     assert "{0, -1," in source and "{1, -1," in source
+    assert source.count("pops_program_install_abi_probe_v5") == 1
     assert source.count('extern "C" bool pops_install_program(') == 1
     assert "pops_install_program_amr" not in source
     assert "ctx.install(" not in source
@@ -138,6 +139,7 @@ def test_amr_codegen_types_exact_flux_metadata_for_public_facade() -> None:
     source = emit_cpp_program(program, model=model, target="amr_system")
 
     exact_type = "std::initializer_list<pops::runtime::program::ExactCoefficientTerm>"
+    assert source.count("pops_program_install_abi_probe_v5") == 1
     assert source.count('extern "C" bool pops_install_program(') == 1
     assert source.count("ctx.axpy(") == 2
     assert source.count(exact_type + "{{") == 2

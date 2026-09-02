@@ -287,6 +287,11 @@ extern "C" void* pops_test_amr_v5_execution_services() noexcept {
   return active_candidate == nullptr ? nullptr : active_candidate->context.get();
 }
 
+extern "C" pops::runtime::program::ProgramInstallAbiProbe
+pops_program_install_abi_probe_v5() noexcept {
+  return pops::runtime::program::make_program_install_abi_probe();
+}
+
 extern "C" bool pops_install_program(
     const pops::runtime::program::ProgramHostDescriptor* host,
     pops::runtime::program::ProgramCandidateDescriptor* candidate,

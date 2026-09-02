@@ -983,6 +983,11 @@ candidate_create_snapshot(void* opaque) {
 
   source << R"CPP(
 
+extern "C" pops::runtime::program::ProgramInstallAbiProbe
+pops_program_install_abi_probe_v5() noexcept {
+  return pops::runtime::program::make_program_install_abi_probe();
+}
+
 extern "C" bool pops_install_program(
     const pops::runtime::program::ProgramHostDescriptor* host,
     pops::runtime::program::ProgramCandidateDescriptor* candidate,
@@ -1213,6 +1218,11 @@ bool candidate_prepare(void* opaque,
   const std::string empty_manifest = callback_empty_resource_manifest_literal();
 
   std::string body = R"CPP(
+extern "C" pops::runtime::program::ProgramInstallAbiProbe
+pops_program_install_abi_probe_v5() noexcept {
+  return pops::runtime::program::make_program_install_abi_probe();
+}
+
 extern "C" bool pops_install_program(
     const pops::runtime::program::ProgramHostDescriptor* host,
     pops::runtime::program::ProgramCandidateDescriptor* candidate,
@@ -1475,6 +1485,11 @@ bool candidate_prepare(void* opaque,
   const std::string empty_manifest = callback_empty_resource_manifest_literal();
 
   std::string body = R"CPP(
+extern "C" pops::runtime::program::ProgramInstallAbiProbe
+pops_program_install_abi_probe_v5() noexcept {
+  return pops::runtime::program::make_program_install_abi_probe();
+}
+
 extern "C" bool pops_install_program(
     const pops::runtime::program::ProgramHostDescriptor* host,
     pops::runtime::program::ProgramCandidateDescriptor* candidate,

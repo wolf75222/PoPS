@@ -52,6 +52,8 @@ def test_resolved_amr_program_emits_only_the_amr_install_entry() -> None:
     )
 
     assert "pops_install_program" in amr_source
+    assert amr_source.count("pops_program_install_abi_probe_v5") == 1
+    assert "make_program_install_abi_probe()" in amr_source
     assert (
         'extern "C" bool pops_install_program(\n'
         "    const pops::runtime::program::ProgramHostDescriptor* host,\n"
@@ -101,6 +103,8 @@ def test_resolved_amr_program_emits_only_the_amr_install_entry() -> None:
         "    pops::runtime::program::ProgramCandidateDescriptor* candidate,\n"
         "    pops::runtime::program::ProgramInstallDiagnostic* diagnostic) noexcept"
     ) in system_source
+    assert system_source.count("pops_program_install_abi_probe_v5") == 1
+    assert "make_program_install_abi_probe()" in system_source
     assert 'extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* sys)' not in system_source
     system_prepare = system_source.split("bool program_candidate_prepare", 1)[1].split(
         'extern "C" bool pops_install_program', 1
