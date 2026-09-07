@@ -51,7 +51,9 @@ void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operat
     interface_flux_ledger_->publish_prepared_begin(*prepared_begin);
     multiblock_subcycling_->advance(
         root,
-        [&](multiblock_level_group_type group) { advance_multiblock_level_group_(group, body); },
+        [&](multiblock_level_group_type group) {
+          advance_multiblock_level_group_(group, dt, body);
+        },
         [&](multiblock_reflux_context_type& reflux) { reconcile_multiblock_reflux_(reflux); },
         [&](std::size_t runtime_block, std::size_t level, const field_type& candidate) {
           facade_->validate_prepared_amr_state_publication_candidate(
@@ -294,7 +296,8 @@ void prepare_multiblock_subcycling_engine_() const {
 }
 
 template <class Body>
-void advance_multiblock_level_group_(multiblock_level_group_type group, Body& body) const {
+void advance_multiblock_level_group_(multiblock_level_group_type group, double macro_dt,
+                                     Body& body) const {
   const std::size_t blocks = facade_->prepared_amr_multiblock_hierarchy_().block_count();
   if (group.size() != blocks || group.empty())
     throw std::logic_error("AMR Program level group lost its complete block pack");
@@ -332,7 +335,11 @@ void advance_multiblock_level_group_(multiblock_level_group_type group, Body& bo
   logical_substep_ = group.front().substep;
   active_subcycling_attempt_ = group.front().attempt;
   active_subcycling_window_ = group.front().window;
-  current_dt_ = group.front().window.end.physical_time - group.front().window.begin.physical_time;
+  // The exact schedule partitions the declared macro duration. Subtracting rounded absolute
+  // timestamps here loses significant bits as physical time grows and gives equal substeps
+  // different integration durations.
+  current_dt_ =
+      macro_dt * (group.front().window.end.phase - group.front().window.begin.phase).value();
   current_interval_start_time_ = group.front().window.begin.physical_time;
   current_interval_begin_phase_ = group.front().window.begin.phase;
   current_interval_end_phase_ = group.front().window.end.phase;

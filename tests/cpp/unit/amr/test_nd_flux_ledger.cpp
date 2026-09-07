@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -469,6 +470,44 @@ TEST(test_nd_flux_ledger, tiny_physical_clock_mismatch_is_not_unit_scaled_roundo
   }
   ledger.commit();
   EXPECT_THROW((void)metric_reflux(ledger, query, ratio, mapping, budget, scalar_axpy),
+               std::runtime_error);
+}
+
+TEST(test_nd_flux_ledger, declared_durations_preserve_clock_rate_after_timestamp_rounding) {
+  namespace detail = pops::amr::reflux::detail;
+  constexpr double macro_dt = 0.45 / 512.0;
+  double time = 0.0;
+  for (int step = 0; step < 71; ++step)
+    time += macro_dt;
+  const pops::amr::ClockWindow root{{0, 71, {0, 1}, time}, {0, 71, {1, 1}, time + macro_dt}};
+  const pops::amr::ParentChildClockRelation first_relation(
+      0, 1, {2, 1}, pops::amr::RemainderPolicy::IntegralOnly);
+  const pops::amr::ParentChildClockRelation second_relation(
+      1, 2, {2, 1}, pops::amr::RemainderPolicy::IntegralOnly);
+  const auto parent = first_relation.partition(root).back().window;
+  const auto children = second_relation.partition(parent);
+  std::map<detail::StageSlice, detail::TemporalSliceMeasure> declared;
+  auto rounded = declared;
+  for (const auto& child : children) {
+    const auto& window = child.window;
+    const auto slice = detail::stage_slice(window.begin, "advance");
+    const double duration = macro_dt * (window.end.phase - window.begin.phase).value();
+    declared.emplace(slice, detail::TemporalSliceMeasure{
+                                {1, 1}, window.begin.phase, window.end.phase, duration});
+    rounded.emplace(
+        slice, detail::TemporalSliceMeasure{{1, 1},
+                                            window.begin.phase,
+                                            window.end.phase,
+                                            window.end.physical_time - window.begin.physical_time});
+  }
+  EXPECT_THROW((void)detail::authenticated_window(rounded, parent.begin.phase, parent.end.phase),
+               std::runtime_error);
+  const auto accepted =
+      detail::authenticated_window(declared, parent.begin.phase, parent.end.phase);
+  EXPECT_DOUBLE_EQ(accepted.duration_per_phase, macro_dt);
+  EXPECT_DOUBLE_EQ(accepted.duration, macro_dt / 2.0);
+  declared.rbegin()->second.substep_duration *= 1.001;
+  EXPECT_THROW((void)detail::authenticated_window(declared, parent.begin.phase, parent.end.phase),
                std::runtime_error);
 }
 

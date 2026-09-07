@@ -14,6 +14,21 @@ void apply_reflux_payload_(field_type& coarse, const Index<Dim>& cell,
   }
 }
 
+double active_flux_interval_duration_(const ::pops::amr::ClockWindow& interval) const {
+  if (!std::isfinite(current_dt_) || !(current_dt_ > 0.0) ||
+      !(current_interval_begin_phase_ < current_interval_end_phase_) ||
+      interval.begin.phase < current_interval_begin_phase_ ||
+      current_interval_end_phase_ < interval.end.phase ||
+      !(interval.begin.phase < interval.end.phase))
+    throw std::logic_error("AMR Program flux interval has no declared integration duration");
+  const auto fraction = (interval.end.phase - interval.begin.phase) /
+                        (current_interval_end_phase_ - current_interval_begin_phase_);
+  const double duration = current_dt_ * fraction.value();
+  if (!std::isfinite(duration) || !(duration > 0.0))
+    throw std::logic_error("AMR Program flux interval has an invalid integration duration");
+  return duration;
+}
+
 void attach_active_flux_basis_(int runtime_block, const level_evaluation_type& evaluation,
                                field_type& rhs, int rhs_identity,
                                FluxBasisProvider provider) const {
@@ -151,7 +166,7 @@ void prepare_active_flux_basis_impl_(
          (evaluation != nullptr || exact_face_fluxes != nullptr || named_cell_fluxes == nullptr)))
       throw std::logic_error(
           "AMR Program flux basis provider differs from its frozen operator route");
-    const double interval_dt = interval.end.physical_time - interval.begin.physical_time;
+    const double interval_dt = active_flux_interval_duration_(interval);
     const auto expected_stage =
         exact_face_fluxes == nullptr ? stage_time_ : ::pops::amr::Rational{0, 1};
     if (rhs_identity < 0 || point.clock.empty() || point.stage < 0 ||
@@ -165,8 +180,10 @@ void prepare_active_flux_basis_impl_(
         (evaluation != nullptr && exact_face_fluxes == nullptr && named_cell_fluxes == nullptr &&
          evaluation->integrated_face_fluxes.size() != rhs.local_size()) ||
         active_block_identities_[block].empty() || !(interval.begin.phase < interval.end.phase) ||
-        !std::isfinite(interval.begin.physical_time) || !std::isfinite(interval_dt) ||
-        !(interval_dt > 0.0))
+        !std::isfinite(interval.begin.physical_time) ||
+        !std::isfinite(interval.end.physical_time) ||
+        !(interval.begin.physical_time < interval.end.physical_time) ||
+        !std::isfinite(interval_dt) || !(interval_dt > 0.0))
       throw std::logic_error(
           "AMR Program flux-expression basis differs from its active evaluation interval");
     if (prepared_rhs_basis_bounds_[block] == 0 || prepared_coefficient_term_bounds_[block] == 0)

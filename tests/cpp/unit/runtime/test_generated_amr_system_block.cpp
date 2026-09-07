@@ -732,6 +732,75 @@ TEST(GeneratedAmrSystemBlock, SparseParentRegridRequiresOnlyChildInterpolationSo
   }
 }
 
+TEST(GeneratedAmrSystemBlock, SubcyclingRetainsDeclaredDurationAcrossAbsoluteTimeBinade) {
+  constexpr int Dim = pops::kNativeDimension;
+  constexpr double macro_dt = 0.45 / 512.0;
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 3;
+  config.regrid_every = 0;
+  config.transition_ratios.assign(2, pops::runtime_config_detail::filled_extent<Dim>(2));
+  config.transition_buffers.assign(2, pops::runtime_config_detail::filled_extent<Dim>(2));
+  config.transition_lookaheads.assign(2, pops::runtime_config_detail::filled_extent<Dim>(0));
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 32;
+    config.periodicity[axis] = true;
+  }
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.generated-amr/declared-substep-duration");
+  system.set_temporal_relations({2, 2}, {1, 1}, {"integral_only", "integral_only"});
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  std::vector<double> initial(cell_count(config.shape));
+  for (std::size_t cell = 0; cell < initial.size(); ++cell)
+    initial[cell] = 1.0 + (static_cast<double>(cell % config.shape[0]) + 0.5) / 32.0;
+  system.set_conservative_state("tracer", initial);
+  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 1.5}},
+                                               "tests.generated-amr/declared-duration/tagging@1");
+  ASSERT_EQ(system.engine()->hierarchy().num_levels(), 3u);
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("clock.macro");
+  context->declare_clock_relation("clock.macro", "clock.level.1", 2);
+  context->declare_clock_relation("clock.level.1", "clock.level.2", 2);
+  std::array<std::size_t, 3> visits{};
+  context->install(
+      [context, &visits](double dt) {
+        context->advance_hierarchy(dt, [&](double local_dt) {
+          const auto point = context->boundary_evaluation_point(0);
+          ASSERT_GE(point.level, 0);
+          ASSERT_LT(point.level, 3);
+          ++visits[static_cast<std::size_t>(point.level)];
+          EXPECT_DOUBLE_EQ(local_dt, std::ldexp(dt, -point.level));
+          auto& stage = context->state(0);
+          auto rhs = context->rhs_scratch_like(stage);
+          context->rhs_into(0, stage, rhs, 0);
+          context->axpy(stage, static_cast<pops::Real>(local_dt), rhs);
+        });
+      },
+      context);
+  system.set_program_block_map({0});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "tests.generated-amr/declared-duration@1", std::vector<FluxBudget>(1, FluxBudget{1, 1}), 0,
+      0);
+  // The unchanged scalar profile first exposed cancellation on step 72, when its child
+  // timestamps straddle 2^-4. Exercise that exact accumulated time with real Program reflux.
+  for (int step = 0; step < 72; ++step) {
+    SCOPED_TRACE(step);
+    ASSERT_NO_THROW(system.step(macro_dt));
+  }
+  EXPECT_EQ(visits, (std::array<std::size_t, 3>{72, 144, 288}));
+  const auto accepted = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+      system.program_accepted_state());
+  ASSERT_TRUE(std::any_of(accepted.accepted_face_flux.begin(), accepted.accepted_face_flux.end(),
+                          [](const auto& axis) { return !axis.empty(); }));
+  for (const auto& axis : accepted.accepted_face_flux)
+    for (const auto& entry : axis)
+      EXPECT_DOUBLE_EQ(
+          entry.measure.substep_duration,
+          macro_dt * (entry.measure.substep_end - entry.measure.substep_begin).value());
+}
+
 TEST(GeneratedAmrSystemBlock,
      EmbeddedBoundaryRematerializesPerLevelAndWeightsCompositeMassAndSidecars) {
   constexpr int Dim = pops::kNativeDimension;
