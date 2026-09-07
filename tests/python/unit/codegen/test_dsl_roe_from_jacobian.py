@@ -208,9 +208,13 @@ def test_dense_roe_complex_spectrum_fails_without_rusanov_fallback(
 
     with pytest.raises(
         RuntimeError,
-        match=r"solve status=invalid_evaluation.*numerical flux evaluation reject",
+        # FiniteVolumeStatus::InvalidWaveSpeed rejects the non-real spectrum
+        # before the prepared face candidate can be published.
+        match=r"^prepared ND hyperbolic face evaluation refused publication status=6$",
     ):
         pops.run(simulation, t_end=DT, max_steps=1)
+    assert simulation.time() == 0.0
+    assert simulation.macro_step() == 0
     np.testing.assert_array_equal(
         np.asarray(simulation.get_state("toy"), dtype=np.float64).reshape(initial.shape),
         initial,

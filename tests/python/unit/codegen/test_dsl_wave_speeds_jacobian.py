@@ -304,9 +304,17 @@ def test_hll_from_dense_jacobian_rejects_non_real_spectrum(
     )
     with pytest.raises(
         RuntimeError,
-        match=r"solve status=invalid_evaluation.*numerical flux evaluation reject",
+        # FiniteVolumeStatus::InvalidWaveSpeed rejects the non-real spectrum
+        # before the prepared face candidate can be published.
+        match=r"^prepared ND hyperbolic face evaluation refused publication status=6$",
     ):
         pops.run(simulation, t_end=DT, max_steps=1)
+    assert simulation.time() == 0.0
+    assert simulation.macro_step() == 0
+    np.testing.assert_array_equal(
+        np.asarray(simulation.get_state("toy"), dtype=np.float64).reshape(state.shape),
+        state,
+    )
 
 
 def test_hll_dense_spectral_capacity_is_checked_per_declared_block() -> None:
