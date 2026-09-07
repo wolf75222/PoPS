@@ -476,6 +476,13 @@ class System {
   /// Any failure leaves the accepted carrier and accepted provider points unchanged.
   POPS_EXPORT void refresh_auxiliary(const runtime::system::AuxiliaryEvaluationPoint& point);
 
+  /// Publish only the exact prerequisites of one Uniform Program consumer before its local
+  /// traversal. The complete Program point and selected SSA layout are checked collectively;
+  /// unrelated dirty providers remain pending and field-output providers are never solved here.
+  POPS_EXPORT void prepare_program_auxiliary_consumer(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
+      int block, const MultiFab<Dim>& stage_state, int evaluation_sequence);
+
   /// Compact slot of a sealed component key and the corresponding accepted scalar field.  The key,
   /// rather than a legacy physical label or a raw component number, is the public authority.
   [[nodiscard]] POPS_EXPORT runtime::system::AuxiliaryStorageAddress<Dim> auxiliary_address(
@@ -1483,6 +1490,8 @@ class System {
       std::shared_ptr<runtime::system::NativePackageCapabilityState<Dim>> capability,
       NativePackageKind kind);
   void seal_auxiliary_providers_(const CommunicatorView& communicator);
+  void refresh_auxiliary_(const runtime::system::AuxiliaryEvaluationPoint& point,
+                          const std::vector<std::string>& consumer_qids);
   /// Read-only compiled-artifact capability check.  Kept private so only ProgramContext can issue
   /// an authenticated apply token; installation writes Impl directly and no public setter exists.
   POPS_EXPORT bool program_owns_operator_authority(

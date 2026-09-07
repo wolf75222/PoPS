@@ -212,6 +212,7 @@ class ProgramContext {
     logical_phase_span_ = amr::Rational(1, 1);
     logical_physical_time_offset_ = 0.0;
     active_operator_snapshot_.reset();
+    auxiliary_evaluation_sequence_ = 0;
   }
 
   void configure_primary_clock(const std::string& clock) const {
@@ -282,6 +283,18 @@ class ProgramContext {
 
   field_type& state(int program_block) const {
     return system_->block_state(sys_block(program_block));
+  }
+  /// One collective prerequisite publication before a generated consumer traverses local Fabs.
+  /// The supplied SSA state is authenticated without substituting the accepted block state.
+  /// Native DerivedAux launchers consume their declared auxiliary dependencies; state-dependent
+  /// formulas continue to read this SSA value in the generated kernel itself.
+  void prepare_provider_values(std::string_view consumer_qid, int program_block,
+                               const field_type& stage_state, int evaluation_id) const {
+    if (auxiliary_evaluation_sequence_ == std::numeric_limits<int>::max())
+      throw std::overflow_error("Program auxiliary evaluation sequence exceeds its exact range");
+    system_->prepare_program_auxiliary_consumer(
+        boundary_evaluation_point(evaluation_id), std::string(consumer_qid),
+        sys_block(program_block), stage_state, auxiliary_evaluation_sequence_++);
   }
   /// Bind one native consumer's exact compact provider ABI for one local state patch.
   ///
@@ -1877,6 +1890,7 @@ class ProgramContext {
   mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;
   mutable double current_dt_ = 0.0;
   mutable amr::Rational stage_time_{0, 1};
+  mutable int auxiliary_evaluation_sequence_ = 0;
   mutable amr::Rational logical_phase_begin_{0, 1};
   mutable amr::Rational logical_phase_span_{1, 1};
   mutable double logical_physical_time_offset_ = 0.0;

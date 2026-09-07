@@ -229,6 +229,8 @@ def test_program_consumer_plan_is_first_use_local_and_owner_qualified() -> None:
         "qid": "case/program/17",
         "count": 2,
         "slots": {"electric_y": 0, "electric_x": 1},
+        "target": "system",
+        "evaluation_id": 0,
     }
     cpp = plans.cpp_install("system")
     assert 'ConsumerPlan{"case/program/17"' in cpp

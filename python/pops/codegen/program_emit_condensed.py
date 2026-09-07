@@ -32,7 +32,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pops.codegen.program_emit_kernels import _cell_locals, _coeff_cpp, _deref, _model_impl
+from pops.codegen.program_emit_kernels import (
+    _cell_locals, _coeff_cpp, _deref, _model_impl, _prepare_provider_values,
+)
 from pops.codegen.program_emit_model_kernels import _linear_source_rows, _provider_binding
 
 
@@ -221,7 +223,7 @@ def _emit_condensed_coeffs_kernel(
     c_cpp = _coeff_cpp(c_coeff)
     th_dt_cpp = _coeff_cpp(th_dt)
     tensor_write = "cond%s_tensorW" % uid
-    body = [
+    body = _prepare_provider_values(provider_binding, program_block, state_var) + [
         "pops::MultiFab<pops::kNativeDimension>& %s = %s;"
         % (tensor_write, tensor),
         "for (int li = 0; li < %s.local_size(); ++li) {" % tensor_write,
@@ -253,7 +255,7 @@ def _emit_condensed_flux_kernel(body: Any, uid: Any, impl: Any, jblock: Any, th_
                                 subset: Any, fx_var: Any, state_var: Any, provider_binding: Any,
                                 program_block: int) -> None:
     """Emit ``F = M^{-1} momentum`` into one component per exact native axis."""
-    body += [
+    body += _prepare_provider_values(provider_binding, program_block, state_var) + [
         "for (int li = 0; li < %s.local_size(); ++li) {" % fx_var,
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> fA = "
         "%s.fab(li).view();" % fx_var,
@@ -362,7 +364,7 @@ def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, sub
     phi = _deref(phi_var)
     phi_read = "cond%s_phiR" % uid
     dimension = len(subset)
-    body = [
+    body = _prepare_provider_values(provider_binding, program_block, state_var) + [
         "pops::MultiFab<pops::kNativeDimension>& %s = "
         'ctx.assembly_source(%s, "pops.tensor-elliptic.solution");'
         % (phi_read, phi),

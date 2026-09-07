@@ -107,10 +107,13 @@ class ProgramProviderPlans:
     storage address after all package providers have been registered.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, target: str = "system") -> None:
         from pops.codegen._program_kernel_reuse import ProgramSourceKernelHelpers
 
         self._plans: dict[str, tuple[tuple[Any, Any], ...]] = {}
+        if target not in {"system", "amr_system"}:
+            raise ValueError("Program provider plan target must be system or amr_system")
+        self.target = target
         self.source_kernel_helpers = ProgramSourceKernelHelpers()
 
     def bind(self, impl: Any, exprs: Any, qid: str) -> dict[str, Any]:
@@ -171,7 +174,8 @@ class ProgramProviderPlans:
                 "Program provider consumer qid %r was emitted with conflicting requirements" % qid
             )
         self._plans[qid] = frozen
-        return {"qid": qid, "count": len(rows), "slots": slots}
+        return {"qid": qid, "count": len(rows), "slots": slots,
+                "target": self.target, "evaluation_id": tuple(self._plans).index(qid)}
 
     def cpp_install(self, target: str) -> str:
         """Emit the registry calls before the Program execution context is installed."""
@@ -572,6 +576,14 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
     return lines
 
 
+def _prepare_provider_values(binding: Any, program_block: Any, state_var: Any) -> list[str]:
+    """Publish Uniform consumer prerequisites once, before any rank-local Fab loop."""
+    if binding is None or not binding["count"] or binding["target"] != "system":
+        return []
+    return ["ctx.prepare_provider_values(%s, %d, %s, %d);" % (
+        json.dumps(binding["qid"]), program_block, state_var, binding["evaluation_id"])]
+
+
 def _kernel_open(
     out_var: Any,
     state_var: Any,
@@ -600,7 +612,7 @@ def _kernel_open(
         if ghost_depth == 0
         else "%s.fab(li).box().grow(%d)" % (out_var, ghost_depth)
     )
-    lines = [
+    lines = _prepare_provider_values(provider_binding, program_block, state_var) + [
         "for (int li = 0; li < %s.local_size(); ++li) {" % out_var,
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> outA = %s.fab(li).view();"
         % out_var,

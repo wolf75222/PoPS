@@ -284,7 +284,7 @@ def _emit_cpp_program_impl(
     _check_lowerable(program, authority, field_plans or {}, target=target)
     from pops.codegen.program_emit_kernels import ProgramProviderPlans
 
-    provider_plans = ProgramProviderPlans()
+    provider_plans = ProgramProviderPlans(target=target)
     prelude, body, post_synchronization, operator_authorities = _emit_body(
         program,
         authority,

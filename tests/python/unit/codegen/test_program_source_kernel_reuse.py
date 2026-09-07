@@ -138,6 +138,27 @@ def test_source_with_a_provider_keeps_its_exact_per_node_access_plan():
     assert not _definitions(source)
     assert source.count("provider_values_view<1>(") == 2
     assert "providers(index, 0)" in source
+    preparations = list(re.finditer(r"ctx\.prepare_provider_values\(", source))
+    assert len(preparations) == 2
+    for preparation in preparations:
+        following = source[preparation.end():]
+        assert following.index("for (int li = 0;") < following.index("provider_values_view<1>(")
+
+
+def test_provider_preparation_is_an_explicit_uniform_target_boundary():
+    from pops.codegen.program_emit_kernels import _kernel_open
+
+    binding = {"qid": "exact-consumer", "count": 1, "slots": {"B_z": 0},
+               "target": "system", "evaluation_id": 7}
+    uniform = _kernel_open("result", "stage", provider_binding=binding, program_block=3)
+    assert uniform[0] == 'ctx.prepare_provider_values("exact-consumer", 3, stage, 7);'
+    assert uniform[1].startswith("for (int li = 0;")
+    amr = _kernel_open("result", "stage", provider_binding={**binding, "target": "amr_system"},
+                       program_block=3)
+    assert amr == uniform[1:]
+    empty = _kernel_open("result", "stage", provider_binding={**binding, "count": 0},
+                         program_block=3)
+    assert not any("prepare_provider_values" in line for line in empty)
 
 
 def test_shared_fallible_implementation_is_called_only_inside_its_guard():
