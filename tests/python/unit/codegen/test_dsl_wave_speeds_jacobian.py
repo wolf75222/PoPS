@@ -20,6 +20,7 @@ from pops.numerics.riemann import FromJacobian, provider_of
 from pops.numerics.spatial import FiniteVolume
 from pops.physics import Model
 from pops.time import FixedDt
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -212,7 +213,10 @@ def _expected_hll_rhs(state: np.ndarray, n: int, *, partitioned: bool) -> np.nda
 
 def _public_rhs(artifact, state: np.ndarray) -> np.ndarray:
     initial = np.ascontiguousarray(state)
-    simulation = pops.bind(artifact, initial_state={"toy": initial})
+    simulation = pops.bind(
+        artifact, initial_state={"toy": initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     report = pops.run(simulation, t_end=DT, max_steps=1)
     assert report.accepted_steps == 1
     final = np.asarray(simulation.get_state("toy"), dtype=np.float64).reshape(initial.shape)
@@ -294,7 +298,10 @@ def test_hll_from_dense_jacobian_rejects_non_real_spectrum(
     state = np.zeros((2, N, N), dtype=np.float64)
     state[0, :, :] = 1.0
     state[1, :, :] = 0.25
-    simulation = pops.bind(artifact, initial_state={"toy": state})
+    simulation = pops.bind(
+        artifact, initial_state={"toy": state},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     with pytest.raises(
         RuntimeError,
         match=r"solve status=invalid_evaluation.*numerical flux evaluation reject",

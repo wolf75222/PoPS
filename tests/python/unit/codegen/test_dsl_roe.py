@@ -18,6 +18,7 @@ from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.physics import Density, Energy, Model, Momentum
 from pops.time import FixedDt
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -193,7 +194,10 @@ def test_board_roe_runs_euler_and_preserves_stationary_shear(
     energy = pressure / (GAMMA - 1.0) + 0.5 * rho * (u * u + v * v)
     initial = np.ascontiguousarray(np.stack((rho, rho * u, rho * v, energy)))
 
-    gas = pops.bind(euler, initial_state={"gas": initial})
+    gas = pops.bind(
+        euler, initial_state={"gas": initial},
+        resources={"execution_context": artifact_execution_context(euler)},
+    )
     report = pops.run(gas, t_end=8 * euler_dt, max_steps=8)
     assert report.accepted_steps == 8
     final = np.asarray(gas.get_state("gas"), dtype=np.float64).reshape(initial.shape)
@@ -221,7 +225,10 @@ def test_board_roe_runs_euler_and_preserves_stationary_shear(
     shear = np.ascontiguousarray(
         np.stack((np.ones((n, n)), np.zeros((n, n)), transverse_velocity))
     )
-    fluid = pops.bind(isothermal, initial_state={"fluid": shear})
+    fluid = pops.bind(
+        isothermal, initial_state={"fluid": shear},
+        resources={"execution_context": artifact_execution_context(isothermal)},
+    )
     before = np.asarray(fluid.get_state("fluid"), dtype=np.float64).reshape(shear.shape).copy()
     report = pops.run(fluid, t_end=6 * shear_dt, max_steps=6)
     assert report.accepted_steps == 6
