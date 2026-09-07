@@ -23,6 +23,12 @@ def main() -> int:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--phase", choices=("baseline", "candidate"), required=True)
     parser.add_argument("--timeout", type=int, default=1800)
+    parser.add_argument(
+        "--profile", action="append", choices=(
+            "scalar_tutorial_openmp", "scalar_tutorial_mpi2", "scalar_full",
+            "multiphysics_full", "imex_amr_full",
+        ), help="select complete profiles for independent replay; default: all five",
+    )
     args = parser.parse_args()
     source, output = args.source.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -60,11 +66,15 @@ def main() -> int:
         ("multiphysics_full", "examples/final/EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py", ("--output-dir", str(output / "multiphysics_full")), 1),
         ("imex_amr_full", "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py", ("--output-dir", str(output / "imex_amr_full")), 1),
     )
+    if args.profile:
+        selected = set(args.profile)
+        profiles = tuple(row for row in profiles if row[0] in selected)
     report = {
         "schema": "pops.migration.m0.reference-examples.v1", "phase": args.phase,
         "source": str(source), "revision": revision, "dirty": bool(status),
         "platform": platform.platform(), "python": python, "installation": installation,
         "dimension": 2, "omp_num_threads": 2, "profiles": [],
+        "selected_profiles": [row[0] for row in profiles],
         "limitations": ["No GPU qualification", "Reference examples, not a manufactured-solution convergence matrix", "No process-loss tolerance claim"],
     }
     for name, path, forwarded, ranks in profiles:
