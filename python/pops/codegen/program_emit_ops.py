@@ -607,7 +607,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         if step_projection is not None:
             if not isinstance(step_projection, str) or not step_projection:
                 raise TypeError("project step_projection must be a non-empty string")
-        if target == "system":
+        if target == "system" and node_model is not None:
             impl = _model_impl(node_model)
             if impl._proj is None:
                 raise ValueError("Program projection requires the selected model projection closure")
