@@ -229,6 +229,12 @@ class ProgramProviderPlans:
             ))
         return "\n".join(lines)
 
+    def preparation_binding(self, qid: str) -> dict[str, Any]:
+        """Return a registered consumer's prerequisite identity, without rebinding its reads."""
+        rows = self._plans[qid]
+        return {"qid": qid, "count": len(rows), "target": self.target,
+                "evaluation_id": tuple(self._plans).index(qid)}
+
 
 def program_provider_consumer_qid(model: Any, value_id: Any, block: Any = None) -> str:
     """Return the stable Program-node consumer qid.
@@ -592,6 +598,7 @@ def _kernel_open(
     ghost_depth: int = 0,
     provider_binding: Any = None,
     program_block: Any = 0,
+    prepare_providers: bool = True,
 ) -> list:
     """Open the per-fab loop + per-cell for_each_cell over the VALID cells of @p out_var, binding the
     write handle ``outA``, the read state handle ``<state_var>A`` and the exact local provider view.
@@ -612,7 +619,9 @@ def _kernel_open(
         if ghost_depth == 0
         else "%s.fab(li).box().grow(%d)" % (out_var, ghost_depth)
     )
-    lines = _prepare_provider_values(provider_binding, program_block, state_var) + [
+    preparation = (_prepare_provider_values(provider_binding, program_block, state_var)
+                   if prepare_providers else [])
+    lines = preparation + [
         "for (int li = 0; li < %s.local_size(); ++li) {" % out_var,
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> outA = %s.fab(li).view();"
         % out_var,

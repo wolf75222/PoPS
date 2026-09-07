@@ -482,6 +482,94 @@ TEST(ProgramContextContract, AuxiliaryReadClosureKeepsUnrelatedDirtyInputsAndDer
     EXPECT_EQ(value, 7.0);
 }
 
+TEST(ProgramContextContract, AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors) {
+  using namespace runtime::system;
+  ensure_kokkos();
+  comm_init();
+  for (const SolveAction action : {SolveAction::kRejectAttempt, SolveAction::kFailRun}) {
+    NativeSystem sim(native_config(4));
+    install_execution_lane(sim, "pops.test.program-context.auxiliary-outcome");
+    add_gas_block(sim, "gas");
+    const AuxiliaryComponentKey key{"owner", "aux", "input", "value"};
+    const AuxiliaryComponentContract contract{"cell-average", "cell", std::nullopt, "cell",
+                                                 std::optional<std::string>{"scalar"}};
+    AuxiliaryStorageShape<kTestDimension> shape;
+    sim.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<kTestDimension>{
+        "input", AuxiliaryProviderKind::input,
+        {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
+        {{key, contract, shape}}, {}});
+    sim.install_auxiliary_consumer_plan(AuxiliaryConsumerProviderPlan<kTestDimension>{
+        "read", {{{key, contract, shape}, 0}}});
+    sim.seal_auxiliary_providers();
+    sim.set_state("gas", ic(4));
+    NativeProgramContext context(&sim);
+    context.configure_primary_clock("clock.macro");
+    int kernel_calls = 0;
+    std::optional<SolveReport> consumed_report;
+    context.install([&](double dt) {
+      context.begin_step(dt);
+      const auto status = context.prepare_provider_values_for_solve("read", 0, context.state(0), 41);
+      if (status == AuxiliaryPublicationStatus::nonfinite_candidate) {
+        SolveReport report;
+        report.mark_failed(SolveStatus::kInvalidEvaluation, action, "auxiliary_nonfinite_candidate");
+        auto outcome = SolveOutcome::collective_lane(std::move(report), context.prepared_execution_lane());
+        consumed_report = outcome.consume(action == SolveAction::kRejectAttempt
+                                              ? SolveConsumption::kRejectAttempt
+                                              : SolveConsumption::kFailRun);
+        if (consumed_report->action == SolveAction::kRejectAttempt)
+          throw runtime::program::StepAttemptRejected(consumed_report->status, "local_solve",
+                                                       consumed_report->reason);
+        throw std::runtime_error(consumed_report->reason);
+      }
+      ++kernel_calls;
+    });
+    sim.set_program_block_map({0});
+    const std::size_t cells = uniform_cell_count(4);
+    sim.stage_auxiliary_input(key, std::vector<double>(cells, 3.0));
+    sim.step(0.1);
+    ASSERT_EQ(kernel_calls, 1);
+    const auto accepted_values = sim.auxiliary_component(key);
+    const auto accepted_state = sim.get_state("gas");
+    const auto accepted_time = sim.time();
+    const auto accepted_step = sim.macro_step();
+    sim.stage_auxiliary_input(key, std::vector<double>(cells, std::numeric_limits<double>::quiet_NaN()));
+    if (action == SolveAction::kRejectAttempt) {
+      EXPECT_THROW(sim.step(0.1), runtime::program::StepAttemptRejected);
+    } else {
+      EXPECT_THROW(sim.step(0.1), std::runtime_error);
+    }
+    ASSERT_TRUE(consumed_report.has_value());
+    EXPECT_EQ(consumed_report->status, SolveStatus::kInvalidEvaluation);
+    EXPECT_EQ(consumed_report->action, action);
+    EXPECT_EQ(consumed_report->reason, "auxiliary_nonfinite_candidate");
+    EXPECT_EQ(kernel_calls, 1);
+    EXPECT_EQ(sim.auxiliary_component(key), accepted_values);
+    EXPECT_EQ(sim.get_state("gas"), accepted_state);
+    EXPECT_EQ(sim.time(), accepted_time);
+    EXPECT_EQ(sim.macro_step(), accepted_step);
+    context.begin_step(0.1);
+    auto wrong_state = native_field_like(context.state(0), kNcomp + 1, context.state(0).ghosts());
+    if (n_ranks() == 1) {
+      EXPECT_THROW((void)context.prepare_provider_values_for_solve("foreign", 0, context.state(0), 41),
+                   std::out_of_range);
+      EXPECT_THROW((void)context.prepare_provider_values_for_solve("read", 0, wrong_state, 41),
+                   std::invalid_argument);
+    } else {
+      // The existing multi-rank preflight reports one collective contract error on every rank.
+      EXPECT_THROW((void)context.prepare_provider_values_for_solve("foreign", 0, context.state(0), 41),
+                   std::runtime_error);
+      EXPECT_THROW((void)context.prepare_provider_values_for_solve("read", 0, wrong_state, 41),
+                   std::runtime_error);
+    }
+    EXPECT_EQ(sim.auxiliary_component(key), accepted_values);
+    sim.stage_auxiliary_input(key, std::vector<double>(cells, 7.0));
+    EXPECT_NO_THROW(sim.step(0.1));
+    EXPECT_EQ(kernel_calls, 2);
+    for (const double value : sim.auxiliary_component(key))
+      EXPECT_EQ(value, 7.0);
+  }
+}
+
 TEST(ProgramContextContract, AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch) {
 #ifndef POPS_HAS_MPI
   GTEST_SKIP() << "publication divergence requires MPI";

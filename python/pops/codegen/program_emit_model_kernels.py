@@ -515,7 +515,7 @@ def _emit_solve_local_linear_kernel(model: Any, name: Any, a_coeff: Any, rhs_var
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
     params_block = block_idx if _has_runtime_param(flat) else None
     body = _kernel_open(out_var, rhs_var, params_block, provider_binding=provider_binding,
-                        program_block=block_idx)
+                        program_block=block_idx, prepare_providers=False)
     lambda_index = next(
         index for index, line in enumerate(body) if "pops::for_each_cell" in line)
     body[lambda_index:lambda_index] = [
@@ -663,7 +663,7 @@ def _emit_solve_local_nonlinear_kernel(
     impl.assign_runtime_indices()
     params_block = block_idx if _has_runtime_param(term_exprs) else None
     body = _kernel_open(out_var, guess_var, params_block, provider_binding=provider_binding,
-                        program_block=block_idx)
+                        program_block=block_idx, prepare_providers=False)
     lambda_index = next(index for index, line in enumerate(body) if "pops::for_each_cell" in line)
     body[lambda_index:lambda_index] = [
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> solve_statusA = "

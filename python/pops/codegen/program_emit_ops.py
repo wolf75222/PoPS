@@ -139,6 +139,36 @@ def _canonical_metadata_int(value: Any, *, where: str) -> int:
     raise TypeError("%s must be an exact graph-canonical integer" % where)
 
 
+def _append_local_auxiliary_preparation(
+    program: Any, solve: Any, lines: list[str], *, provider_plans: Any,
+    consumer_qid: str, block: int, state: str, label: str,
+) -> None:
+    """Consume only numerical prerequisite failure through this local solve's authored action."""
+    binding = provider_plans.preparation_binding(consumer_qid)
+    if binding["target"] != "system" or binding["count"] == 0:
+        return
+    status = "local_auxiliary_status_%d" % solve.id
+    report = "local_auxiliary_report_%d" % solve.id
+    outcome = "local_auxiliary_outcome_%d" % solve.id
+    action_kind, action_statuses = _consumed_solve_action(program, solve)
+    action = ("pops::SolveAction::kRejectAttempt"
+              if action_kind == "reject_attempt" and "invalid_evaluation" in action_statuses
+              else "pops::SolveAction::kFailRun")
+    lines += [
+        "const auto %s = ctx.prepare_provider_values_for_solve(%s, %d, %s, %d);"
+        % (status, json.dumps(consumer_qid), block, state, binding["evaluation_id"]),
+        "if (%s == pops::runtime::system::AuxiliaryPublicationStatus::nonfinite_candidate) {"
+        % status,
+        "  pops::SolveReport %s;" % report,
+        "  %s.mark_failed(pops::SolveStatus::kInvalidEvaluation, %s, "
+        '"auxiliary_nonfinite_candidate");' % (report, action),
+        "  pops::SolveOutcome %s = pops::SolveOutcome::collective_lane("
+        "std::move(%s), ctx.prepared_execution_lane());" % (outcome, report),
+    ]
+    _append_solve_report_guard(program, solve, outcome, lines, label=label)
+    lines.append("}")
+
+
 def _append_pointwise_solve_report(
         program: Any, solve: Any, status: str, lines: list[str], *,
         label: str, stem: str, active_mask: str | None = None,
@@ -864,12 +894,17 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                      % (var[v.id], int(v.id), var[base.id]))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
                      % (status, int(v.id), var[v.id]))
-        lines += _emit_solve_local_linear_kernel(
+        consumer_qid = program_provider_consumer_qid(node_model, v.id, v.block)
+        kernel = _emit_solve_local_linear_kernel(
             node_model, v.attrs["linear_source"], v.attrs["a_coeff"],
             var[rhs_in.id], var[v.id], status, bidx,
             provider_plans=provider_plans,
-            consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
+            consumer_qid=consumer_qid,
         )
+        _append_local_auxiliary_preparation(
+            program, v, lines, provider_plans=provider_plans, consumer_qid=consumer_qid,
+            block=bidx, state=var[rhs_in.id], label="local_linear")
+        lines += kernel
         _append_pointwise_solve_report(
             program, v, status, lines, label="local_linear", stem="local_solve")
     elif v.op == "solve_local_nonlinear":
@@ -886,11 +921,16 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines.append(
             "const pops::MultiFab<pops::kNativeDimension>* %s = ctx.pointwise_active_mask(%d, %s);"
             % (active_mask, bidx, status))
-        lines += _emit_solve_local_nonlinear_kernel(
+        consumer_qid = program_provider_consumer_qid(node_model, v.id, v.block)
+        kernel = _emit_solve_local_nonlinear_kernel(
             node_model, v, var[guess_in.id], var[v.id], status, active_mask, bidx,
             provider_plans=provider_plans,
-            consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
+            consumer_qid=consumer_qid,
         )
+        _append_local_auxiliary_preparation(
+            program, v, lines, provider_plans=provider_plans, consumer_qid=consumer_qid,
+            block=bidx, state=var[guess_in.id], label="local_nonlinear")
+        lines += kernel
         report = "ln_report_%d" % v.id
         outcome = _append_local_nonlinear_report(program, v, status, report, lines)
         _append_solve_report_guard(

@@ -29,6 +29,7 @@ namespace {
 using runtime::system::AuxiliaryComponentKey;
 using runtime::system::AuxiliaryEvaluationPoint;
 using runtime::system::AuxiliaryProviderKind;
+using runtime::system::AuxiliaryPublicationStatus;
 using runtime::system::AuxiliaryStorageShape;
 
 template <int Dim>
@@ -301,11 +302,24 @@ void System<Dim>::stage_auxiliary_input(const AuxiliaryComponentKey& key,
 
 template <int Dim>
 void System<Dim>::refresh_auxiliary(const AuxiliaryEvaluationPoint& point) {
-  refresh_auxiliary_(point, {});
+  if (refresh_auxiliary_(point, {}) == AuxiliaryPublicationStatus::nonfinite_candidate)
+    throw std::runtime_error(
+        "System auxiliary publication rejected: candidate valid/ghost image contains non-finite values");
 }
 
 template <int Dim>
 void System<Dim>::prepare_program_auxiliary_consumer(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
+    int block, const MultiFab<Dim>& stage_state, int evaluation_sequence) {
+  if (prepare_program_auxiliary_consumer_for_solve(
+          point, consumer_qid, block, stage_state, evaluation_sequence) ==
+      AuxiliaryPublicationStatus::nonfinite_candidate)
+    throw std::runtime_error(
+        "System auxiliary publication rejected: candidate valid/ghost image contains non-finite values");
+}
+
+template <int Dim>
+AuxiliaryPublicationStatus System<Dim>::prepare_program_auxiliary_consumer_for_solve(
     const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
     int block, const MultiFab<Dim>& stage_state, int evaluation_sequence) {
   const ExecutionLane& lane = prepared_boundary_execution_lane();
@@ -345,12 +359,12 @@ void System<Dim>::prepare_program_auxiliary_consumer(
   auxiliary_point.stage = point.stage;
   auxiliary_point.nonlinear_iteration = evaluation_sequence;
   auxiliary_point.event = runtime::system::AuxiliaryEvaluationEvent::before_residual;
-  refresh_auxiliary_(auxiliary_point, {consumer_qid});
+  return refresh_auxiliary_(auxiliary_point, {consumer_qid});
 }
 
 template <int Dim>
-void System<Dim>::refresh_auxiliary_(const AuxiliaryEvaluationPoint& point,
-                                    const std::vector<std::string>& consumer_qids) {
+AuxiliaryPublicationStatus System<Dim>::refresh_auxiliary_(
+    const AuxiliaryEvaluationPoint& point, const std::vector<std::string>& consumer_qids) {
   if (!p_->auxiliary_registry_.sealed())
     throw std::logic_error("System auxiliary refresh requires a sealed provider registry");
   require_collective_auxiliary_point<Dim>(point);
@@ -359,7 +373,7 @@ void System<Dim>::refresh_auxiliary_(const AuxiliaryEvaluationPoint& point,
         p_->auxiliary_registry_.begin_publication(point, p_->dirty_auxiliary_providers_);
     transaction.accept();
     p_->dirty_auxiliary_providers_.clear();
-    return;
+    return AuxiliaryPublicationStatus::ready;
   }
   runtime::system::AuxiliaryStorageGroups<Dim> candidate;
   using transaction_type =
@@ -437,7 +451,7 @@ void System<Dim>::refresh_auxiliary_(const AuxiliaryEvaluationPoint& point,
     throw std::invalid_argument("System auxiliary publication selection differs across MPI ranks");
   if (!has_due_provider) {
     transaction.reject();
-    return;
+    return AuxiliaryPublicationStatus::ready;
   }
   try {
     if (!p_->auxiliary_ghost_lane_)
@@ -496,11 +510,14 @@ void System<Dim>::refresh_auxiliary_(const AuxiliaryEvaluationPoint& point,
     runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
         fence_error, &*p_->auxiliary_ghost_lane_,
         "System auxiliary device fence failed collectively");
-    runtime::system::require_finite_auxiliary_groups(candidate, &*p_->auxiliary_ghost_lane_,
-                                                     "System auxiliary publication");
+    if (!runtime::system::auxiliary_groups_are_finite(candidate, &*p_->auxiliary_ghost_lane_)) {
+      transaction.reject();
+      return AuxiliaryPublicationStatus::nonfinite_candidate;
+    }
     transaction.accept();
     std::swap(*p_->provider_carrier_, candidate);
     p_->dirty_auxiliary_providers_.swap(remaining_dirty);
+    return AuxiliaryPublicationStatus::ready;
   } catch (...) {
     transaction.reject();
     throw;
@@ -841,6 +858,9 @@ template void System<kNativeDimension>::stage_auxiliary_input(const AuxiliaryCom
                                                               const std::vector<double>&);
 template void System<kNativeDimension>::refresh_auxiliary(const AuxiliaryEvaluationPoint&);
 template void System<kNativeDimension>::prepare_program_auxiliary_consumer(
+    const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&, int,
+    const MultiFab<kNativeDimension>&, int);
+template AuxiliaryPublicationStatus System<kNativeDimension>::prepare_program_auxiliary_consumer_for_solve(
     const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&, int,
     const MultiFab<kNativeDimension>&, int);
 template runtime::system::AuxiliaryStorageAddress<kNativeDimension>

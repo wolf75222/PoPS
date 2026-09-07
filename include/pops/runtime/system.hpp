@@ -482,6 +482,12 @@ class System {
   POPS_EXPORT void prepare_program_auxiliary_consumer(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
       int block, const MultiFab<Dim>& stage_state, int evaluation_sequence);
+  /// Checked numerical variant for a local solve. No candidate is published on non-finite data;
+  /// the consuming solve owns the selected failure action. Contract failures still throw.
+  [[nodiscard]] POPS_EXPORT runtime::system::AuxiliaryPublicationStatus
+  prepare_program_auxiliary_consumer_for_solve(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
+      int block, const MultiFab<Dim>& stage_state, int evaluation_sequence);
 
   /// Compact slot of a sealed component key and the corresponding accepted scalar field.  The key,
   /// rather than a legacy physical label or a raw component number, is the public authority.
@@ -1490,8 +1496,9 @@ class System {
       std::shared_ptr<runtime::system::NativePackageCapabilityState<Dim>> capability,
       NativePackageKind kind);
   void seal_auxiliary_providers_(const CommunicatorView& communicator);
-  void refresh_auxiliary_(const runtime::system::AuxiliaryEvaluationPoint& point,
-                          const std::vector<std::string>& consumer_qids);
+  runtime::system::AuxiliaryPublicationStatus refresh_auxiliary_(
+      const runtime::system::AuxiliaryEvaluationPoint& point,
+      const std::vector<std::string>& consumer_qids);
   /// Read-only compiled-artifact capability check.  Kept private so only ProgramContext can issue
   /// an authenticated apply token; installation writes Impl directly and no public setter exists.
   POPS_EXPORT bool program_owns_operator_authority(

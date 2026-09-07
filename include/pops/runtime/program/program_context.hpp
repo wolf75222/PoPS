@@ -290,9 +290,17 @@ class ProgramContext {
   /// formulas continue to read this SSA value in the generated kernel itself.
   void prepare_provider_values(std::string_view consumer_qid, int program_block,
                                const field_type& stage_state, int evaluation_id) const {
+    if (prepare_provider_values_for_solve(consumer_qid, program_block, stage_state, evaluation_id) ==
+        runtime::system::AuxiliaryPublicationStatus::nonfinite_candidate)
+      throw std::runtime_error(
+          "System auxiliary publication rejected: candidate valid/ghost image contains non-finite values");
+  }
+  [[nodiscard]] runtime::system::AuxiliaryPublicationStatus prepare_provider_values_for_solve(
+      std::string_view consumer_qid, int program_block,
+      const field_type& stage_state, int evaluation_id) const {
     if (auxiliary_evaluation_sequence_ == std::numeric_limits<int>::max())
       throw std::overflow_error("Program auxiliary evaluation sequence exceeds its exact range");
-    system_->prepare_program_auxiliary_consumer(
+    return system_->prepare_program_auxiliary_consumer_for_solve(
         boundary_evaluation_point(evaluation_id), std::string(consumer_qid),
         sys_block(program_block), stage_state, auxiliary_evaluation_sequence_++);
   }

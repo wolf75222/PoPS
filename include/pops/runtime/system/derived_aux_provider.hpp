@@ -279,6 +279,11 @@ struct AuxiliaryConsumerProviderPlan {
   }
 };
 
+/// Numerical result of a prerequisite publication, independent of a consuming solve's action.
+/// Contract, ownership and transport failures remain exceptions; only a collectively inspected
+/// non-finite candidate is represented as an unsuccessful numerical evaluation.
+enum class AuxiliaryPublicationStatus { ready, nonfinite_candidate };
+
 /// Integer-identical point supplied by Program/AMR.  Physical time is intentionally absent: the
 /// time authority owns it, while auxiliary freshness needs an unambiguous accepted-step/stage
 /// identity that survives checkpoint/restart and MPI rank ordering.
