@@ -718,7 +718,7 @@ def _emit_auxiliary_route_registration(
                 "                output(index, output_component) = %s;" % expression,
                 "              });",
                 "            }",
-                "          }))",
+                "          })",
             )
         )
         return "\n".join(lines)
@@ -815,7 +815,7 @@ def _emit_auxiliary_route_registration(
                     "derived auxiliary provider %r has no exact typed lowering route"
                     % row["key"]["component"]
                 )
-            lines.append(derived_launcher(identity, route) + ");")
+            lines.append(derived_launcher(identity, route) + "});")
         else:
             lines.append("      std::vector<Dependency>{}});")
 

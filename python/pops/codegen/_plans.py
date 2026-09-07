@@ -55,6 +55,17 @@ def _string_mapping(value: Any, *, where: str) -> Mapping[str, Any]:
     return _deep_freeze(value)
 
 
+def _component_mapping(value: Any, *, where: str) -> Mapping[Any, Any]:
+    """Preserve the exact native component identity across the public bind boundary."""
+    from pops.model.provider_pack import ComponentKey
+
+    if not isinstance(value, Mapping):
+        raise TypeError("%s must be a ComponentKey-keyed mapping" % where)
+    if any(type(key) is not ComponentKey for key in value):
+        raise TypeError("%s keys must be exact pops.model.ComponentKey values" % where)
+    return _deep_freeze(value)
+
+
 def _array_evidence(value: Any, *, where: str) -> dict[str, Any] | None:
     """Return content evidence for an array-like value, or ``None`` when it is not array-like."""
     if not (hasattr(value, "__array__") or hasattr(value, "__array_interface__")):
@@ -803,7 +814,7 @@ class BindInputs:
 
     initial_state: Mapping[str, Any] = field(default_factory=dict)
     params: Mapping[Any, Any] = field(default_factory=dict)
-    aux: Mapping[str, Any] = field(default_factory=dict)
+    aux: Mapping[Any, Any] = field(default_factory=dict)
     resources: Mapping[str, Any] = field(default_factory=dict)
     initial_values: Mapping[Any, Any] = field(default_factory=dict)
     inputs_identity: Identity = field(init=False)
@@ -814,7 +825,7 @@ class BindInputs:
         if not isinstance(self.params, Mapping):
             raise TypeError("BindInputs.params must be a mapping")
         object.__setattr__(self, "params", _deep_freeze(self.params))
-        object.__setattr__(self, "aux", _string_mapping(self.aux, where="BindInputs.aux"))
+        object.__setattr__(self, "aux", _component_mapping(self.aux, where="BindInputs.aux"))
         object.__setattr__(self, "resources", _string_mapping(
             self.resources, where="BindInputs.resources"))
         if not isinstance(self.initial_values, Mapping):
@@ -862,7 +873,7 @@ class InstallPlan:
     bind_inputs: BindInputs
     instances: Mapping[str, Any]
     params: Any
-    aux: Mapping[str, Any]
+    aux: Mapping[Any, Any]
     resources: Mapping[str, Any] = field(default_factory=dict)
     components: Mapping[str, Any] = field(default_factory=dict)
     execution_context: Any = None
@@ -882,7 +893,7 @@ class InstallPlan:
             raise TypeError("InstallPlan.params must be exact resolved BindSchema values")
         if self.params.schema.hash != self.artifact.bind_schema.hash:
             raise ValueError("InstallPlan.params were resolved from a different BindSchema")
-        object.__setattr__(self, "aux", _string_mapping(self.aux, where="InstallPlan.aux"))
+        object.__setattr__(self, "aux", _component_mapping(self.aux, where="InstallPlan.aux"))
         object.__setattr__(self, "resources", _string_mapping(
             self.resources, where="InstallPlan.resources"))
         object.__setattr__(self, "components", _string_mapping(

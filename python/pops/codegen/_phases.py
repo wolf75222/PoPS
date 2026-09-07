@@ -497,6 +497,9 @@ def bind(artifact: Any, inputs: Any) -> Any:
         raise TypeError("internal bind phase requires an exact authenticated BindInputs record")
     artifact.verify()
     inputs.verify()
+    from pops.runtime._auxiliary_bind import validate_auxiliary_bind_inputs
+
+    validate_auxiliary_bind_inputs(artifact, inputs.aux)
     plan = artifact.plan
     adaptive = any(row.adaptive for row in plan.layout_plan.layouts)
     if adaptive and plan.initial_condition_plan is None:

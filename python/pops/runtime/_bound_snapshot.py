@@ -288,8 +288,10 @@ class MultiLayoutBoundSnapshot:
             self, "step_transaction", _freeze(transactions[0], where="step_transaction"))
         object.__setattr__(self, "params", _freeze(
             _data(install_plan.params.rows(), where="params"), where="params"))
+        from pops.runtime._auxiliary_bind import auxiliary_array_evidence
+
         object.__setattr__(self, "aux_evidence", _freeze(
-            _input_evidence(install_plan.aux, where="aux"), where="aux_evidence"))
+            auxiliary_array_evidence(install_plan.aux), where="aux_evidence"))
         object.__setattr__(self, "initial_evidence", _freeze(
             _resolved_initial_evidence(install_plan),
             where="initial_evidence"))
@@ -406,6 +408,8 @@ def _require_exact_install_inputs(engine: Any, compiled: Any, instances: Any,
 def _build_snapshot(engine: Any, compiled: Any, instances: Any, field_plans: Any,
                     aux: Any, params: Any, *, layout: str,
                     install_plan: Any = None) -> BoundSnapshot:
+    from pops.runtime._auxiliary_bind import auxiliary_array_evidence
+
     plan = None
     if install_plan is not None:
         plan = _require_exact_install_inputs(
@@ -432,7 +436,7 @@ def _build_snapshot(engine: Any, compiled: Any, instances: Any, field_plans: Any
                      for name, value in sorted((field_plans or {}).items())},
         step_transaction=_transaction_data(compiled),
         params=rows,
-        aux_evidence=_input_evidence(aux or {}, where="aux"),
+        aux_evidence=auxiliary_array_evidence(aux or {}),
         initial_evidence=(
             _resolved_initial_evidence(plan)
             if plan is not None

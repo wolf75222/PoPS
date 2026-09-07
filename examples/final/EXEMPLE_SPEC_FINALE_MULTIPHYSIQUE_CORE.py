@@ -543,17 +543,6 @@ def build_initial_state(*, cells: int = DEFAULT_CELLS) -> dict[str, np.ndarray]:
     }
 
 
-def build_initial_fields(*, cells: int = DEFAULT_CELLS) -> dict[str, np.ndarray]:
-    """Allocate the declared field-space buffers; the Program solve supplies their values."""
-
-    zeros = np.zeros((cells, cells), dtype=np.float64)
-    return {
-        "potential": zeros.copy(),
-        "electric_x": zeros.copy(),
-        "electric_y": zeros.copy(),
-    }
-
-
 def compile_final_case(*, cells: int = DEFAULT_CELLS) -> tuple[FinalMultiphysicsCase, Any]:
     """Resolve and compile the exact final Case with its authenticated layout provider."""
 
@@ -658,7 +647,6 @@ def run_and_restart(
     simulation = _bind_artifact(
         artifact,
         initial_state=build_initial_state(cells=cells),
-        aux=build_initial_fields(cells=cells),
     )
     run_report = pops.run(
         simulation,
@@ -682,7 +670,6 @@ def run_and_restart(
     resumed = _bind_artifact(
         artifact,
         initial_state=build_initial_state(cells=cells),
-        aux=build_initial_fields(cells=cells),
     )
     resumed.restart(checkpoint_path)
     restored = _snapshot(resumed)
