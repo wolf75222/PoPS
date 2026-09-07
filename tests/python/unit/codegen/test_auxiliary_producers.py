@@ -9,6 +9,8 @@ from pops._ir import ValueExpr
 from pops._ir.expr import Var
 from pops.codegen._artifact_freeze import seal_attributes
 from pops.codegen._compile_emit import _emit_auxiliary_route_registration
+from pops.codegen._native_model_provider_plan import native_model_provider_plan
+from pops.codegen.module_lowering import _module_to_model
 from pops.codegen.program_emit_kernels import ProgramProviderPlans
 from pops.codegen.component_provider_packs import (
     ComponentProviderPacks,
@@ -20,10 +22,12 @@ from pops.codegen.component_provider_packs import (
 from pops.fields import AuxiliaryBoundary, DerivedAux, InputAux
 from pops.model.provider_pack import ComponentContract, ComponentKey, ProviderEntry, ProviderPack
 from pops.model import Module
+from pops.physics._model import HyperbolicModel
 
 
 def _module() -> Module:
     module = Module("auxiliary_producers")
+    module.state_space("U", ("u",))
     imposed = module.aux_field("imposed")
     temperature = module.aux_field("temperature")
     module.aux_provider(InputAux(
@@ -47,9 +51,10 @@ def test_input_and_derived_aux_routes_are_exact_and_emit_native_launcher() -> No
     assert [key.component for key in derived["dependencies"]] == ["imposed"]
     assert [packs.auxiliary.declared_entry(key).slot for key in packs.auxiliary] == [0, 1]
 
-    carrier = SimpleNamespace(owner_path=module.owner_path)
-    packs.attach(carrier)
+    carrier = _module_to_model(module)._m
+    assert native_model_provider_plan(carrier) == ()  # Produced outputs are not model inputs.
     source = _emit_auxiliary_route_registration(carrier)
+    assert '/native_model"' in source
     assert "AuxiliaryProviderKind::derived" in source
     assert "Provider::launcher_type::trusted_extension" in source
     assert ".address.group" in source
@@ -84,9 +89,7 @@ def test_provider_pack_reattachment_normalizes_only_artifact_container_freezing(
 
 def test_amr_auxiliary_hook_is_typed_and_distinct_from_the_system_hook() -> None:
     module = _module()
-    packs = resolve_component_provider_packs(module)
-    carrier = SimpleNamespace(owner_path=module.owner_path)
-    packs.attach(carrier)
+    carrier = _module_to_model(module)._m
 
     source = _emit_auxiliary_route_registration(carrier, target="amr_system")
 
@@ -130,6 +133,7 @@ def test_auxiliary_boundary_rejects_ambiguous_physical_policy() -> None:
 def test_auxiliary_boundary_and_derived_freshness_are_part_of_the_typed_route() -> None:
     """Halo policy and freshness belong to the typed provider, never to a named setter."""
     module = Module("fresh_derived_auxiliary")
+    module.state_space("U", ("u",))
     imposed = module.aux_handle(module.aux_field("imposed"))
     nonlinear = module.aux_handle(module.aux_field("nonlinear"))
     module.aux_provider(InputAux(
@@ -137,9 +141,8 @@ def test_auxiliary_boundary_and_derived_freshness_are_part_of_the_typed_route() 
         boundary=AuxiliaryBoundary(width=3, kind="dirichlet", value=2.0),
     ))
     module.aux_provider(DerivedAux(nonlinear, ValueExpr(imposed) * ValueExpr(imposed)))
-    packs = resolve_component_provider_packs(module)
-    carrier = SimpleNamespace(owner_path=module.owner_path)
-    packs.attach(carrier)
+    carrier = _module_to_model(module)._m
+    assert native_model_provider_plan(carrier) == ()
     source = _emit_auxiliary_route_registration(carrier)
 
     assert 'halo[axis] = 3' in source
@@ -189,8 +192,12 @@ def test_native_route_registers_only_owned_outputs_but_consumes_foreign_keys() -
         consumer_plans={"consumer": plan},
         physical_flux_plan=plan,
     )
-    carrier = SimpleNamespace(owner_path=module.owner_path)
+    # This fixture deliberately supplies an already resolved pack with two distinct owners.
+    # Use the real emitter model protocol, retaining its initialized source/projection roles.
+    carrier = HyperbolicModel(module.name)
+    object.__setattr__(carrier, "_owner_path", module.owner_path)
     packs.attach(carrier)
+    assert native_model_provider_plan(carrier) == plan
     source = _emit_auxiliary_route_registration(carrier)
 
     assert source.count("install_prepared_auxiliary_provider(Provider{") == 1
