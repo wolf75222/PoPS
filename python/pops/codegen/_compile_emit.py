@@ -17,7 +17,7 @@ _BACKEND_CAPS = {
 
 # Must match pops::runtime::system::kNativeSystemPackageAbiVersion.  Host
 # add_native_block looks up NATIVE_SYSTEM_PACKAGE_ABI_EXPORT on every package.
-NATIVE_SYSTEM_PACKAGE_ABI_VERSION = 4
+NATIVE_SYSTEM_PACKAGE_ABI_VERSION = 5
 NATIVE_SYSTEM_PACKAGE_ABI_EXPORT = "pops_native_system_package_abi_version"
 
 
@@ -34,7 +34,7 @@ def compiled_capability_flags(backend: str) -> dict[str, bool]:
 
 
 def _normalize_native_amr_field_roles(value: Any) -> tuple[dict[str, Any], ...]:
-    """Validate the resolved per-block field roles consumed by one AMR package.
+    """Validate the resolved per-block field roles consumed by one native package.
 
     Output ownership and RHS contribution are deliberately separate rows.  The compiler receives
     these rows from the complete resolved Case; a model-local elliptic declaration is never used to
@@ -890,8 +890,6 @@ def emit_cpp_native_loader(
         raise ValueError(
             "emit_cpp_native_loader: target 'system' | 'amr_system' (got %r)" % (target,)
         )
-    if target == "system" and native_field_roles is not None:
-        raise ValueError("resolved AMR field roles cannot be emitted into a System package")
     nv, bricks, composite = _emit_bricks(m, name, hoist_reciprocals=hoist_reciprocals)
     model_identity = str(model_identity if model_identity is not None else model_hash(m))
     if len(model_identity) != 64 or any(ch not in "0123456789abcdef" for ch in model_identity):
@@ -953,22 +951,52 @@ def emit_cpp_native_loader(
     # the host validates its block and elliptic attachments before one atomic commit.
     system_elliptic_prepare_lines = ""
     system_elliptic_package_lines = ""
-    for index, (fld, brick, output_keys) in enumerate(ell_field_regs):
-        gradient_sign = m._elliptic_fields[fld]["gradient_sign"]
+    system_registrations = [(*registration, None) for registration in ell_field_regs]
+    if target == "system" and native_field_roles is not None:
+        # A Case owns one complete field output. Model packages contribute only their resolved
+        # RHS laws; the available output FieldSpace does not confer output or gradient ownership.
+        local_fields = {field: brick for field, brick, _ in ell_field_regs}
+        system_registrations = []
+        system_bindings = {}
+        for role in amr_field_roles:
+            if role["kind"] != "rhs":
+                continue
+            provider_key = role["provider_key"]
+            brick = local_fields.get(provider_key)
+            is_default = provider_key == "fields_from_state" and m._elliptic is not None
+            if brick is None and not is_default:
+                raise ValueError(
+                    "resolved System field RHS provider %r is absent from its block model"
+                    % provider_key)
+            binding_key = (role["field"], provider_key)
+            if binding_key in system_bindings:
+                if system_bindings[binding_key] != role["binding_identity"]:
+                    raise ValueError("resolved System RHS has conflicting provider identities")
+                # Repeated signed terms share one density closure. Their coefficients remain in
+                # the exact field plan and are accumulated by set_block_elliptic_field.
+                continue
+            system_bindings[binding_key] = role["binding_identity"]
+            system_registrations.append((provider_key, brick, (), role))
+    for index, (fld, brick, output_keys, rhs_role) in enumerate(system_registrations):
+        gradient_sign = 1 if rhs_role is not None else m._elliptic_fields[fld]["gradient_sign"]
         if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
             raise ValueError("elliptic_field('%s'): gradient_sign must be exactly -1 or 1" % fld)
         if len(output_keys) == 1 and gradient_sign != 1:
             raise ValueError(
                 "elliptic_field('%s'): gradient_sign=-1 requires gradient outputs" % fld
             )
-        system_elliptic_prepare_lines += (
-            "  auto named_elliptic_model_%d = %s{};\n"
-            "  pops::compiled_model::apply_runtime_params(\n"
-            "      named_elliptic_model_%d,\n"
-            "      pops::compiled_model::declaration_runtime_params(model));\n"
-            "  auto named_elliptic_rhs_%d = pops::make_poisson_rhs(named_elliptic_model_%d);\n"
-            % (index, brick, index, index, index)
-        )
+        if brick is None:
+            system_elliptic_prepare_lines += (
+                "  auto named_elliptic_rhs_%d = pops::make_poisson_rhs(model);\n" % index)
+        else:
+            system_elliptic_prepare_lines += (
+                "  auto named_elliptic_model_%d = %s{};\n"
+                "  pops::compiled_model::apply_runtime_params(\n"
+                "      named_elliptic_model_%d,\n"
+                "      pops::compiled_model::declaration_runtime_params(model));\n"
+                "  auto named_elliptic_rhs_%d = pops::make_poisson_rhs(named_elliptic_model_%d);\n"
+                % (index, brick, index, index, index)
+            )
         key_values = ", ".join(
             "pops::runtime::system::AuxiliaryComponentKey{%s, %s, %s, %s}"
             % tuple(
@@ -982,13 +1010,29 @@ def emit_cpp_native_loader(
             )
             for key in output_keys
         )
-        system_elliptic_package_lines += (
-            '  package.elliptic_attachments.push_back({"%s", "%s/%s", '
-            "std::vector<pops::runtime::system::AuxiliaryComponentKey>{%s}, %d, "
-            "std::move(named_elliptic_rhs_%d)});\n"
-            % (fld, model_identity, fld, key_values, gradient_sign, index)
-        )
-    if m._elliptic is not None:
+        if rhs_role is None:
+            system_elliptic_package_lines += (
+                '  package.elliptic_attachments.push_back({"%s", "%s/%s", '
+                "std::vector<pops::runtime::system::AuxiliaryComponentKey>{%s}, %d, "
+                "std::move(named_elliptic_rhs_%d)});\n"
+                % (fld, model_identity, fld, key_values, gradient_sign, index)
+            )
+        else:
+            system_elliptic_package_lines += (
+                "  {\n"
+                "    pops::runtime::system::PreparedNativeEllipticAttachment<pops::kNativeDimension> attachment;\n"
+                "    attachment.field = %s;\n"
+                "    attachment.rhs_identity = %s;\n"
+                "    attachment.role = pops::runtime::system::NativeEllipticAttachmentRole::rhs_only;\n"
+                "    attachment.field_slot = %s;\n"
+                "    attachment.binding_identity = %s;\n"
+                "    attachment.rhs = std::move(named_elliptic_rhs_%d);\n"
+                "    package.elliptic_attachments.push_back(std::move(attachment));\n"
+                "  }\n"
+                % (json.dumps(fld), json.dumps("%s/%s" % (model_identity, fld)),
+                   json.dumps(rhs_role["field"]), json.dumps(rhs_role["binding_identity"]), index)
+            )
+    if m._elliptic is not None and (target != "system" or native_field_roles is None):
         system_elliptic_prepare_lines += (
             "  auto fields_from_state_rhs = pops::make_poisson_rhs(model);\n"
         )
@@ -1001,7 +1045,7 @@ def emit_cpp_native_loader(
     amr_elliptic_package_lines = ""
     local_fields = {field: brick for field, brick, _ in ell_field_regs}
     rhs_index = 0
-    for role in amr_field_roles:
+    for role in (amr_field_roles if target == "amr_system" else ()):
         if role["kind"] == "output":
             key_values = ", ".join(
                 "pops::runtime::system::AuxiliaryComponentKey{%s, %s, %s, %s}"

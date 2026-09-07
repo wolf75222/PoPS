@@ -2189,9 +2189,30 @@ void System<Dim>::finalize_native_packages() {
       for (auto& attachment : candidate.elliptic_attachments) {
         std::exception_ptr field_error;
         try {
-          const auto [selected, provider_key] = select_field_rhs_binding(
-              snapshot->field_plans, package.capability->identity, attachment.field,
-              attachment.rhs_identity);
+          const auto [selected, provider_key] = [&]() {
+            if (attachment.role ==
+                runtime::system::NativeEllipticAttachmentRole::rhs_only) {
+              const auto field_plan = snapshot->field_plans.find(attachment.field_slot);
+              if (field_plan == snapshot->field_plans.end())
+                throw std::logic_error("System RHS-only attachment has no exact field slot");
+              std::size_t matches = 0;
+              for (const auto& binding : field_plan->second.providers)
+                if (binding.block == package.capability->identity &&
+                    binding.key == attachment.field) {
+                  if (binding.identity != attachment.binding_identity)
+                    throw std::logic_error(
+                        "System RHS-only attachment has conflicting provider identities");
+                  ++matches;
+                }
+              if (matches == 0)
+                throw std::logic_error(
+                    "System RHS-only attachment differs from its exact provider binding");
+              return std::make_pair(field_plan, attachment.field);
+            }
+            return select_field_rhs_binding(
+                snapshot->field_plans, package.capability->identity, attachment.field,
+                attachment.rhs_identity);
+          }();
           if (selected == snapshot->field_plans.end()) {
             // Convenience ChargeDensity packages emit an RHS-only fields_from_state
             // attachment. The default Poisson already lives on the prepared block
@@ -2202,11 +2223,11 @@ void System<Dim>::finalize_native_packages() {
             throw std::logic_error("System native elliptic attachment has no resolved field plan");
           }
           const auto staged = snapshot->staged_native_field_outputs.find(selected->first);
-          if (staged == snapshot->staged_native_field_outputs.end() ||
-              staged->second.gradient_sign != attachment.gradient_sign ||
-              (!attachment.outputs.empty() && staged->second.output_keys != attachment.outputs))
+          if (staged == snapshot->staged_native_field_outputs.end())
             throw std::logic_error(
                 "System native elliptic attachment differs from its staged output contract");
+          runtime::system::require_native_elliptic_output_contract(
+              attachment, staged->second.output_keys, staged->second.gradient_sign);
           if (!expected_field_attachments.erase(
                   {selected->first, package.capability->identity, provider_key}))
             throw std::logic_error(

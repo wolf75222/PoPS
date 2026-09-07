@@ -10,8 +10,8 @@ from typing import Any
 def _resolved_native_amr_field_roles(plan: Any) -> dict[str, tuple[dict[str, Any], ...]]:
     """Project complete resolved field plans onto exact per-block package roles."""
     roles: dict[str, list[dict[str, Any]]] = {block.name: [] for block in plan.blocks}
-    if plan.target != "amr_system":
-        return {block: () for block in roles}
+    if plan.target not in {"system", "amr_system"}:
+        raise ValueError("resolved field roles require a native System or AmrSystem target")
     from pops.identity import canonical_bytes
 
     for field_name, field_plan in sorted(plan.field_plans.items()):
@@ -99,7 +99,7 @@ def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
             plan.target,
             compile_options,
             state_spaces=block.state_spaces,
-            native_field_roles=(roles[block.name] if plan.target == "amr_system" else None),
+            native_field_roles=roles[block.name],
             consumer_owner_qid=block.instance_owner_qid,
             declare_auxiliary_providers=block.declares_auxiliary_providers,
             resolved_operations=block.resolved_operations,
@@ -144,18 +144,14 @@ def compile_install_model(
     require_block_plan_owner(
         resolved_operations, consumer_owner_qid, where="compiled block %r" % name)
 
-    if target == "system":
-        if native_field_roles is not None:
-            raise ValueError("resolved AMR field roles cannot be compiled for System")
-        expected_roles: tuple[dict[str, Any], ...] = ()
-    elif target == "amr_system":
-        if native_field_roles is None:
-            raise ValueError("resolved AMR blocks require an exact per-block field-role contract")
-        from pops.codegen._compile_emit import _normalize_native_amr_field_roles
-
-        expected_roles = _normalize_native_amr_field_roles(native_field_roles)
-    else:
+    if target not in {"system", "amr_system"}:
         raise ValueError("compiled block target must be 'system' or 'amr_system'")
+    if target == "amr_system" and native_field_roles is None:
+        raise ValueError("resolved AMR blocks require an exact per-block field-role contract")
+    from pops.codegen._compile_emit import _normalize_native_amr_field_roles
+
+    expected_roles = _normalize_native_amr_field_roles(native_field_roles)
+    has_field_role_contract = native_field_roles is not None
     state_spaces = tuple(state_spaces)
     if len(state_spaces) != 1 or not isinstance(state_spaces[0], str) or not state_spaces[0]:
         raise TypeError("compiled block %r requires exactly one named state space" % name)
@@ -165,14 +161,14 @@ def compile_install_model(
             raise ValueError("resolved compiled model state-space route disagrees with its plan")
         if model.target != target or model.backend != backend:
             raise ValueError("resolved compiled model route disagrees with its plan")
-        if target == "amr_system":
+        if has_field_role_contract:
             observed_roles = getattr(model, "_native_field_roles", None)
             if (
                 observed_roles is None
                 or _normalize_native_amr_field_roles(observed_roles) != expected_roles
             ):
                 raise ValueError(
-                    "precompiled AMR block field roles differ from the resolved Case; recompile"
+                    "precompiled native block field roles differ from the resolved Case; recompile"
                 )
         from pops.codegen._plans import attest_precompiled_consumer_owner
 
@@ -206,20 +202,20 @@ def compile_install_model(
     compiled = compile_model(
         backend=backend,
         target=target,
-        _native_field_roles=(expected_roles if target == "amr_system" else None),
+        _native_field_roles=(expected_roles if has_field_role_contract else None),
         consumer_owner_qid=consumer_owner_qid,
         declare_auxiliary_providers=declare_auxiliary_providers,
         **compile_options,
     )
     if type(compiled) is not CompiledModel:
         raise TypeError("resolved block compiler must return exact CompiledModel")
-    if target == "amr_system":
+    if has_field_role_contract:
         observed_roles = getattr(compiled, "_native_field_roles", None)
         if (
             observed_roles is None
             or _normalize_native_amr_field_roles(observed_roles) != expected_roles
         ):
-            raise ValueError("compiled AMR block did not attest the exact resolved field roles")
+            raise ValueError("compiled native block did not attest the exact resolved field roles")
     if compiled.module_manifest is not None:
         raise TypeError(
             "model.compile() returned a CompiledModel with a pre-attached ModuleManifest; "

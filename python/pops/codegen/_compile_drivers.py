@@ -179,13 +179,9 @@ def compile_model(
     backend = lower_backend(backend)
     if target not in ("system", "amr_system"):
         raise ValueError("compile: target 'system' | 'amr_system' (received %r)" % (target,))
-    if target == "system" and _native_field_roles is not None:
-        raise ValueError("resolved AMR field roles cannot be compiled for System")
     from pops.codegen._compile_emit import _normalize_native_amr_field_roles
 
-    normalized_field_roles = (
-        _normalize_native_amr_field_roles(_native_field_roles) if target == "amr_system" else ()
-    )
+    normalized_field_roles = _normalize_native_amr_field_roles(_native_field_roles)
     if (
         target == "amr_system"
         and _native_field_roles is None
@@ -208,11 +204,12 @@ def compile_model(
     from pops.codegen._artifact_identity import model_artifact_spec
 
     identity_name = name
-    if target == "amr_system":
+    if target == "amr_system" or _native_field_roles is not None:
         from pops.identity import canonical_bytes
 
-        identity_name = "%s#amr-field-roles:%s" % (
+        identity_name = "%s#%s-field-roles:%s" % (
             "" if name is None else name,
+            "amr" if target == "amr_system" else "system",
             canonical_bytes(_native_amr_field_roles_identity(normalized_field_roles)).hex(),
         )
     semantic_identity, spec_identity = model_artifact_spec(
@@ -239,7 +236,8 @@ def compile_model(
             target=target,
             hoist_reciprocals=hoist_reciprocals,
             model_identity=model_identity,
-            native_field_roles=(normalized_field_roles if target == "amr_system" else None),
+            native_field_roles=(normalized_field_roles if _native_field_roles is not None
+                                or target == "amr_system" else None),
             consumer_owner_qid=consumer_owner_qid,
             declare_auxiliary_providers=declare_auxiliary_providers,
         )

@@ -193,16 +193,12 @@ class _FacadeCompileMixin(_FacadeModel):
         backend = lower_backend(backend)
         if target not in ("system", "amr_system"):
             raise ValueError("compile: target 'system' | 'amr_system' (got %r)" % (target,))
-        if target == "system" and _native_field_roles is not None:
-            raise ValueError("resolved AMR field roles cannot be compiled for System")
         from pops.codegen._compile_emit import (
             _native_amr_field_roles_identity,
             _normalize_native_amr_field_roles,
         )
 
-        normalized_field_roles = (
-            _normalize_native_amr_field_roles(_native_field_roles) if target == "amr_system" else ()
-        )
+        normalized_field_roles = _normalize_native_amr_field_roles(_native_field_roles)
 
         m = self._m
         if target == "amr_system" and _native_field_roles is None and bool(m._elliptic_fields):
@@ -263,10 +259,11 @@ class _FacadeCompileMixin(_FacadeModel):
                 else float((getattr(m, "_ws_jacobian", {}) or {})["im_tol"]).hex()
             ),
         }
-        if target == "amr_system":
+        if target == "amr_system" or _native_field_roles is not None:
             from pops.identity import canonical_bytes
 
-            spec_components["amr_field_roles"] = canonical_bytes(
+            role_key = "amr_field_roles" if target == "amr_system" else "system_field_roles"
+            spec_components[role_key] = canonical_bytes(
                 _native_amr_field_roles_identity(normalized_field_roles)
             ).hex()
         spec_identity = artifact_spec_identity(
@@ -312,7 +309,8 @@ class _FacadeCompileMixin(_FacadeModel):
                 target=target,
                 hoist_reciprocals=hoist_reciprocals,
                 model_identity=model_hash,
-                _native_field_roles=(normalized_field_roles if target == "amr_system" else None),
+                _native_field_roles=(normalized_field_roles if _native_field_roles is not None
+                                     or target == "amr_system" else None),
                 consumer_owner_qid=consumer_owner_qid,
                 declare_auxiliary_providers=declare_auxiliary_providers,
             )
@@ -359,7 +357,7 @@ class _FacadeCompileMixin(_FacadeModel):
         cm.artifact_spec_identity = spec_identity
         cm.binary_identity = binary_identity
         cm.artifact_identity = final_artifact_identity
-        if target == "amr_system":
+        if target == "amr_system" or _native_field_roles is not None:
             cm._native_field_roles = normalized_field_roles
         # Exact ABI order of only the RuntimeParamRef nodes actually read by emitted formulas.
         # BindSchema routes qualified values into this local vector; declarations that are never

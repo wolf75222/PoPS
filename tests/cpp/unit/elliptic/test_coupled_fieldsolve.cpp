@@ -152,7 +152,21 @@ std::vector<std::string> periodic_kinds() {
 struct NativeLoad {
   std::string key;
   pops::Real scale;
+  pops::runtime::system::NativeEllipticAttachmentRole role =
+      pops::runtime::system::NativeEllipticAttachmentRole::output_and_rhs;
+  std::string field_slot;
+  std::string binding_identity;
+  bool claim_outputs = false;
+  int gradient_sign = 1;
 };
+
+NativeLoad rhs_only_load(std::string key, pops::Real scale) {
+  NativeLoad result{std::move(key), scale};
+  result.role = pops::runtime::system::NativeEllipticAttachmentRole::rhs_only;
+  result.field_slot = "test.exact-load-plan";
+  result.binding_identity = "test.resolved-provider/" + result.key;
+  return result;
+}
 
 void stage_charge_package(
     NativeSystem& system, const std::string& block,
@@ -182,10 +196,13 @@ void stage_charge_package(
         for (const auto& load : loads) {
           package.elliptic_attachments.push_back({
               load.key, "test.native-rhs/" + block + "/" + load.key,
-              load.key == "fields_from_state" ? std::vector<AuxiliaryComponentKey>{} : outputs,
-              1, [scale = load.scale](const NativeField& state, NativeField& rhs) {
+              load.key == "fields_from_state" ||
+                      (load.role == NativeEllipticAttachmentRole::rhs_only && !load.claim_outputs)
+                  ? std::vector<AuxiliaryComponentKey>{}
+                  : outputs,
+              load.gradient_sign, [scale = load.scale](const NativeField& state, NativeField& rhs) {
                 pops::add_scaled_component(state, scale, 0, rhs);
-              }});
+              }, load.role, load.field_slot, load.binding_identity});
         }
         installer->commit(std::move(package));
       },
@@ -194,7 +211,8 @@ void stage_charge_package(
 
 NativeSystem named_load_system(int cells, const std::vector<std::string>& keys,
                                const std::vector<double>& coefficients,
-                               const std::vector<NativeLoad>& attachments) {
+                               const std::vector<NativeLoad>& attachments,
+                               int output_gradient_sign = 1) {
   NativeSystem system(config(cells));
   install_execution_lane(system);
   const auto outputs = install_field_outputs(system, "test.exact-load-output", "potential", false);
@@ -218,8 +236,33 @@ NativeSystem named_load_system(int cells, const std::vector<std::string>& keys,
   system.set_field_nullspace(
       slot, "pops.field-nullspace.operator-topology-derived",
       {"pops.field-nullspace.operator-topology-derived.options@1", {{"gauge.value", 0.0}}});
-  system.register_elliptic_field("first", "potential", outputs, 1);
+  system.register_elliptic_field("first", "potential", outputs, output_gradient_sign);
   return system;
+}
+
+void expect_negative_field_gradient(const NativeSystem& system, const std::vector<double>& potential,
+                                    int cells) {
+  for (int axis = 0; axis < Dim; ++axis) {
+    SCOPED_TRACE(axis);
+    const auto gradient = system.auxiliary_component(
+        {"test.exact-load-output", "field", "potential", "gradient-" + std::to_string(axis)});
+    ASSERT_EQ(gradient.size(), potential.size());
+    std::size_t stride = 1;
+    for (int lower_axis = 0; lower_axis < axis; ++lower_axis)
+      stride *= static_cast<std::size_t>(cells);
+    double error = 0;
+    double magnitude = 0;
+    for (std::size_t cell = 0; cell < potential.size(); ++cell) {
+      const int coordinate = static_cast<int>((cell / stride) % static_cast<std::size_t>(cells));
+      const std::size_t minus = coordinate == 0 ? cell + stride * (cells - 1) : cell - stride;
+      const std::size_t plus = coordinate == cells - 1 ? cell - stride * (cells - 1) : cell + stride;
+      const double expected = -0.5 * cells * (potential[plus] - potential[minus]);
+      error = std::max(error, std::abs(gradient[cell] - expected));
+      magnitude = std::max(magnitude, std::abs(expected));
+    }
+    ASSERT_GT(magnitude, 1024.0 * std::numeric_limits<pops::Real>::epsilon());
+    EXPECT_LE(error, 16.0 * std::numeric_limits<pops::Real>::epsilon() * std::max(1.0, magnitude));
+  }
 }
 
 }  // namespace
@@ -413,4 +456,109 @@ TEST(test_coupled_fieldsolve, native_default_poisson_attachment_retains_its_prep
   ASSERT_TRUE(report.solved()) << report.reason;
   const auto potential = system.potential();
   EXPECT_GT(max_difference(potential, std::vector<double>(potential.size(), 0.0)), 1.0e-5);
+}
+
+TEST(test_coupled_fieldsolve, native_rhs_only_repeated_signed_coefficients_preserve_case_gradient) {
+  constexpr int cells = 24;
+  const auto density = charge_density(cells, 1.0, 0.0);
+  auto system = named_load_system(cells, {"electron-load", "electron-load"}, {2.0, -0.5},
+                                  {rhs_only_load("electron-load", pops::Real(0.5))}, -1);
+  ASSERT_NO_THROW(system.finalize_native_packages());
+  system.set_density("first", density);
+  // Both resolved occurrences use the same density law: (2 - 0.5) * (0.5 rho) = 0.75 rho.
+  auto reference = named_load_system(cells, {"combined-load"}, {1.0},
+                                     {rhs_only_load("combined-load", pops::Real(0.75))}, -1);
+  ASSERT_NO_THROW(reference.finalize_native_packages());
+  reference.set_density("first", density);
+  const std::string slot = "test.exact-load-plan";
+  const auto report = pops::consume_solve_outcome(system.solve_fields_from_blocks(
+      slot, std::vector<const NativeField*>{&system.block_state(0)}));
+  const auto reference_report = pops::consume_solve_outcome(reference.solve_fields_from_blocks(
+      slot, std::vector<const NativeField*>{&reference.block_state(0)}));
+  ASSERT_TRUE(report.solved()) << report.reason;
+  ASSERT_TRUE(reference_report.solved()) << reference_report.reason;
+  const auto potential = system.field_potential_global(slot);
+  EXPECT_LE(max_difference(potential, reference.field_potential_global(slot)), 1.0e-11);
+  EXPECT_GT(max_difference(potential, std::vector<double>(potential.size(), 0.0)), 1.0e-5);
+  expect_negative_field_gradient(system, potential, cells);
+  EXPECT_EQ(system.density("first"), density);
+  EXPECT_THROW((void)system.field_potential_global("electron-load"), std::exception);
+}
+
+TEST(test_coupled_fieldsolve, native_rhs_only_electron_and_ion_blocks_share_one_case_output) {
+  constexpr int cells = 24;
+  const auto electron_density = charge_density(cells, 1.0, 0.0);
+  const auto ion_density = charge_density(cells, 0.6, 0.25);
+  NativeSystem system(config(cells));
+  install_execution_lane(system);
+  const auto outputs = install_field_outputs(system, "test.exact-load-output", "potential", false);
+  stage_charge_package(system, "electron", outputs,
+                       {rhs_only_load("electron-load", pops::Real(1))});
+  stage_charge_package(system, "ion", outputs, {rhs_only_load("ion-load", pops::Real(1))});
+  const std::string slot = "test.exact-load-plan";
+  system.register_configured_field_solver_provider(
+      "cartesian_cg", slot,
+      {"pops.system.cartesian-cg-options@1",
+       {{"abs_tol", 0.0}, {"max_iterations", std::int64_t{200}}, {"rel_tol", 1.0e-8}}});
+  system.set_field_solver_plan(
+      slot, "test.exact-load.plan@1", "test.exact-load.provider@1", "test.exact-load-output",
+      "electron", "potential",
+      {"test.resolved-provider/electron-load", "test.resolved-provider/ion-load"},
+      {"electron", "ion"}, {"electron-load", "ion-load"}, {-1.0, 1.0}, slot);
+  system.set_field_topology_authority(slot, "builtin_rectangular_cell_graph_v1",
+                                      "test.periodic-cartesian", "test.periodic-cartesian.v1");
+  system.set_field_boundary_plan(slot, periodic_kinds(), periodic_faces(0.0), periodic_faces(0.0),
+                                 periodic_faces(0.0));
+  system.set_field_nullspace(
+      slot, "pops.field-nullspace.operator-topology-derived",
+      {"pops.field-nullspace.operator-topology-derived.options@1", {{"gauge.value", 0.0}}});
+  system.register_elliptic_field("electron", "potential", outputs, -1);
+  ASSERT_NO_THROW(system.finalize_native_packages());
+  system.set_density("electron", electron_density);
+  system.set_density("ion", ion_density);
+
+  std::vector<double> combined(electron_density.size());
+  for (std::size_t index = 0; index < combined.size(); ++index)
+    combined[index] = -electron_density[index] + ion_density[index];
+  auto reference = named_load_system(cells, {"combined-load"}, {1.0},
+                                     {rhs_only_load("combined-load", pops::Real(1))}, -1);
+  ASSERT_NO_THROW(reference.finalize_native_packages());
+  reference.set_density("first", combined);
+  const auto report = pops::consume_solve_outcome(system.solve_fields_from_blocks(
+      slot, std::vector<const NativeField*>{&system.block_state(0), &system.block_state(1)}));
+  const auto reference_report = pops::consume_solve_outcome(reference.solve_fields_from_blocks(
+      slot, std::vector<const NativeField*>{&reference.block_state(0)}));
+  ASSERT_TRUE(report.solved()) << report.reason;
+  ASSERT_TRUE(reference_report.solved()) << reference_report.reason;
+  const auto potential = system.field_potential_global(slot);
+  EXPECT_LE(max_difference(potential, reference.field_potential_global(slot)), 1.0e-11);
+  expect_negative_field_gradient(system, potential, cells);
+  EXPECT_EQ(system.density("electron"), electron_density);
+  EXPECT_EQ(system.density("ion"), ion_density);
+}
+
+TEST(test_coupled_fieldsolve, native_rhs_only_forged_authorities_reject_before_block_publication) {
+  for (int forgery = 0; forgery != 5; ++forgery) {
+    SCOPED_TRACE(forgery);
+    auto load = rhs_only_load("electron-load", pops::Real(1));
+    switch (forgery) {
+      case 0: load.field_slot = "another-field-plan"; break;
+      case 1: load.binding_identity = "test.resolved-provider/foreign-load"; break;
+      case 2: load.claim_outputs = true; break;
+      case 3: load.gradient_sign = -1; break;
+      case 4:
+        load.role = pops::runtime::system::NativeEllipticAttachmentRole::output_and_rhs;
+        break;
+    }
+    auto system = named_load_system(24, {"electron-load"}, {1.0}, {load}, -1);
+    EXPECT_THROW(system.finalize_native_packages(), std::exception);
+    EXPECT_THROW((void)system.block_state(0), std::exception);
+  }
+}
+
+TEST(test_coupled_fieldsolve, native_output_bearing_wrong_gradient_rejects_before_block_publication) {
+  auto system = named_load_system(24, {"electron-load"}, {1.0},
+                                  {{"electron-load", pops::Real(1)}}, -1);
+  EXPECT_THROW(system.finalize_native_packages(), std::exception);
+  EXPECT_THROW((void)system.block_state(0), std::exception);
 }

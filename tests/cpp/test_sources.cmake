@@ -167,6 +167,7 @@ set(POPS_CPP_TEST_SOURCE_test_nd_topology "tests/cpp/unit/mesh/test_nd_topology.
 set(POPS_CPP_TEST_SOURCE_test_nd_transfer "tests/cpp/unit/amr/test_nd_transfer.cpp")
 set(POPS_CPP_TEST_SOURCE_test_nd_translation_schedule "tests/cpp/unit/mesh/test_nd_translation_schedule.cpp")
 set(POPS_CPP_TEST_SOURCE_test_native_aux_named "tests/cpp/integration/native_loader/test_native_aux_named.cpp")
+set(POPS_CPP_TEST_SOURCE_test_native_field_attachment "tests/cpp/unit/runtime/test_native_field_attachment.cpp")
 set(POPS_CPP_TEST_SOURCE_test_native_loader_param_overflow "tests/cpp/integration/native_loader/test_native_loader_param_overflow.cpp")
 set(POPS_CPP_TEST_SOURCE_test_newton_robustness "tests/cpp/unit/elliptic/test_newton_robustness.cpp")
 set(POPS_CPP_TEST_SOURCE_test_numerical_defaults "tests/cpp/unit/numerics/test_numerical_defaults.cpp")
