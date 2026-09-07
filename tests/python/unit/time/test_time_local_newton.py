@@ -531,7 +531,17 @@ def section_b(t):
                 ),
             ),
         }
-        compiled_fault_block = fault_model("fault_block").compile(backend="production")
+        # Both Programs and their block read the same declared InputAux keys.
+        compiled_fault_block = fault_program_model.compile(backend="production")
+        from pops.codegen.component_provider_packs import resolve_component_provider_packs
+
+        fault_input_keys = {
+            key.component: key
+            for key in resolve_component_provider_packs(fault_program_model.module).auxiliary
+        }
+        assert set(fault_input_keys) == {
+            "fault_offset", "fault_linear", "fault_quadratic", "fault_boundary", "B_z",
+        }
     except RuntimeError as exc:
         _skip("fault-matrix compilation could not build the native packages: %s" % str(exc)[:160])
 
@@ -583,8 +593,8 @@ def section_b(t):
         for field in (
             "fault_offset", "fault_linear", "fault_quadratic", "fault_boundary",
         ):
-            sim.set_aux_field("blk", field, np.full((8, 8), fault[field]))
-        sim.set_magnetic_field(np.full(64, fault["root_weight"]))
+            sim.stage_auxiliary_input(fault_input_keys[field], np.full((8, 8), fault[field]))
+        sim.stage_auxiliary_input(fault_input_keys["B_z"], np.full((8, 8), fault["root_weight"]))
         sim.install_program(compiled_program.so_path)
         return sim
 
@@ -649,6 +659,8 @@ def section_b(t):
             except RuntimeError as exc:
                 error = exc
             after = accepted_envelope(sim)
+            print("  %s/%s observed %s: %s" % (
+                action_name, fault_name, type(error).__name__, error))
 
             chk(
                 error is not None,
