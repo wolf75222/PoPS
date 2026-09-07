@@ -576,8 +576,9 @@ def _snapshot(simulation: Any) -> RuntimeSnapshot:
         )
         for name in simulation.history_names()
     }
-    bound = simulation.bound_snapshot.to_dict()
-    layout_plan = bound["layout"]
+    # The single-layout engine snapshot records its layout kind.  The public runtime
+    # report carries the complete authenticated install plan and its qualified handles.
+    layout_plan = simulation.inspect().to_dict()["instance"]["layout_plan"]
     return RuntimeSnapshot(
         time=float(simulation.time()),
         macro_step=int(simulation.macro_step()),
