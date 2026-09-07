@@ -649,6 +649,89 @@ TEST(GeneratedAmrSystemBlock, RegridRebuildsExactFineGhostProvidersAndInvalidate
   EXPECT_EQ(fine.integrated_face_fluxes.size(), system.engine()->hierarchy().state(1).local_size());
 }
 
+TEST(GeneratedAmrSystemBlock, SparseParentRegridRequiresOnlyChildInterpolationSources) {
+  constexpr int Dim = pops::kNativeDimension;
+  for (const bool injection : {false, true}) {
+    SCOPED_TRACE(injection ? "constant injection" : "conservative linear");
+    pops::AmrSystemConfig<Dim> config;
+    config.level_count = 3;
+    config.regrid_every = 0;
+    config.transition_ratios.assign(2, pops::runtime_config_detail::filled_extent<Dim>(2));
+    config.transition_buffers.assign(2, pops::runtime_config_detail::filled_extent<Dim>(2));
+    config.transition_lookaheads.assign(2, pops::runtime_config_detail::filled_extent<Dim>(0));
+    for (int axis = 0; axis < Dim; ++axis) {
+      config.shape[axis] = 32;
+      config.periodicity[axis] = true;
+    }
+    pops::AmrSystem<Dim> system(config);
+    pops::test::install_amr_runtime_authority(system, "tests.generated-amr/sparse-parent-transfer");
+    system.install_block_state_route("tracer", "state/tracer");
+    pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+    if (injection)
+      system.register_bootstrap_transfer_route(
+          "tests.generated-amr/sparse-parent/injection", {"state/tracer"},
+          "tests.generated-amr/sparse-parent/injection@1", "cell", "cell", "conservative", "dense",
+          "prolongation", "conservative_injection", 1, pops::Extent<Dim>{},
+          config.transition_ratios.front());
+    std::vector<double> initial(cell_count(config.shape));
+    for (std::size_t cell = 0; cell < initial.size(); ++cell)
+      initial[cell] = 1.0 + (static_cast<double>(cell % config.shape[0]) + 0.5) / 32.0;
+    system.set_conservative_state("tracer", initial);
+    pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 1.5}},
+                                                 "tests.generated-amr/sparse-parent/tagging@1");
+
+    auto* engine = system.engine();
+    ASSERT_NE(engine, nullptr);
+    ASSERT_EQ(engine->hierarchy().num_levels(), 3u);
+    const auto& parent = engine->hierarchy().layout(1);
+    pops::Index<Dim> unused{};
+    unused[0] = 12;
+    for (int axis = 1; axis < Dim; ++axis)
+      unused[axis] = 32;
+    for (const auto& patch : parent.patches().boxes()) {
+      auto grown = patch;
+      for (int axis = 0; axis < Dim; ++axis)
+        grown = grown.grow(axis, static_cast<int>(engine->hierarchy().state(1).ghosts()[axis]));
+      EXPECT_FALSE(grown.contains(unused));
+    }
+
+    // The accepted parent has a genuine hole in its dense domain. Repeating the ordinary
+    // transfer must preserve fine values and still prepare all required parent ghost stencils.
+    ASSERT_TRUE(system.regrid_from_prepared_tagging(1));
+    const auto& fine = engine->hierarchy().state(2);
+    std::size_t checked = 0;
+    for (std::size_t local = 0; local < fine.local_size(); ++local) {
+      const auto& fab = fine.fab(local);
+      auto host = fab.create_host_mirror();
+      fab.copy_to_host(host);
+      const auto box = fab.box();
+      const auto grown = fab.grown_box();
+      for (std::size_t cell = 0; cell < static_cast<std::size_t>(box.numPts()); ++cell) {
+        pops::Index<Dim> index{};
+        std::size_t residual = cell;
+        std::size_t offset = 0;
+        std::size_t stride = 1;
+        for (int axis = 0; axis < Dim; ++axis) {
+          const auto length = static_cast<std::size_t>(box.hi[axis] - box.lo[axis] + 1);
+          index[axis] = box.lo[axis] + static_cast<int>(residual % length);
+          residual /= length;
+          offset += static_cast<std::size_t>(index[axis] - grown.lo[axis]) * stride;
+          stride *= static_cast<std::size_t>(grown.hi[axis] - grown.lo[axis] + 1);
+        }
+        // The periodic wrap is a discontinuity of this test's affine data; check the exact
+        // affine interior, where both selected transfer methods have a known cell-average value.
+        if (index[0] < 24 || index[0] >= 120)
+          continue;
+        const double x = injection ? static_cast<double>(index[0] / 4) + 0.5
+                                   : (static_cast<double>(index[0]) + 0.5) / 4.0;
+        EXPECT_NEAR(static_cast<double>(host(offset)), 1.0 + x / 32.0, 1e-12);
+        ++checked;
+      }
+    }
+    EXPECT_GT(pops::all_reduce_sum(static_cast<long>(checked)), 0);
+  }
+}
+
 TEST(GeneratedAmrSystemBlock,
      EmbeddedBoundaryRematerializesPerLevelAndWeightsCompositeMassAndSidecars) {
   constexpr int Dim = pops::kNativeDimension;

@@ -803,6 +803,7 @@ struct PreparedRegriddedStateTransfer {
   host_mirror_type dense_host;
   std::vector<double> values;
   std::vector<char> populated;
+  std::vector<Box<Dim>> required_sources;
   std::vector<amr::transfer::PreparedTransfer<Dim>> kernels;
   std::vector<host_mirror_type> child_hosts;
   const SparseFieldImage<Dim>* previous_child = nullptr;
@@ -899,6 +900,17 @@ std::unique_ptr<PreparedRegriddedStateTransfer<Dim>> prepare_regridded_state_tra
   const amr::transfer::ComponentRange components{0, 0, field.ncomp()};
   const amr::transfer::TransferProvider<Dim, amr::transfer::Centering::Cell> provider(
       transfer_kind);
+  // A deeper parent may cover only part of its domain. Authenticate the source stencil of
+  // every global child patch, not unused cells in the dense communication carrier. Include
+  // retained child cells too: the prepared kernels evaluate them before their values are reused.
+  prepared->required_sources.reserve(child_layout.patches().size());
+  for (const Box<Dim>& child_patch : child_layout.patches().boxes()) {
+    const Box<Dim> required = amr::transfer::detail::interpolation_source_box(
+        child_patch, ratio, mapping, provider.capabilities().source_stencil_radius);
+    if (!dense_box.contains(required))
+      throw std::invalid_argument("AMR prepared transfer source carrier omits a required stencil");
+    prepared->required_sources.push_back(required);
+  }
   prepared->kernels.reserve(prepared->child.local_size());
   prepared->child_hosts.reserve(prepared->previous_child != nullptr ? prepared->child.local_size()
                                                                     : 0);
@@ -918,10 +930,14 @@ void execute_regridded_state_transfer(PreparedRegriddedStateTransfer<Dim>& prepa
                                       const CommunicatorView& communicator) {
   all_reduce_sum_inplace(prepared.values.data(), prepared.values.size(), communicator);
   all_reduce_max_inplace(prepared.populated.data(), prepared.populated.size(), communicator);
-  if (std::any_of(prepared.populated.begin(), prepared.populated.end(),
-                  [](char value) { return value == 0; }))
-    throw std::runtime_error(
-        "AMR prepared transfer source ghosts were not materialized collectively");
+  const Box<Dim>& dense_box = prepared.dense_parent.grown_box();
+  for (const Box<Dim>& required : prepared.required_sources)
+    for (std::size_t ordinal = 0; ordinal < checked_cells(required); ++ordinal) {
+      const Index<Dim> cell = unflatten(required, ordinal);
+      if (prepared.populated[offset(cell, dense_box)] == 0)
+        throw std::runtime_error(
+            "AMR prepared transfer required source stencil was not materialized collectively");
+    }
   for (std::size_t index = 0; index < prepared.values.size(); ++index)
     prepared.dense_host(index) = static_cast<Real>(prepared.values[index]);
   prepared.dense_parent.copy_from_host(prepared.dense_host);
