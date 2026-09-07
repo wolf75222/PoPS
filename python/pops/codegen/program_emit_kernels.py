@@ -177,6 +177,34 @@ class ProgramProviderPlans:
         return {"qid": qid, "count": len(rows), "slots": slots,
                 "target": self.target, "evaluation_id": tuple(self._plans).index(qid)}
 
+    def bind_pack(self, pack: Any, qid: str) -> dict[str, Any]:
+        """Register an already authenticated native closure's exact read pack.
+
+        This publication-only binding preserves ComponentKeys directly; the installed
+        closure owns its existing local-slot mapping and emits no Program cell locals.
+        """
+        from pops.model.provider_pack import ProviderPack
+
+        if type(pack) is not ProviderPack:
+            raise TypeError("Program closure consumer requires an exact ProviderPack")
+        if not isinstance(qid, str) or not qid:
+            raise ValueError("Program provider consumer qid must be a non-empty string")
+        rows = []
+        for key in pack:
+            contract = pack.contract(key)
+            if key.space_kind not in {"aux", "field"} or \
+                    contract.centering != "cell" or contract.layout != "cell":
+                raise ValueError("Program closure requires cell-layout auxiliary/field inputs")
+            rows.append((key, contract))
+        frozen = tuple(rows)
+        prior = self._plans.get(qid)
+        if prior is not None and prior != frozen:
+            raise ValueError(
+                "Program provider consumer qid %r was emitted with conflicting requirements" % qid)
+        self._plans[qid] = frozen
+        return {"qid": qid, "count": len(rows), "slots": {},
+                "target": self.target, "evaluation_id": tuple(self._plans).index(qid)}
+
     def cpp_install(self, target: str) -> str:
         """Emit the registry calls before the Program execution context is installed."""
         if target not in {"system", "amr_system"}:

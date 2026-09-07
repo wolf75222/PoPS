@@ -25,6 +25,7 @@ from pops.codegen.program_emit_kernels import (
     _emit_where_kernel,
     _model_impl,
     _named_fluxes,
+    _prepare_provider_values,
     program_provider_consumer_qid,
 )
 from pops.codegen.program_emit_model_kernels import (
@@ -606,6 +607,19 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         if step_projection is not None:
             if not isinstance(step_projection, str) or not step_projection:
                 raise TypeError("project step_projection must be a non-empty string")
+        if target == "system":
+            impl = _model_impl(node_model)
+            if impl._proj is None:
+                raise ValueError("Program projection requires the selected model projection closure")
+            if provider_plans is None:
+                raise ValueError("Program projection requires its exact provider-plan collector")
+            # The authenticated operator pack, rather than the aggregate native model
+            # pack, selects only this closure's inputs. Native registry preparation
+            # publishes them from this exact SSA state before the installed closure reads.
+            pack = impl._component_operator_provider_packs.get("projection")
+            binding = provider_plans.bind_pack(
+                pack, program_provider_consumer_qid(node_model, v.id, v.block))
+            lines += _prepare_provider_values(binding, bidx, var[state_in.id])
         lines.append("ctx.apply_projection(%d, %s);" % (bidx, var[state_in.id]))
         if step_projection is not None:
             lines.append("ctx.note_step_projection(%s);" % json.dumps(step_projection))
