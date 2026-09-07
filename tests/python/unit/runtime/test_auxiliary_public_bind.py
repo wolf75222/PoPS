@@ -52,13 +52,15 @@ def test_full_multiphysics_binds_without_uploading_native_field_outputs(
     second = example._bind_artifact(artifact, initial_state=inputs)
     assert first.bind_identity == second.bind_identity
     assert first.bound_snapshot.to_dict()["aux_evidence"] == {}
-    assert first.field_provider_slots() == ("electrostatic",)
     field_plan, = artifact.plan.field_plans.values()
-    assert field_plan.native_install_data()["output_route"]["owner_block"] == "electrons"
+    options = field_plan.native_install_data()
+    slot = options["provider_slot"]
+    assert first.field_provider_slots() == (slot,)
+    assert options["output_route"]["owner_block"] == "electrons"
     for simulation in (first, second):
         for name, expected in inputs.items():
             np.testing.assert_array_equal(simulation.state_global(name), expected)
-        potential = np.asarray(simulation.field_potential_global("electrostatic"))
+        potential = np.asarray(simulation.field_potential_global(slot))
         assert potential.size == example.DEFAULT_CELLS**2
         np.testing.assert_array_equal(potential, np.zeros_like(potential))
 
