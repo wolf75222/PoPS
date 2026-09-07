@@ -8,6 +8,13 @@ from pops.lib import time as libtime
 from pops.physics._facade import Model
 
 
+def _emit_program(program, model, *, target):
+    from pops.codegen.module_lowering import lower_and_validate
+
+    lowered, _ = lower_and_validate(model)
+    return emit_cpp_program(program, model=lowered, target=target)
+
+
 def _transport_program(factory=libtime.ForwardEuler):
     model = Model("cell_local_transport")
     model.conservative_vars("u")
@@ -61,7 +68,7 @@ def test_amr_codegen_selects_only_the_prepared_cell_local_driver() -> None:
     program, model = _transport_program()
     program.cell_local_time(tick_denominator=100, rung=0)
 
-    source = emit_cpp_program(program, model=model, target="amr_system")
+    source = _emit_program(program, model, target="amr_system")
 
     assert "ctx.configure_primary_clock(" in source
     assert "ctx.prepare_same_level_cell_temporal_execution(" in source
@@ -98,7 +105,7 @@ def test_amr_codegen_emits_one_typed_cell_local_route_per_block() -> None:
     )
     program.cell_local_time(tick_denominator=64, rung=1)
 
-    source = emit_cpp_program(program, model=model, target="amr_system")
+    source = _emit_program(program, model, target="amr_system")
 
     assert "SameLevelCellTemporalForwardEulerRoute, 2>" in source
     assert "{0, -1," in source and "{1, -1," in source
@@ -109,17 +116,17 @@ def test_cell_local_codegen_refuses_non_euler_and_nondefault_cadence() -> None:
     multistage, model = _transport_program(libtime.SSPRK2)
     multistage.cell_local_time(tick_denominator=100)
     with pytest.raises(ValueError, match="ForwardEuler"):
-        emit_cpp_program(multistage, model=model, target="amr_system")
+        _emit_program(multistage, model, target="amr_system")
 
     strided, model = _transport_program()
     strided.cadence(stride=2)
     strided.cell_local_time(tick_denominator=100)
     with pytest.raises(ValueError, match="default Program cadence"):
-        emit_cpp_program(strided, model=model, target="amr_system")
+        _emit_program(strided, model, target="amr_system")
 
 
 def test_cell_local_codegen_refuses_uniform_target() -> None:
     program, model = _transport_program()
     program.cell_local_time(tick_denominator=100)
     with pytest.raises(ValueError, match="target='amr_system'"):
-        emit_cpp_program(program, model=model, target="system")
+        _emit_program(program, model, target="system")

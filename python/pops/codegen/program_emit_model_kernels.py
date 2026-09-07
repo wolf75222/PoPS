@@ -164,9 +164,13 @@ def _component_sources(
             "multi-state operator references ambiguous bare component(s) %s; obtain exact "
             "coordinates with module.state_symbols(state_space)" % ambiguous)
     sources = {}
-    for state in states:
+    from pops.model.state_symbols import native_input_state_component_symbol
+    for ordinal, state in enumerate(states):
         for index, component in enumerate(state.space.components):
             source = source_for_state(state, index)
+            bound = native_input_state_component_symbol(ordinal, index)
+            if bound in referenced:
+                sources[bound] = source
             qualified = state_component_symbol(state.space, component)
             if qualified in referenced:
                 sources[qualified] = source

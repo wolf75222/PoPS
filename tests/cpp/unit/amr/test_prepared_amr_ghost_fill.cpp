@@ -75,10 +75,11 @@ Real quartic_average(Real lower, Real upper) {
 
 template <int Dim>
 void prove_sparse_parent_interpolation(int ghost_depth = 1, int fine_lower = 4, int fine_upper = 11,
-                                       bool constant = false) {
-  const Box<Dim> coarse_domain = box<Dim>(0, 7);
-  const Box<Dim> fine_domain = box<Dim>(0, 15);
-  const BoxArray<Dim> coarse_layout(std::vector<Box<Dim>>{coarse_domain});
+                                       bool constant = false, bool sparse_parent = false) {
+  const Box<Dim> coarse_domain = box<Dim>(0, sparse_parent ? 15 : 7);
+  const Box<Dim> fine_domain = box<Dim>(0, sparse_parent ? 31 : 15);
+  const Box<Dim> coarse_valid = sparse_parent ? box<Dim>(3, 12) : coarse_domain;
+  const BoxArray<Dim> coarse_layout(std::vector<Box<Dim>>{coarse_valid});
   const BoxArray<Dim> fine_layout(std::vector<Box<Dim>>{box<Dim>(fine_lower, fine_upper)});
   HostMultiFab<Dim> coarse(coarse_layout, replicated(coarse_layout), Index<Dim>{}, 2,
                            uniform_extent<Dim>(0));
@@ -93,7 +94,7 @@ void prove_sparse_parent_interpolation(int ghost_depth = 1, int fine_lower = 4, 
              [](const Index<Dim>&, int component) { return Real(8000 + component); });
 
   AmrGhostFillPreparation<Dim> request{};
-  request.fine_level = 1;
+  request.fine_level = sparse_parent ? 2 : 1;
   request.coarse_domain = coarse_domain;
   request.fine_domain = fine_domain;
   request.ratio = ratio_two<Dim>();
@@ -106,7 +107,7 @@ void prove_sparse_parent_interpolation(int ghost_depth = 1, int fine_lower = 4, 
   const auto fill = prepare_amr_ghost_fill(coarse, fine, request, lane);
 
   runtime::multiblock::BoundaryEvaluationPoint point{};
-  point.level = 1;
+  point.level = request.fine_level;
   fill(fine, point);
 
   const auto& fab = fine.fab_global(0);
@@ -122,12 +123,69 @@ void prove_sparse_parent_interpolation(int ghost_depth = 1, int fine_lower = 4, 
   }
 }
 
+template <int Dim>
+void prove_parent_layout_rejected(std::vector<Box<Dim>> coarse_boxes, const char* message) {
+  const BoxArray<Dim> coarse_layout(std::move(coarse_boxes));
+  const BoxArray<Dim> fine_layout(std::vector<Box<Dim>>{box<Dim>(12, 19)});
+  HostMultiFab<Dim> coarse(coarse_layout, replicated(coarse_layout), Index<Dim>{}, 2,
+                           uniform_extent<Dim>(0));
+  HostMultiFab<Dim> fine(fine_layout, replicated(fine_layout), Index<Dim>{}, 2,
+                         uniform_extent<Dim>(2));
+  try {
+    const CoarseFineGhostSchedule<Dim> schedule(
+        coarse, fine, box<Dim>(0, 15), box<Dim>(0, 31), ratio_two<Dim>(),
+        BoundaryTopology<Dim>::physical(), 1, budget<Dim>(coarse_layout.size(), 1).coarse_fine);
+    FAIL() << "coarse/fine schedule accepted an invalid parent layout";
+  } catch (const std::invalid_argument& error) {
+    EXPECT_STREQ(error.what(), message);
+  }
+}
+
+template <int Dim>
+void prove_sparse_parent_missing_stencil_rejected() {
+  const char* message =
+      "coarse/fine ghost parent layout does not cover a required interpolation stencil";
+  // Fine ghosts 10..11 require parent cell 5 and its neighbors along each axis.
+  prove_parent_layout_rejected<Dim>({box<Dim>(6, 12)}, message);
+  Box<Dim> lower = box<Dim>(3, 12);
+  Box<Dim> upper = box<Dim>(3, 12);
+  lower.hi[0] = 4;
+  upper.lo[0] = 6;
+  prove_parent_layout_rejected<Dim>({lower, upper}, message);
+}
+
+template <int Dim>
+void prove_parent_overlap_and_outside_domain_rejected() {
+  const char* message =
+      "coarse/fine ghost schedule requires disjoint parent and child patches within their domains";
+  prove_parent_layout_rejected<Dim>({box<Dim>(3, 12), box<Dim>(5, 6)}, message);
+  prove_parent_layout_rejected<Dim>({box<Dim>(3, 16)}, message);
+}
+
 }  // namespace
 
 TEST(test_prepared_amr_ghost_fill, sparse_parent_interpolation_is_exact_in_1d_2d_and_3d) {
   prove_sparse_parent_interpolation<1>();
   prove_sparse_parent_interpolation<2>();
   prove_sparse_parent_interpolation<3>();
+}
+
+TEST(test_prepared_amr_ghost_fill, sparse_parent_level_keeps_two_halo_linear_accuracy_in_1d_2d_and_3d) {
+  prove_sparse_parent_interpolation<1>(2, 12, 19, false, true);
+  prove_sparse_parent_interpolation<2>(2, 12, 19, false, true);
+  prove_sparse_parent_interpolation<3>(2, 12, 19, false, true);
+}
+
+TEST(test_prepared_amr_ghost_fill, sparse_parent_level_rejects_missing_stencil_cells_and_holes) {
+  prove_sparse_parent_missing_stencil_rejected<1>();
+  prove_sparse_parent_missing_stencil_rejected<2>();
+  prove_sparse_parent_missing_stencil_rejected<3>();
+}
+
+TEST(test_prepared_amr_ghost_fill, sparse_parent_level_still_rejects_overlap_and_outside_domain) {
+  prove_parent_overlap_and_outside_domain_rejected<1>();
+  prove_parent_overlap_and_outside_domain_rejected<2>();
+  prove_parent_overlap_and_outside_domain_rejected<3>();
 }
 
 TEST(test_prepared_amr_ghost_fill, two_destination_halos_keep_linear_accuracy_at_physical_faces) {

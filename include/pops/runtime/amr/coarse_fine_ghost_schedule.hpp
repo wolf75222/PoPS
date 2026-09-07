@@ -328,14 +328,16 @@ class CoarseFineGhostSchedule {
         coarse.rank_space() != fine.rank_space())
       throw std::invalid_argument(
           "coarse/fine ghost schedule fields have incompatible components or rank spaces");
-    if (!coarse.layout().tiles_exactly(
+    // A deeper AMR parent can itself be sparse. Disjointness makes the exact
+    // required-stencil coverage count in prepare_jobs_ authoritative.
+    if (!coarse.layout().is_disjoint_within(
             coarse_domain_, mesh::BoxArrayValidationBudget{coarse.layout().size(),
                                                            budget.parent_child_patch_pairs}) ||
         !fine.layout().is_disjoint_within(
             fine_domain_,
             mesh::BoxArrayValidationBudget{fine.layout().size(), budget.parent_child_patch_pairs}))
       throw std::invalid_argument(
-          "coarse/fine ghost schedule requires a complete parent and sparse valid child layout");
+          "coarse/fine ghost schedule requires disjoint parent and child patches within their domains");
     if (fine.layout().size() > budget.fine_patches)
       throw std::length_error("coarse/fine ghost schedule fine-patch budget exceeded");
   }

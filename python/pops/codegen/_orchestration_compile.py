@@ -332,10 +332,20 @@ def _field_rhs_providers(
                 raise ValueError(
                     "field %r RHS provider has no executable expression graph" % operator.name
                 )
+            # The registry body belongs to a reusable model definition; compare it
+            # in the exact provider instance, like the resolved field equation.
+            from pops._ir.expr_references import resolve_expr_references
+
+            body = resolve_expr_references(
+                field_op.body,
+                lambda handle, block=block_handle: problem.resolve(handle, block=block),
+                {},
+                allow_formula_vars=True,
+            )
             term = (
-                field_op.body
+                body
                 if contribution.coefficient == 1.0
-                else field_op.body * contribution.coefficient
+                else body * contribution.coefficient
             )
             composed_body = term if composed_body is None else composed_body + term
             authenticated.append(qualified)

@@ -191,9 +191,13 @@ def test_same_component_names_are_qualified_by_state_space():
     })
 
     source = emit_cpp_program(program, model=None)
-    assert electron_density.name in source
-    assert ion_density.name in source
-    assert electron_density.name != ion_density.name
+    assert electron_density.handle == module.state_handle(electrons)
+    assert ion_density.handle == module.state_handle(ions)
+    assert electron_density.component == ion_density.component == "density"
+    assert electron_density.handle != ion_density.handle
+    assert electron_density.qualified_id != ion_density.qualified_id
+    assert "pops_input_0_component_0" in source
+    assert "pops_input_1_component_0" in source
 
 
 def test_dense_newton_dimension_follows_the_typed_rate_bundle():

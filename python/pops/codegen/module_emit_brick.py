@@ -47,6 +47,8 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     which the DSL cannot invert on its own). cse=True (default) factors the common
     subexpressions (H, c...) into ``cseK_`` locals. The production loader instantiates the resulting
     type inside Kokkos kernels; no host-vtable execution path is emitted."""
+    from pops.model.state_symbols import native_formula_carrier_view
+    model = native_formula_carrier_view(model)
     if not model.prim_state:
         raise ValueError("emit_cpp_brick : call set_primitive_state(...) first")
     if len(model.prim_state) != model.n_vars:

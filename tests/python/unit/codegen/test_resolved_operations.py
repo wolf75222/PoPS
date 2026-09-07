@@ -270,6 +270,58 @@ def test_transparent_field_component_reads_narrow_the_existing_native_provider_p
     assert {key.component for key in packs.complete if key.space_kind == "field"} == {"phi", "Ex", "Ey"}
 
 
+def test_field_result_projections_keep_distinct_operator_qualified_targets():
+    def make_module(*, pure_component="pure_phi"):
+        module = model.Module("two_field_results")
+        state = module.state_space("U", ("pure_forcing", "screened_forcing"))
+        pure, screened = module.state_symbols(state)
+        module.field_space("fields", ("pure_phi", "screened_phi"))
+        for name, component, body in (("pure_poisson", pure_component, pure),
+                                      ("screened_poisson", "screened_phi", screened)):
+            result = model.FieldSpace(name, (component,))
+            module.operator(name, state >> result, "field_operator", expr=body)
+        return module
+
+    module = make_module()
+    resolved = build_resolved_operations(module)
+    wire = resolved.to_data()
+    targets = tuple(request.occurrences[0].target for request in resolved.evaluations)
+    assert targets == tuple("output:%s" % operation.identity for operation in resolved.operations)
+    assert len(set(targets)) == 2
+    carrier = module.field_handle(module.field_spaces()["fields"])._resolved().qualified_id
+    assert all(target != carrier and "authoring=" not in target for target in targets)
+    assert [operation["outputs"] for operation in wire["operations"]] == [
+        [operator.signature.output.to_data()] for operator in module.operator_registry()]
+    assert {key.component for key in resolved.require_provider_packs(module).complete
+            if key.space_kind == "field"} \
+        == {"pure_phi", "screened_phi"}
+    assert ResolvedOperationPlan.from_data(wire).to_data() == wire
+    assert build_resolved_operations(make_module()).to_data() == wire
+    changed = build_resolved_operations(make_module(pure_component="screened_phi"))
+    assert changed.source_module_hash != resolved.source_module_hash
+    assert changed.identity != resolved.identity
+
+
+def test_unregistered_field_output_does_not_authorize_an_unregistered_input():
+    module = model.Module("invalid_field_input")
+    module.state_space("U", ("rho",))
+    unregistered = model.StateSpace("foreign", ("rho",))
+    result = model.FieldSpace("pure_poisson", ("pure_phi",))
+    module.operator("solve", unregistered >> result, "field_operator", expr=Const(0))
+    with pytest.raises(ValueError, match="input representation differs from its Module registry"):
+        build_resolved_operations(module)
+
+
+def test_registered_field_output_still_requires_its_exact_carrier_descriptor():
+    module = model.Module("invalid_registered_field_output")
+    state = module.state_space("U", ("rho",))
+    module.field_space("fields", ("pure_phi", "screened_phi"))
+    partial = model.FieldSpace("fields", ("pure_phi",))
+    module.operator("solve", state >> partial, "field_operator", expr=Const(0))
+    with pytest.raises(ValueError, match="representation differs from its Module registry"):
+        build_resolved_operations(module)
+
+
 def test_explicit_field_requirement_adds_a_component_not_read_by_the_body():
     module = model.Module("field_requirement_union")
     state = module.state_space("U", ("rho",))

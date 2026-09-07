@@ -282,17 +282,18 @@ def _roe_validate(e: Any, in_marker: Any) -> None:
     left()/right() marker (undetermined state) or if a marker is nested. Const / runtime
     parameter: allowed everywhere (without state). Evaluates nothing (usable before the assignment of
     the runtime indices)."""
+    from pops._ir.quantity import QuantityRef
     if isinstance(e, StateRef):
         if in_marker:
             raise ValueError("m.roe_dissipation: nested left()/right() marker forbidden "
                              "(a subexpression belongs to a single state)")
         _roe_validate(e.expr, True)
         return
-    if isinstance(e, Var):
+    if isinstance(e, (Var, QuantityRef)):
         if not in_marker:
             raise ValueError(
                 "m.roe_dissipation: variable '%s' outside marker; wrap each variable or "
-                "primitive with dsl.left(...) (state UL) or dsl.right(...) (state UR)" % e.name)
+                "primitive with dsl.left(...) (state UL) or dsl.right(...) (state UR)" % (e.name if isinstance(e, Var) else e.component))
         return
     if isinstance(e, (Const, RuntimeParamRef)):
         return

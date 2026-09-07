@@ -156,6 +156,11 @@ def derive_inputs(module: Any, operator: Any, packs: Any, *, boundary_data: Any 
     from pops.model.handles import Handle
     from pops.model.state_symbols import state_component_symbol
 
+    # Every declared input must name its exact registered carrier, even when a
+    # transparent constant body happens not to read it. Output projections do
+    # not grant unregistered input spaces a storage identity.
+    for space in operator.signature.inputs:
+        _space_handle(module, space)
     spaces = (*module.state_spaces().values(), *module.field_spaces().values())
     by_handle = {_reference(_space_handle(module, space)): space for space in spaces}
     auxiliaries = module.aux()
@@ -330,8 +335,18 @@ def _occurrences(module: Any, operator: Any, identity: str) -> tuple[TermOccurre
             _reference(term.identity), _reference(term.payload), _reference(term.target),
             term.kind, Fraction(term.coefficient)) for term in balance.occurrences)
     target_space = getattr(operator.signature.output, "base", operator.signature.output)
-    handle = _space_handle(module, target_space)
-    target = _reference(handle) if handle is not None else "output:%s" % identity
+    from pops.model.spaces import FieldSpace
+
+    if (operator.kind == "field_operator" and isinstance(target_space, FieldSpace)
+            and target_space.name not in module.field_spaces()):
+        # A field provider may project one result from a shared registered
+        # carrier. This is the operator's typed result, not a new stored field:
+        # keep its exact descriptor in NumericalConstruction.outputs and its
+        # identity under the authenticated operator/source Module authority.
+        target = "output:%s" % identity
+    else:
+        handle = _space_handle(module, target_space)
+        target = _reference(handle) if handle is not None else "output:%s" % identity
     if operator.kind == "local_rate":
         terms = []
         low = operator.lowering

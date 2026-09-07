@@ -31,6 +31,9 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
     cannot lower in this MVP: no bound registry, no operator body, a block whose component count
     does not match its StateSpace, or a formula referencing a non-cons (prim / aux) Var."""
     from pops._ir.expr import Var
+    from pops._ir.quantity import QuantityRef
+    from pops._ir.application import substitute_quantities
+    from pops.model.state_symbols import native_input_state_component_symbol
     op_name = v.attrs["operator"]
     from pops.time.operator_resolution import resolve_operator_handle
     operator_handle = v.attrs.get("operator_handle")
@@ -68,6 +71,38 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
             "the coupled_rate kernel codegen (ADC-457) needs operator %r to carry its per-block "
             "component formulas as an expr={block: [Expr, ...]} dict (got %r); a decorator-body "
             "coupled_rate is a later phase (node %r)" % (op_name, type(expr).__name__, v.name))
+    # Bind qualified leaves only after matching the exact declaration/instance and
+    # complete physical type of one Program input. The private symbols are positional
+    # within this kernel; equal scientific display names cannot alias one another.
+    bindings = {}
+    for comps in expr.values():
+        for expression in comps:
+            for quantity in _walk_expr(expression):
+                if not isinstance(quantity, QuantityRef):
+                    continue
+                matches = []
+                for ordinal, state in enumerate(v.inputs):
+                    reference = getattr(state, "state_ref", None)
+                    declaration = getattr(reference, "declaration_ref", None)
+                    if quantity.handle == reference or (
+                            declaration is not None and quantity.handle == declaration):
+                        if quantity.space != state.space:
+                            raise ValueError("coupled_rate qualified input changes its physical state type")
+                        matches.append((ordinal, state))
+                if len(matches) != 1:
+                    raise ValueError(
+                        "coupled_rate qualified quantity requires exactly one matching input state "
+                        "declaration; found %d for %s" % (len(matches), quantity.handle.local_id))
+                ordinal, state = matches[0]
+                if quantity.handle.kind != "state" or quantity.component not in state.space.components:
+                    raise ValueError("coupled_rate native formulas require a declared state component")
+                bindings[(quantity.handle, quantity.index)] = Var(
+                    native_input_state_component_symbol(ordinal, quantity.index), "cons")
+    private_symbols = {symbol.name for symbol in bindings.values()}
+    if any(isinstance(node, Var) and node.name in private_symbols
+           for formulas in expr.values() for formula in formulas for node in _walk_expr(formula)):
+        raise ValueError("coupled_rate authored variable collides with a private input binding")
+    expr = substitute_quantities(expr, bindings)
     # Each coupled_rate_out block must own one input state (its rate scratch is shaped like that
     # block's state) whose StateSpace gives the component count + cons names.
     by_block = {block_name(state.block): state for state in v.inputs}
@@ -107,6 +142,7 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
         for space in spaces for component in space.components
     }
     all_cons.update(component for component, count in counts.items() if count == 1)
+    all_cons.update(private_symbols)
     referenced = set()
     for comps in components.values():
         for e in comps:

@@ -50,6 +50,9 @@ class _FacadeCompileMixin(_FacadeModel):
             raise TypeError("compiler provider-pack binding requires exact ComponentProviderPacks")
         packs.attach(self)
         packs.attach(self._m)
+        # Retain the same source authority for direct private-carrier emission.
+        # Emitter symbols are bound on a detached view, never on this authoring model.
+        object.__setattr__(self._m, "_formula_source_module", self.module)
 
     def __pops_native_loader_source__(
         self,

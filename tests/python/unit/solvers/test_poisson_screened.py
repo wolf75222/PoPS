@@ -27,6 +27,7 @@ from pops.physics import Model
 from pops.solvers.elliptic import FFT, GeometricMG
 from pops.time import FailRun, FixedDt
 from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -316,12 +317,14 @@ def test_pure_and_screened_public_equations_match_the_native_mms(
     resolved, parameter, slots, initial, exact = _resolved_mms_case()
     artifact = pops.compile(resolved)
     artifact.verify()
+    execution_context = artifact_execution_context(artifact)
 
     def solve(value: float):
         instance = pops.bind(
             artifact,
             initial_state={"charge": initial},
             params={parameter: value},
+            execution_context=execution_context,
         )
         report = pops.run(instance, t_end=DT, max_steps=1)
         assert report.accepted_steps == 1
@@ -353,4 +356,5 @@ def test_pure_and_screened_public_equations_match_the_native_mms(
                 artifact,
                 initial_state={"charge": initial},
                 params={parameter: invalid},
+                execution_context=execution_context,
             )

@@ -138,22 +138,57 @@ def native_formula_view(facade: Any, module: Any, *, quantity_handles: Any = ())
     The clone owns its rebound expression containers; authoring graph nodes and
     declaration identities remain the source authority.
     """
-    states = module.state_spaces()
-    if len(states) != 1:
-        raise ValueError("a formula-emitter view requires one explicitly selected state route")
-    state = next(iter(states.values()))
+    emitter = _native_formula_model_view(facade._m, module, quantity_handles=quantity_handles)
     view = object.__new__(type(facade))
     vars(view).update(vars(facade))
-    emitter = object.__new__(type(facade._m))
-    vars(emitter).update({
-        name: rebind_state_symbols(value, state, states.values(), module=module,
-                                  quantity_handles=quantity_handles)
-        for name, value in vars(facade._m).items()
-    })
     object.__setattr__(view, "_m", emitter)
     object.__setattr__(view, "_module_cache", module)
     object.__setattr__(view, "_compile_source_module_hash", module.module_hash())
     return view
+
+
+def _native_formula_model_view(model: Any, module: Any, *, quantity_handles: Any = ()) -> Any:
+    states = module.state_spaces()
+    if len(states) != 1:
+        raise ValueError("a formula-emitter view requires one explicitly selected state route")
+    state = next(iter(states.values()))
+    emitter = object.__new__(type(model))
+    vars(emitter).update({
+        name: rebind_state_symbols(value, state, states.values(), module=module,
+                                  quantity_handles=quantity_handles)
+        for name, value in vars(model).items()
+    })
+    object.__setattr__(emitter, "_formula_native_bound", True)
+    return emitter
+
+
+def native_formula_carrier_view(model: Any) -> Any:
+    """Bind an authenticated raw formula carrier for one private emission only."""
+    if getattr(model, "_formula_native_bound", False):
+        return model
+    module = getattr(model, "_formula_source_module", None)
+    if module is None:
+        return model
+    from .module import Module
+    if not isinstance(module, Module) or model.owner_path != module.owner_path:
+        raise ValueError("native formula carrier source does not match its Module authority")
+    from pops.codegen.component_provider_packs import (
+        require_emitter_provider_carrier, resolve_component_provider_packs,
+    )
+    require_emitter_provider_carrier(model, where="native formula source")
+    view = _native_formula_model_view(model, module)
+    # The source witness is object-bound. Reattach the same exact Module pack to
+    # authenticate the private target instead of reusing another object's witness.
+    resolve_component_provider_packs(module).attach(view)
+    return view
+
+
+def native_input_state_component_symbol(input_index: int, component_index: int) -> str:
+    """A local emitter coordinate after an exact input-state binding was checked."""
+    if any(isinstance(value, bool) or not isinstance(value, int) or value < 0
+           for value in (input_index, component_index)):
+        raise ValueError("native state coordinates require non-negative integer indices")
+    return "pops_input_%d_component_%d" % (input_index, component_index)
 
 
 __all__ = ["rebind_state_symbols", "state_component_symbol", "native_formula_view"]
