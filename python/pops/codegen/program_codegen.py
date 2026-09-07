@@ -254,6 +254,19 @@ def _emit_cpp_program_impl(
     if model_graph is not None and type(model_graph) is not ProgramModelGraph:
         raise TypeError("model_graph must be an exact ProgramModelGraph")
     authority = model_graph if model_graph is not None else model
+    # Even an RHS-only Program must cross the same authenticated provider boundary.
+    # Otherwise no expression kernel calls ProgramProviderPlans.bind(), allowing a
+    # raw facade to bypass the exact Module/provider authority check entirely.
+    from pops.codegen.component_provider_packs import require_emitter_provider_carrier
+
+    emitters = (() if authority is None else
+                tuple(authority.models_by_owner.values())
+                if type(authority) is ProgramModelGraph else (authority,))
+    for emitter in emitters:
+        implementation = getattr(emitter, "_m", emitter)
+        if getattr(implementation, "_auxiliary_provider_pack", None) is None:
+            raise ValueError("Program emission requires the exact auxiliary ProviderPack; compile through Module")
+        require_emitter_provider_carrier(implementation, where="Program emission")
     if target not in ("system", "amr_system"):
         raise ValueError("emit_cpp_program: target 'system' | 'amr_system' (got %r)" % (target,))
     if type(has_shared_interface_implicit_jacvec) is not bool:

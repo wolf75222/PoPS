@@ -86,17 +86,11 @@ void publish_conservative_state(const Model& model, const double* primitive, dou
 }
 
 template <int Dim, class Model>
-concept GeneratedSourceModel =
-    requires(const Model& model, const typename Model::State& state,
-             const ProviderValues<provider_count_for<Model, Dim>()>& providers) {
-      { model.source(state, providers) } -> std::same_as<typename Model::State>;
-    };
+concept GeneratedSourceModel = PhysicalSourceFor<Model, Dim>;
 
 template <class Model>
 concept GeneratedEllipticRhsModel =
-    requires(const Model& model, const typename Model::State& state) {
-      { model.elliptic_rhs(state) } -> std::convertible_to<Real>;
-    };
+    PhysicalEllipticRhsFor<Model, physical_model_dimension<Model>>;
 
 template <int Dim>
 struct CopyValidField {
@@ -111,6 +105,7 @@ struct CopyValidField {
 };
 
 template <int Dim, class Model>
+  requires PhysicalSourceFor<Model, Dim>
 struct MaterializeSource {
   static constexpr int provider_count = provider_count_for<Model, Dim>();
   Model model;
@@ -171,6 +166,7 @@ struct MaterializePointwiseProjection {
 };
 
 template <int Dim, class Model>
+  requires PhysicalEllipticRhsFor<Model, Dim>
 struct MaterializePoissonRhs {
   Model model;
   FieldView<const Real, Dim> state{};

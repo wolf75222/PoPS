@@ -54,6 +54,7 @@ class Module(ModuleFreezable):
         # lowered to dsl.Model.eigenvalues by compile_problem.
         self._eigenvalues = None
         self._constitutive = None
+        self._primitive_recipes = MappingProxyType({})
         self._application_sequence = 0
         # Canonical detached source of the signed pair consumed by HLL.  This is metadata, not a
         # numerics selection: Einfeldt/Davis remain Riemann-provider strategies and are therefore
@@ -318,6 +319,21 @@ class Module(ModuleFreezable):
         else:
             raise TypeError("this callable output has no supported capture protocol")
         return freeze_symbolic_metadata(result)
+
+    def set_primitive_recipes(self, recipes: Any) -> None:
+        """Retain the local primitive definitions of this exact physical source."""
+        self._guard_mutable("declare primitive recipes")
+        from .primitive_recipes import freeze_primitive_recipes
+        validated = freeze_primitive_recipes(self, recipes)
+        if self._primitive_recipes and (
+                set(validated) != set(self._primitive_recipes)
+                or any(body is not self._primitive_recipes[name] for name, body in validated.items())):
+            raise ValueError("primitive recipes are already declared on this Module")
+        self._primitive_recipes = validated
+
+    def primitive_recipes(self) -> Any:
+        """The immutable expression recipes; absence leaves opaque recovery explicit."""
+        return self._primitive_recipes
 
     def apply(self, operator: Any, *arguments: Any, context: Any = None) -> Any:
         """Instantiate a captured expression operator and retain one joint application identity."""

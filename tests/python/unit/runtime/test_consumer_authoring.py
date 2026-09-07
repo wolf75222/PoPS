@@ -24,6 +24,7 @@ from pops.output import (
 from pops.linalg.norms import L2
 from pops.output._consumer_contracts import ConsumerKind, ParallelMode
 from pops.output._balance_due_contract import BalanceDueContract
+from pops.physics.roles import Momentum
 from pops.representations import Conservative
 from pops.spaces import CellState
 from pops.time import Clock, FailRun as SolveFailRun, every, on_start
@@ -642,3 +643,42 @@ def test_paraview_single_layout_contract_fails_during_resolution():
         layout_plan,
         owner=case.owner_path.canonical(),
     ).is_resolved
+
+
+@pytest.mark.parametrize("same_axis", [False, True])
+def test_diagnostic_role_axes_preserve_identity_and_duplicate_guard(same_axis):
+    domain = Rectangle("momentum-unit", (0.0, 0.0), (1.0, 1.0))
+    frame = domain.frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = pops.Model("momentum-model", frame=frame)
+    state = model.state(
+        "U", components={"mx": Momentum(x_axis), "my": Momentum(y_axis)},
+        representation=Conservative(), space=CellState(frame=frame),
+    )
+    case = pops.Case("momentum-consumers")
+    block = case.block("fluid", model)
+    schedule = every(10, clock=Clock("macro", owner=case.owner_path))
+    roles = (Momentum(x_axis), Momentum(x_axis if same_axis else y_axis))
+    diagnostics = tuple(Integral(block, role=role, cadence=schedule) for role in roles)
+    graph = ConsumerGraph.from_consumers((ScientificOutput(
+        format=HDF5(mode=ParallelMode.COLLECTIVE), schedule=schedule,
+        fields=(block[state],), diagnostics=diagnostics, target="momentum",
+    ),))
+    case.consumers(graph)
+    pops.validate(case)
+    subjects = case.layout_subjects()
+    layout = normalize_layout_plan(
+        Uniform(cartesian_grid(n=8)), owner=case.owner_path.canonical(),
+        states=subjects.states, fields=subjects.fields, blocks=subjects.blocks,
+        handle_resolver=case.resolve,
+    )
+    if same_axis:
+        with pytest.raises(ValueError, match="duplicate diagnostic quantities"):
+            graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
+        return
+    resolved = graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
+    output, = resolved.nodes
+    first, second = output.diagnostic_quantities
+    assert first.identity != second.identity
+    assert tuple(q.execution["role"] for q in (first, second)) == ("momentum:0", "momentum:1")
+    assert tuple(d.options()["role"] for d in diagnostics) == ("momentum:0", "momentum:1")

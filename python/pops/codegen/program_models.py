@@ -109,7 +109,7 @@ class ProgramModelGraph:
         modules: dict[Any, Any] = {}
         authorities: dict[Any, Any] = {}
         routes: dict[str, Any] = {}
-        lowered_by_authority: dict[tuple[int, tuple[str, ...]], tuple[Any, Any]] = {}
+        lowered_by_authority: dict[tuple[Any, ...], tuple[Any, Any]] = {}
         block_models: dict[str, Any] = {}
         for block, owner, canonical in source_blocks:
             if block.name in routes:
@@ -122,13 +122,16 @@ class ProgramModelGraph:
                     "ProgramModelGraph distinct authoring model authorities collide at canonical "
                     "owner %s" % canonical
                 )
-            authority_key = (id(block.model), block.state_spaces)
+            operation_plan = getattr(block, "resolved_operations", None)
+            authority_key = (id(block.model), block.state_spaces,
+                             None if operation_plan is None else operation_plan.identity.token)
             lowered = lowered_by_authority.get(authority_key)
             if lowered is None:
                 lowered = lower_and_validate(
                     block.model,
                     facade=block.model,
                     state_space=block.state_spaces[0],
+                    resolved_operations=operation_plan,
                 )
                 lowered_by_authority[authority_key] = lowered
             emit_model, source_module = lowered

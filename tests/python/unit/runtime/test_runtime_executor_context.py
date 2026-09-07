@@ -624,6 +624,60 @@ def test_owned_exact_consumer_collective_reaches_native_fact_probe(monkeypatch):
         executor.install_runtime_executor(plan, runtime_plan)
 
 
+def _case_field_collective_owner_graph(base, *, field_owner=None, block_name="fluid"):
+    graph = _collective_owner_graph(base, block_name=block_name)
+    node = graph.nodes[0]
+    reference = Handle(
+        "potential", kind="field", owner=field_owner or base.artifact.layout_plan.owner)
+    quantity = replace(
+        node.quantities[0], reference=reference,
+        runtime_resource="declaration:%s" % reference.qualified_id)
+    return ConsumerGraph((replace(node, quantities=(quantity,)),))
+
+
+def test_singleton_case_field_collective_uses_the_same_producer_and_validator_owner(monkeypatch):
+    base = _install()
+    plan = _install_with_consumer_graph(base, _case_field_collective_owner_graph(base))
+    runtime_plan = build_runtime_plans(plan, component_manifests_for_install(plan))
+    assert len(runtime_plan.communication.collectives) == 1
+
+    class NativeFactProbeReached(Exception):
+        pass
+
+    def reached_native_facts():
+        raise NativeFactProbeReached
+
+    monkeypatch.setattr(executor, "_native_runtime_facts", reached_native_facts)
+    with pytest.raises(NativeFactProbeReached):
+        executor.install_runtime_executor(plan, runtime_plan)
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_case_field_collective_refuses_foreign_or_ambiguous_execution_owner(monkeypatch, ambiguous):
+    names = ("first", "second") if ambiguous else ("fluid",)
+    base = _install(names)
+    graph = _case_field_collective_owner_graph(
+        base, block_name=names[0],
+        field_owner=None if ambiguous else OwnerPath.case("foreign-case"))
+    plan = _install_with_consumer_graph(base, graph)
+    with pytest.raises(ValueError, match="no exact block owner"):
+        component_manifests_for_install(plan)
+
+    # Supplying an external manifest cannot bypass the same owner check.
+    resource = graph.nodes[0].quantities[0].runtime_resource
+    manifests = {name: _manifest(name) for name in names}
+    manifests[names[0]] = _collective_component_manifest(names[0], resource=resource)
+    runtime_plan = build_runtime_plans(plan, manifests)
+
+    def forbidden_native_facts():
+        raise AssertionError("native fact probe became reachable")
+
+    monkeypatch.setattr(executor, "_native_runtime_facts", forbidden_native_facts)
+    with pytest.raises(RuntimePlanningError) as error:
+        executor.install_runtime_executor(plan, runtime_plan)
+    assert error.value.code == "runtime_collective_without_consumer_owner"
+
+
 def test_unowned_exact_consumer_collective_fails_before_native_fact_probe(monkeypatch):
     plan = _install()
     runtime_plan = build_runtime_plans(

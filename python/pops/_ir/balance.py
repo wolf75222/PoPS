@@ -199,7 +199,8 @@ class Balance:
     def resolve_references(self, resolver: Any) -> Balance:
         from .expr_references import resolve_reference_value
         memo: dict[int, Any] = {}
-        resolve = lambda value: resolve_reference_value(value, resolver, memo)
+        def resolve(value):
+            return resolve_reference_value(value, resolver, memo)
         return Balance.capture(resolve(self.handle), resolve(self.target),
             ((item.kind, resolve(item.payload), item.coefficient) for item in self.occurrences),
             self.accumulation.resolve_references(resolver))

@@ -26,6 +26,7 @@ class CompiledPlanBlock:
     instance_owner: Any = None
     model_owner: Any = None
     declares_auxiliary_providers: bool = False
+    resolved_operations: Any = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -71,6 +72,15 @@ class CompiledPlanBlock:
                 )
             _evidence(boundary, where="CompiledPlanBlock.boundaries")
         object.__setattr__(self, "boundaries", boundaries)
+        if self.resolved_operations is not None:
+            from .resolved_operations import ResolvedOperationPlan
+
+            if type(self.resolved_operations) is not ResolvedOperationPlan:
+                raise TypeError("CompiledPlanBlock requires an exact ResolvedOperationPlan")
+            # Reconstruct from authenticated data; compiled artifacts retain no
+            # source Module or authoring callback through this authority.
+            object.__setattr__(self, "resolved_operations", ResolvedOperationPlan.from_data(
+                self.resolved_operations.to_data()))
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,7 +150,8 @@ class CompiledPlanRecord:
                     instance_owner_qid=block.instance_owner_qid,
                     instance_owner=block.instance_owner,
                     model_owner=block.model_owner,
-                    declares_auxiliary_providers=block.declares_auxiliary_providers)
+                    declares_auxiliary_providers=block.declares_auxiliary_providers,
+                    resolved_operations=block.resolved_operations)
                 for block in plan.blocks
             ),
             time_identity=_evidence(plan.time, where="resolved time"),
@@ -260,6 +271,19 @@ class CompiledPlanRecord:
         object.__setattr__(
             self, "contract_identity", make_identity("compiled-plan", self._payload()))
 
+    @property
+    def resolved_operations(self) -> Mapping[str, Any]:
+        from ._resolved_block_operations import resolved_operation_mapping
+
+        return resolved_operation_mapping(self.blocks)
+
+    def explain(self, result: str | None = None) -> dict[str, Any]:
+        self.verify()
+        if result is not None and result not in self.resolved_operations:
+            raise KeyError("no compiled block %r" % result)
+        return {name: plan.explain() for name, plan in self.resolved_operations.items()
+                if plan is not None and (result is None or name == result)}
+
     def _payload(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
@@ -305,6 +329,8 @@ class CompiledPlanRecord:
                         block.spatial, where="compiled plan block spatial"),
                     "boundaries": _evidence(
                         block.boundaries, where="compiled plan block boundaries"),
+                    "resolved_operations": _evidence(block.resolved_operations,
+                        where="compiled plan block resolved operations"),
                 }
                 for block in self.blocks
             ],
@@ -723,6 +749,15 @@ class CompiledSimulationArtifact:
                for manifest in manifests[1:]):
             return None
         return manifests[0]
+
+    @property
+    def resolved_operations(self) -> Mapping[str, Any]:
+        return self.plan.resolved_operations
+
+    def explain(self, result: str | None = None) -> dict[str, Any]:
+        """Explain resolved operations; binary evidence remains separately authenticated."""
+        self.verify()
+        return self.plan.explain(result)
 
     @property
     def lowering_coverage(self) -> Any:

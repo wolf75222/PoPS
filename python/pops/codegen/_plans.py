@@ -424,6 +424,7 @@ class ResolvedBlock:
     instance_owner: Any = field(init=False, default=None)
     model_owner: Any = field(init=False, default=None)
     declares_auxiliary_providers: bool = False
+    resolved_operations: Any = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -461,6 +462,14 @@ class ResolvedBlock:
         _evidence(self.spatial, where="ResolvedBlock.spatial")
         object.__setattr__(self, "numerics", _deep_freeze(self.numerics))
         _evidence(self.numerics, where="ResolvedBlock.numerics")
+        if self.resolved_operations is not None:
+            from .resolved_operations import ResolvedOperationPlan
+            from ._compiler_lowering import require_compiler_lowering
+
+            if type(self.resolved_operations) is not ResolvedOperationPlan:
+                raise TypeError("ResolvedBlock.resolved_operations must be an exact ResolvedOperationPlan")
+            self.resolved_operations.require_module(
+                require_compiler_lowering(self.model).source_module)
 
 
 @dataclass(frozen=True, slots=True)
@@ -656,6 +665,20 @@ class ResolvedSimulationPlan:
 
         validate_amr_authorities(self)
 
+    @property
+    def resolved_operations(self) -> Mapping[str, Any]:
+        from ._resolved_block_operations import resolved_operation_mapping
+
+        return resolved_operation_mapping(self.blocks)
+
+    def explain(self, result: str | None = None) -> dict[str, Any]:
+        """Project the exact compiler operation choices, without claiming execution."""
+        self.verify()
+        if result is not None and result not in self.resolved_operations:
+            raise KeyError("no resolved block %r" % result)
+        return {name: plan.explain() for name, plan in self.resolved_operations.items()
+                if plan is not None and (result is None or name == result)}
+
     def _payload(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
@@ -682,6 +705,8 @@ class ResolvedSimulationPlan:
                 "model": _evidence(block.model, where="plan.block.model"),
                 "spatial": _evidence(block.spatial, where="plan.block.spatial"),
                 "numerics": _evidence(block.numerics, where="plan.block.numerics"),
+                "resolved_operations": _evidence(block.resolved_operations,
+                                                  where="plan.block.resolved_operations"),
             } for block in self.blocks],
             "field_plans": _evidence(self.field_plans, where="plan.field_plans"),
             "consumer_graph": (

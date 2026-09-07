@@ -34,6 +34,7 @@ set(POPS_CPP_TEST_SOURCE_test_aux_coupler_bz "tests/cpp/unit/physics/test_aux_co
 set(POPS_CPP_TEST_SOURCE_test_aux_halo "tests/cpp/unit/physics/test_aux_halo.cpp")
 set(POPS_CPP_TEST_SOURCE_test_aux_runtime_bz "tests/cpp/integration/runtime/test_aux_runtime_bz.cpp")
 set(POPS_CPP_TEST_SOURCE_test_aux_single_source "tests/cpp/unit/physics/test_aux_single_source.cpp")
+set(POPS_CPP_TEST_SOURCE_test_narrow_physical_operations "tests/cpp/unit/physics/test_narrow_physical_operations.cpp")
 set(POPS_CPP_TEST_SOURCE_test_block_inverse "tests/cpp/unit/numerics/test_block_inverse.cpp")
 set(POPS_CPP_TEST_SOURCE_test_box "tests/cpp/unit/mesh/test_box.cpp")
 set(POPS_CPP_TEST_SOURCE_test_box_array "tests/cpp/unit/mesh/test_box_array.cpp")

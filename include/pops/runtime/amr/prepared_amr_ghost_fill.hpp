@@ -531,12 +531,27 @@ class PreparedAmrGhostFill {
             ::pops::amr::transfer::TransferProvider<Dim, ::pops::amr::transfer::Centering::Cell>(
                 preparation.interpolation_kind);
         const auto components = ::pops::amr::transfer::ComponentRange{0, 0, coarse_fine->ncomp()};
+        ::pops::amr::transfer::PhysicalParentBoundary<Dim> physical_boundary{};
+        physical_boundary.domain = preparation.coarse_domain;
+        for (int axis = 0; axis < Dim; ++axis) {
+          physical_boundary.lower[axis] =
+              preparation.topology.is_physical(Face<Dim>{axis, BoundarySide::lower});
+          physical_boundary.upper[axis] =
+              preparation.topology.is_physical(Face<Dim>{axis, BoundarySide::upper});
+        }
         for (ScratchPatch& patch : scratch) {
           const auto source = std::as_const(patch.coarse).view();
           auto destination = requested_fine.fab_global(patch.fine_patch).view();
-          for (InterpolationSlot& slot : patch.interpolations)
-            slot.transfer.emplace(provider.prepare(source, destination, slot.destination,
-                                                   preparation.ratio, slot.mapping, components));
+          for (InterpolationSlot& slot : patch.interpolations) {
+            if (preparation.interpolation_kind ==
+                ::pops::amr::transfer::TransferKind::CoarseFineGhostInterpolation)
+              slot.transfer.emplace(provider.prepare_physical_boundary_ghosts(
+                  source, destination, slot.destination, preparation.ratio, slot.mapping,
+                  components, physical_boundary));
+            else
+              slot.transfer.emplace(provider.prepare(source, destination, slot.destination,
+                                                     preparation.ratio, slot.mapping, components));
+          }
         }
       } catch (...) {
         binding_failure = 1;

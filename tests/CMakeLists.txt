@@ -523,6 +523,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_aux_halo
   test_aux_coupler_bz
   test_aux_single_source
+  test_narrow_physical_operations
   test_weno_convergence
   test_splitting
   test_imex_ap

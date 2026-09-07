@@ -283,6 +283,10 @@ def resolve(
     )
     from pops.mesh.boundaries.composition import compose_shared_interfaces
     blocks = compose_shared_interfaces(blocks, layout_plan=layout_plan)
+    from pops.codegen._resolved_block_operations import build_block_resolved_operations
+
+    blocks = tuple(replace(block, resolved_operations=build_block_resolved_operations(
+        block, resolved_time)) for block in blocks)
     from pops.codegen._interface_validation import (
         validate_prepared_boundary_jacvec,
         validate_shared_interface_program,
@@ -344,6 +348,11 @@ def resolve(
     from pops.output._restart_provider import RestartAuthority
     restart_authority = RestartAuthority.from_consumer_graph(consumer_graph)
     lowering_coverage = layout_lowering_coverage(layout_plan)
+    from pops.codegen._resolved_block_operations import operation_coverage
+    from pops.codegen.lowering_coverage import LoweringCoverageReport
+
+    lowering_coverage = LoweringCoverageReport((
+        *lowering_coverage.rows, *operation_coverage(blocks).rows))
     if bootstrap_plan is not None:
         from pops.codegen._amr_lowering_coverage import amr_lowering_coverage
         from pops.codegen.lowering_coverage import LoweringCoverageReport

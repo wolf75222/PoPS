@@ -611,6 +611,7 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         mod._param_registry = self._param_registry
         if self._m.gamma is not None:
             mod.constitutive(gamma=self._m.gamma)
+        mod.set_primitive_recipes(self._m.prim_defs)
         mod.adopt_registry(self._m.operator_registry())
         if self._m._wave_speeds is not None:
             mod.set_wave_speed_provider("explicit_pair")

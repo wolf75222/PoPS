@@ -979,6 +979,11 @@ sources = ["tests/cpp/unit/physics/test_aux_single_source.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]
+name = "test_narrow_physical_operations"
+sources = ["tests/cpp/unit/physics/test_narrow_physical_operations.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
 name = "test_composite_fac_variable_eps"
 sources = ["tests/cpp/unit/physics/test_composite_fac_variable_eps.cpp"]
 labels = ["unit", "physics", "fast"]

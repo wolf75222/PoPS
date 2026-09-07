@@ -334,6 +334,15 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
             coverage_rows.append(LoweringCoverageRow(
                 source, "documentary"))
             continue
+        refusal = op.lowering.get("native_unsupported")
+        if refusal:
+            _reject(source, "unsupported_balance_realization",
+                    "operator %r retains a physical balance without a native realization: %s"
+                    % (op.name, refusal))
+        if op.kind == "local_rate" and len(state_inputs) != 1:
+            _reject(source, "joint_balance_realization_unavailable",
+                    "operator %r requires a joint numerical realization; the single-state "
+                    "adapter cannot discard its other inputs" % op.name)
         if op.kind == "field_operator" and len(state_inputs) > 1:
             _reject(
                 source,
@@ -431,7 +440,8 @@ def remap_lowering_error(exc: Any, facade: Any) -> None:
     raise ValueError(message) from exc
 
 
-def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None) -> Any:
+def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
+                       *, resolved_operations: Any = None) -> Any:
     """The SINGLE validate + lower entry of the compile pipeline (ADC-557).
 
     Validates @p model ONCE and returns ``(emit_model, source_module)``:
@@ -451,20 +461,35 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None) 
     try:
         from pops.codegen._compiler_lowering import require_compiler_lowering
 
+        if resolved_operations is None:
+            resolved_operations = getattr(model, "_resolved_operations", None)
         lowering = require_compiler_lowering(model)
         if diagnostic_facade is None:
             diagnostic_facade = lowering.facade
         from pops.codegen.component_provider_packs import resolve_component_provider_packs
 
-        lowering.bind_component_provider_packs(
-            resolve_component_provider_packs(lowering.source_module)
-        )
+        if resolved_operations is None:
+            packs = resolve_component_provider_packs(lowering.source_module)
+        else:
+            from pops.codegen.resolved_operations import ResolvedOperationPlan
+            if type(resolved_operations) is not ResolvedOperationPlan:
+                raise TypeError("compiler requires an exact resolved operation plan")
+            packs = resolved_operations.require_provider_packs(lowering.source_module)
+            for operation in resolved_operations.operations:
+                if "program_evaluation" in operation.guarantees:
+                    resolved_operations.require_native(operation.identity, module=lowering.source_module)
+        lowering.bind_component_provider_packs(packs)
         states = lowering.source_module.state_spaces()
         if len(states) > 1:
             emit_model = _module_to_model(
                 lowering.source_module, state_space=state_space)
+            emit_model.__pops_bind_component_provider_packs__(packs)
+            if resolved_operations is not None:
+                object.__setattr__(emit_model, "_resolved_operations", resolved_operations)
             emit_model.check()
             return emit_model, lowering.source_module
+        if resolved_operations is not None:
+            object.__setattr__(lowering.emit_model, "_resolved_operations", resolved_operations)
         lowering.emit_model.check()
         return lowering.emit_model, lowering.source_module
     except ValueError as exc:

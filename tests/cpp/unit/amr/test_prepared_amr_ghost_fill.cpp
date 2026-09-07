@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 using namespace pops;
@@ -73,16 +74,21 @@ Real quartic_average(Real lower, Real upper) {
 }
 
 template <int Dim>
-void prove_sparse_parent_interpolation() {
+void prove_sparse_parent_interpolation(int ghost_depth = 1, int fine_lower = 4, int fine_upper = 11,
+                                       bool constant = false) {
   const Box<Dim> coarse_domain = box<Dim>(0, 7);
   const Box<Dim> fine_domain = box<Dim>(0, 15);
   const BoxArray<Dim> coarse_layout(std::vector<Box<Dim>>{coarse_domain});
-  const BoxArray<Dim> fine_layout(std::vector<Box<Dim>>{box<Dim>(4, 11)});
+  const BoxArray<Dim> fine_layout(std::vector<Box<Dim>>{box<Dim>(fine_lower, fine_upper)});
   HostMultiFab<Dim> coarse(coarse_layout, replicated(coarse_layout), Index<Dim>{}, 2,
                            uniform_extent<Dim>(0));
   HostMultiFab<Dim> fine(fine_layout, replicated(fine_layout), Index<Dim>{}, 2,
-                         uniform_extent<Dim>(1));
-  fill_valid_encoded(coarse, Real{-1});
+                         uniform_extent<Dim>(ghost_depth));
+  if (constant)
+    fill_valid(coarse, Real{-1},
+               [](const Index<Dim>&, int component) { return Real(3 + component); });
+  else
+    fill_valid_encoded(coarse, Real{-1});
   fill_valid(fine, Real{-777},
              [](const Index<Dim>&, int component) { return Real(8000 + component); });
 
@@ -109,6 +115,7 @@ void prove_sparse_parent_interpolation() {
     const Index<Dim> index = index_from_ordinal(fab.grown_box(), ordinal);
     for (int component = 0; component < fine.ncomp(); ++component) {
       const Real expected = fab.box().contains(index) ? Real(8000 + component)
+                            : constant                ? Real(3 + component)
                                                       : expected_linear_parent(index, component);
       EXPECT_DOUBLE_EQ(value_at(fine, 0, index, component), expected);
     }
@@ -121,6 +128,49 @@ TEST(test_prepared_amr_ghost_fill, sparse_parent_interpolation_is_exact_in_1d_2d
   prove_sparse_parent_interpolation<1>();
   prove_sparse_parent_interpolation<2>();
   prove_sparse_parent_interpolation<3>();
+}
+
+TEST(test_prepared_amr_ghost_fill, two_destination_halos_keep_linear_accuracy_at_physical_faces) {
+  prove_sparse_parent_interpolation<1>(2, 2, 5);
+  prove_sparse_parent_interpolation<2>(2, 2, 5);
+  prove_sparse_parent_interpolation<3>(2, 2, 5);
+  prove_sparse_parent_interpolation<1>(2, 10, 13);
+  prove_sparse_parent_interpolation<2>(2, 10, 13);
+  prove_sparse_parent_interpolation<3>(2, 10, 13);
+}
+
+TEST(test_prepared_amr_ghost_fill, two_destination_halos_preserve_constants_at_physical_faces) {
+  prove_sparse_parent_interpolation<1>(2, 2, 5, true);
+  prove_sparse_parent_interpolation<2>(2, 2, 5, true);
+  prove_sparse_parent_interpolation<3>(2, 2, 5, true);
+  prove_sparse_parent_interpolation<1>(2, 10, 13, true);
+  prove_sparse_parent_interpolation<2>(2, 10, 13, true);
+  prove_sparse_parent_interpolation<3>(2, 10, 13, true);
+}
+
+TEST(test_prepared_amr_ghost_fill, physical_faces_do_not_authorize_missing_interior_stencils) {
+  using namespace ::pops::amr::transfer;
+  const BoxArray<1> coarse_layout(std::vector<Box<1>>{box<1>(0, 1)});
+  const BoxArray<1> fine_layout(std::vector<Box<1>>{box<1>(0, 3)});
+  HostMultiFab<1> coarse(coarse_layout, replicated(coarse_layout), Index<1>{}, 1, Extent<1>{0});
+  HostMultiFab<1> fine(fine_layout, replicated(fine_layout), Index<1>{}, 1, Extent<1>{0});
+  const auto source = std::as_const(coarse.fab_global(0)).view();
+  const auto destination = fine.fab_global(0).view();
+  const auto provider = TransferProvider<1, Centering::Cell>::coarse_fine_ghost_interpolation();
+  const PhysicalParentBoundary<1> physical{box<1>(0, 7), {true}, {true}};
+
+  EXPECT_THROW((void)provider.prepare(source, destination, box<1>(0, 1), ratio_two<1>()),
+               std::invalid_argument);
+  EXPECT_NO_THROW((void)provider.prepare_physical_boundary_ghosts(
+      source, destination, box<1>(0, 1), ratio_two<1>(), {}, {}, physical));
+  EXPECT_THROW((void)provider.prepare_physical_boundary_ghosts(source, destination, box<1>(0, 3),
+                                                               ratio_two<1>(), {}, {}, physical),
+               std::invalid_argument);
+  const auto fifth_order =
+      TransferProvider<1, Centering::Cell>::fifth_order_coarse_fine_ghost_interpolation();
+  EXPECT_THROW((void)fifth_order.prepare_physical_boundary_ghosts(source, destination, box<1>(0, 1),
+                                                                  ratio_two<1>(), {}, {}, physical),
+               std::invalid_argument);
 }
 
 TEST(test_prepared_amr_ghost_fill,
@@ -246,7 +296,7 @@ TEST(test_prepared_amr_ghost_fill, physical_face_ghosts_remain_for_the_boundary_
   const BoxArray<1> coarse_layout(std::vector<Box<1>>{coarse_domain});
   const BoxArray<1> fine_layout(std::vector<Box<1>>{{Index<1>{0}, Index<1>{3}}});
   HostMultiFab<1> coarse(coarse_layout, replicated(coarse_layout), Index<1>{}, 1, Extent<1>{0});
-  HostMultiFab<1> fine(fine_layout, replicated(fine_layout), Index<1>{}, 1, Extent<1>{1});
+  HostMultiFab<1> fine(fine_layout, replicated(fine_layout), Index<1>{}, 1, Extent<1>{2});
   fill_valid(coarse, Real{-1}, [](const Index<1>&, int) { return Real(3); });
   fill_valid(fine, Real{-777}, [](const Index<1>&, int) { return Real(9); });
 
@@ -265,8 +315,10 @@ TEST(test_prepared_amr_ghost_fill, physical_face_ghosts_remain_for_the_boundary_
   point.level = 1;
   fill(fine, point);
 
+  EXPECT_DOUBLE_EQ(value_at(fine, 0, Index<1>{-2}), -777);
   EXPECT_DOUBLE_EQ(value_at(fine, 0, Index<1>{-1}), -777);
   EXPECT_DOUBLE_EQ(value_at(fine, 0, Index<1>{4}), 3);
+  EXPECT_DOUBLE_EQ(value_at(fine, 0, Index<1>{5}), 3);
 }
 
 TEST(test_prepared_amr_ghost_fill, periodic_sparse_ghost_without_a_fine_peer_uses_the_parent) {

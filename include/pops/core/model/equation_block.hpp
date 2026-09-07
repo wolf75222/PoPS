@@ -28,7 +28,8 @@ namespace pops {
 ///
 /// Template parameters:
 ///   Dim: immutable spatial rank.
-///   ModelT: must satisfy PhysicalModelFor<ModelT, Dim>.
+///   ModelT: must satisfy PhysicalStateFor<ModelT, Dim>; operation consumers impose their
+///           own transport, source, problem-load, or recovery requirements.
 ///   SpatialT: must satisfy SpatialDiscretisationLike (default FirstOrder).
 ///   TimeT: time policy (default ExplicitTime<SSPRK2>).
 ///
@@ -40,7 +41,7 @@ template <int Dim, class ModelT, class SpatialT = FirstOrder, class TimeT = Expl
           class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 struct EquationBlock {
   static_assert(Dim >= 1 && Dim <= 3, "EquationBlock only supports dimensions 1, 2, and 3");
-  static_assert(PhysicalModelFor<ModelT, Dim>,
+  static_assert(PhysicalStateFor<ModelT, Dim>,
                 "EquationBlock expects a model matching its exact spatial rank");
   static_assert(SpatialDiscretisationLike<SpatialT>,
                 "EquationBlock expects a named spatial discretisation");
