@@ -398,6 +398,95 @@ def test_domain_effects_in_a_primitive_recipe_reach_the_numerical_operation():
     assert "fallible" in inverse.effects
 
 
+@pytest.mark.parametrize("root", ("coefficient", "boundary", "wave", "primitive_wave"))
+def test_domain_effects_cover_all_evaluated_expression_roots(root):
+    module = model.Module("effect_closure_" + root)
+    state = module.state_space("U", ("rho",))
+    (rho,) = module.state_symbols(state)
+    kwargs = {"lowering": {"coefficient": 1 / rho}} if root == "coefficient" else {}
+    module.operator("flux", state >> model.Rate(state), "grid_operator",
+                    expr=(Const(0),), **kwargs)
+    boundary = (1 / rho,) if root == "boundary" else ()
+    if root == "wave":
+        module.eigenvalues(x=(1 / rho,))
+    elif root == "primitive_wave":
+        module.set_primitive_recipes({"inverse_density": 1 / rho})
+        module.eigenvalues(x=(Var("inverse_density", "prim"),))
+    resolved = build_resolved_operations(module, boundary_data=boundary)
+    operation, = resolved.operations
+    assert operation.effects == ("fallible",)
+    assert operation.guards == operation.materialized_inputs == ()
+    assert any(read.components == ("rho",) for read in operation.inputs)
+    assert resolved.require_native(operation.identity, module=module) == "legacy:flux"
+    if root != "boundary":
+        forged = build_resolved_operations(module, constructions=(replace(operation, effects=()),))
+        with pytest.raises(LoweringRejection, match="discards a required scientific effect"):
+            forged.require_native(operation.identity, module=module)
+
+
+def test_rate_effects_follow_selected_contributions_and_their_wave_formulas():
+    module = model.Module("selected_effects")
+    state = module.state_space("U", ("rho",))
+    (rho,) = module.state_symbols(state)
+    module.operator("pure", state >> model.Rate(state), "local_source", expr=(rho,))
+    module.operator("inverse", state >> model.Rate(state), "local_source", expr=(1 / rho,))
+    module.operator("flux", state >> model.Rate(state), "grid_operator", expr=(Const(0),))
+    module.eigenvalues(x=(1 / rho,))
+    module.rate_operator("pure_rate", state, flux=False,
+                         sources=(module.operator_handle("pure"),))
+    module.rate_operator("source_rate", state, flux=False,
+                         sources=(module.operator_handle("inverse"),))
+    module.rate_operator("flux_rate", state, fluxes=(module.operator_handle("flux"),),
+                         default_flux=module.operator_handle("flux"))
+    resolved = build_resolved_operations(module)
+    operations = {operation.identity.rsplit("::", 1)[-1]: operation
+                  for operation in resolved.operations}
+    assert operations["pure_rate"].effects == ()
+    for name in ("source_rate", "flux_rate"):
+        operation = operations[name]
+        assert operation.effects == ("fallible",)
+        assert resolved.require_native(operation.identity, module=module) == "legacy:rate_operator"
+
+
+def test_retained_balance_effects_respect_the_selected_occurrence_subset():
+    from tests.python.unit.numerics.test_discretization_plan import _declarations
+    from pops.math import ddt
+
+    _, physical, state, _, _, _ = _declarations()
+    pure = physical.source("pure", on=state, value=[state[0]])
+    inverse = physical.source("inverse", on=state, value=[1 / state[0]])
+    rate = physical.rate("balance", equation=ddt(state) == pure + inverse)
+    selected = rate.select(rate.occurrences[0])
+    operations = {operation.identity.rsplit("::", 1)[-1]: operation
+                  for operation in build_resolved_operations(physical.module).operations}
+    assert operations[rate.local_id].effects == ("fallible",)
+    assert operations[selected.local_id].effects == ()
+
+
+@pytest.mark.parametrize("root", ("body", "coefficient", "boundary"))
+def test_opaque_evaluations_retain_effect_barriers_without_running_the_callback(root):
+    module = model.Module("opaque_effects_" + root)
+    state = module.state_space("U", ("rho",))
+
+    class NativeClosure:
+        def __call__(self):
+            raise AssertionError("effect discovery must not execute a callback")
+
+        def to_data(self):
+            return {"native": "opaque-effect-fixture"}
+
+    opaque = NativeClosure()
+
+    kwargs = {"lowering": {"coefficient": opaque}} if root == "coefficient" else {}
+    module.operator("source", state >> model.Rate(state), "local_source",
+                    expr=opaque if root == "body" else (Const(0),), **kwargs)
+    operation, = build_resolved_operations(
+        module, boundary_data=(opaque,) if root == "boundary" else ()).operations
+    assert operation.effects == ("opaque", "fallible")
+    if root == "body":
+        assert operation.native_route is None and operation.refusal == "expression_body_required"
+
+
 def test_m1_balance_views_preserve_signed_occurrences_and_real_input_bodies():
     from tests.python.unit.numerics.test_discretization_plan import _declarations
     from pops.math import ddt, div

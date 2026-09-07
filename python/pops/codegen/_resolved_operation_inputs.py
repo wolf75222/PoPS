@@ -9,6 +9,7 @@ from pops.identity.digest import make_identity
 
 from ._resolved_operation_records import (
     EvaluationRequest, ExchangeRecord, NumericalConstruction, ResolvedAccess, TermOccurrence, data,
+    identifiers,
 )
 
 
@@ -371,6 +372,105 @@ def _occurrences(module: Any, operator: Any, identity: str) -> tuple[TermOccurre
                            operator.kind),)
 
 
+def _derive_effects(module: Any, operator: Any, boundary_data: Any) -> tuple[str, ...]:
+    """Retain obligations from the expressions this operation evaluates.
+
+    This is a conservative barrier union, not an eager evaluation or permission
+    to move expressions across their existing guards/materialization boundaries.
+    Declaration references are followed only through the selected rate terms.
+    """
+    from pops._ir.application import OperatorApplication
+    from pops._ir.expr import Const, Div, Expr, Pow, Sqrt, Var
+    from pops._ir.visitors import _children
+    from pops.model.handles import Handle
+
+    effects: dict[str, None] = {}
+    seen: set[tuple[int, bool]] = set()
+    visited_operators: set[str] = set()
+    bindings = {_reference(subject): _reference(target)
+                for subject, target in module.operator_bindings().items()}
+    declarations = {_reference(module.operator_handle(item.name)): item
+                    for item in module.operator_registry()}
+
+    def retain(*obligations: str) -> None:
+        effects.update(dict.fromkeys(obligations))
+
+    def walk(value: Any, *, opaque: bool = False) -> None:
+        key = (id(value), opaque)
+        if key in seen:
+            return
+        seen.add(key)
+        if isinstance(value, Mapping):
+            for item in value.values():
+                walk(item, opaque=opaque)
+        elif isinstance(value, (tuple, list)):
+            for item in value:
+                walk(item, opaque=opaque)
+        elif callable(value) or callable(getattr(value, "__pops_native_read_footprint__", None)):
+            # A precise read footprint does not establish purity or successful evaluation.
+            retain("opaque", "fallible")
+        elif isinstance(value, Expr):
+            if isinstance(value, (Div, Sqrt, Pow)):
+                retain("fallible")
+            if isinstance(value, OperatorApplication):
+                retain(*value.effects)
+            if isinstance(value, Var) and value.kind == "prim":
+                from pops.model.primitive_recipes import resolve_primitive_recipe
+
+                recipe = resolve_primitive_recipe(module, value.name)
+                if recipe is None:
+                    retain("opaque", "fallible")
+                else:
+                    walk(recipe, opaque=True)
+            children = _children(value)
+            for child in children:
+                walk(child, opaque=opaque)
+            if not children and not value.declaration_references() \
+                    and not isinstance(value, (Const, Var)):
+                retain("opaque", "fallible")
+        elif opaque and value is not None and not isinstance(
+                value, (str, int, float, bool, Handle)):
+            retain("opaque", "fallible")
+
+    def visit(declaration: Any) -> None:
+        if declaration.name in visited_operators:
+            return
+        visited_operators.add(declaration.name)
+        if declaration.kind == "field_operator":
+            retain("solve", "collective", "fallible")
+        retain(*identifiers(declaration.capabilities.get("effects", ()), "operator effects"))
+        walk(declaration.body, opaque=True)
+        walk(declaration.lowering)
+        balance = declaration.lowering.get("physical_balance")
+        if balance is not None:
+            walk(getattr(balance.accumulation, "law", None), opaque=True)
+            for occurrence in balance.occurrences:
+                walk(occurrence.payload, opaque=True)
+                from pops.physics.board_handles import SourceHandle
+
+                # Retained board sources carry their explicit legacy registry
+                # route; unlike fluxes they do not use operator_bindings().
+                if isinstance(occurrence.payload, SourceHandle):
+                    if occurrence.payload.owner_path != module.owner_path:
+                        raise ValueError("balance source effect belongs to a different Module")
+                    source = module.operator_registry().get(occurrence.payload.reg_name)
+                    if source.kind != "local_source":
+                        raise ValueError("balance source effect requires its local-source declaration")
+                    visit(source)
+        if declaration.kind == "local_rate":
+            identity = "operation:%s" % _reference(module.operator_handle(declaration.name))
+            for occurrence in _occurrences(module, declaration, identity):
+                dependency = declarations.get(bindings.get(occurrence.operator, occurrence.operator))
+                if dependency is not None:
+                    visit(dependency)
+        if declaration.kind == "grid_operator":
+            walk(getattr(module, "_eigenvalues", None), opaque=True)
+
+    visit(operator)
+    walk(boundary_data, opaque=True)
+    return tuple(effects)
+
+
 def derive_module_operations(module: Any, packs: Any, *, boundary_data: Any = ()) \
         -> tuple[tuple[EvaluationRequest, ...], tuple[NumericalConstruction, ...]]:
     requests, operations = [], []
@@ -380,34 +480,7 @@ def derive_module_operations(module: Any, packs: Any, *, boundary_data: Any = ()
         occurrences = _occurrences(module, operator, identity)
         requests.append(EvaluationRequest(evaluation, occurrences))
         route, refusal = native_route(module, operator)
-        effects = ("solve", "collective", "fallible") if operator.kind == "field_operator" else ()
-        if callable(operator.body):
-            effects = (*effects, "opaque", "fallible")
-        from pops._ir.expr import Div, Expr, Pow, Sqrt, Var
-        from pops._ir.visitors import _children
-
-        def has_domain_effect(value, seen=None):
-            seen = set() if seen is None else seen
-            if id(value) in seen:
-                return False
-            seen.add(id(value))
-            if isinstance(value, (Div, Sqrt, Pow)):
-                return True
-            if isinstance(value, Var) and value.kind == "prim":
-                from pops.model.primitive_recipes import resolve_primitive_recipe
-
-                recipe = resolve_primitive_recipe(module, value.name)
-                return recipe is not None and has_domain_effect(recipe, seen)
-            if isinstance(value, Mapping):
-                return any(has_domain_effect(item, seen) for item in value.values())
-            if isinstance(value, (tuple, list)):
-                return any(has_domain_effect(item, seen) for item in value)
-            return isinstance(value, Expr) and any(has_domain_effect(item, seen)
-                                                    for item in _children(value))
-
-        if has_domain_effect(operator.body):
-            effects = (*effects, "fallible")
-        effects = tuple(dict.fromkeys(effects))
+        effects = _derive_effects(module, operator, boundary_data)
         exchanges = tuple(ExchangeRecord(term.identity, term.target)
                           for term in occurrences if term.kind in {"flux", "transport", "diffusion", "grid_operator"})
         operations.append(NumericalConstruction(
