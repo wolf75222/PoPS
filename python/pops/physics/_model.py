@@ -114,6 +114,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
             "units": None,
         }
         self.cons_names = []
+        self._conservative_coordinates = None  # exact Board declarations used as AD targets
         self.prim_defs = {}     # name -> Expr (in terms of the cons / previous prims / aux)
         self._recovery_admissibility = {}  # primitive component -> symbolic Boolean predicate
         self._provider_components = []  # Ordered ordinary provider component declarations.

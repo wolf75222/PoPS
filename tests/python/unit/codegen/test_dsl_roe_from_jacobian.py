@@ -12,8 +12,10 @@ from pops._dense_spectral import (
     is_exact_block_triangular,
 )
 from pops._ir.expr import Const
+from pops._ir.lowering import diff
 from pops.codegen import Production
 from pops.codegen.module_lowering import lower_and_validate
+from pops.codegen.module_emit_riemann import has_characteristic_no_inflow_provider
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
@@ -115,6 +117,48 @@ def _lower_model(model: Model):
     return emit_model
 
 
+def test_qualified_flux_jacobian_retains_nonzero_entries_through_freeze_and_lowering() -> None:
+    model = _nonhyperbolic_roe_model()
+    expected = np.array([[0.0, -1.0], [1.0, 0.0]])
+
+    def assert_jacobians(carrier) -> None:
+        for axis in ("x", "y"):
+            for matrix in (
+                carrier.flux_jacobian(axis),
+                carrier._roe_jacobian[axis],
+                carrier._ws_jacobian["rows"][axis],
+            ):
+                np.testing.assert_array_equal(
+                    [[entry.eval({}) for entry in row] for row in matrix], expected)
+
+    assert_jacobians(model._dsl._m)
+    assert_jacobians(_lower_model(model)._m)
+    model.freeze()
+    assert_jacobians(model._dsl._m)
+    assert_jacobians(_lower_model(model)._m)
+
+
+def test_qualified_derivative_distinguishes_homonymous_owners_and_legacy_variables() -> None:
+    from pops.physics._model import HyperbolicModel
+
+    first = _diagonal_roe_model("qualified_derivative_first", 1)
+    second = _diagonal_roe_model("qualified_derivative_second", 1)
+    (own_q,) = first.states["U"]
+    (foreign_q,) = second.states["U"]
+    expression = own_q * foreign_q
+    environment = {own_q.qualified_id: 2.0, foreign_q.qualified_id: 7.0}
+    assert diff(expression, own_q).eval(environment) == 7.0
+    assert diff(expression, foreign_q).eval(environment) == 2.0
+    assert diff(own_q, foreign_q).eval({}) == 0
+    assert diff(own_q, "q0").eval({}) == 0
+
+    legacy = HyperbolicModel("legacy_derivative")
+    (q,) = legacy.conservative_vars("q")
+    legacy.set_flux(x=[q * q], y=[3 * q])
+    assert legacy.flux_jacobian("x")[0][0].eval({"q": 4.0}) == 8.0
+    assert legacy.flux_jacobian("y")[0][0].eval({}) == 3.0
+
+
 def test_dense_roe_complex_spectrum_fails_without_rusanov_fallback(
     isolated_native_cache, native_cxx, kokkos_root
 ) -> None:
@@ -200,7 +244,10 @@ def test_flux_jacobian_roe_emits_generic_characteristic_no_inflow_provider() -> 
     assert "Euler" not in source
 
 
-def test_auxiliary_dependent_jacobian_does_not_advertise_characteristic_provider() -> None:
+@pytest.mark.parametrize("through_primitive", [False, True])
+def test_auxiliary_dependent_jacobian_does_not_advertise_characteristic_provider(
+    through_primitive: bool,
+) -> None:
     frame = Rectangle(
         "aux-characteristic-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
     ).frame(Cartesian2D())
@@ -209,14 +256,40 @@ def test_auxiliary_dependent_jacobian_does_not_advertise_characteristic_provider
     state = model.state("U", components=("q",))
     (q,) = state
     coefficient = model.aux("coefficient")
+    physical_flux = coefficient * q
+    if through_primitive:
+        physical_flux = model.primitive("scaled_q", physical_flux)
     model.flux(
         "transport",
         frame=frame,
         state=state,
-        components={x_axis: (coefficient * q,), y_axis: (coefficient * q,)},
+        components={x_axis: (physical_flux,), y_axis: (physical_flux,)},
     )
     model.wave_speeds_from_jacobian()
     model.roe_from_jacobian()
 
+    assert not has_characteristic_no_inflow_provider(model._dsl._m)
+    for axis in ("x", "y"):
+        jacobian = model._dsl._m._roe_jacobian[axis]
+        assert jacobian[0][0].eval({coefficient.name: 2.5}) == 2.5
     source = _emit_cpp_brick(model, name="AuxCharacteristicBoundary")
     assert "bool characteristic_no_inflow(" not in source
+
+
+def test_state_only_jacobian_remains_characteristic_with_additive_auxiliary_flux() -> None:
+    frame = Rectangle(
+        "additive-aux-characteristic-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    model = Model("additive_aux_characteristic_boundary", frame=frame)
+    state = model.state("U", components=("q",))
+    (q,) = state
+    coefficient = model.aux("coefficient")
+    model.flux(
+        "transport", frame=frame, state=state,
+        components={axis: (q + coefficient,) for axis in frame.axes},
+    )
+    model.wave_speeds_from_jacobian()
+    model.roe_from_jacobian()
+    assert has_characteristic_no_inflow_provider(model._dsl._m)
+    source = _emit_cpp_brick(model, name="AdditiveAuxCharacteristicBoundary")
+    assert "bool characteristic_no_inflow(" in source

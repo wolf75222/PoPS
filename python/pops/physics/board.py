@@ -341,6 +341,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         hyp = self._dsl._m
         with atomic_attrs(
             (hyp, "cons_names"),
+            (hyp, "_conservative_coordinates"),
             (hyp, "cons_roles"),
             (hyp, "prim_state"),
             (hyp, "prim_roles"),
@@ -379,6 +380,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             handle = StateHandle(
                 name, components, qualified, role_map, owner=self.owner_path, space=typed_space)
             self._states[handle.name] = handle
+            hyp._conservative_coordinates = qualified
             self._primitive_state_values = qualified
         return handle
 

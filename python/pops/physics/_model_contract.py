@@ -27,6 +27,7 @@ class _HyperbolicModel:
 
     name: str
     cons_names: Any
+    _conservative_coordinates: Any
     cons_roles: Any
     cons_from: Any
     prim_defs: Any

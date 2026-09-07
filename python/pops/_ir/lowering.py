@@ -210,7 +210,7 @@ def _s_pow(a: Any, b: Any) -> Any:
 
 
 def diff(expr: Any, var: Any, defs: Any = None) -> Any:
-    """Symbolic derivative of @p expr with respect to @p var (variable name or Var).
+    """Symbolic derivative with respect to a name, Var, or qualified declaration coordinate.
 
     @p defs (optional): dictionary {primitive name: definition Expr}. When the differentiation
     meets a DEFINED primitive, it differentiates its DEFINITION (chain rule) -- the primitives
@@ -221,11 +221,15 @@ def diff(expr: Any, var: Any, defs: Any = None) -> Any:
     @return an Expr minimally simplified (0*x, 1*x, x+0, ... removed for a readable emission).
     Raises NotImplementedError on a non differentiable node (naming its type) or a power whose
     exponent depends on @p var (would need a logarithm, a node absent from the DSL)."""
+    from .quantity import QuantityRef
+
     target = var.name if isinstance(var, Var) else var
     if not isinstance(target, str) or not target:
-        if not callable(getattr(var, "canonical_identity", None)):
-            raise TypeError("diff variable must be a Var, declaration Handle, or non-empty string")
-        target = None  # extension nodes receive the original Handle through __pops_ir_diff__
+        if not isinstance(var, QuantityRef) and not callable(
+                getattr(var, "canonical_identity", None)):
+            raise TypeError(
+                "diff variable must be a Var, QuantityRef, declaration Handle, or non-empty string")
+        target = None  # extension nodes receive the exact target through __pops_ir_diff__
     d = defs or {}
 
     def go(e: Any) -> Any:

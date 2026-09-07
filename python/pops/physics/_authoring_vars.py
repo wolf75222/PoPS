@@ -82,6 +82,7 @@ class _VariablesMixin(_HyperbolicModel):
 
     def cons(self, name: Any) -> Any:
         self.cons_names.append(name)
+        self._conservative_coordinates = None
         return Var(name, "cons")
 
     def conservative_vars(self, *names: Any, roles: Any = None) -> Any:
