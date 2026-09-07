@@ -183,7 +183,7 @@ def test_cpp_brick_vs_numpy(cxx, tmp):
             '#include "eig_brick.hpp"\n'
             "int main(int argc, char** argv) {\n"
             "  pops_generated::ToyEigCpp m;\n"
-            "  pops::Aux a{};\n"
+            "  pops::ProviderValues<0> a{};\n"
             '  std::FILE* fp = std::fopen(argv[1], "w");\n'
             "  for (int i = 2; i < argc; i += 3) {\n"
             "    pops::StateVec<3> U{atof(argv[i]), atof(argv[i+1]), atof(argv[i+2])};\n"
@@ -195,8 +195,13 @@ def test_cpp_brick_vs_numpy(cxx, tmp):
             "}\n"
         )
     exe = os.path.join(tmp, "eig_main")
+    from pops.codegen.toolchain import _native_kokkos_include_dirs
+    kokkos_includes = [flag for directory in _native_kokkos_include_dirs()
+                       for flag in ("-I", directory)]
     cp = subprocess.run(
-        [cxx, "-std=c++20", "-I", INCLUDE, main, "-o", exe], capture_output=True, text=True
+        [cxx, "-std=c++20", "-DPOPS_NATIVE_DIM=2", *kokkos_includes,
+         "-I", INCLUDE, main, "-o", exe],
+        capture_output=True, text=True
     )
     if cp.returncode != 0:
         chk(False, "compilation de la brique generee (voir stderr)")
@@ -260,16 +265,11 @@ def test_system_end_to_end():
     try:
         from pops.runtime._system import System  # ADC-545 advanced runtime seam
         from tests.python.support.explicit_program import install_forward_euler_program
-        from pops.codegen.loader import CompiledModel
-        from pops.codegen.abi import _abi_key_python
-        from pops.codegen.toolchain import loader_cxx_std
         from pops._ir.expr import Const
         from pops._ir.ops import eig_max_im, sign
         from pops.numerics.reconstruction import Minmod
         from pops.numerics.riemann import Rusanov
         from pops.numerics.variables import Conservative
-        from pops.physics.aux import roles_for
-        from pops.physics._model import HyperbolicModel
         import pops.runtime._engine_descriptors as engine
     except Exception as ex:  # noqa: BLE001
         if fails:
@@ -293,16 +293,17 @@ def test_system_end_to_end():
     N, L, DT, NSTEPS = 24, 1.0, 1e-3, 3
     tol, target = 0.5, 9.0
 
-    def build_pkg(tag):
-        m = HyperbolicModel("toyeigsys_" + tag)
+    def build_pkg(tag, *, project=True):
+        m = Model("toyeigsys_" + tag)
         q0, q1, q2 = m.conservative_vars("q0", "q1", "q2")
-        m.set_flux(x=[q0, q1, q2], y=[0.5 * q0, 0.5 * q1, 0.5 * q2])
-        m.set_eigenvalues(x=[Const(1.0)], y=[Const(0.5)])
-        m.set_primitive_state("q0", "q1", "q2")
-        m.set_conservative_from([q0, q1, q2])
+        m.flux(x=[q0, q1, q2], y=[0.5 * q0, 0.5 * q1, 0.5 * q2])
+        m.eigenvalues(x=[Const(1.0)], y=[Const(0.5)])
+        m.primitive_vars(q0=q0, q1=q1, q2=q2)
+        m.conservative_from([q0, q1, q2])
         wit = eig_max_im([[q0, -q1], [q1, q0]])
         mask = 0.5 * (sign(wit - tol) + 1.0)
-        m.projection([q0, q1, q2 * (1.0 - mask) + target * mask])
+        if project:
+            m.projection([q0, q1, q2 * (1.0 - mask) + target * mask])
         return m
 
     def init(n):
@@ -312,28 +313,6 @@ def test_system_end_to_end():
         q1 = 0.9 * np.cos(2 * np.pi * Y)  # |q1| traverse tol -> les deux branches actives
         q2 = np.zeros((n, n))
         return np.stack([q0, q1, q2])
-
-    def compiled_component(model, so_path):
-        return CompiledModel(
-            so_path=so_path,
-            backend="production",
-            target="system",
-            cons_names=model.cons_names,
-            cons_roles=roles_for(model.cons_names, model.cons_roles),
-            prim_names=model.prim_state,
-            n_vars=model.n_vars,
-            gamma=1.4,
-            n_aux=len(model._provider_components),
-            params={},
-            caps={"cpu": True, "mpi": False, "amr": False, "gpu": False},
-            abi_key=_abi_key_python(INCLUDE, cxx, loader_cxx_std()),
-            model_hash=model._model_hash(),
-            cxx=cxx,
-            std=loader_cxx_std(),
-            native_dimension=2,
-            wave_speeds=False,
-            wave_speed_provider=None,
-        )
 
     def make_sys(component):
         s = System(n=N, L=L, periodicity=(True, True))
@@ -349,16 +328,13 @@ def test_system_end_to_end():
     tmp = tempfile.mkdtemp()
     try:
         m_eig = build_pkg("e")
-        m_none = build_pkg("n")  # meme transport ; on neutralise sa projection pour la reference
-        m_none._proj = None
-        so = m_eig.compile(
+        m_none = build_pkg("n", project=False)
+        eig_component = m_eig.compile(
             os.path.join(tmp, "eig_production.so"), INCLUDE, backend="production", cxx=cxx
         )
-        so_n = m_none.compile(
+        plain_component = m_none.compile(
             os.path.join(tmp, "none_production.so"), INCLUDE, backend="production", cxx=cxx
         )
-        eig_component = compiled_component(m_eig, so)
-        plain_component = compiled_component(m_none, so_n)
         # run AVEC hook
         s = make_sys(eig_component)
         install_forward_euler_program(s, project_blocks=("toy",))

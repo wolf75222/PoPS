@@ -110,6 +110,29 @@ class _EmptyProgramAuthority:
     pass
 
 
+def test_face_evidence_reports_its_originating_topology_after_regrid():
+    class HistoricalAuthority(_AcceptedProgramAuthority):
+        def program_flux_ledger_manifest(self):
+            return [(*row, "space:accepted", 3, 8, 2)
+                    for row in super().program_flux_ledger_manifest()]
+
+        def program_sync_manifest(self):
+            return [(*row, "space:accepted", 3, 8, 2)
+                    for row in super().program_sync_manifest()]
+
+    report = build_program_report(HistoricalAuthority())
+    origin = {
+        "spatial_identity": "space:accepted",
+        "topology_epoch": 3,
+        "materialization_generation": 8,
+        "level_count": 2,
+    }
+    assert report.flux_ledger[0]["origin"] == origin
+    assert report.synchronization[0]["origin"] == origin
+    assert report.temporal_partition["topology_epoch"] == 7
+    assert report.to_dict()["flux_ledger"][0]["origin"] == origin
+
+
 def test_empty_authority_produces_an_honest_empty_report():
     report = build_program_report(_EmptyProgramAuthority())
 

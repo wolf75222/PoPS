@@ -931,24 +931,27 @@ class ProgramContext {
   void laplacian(field_type& output, field_type& input,
                  const scalar_boundary_session_type& boundary) const {
     require_prepared_lane_(boundary.lane(), "Program Laplacian boundary");
-    require_scalar_stencil_(output, input, 1, "Program Laplacian");
+    require_componentwise_stencil_(output, input, "Program Laplacian");
     boundary.fill(input);
     const Geometry<Dim> geom = boundary.geometry();
+    const int components = input.ncomp();
     for (std::size_t local = 0; local < output.local_size(); ++local) {
       const FieldView<Real, Dim> result = output.fab(local).view();
       const FieldView<const Real, Dim> value = std::as_const(input).fab(local).view();
       for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-        Real image = Real(0);
-        for (int axis = 0; axis < Dim; ++axis) {
-          Index<Dim> lower = cell;
-          Index<Dim> upper = cell;
-          --lower[axis];
-          ++upper[axis];
-          const Real spacing = geom.spacing(axis);
-          image +=
-              (value(upper, 0) - Real(2) * value(cell, 0) + value(lower, 0)) / (spacing * spacing);
+        for (int component = 0; component < components; ++component) {
+          Real image = Real(0);
+          for (int axis = 0; axis < Dim; ++axis) {
+            Index<Dim> lower = cell;
+            Index<Dim> upper = cell;
+            --lower[axis];
+            ++upper[axis];
+            const Real spacing = geom.spacing(axis);
+            image += (value(upper, component) - Real(2) * value(cell, component) +
+                      value(lower, component)) / (spacing * spacing);
+          }
+          result(cell, component) = image;
         }
-        result(cell, 0) = image;
       });
     }
     count_kernel_();
@@ -1715,6 +1718,19 @@ class ProgramContext {
         !std::isfinite(point.physical_time))
       throw std::invalid_argument(std::string(operation) +
                                   " requires a complete boundary evaluation point");
+  }
+
+  static void require_componentwise_stencil_(const field_type& output, const field_type& input,
+                                             const char* operation) {
+    if (input.ncomp() < 1 || output.ncomp() != input.ncomp() ||
+        output.layout() != input.layout() || output.distribution() != input.distribution() ||
+        output.local_rank() != input.local_rank() || output.local_size() != input.local_size())
+      throw std::invalid_argument(std::string(operation) +
+                                  " fields do not share the exact componentwise stencil layout");
+    for (int axis = 0; axis < Dim; ++axis)
+      if (input.ghosts()[axis] < 1)
+        throw std::invalid_argument(std::string(operation) +
+                                    " input requires one ghost on every native axis");
   }
 
   static void require_scalar_stencil_(const field_type& output, const field_type& input,

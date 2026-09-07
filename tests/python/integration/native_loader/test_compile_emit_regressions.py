@@ -163,9 +163,7 @@ def test_named_elliptic_rhs_declares_its_exact_consumer_dimension(dimension: int
     assert "return state;" in brick
 
 
-def test_generated_bricks_retain_the_full_native_provider_carrier() -> None:
-    from pops.codegen.module_codegen import emit_cpp_source
-
+def _distinct_provider_roles_model() -> Model:
     model = _ranked_scalar_model(2)
     state = model._m.cons_from[0]
     grad_x = model.aux("grad_x")
@@ -174,14 +172,115 @@ def test_generated_bricks_retain_the_full_native_provider_carrier() -> None:
     model.flux(x=[-grad_y * state], y=[grad_x * state])
     model.source([forcing * state])
     model._model_hash()
+    return model
+
+
+def test_generated_bricks_project_the_native_input_union_into_each_role() -> None:
+    from pops.codegen._native_model_provider_plan import native_model_provider_plan
+    from pops.codegen.module_codegen import _emit_bricks, emit_cpp_source
+
+    model = _distinct_provider_roles_model()
 
     hyperbolic = model._m.emit_cpp_brick(name="ProviderCarrierHyperbolic")
     source = emit_cpp_source(model._m, name="ProviderCarrierSource")
     assert model._m._total_n_aux() == 3
     assert "static constexpr int n_flux_providers = 2;" in hyperbolic
+    assert "static constexpr int n_providers = 2;" in hyperbolic
+    assert "static constexpr int n_providers = 1;" in source
     for brick in (hyperbolic, source):
-        assert "static constexpr int n_providers = 3;" in brick
         assert "static constexpr int n_aux = 3;" in brick
+    inputs = native_model_provider_plan(model._m)
+    by_component = {row["key"]["component"]: row["consumer_slot"] for row in inputs}
+    assert set(by_component) == {"grad_x", "grad_y", "forcing"}
+    _, native, _ = _emit_bricks(model._m, name="DistinctRoles")
+    assert native.count("static constexpr int n_providers = 3;") == 2
+    for component, slot in by_component.items():
+        assert "const pops::Real %s = pops::provider_value<%d>(a);" % (component, slot) in native
+    loader = model.__pops_native_loader_source__(name="DistinctRoles", target="system")
+    assert '/native_model"' in loader
+
+
+def test_named_field_outputs_do_not_become_native_model_inputs() -> None:
+    from pops.codegen._native_model_provider_plan import native_model_provider_plan
+    from pops.codegen.module_codegen import _emit_bricks
+
+    model = _runtime_elliptic_model()
+    model._model_hash()
+    assert model._m._total_n_aux() == 1
+    assert native_model_provider_plan(model._m) == ()
+    _, native, _ = _emit_bricks(model._m, name="OutputOnlyField")
+    assert "static constexpr int n_providers = 0;" in native
+    assert "static constexpr int n_aux = 1;" in native
+
+
+def test_field_free_flux_retains_source_only_native_inputs() -> None:
+    from pops.codegen._native_model_provider_plan import native_model_provider_plan
+    from pops.codegen.module_codegen import _emit_bricks
+
+    model = _ranked_scalar_model(2)
+    electric = model.aux("electric")
+    model.source([electric * model._m.cons_from[0]])
+    model._model_hash()
+    assert model._m._component_flux_consumer_plan == ()
+    assert len(native_model_provider_plan(model._m)) == 1
+    _, native, _ = _emit_bricks(model._m, name="ElectricSource")
+    assert "static constexpr int n_flux_providers = 0;" in native
+    assert native.count("static constexpr int n_providers = 1;") == 2
+
+
+def test_native_flux_and_source_read_their_distinct_qualified_inputs() -> None:
+    from pops.codegen._native_model_provider_plan import native_model_provider_plan
+    from pops.codegen.module_codegen import _emit_bricks
+    from tests.python.unit.codegen.test_dsl_brick import _compile_and_run
+
+    model = _distinct_provider_roles_model()
+    _, bricks, composite = _emit_bricks(model._m, name="DistinctRolesOracle")
+    slots = {
+        row["key"]["component"]: row["consumer_slot"]
+        for row in native_model_provider_plan(model._m)
+    }
+    source = r'''
+#include <pops/physics/bricks/bricks.hpp>
+%s
+using Model = %s;
+static_assert(Model::n_providers == 3);
+static_assert(pops::qualified_flux_provider_requirements_valid<Model>());
+struct Storage {
+  pops::ProviderValues<Model::n_providers> values{};
+  pops::Real operator()(const pops::Index<2>&, int slot) const { return values[slot]; }
+};
+int main() {
+  Model model;
+  Model::State state{};
+  state[0] = 2;
+  Storage storage;
+  storage.values[%d] = 3;
+  storage.values[%d] = 5;
+  storage.values[%d] = 7;
+  const auto flux_inputs = pops::bind_flux_providers_at<Model>(storage, pops::Index<2>{});
+  const auto x = model.template flux<0>(state, flux_inputs);
+  const auto y = model.template flux<1>(state, flux_inputs);
+  const auto local = model.source(state, storage.values);
+  return x[0] == -10 && y[0] == 6 && local[0] == 14 ? 0 : 1;
+}
+''' % (bricks, composite, slots["grad_x"], slots["grad_y"], slots["forcing"])
+    _compile_and_run(source, "distinct_provider_roles")
+
+
+def test_native_input_layout_version_invalidates_only_the_model_artifact(monkeypatch) -> None:
+    from pops.codegen import _native_model_provider_plan as provider_layout
+    from pops.codegen._artifact_identity import model_artifact_spec
+
+    model = _distinct_provider_roles_model()
+    options = dict(
+        backend="production", target="system", name="InputLayoutIdentity",
+        compiler="c++", standard="c++20", abi_key="test-native-abi", hoist_reciprocals=False,
+    )
+    semantic, artifact = model_artifact_spec(model._m, **options)
+    monkeypatch.setattr(provider_layout, "NATIVE_MODEL_PROVIDER_CONTRACT", 2)
+    changed_semantic, changed_artifact = model_artifact_spec(model._m, **options)
+    assert semantic == changed_semantic
+    assert artifact != changed_artifact
 
 
 def test_generated_provider_free_brick_declares_zero_native_carrier() -> None:

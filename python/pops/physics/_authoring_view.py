@@ -52,6 +52,33 @@ class _OperatorViewMixin(_HyperbolicModel):
         read = sorted(expanded & aux_set)
         return {"aux": read} if read else {}
 
+    def _source_callback_expressions(self) -> list[Any]:
+        """All formulas emitted on the default source's native provider role."""
+        expressions = list(self._source or ())
+        if self._src_freq is not None:
+            expressions.append(self._src_freq)
+        expressions.extend(expression for row in (self._src_jac or ()) for expression in row)
+        return expressions
+
+    def _stability_callback_expressions(self) -> list[Any]:
+        """Wave and timestep formulas evaluated through the physical-flux role."""
+        expressions = flattened_axis_values(self._eig)
+        if self._wave_speeds is not None:
+            expressions.extend(flattened_axis_values(self._wave_speeds))
+        if self._ws_jacobian is not None and self._ws_jacobian["rows"] is not None:
+            for direction in self._ws_jacobian["rows"]:
+                expressions.extend(expression for row in self._ws_jacobian["rows"][direction]
+                                   for expression in row)
+        if self._roe_rows is not None:
+            expressions.extend(flattened_axis_values(self._roe_rows))
+        if self._roe_jacobian is not None:
+            for direction in self._flux:
+                expressions.extend(expression for row in self._roe_jacobian[direction]
+                                   for expression in row)
+        expressions.extend(expression for expression in (self._stab_speed, self._stab_dt)
+                           if expression is not None)
+        return expressions
+
     def state_space(self, name: str = "U") -> Any:
         """Typed :class:`pops.model.StateSpace` view of the conservative state: its
         components and canonical physical roles. Derived; carries no data."""
@@ -107,21 +134,7 @@ class _OperatorViewMixin(_HyperbolicModel):
         def reads_fields(exprs: Any) -> bool:
             return bool(self._aux_requirements(exprs))
 
-        stability_exprs = flattened_axis_values(self._eig)
-        if self._wave_speeds is not None:
-            stability_exprs.extend(flattened_axis_values(self._wave_speeds))
-        if self._ws_jacobian is not None and self._ws_jacobian["rows"] is not None:
-            for direction in self._ws_jacobian["rows"]:
-                stability_exprs.extend(
-                    expression for row in self._ws_jacobian["rows"][direction] for expression in row
-                )
-        if self._roe_rows is not None:
-            stability_exprs.extend(flattened_axis_values(self._roe_rows))
-        if self._roe_jacobian is not None:
-            for direction in self._flux:
-                stability_exprs.extend(
-                    expression for row in self._roe_jacobian[direction] for expression in row
-                )
+        stability_exprs = self._stability_callback_expressions()
 
         # Flux divergence (grid_operator: State -> Rate(State)).
         if self._flux:
@@ -177,7 +190,8 @@ class _OperatorViewMixin(_HyperbolicModel):
 
         # Local sources (local_source: State[, Fields] -> Rate(State)).
         if self._source is not None:
-            rf = reads_fields(self._source)
+            source_exprs = self._source_callback_expressions()
+            rf = reads_fields(source_exprs)
             reg.register(
                 _model.Operator(
                     "source_default",
@@ -191,7 +205,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                         "supports_device": True,
                         "default": True,
                     },
-                    requirements=self._aux_requirements(self._source),
+                    requirements=self._aux_requirements(source_exprs),
                     lowering={"source": "default"},
                     source=None,
                     body=freeze_symbolic_metadata(self._source),

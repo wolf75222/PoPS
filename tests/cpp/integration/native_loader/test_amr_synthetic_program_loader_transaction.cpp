@@ -298,12 +298,14 @@ extern "C" void pops_install_program_amr(
           auto& accepted = context->state(0);
           auto& candidate = context->scratch_state(1000, 0, accepted);
           auto& explicit_rate = context->rhs_scratch(2000, 0, accepted);
-          context->neg_div_flux_default_into(0, accepted, explicit_rate, 3000);
+          const bool source_only = context->macro_step() >= 3;
+          if (!source_only)
+            context->neg_div_flux_default_into(0, accepted, explicit_rate, 3000);
           context->lincomb(candidate, pops::Real(1), accepted, pops::Real(0), accepted);
           // Materialize ten independent, authenticated default-flux bases. The dyadic weights
           // sum exactly to one, so this decimal-boundary capacity witness preserves the fixture's
           // physical update while forcing identities 1 through 10 into the live expression.
-          for (int basis = 0; basis < 10; ++basis) {
+          for (int basis = 0; !source_only && basis < 10; ++basis) {
             auto& rate = basis == 0 ? explicit_rate
                                     : context->rhs_scratch(2000 + basis, 0, accepted);
             if (basis != 0)
@@ -483,6 +485,8 @@ TEST(test_amr_synthetic_program_loader_transaction,
   ASSERT_EQ(continuous.n_levels(), 2);
   ASSERT_GT(continuous.n_patches(), 0);
   EXPECT_EQ(continuous.installed_program_hash(), kSyntheticLoaderProgramHash);
+  EXPECT_TRUE(continuous.program_flux_ledger_manifest().empty());
+  EXPECT_TRUE(continuous.program_sync_manifest().empty());
   const auto& budget = continuous.prepared_amr_program_flux_expression_budget();
   EXPECT_EQ(budget.program_hash, kSyntheticLoaderProgramHash);
   ASSERT_EQ(budget.blocks.size(), 1u);
@@ -556,4 +560,46 @@ TEST(test_amr_synthetic_program_loader_transaction,
             max_departure_from_equilibrium(fine_interior_first));
   EXPECT_EQ(continuous.macro_step(), 3);
   EXPECT_DOUBLE_EQ(continuous.time(), 3.0 * dt);
+
+  const auto before_regrid = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+      continuous.program_accepted_state());
+  ASSERT_TRUE(before_regrid.face_evidence_provenance);
+  const auto recorded_boxes = continuous.patch_boxes();
+  std::vector<int> recorded_owners(recorded_boxes.size(), -1);
+  continuous.rebuild_hierarchy(recorded_boxes, recorded_owners);
+  const auto same_geometry = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+      continuous.program_accepted_state());
+  EXPECT_EQ(same_geometry.face_evidence_provenance, before_regrid.face_evidence_provenance);
+  EXPECT_EQ(same_geometry.accepted_face_flux[0].size(), before_regrid.accepted_face_flux[0].size());
+  EXPECT_EQ(same_geometry.synchronization_events.size(),
+            before_regrid.synchronization_events.size());
+  for (int axis = 0; axis < Dim; ++axis) {
+    ASSERT_EQ(same_geometry.accepted_face_flux[axis].size(),
+              before_regrid.accepted_face_flux[axis].size());
+    for (std::size_t index = 0; index < before_regrid.accepted_face_flux[axis].size(); ++index) {
+      EXPECT_EQ(same_geometry.accepted_face_flux[axis][index].key,
+                before_regrid.accepted_face_flux[axis][index].key);
+      EXPECT_EQ(same_geometry.accepted_face_flux[axis][index].payload,
+                before_regrid.accepted_face_flux[axis][index].payload);
+    }
+  }
+
+  continuous.rebuild_hierarchy({}, {});
+  ASSERT_EQ(continuous.n_levels(), 1);
+  const auto removed_child = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+      continuous.program_accepted_state());
+  EXPECT_EQ(removed_child.face_evidence_provenance, before_regrid.face_evidence_provenance);
+  EXPECT_EQ(removed_child.face_evidence_provenance->level_count, 2u);
+  EXPECT_EQ(removed_child.level_clocks.size(), 1u);
+  EXPECT_EQ(removed_child.accepted_face_flux[0].size(), before_regrid.accepted_face_flux[0].size());
+
+  // The fourth accepted step evaluates only the genuine implicit source. Historic transport
+  // fragments must disappear, rather than being mistaken for this new step's numerical input.
+  continuous.step(dt);
+  const auto source_only = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+      continuous.program_accepted_state());
+  for (const auto& fragments : source_only.accepted_face_flux)
+    EXPECT_TRUE(fragments.empty());
+  EXPECT_TRUE(source_only.synchronization_events.empty());
+  EXPECT_FALSE(source_only.face_evidence_provenance);
 }

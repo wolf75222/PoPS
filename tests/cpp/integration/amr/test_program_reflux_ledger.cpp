@@ -225,7 +225,37 @@ void prove_ranked_reflux_and_checkpoint() {
   const std::vector<std::uint8_t> bytes = program::serialize_amr_program_accepted_state(accepted);
   const auto decoded = program::deserialize_amr_program_accepted_state<Dim>(bytes);
   EXPECT_EQ(program::serialize_amr_program_accepted_state(decoded), bytes);
+  ASSERT_TRUE(decoded.face_evidence_provenance);
+  EXPECT_EQ(decoded.face_evidence_provenance->spatial_contract, runtime.spatial_contract());
+  EXPECT_EQ(decoded.face_evidence_provenance->level_count, 2u);
   EXPECT_NO_THROW(program::require_live_amr_program_checkpoint(decoded, runtime));
+
+  // V4 ends immediately before the optional V5 origin suffix. Its evidence belonged to the
+  // envelope geometry, so upgrade that exact old image without changing the accepted payload.
+  std::vector<std::uint8_t> legacy = bytes;
+  legacy.resize(legacy.size() - (5 * sizeof(std::uint64_t) +
+                                 decoded.face_evidence_provenance->spatial_contract.size()));
+  legacy[7] = '4';
+  const auto upgraded = program::deserialize_amr_program_accepted_state<Dim>(legacy);
+  EXPECT_EQ(upgraded.face_evidence_provenance, decoded.face_evidence_provenance);
+  EXPECT_EQ(program::serialize_amr_program_accepted_state(upgraded), bytes);
+
+  // Regridding can remove the former child. Historical contributions remain tied to their
+  // original two-level geometry, while the new accepted envelope describes one live level.
+  auto remapped = decoded;
+  remapped.spatial_contract = "new-single-level-geometry";
+  ++remapped.topology_epoch;
+  ++remapped.materialization_generation;
+  remapped.level_clocks.resize(1);
+  remapped.synchronization_events.push_back({0, 1, 0, "reflux", {0, 3, {0, 1}, 3.0}});
+  const auto historical = program::deserialize_amr_program_accepted_state<Dim>(
+      program::serialize_amr_program_accepted_state(remapped));
+  EXPECT_EQ(historical.face_evidence_provenance, decoded.face_evidence_provenance);
+  EXPECT_EQ(historical.level_clocks.size(), 1u);
+  EXPECT_EQ(historical.accepted_face_flux[0].size(), decoded.accepted_face_flux[0].size());
+  remapped.face_evidence_provenance->level_count = 1;
+  EXPECT_THROW((void)program::serialize_amr_program_accepted_state(remapped),
+               std::invalid_argument);
 
   auto restored = program::restore_amr_program_face_flux_ledger(
       decoded, reflux::FaceFluxLedgerBudget{256, 256, 4});

@@ -24,7 +24,6 @@ Runs BOTH as a script (``python3 test_board_multispecies.py``, the CI-style invo
 pytest (the test_* functions take no args and importorskip pops.time / pops.physics).
 """
 from pops.codegen.program_codegen import emit_cpp_program
-import re
 
 import pytest
 
@@ -32,6 +31,7 @@ adctime = pytest.importorskip("pops.time")
 physics = pytest.importorskip("pops.physics")
 from pops import model  # noqa: E402
 from pops._ir.expr import Var  # noqa: E402
+from pops._ir.quantity import QuantityRef  # noqa: E402
 from pops.descriptors import Descriptor  # noqa: E402
 from pops.fields import (  # noqa: E402
     FieldDiscretization,
@@ -92,7 +92,8 @@ def _two_fluid_board():
 def _two_fluid_handwritten():
     """The operator-first reference the two-fluid board must match (test_coupled_rate shape)."""
     mod = model.Module("two_fluid")
-    e = mod.state_space("electron_state", ("ne", "mex", "mey"))
+    e = mod.state_space("electron_state", ("ne", "mex", "mey"),
+                        roles={name: name for name in ("ne", "mex", "mey")})
     i = mod.state_space("ion_state", ("ni", "mix", "miy"))
     bundle = model.RateBundle({"electron_state": model.Rate(e), "ion_state": model.Rate(i)})
     ne = mod.state_symbols(e)[0]
@@ -194,12 +195,12 @@ def test_raw_multi_input_field_provider_is_rejected_by_module_lowering():
 
 def test_state_handle_indexes_by_component_name():
     m, e, _i, _n = _three_fluid_board()
-    # e["ne"] is the conservative Var of that component (the board access of section 12.3/16),
-    # qualified by StateSpace ownership. Var has no Boolean __eq__ (== builds an expression),
-    # so compare it to the canonical Module coordinate by name + kind.
+    # The Board and canonical Module retain the same qualified scientific coordinate.
     ne = e["ne"]
     canonical = m.module.state_symbols(m.module.state_spaces()[e.name])[0]
-    assert isinstance(ne, Var) and ne.name == canonical.name and ne.kind == "cons"
+    assert isinstance(ne, QuantityRef)
+    assert ne.handle == canonical.handle and ne.space == canonical.space
+    assert ne.index == canonical.index
     with pytest.raises(KeyError):
         _ = e["not_a_component"]
 
@@ -227,14 +228,7 @@ def test_board_two_fluid_emits_identical_cpp_to_handwritten():
     bsrc = emit_cpp_program(_two_fluid_program(
         bm.module, board_spaces[be.name], board_spaces[bi.name]), model=None)
     hsrc = emit_cpp_program(_two_fluid_program(hmod, he, hi), model=None)
-    # Independently authored Cases carry distinct temporal authorities. Isolate only
-    # their authenticated Program hash; every route, provider and kernel byte must match.
-    hash_line = r'extern "C" const char\* pops_program_hash\(\) \{ return "([0-9a-f]{64})"; \}'
-    board_hashes, handwritten_hashes = re.findall(hash_line, bsrc), re.findall(hash_line, hsrc)
-    assert len(board_hashes) == len(handwritten_hashes) == 1
-    assert board_hashes != handwritten_hashes
-    assert re.sub(hash_line, "AUTHENTICATED_PROGRAM_HASH", bsrc) == re.sub(
-        hash_line, "AUTHENTICATED_PROGRAM_HASH", hsrc)
+    assert bsrc == hsrc
     # One shared multi-state kernel binds both exact input state coordinates.
     assert bsrc.count("pops::for_each_cell") == 1
     assert "pops_input_0_component_0" in bsrc
@@ -253,12 +247,12 @@ def test_same_physical_component_name_needs_no_species_rename():
             ions: [electrons["density"] - ions["density"]],
         },
     )
-    assert electrons["density"].name != ions["density"].name
+    assert electrons["density"].qualified_id != ions["density"].qualified_id
     spaces = model_.module.state_spaces()
     source = emit_cpp_program(_two_fluid_program(
         model_.module, spaces["electron_state"], spaces["ion_state"]), model=None)
-    assert electrons["density"].name in source
-    assert ions["density"].name in source
+    assert "pops_input_0_component_0" in source
+    assert "pops_input_1_component_0" in source
 
 
 def test_arbitrary_arity_four_inputs():

@@ -13,16 +13,46 @@ from pops.codegen._orchestration_compile import build_program_model_graph
 from pops.codegen.lowering_coverage import LoweringRejection
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.layouts import Uniform
+from pops.numerics import DiscretizationPlan, FiniteVolume
+from pops.numerics.reconstruction import FirstOrder
+from pops.numerics.riemann import Rusanov
+from pops.numerics.variables import Conservative
 from pops.physics._facade import Model
 from pops.time import FixedDt
 from tests.python.support.layout_plan import cartesian_grid
 
 
-def _resolved(*, foreign=False, changed=False, runtime=False, guarded=False, provider=False):
+def _typed_source_model(name, guarded):
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    from pops.math import ddt, div
+
+    frame = Rectangle("unit-square", lower=(0, 0), upper=(1, 1)).frame(Cartesian2D())
+    physical = pops.Model(name, frame=frame)
+    state = physical.state("U", components=("u",))
+    u, = state
+    flux = physical.flux("F", frame=frame, state=state,
+                         components={frame.x: (0 * u,), frame.y: (0 * u,)},
+                         waves={frame.x: (0,), frame.y: (0,)})
+    rate = physical.rate("transport", equation=ddt(state) == -div(flux))
+    physical.source("decay", on=state, value=(1 / u if guarded else -2 * u,))
+    physical.source("alternate", on=state, value=(0 * u if guarded else -3 * u,))
+    numerics = DiscretizationPlan()
+    numerics.rates.add(rate, FiniteVolume(flux=flux, variables=Conservative(state),
+                                       reconstruction=FirstOrder(), riemann=Rusanov()))
+    return (physical, physical.module.operator_handle("decay"),
+            physical.module.operator_handle("alternate"), numerics)
+
+
+def _resolved(*, foreign=False, changed=False, runtime=False, guarded=False, provider=False,
+              typed=False):
     def model(name):
         physical = Model(name)
         u, = physical.conservative_vars("u")
+        physical.primitive_vars(u=u)
+        physical.conservative_from([u])
         physical.flux(x=[0 * u], y=[0 * u])
+        physical.wave_speeds(x=(0 * u, 0 * u), y=(0 * u, 0 * u))
         coefficient = -2
         if runtime:
             from pops.params import RuntimeParam
@@ -32,17 +62,19 @@ def _resolved(*, foreign=False, changed=False, runtime=False, guarded=False, pro
             expression = expression + physical.aux("forcing")
         source = physical.source_term("decay", [expression])
         alternate = physical.source_term("alternate", [0 * u if guarded else -3 * u])
-        return physical, source, alternate
+        return physical, source, alternate, None
 
-    first = model("shared_decay")
+    first = _typed_source_model("shared_decay", guarded) if typed else model("shared_decay")
     second = model("foreign_decay") if foreign else first
     case = pops.Case("shared_source_implementations")
     program = pops.Program("shared_source_step")
     for index, (name, declarations) in enumerate((("left", first), ("right", second))):
-        physical, source, alternate = declarations
+        physical, source, alternate, numerics = declarations
         module = physical.module
         program._bind_operators(module)
         block = case.block(name, physical)
+        if numerics is not None:
+            case.numerics(numerics, block=block)
         state = program.state(block[module.state_handle(module.state_spaces()["U"])])
         if guarded:
             rhs = program.branch(
@@ -237,7 +269,7 @@ def test_native_shared_source_helper_preserves_two_block_updates(record_property
     missing = missing_compiler_requirement(include)
     if missing:
         require_native_or_skip(missing, optional_skip=pytest.skip)
-    resolved = _resolved(guarded=guarded)
+    resolved = _resolved(guarded=guarded, typed=True)
     implementation_count = 2 if guarded else 1
     assert len(_definitions(_source(resolved))) == implementation_count
     start = time.perf_counter()

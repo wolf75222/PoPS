@@ -20,6 +20,7 @@ from pops.codegen._compiled_artifact import (
 )
 from pops.identity import Identity, make_identity
 from pops.model import Handle, OwnerPath
+from pops.model.ownership import OwnerKind
 from pops.output import (
     AsyncScientificOutput,
     LiveVisualization,
@@ -443,10 +444,20 @@ def _with_graph(
     parallel_mode = _scientific_output_mode(base.artifact)
     if isinstance(output_format, type):
         output_format = output_format(parallel_mode)
-    layout = base.artifact.layout_plan.layouts[0].handle
+    (assignment,) = tuple(
+        row for row in base.artifact.layout_plan.assignments if row.subject_kind == "block"
+    )
+    layout = assignment.layout
+    block = assignment.subject
+    declaration = Handle("rho", kind="state", owner=OwnerPath.model("adc-687"))
+    state = declaration._with_owner(
+        block.owner_path.child(OwnerKind.BLOCK, block.local_id).instance_of(declaration.owner_path),
+        declaration_ref=declaration,
+        block_ref=block,
+    )
     clock = Clock("solution", owner=OwnerPath.consumer("adc-687"))
     quantity = ConsumerQuantity(
-        Handle("rho", kind="state", owner=OwnerPath.model("adc-687")),
+        state,
         "state:u",
         layout.qualified_id,
     )

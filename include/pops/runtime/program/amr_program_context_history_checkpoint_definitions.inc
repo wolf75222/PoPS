@@ -16,6 +16,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
         cell_temporal_configuration_(owner.cell_temporal_configuration_),
         accepted_flux_budget_contract_(owner.accepted_flux_budget_contract_),
         accepted_coupling_contract_(owner.accepted_coupling_contract_),
+        accepted_face_evidence_provenance_(owner.accepted_face_evidence_provenance_),
         accepted_face_flux_(owner.accepted_face_flux_),
         interface_flux_ledger_(
             std::make_unique<interface_flux_ledger_type>(*owner.interface_flux_ledger_)),
@@ -37,6 +38,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
         cell_temporal_configuration_(accepted.cell_temporal_configuration_),
         accepted_flux_budget_contract_(accepted.accepted_flux_budget_contract_),
         accepted_coupling_contract_(accepted.accepted_coupling_contract_),
+        accepted_face_evidence_provenance_(accepted.accepted_face_evidence_provenance_),
         accepted_face_flux_(accepted.accepted_face_flux_),
         interface_flux_ledger_(
             std::make_unique<interface_flux_ledger_type>(*accepted.interface_flux_ledger_)),
@@ -57,6 +59,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
     static_assert(std::is_nothrow_swappable_v<decltype(cell_temporal_configuration_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(accepted_flux_budget_contract_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(accepted_coupling_contract_)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(accepted_face_evidence_provenance_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(accepted_face_flux_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(interface_flux_ledger_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(accepted_synchronization_events_)>);
@@ -77,6 +80,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
     owner_->hierarchy_tensor_materialization_generation_ =
         std::numeric_limits<std::uint64_t>::max();
     owner_->multiblock_subcycling_.reset();
+    owner_->multiblock_subcycling_has_accepted_step_ = false;
     owner_->multiblock_subcycling_epoch_ = std::numeric_limits<std::uint64_t>::max();
     owner_->multiblock_subcycling_generation_ = std::numeric_limits<std::uint64_t>::max();
     owner_->multiblock_subcycling_program_budget_contract_.swap(discarded_subcycling_contract_);
@@ -84,6 +88,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
     std::swap(owner_->cell_temporal_configuration_, cell_temporal_configuration_);
     owner_->accepted_flux_budget_contract_.swap(accepted_flux_budget_contract_);
     owner_->accepted_coupling_contract_.swap(accepted_coupling_contract_);
+    owner_->accepted_face_evidence_provenance_.swap(accepted_face_evidence_provenance_);
     std::swap(owner_->accepted_face_flux_, accepted_face_flux_);
     owner_->interface_flux_commit_guard_.reset();
     owner_->interface_flux_ledger_.swap(interface_flux_ledger_);
@@ -111,6 +116,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
   std::optional<CellTemporalConfiguration> cell_temporal_configuration_;
   std::string accepted_flux_budget_contract_;
   std::string accepted_coupling_contract_;
+  std::optional<AmrProgramFaceEvidenceProvenance> accepted_face_evidence_provenance_;
   std::array<std::vector<::pops::amr::reflux::FaceFluxFragment<Dim, AmrProgramFacePayload>>, Dim>
       accepted_face_flux_;
   std::unique_ptr<interface_flux_ledger_type> interface_flux_ledger_;

@@ -115,7 +115,7 @@ double max_difference(const std::vector<double>& first, const std::vector<double
 }
 
 std::vector<pops::runtime::system::AuxiliaryComponentKey> install_field_outputs(
-    NativeSystem& system, const std::string& owner, const std::string& field) {
+    NativeSystem& system, const std::string& owner, const std::string& field, bool seal = true) {
   using namespace pops::runtime::system;
   AuxiliaryStorageShape<Dim> shape;
   for (int axis = 0; axis < Dim; ++axis)
@@ -136,7 +136,8 @@ std::vector<pops::runtime::system::AuxiliaryComponentKey> install_field_outputs(
       {AuxiliaryEvaluationEvent::before_field_solve, AuxiliaryFreshness::evaluation},
       std::move(outputs),
       {}});
-  system.seal_auxiliary_providers();
+  if (seal)
+    system.seal_auxiliary_providers();
   return keys;
 }
 
@@ -146,6 +147,79 @@ std::vector<double> periodic_faces(double value) {
 
 std::vector<std::string> periodic_kinds() {
   return std::vector<std::string>(static_cast<std::size_t>(2 * Dim), "periodic");
+}
+
+struct NativeLoad {
+  std::string key;
+  pops::Real scale;
+};
+
+void stage_charge_package(
+    NativeSystem& system, const std::string& block,
+    const std::vector<pops::runtime::system::AuxiliaryComponentKey>& outputs,
+    const std::vector<NativeLoad>& loads) {
+  using namespace pops::runtime::system;
+  system.install_block_state_route(block, "test.coupled-fieldsolve/" + block + "/state@1");
+  auto capability = std::make_shared<NativePackageCapabilityState<Dim>>();
+  capability->identity = block;
+  auto installer = NativePackageCapabilityFactory<Dim>::block_installer(capability);
+  system.stage_prepared_native_package(
+      "test.named-load-package/" + block,
+      [capability] {
+        capability->phase = NativeCapabilityPhase::routes_open;
+        capability->close_routes();
+      },
+      [capability, installer, block, outputs, loads] {
+        capability->phase = NativeCapabilityPhase::install_open;
+        ChargeModel model{};
+        model.hyp = pops::nd::ScalarAdvection<Dim>::prepare(pops::RealVector<Dim>{});
+        model.ell.q = pops::Real(1);
+        PreparedNativeSystemPackage<Dim> package;
+        package.consumer_qid = block;
+        package.block = pops::prepare_compiled_system_block<Dim>(
+            *installer, block, block, std::move(model), "minmod", "rusanov", "conservative",
+            "explicit", static_cast<double>(pops::kPhysicalDefaultGamma), 1, true, 1);
+        for (const auto& load : loads) {
+          package.elliptic_attachments.push_back({
+              load.key, "test.native-rhs/" + block + "/" + load.key,
+              load.key == "fields_from_state" ? std::vector<AuxiliaryComponentKey>{} : outputs,
+              1, [scale = load.scale](const NativeField& state, NativeField& rhs) {
+                pops::add_scaled_component(state, scale, 0, rhs);
+              }});
+        }
+        installer->commit(std::move(package));
+      },
+      capability, capability);
+}
+
+NativeSystem named_load_system(int cells, const std::vector<std::string>& keys,
+                               const std::vector<double>& coefficients,
+                               const std::vector<NativeLoad>& attachments) {
+  NativeSystem system(config(cells));
+  install_execution_lane(system);
+  const auto outputs = install_field_outputs(system, "test.exact-load-output", "potential", false);
+  stage_charge_package(system, "first", outputs, attachments);
+  const std::string slot = "test.exact-load-plan";
+  system.register_configured_field_solver_provider(
+      "cartesian_cg", slot,
+      {"pops.system.cartesian-cg-options@1",
+       {{"abs_tol", 0.0}, {"max_iterations", std::int64_t{200}}, {"rel_tol", 1.0e-8}}});
+  std::vector<std::string> identities;
+  for (const auto& key : keys)
+    identities.push_back("test.resolved-provider/" + key);
+  system.set_field_solver_plan(slot, "test.exact-load.plan@1", "test.exact-load.provider@1",
+                               "test.exact-load-output", "first", "potential", identities,
+                               std::vector<std::string>(keys.size(), "first"), keys,
+                               coefficients, slot);
+  system.set_field_topology_authority(slot, "builtin_rectangular_cell_graph_v1",
+                                      "test.periodic-cartesian", "test.periodic-cartesian.v1");
+  system.set_field_boundary_plan(slot, periodic_kinds(), periodic_faces(0.0), periodic_faces(0.0),
+                                 periodic_faces(0.0));
+  system.set_field_nullspace(
+      slot, "pops.field-nullspace.operator-topology-derived",
+      {"pops.field-nullspace.operator-topology-derived.options@1", {{"gauge.value", 0.0}}});
+  system.register_elliptic_field("first", "potential", outputs, 1);
+  return system;
 }
 
 }  // namespace
@@ -280,4 +354,63 @@ TEST(test_coupled_fieldsolve,
       << "the named prepared plan must consume both qualified simultaneous stage slots";
   EXPECT_EQ(system.density("first"), first);
   EXPECT_EQ(system.density("second"), second);
+}
+
+TEST(test_coupled_fieldsolve, native_load_keys_use_the_case_output_and_each_exact_coefficient) {
+  constexpr int cells = 24;
+  const auto density = charge_density(cells, 1.0, 0.0);
+  auto system = named_load_system(cells, {"load-a", "load-b"}, {2.0, -0.5},
+                                  {{"load-a", pops::Real(3)}, {"load-b", pops::Real(5)}});
+  ASSERT_NO_THROW(system.finalize_native_packages());
+  system.set_density("first", density);
+  auto reference = named_load_system(cells, {"combined-load"}, {1.0},
+                                     {{"combined-load", pops::Real(3.5)}});
+  ASSERT_NO_THROW(reference.finalize_native_packages());
+  reference.set_density("first", density);
+  const std::string slot = "test.exact-load-plan";
+  const auto report = pops::consume_solve_outcome(system.solve_fields_from_blocks(
+      slot, std::vector<const NativeField*>{&system.block_state(0)}));
+  const auto reference_report = pops::consume_solve_outcome(reference.solve_fields_from_blocks(
+      slot, std::vector<const NativeField*>{&reference.block_state(0)}));
+  ASSERT_TRUE(report.solved()) << report.reason;
+  ASSERT_TRUE(reference_report.solved()) << reference_report.reason;
+  const auto potential = system.field_potential_global(slot);
+  EXPECT_LE(max_difference(potential, reference.field_potential_global(slot)), 1.0e-11);
+  EXPECT_GT(max_difference(potential, std::vector<double>(potential.size(), 0.0)), 1.0e-5);
+  EXPECT_THROW((void)system.field_potential_global("load-a"), std::exception);
+  EXPECT_THROW((void)system.field_potential_global("load-b"), std::exception);
+}
+
+TEST(test_coupled_fieldsolve, native_output_alias_requires_one_exact_provider_on_its_block) {
+  auto supported = named_load_system(24, {"electron-load"}, {2.0},
+                                     {{"potential", pops::Real(1)}});
+  EXPECT_NO_THROW(supported.finalize_native_packages());
+  auto ambiguous = named_load_system(24, {"load-a", "load-b"}, {2.0, -0.5},
+                                     {{"potential", pops::Real(1)}});
+  EXPECT_THROW(ambiguous.finalize_native_packages(), std::exception);
+  EXPECT_THROW((void)ambiguous.block_state(0), std::exception);
+}
+
+TEST(test_coupled_fieldsolve, native_missing_and_foreign_loads_reject_before_block_publication) {
+  auto missing = named_load_system(24, {"load-a", "load-b"}, {2.0, -0.5},
+                                   {{"load-a", pops::Real(1)}});
+  EXPECT_THROW(missing.finalize_native_packages(), std::exception);
+  EXPECT_THROW((void)missing.block_state(0), std::exception);
+  auto foreign = named_load_system(24, {"load-a"}, {2.0},
+                                   {{"foreign-load", pops::Real(1)}});
+  EXPECT_THROW(foreign.finalize_native_packages(), std::exception);
+  EXPECT_THROW((void)foreign.block_state(0), std::exception);
+}
+
+TEST(test_coupled_fieldsolve, native_default_poisson_attachment_retains_its_prepared_block_rhs) {
+  NativeSystem system(config(24));
+  install_execution_lane(system);
+  stage_charge_package(system, "first", {}, {{"fields_from_state", pops::Real(1)}});
+  ASSERT_NO_THROW(system.finalize_native_packages());
+  system.set_poisson("charge_density", "cartesian_cg");
+  system.set_density("first", charge_density(24, 1.0, 0.0));
+  const auto report = pops::consume_solve_outcome(system.solve_fields());
+  ASSERT_TRUE(report.solved()) << report.reason;
+  const auto potential = system.potential();
+  EXPECT_GT(max_difference(potential, std::vector<double>(potential.size(), 0.0)), 1.0e-5);
 }

@@ -200,24 +200,25 @@ def test_named_flux_rate_contract_retains_the_exact_ordered_operator_pack() -> N
             reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov(),
         )
 
+    numerics = _numerical_plan(module, state, whole_rate, split_rate)
     case, _, _ = _program(
-        module, state, whole_rate, name="ordered-flux-contract",
-        numerics=_numerical_plan(module, state, whole_rate, split_rate),
+        module, state, whole_rate, name="ordered-flux-contract", numerics=numerics,
     )
     frame = Rectangle(
         "ordered-flux-contract-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
     ).frame(Cartesian2D())
-    resolved = pops.resolve(
-        pops.validate(case),
-        layout=Uniform(CartesianGrid(
-            frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes))),
-    )
-    methods = {
-        row.rate.local_id: row.method.to_data()
-        for row in resolved.blocks[0].numerics.rates
-    }
-    assert [item["local_id"] for item in methods["split_rate"]["flux"]] == [
-        "convective", "pressure"]
+    # The retained named-RHS route is a centered divergence. An authored FV
+    # descriptor must not silently relabel that native implementation.
+    from pops.codegen.lowering_coverage import LoweringRejection
+    with pytest.raises(LoweringRejection) as error:
+        pops.resolve(
+            pops.validate(case),
+            layout=Uniform(CartesianGrid(
+                frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes))),
+        )
+    assert error.value.gate == "numerical_method_realization_mismatch"
+    methods = {rate.local_id: method for rate, method in numerics.rates.items()}
+    assert methods["split_rate"].flux == split["flux"]
 
 
 @pytest.mark.compiler

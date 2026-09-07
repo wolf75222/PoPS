@@ -30,6 +30,10 @@ struct ClusterOptions {
   std::array<int, Dim> min_box_size{};
   std::array<int, Dim> max_box_size{};
   ClusterWorkBudget budget{};
+  // Guaranteed padding in parent cells. Periodic images provide padding across domain faces;
+  // physical faces truncate it. The accepted parent patch union owns all other padding.
+  std::array<int, Dim> nesting_buffer{};
+  std::array<bool, Dim> periodic_axes{};
 
   bool operator==(const ClusterOptions&) const = default;
 };

@@ -77,7 +77,8 @@ def _typed_lowering_roles(state: Any) -> list[Any] | None:
     return None if all(role is None for role in result) else result
 
 
-def _module_to_model(module: Any, state_space: Any = None) -> Any:
+def _module_to_model(module: Any, state_space: Any = None,
+                     *, resolved_operations: Any = None) -> Any:
     """Lower a :class:`pops.model.Module` to a :class:`pops.dsl.Model`
     (Spec 2, S2-11), reusing the dsl codegen engine -- a translation, NOT a
     second backend.  The Module's typed operators carry dsl ``Expr`` bodies;
@@ -124,7 +125,15 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
         resolve_component_provider_packs,
     )
 
-    provider_packs = resolve_component_provider_packs(module)
+    if resolved_operations is None:
+        provider_packs = resolve_component_provider_packs(module)
+    else:
+        from pops.codegen.resolved_operations import ResolvedOperationPlan
+
+        if type(resolved_operations) is not ResolvedOperationPlan:
+            raise TypeError("compiler requires an exact resolved operation plan")
+        provider_packs = resolved_operations.require_provider_packs(module)
+        object.__setattr__(m, "_resolved_operations", resolved_operations)
     m.__pops_bind_component_provider_packs__(provider_packs)
     # The facade is a lowering view of THIS Module, not a newly declared model. Re-anchor its empty
     # backing model before the first declaration so every derived operator registry retains the
@@ -482,16 +491,17 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
             for operation in resolved_operations.operations:
                 if "program_evaluation" in operation.guarantees:
                     resolved_operations.require_native(operation.identity, module=lowering.source_module)
-        lowering.bind_component_provider_packs(packs)
         states = lowering.source_module.state_spaces()
         if len(states) > 1:
+            # Each selected state/evaluation gets a fresh compiler view. Bind its
+            # authenticated plan once, without changing the shared multi-state
+            # authoring facade or first attaching a different default pack.
             emit_model = _module_to_model(
-                lowering.source_module, state_space=state_space)
-            emit_model.__pops_bind_component_provider_packs__(packs)
-            if resolved_operations is not None:
-                object.__setattr__(emit_model, "_resolved_operations", resolved_operations)
+                lowering.source_module, state_space=state_space,
+                resolved_operations=resolved_operations)
             emit_model.check()
             return emit_model, lowering.source_module
+        lowering.bind_component_provider_packs(packs)
         if resolved_operations is not None:
             object.__setattr__(lowering.emit_model, "_resolved_operations", resolved_operations)
         lowering.emit_model.check()

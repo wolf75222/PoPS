@@ -283,8 +283,9 @@ def _local_linear_signature(signature: Signature) -> None:
 
 def _projection_signature(signature: Signature) -> None:
     _require(
-        len(signature.inputs) == 1 and isinstance(signature.inputs[0], StateSpace),
-        "expected (StateSpace,) -> the same StateSpace",
+        len(signature.inputs) in (1, 2) and isinstance(signature.inputs[0], StateSpace)
+        and (len(signature.inputs) == 1 or isinstance(signature.inputs[1], FieldSpace)),
+        "expected (StateSpace[, FieldSpace]) -> the same StateSpace",
     )
     _require(signature.output == signature.inputs[0],
              "projection output must equal its StateSpace input")
@@ -355,7 +356,7 @@ OPERATOR_SIGNATURE_CONTRACTS = MappingProxyType({
     "local_transform": SignatureContract(
         "(State[, Fields]) -> State", _local_transform_signature),
     "projection": SignatureContract(
-        "(State,) -> State", _projection_signature),
+        "(State[, Fields]) -> State", _projection_signature),
     "coupled_rate": SignatureContract(
         "(State, State, ...) -> RateBundle", _coupled_rate_signature),
     "matrix_free_operator": SignatureContract(

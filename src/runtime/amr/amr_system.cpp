@@ -1066,8 +1066,12 @@ amr::tagging::ClusterOptions<Dim> exact_cluster_options(
       checked_size_product(std::max<std::size_t>(cells, 1), static_cast<std::size_t>(2 * Dim),
                            "AMR clustering recursion budget exceeds size_t"),
       1, "AMR clustering recursion budget exceeds size_t");
-  const std::size_t visits = checked_size_product(
-      std::max<std::size_t>(cells, 1), nodes, "AMR clustering cell-visit budget exceeds size_t");
+  const std::size_t coverage_visits = checked_size_product(
+      patches, std::size_t{1} << Dim, "AMR nesting coverage budget exceeds size_t");
+  const std::size_t visits =
+      checked_size_product(checked_size_sum(std::max<std::size_t>(cells, 1), coverage_visits,
+                                            "AMR clustering per-node budget exceeds size_t"),
+                           nodes, "AMR clustering cell-visit budget exceeds size_t");
   if (visits > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()))
     throw std::length_error("AMR clustering cell-visit budget exceeds exact signed counters");
   const auto add_identity = [](std::size_t total, std::size_t count, std::size_t width) {
@@ -4702,7 +4706,8 @@ struct AmrSystem<Dim>::Impl {
   std::string source_accepted_state_authority_contract(
       const runtime::program::AmrProgramAcceptedState<Dim>& state,
       const std::vector<std::vector<int>>& source_level_owners,
-      const std::vector<std::string>& source_level_modes, int source_rank_count) const {
+      const std::vector<std::string>& source_level_modes, int source_rank_count,
+      std::span<const std::uint8_t> authenticated_source_wire = {}) const {
     const auto& artifact = require_prepared_program_flux_expression_budget();
     if (source_rank_count < 1)
       throw std::invalid_argument(
@@ -4714,8 +4719,13 @@ struct AmrSystem<Dim>::Impl {
         source_level_modes.size() != state.level_clocks.size())
       throw std::invalid_argument(
           "AMR Program source authority topology differs from its accepted hierarchy depth");
+    // Verify a legacy checkpoint against the exact wire that was sealed at capture; upgrading
+    // its decoded face-evidence provenance must not change that source authentication digest.
     const std::vector<std::uint8_t> serialized =
-        runtime::program::serialize_amr_program_accepted_state(state);
+        authenticated_source_wire.empty()
+            ? runtime::program::serialize_amr_program_accepted_state(state)
+            : std::vector<std::uint8_t>(authenticated_source_wire.begin(),
+                                        authenticated_source_wire.end());
     ExactContractBuilder authority;
     authority.text("pops.amr-program.accepted-source-authority")
         .scalar(std::uint32_t{2})
@@ -8975,6 +8985,43 @@ struct AmrSystem<Dim>::Impl {
     return std::move(*result);
   }
 
+  amr::tagging::ClusterOptions<Dim> nested_cluster_options(int parent_level) const {
+    const std::size_t level = static_cast<std::size_t>(parent_level);
+    const auto& parent = engine->hierarchy().layout(level);
+    auto options = exact_cluster_options(cfg, parent);
+    for (int axis = 0; axis < Dim; ++axis) {
+      options.nesting_buffer[axis] = cfg.transition_buffers[level][axis];
+      options.periodic_axes[axis] = topology().is_periodic(Face<Dim>{axis, BoundarySide::lower});
+    }
+    const auto include_stencil = [&](const Extent<Dim>& ghosts, int source_radius) {
+      for (int axis = 0; axis < Dim; ++axis) {
+        const std::int64_t ratio = cfg.transition_ratios[level][axis];
+        // A fine halo first reaches ceil(ghosts / ratio) parent cells; interpolation then
+        // reads its own parent stencil. Unrefined axes do not evaluate that stencil.
+        const std::int64_t padding =
+            (ghosts[axis] + ratio - 1) / ratio + (ratio > 1 ? source_radius : 0);
+        if (padding > std::numeric_limits<int>::max())
+          throw std::overflow_error("AMR parent nesting buffer exceeds native coordinates");
+        options.nesting_buffer[axis] =
+            std::max(options.nesting_buffer[axis], static_cast<int>(padding));
+      }
+    };
+    const auto state_provider =
+        amr::transfer::TransferProvider<Dim, amr::transfer::Centering::Cell>(
+            coarse_fine_transfer_kind(parent_level));
+    for (std::size_t block = 0; block < blocks.size(); ++block)
+      include_stencil(multiblock_hierarchy->state(block, level).ghosts(),
+                      state_provider.capabilities().source_stencil_radius);
+    const auto auxiliary_provider =
+        amr::transfer::TransferProvider<Dim, amr::transfer::Centering::Cell>(
+            amr::transfer::TransferKind::CoarseFineGhostInterpolation);
+    for (const auto& [identity, group] : prepared_hierarchy->provider_storage[level]->groups) {
+      (void)identity;
+      include_stencil(group.ghosts(), auxiliary_provider.capabilities().source_stencil_radius);
+    }
+    return options;
+  }
+
   std::vector<amr::tagging::TagMask<Dim>> prepare_cluster_shards(
       int parent_level, const runtime::amr::PreparedTaggerCandidates<Dim>& candidates,
       runtime::amr::PersistentTaggingState<Dim>& staged_state) const {
@@ -9183,7 +9230,7 @@ struct AmrSystem<Dim>::Impl {
     std::exception_ptr cluster_error;
     try {
       const amr::tagging::ClusterOptions<Dim> cluster_options =
-          exact_cluster_options(cfg, parent_layout);
+          nested_cluster_options(parent_level);
       const amr::tagging::BergerRigoutsosProvider<Dim> clustering;
       clustered.emplace(clustering.cluster(shards, cluster_options));
       ratio.emplace(
@@ -18551,7 +18598,7 @@ std::vector<std::uint8_t> AmrSystem<Dim>::rematerialize_program_accepted_state(
     accepted.emplace(runtime::program::deserialize_amr_program_accepted_state<Dim>(
         source_state, &interface_budget));
     const std::string expected_source_authority = p_->source_accepted_state_authority_contract(
-        *accepted, source_level_owners, source_level_modes, source_rank_count);
+        *accepted, source_level_owners, source_level_modes, source_rank_count, source_state);
     const std::string_view provided_source_authority(
         reinterpret_cast<const char*>(source_authority.data()), source_authority.size());
     if (provided_source_authority != expected_source_authority)
@@ -19911,6 +19958,11 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::program_flux_ledger_manife
   const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
   const auto state =
       runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes, &interface_budget);
+  const std::string evidence_space =
+      state.face_evidence_provenance
+          ? prefixed_sha256("pops.amr-program.face-evidence-space.v1:sha256:",
+                            state.face_evidence_provenance->spatial_contract)
+          : std::string{};
   for (int axis = 0; axis < Dim; ++axis)
     for (const auto& fragment : state.accepted_face_flux[static_cast<std::size_t>(axis)]) {
       const auto& key = fragment.key;
@@ -19926,7 +19978,10 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::program_flux_ledger_manife
            std::to_string(key.clock.phase.denominator),
            std::to_string(measure.stage_weight.numerator),
            std::to_string(measure.stage_weight.denominator), orientation,
-           std::to_string(measure.face_measure), std::to_string(measure.substep_duration)});
+           std::to_string(measure.face_measure), std::to_string(measure.substep_duration),
+           evidence_space, std::to_string(state.face_evidence_provenance->topology_epoch),
+           std::to_string(state.face_evidence_provenance->materialization_generation),
+           std::to_string(state.face_evidence_provenance->level_count)});
     }
   return rows;
 }
@@ -19990,13 +20045,20 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::program_sync_manifest() co
   const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
   const auto state =
       runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes, &interface_budget);
+  const std::string evidence_space =
+      state.face_evidence_provenance
+          ? prefixed_sha256("pops.amr-program.face-evidence-space.v1:sha256:",
+                            state.face_evidence_provenance->spatial_contract)
+          : std::string{};
   rows.reserve(state.synchronization_events.size());
   for (const auto& event : state.synchronization_events)
-    rows.push_back({std::to_string(event.parent_level), std::to_string(event.child_level),
-                    std::to_string(event.runtime_block), event.phase,
-                    std::to_string(event.clock.macro_step),
-                    std::to_string(event.clock.phase.numerator),
-                    std::to_string(event.clock.phase.denominator)});
+    rows.push_back(
+        {std::to_string(event.parent_level), std::to_string(event.child_level),
+         std::to_string(event.runtime_block), event.phase, std::to_string(event.clock.macro_step),
+         std::to_string(event.clock.phase.numerator), std::to_string(event.clock.phase.denominator),
+         evidence_space, std::to_string(state.face_evidence_provenance->topology_epoch),
+         std::to_string(state.face_evidence_provenance->materialization_generation),
+         std::to_string(state.face_evidence_provenance->level_count)});
   return rows;
 }
 

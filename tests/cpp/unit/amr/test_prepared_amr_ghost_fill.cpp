@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/runtime/amr/prepared_amr_ghost_fill.hpp>
+#include <pops/amr/tagging/berger_rigoutsos.hpp>
 
 #include "../mesh/nd_multifab_test_utils.hpp"
 
@@ -337,6 +338,74 @@ TEST(test_prepared_amr_ghost_fill, sparse_parent_interpolation_is_exact_in_1d_2d
   prove_sparse_parent_interpolation<1>();
   prove_sparse_parent_interpolation<2>();
   prove_sparse_parent_interpolation<3>();
+}
+
+TEST(test_prepared_amr_ghost_fill, full_profile_parent_corner_is_reclustered_before_interpolation) {
+  // Captured from the unchanged 128x128/max_levels=3 scalar profile at level-2 bootstrap.
+  // Its former fine corner [0,0]..[15,15] required the absent parent cell (8,8).
+  const Box<2> coarse_domain{Index<2>{0, 0}, Index<2>{255, 255}};
+  const Box<2> fine_domain{Index<2>{0, 0}, Index<2>{511, 511}};
+  const BoxArray<2> coarse_layout(std::vector<Box<2>>{
+      Box<2>{Index<2>{0, 0}, Index<2>{7, 7}}, Box<2>{Index<2>{0, 8}, Index<2>{7, 69}},
+      Box<2>{Index<2>{0, 70}, Index<2>{7, 131}}, Box<2>{Index<2>{0, 132}, Index<2>{7, 193}},
+      Box<2>{Index<2>{0, 194}, Index<2>{7, 255}}, Box<2>{Index<2>{8, 0}, Index<2>{69, 7}},
+      Box<2>{Index<2>{12, 26}, Index<2>{55, 89}}, Box<2>{Index<2>{12, 90}, Index<2>{55, 153}},
+      Box<2>{Index<2>{56, 26}, Index<2>{99, 89}}, Box<2>{Index<2>{56, 90}, Index<2>{99, 153}},
+      Box<2>{Index<2>{70, 0}, Index<2>{131, 7}}, Box<2>{Index<2>{100, 26}, Index<2>{141, 89}},
+      Box<2>{Index<2>{100, 90}, Index<2>{141, 153}}, Box<2>{Index<2>{132, 0}, Index<2>{193, 7}},
+      Box<2>{Index<2>{194, 0}, Index<2>{255, 7}}});
+  const ::pops::amr::hierarchy::LevelLayout<2> parent(
+      1, coarse_domain, coarse_layout, replicated(coarse_layout), ratio_two<2>(), {15, 105});
+  ::pops::amr::tagging::TagMask<2> mask(parent, Index<2>{},
+                                        {15, 15, 65536, 65536, 65536, 1U << 20});
+  for (int j = 0; j != 8; ++j)
+    for (int i = 0; i != 8; ++i)
+      mask.set(Index<2>{i, j});
+  ::pops::amr::tagging::ClusterOptions<2> controls{
+      0.7, {1, 1}, {32, 32}, {1, 65536, 8U << 20, 65536, 1U << 20}};
+  controls.nesting_buffer = {2, 2};  // ceil(two fine halos / ratio two) + radius one.
+  const auto clustered = ::pops::amr::tagging::BergerRigoutsosProvider<2>{}.cluster(
+      std::array<::pops::amr::tagging::TagMask<2>, 1>{mask}, controls);
+  std::vector<Box<2>> fine_boxes;
+  std::int64_t retained_parent_cells = 0;
+  for (const auto& valid : clustered.boxes.boxes()) {
+    EXPECT_FALSE(valid.contains(Index<2>{7, 7}));
+    retained_parent_cells += valid.numPts();
+    fine_boxes.push_back(::pops::amr::hierarchy::refine_box(valid, ratio_two<2>()));
+  }
+  EXPECT_EQ(retained_parent_cells, 60);  // Only the unsupported two-by-two corner is excluded.
+  const BoxArray<2> fine_layout(std::move(fine_boxes));
+  HostMultiFab<2> coarse(coarse_layout, replicated(coarse_layout), Index<2>{}, 1,
+                         uniform_extent<2>(0));
+  HostMultiFab<2> fine(fine_layout, replicated(fine_layout), Index<2>{}, 1, uniform_extent<2>(2));
+  fill_valid_encoded(coarse, Real{-1});
+  fill_valid(fine, Real{-777}, [](const Index<2>& cell, int component) {
+    return expected_linear_parent(cell, component);
+  });
+  AmrGhostFillPreparation<2> request{};
+  request.fine_level = 2;
+  request.coarse_domain = coarse_domain;
+  request.fine_domain = fine_domain;
+  request.ratio = ratio_two<2>();
+  request.topology = BoundaryTopology<2>::physical();
+  request.topology_generation = 1;
+  request.materialization_generation = 1;
+  request.field_identity = "scalar-full-profile-corner";
+  request.budget = budget<2>(coarse_layout.size(), fine_layout.size());
+  const ExecutionLane lane = ExecutionLane::world();
+  const auto fill = prepare_amr_ghost_fill(coarse, fine, request, lane);
+  runtime::multiblock::BoundaryEvaluationPoint point{};
+  point.level = 2;
+  fill(fine, point);
+  for (std::size_t local = 0; local < fine.local_size(); ++local) {
+    const auto& fab = fine.fab(local);
+    const Box<2> region = fab.grown_box().intersect(fine_domain);
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(region.numPts()); ++ordinal) {
+      const Index<2> cell = index_from_ordinal(region, ordinal);
+      EXPECT_DOUBLE_EQ(value_at(fine, fine.global_index(local), cell, 0),
+                       expected_linear_parent(cell, 0));
+    }
+  }
 }
 
 TEST(test_prepared_amr_ghost_fill, sparse_parent_level_keeps_two_halo_linear_accuracy_in_1d_2d_and_3d) {

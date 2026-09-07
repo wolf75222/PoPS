@@ -301,7 +301,7 @@ def test_production_model_primitive_roundtrip_and_step():
     simulation = pops.bind(
         artifact,
         initial_state={"gas": initial.copy()},
-        execution_context=artifact_execution_context(artifact),
+        resources={"execution_context": artifact_execution_context(artifact)},
     )
     bound = np.asarray(simulation.state_global("gas"), dtype=np.float64).reshape(initial.shape)
     bound_rho = bound[0]

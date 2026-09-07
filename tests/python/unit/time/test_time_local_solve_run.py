@@ -24,6 +24,7 @@ ProgramContext + for_each_cell + the existing
 
 from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen.module_lowering import lower_and_validate
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
@@ -114,21 +115,23 @@ def lorentz_program(name="lorentz_step", model=None, action=None):
 # ---- (A) codegen: pure Python, always runs ----
 print("== (A) typed local-linear solve codegen ==")
 m = lorentz_model()
-src = emit_cpp_program(lorentz_program(model=m), model=m)
+src = emit_cpp_program(lorentz_program(model=m), model=lower_and_validate(m)[0])
 for frag in (
     "pops::for_each_cell(",
     "pops::detail::mat_inverse<3>(",
     "if (solve_failure_ == 0 && !pops::detail::mat_inverse<3>(",
     "pops::Real M_[3][3];",
     "pops::Real Minv_[3][3];",
-    "pops::reduce_max(local_solve_status_",
+    "pops::all_reduce_max(pops::reduce_max_local(local_solve_status_",
+    "= ctx.prepared_execution_lane();",
+    "pops::SolveOutcome::collective_lane(",
     "pops::SolveReport local_solve_report_",
     "pops::SolveOutcome local_solve_outcome_",
     ".consume(pops::SolveConsumption::kAccept)",
     "pops::SolveStatus::kSingular",
     "pops::SolveStatus::kInvalidEvaluation",
-    "auxA(i, j, 3)",
-    "ctx.aux()",
+    "const pops::Real B_z = providers(index, 0);",
+    "ctx.template provider_values_view<1>(",
 ):
     chk(frag in src, "generated local-linear solve kernel has %r" % frag)
 chk(
@@ -159,7 +162,7 @@ Wb = Pbig.solve(
     name="Wb",
 ).consume(action=adctime.FailRun())
 Pbig.commit(endpoint_big, Wb)
-big_src = emit_cpp_program(Pbig, model=big)
+big_src = emit_cpp_program(Pbig, model=lower_and_validate(big)[0])
 chk(
     "pops::detail::mat_inverse<9>(" in big_src and "pops::Real M_[9][9];" in big_src,
     "n_cons=9 emits exact manifest-sized dense storage",

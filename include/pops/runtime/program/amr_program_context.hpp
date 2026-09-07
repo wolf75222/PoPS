@@ -340,6 +340,7 @@ class AmrProgramContext {
   mutable ::pops::amr::ClockWindow active_subcycling_window_{};
   mutable std::uint64_t active_subcycling_attempt_ = 0;
   mutable std::unique_ptr<multiblock_subcycling_type> multiblock_subcycling_;
+  mutable bool multiblock_subcycling_has_accepted_step_ = false;
   mutable std::uint64_t multiblock_subcycling_epoch_ = std::numeric_limits<std::uint64_t>::max();
   mutable std::uint64_t multiblock_subcycling_generation_ =
       std::numeric_limits<std::uint64_t>::max();
@@ -352,6 +353,7 @@ class AmrProgramContext {
   mutable std::int64_t cell_temporal_interval_target_tick_ = 0;
   mutable std::string accepted_flux_budget_contract_;
   mutable std::string accepted_coupling_contract_;
+  mutable std::optional<AmrProgramFaceEvidenceProvenance> accepted_face_evidence_provenance_;
   mutable std::array<std::vector<::pops::amr::reflux::FaceFluxFragment<Dim, AmrProgramFacePayload>>,
                      Dim>
       accepted_face_flux_;

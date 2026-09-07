@@ -25,7 +25,6 @@ MUST be added in the SAME order the Program declares them via ``P.state``.
 
 from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
-from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import (
     codegen_field_plans,
     solve_field,
@@ -277,7 +276,6 @@ def section_b(t):
     try:
         import numpy as np
 
-        import pops.runtime._engine_descriptors as engine
     except Exception as exc:  # noqa: BLE001 -- numpy or _pops unavailable
         if fails:
             raise AssertionError(
@@ -309,61 +307,67 @@ def section_b(t):
     ic_a = make_ic(0.0)
     ic_b = make_ic(0.37)  # a DIFFERENT IC per block, so a routing bug (b reads a's state) shows up
 
-    # Compile the single-block reference programs (one per block name) and the 2-block program.
-    try:
-        model_a = passive_model("pa_ref")
-        model_b = passive_model("pb_ref")
-        model_ab = passive_model("pab")
-        comp_a = compile_drivers.compile_problem(
-            model=model_a, time=single_block_program(t, "fe_a", "a", model_a)
-        )
-        comp_b = compile_drivers.compile_problem(
-            model=model_b, time=single_block_program(t, "fe_b", "b", model_b)
-        )
-        comp_ab = compile_drivers.compile_problem(
-            model=model_ab, time=two_block_program(t, model_ab)
-        )
-    except (RuntimeError, ValueError) as exc:  # no compiler / no Kokkos / .so compile failed
-        _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
+    # The public Case install stages every block before sealing the shared registry.
+    # Compare one two-block transaction with two independent one-block transactions.
+    import pops
+    from pops.codegen import Production
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    from pops.layouts import Uniform
+    from pops.math import ddt, div
+    from pops.mesh import CartesianGrid, PeriodicAxes
+    from pops.numerics import DiscretizationPlan, FiniteVolume, variables
+    from pops.time import FixedDt
+    from tests.python.support.native_execution_context import artifact_execution_context
 
-    chk(comp_ab.program_name == "two_block_passive", "the 2-block handle carries the program name")
+    def run_case(blocks):
+        frame = Rectangle("multiblock-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(
+            Cartesian2D())
+        x_axis, y_axis = frame.axes
+        model = pops.Model("passive_public", frame=frame)
+        state = model.state("U", components=("rho",))
+        rho, = state
+        flux = model.flux("transport", frame=frame, state=state,
+                          components={x_axis: (0.7 * rho,), y_axis: (0.7 * rho,)},
+                          waves={x_axis: (0.7,), y_axis: (0.7,)})
+        decay = model.source("decay", on=state, value=(-0.3 * rho,))
+        rate = model.rate("passive", equation=ddt(state) == -div(flux) + decay)
+        numerics = DiscretizationPlan()
+        numerics.rates.add(rate, FiniteVolume(
+            flux=flux, variables=variables.Conservative(state),
+            reconstruction=FirstOrder(), riemann=Rusanov()))
+        program_name = "two_block_passive" if len(blocks) == 2 else "fe_" + blocks[0]
+        case = pops.Case(program_name + "-case")
+        program = t.Program(program_name)
+        updates = {}
+        for name in blocks:
+            block = case.block(name, model)
+            case.numerics(numerics, block=block)
+            temporal = program.state(block[state])
+            rhs = rate(temporal.n)
+            updates[temporal.next] = program.value(
+                name + "_next", temporal.n + program.dt * rhs, at=temporal.next.point)
+        program.commit_many(updates)
+        program.step_strategy(FixedDt(dt))
+        case.program(program)
+        resolved = pops.resolve(pops.validate(case), backend=Production(),
+            layout=Uniform(CartesianGrid(frame=frame, cells=(n, n),
+                                         periodic=PeriodicAxes(frame.axes))))
+        artifact = pops.compile(resolved)
+        artifact.verify()
+        chk(artifact.program_name == program_name, "compiled artifact carries its Program name")
+        initials = {name: (ic_a if name == "a" else ic_b)[None, :, :] for name in blocks}
+        simulation = pops.bind(artifact, initial_state=initials,
+            resources={"execution_context": artifact_execution_context(artifact)})
+        report = pops.run(simulation, t_end=dt, max_steps=1)
+        chk(report.accepted_steps == 1, "public multi-block run accepted exactly one step")
+        return {name: np.asarray(simulation.state_global(name)).reshape((1, n, n)).copy()
+                for name in blocks}
 
-    def make_sim(blocks):
-        sim = System(n=n, L=1.0, periodicity=(True, True))
-        for blk in blocks:
-            try:
-                cm = passive_model("blk_" + blk).compile(backend="production")
-            except RuntimeError as exc:  # no compiler / no Kokkos
-                _skip("model compile could not build the .so: %s" % str(exc)[:160])
-            sim.add_equation(
-                blk,
-                cm,
-                spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                time=engine.Explicit(method="euler"),
-            )
-        return sim
-
-    # Reference: two INDEPENDENT single-block systems.
-    sim_a = make_sim(["a"])
-    sim_a.set_state("a", ic_a[None, :, :])
-    sim_a.install_program(comp_a.so_path)
-    sim_a.step(dt)
-    ref_a = np.array(sim_a.get_state("a"))
-
-    sim_b = make_sim(["b"])
-    sim_b.set_state("b", ic_b[None, :, :])
-    sim_b.install_program(comp_b.so_path)
-    sim_b.step(dt)
-    ref_b = np.array(sim_b.get_state("b"))
-
-    # The multi-block system: blocks added in the SAME order the Program declares them (a then b).
-    sim_ab = make_sim(["a", "b"])
-    sim_ab.set_state("a", ic_a[None, :, :])
-    sim_ab.set_state("b", ic_b[None, :, :])
-    sim_ab.install_program(comp_ab.so_path)
-    sim_ab.step(dt)
-    got_a = np.array(sim_ab.get_state("a"))
-    got_b = np.array(sim_ab.get_state("b"))
+    ref_a = run_case(("a",))["a"]
+    ref_b = run_case(("b",))["b"]
+    result = run_case(("a", "b"))
+    got_a, got_b = result["a"], result["b"]
 
     e_a = float(np.abs(got_a - ref_a).max())
     e_b = float(np.abs(got_b - ref_b).max())

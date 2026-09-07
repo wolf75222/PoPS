@@ -367,8 +367,8 @@ def _accepted_tagging_hysteresis_span(payload: Any) -> tuple[bytes, int]:
         if cursor > len(encoded):
             raise AssertionError("accepted-state string is truncated")
 
-    if encoded[:8] != b"POPSAND4":
-        raise AssertionError("checkpoint does not contain exact-ranked accepted-state v4")
+    if encoded[:8] not in (b"POPSAND4", b"POPSAND5"):
+        raise AssertionError("checkpoint does not contain exact-ranked accepted-state v4/v5")
     cursor = 8
     cursor += 8  # native dimension
     skip_string()  # exact spatial contract

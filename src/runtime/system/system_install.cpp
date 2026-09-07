@@ -33,6 +33,44 @@
 namespace pops {
 namespace {
 
+template <class FieldPlans>
+auto select_field_rhs_binding(FieldPlans& plans, const std::string& block,
+                              const std::string& field, const std::string& identity = {}) {
+  using Selection = std::pair<decltype(plans.begin()), std::string>;
+  const auto select = [&](const auto& matches) -> Selection {
+    Selection selected{plans.end(), {}};
+    for (auto plan = plans.begin(); plan != plans.end(); ++plan) {
+      std::set<std::string> keys;
+      for (const auto& binding : plan->second.providers)
+        if (binding.block == block && matches(plan->second, binding))
+          keys.insert(binding.key);
+      if (keys.empty())
+        continue;
+      if (keys.size() != 1 || selected.first != plans.end())
+        throw std::logic_error("System elliptic RHS has ambiguous qualified provider bindings");
+      selected = {plan, *keys.begin()};
+    }
+    return selected;
+  };
+  if (!identity.empty()) {
+    auto exact = select([&](const auto&, const auto& binding) {
+      return binding.identity == identity;
+    });
+    if (exact.first != plans.end()) {
+      if (field != exact.second && field != exact.first->second.output_key)
+        throw std::logic_error("System elliptic RHS identity differs from its provider/output key");
+      return exact;
+    }
+  }
+  auto exact = select([&](const auto&, const auto& binding) { return binding.key == field; });
+  if (exact.first != plans.end())
+    return exact;
+  // Older in-process/native providers nominate the Case output instead of the
+  // load provider. Preserve that adapter only for one exact source key on this
+  // block/output. Distinct load closures cannot inherit a summed coefficient.
+  return select([&](const auto& plan, const auto&) { return plan.output_key == field; });
+}
+
 std::string prepared_system_boundary_package_identity(std::string_view operation,
                                                       std::string_view block,
                                                       const PreparedBoundaryComponentSpec& spec) {
@@ -1647,32 +1685,13 @@ void System<Dim>::set_block_elliptic_field(
   auto& field_plans = finalize == nullptr ? p_->field_plans_ : finalize->field_plans;
   auto& named_fields = finalize == nullptr ? p_->named_fields_ : finalize->named_fields;
   const int block = blocks.index(block_name);
-  auto selected = field_plans.end();
+  const auto [selected, provider_key] = select_field_rhs_binding(field_plans, block_name, field);
   Real coefficient = Real(0);
-  for (auto plan = field_plans.begin(); plan != field_plans.end(); ++plan) {
-    if (plan->second.output_key != field)
-      continue;
-    Real candidate = Real(0);
-    bool contributes = false;
-    for (const typename Impl::FieldProviderBinding& binding : plan->second.providers) {
-      // ``field`` identifies the qualified output route selected above.  A source provider key is
-      // deliberately independent (for example electron_charge -> electrostatic); generated block
-      // installation supplies the one RHS closure owned by this block, so its exact coefficient is
-      // resolved by block ownership rather than by equating input and output names.
-      if (binding.block == block_name) {
-        candidate += static_cast<Real>(binding.coefficient);
-        contributes = true;
-      }
-    }
-    if (!contributes)
-      continue;
-    if (selected != field_plans.end())
-      throw std::runtime_error("System elliptic RHS resolves to multiple qualified provider slots");
-    selected = plan;
-    coefficient = candidate;
-  }
   if (selected == field_plans.end())
     throw std::invalid_argument("System elliptic RHS has no resolved provider binding");
+  for (const typename Impl::FieldProviderBinding& binding : selected->second.providers)
+    if (binding.block == block_name && binding.key == provider_key)
+      coefficient += static_cast<Real>(binding.coefficient);
   const auto provider = named_fields.find(selected->first);
   if (provider == named_fields.end())
     throw std::invalid_argument("System named elliptic field is not registered: " +
@@ -2148,12 +2167,12 @@ void System<Dim>::finalize_native_packages() {
       }
     }
 
-    std::set<std::pair<std::string, std::string>> expected_field_attachments;
+    std::set<std::tuple<std::string, std::string, std::string>> expected_field_attachments;
     std::exception_ptr expected_field_error;
     try {
       for (const auto& [slot, plan] : snapshot->field_plans)
         for (const typename Impl::FieldProviderBinding& binding : plan.providers)
-          expected_field_attachments.emplace(slot, binding.block);
+          expected_field_attachments.emplace(slot, binding.block, binding.key);
     } catch (...) {
       expected_field_error = std::current_exception();
     }
@@ -2170,23 +2189,9 @@ void System<Dim>::finalize_native_packages() {
       for (auto& attachment : candidate.elliptic_attachments) {
         std::exception_ptr field_error;
         try {
-          auto selected = snapshot->field_plans.end();
-          for (auto plan = snapshot->field_plans.begin(); plan != snapshot->field_plans.end();
-               ++plan) {
-            if (plan->second.output_key != attachment.field)
-              continue;
-            const bool contributes =
-                std::any_of(plan->second.providers.begin(), plan->second.providers.end(),
-                            [&](const typename Impl::FieldProviderBinding& binding) {
-                              return binding.block == package.capability->identity;
-                            });
-            if (!contributes)
-              continue;
-            if (selected != snapshot->field_plans.end())
-              throw std::logic_error(
-                  "System native elliptic attachment resolves to multiple field plans");
-            selected = plan;
-          }
+          const auto [selected, provider_key] = select_field_rhs_binding(
+              snapshot->field_plans, package.capability->identity, attachment.field,
+              attachment.rhs_identity);
           if (selected == snapshot->field_plans.end()) {
             // Convenience ChargeDensity packages emit an RHS-only fields_from_state
             // attachment. The default Poisson already lives on the prepared block
@@ -2202,10 +2207,11 @@ void System<Dim>::finalize_native_packages() {
               (!attachment.outputs.empty() && staged->second.output_keys != attachment.outputs))
             throw std::logic_error(
                 "System native elliptic attachment differs from its staged output contract");
-          if (!expected_field_attachments.erase({selected->first, package.capability->identity}))
+          if (!expected_field_attachments.erase(
+                  {selected->first, package.capability->identity, provider_key}))
             throw std::logic_error(
                 "System native elliptic attachment is duplicate or was not required");
-          set_block_elliptic_field(package.capability->identity, attachment.field,
+          set_block_elliptic_field(package.capability->identity, provider_key,
                                    std::move(attachment.rhs));
         } catch (...) {
           field_error = std::current_exception();

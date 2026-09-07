@@ -322,6 +322,24 @@ def test_dynamic_contract_is_checked_after_the_opaque_state_is_restored(section)
         validate_restored_contract(_Sim(), payload)
 
 
+def test_legacy_wire_compares_original_rows_without_discarding_new_wire_provenance():
+    class WithHistoricalOrigin(_Sim):
+        def program_flux_ledger_manifest(self):
+            return [row + ["space:old", "3", "5", "2"]
+                    for row in super().program_flux_ledger_manifest()]
+
+        def program_sync_manifest(self):
+            return [row + ["space:old", "3", "5", "2"]
+                    for row in super().program_sync_manifest()]
+
+    payload = _payload()
+    payload["program_accepted_state"] = np.frombuffer(b"POPSAND4", dtype=np.uint8)
+    validate_restored_contract(WithHistoricalOrigin(), payload)
+    payload["program_accepted_state"] = np.frombuffer(b"POPSAND5", dtype=np.uint8)
+    with pytest.raises(ValueError, match="restored AMR accepted-state image differs"):
+        validate_restored_contract(WithHistoricalOrigin(), payload)
+
+
 @pytest.mark.parametrize("live_epoch, levels, blocks", [(8, 3, 2), (7, 1, 2), (7, 3, 1)])
 def test_restored_interface_audit_must_match_the_live_hierarchy(live_epoch, levels, blocks):
     class _ChangedHierarchy(_Sim):

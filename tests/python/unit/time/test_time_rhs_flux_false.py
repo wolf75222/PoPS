@@ -58,6 +58,9 @@ fails = 0
 
 
 def _emit(program, *, model=None):
+    from pops.codegen.module_lowering import lower_and_validate
+    if model is not None:
+        model, _ = lower_and_validate(model)
     return emit_cpp_program(program, model=model, field_plans=codegen_field_plans(program))
 
 

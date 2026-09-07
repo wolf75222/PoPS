@@ -37,7 +37,7 @@ from pops.identity.scalar import scalar_cpp
 
 
 def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generated", cse: Any = True,
-                   hoist_reciprocals: Any = False) -> str:
+                   hoist_reciprocals: Any = False, *, native_input_plan: Any = None) -> str:
     """Generates a C++ BRICK satisfying the pops::HyperbolicModel concept (wrapping : step
     2bis). The produced struct uses StateVec / ProviderValues / POPS_HD / Variables and exposes flux,
     max_wave_speed, to_primitive, to_conservative, conservative_vars, primitive_vars : it can
@@ -48,6 +48,9 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     subexpressions (H, c...) into ``cseK_`` locals. The production loader instantiates the resulting
     type inside Kokkos kernels; no host-vtable execution path is emitted."""
     from pops.model.state_symbols import native_formula_carrier_view
+    from pops.codegen._native_model_provider_plan import (
+        project_provider_locals, provider_slot_projection,
+    )
     model = native_formula_carrier_view(model)
     if not model.prim_state:
         raise ValueError("emit_cpp_brick : call set_primitive_state(...) first")
@@ -113,10 +116,14 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         return _prim_block(model, live, hoist_reciprocals)
 
     def aux_locals() -> list:
-        return named_real_locals(model._flux_provider_locals_lines())
+        return named_real_locals(project_provider_locals(
+            model._flux_provider_locals_lines(), model._component_flux_consumer_plan,
+            native_input_plan))
 
     def projection_locals() -> list:
-        return named_real_locals(model._projection_provider_locals_lines())
+        return named_real_locals(project_provider_locals(
+            model._projection_provider_locals_lines(),
+            model._component_operator_consumer_plans.get("projection", ()), native_input_plan))
 
     # Physical laws consume the exact provider-read protocol. The parameter remains generic so
     # the FV route may pass its exact model-qualified provider view without reconstructing a
@@ -324,6 +331,10 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             "generated physics brick requires the physical-flux consumer ProviderPack plan"
         )
     S.append("  static constexpr int n_flux_providers = %d;" % len(provider_rows))
+    native_slots = (
+        provider_slot_projection(provider_rows, native_input_plan)
+        if native_input_plan is not None else None
+    )
     S.append(
         "  inline static constexpr std::array<pops::QualifiedProviderRequirement, %d> "
         "flux_provider_requirements{{" % len(provider_rows)
@@ -338,7 +349,8 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         availability = "true" if provider["availability"] else "false"
         S.append("    {%s, %s, %d}," %
                  (", ".join(json.dumps(value) for value in values),
-                  availability, row["consumer_slot"]))
+                  availability, (row["consumer_slot"] if native_slots is None
+                                 else native_slots[row["consumer_slot"]])))
     S.append("  }};")
     if rt_member:  # member pops::RuntimeParams params{count, {defaults}} (P7-b)
         S.append(rt_member.rstrip("\n"))
@@ -352,12 +364,12 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     # Foncteurs nommes des temoins de VP (EigWitness) : methodes statiques POPS_HD remplissant
     # M[k][k] + real_eig_minmax, declarees une fois par couple (field, k). Device-clean (ADC-289).
     S += _eig_witness_helpers(eig_pairs)
-    # Native operation consumers need the full resolved carrier width, which may
-    # exceed the physical-flux subpack. Keep n_aux as a compatibility spelling.
-    provider_width = model._total_n_aux()
-    S.append("  static constexpr int n_providers = %d;" % provider_width)
-    if provider_width:
-        S.append("  static constexpr int n_aux = %d;" % provider_width)
+    # The aggregate uses an authenticated input union; standalone flux bricks
+    # retain their exact local input pack. Published outputs never become inputs.
+    input_width = len(provider_rows if native_input_plan is None else native_input_plan)
+    S.append("  static constexpr int n_providers = %d;" % input_width)
+    if model._total_n_aux():
+        S.append("  static constexpr int n_aux = %d;" % model._total_n_aux())
     S += [
         "",
         "  template <int Axis>",
@@ -365,7 +377,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         axis_guard("physical-flux"),
     ]
     all_fluxes = axis_values(model._flux, "physical flux")
-    S += cons_locals() + prim_locals(_live_prims(model, all_fluxes)) + aux_locals()
+    S += cons_locals() + aux_locals() + prim_locals(_live_prims(model, all_fluxes))
     S.append("    State F{};")
     for ordinal, axis in enumerate(axes):
         S.append(axis_branch(ordinal))
@@ -417,7 +429,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         mws_drv = []  # fd path: max_wave_speed calls flux(), no direct primitive
     else:
         mws_drv = _jac_entries(model)
-    S += cons_locals() + prim_locals(_live_prims(model, mws_drv)) + aux_locals()
+    S += cons_locals() + aux_locals() + prim_locals(_live_prims(model, mws_drv))
     if model._eig:
         for ordinal, axis in enumerate(axes):
             S.append(axis_branch(ordinal))
@@ -536,7 +548,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         ]
         all_wave_speeds = axis_values(ws, "explicit wave speeds")
         S += cons_locals() \
-            + prim_locals(_live_prims(model, all_wave_speeds)) + aux_locals()
+            + aux_locals() + prim_locals(_live_prims(model, all_wave_speeds))
         for ordinal, axis in enumerate(axes):
             S.append(axis_branch(ordinal))
             wtl, wcpps = _codegen_exprs(model, list(ws[axis]), cse, indent="      ")
@@ -558,7 +570,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             axis_guard("signed-wave-speed"),
         ]
         ws_drv = [] if model._ws_jacobian["eig"] == "fd" else _jac_entries(model)
-        S += cons_locals() + prim_locals(_live_prims(model, ws_drv)) + aux_locals()
+        S += cons_locals() + aux_locals() + prim_locals(_live_prims(model, ws_drv))
         ws_blocks = model._ws_jacobian["blocks"]
         if tuple(ws_blocks) != axes:
             raise ValueError(
@@ -596,7 +608,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             axis_guard("signed-wave-speed"),
         ]
         S += cons_locals() \
-            + prim_locals(_live_prims(model, all_eigenvalues)) + aux_locals()
+            + aux_locals() + prim_locals(_live_prims(model, all_eigenvalues))
         for ordinal, axis in enumerate(axes):
             S.append(axis_branch(ordinal))
             wtl, wcpps = _codegen_exprs(
@@ -629,13 +641,13 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             "  POPS_HD pops::Real stability_speed(const State& U, %s) const {" % aux_param,
             axis_guard("stability-speed"),
         ]
-        S += cons_locals() + prim_locals(_live_prims(model, [model._stab_speed])) + aux_locals()
+        S += cons_locals() + aux_locals() + prim_locals(_live_prims(model, [model._stab_speed]))
         stl, scpps = _codegen_exprs(model, [model._stab_speed], cse)
         S += stl
         S += ["    return %s;" % scpps[0], "  }", ""]
     if model._stab_dt is not None:
         S.append("  POPS_HD pops::Real stability_dt(const State& U, %s) const {" % aux_param)
-        S += cons_locals() + prim_locals(_live_prims(model, [model._stab_dt])) + aux_locals()
+        S += cons_locals() + aux_locals() + prim_locals(_live_prims(model, [model._stab_dt]))
         dtl, dcpps = _codegen_exprs(model, [model._stab_dt], cse)
         S += dtl
         S += ["    return %s;" % dcpps[0], "  }", ""]

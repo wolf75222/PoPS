@@ -196,6 +196,11 @@ AmrProgramAcceptedState<Dim> accepted_state_() const {
                                                state.flux_budget_contract);
     state.coupling_contract =
         seal_contract("pops.amr-program.accepted-coupling.v1:sha256:", state.coupling_contract);
+  } else {
+    state.flux_budget_contract = accepted_flux_budget_contract_;
+    state.coupling_contract = accepted_coupling_contract_;
+  }
+  if (multiblock_subcycling_ && multiblock_subcycling_has_accepted_step_) {
     for (std::size_t block = 0; block < facade_->prepared_amr_multiblock_hierarchy_().block_count();
          ++block) {
       for (std::size_t parent = 0; parent + 1 < runtime_->hierarchy().num_levels(); ++parent) {
@@ -220,9 +225,14 @@ AmrProgramAcceptedState<Dim> accepted_state_() const {
       std::sort(state.accepted_face_flux[static_cast<std::size_t>(axis)].begin(),
                 state.accepted_face_flux[static_cast<std::size_t>(axis)].end(), by_key);
     }
+    if (!state.synchronization_events.empty() ||
+        std::any_of(state.accepted_face_flux.begin(), state.accepted_face_flux.end(),
+                    [](const auto& fragments) { return !fragments.empty(); }))
+      state.face_evidence_provenance = AmrProgramFaceEvidenceProvenance{
+          state.spatial_contract, state.topology_epoch, state.materialization_generation,
+          state.level_clocks.size()};
   } else {
-    state.flux_budget_contract = accepted_flux_budget_contract_;
-    state.coupling_contract = accepted_coupling_contract_;
+    state.face_evidence_provenance = accepted_face_evidence_provenance_;
     state.accepted_face_flux = accepted_face_flux_;
     state.synchronization_events = accepted_synchronization_events_;
   }
@@ -386,9 +396,11 @@ void import_accepted_state_(bool force) const {
   accepted_flux_budget_contract_.swap(state.flux_budget_contract);
   accepted_coupling_contract_.swap(state.coupling_contract);
   std::swap(accepted_face_flux_, state.accepted_face_flux);
+  accepted_face_evidence_provenance_.swap(state.face_evidence_provenance);
   interface_flux_commit_guard_.reset();
   interface_flux_ledger_.swap(restored_interface_flux);
   accepted_synchronization_events_.swap(state.synchronization_events);
+  multiblock_subcycling_has_accepted_step_ = false;
   accepted_state_revision_ = revision;
 }
 
@@ -407,6 +419,7 @@ void refresh_accepted_hierarchy_state_(bool prepare_subcycling = true) const {
   accepted_flux_budget_contract_ = state.flux_budget_contract;
   accepted_coupling_contract_ = state.coupling_contract;
   accepted_face_flux_ = state.accepted_face_flux;
+  accepted_face_evidence_provenance_ = state.face_evidence_provenance;
   accepted_synchronization_events_ = state.synchronization_events;
 }
 
@@ -549,6 +562,7 @@ void refresh_accepted_hierarchy_state_after_remap_(
   accepted_flux_budget_contract_.swap(image.state.flux_budget_contract);
   accepted_coupling_contract_.swap(image.state.coupling_contract);
   std::swap(accepted_face_flux_, image.state.accepted_face_flux);
+  accepted_face_evidence_provenance_.swap(image.state.face_evidence_provenance);
   accepted_synchronization_events_.swap(image.state.synchronization_events);
   static_assert(std::is_nothrow_swappable_v<decltype(pending_history_remaps_)>);
   pending_history_remaps_.swap(candidate.pending);
@@ -588,14 +602,15 @@ void restart_regrid_() const {
     throw;
   }
   multiblock_subcycling_.reset();
+  multiblock_subcycling_has_accepted_step_ = false;
   accepted_face_flux_ = {};
+  accepted_face_evidence_provenance_.reset();
   interface_flux_commit_guard_.reset();
   interface_flux_ledger_ = std::make_unique<interface_flux_ledger_type>(
       runtime_->topology_epoch(), inactive_interface_flux_budget_());
   accepted_synchronization_events_.clear();
-  // Publish the cleared image before recreating the subcycling engine. Preparing first
-  // would make accepted_state_() synthesize reflux/average_down reports for a topology
-  // that has not taken a step.
+  // Explicit RegridOnRestart starts a new continuation and clears its old step reports,
+  // as required by that public restart policy. Regular accepted-step regrid retains them.
   refresh_accepted_hierarchy_state_(false);
   prepare_multiblock_subcycling_engine_();
 }
@@ -604,6 +619,7 @@ void resync_after_restart_() const {
   if (!active_attempt_states_.empty())
     throw std::logic_error("AMR restart resynchronization crossed an active Program attempt");
   multiblock_subcycling_.reset();
+  multiblock_subcycling_has_accepted_step_ = false;
   // rebuild_hierarchy publishes a temporary newer topology epoch; restore_checkpoint_counters
   // then republishes the authenticated checkpoint epoch. The interface-flux ledger followed
   // the temporary epoch and must be requalified rather than treated as a live regression.

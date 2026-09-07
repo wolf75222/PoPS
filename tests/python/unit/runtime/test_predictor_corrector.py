@@ -247,9 +247,12 @@ def _compile(resolved):
 
 
 def _run_one_step(artifact, state):
+    from tests.python.support.native_execution_context import artifact_execution_context
+
     runtime = pops.bind(
         artifact,
         initial_state={"plasma": np.ascontiguousarray(state)},
+        resources={"execution_context": artifact_execution_context(artifact)},
     )
     report = pops.run(runtime, t_end=DT, max_steps=1)
     actual = np.asarray(runtime.state_global("plasma"), dtype=np.float64).reshape(

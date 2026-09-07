@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/amr/tagging/berger_rigoutsos.hpp>
+#include <pops/amr/regridding/regrid.hpp>
 
 #include <algorithm>
 #include <array>
@@ -305,4 +306,98 @@ TEST(test_nd_cluster, invalid_or_exhausted_work_budgets_fail_closed) {
   auto identity_exhausted = options<2>({1, 1}, {4, 4});
   identity_exhausted.budget.identity_bytes = 1;
   EXPECT_THROW((void)provider.cluster(shards, identity_exhausted), std::length_error);
+}
+
+namespace {
+
+template <int Dim>
+void prove_nesting_preserves_patch_union_and_periodic_images() {
+  Index<Dim> lower{};
+  Index<Dim> upper{};
+  Extent<Dim> rank_extent{};
+  std::array<int, Dim> minimum{};
+  std::array<int, Dim> maximum{};
+  std::array<int, Dim> ratios{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    upper[axis] = 15;
+    rank_extent[axis] = 1;
+    minimum[axis] = 1;
+    maximum[axis] = 16;
+    ratios[axis] = 2;
+  }
+  const Box<Dim> domain{lower, upper};
+  const mesh::RankSpace<Dim> ranks{lower, rank_extent};
+  auto controls = options<Dim>(minimum, maximum);
+  controls.nesting_buffer.fill(2);
+  controls.budget.recursion_nodes = static_cast<std::size_t>(2 * domain.numPts());
+  controls.budget.cell_visits =
+      static_cast<std::size_t>(domain.numPts()) * controls.budget.recursion_nodes;
+  const auto cluster = [&](std::vector<Box<Dim>> boxes, bool periodic) {
+    const mesh::BoxArray<Dim> patches(std::move(boxes));
+    const hierarchy::LevelLayout<Dim> level(1, domain, patches,
+                                            mesh::Distribution<Dim>::replicated(patches, ranks),
+                                            pops::amr::RefinementRatio<Dim>(ratios), kLayoutBudget);
+    tagging::TagMask<Dim> mask(
+        level, lower, tag_budget(patches.size(), patches.size(), domain.numPts(), domain.numPts()));
+    for (const auto& patch : mask.patches())
+      for (std::size_t ordinal = 0; ordinal < patch.tags.size(); ++ordinal) {
+        std::size_t rest = ordinal;
+        Index<Dim> cell{};
+        for (int axis = 0; axis < Dim; ++axis) {
+          cell[axis] = patch.box.lo[axis] + static_cast<int>(rest % patch.box.length(axis));
+          rest /= static_cast<std::size_t>(patch.box.length(axis));
+        }
+        mask.set(patch.global_patch, cell);
+      }
+    controls.periodic_axes[0] = periodic;
+    return tagging::BergerRigoutsosProvider<Dim>{}.cluster(
+        std::array<tagging::TagMask<Dim>, 1>{mask}, controls);
+  };
+  const auto cells = [](const auto& result) {
+    std::int64_t count = 0;
+    for (const auto& box : result.boxes.boxes())
+      count += box.numPts();
+    return count;
+  };
+  Box<Dim> first = domain;
+  Box<Dim> second = domain;
+  first.hi[0] = 7;
+  second.lo[0] = 8;
+  EXPECT_EQ(cells(cluster({first, second}, false)), domain.numPts());
+  first.hi[0] = 3;
+  second.lo[0] = 12;
+  const auto wrapped = cluster({first, second}, true);
+  EXPECT_EQ(cells(wrapped), domain.numPts() / 4);
+  for (const auto& box : wrapped.boxes.boxes())
+    EXPECT_TRUE(box.hi[0] <= 1 || box.lo[0] >= 14);
+  EXPECT_TRUE(cluster({first}, true).boxes.empty());
+  const auto node_budget = controls.budget.recursion_nodes;
+  controls.budget.recursion_nodes = 1;
+  EXPECT_THROW((void)cluster({first}, true), std::length_error);
+  controls.budget.recursion_nodes = node_budget;
+
+  // A complete union produces identical boxes under these policies; the exact preparation
+  // identity must nevertheless retain both the guaranteed padding and periodic topology.
+  first = domain;
+  const auto physical = cluster({first}, false);
+  const auto periodic = cluster({first}, true);
+  controls.nesting_buffer.fill(0);
+  const auto no_padding = cluster({first}, false);
+  EXPECT_EQ(physical.boxes.boxes(), periodic.boxes.boxes());
+  EXPECT_EQ(physical.boxes.boxes(), no_padding.boxes.boxes());
+  const auto exact = [&](const auto& result) {
+    return pops::amr::regridding::detail::exact_regrid_contract<Dim>(
+        result.identity.source_level, pops::amr::RefinementRatio<Dim>(ratios), result.identity, {},
+        {}, {});
+  };
+  EXPECT_NE(exact(physical), exact(periodic));
+  EXPECT_NE(exact(physical), exact(no_padding));
+}
+
+}  // namespace
+
+TEST(test_nd_cluster, proper_nesting_preserves_parent_seams_and_authenticates_periodic_images) {
+  prove_nesting_preserves_patch_union_and_periodic_images<1>();
+  prove_nesting_preserves_patch_union_and_periodic_images<2>();
+  prove_nesting_preserves_patch_union_and_periodic_images<3>();
 }

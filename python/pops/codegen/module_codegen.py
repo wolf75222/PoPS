@@ -123,7 +123,7 @@ def emit_cpp(model: Any, func: Any = None, cse: bool = True) -> str:
 # ---------------------------------------------------------------------------
 
 def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generated", cse: bool = True,
-                    hoist_reciprocals: bool = False) -> str:
+                    hoist_reciprocals: bool = False, *, native_input_plan: Any = None) -> str:
     """Generate a composable C++ SOURCE BRICK (in the pops sense) from model._source.
 
     The produced struct exposes apply(U, a) returning the source term S(U, aux), with one line per
@@ -139,6 +139,7 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
     plus, aux -> locals); cse=True factors the common sub-expressions. Raises ValueError if
     set_source(...) has not been called."""
     from pops._ir.expr import _wrap as _ir_wrap
+    from pops.codegen._native_model_provider_plan import project_provider_locals
     if model._source is None:
         if model._source_terms:
             raise ValueError("model has multiple named sources; use pops.compile(...) "
@@ -156,7 +157,9 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
         return _prim_block(model, live, hoist_reciprocals)
 
     def aux_locals() -> list:
-        return model._aux_locals_lines()  # source-default consumer slots from ProviderPack
+        return project_provider_locals(
+            model._aux_locals_lines(),
+            model._component_operator_consumer_plans.get("source_default", ()), native_input_plan)
 
     na = model._total_n_aux()
     rt_member = model._runtime_params_member()  # P7-b: runtime indices BEFORE any to_cpp()
@@ -177,9 +180,9 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
     ]
     if rt_member:  # pops::RuntimeParams params{count, {defaults}} member (P7-b)
         S.append(rt_member.rstrip("\n"))
-    # The exact ProviderPack owns the native carrier width. Keep n_aux as a
-    # compatibility spelling; zero explicitly selects a provider-free consumer.
-    S.append("  static constexpr int n_providers = %d;" % na)
+    source_plan = model._component_operator_consumer_plans.get("source_default", ())
+    input_width = len(source_plan if native_input_plan is None else native_input_plan)
+    S.append("  static constexpr int n_providers = %d;" % input_width)
     if na:
         S.append("  static constexpr int n_aux = %d;" % na)
     S += _exact_brick_contract(
@@ -192,7 +195,7 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
     S.append("  POPS_HD pops::StateVec<%d> apply(const pops::StateVec<%d>& U, const auto& a) const {"
              % (nc, nc))
     src_exprs = [_ir_wrap(e) for e in model._source]
-    S += cons_locals() + prim_locals(_live_prims(model, src_exprs)) + aux_locals()
+    S += cons_locals() + aux_locals() + prim_locals(_live_prims(model, src_exprs))
     # _wrap: a component may be a Python literal (e.g. 0.0), promoted to Const.
     stl, scpps = _codegen_exprs(model, src_exprs, cse)
     S += stl
@@ -206,7 +209,7 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
         S.append("")
         S.append("  POPS_HD pops::Real frequency(const pops::StateVec<%d>& U, const auto& a) "
                  "const {" % nc)
-        S += cons_locals() + prim_locals(_live_prims(model, [model._src_freq])) + aux_locals()
+        S += cons_locals() + aux_locals() + prim_locals(_live_prims(model, [model._src_freq]))
         ftl, fcpps = _codegen_exprs(model, [model._src_freq], cse)
         S += ftl
         S += ["    return %s;" % fcpps[0], "  }"]
@@ -220,7 +223,7 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
         S.append("  POPS_HD void jacobian(const pops::StateVec<%d>& U, const auto& a, "
                  "pops::Real (&J)[%d][%d]) const {" % (nc, nc, nc))
         flat = [e for row in model._src_jac for e in row]
-        S += cons_locals() + prim_locals(_live_prims(model, flat)) + aux_locals()
+        S += cons_locals() + aux_locals() + prim_locals(_live_prims(model, flat))
         jtl, jcpps = _codegen_exprs(model, flat, cse)
         S += jtl
         for r in range(nc):
@@ -242,6 +245,8 @@ def _emit_bricks(model: Any, name: Any = None, hoist_reciprocals: bool = False) 
     @p hoist_reciprocals: codegen option propagated to the bricks (cf. emit_cpp_brick).
     Returns (nv, bricks_code, composite_type)."""
     nm = _cpp_identifier(name or (model.name.capitalize() + "Gen"))
+    from pops.codegen._native_model_provider_plan import native_model_provider_plan
+    native_inputs = native_model_provider_plan(model)
     nv = model.n_vars
     # CODEGEN guard (not only check(), which compile() does not call): a source
     # frequency or jacobian without m.source(...) would be silently PURGED by the
@@ -253,9 +258,11 @@ def _emit_bricks(model: Any, name: Any = None, hoist_reciprocals: bool = False) 
         if model._src_jac is not None:
             raise ValueError("source_jacobian(...) declared without source: call "
                              "m.source([...]) (the jacobian is emitted on the source brick)")
-    parts = [emit_cpp_brick(model, name=nm + "Hyp", hoist_reciprocals=hoist_reciprocals)]
+    parts = [emit_cpp_brick(model, name=nm + "Hyp", hoist_reciprocals=hoist_reciprocals,
+                           native_input_plan=native_inputs)]
     if model._source is not None:  # source brick generated, otherwise NoSource
-        parts.append(emit_cpp_source(model, name=nm + "Src", hoist_reciprocals=hoist_reciprocals))
+        parts.append(emit_cpp_source(model, name=nm + "Src", hoist_reciprocals=hoist_reciprocals,
+                                     native_input_plan=native_inputs))
         src_type = "pops_generated::%sSrc" % nm
     else:
         src_type = "pops::NoSource"

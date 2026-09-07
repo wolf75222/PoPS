@@ -96,6 +96,18 @@ struct AmrProgramSynchronizationEvent {
   ::pops::amr::ClockStamp clock;
 };
 
+/// Geometry on which the last accepted step produced its face/synchronization evidence.
+/// This is historical report authority, never a layout for the next numerical advance.
+struct AmrProgramFaceEvidenceProvenance {
+  std::string spatial_contract;
+  std::uint64_t topology_epoch = 0;
+  std::uint64_t materialization_generation = 0;
+  std::size_t level_count = 0;
+
+  friend bool operator==(const AmrProgramFaceEvidenceProvenance&,
+                         const AmrProgramFaceEvidenceProvenance&) = default;
+};
+
 /// Rank-independent accepted image of one exact native AMR Program.
 ///
 /// Face entries are the published side of the canonical transactional ledger. Pending fragments,
@@ -122,6 +134,7 @@ struct AmrProgramAcceptedState {
   /// Exact prepared authorities which bounded and coupled the accepted face ledgers.
   std::string flux_budget_contract;
   std::string coupling_contract;
+  std::optional<AmrProgramFaceEvidenceProvenance> face_evidence_provenance;
   std::array<std::vector<amr_reflux::FaceFluxFragment<Dim, AmrProgramFacePayload>>, Dim>
       accepted_face_flux;
   std::vector<::pops::amr::InterfaceFluxFragment<AmrProgramFacePayload>> accepted_interface_flux;
@@ -130,7 +143,8 @@ struct AmrProgramAcceptedState {
 
 namespace checkpoint_detail {
 
-inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '4'};
+inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '5'};
+inline constexpr std::array<std::uint8_t, 8> kLegacyMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '4'};
 
 class Writer {
  public:
@@ -696,6 +710,21 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
     throw std::invalid_argument(
         "exact AMR Program checkpoint has a truncated history-flux payload");
 
+  const bool has_face_evidence =
+      !state.synchronization_events.empty() ||
+      std::any_of(state.accepted_face_flux.begin(), state.accepted_face_flux.end(),
+                  [](const auto& fragments) { return !fragments.empty(); });
+  if (has_face_evidence && !state.face_evidence_provenance)
+    throw std::invalid_argument("exact AMR Program face evidence lacks its originating geometry");
+  if (!has_face_evidence && state.face_evidence_provenance)
+    throw std::invalid_argument(
+        "empty AMR Program face evidence cannot retain geometry provenance");
+  if (state.face_evidence_provenance &&
+      (state.face_evidence_provenance->spatial_contract.empty() ||
+       state.face_evidence_provenance->level_count == 0 ||
+       state.face_evidence_provenance->level_count >
+           static_cast<std::size_t>(std::numeric_limits<int>::max())))
+    throw std::invalid_argument("exact AMR Program face evidence has invalid geometry provenance");
   for (int axis = 0; axis < Dim; ++axis) {
     const auto validate_fragments = [&](const auto& fragments, std::string_view family) {
       std::optional<amr_reflux::FaceFluxFragmentKey<Dim>> previous;
@@ -704,6 +733,10 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
           throw std::invalid_argument("exact AMR Program checkpoint stores a " +
                                       std::string(family) + " face under another axis");
         amr_reflux::validate_face_flux_fragment(fragment.key, fragment.measure);
+        if (static_cast<std::size_t>(fragment.key.levels.fine) >=
+            state.face_evidence_provenance->level_count)
+          throw std::invalid_argument(
+              "exact AMR Program face fragment is outside its originating hierarchy");
         if (fragment.payload.empty())
           throw std::invalid_argument("exact AMR Program checkpoint face payload cannot be empty");
         for (Real component : fragment.payload)
@@ -735,7 +768,8 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
   }
   for (const AmrProgramSynchronizationEvent& event : state.synchronization_events) {
     if (event.parent_level < 0 || event.child_level != event.parent_level + 1 ||
-        static_cast<std::size_t>(event.child_level) >= state.level_clocks.size() ||
+        static_cast<std::size_t>(event.child_level) >=
+            state.face_evidence_provenance->level_count ||
         event.runtime_block < 0 || (event.phase != "reflux" && event.phase != "average_down") ||
         event.clock.level != event.parent_level || event.clock.macro_step < 0 ||
         !std::isfinite(event.clock.physical_time))
@@ -817,6 +851,14 @@ void write_state(Output& out, const AmrProgramAcceptedState<Dim>& state) {
     out.string(event.phase);
     write_clock(out, event.clock);
   }
+  out.u64(state.face_evidence_provenance ? 1U : 0U);
+  if (state.face_evidence_provenance) {
+    const auto& origin = *state.face_evidence_provenance;
+    out.string(origin.spatial_contract);
+    out.u64(origin.topology_epoch);
+    out.u64(origin.materialization_generation);
+    out.size(origin.level_count);
+  }
 }
 
 }  // namespace checkpoint_detail
@@ -842,6 +884,11 @@ AmrProgramAcceptedState<Dim> accepted_amr_program_state(
     std::sort(destination.begin(), destination.end(),
               [](const auto& left, const auto& right) { return left.key < right.key; });
   }
+  if (std::any_of(state.accepted_face_flux.begin(), state.accepted_face_flux.end(),
+                  [](const auto& fragments) { return !fragments.empty(); }))
+    state.face_evidence_provenance =
+        AmrProgramFaceEvidenceProvenance{state.spatial_contract, topology_epoch,
+                                         materialization_generation, state.level_clocks.size()};
   checkpoint_detail::validate_state(state);
   return state;
 }
@@ -1004,6 +1051,11 @@ std::size_t serialized_amr_program_accepted_state_capacity(
                      checkpoint_detail::kMinSynchronizationEventBytes);
   out.repeated_bytes(capacity.synchronization_event_count,
                      capacity.synchronization_phase_characters);
+  out.u64(1);
+  out.string_size(capacity.spatial_contract_characters);
+  out.u64(0);
+  out.u64(0);
+  out.size(capacity.level_count);
   return out.count();
 }
 
@@ -1012,7 +1064,10 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
     std::span<const std::uint8_t> bytes,
     const ::pops::amr::InterfaceFluxLedgerBudget* interface_budget = nullptr) {
   checkpoint_detail::Reader in(bytes);
-  in.expect_raw(checkpoint_detail::kMagic);
+  const bool legacy = bytes.size() >= checkpoint_detail::kLegacyMagic.size() &&
+                      std::equal(checkpoint_detail::kLegacyMagic.begin(),
+                                 checkpoint_detail::kLegacyMagic.end(), bytes.begin());
+  in.expect_raw(legacy ? checkpoint_detail::kLegacyMagic : checkpoint_detail::kMagic);
   if (in.i32() != Dim)
     throw std::runtime_error(
         "invalid exact AMR Program checkpoint: native dimension does not match the artifact");
@@ -1103,6 +1158,26 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
     event.runtime_block = in.i32();
     event.phase = in.string();
     event.clock = checkpoint_detail::read_clock(in);
+  }
+  if (legacy) {
+    if (!state.synchronization_events.empty() ||
+        std::any_of(state.accepted_face_flux.begin(), state.accepted_face_flux.end(),
+                    [](const auto& fragments) { return !fragments.empty(); }))
+      state.face_evidence_provenance = AmrProgramFaceEvidenceProvenance{
+          state.spatial_contract, state.topology_epoch, state.materialization_generation,
+          state.level_clocks.size()};
+  } else {
+    const auto present = in.u64();
+    if (present > 1)
+      throw std::runtime_error("invalid exact AMR Program face evidence provenance marker");
+    if (present != 0) {
+      AmrProgramFaceEvidenceProvenance origin;
+      origin.spatial_contract = in.string();
+      origin.topology_epoch = in.u64();
+      origin.materialization_generation = in.u64();
+      origin.level_count = in.u64();
+      state.face_evidence_provenance = std::move(origin);
+    }
   }
   in.finish();
   checkpoint_detail::validate_state(state);

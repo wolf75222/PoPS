@@ -117,9 +117,7 @@ class _VariablesMixin(_HyperbolicModel):
 
     def _aux_locals_lines(self) -> Any:
         """C++ locals read through exact compact provider-pack slots."""
-        from pops._ir.visitors import _dependencies
-
-        used = _dependencies(self._source or ())
+        used = self._aux_requirements(self._source_callback_expressions()).get("aux", ())
         return [
             "    const pops::Real %s = pops::provider_value<%d>(a);"
             % (name, self._consumer_provider_slot("source_default", name))
@@ -145,24 +143,11 @@ class _VariablesMixin(_HyperbolicModel):
         ``BoundFluxProviders<Model>`` used by the finite-volume route, while exposing only the
         consumer's resolved pack.
         """
-        from pops._ir.visitors import _dependencies
-
         expressions = [
             *[expr for values in self._flux.values() for expr in values],
-            *[expr for values in self._eig.values() for expr in values],
+            *self._stability_callback_expressions(),
         ]
-        if self._wave_speeds is not None:
-            expressions.extend(
-                expr for values in self._wave_speeds.values() for expr in values
-            )
-        if self._ws_jacobian is not None and self._ws_jacobian["rows"] is not None:
-            expressions.extend(
-                expr
-                for matrix in self._ws_jacobian["rows"].values()
-                for row in matrix
-                for expr in row
-            )
-        used = _dependencies(expressions)
+        used = self._aux_requirements(expressions).get("aux", ())
         return [
             "    const pops::Real %s = pops::provider_value<%d>(a);"
             % (name, self._physical_flux_consumer_slot(name))

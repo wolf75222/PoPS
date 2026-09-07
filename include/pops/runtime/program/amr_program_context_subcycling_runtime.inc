@@ -84,6 +84,7 @@ void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operat
     static_assert(noexcept(interface_flux_commit_guard_.swap(prepared_commit)));
     interface_flux_commit_guard_.swap(prepared_commit);
     interface_flux_ledger_->publish_prepared_commit(*interface_flux_commit_guard_);
+    multiblock_subcycling_has_accepted_step_ = true;
   } catch (...) {
     if (interface_flux_ledger_ && interface_flux_ledger_->in_transaction())
       interface_flux_ledger_->rollback();
@@ -281,6 +282,7 @@ void prepare_multiblock_subcycling_engine_() const {
   }
 
   multiblock_subcycling_ = std::move(prepared);
+  multiblock_subcycling_has_accepted_step_ = false;
   prepared_rhs_basis_bounds_ = std::move(rhs_basis_bounds);
   prepared_coefficient_term_bounds_ = std::move(coefficient_term_bounds);
   multiblock_subcycling_program_budget_contract_ = std::move(program_budget_contract);

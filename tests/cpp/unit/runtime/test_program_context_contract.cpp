@@ -1110,6 +1110,58 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   EXPECT_TRUE(sf.ncomp() == 1) << "alloc_scalar_field ncomp";
 }
 
+TEST(ProgramContextContract, LaplacianPreservesEveryComponentAndExactStencilAuthority) {
+  ensure_kokkos();
+  constexpr int n = 16;
+  NativeSystem sim(native_config(n));
+  install_execution_lane(sim, "pops.test.program-context.componentwise-laplacian");
+  add_gas(sim);
+  sim.set_program_block_map({0});
+  NativeProgramContext ctx(&sim);
+  NativeField input = ctx.alloc_scalar_field(2, 1);
+  NativeField output = ctx.alloc_scalar_field(2, 1);
+  NativeField expected = ctx.alloc_scalar_field(2, 1);
+  output.set_val(Real(42));
+  const Real pi = std::acos(Real(-1));
+  const Real eigenvalue0 = -Real(4 * n * n) * std::pow(std::sin(pi / Real(n)), 2);
+  const Real eigenvalue1 = -Real(4 * n * n) * std::pow(std::sin(Real(2) * pi / Real(n)), 2);
+  for (std::size_t local = 0; local < input.local_size(); ++local) {
+    const FieldView<Real, kTestDimension> values = input.fab(local).view();
+    const FieldView<Real, kTestDimension> reference = expected.fab(local).view();
+    for_each_cell(input.box(local), [=] POPS_HD(const Index<kTestDimension>& cell) {
+      const Real x = (Real(cell[0]) + Real(0.5)) / Real(n);
+      const Real first = Real(0.3) * std::cos(Real(2) * pi * x);
+      const Real second = -Real(0.4) * std::sin(Real(4) * pi * x);
+      values(cell, 0) = Real(1) + first;
+      values(cell, 1) = Real(0.5) + second;
+      reference(cell, 0) = eigenvalue0 * first;
+      reference(cell, 1) = eigenvalue1 * second;
+    });
+  }
+  auto boundary = ctx.prepare_mesh_boundary_session(input, ctx.prepared_execution_lane());
+  ctx.laplacian(output, input, *boundary);
+  for (std::size_t local = 0; local < output.local_size(); ++local) {
+    const FieldView<Real, kTestDimension> error = output.fab(local).view();
+    const NativeConstView reference = std::as_const(expected).fab(local).view();
+    for_each_cell(output.box(local), [=] POPS_HD(const Index<kTestDimension>& cell) {
+      for (int component = 0; component < 2; ++component)
+        error(cell, component) = std::abs(error(cell, component) - reference(cell, component));
+    });
+  }
+  EXPECT_LT(ctx.max_component(output, 0), Real(1e-10));
+  EXPECT_LT(ctx.max_component(output, 1), Real(1e-10));
+
+  NativeField scalar = ctx.alloc_scalar_field(1, 1);
+  NativeField no_ghosts = ctx.alloc_scalar_field(2, 0);
+  EXPECT_THROW(ctx.laplacian(scalar, input, *boundary), std::invalid_argument);
+  EXPECT_THROW(ctx.laplacian(output, scalar, *boundary), std::invalid_argument);
+  EXPECT_THROW(ctx.laplacian(output, no_ghosts, *boundary), std::invalid_argument);
+  auto scalar_boundary = ctx.prepare_mesh_boundary_session(scalar, ctx.prepared_execution_lane());
+  EXPECT_THROW(ctx.laplacian(output, input, *scalar_boundary), std::exception);
+  NativeField gradient = ctx.alloc_scalar_field(kTestDimension, 1);
+  EXPECT_THROW(ctx.gradient(gradient, input, *boundary), std::invalid_argument);
+}
+
 TEST(ProgramContextContract, LogicalSubcycleSnapshotsCarryExactChildWindowsAndRestoreParents) {
   ensure_kokkos();
   NativeSystemConfig cfg = native_config(8);

@@ -159,6 +159,8 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
         throw std::invalid_argument("Berger-Rigoutsos box sizes must be strictly positive");
       if (options.min_box_size[axis] > options.max_box_size[axis])
         throw std::invalid_argument("Berger-Rigoutsos minimum box size cannot exceed its maximum");
+      if (options.nesting_buffer[axis] < 0)
+        throw std::invalid_argument("Berger-Rigoutsos nesting buffer must be non-negative");
     }
     if (options.budget.shards == 0 || options.budget.recursion_nodes == 0 ||
         options.budget.cell_visits == 0 || options.budget.output_boxes == 0 ||
@@ -331,6 +333,58 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
     return {best, score};
   }
 
+  static bool nesting_covered_(const Box<Dim>& region,
+                               const hierarchy::LevelLayoutIdentity<Dim>& source,
+                               const ClusterOptions<Dim>& options, Work& work) {
+    if (std::all_of(options.nesting_buffer.begin(), options.nesting_buffer.end(),
+                    [](int width) { return width == 0; }))
+      return true;
+    std::vector<Box<Dim>> canonical{region};
+    for (int axis = 0; axis < Dim; ++axis) {
+      std::vector<Box<Dim>> next;
+      for (Box<Dim> piece : canonical) {
+        const std::int64_t lower =
+            static_cast<std::int64_t>(piece.lo[axis]) - options.nesting_buffer[axis];
+        const std::int64_t upper =
+            static_cast<std::int64_t>(piece.hi[axis]) + options.nesting_buffer[axis];
+        const std::int64_t domain_lower = source.domain.lo[axis];
+        const std::int64_t domain_upper = source.domain.hi[axis];
+        const std::int64_t length = source.domain.length(axis);
+        if (!options.periodic_axes[axis]) {
+          piece.lo[axis] = static_cast<int>(std::max(lower, domain_lower));
+          piece.hi[axis] = static_cast<int>(std::min(upper, domain_upper));
+        } else if (upper - lower + 1 >= length) {
+          piece.lo[axis] = source.domain.lo[axis];
+          piece.hi[axis] = source.domain.hi[axis];
+        } else {
+          const std::int64_t relative = lower - domain_lower;
+          const std::int64_t wrapped = domain_lower + ((relative % length) + length) % length;
+          const std::int64_t end = wrapped + upper - lower;
+          piece.lo[axis] = static_cast<int>(wrapped);
+          piece.hi[axis] = static_cast<int>(std::min(end, domain_upper));
+          if (end > domain_upper) {
+            Box<Dim> remainder = piece;
+            remainder.lo[axis] = source.domain.lo[axis];
+            remainder.hi[axis] = static_cast<int>(domain_lower + end - domain_upper - 1);
+            next.push_back(remainder);
+          }
+        }
+        next.push_back(piece);
+      }
+      canonical = std::move(next);
+    }
+    work.visit_cells(checked_product_(canonical.size(), source.patches.size()));
+    for (const Box<Dim>& required : canonical) {
+      mesh::ExactCellCount covered;
+      for (const Box<Dim>& parent : source.patches)
+        if (!covered.add(mesh::ExactCellCount::from_box(required.intersect(parent))))
+          throw std::overflow_error("Berger-Rigoutsos nesting coverage exceeds exact count");
+      if (covered != mesh::ExactCellCount::from_box(required))
+        return false;
+    }
+    return true;
+  }
+
   static void cluster_rec_(const TagMask<Dim>& mask, const Box<Dim>& candidate,
                            const ClusterOptions<Dim>& options, Work& work,
                            std::vector<Box<Dim>>& output) {
@@ -339,6 +393,25 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
     if (scan.tagged == 0)
       return;
     const Box<Dim>& region = scan.bounds;
+    if (!nesting_covered_(region, mask.level_identity(), options, work)) {
+      // Recluster unsupported candidates down to the parent-valid stencil domain. Using
+      // the complete patch union keeps valid refinement across parent patch seams.
+      int split_axis = 0;
+      for (int axis = 1; axis < Dim; ++axis)
+        if (region.length(axis) > region.length(split_axis))
+          split_axis = axis;
+      if (region.length(split_axis) == 1)
+        return;
+      Box<Dim> lower = region;
+      Box<Dim> upper = region;
+      const int cut = static_cast<int>(static_cast<std::int64_t>(region.lo[split_axis]) +
+                                       region.length(split_axis) / 2);
+      lower.hi[split_axis] = cut - 1;
+      upper.lo[split_axis] = cut;
+      cluster_rec_(mask, lower, options, work, output);
+      cluster_rec_(mask, upper, options, work, output);
+      return;
+    }
     const long double efficiency =
         static_cast<long double>(scan.tagged) / static_cast<long double>(region.numPts());
 

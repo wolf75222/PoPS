@@ -122,7 +122,7 @@ def _run(method: str, steps: int, cxx: str) -> np.ndarray:
     simulation = pops.bind(
         artifact,
         initial_values={instance: _initial_state()},
-        execution_context=artifact_execution_context(artifact),
+        resources={"execution_context": artifact_execution_context(artifact)},
     )
     report = pops.run(simulation, t_end=steps * DT, max_steps=steps)
     assert report.accepted_steps == simulation.macro_step() == steps

@@ -264,7 +264,8 @@ def test_fallback_conservative(cxx, tmp):
         )
     exe = os.path.join(tmp, "fallback_main")
     cp = subprocess.run(
-        [cxx, "-std=c++20", "-I", INCLUDE, main, "-o", exe], capture_output=True, text=True
+        [cxx, "-std=c++20", "-DPOPS_NATIVE_DIM=2", "-I", INCLUDE, main, "-o", exe],
+        capture_output=True, text=True
     )
     if cp.returncode != 0:
         chk(False, "compilation du test de repli (voir stderr)")
@@ -303,7 +304,7 @@ def test_cpp_brick_vs_numpy(cxx, tmp):
             '#include "pred_brick.hpp"\n'
             "int main(int argc, char** argv) {\n"
             "  pops_generated::ToyPredCpp m;\n"
-            "  pops::Aux a{};\n"
+            "  pops::ProviderValues<0> a{};\n"
             '  std::FILE* fp = std::fopen(argv[1], "w");\n'
             "  for (int i = 2; i < argc; i += 3) {\n"
             "    pops::StateVec<3> U{atof(argv[i]), atof(argv[i+1]), atof(argv[i+2])};\n"
@@ -315,8 +316,13 @@ def test_cpp_brick_vs_numpy(cxx, tmp):
             "}\n"
         )
     exe = os.path.join(tmp, "pred_main")
+    from pops.codegen.toolchain import _native_kokkos_include_dirs
+    kokkos_includes = [flag for directory in _native_kokkos_include_dirs()
+                       for flag in ("-I", directory)]
     cp = subprocess.run(
-        [cxx, "-std=c++20", "-I", INCLUDE, main, "-o", exe], capture_output=True, text=True
+        [cxx, "-std=c++20", "-DPOPS_NATIVE_DIM=2", *kokkos_includes,
+         "-I", INCLUDE, main, "-o", exe],
+        capture_output=True, text=True
     )
     if cp.returncode != 0:
         chk(False, "compilation de la brique generee (voir stderr)")

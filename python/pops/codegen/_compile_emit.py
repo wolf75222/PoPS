@@ -839,6 +839,8 @@ def _emit_auxiliary_route_registration(
         lines.append("  }});")
 
     emit_plan(owner_qid + "/physical_flux", flux_plan)
+    from pops.codegen._native_model_provider_plan import native_model_provider_plan
+    emit_plan(owner_qid + "/native_model", native_model_provider_plan(model))
     for operator, plan in plans.items():
         emit_plan(owner_qid + "/operator/" + operator, plan)
     lines.append("}")
@@ -1098,7 +1100,7 @@ def emit_cpp_native_loader(
             + system_elliptic_prepare_lines
             + "  pops::runtime::system::PreparedNativeSystemPackage<pops::kNativeDimension> package;\n"
             "  package.consumer_qid = "
-            + json.dumps(_consumer_owner_qid(m, consumer_owner_qid) + "/physical_flux")
+            + json.dumps(_consumer_owner_qid(m, consumer_owner_qid) + "/native_model")
             + ";\n"
             "  const pops::NewtonOptions newton = pops::newton_options_from_abi(\n"
             "      newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);\n"
@@ -1136,7 +1138,7 @@ def emit_cpp_native_loader(
             "      name, std::move(model), limiter, riemann, recon, time, gamma, substeps,\n"
             "      stride, pos_floor, weno_epsilon, wave_speed_cache, %s, newton,\n"
             "      newton_diagnostics != 0);\n"
-            % json.dumps(_consumer_owner_qid(m, consumer_owner_qid) + "/physical_flux")
+            % json.dumps(_consumer_owner_qid(m, consumer_owner_qid) + "/native_model")
             + amr_elliptic_package_lines
             + "  s->install_prepared_native_amr_package(std::move(package));\n"
             "}\n"

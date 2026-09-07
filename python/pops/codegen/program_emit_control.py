@@ -19,6 +19,29 @@ from pops.codegen._rhs_coherence import plan_rhs_coherence
 from pops.time.references import block_name
 
 
+def _detached_coupled_quantity_identity(quantity: Any, source: Any) -> Any:
+    """Canonicalize an exact source declaration for a detached Program input.
+
+    Detachment sheds authoring capabilities from Program handles, while the
+    immutable source Module still owns the qualified formula leaves. Authenticate
+    that live declaration before comparing complete canonical identities; equal
+    display names or independently authored equivalent Modules are insufficient.
+    """
+    handle = quantity.handle
+    declaration = handle.declaration_ref if handle.is_instance else handle
+    spaces = source.state_spaces()
+    if declaration.kind != "state" or declaration.local_id not in spaces:
+        return None
+    registered = source.state_handle(spaces[declaration.local_id])
+    if declaration != registered:
+        return None
+    if quantity.space != registered.space or declaration.space != registered.space:
+        raise ValueError("coupled_rate qualified input changes its physical state type")
+    from pops.time.references import canonical_handle
+
+    return canonical_handle(handle).canonical_identity()
+
+
 def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dict:
     """Resolve a ``coupled_rate`` node @p v to its per-block component formulas (Spec 3 criterion
     27, ADC-457), validated for the cons-only MVP. Returns ``{block: [Expr, ...]}`` (one formula
@@ -37,6 +60,7 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
     op_name = v.attrs["operator"]
     from pops.time.operator_resolution import resolve_operator_handle
     operator_handle = v.attrs.get("operator_handle")
+    detached_source = None
     if operator_handle is not None and getattr(program, "_operator_registries", None):
         op = resolve_operator_handle(
             program, operator_handle, where="coupled_rate codegen", values=v.inputs)
@@ -62,6 +86,8 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
         if op.kind != operator_handle.kind or op.kind != "coupled_rate":
             raise ValueError(
                 "coupled_rate codegen: operator handle kind differs from its source Module")
+        if getattr(program, "_compiled_detached", False):
+            detached_source = source
     else:
         raise ValueError(
             "coupled_rate codegen: node %r lacks its owner-qualified OperatorHandle" % v.name)
@@ -81,13 +107,24 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
             for quantity in _walk_expr(expression):
                 if not isinstance(quantity, QuantityRef):
                     continue
+                canonical = (None if detached_source is None else
+                             _detached_coupled_quantity_identity(quantity, detached_source))
                 matches = []
                 for ordinal, state in enumerate(v.inputs):
                     reference = getattr(state, "state_ref", None)
                     declaration = getattr(reference, "declaration_ref", None)
+                    canonical_match = canonical is not None and any(
+                        candidate is not None and candidate.is_resolved
+                        and candidate.canonical_identity() == canonical
+                        for candidate in (reference, declaration))
                     if quantity.handle == reference or (
-                            declaration is not None and quantity.handle == declaration):
+                            declaration is not None and quantity.handle == declaration) \
+                            or canonical_match:
                         if quantity.space != state.space:
+                            raise ValueError("coupled_rate qualified input changes its physical state type")
+                        if canonical_match and any(
+                                candidate.space != state.space
+                                for candidate in (reference, declaration)):
                             raise ValueError("coupled_rate qualified input changes its physical state type")
                         matches.append((ordinal, state))
                 if len(matches) != 1:

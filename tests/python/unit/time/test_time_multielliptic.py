@@ -274,6 +274,9 @@ def _prog(name, field=None, model=None):
 
 
 def _emit(program, *, model=None):
+    from pops.codegen.module_lowering import lower_and_validate
+    if model is not None:
+        model, _ = lower_and_validate(model)
     return emit_cpp_program(program, model=model, field_plans=codegen_field_plans(program))
 
 
@@ -467,7 +470,12 @@ def step_program(
             provider_outputs.isdisjoint(compiled.arguments().aux),
             "named field outputs are reported as provider-owned, not external bind aux",
         )
-    simulation = pops.bind(compiled, initial_state={"plasma": _ic()})
+    from tests.python.support.native_execution_context import artifact_execution_context
+
+    simulation = pops.bind(
+        compiled, initial_state={"plasma": _ic()},
+        resources={"execution_context": artifact_execution_context(compiled)},
+    )
     report = pops.run(simulation, t_end=DT, max_steps=1)
     chk(report.accepted_steps == 1, "%s accepted one public runtime step" % artifact_name)
     return np.asarray(simulation.state_global("plasma"), dtype=np.float64)
