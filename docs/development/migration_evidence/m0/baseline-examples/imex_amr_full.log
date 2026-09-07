@@ -1,0 +1,7 @@
+PoPS release runtime | native_sha256=c98574b452ab5ee138212a660c48fe638571f9b5e37d5c6b2eb708fa45ea069c
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+installed example failed: planned collective has no exact ConsumerGraph block/resource/operation/strategy/communicator owner
