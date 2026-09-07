@@ -85,7 +85,9 @@ def main() -> int:
         command = [python, "-c", bootstrap, helper, "--runtime-sha256", installation["sha256"],
                    "--example", str(source / path), "--", *forwarded]
         if ranks > 1:
-            command = [str(args.python.parent / "mpiexec"), "-n", str(ranks), *command]
+            # MPI launchers may locate sibling helper binaries relative to argv[0].
+            command = [str((args.python.parent / "mpiexec").resolve()),
+                       "-n", str(ranks), *command]
         log = output / (name + ".log")
         started = time.monotonic()
         timeout = False
