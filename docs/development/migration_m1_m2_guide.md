@@ -280,6 +280,27 @@ the authenticated provider pack, and checks every selected program evaluation ag
 source module before emission. Repeated adapter entry must preserve the same resolved plan and
 source-module hash.
 
+Runtime `InputAux` values cross `pops.bind` under the exact owner-qualified
+`pops.model.ComponentKey` declared by the resolved provider pack. The key carries
+`owner_qid`, `space_kind`, `space_name`, and `component`; a bare component string, foreign-owner
+key, derived-provider key, or missing declared input is rejected. The public call shape exercised
+by `tests/python/unit/runtime/test_auxiliary_public_bind.py` is:
+
+```python
+# `input_key` is the exact declared runtime-InputAux ComponentKey from the resolved pack.
+simulation = pops.bind(
+    artifact,
+    initial_state=initial_state,
+    aux={input_key: values},
+    resources=resources,
+)
+```
+
+The bound snapshot preserves the exact key and array shape, and a positive projection consumes that
+input. Native field outputs remain owned by their field provider and are not uploaded through the
+`aux` mapping. This authority applies to public uniform binding; AMR preparation retains its
+existing authenticated layout and provider route.
+
 Extension components use the public manifest-driven `ComponentAdapter` seam. Register a component
 with its `ComponentManifest` and target platform, retrieve it by the manifest `component_id`, and
 invoke a declared interface. A `fallible_evaluation` interface must return an explicit
@@ -315,10 +336,20 @@ which new contracts still await their phase evidence.
 | M6 — Consolidate temporal problems and accepted continuation | Generalize solve/result tuples, nested-attempt publication, accepted exchange transactions, checked explicit/implicit/IMEX/splitting expansions, and explicit histories/dense-output/restart/topology-transition validity. Existing SSA/region, rollback, restart, and continuation routes are retained while these extensions are qualified. |
 | M7 — Extend coupled supports, layouts and AMR | Preserve the qualified scalar AMR path while adding synchronized composite-field coupling, a bounded different-support 1x1v-to-1x physical map, explicit physical maps, and the required collective/transfer/transition diagnostics. |
 
+With the M0–M2 technical gates complete, the first entry slices are M3.1 / [ADC-903](https://linear.app/romain7522/issue/ADC-903),
+M4.1 / [ADC-904](https://linear.app/romain7522/issue/ADC-904), M5.1 / [ADC-905](https://linear.app/romain7522/issue/ADC-905),
+and M6.1 / [ADC-906](https://linear.app/romain7522/issue/ADC-906). M3.1 is the recommended first
+slice; M5.1 can proceed in parallel and depends on M1.2 plus M2.1/M2.2/M2.3. Later M5.3/M5.4
+remain dependent on M6.1/M6.2.
+
 Private kernel reuse is eligible only for a transparent, field-free, parameter-free source
 implementation of the same declaration. Separate per-block evaluations and owner-qualified
-identities remain distinct; reuse does not merge their ownership or provenance. No performance gain
-is claimed, and the native reuse test is still pending.
+identities remain distinct; reuse does not merge their ownership or provenance. The final retry
+records ordinary `2.003255542 s` / `198416` bytes / `1` source implementation / `2` evaluations and
+guarded `3.327155250 s` / `235328` bytes / `2` implementations / `2` evaluations. These observations
+are cache-affected rather than cold timings; the initial `45.741679 s` / `46.165868 s` measurements
+remain historical beside the pre-fix stale diagnostic failure. These counts separate source reuse
+from mathematical evaluation and do not establish a performance gain or zero-overhead abstraction.
 
 Typical structured refusals include `unsupported_balance_realization`,
 `multi_state_field_provider_unsupported`, `operator_kind_not_lowerable`,
@@ -327,11 +358,38 @@ the evidence record; do not simplify it into a dummy computation.
 
 ## Evidence status
 
-The frozen Dim2 candidate `aec6b17` has two recorded tutorial profiles passing (`scalar_tutorial_openmp`
-and `scalar_tutorial_mpi2`). The full scalar, multiphysics, and IMEX–AMR profiles remain under
-repair. This guide makes no M0–M2 completion claim and reports no numerical-correctness or
-performance-green result. The integration owner will fill the exact source/configuration/command/
-artifact/oracle record in [`migration_m0_m2_results.md`](migration_m0_m2_results.md).
+The current production evidence is candidate7 source `bd583faf196f3c1faeedec489e04d24e959ed00b`
+with the authenticated Dim2 native extension SHA-256
+`d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518`. Its retained wheel proof
+records 915 installed members, Kokkos and MPI support, and the wheel SHA-256
+`4bc8fda4395f510f9e56710dbce6e769030730d48752ef67fc0eaa1c2ac49792`.
+
+The candidate7 screened/MMS plus primitive lane is `16 passed` with no skips, the five
+provider-sensitive scripts pass without skip markers, the selected native lane has 156 passes and
+3 MPI-only skips, the effective MPI lane has 4/4 MPI CTest and 7 gtests, LocalLinear/LocalNewton
+has 145 assertions with no skips or failures, including fixed original `16x16`/`8x8` profiles, and
+the public InputAux binding lane has 9 passes.
+The five normative reference profiles have pass evidence across authenticated artifacts: candidate7
+OpenMP, MPI2, IMEX-AMR, and the example-only multiphysics snapshot repair, plus the completed full
+scalar profile on the clean candidate5 artifact. Their source and artifact provenance stays separate
+in [`migration_m0_m2_results.md`](migration_m0_m2_results.md).
+
+M0 is done for baseline capture with all five baseline failures and unavailable cells retained. M1
+source/IR implementation and the qualified Roe/HLL native/compiler replay are complete. M2
+execution and benchmark gates are complete within the frozen contract: the final compiler/identity
+replay is `1107 passed, 0 failed, 30 deselected`, with `2` property warnings in `725.41 s`, and the
+final benchmark has eight valid records and six strict pairs under the two-warmup, seven-repetition
+protocol. Ratios, MAD, and helper timings are observations; this guide makes no speedup or
+zero-overhead claim. ADC-901 and ADC-902 remain the issue links for this completed M0–M2 scope.
+
+The final seven-level index is recorded at
+[`migration_evidence/m1_m2/index.json`](migration_evidence/m1_m2/index.json) with status `complete`,
+five passed profiles, an empty pending list, and 66 byte-hashed files totaling `2,912,669` bytes.
+
+The exact source/configuration/command/artifact/oracle record is maintained in
+[`migration_m0_m2_results.md`](migration_m0_m2_results.md). The report keeps resolution-only
+`explain` output, selected native execution, numerical checks, and performance characterization as
+separate evidence levels. No GPU or public Dim1/Dim3 scientific qualification is implied.
 
 Focused source witnesses are `tests/python/unit/codegen/test_qualified_quantity_application.py`,
 `tests/python/unit/problem/test_state_handle_space.py`,

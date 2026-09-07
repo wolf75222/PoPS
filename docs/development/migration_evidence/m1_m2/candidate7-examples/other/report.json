@@ -1,0 +1,95 @@
+{
+  "schema": "pops.migration.m0.reference-examples.v1",
+  "phase": "candidate",
+  "runner": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/scripts/run_migration_baseline.py",
+  "runner_sha256": "12ad595783560e1d015dc13b007ab0fc3b6ef9b554edb7b1d8858341da8f1114",
+  "source": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8",
+  "revision": "bd583faf196f3c1faeedec489e04d24e959ed00b",
+  "dirty": false,
+  "platform": "macOS-26.5-arm64-arm-64bit",
+  "python": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/bin/python",
+  "installation": {
+    "package": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/__init__.py",
+    "native": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "sha256": "d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518"
+  },
+  "dimension": 2,
+  "omp_num_threads": 2,
+  "profiles": [
+    {
+      "profile": "scalar_tutorial_openmp",
+      "command": [
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/bin/python",
+        "-c",
+        "import runpy,sys; from pops._native_selector import select_native_dimension; select_native_dimension(2); sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name='__main__')",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/scripts/run_installed_example.py",
+        "--runtime-sha256",
+        "d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518",
+        "--example",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/docs/tuto/scalar_advection/06_openmp_amr_explicit_ssprk2.py",
+        "--"
+      ],
+      "mpi_ranks": 1,
+      "returncode": 0,
+      "timeout": false,
+      "seconds": 47.48955900000874,
+      "log": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/other/scalar_tutorial_openmp.log",
+      "log_sha256": "edde690764db7e1d0ecc3b9ddd253e3b5307be454bea4f2c065a18dace42de8f"
+    },
+    {
+      "profile": "scalar_tutorial_mpi2",
+      "command": [
+        "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/mpiexec.hydra",
+        "-n",
+        "2",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/bin/python",
+        "-c",
+        "import runpy,sys; from pops._native_selector import select_native_dimension; select_native_dimension(2); sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name='__main__')",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/scripts/run_installed_example.py",
+        "--runtime-sha256",
+        "d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518",
+        "--example",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/docs/tuto/scalar_advection/08_mpi_amr_explicit_ssprk2.py",
+        "--"
+      ],
+      "mpi_ranks": 2,
+      "returncode": 0,
+      "timeout": false,
+      "seconds": 25.29048941700603,
+      "log": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/other/scalar_tutorial_mpi2.log",
+      "log_sha256": "1802e48ef4f4cd6ead7474df6d24507373ba0d7293c85f110c0a803f99a035be"
+    },
+    {
+      "profile": "imex_amr_full",
+      "command": [
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/bin/python",
+        "-c",
+        "import runpy,sys; from pops._native_selector import select_native_dimension; select_native_dimension(2); sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name='__main__')",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/scripts/run_installed_example.py",
+        "--runtime-sha256",
+        "d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518",
+        "--example",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py",
+        "--",
+        "--output-dir",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/other/imex_amr_full"
+      ],
+      "mpi_ranks": 1,
+      "returncode": 0,
+      "timeout": false,
+      "seconds": 153.92111712499172,
+      "log": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/other/imex_amr_full.log",
+      "log_sha256": "fec70f652082f86e0dc52b62249379329380719f8c6d3fb3e91811bc01e2124c"
+    }
+  ],
+  "selected_profiles": [
+    "scalar_tutorial_openmp",
+    "scalar_tutorial_mpi2",
+    "imex_amr_full"
+  ],
+  "limitations": [
+    "No GPU qualification",
+    "Reference examples, not a manufactured-solution convergence matrix",
+    "No process-loss tolerance claim"
+  ]
+}

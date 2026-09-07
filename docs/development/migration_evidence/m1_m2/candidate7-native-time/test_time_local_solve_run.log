@@ -1,0 +1,31 @@
+{"fixture": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/tests/python/unit/time/test_time_local_solve_run.py", "fixture_sha256": "863aa4f968a61f86e276849852795de9e125198943420eea7fc6d841154127b9", "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8", "source_commit": "bd583faf196f3c1faeedec489e04d24e959ed00b", "python": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/bin/python", "prefix": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env", "package": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/__init__.py", "native_sha256": "d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518"}
+== (A) typed local-linear solve codegen ==
+  [OK ] generated local-linear solve kernel has 'pops::for_each_cell('
+  [OK ] generated local-linear solve kernel has 'pops::detail::mat_inverse<3>('
+  [OK ] generated local-linear solve kernel has 'if (solve_failure_ == 0 && !pops::detail::mat_inverse<3>('
+  [OK ] generated local-linear solve kernel has 'pops::Real M_[3][3];'
+  [OK ] generated local-linear solve kernel has 'pops::Real Minv_[3][3];'
+  [OK ] generated local-linear solve kernel has 'pops::all_reduce_max(pops::reduce_max_local(local_solve_status_'
+  [OK ] generated local-linear solve kernel has '= ctx.prepared_execution_lane();'
+  [OK ] generated local-linear solve kernel has 'pops::SolveOutcome::collective_lane('
+  [OK ] generated local-linear solve kernel has 'pops::SolveReport local_solve_report_'
+  [OK ] generated local-linear solve kernel has 'pops::SolveOutcome local_solve_outcome_'
+  [OK ] generated local-linear solve kernel has '.consume(pops::SolveConsumption::kAccept)'
+  [OK ] generated local-linear solve kernel has 'pops::SolveStatus::kSingular'
+  [OK ] generated local-linear solve kernel has 'pops::SolveStatus::kInvalidEvaluation'
+  [OK ] generated local-linear solve kernel has 'const pops::Real B_z = providers(index, 0);'
+  [OK ] generated local-linear solve kernel has 'ctx.template provider_values_view<1>('
+  [OK ] the Lorentz operator M = I - dt*L reads +/- B_z off the aux
+  [OK ] local-linear solve refused without a model
+  [OK ] n_cons=9 emits exact manifest-sized dense storage
+== (B) end-to-end: implicit Lorentz solve vs analytic rotation ==
+  [OK ] handle carries the program name
+  Lorentz parity: max|d(rho)| = 0.00e+00  max|d(mx,my)| = 1.11e-16
+  [OK ] rho unchanged by the Lorentz solve (max|d| = 0.00e+00)
+  [OK ] stepped (mx, my) == analytic implicit rotation (max|d| = 1.11e-16)
+  [OK ] the step actually rotated the momentum
+  [OK ] non-finite local coefficients reject the step attempt
+  [OK ] the typed rejection status is invalid_evaluation
+  [OK ] the rejected local solve does not commit a provisional state
+PASS test_time_local_solve_run
+{"fixture_result": "test_time_local_solve_run.py", "exit_code": 0, "seconds": 49.755}

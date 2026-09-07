@@ -1,0 +1,29 @@
+INSTALLED /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/__init__.py
+NATIVE /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so SHA256 d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518
+FIXTURE /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/tests/python/unit/runtime/test_projection_eig.py SHA256 489c217c29e21bb48676c517a59f116e43c7785e83229815811d43799a992e82 SOURCE_SHA bd583faf196f3c1faeedec489e04d24e959ed00b
+== (1) eval numpy eig_max_im / eig_lmin / eig_lmax == np.linalg.eigvals ==
+  [OK ] 2x2 max_im == numpy (ecart max 0.00e+00)
+  [OK ] 2x2 lmin == numpy (ecart max 0.00e+00)
+  [OK ] 2x2 lmax == numpy (ecart max 0.00e+00)
+  [OK ] scalaire : rotation [[c,-s],[s,c]] -> max_im = |s| = 0.800
+  [OK ] 3x3 max_im == numpy (ecart max 0.00e+00)
+  [OK ] 3x3 lmin == numpy (ecart max 0.00e+00)
+  [OK ] 3x3 lmax == numpy (ecart max 0.00e+00)
+== (2) codegen : include dense_eig + foncteur nomme (pas de lambda) ==
+  [OK ] brique inclut dense_eig.hpp
+  [OK ] foncteur nomme pops_eig_max_im_2x2 declare
+  [OK ] le foncteur exige une borne spectrale valide avant de retourner max_im
+  [OK ] aucune lambda etendue (device-clean)
+  [OK ] project() appelle le foncteur
+== (5) extension ADDITIVE : projection SANS temoin VP inchangee (ADC-177) ==
+  [OK ] aucun include dense_eig sans temoin VP
+  [OK ] aucun foncteur eig sans temoin VP (additif)
+== (3) [compilateur] brique generee project(U) == reference numpy (cellule par cellule) ==
+  [OK ] la brique generee compile contre les en-tetes pops
+  [OK ] project(U) C++ == numpy sur 64 cellules (ecart max 0.00e+00)
+  [OK ] les deux branches (VP complexe / reelle) sont exercees (40/64 corrigees)
+  [OK ] temoin = |Im| : max_im == |q1| de la rotation (ecart 1.11e-16)
+== (4) [_pops] semantique POST-PAS (production) == reference numpy ==
+  [OK ] production : etat post-pas == transport puis projection(temoin VP) numpy (ecart 0.00e+00)
+  [OK ] production : la branche VP complexe corrige q2 (cible atteinte)
+FAILS = 0

@@ -1,0 +1,174 @@
+{
+  "schema": "pops.migration.benchmark-comparison.v1",
+  "comparisons": [
+    {
+      "case": "arith_halo",
+      "variant": "saxpy_then_fill_boundary",
+      "ranks": 1,
+      "baseline_revision": "51bcdc2e2399dbc922c58c3008ae30a11332f1d8",
+      "candidate_revision": "bd583faf196f3c1faeedec489e04d24e959ed00b",
+      "candidate_dirty": false,
+      "baseline_median_seconds": 0.000232854,
+      "candidate_median_seconds": 0.00021270799999999998,
+      "candidate_over_baseline": 0.9134822678588299,
+      "baseline_mad_seconds": 9.603999999999998e-06,
+      "candidate_mad_seconds": 2.7353999999999996e-05,
+      "sample_count": 14,
+      "validation": {
+        "passed": true,
+        "nonfinite_detected": false,
+        "metric": "max_abs_error_valid_and_ghost",
+        "saxpy_error": 0,
+        "lincomb_error": 0,
+        "variant_difference": 0,
+        "tolerance": 1.4210854715202004e-14,
+        "timed": false
+      }
+    },
+    {
+      "case": "arith_halo",
+      "variant": "lincomb_then_fill_boundary",
+      "ranks": 1,
+      "baseline_revision": "51bcdc2e2399dbc922c58c3008ae30a11332f1d8",
+      "candidate_revision": "bd583faf196f3c1faeedec489e04d24e959ed00b",
+      "candidate_dirty": false,
+      "baseline_median_seconds": 0.0002487295,
+      "candidate_median_seconds": 0.0002527715,
+      "candidate_over_baseline": 1.0162505854753858,
+      "baseline_mad_seconds": 8.666499999999996e-06,
+      "candidate_mad_seconds": 3.998000000000001e-05,
+      "sample_count": 14,
+      "validation": {
+        "passed": true,
+        "nonfinite_detected": false,
+        "metric": "max_abs_error_valid_and_ghost",
+        "saxpy_error": 0,
+        "lincomb_error": 0,
+        "variant_difference": 0,
+        "tolerance": 1.4210854715202004e-14,
+        "timed": false
+      }
+    },
+    {
+      "case": "scalar_mg",
+      "variant": "geometric_multigrid",
+      "ranks": 1,
+      "baseline_revision": "51bcdc2e2399dbc922c58c3008ae30a11332f1d8",
+      "candidate_revision": "bd583faf196f3c1faeedec489e04d24e959ed00b",
+      "candidate_dirty": false,
+      "baseline_median_seconds": 0.008588666,
+      "candidate_median_seconds": 0.007943417,
+      "candidate_over_baseline": 0.9248720348421978,
+      "baseline_mad_seconds": 0.0002327070000000004,
+      "candidate_mad_seconds": 4.875000000000018e-05,
+      "sample_count": 7,
+      "validation": {
+        "passed": true,
+        "timed": false,
+        "solve_status": "solved",
+        "residual_l2": 1.6208599851186278e-08,
+        "forcing_l2": 19.72732043143998,
+        "residual_limit": 7.891152446243649e-08,
+        "manufactured_max_error": 0.0002007008622438855,
+        "resolution_scaled_error_limit": 0.03125
+      }
+    },
+    {
+      "case": "arith_halo",
+      "variant": "saxpy_then_fill_boundary",
+      "ranks": 2,
+      "baseline_revision": "51bcdc2e2399dbc922c58c3008ae30a11332f1d8",
+      "candidate_revision": "bd583faf196f3c1faeedec489e04d24e959ed00b",
+      "candidate_dirty": false,
+      "baseline_median_seconds": 0.00022316650000000002,
+      "candidate_median_seconds": 0.000224979,
+      "candidate_over_baseline": 1.008121738701821,
+      "baseline_mad_seconds": 3.647900000000003e-05,
+      "candidate_mad_seconds": 3.337500000000001e-05,
+      "sample_count": 14,
+      "validation": {
+        "passed": true,
+        "nonfinite_detected": false,
+        "metric": "max_abs_error_valid_and_ghost",
+        "saxpy_error": 0,
+        "lincomb_error": 0,
+        "variant_difference": 0,
+        "tolerance": 1.4210854715202004e-14,
+        "timed": false
+      }
+    },
+    {
+      "case": "arith_halo",
+      "variant": "lincomb_then_fill_boundary",
+      "ranks": 2,
+      "baseline_revision": "51bcdc2e2399dbc922c58c3008ae30a11332f1d8",
+      "candidate_revision": "bd583faf196f3c1faeedec489e04d24e959ed00b",
+      "candidate_dirty": false,
+      "baseline_median_seconds": 0.0002337705,
+      "candidate_median_seconds": 0.000257438,
+      "candidate_over_baseline": 1.1012424578806994,
+      "baseline_mad_seconds": 2.4249499999999985e-05,
+      "candidate_mad_seconds": 4.6563500000000016e-05,
+      "sample_count": 14,
+      "validation": {
+        "passed": true,
+        "nonfinite_detected": false,
+        "metric": "max_abs_error_valid_and_ghost",
+        "saxpy_error": 0,
+        "lincomb_error": 0,
+        "variant_difference": 0,
+        "tolerance": 1.4210854715202004e-14,
+        "timed": false
+      }
+    },
+    {
+      "case": "scalar_mg",
+      "variant": "geometric_multigrid",
+      "ranks": 2,
+      "baseline_revision": "51bcdc2e2399dbc922c58c3008ae30a11332f1d8",
+      "candidate_revision": "bd583faf196f3c1faeedec489e04d24e959ed00b",
+      "candidate_dirty": false,
+      "baseline_median_seconds": 0.315405875,
+      "candidate_median_seconds": 0.239240833,
+      "candidate_over_baseline": 0.7585173643325446,
+      "baseline_mad_seconds": 0.00992541600000002,
+      "candidate_mad_seconds": 0.0015405009999999997,
+      "sample_count": 7,
+      "validation": {
+        "passed": true,
+        "timed": false,
+        "solve_status": "solved",
+        "residual_l2": 1.6208599851186278e-08,
+        "forcing_l2": 19.72732043143998,
+        "residual_limit": 7.891152446243649e-08,
+        "manufactured_max_error": 0.0002007008622438855,
+        "resolution_scaled_error_limit": 0.03125
+      }
+    }
+  ],
+  "files": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/baseline-benchmarks.json",
+      "sha256": "9e72c81eb7573129d7d35019b391a0bf39e8ea211030fd440aecf67b458e3899"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-benchmarks.json",
+      "sha256": "3376a511bc85e05fd1f1d6723786f7ae6907d3f41359eb4258977fc59f5e929e"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/baseline-benchmarks-mpi2.json",
+      "sha256": "282e66048b06f54ec3e28974ddcfe5d21e30d54775d5ac2c029ef03fdfa37b10"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-benchmarks-mpi2.json",
+      "sha256": "4458f3ecc31c2c33041daad71076fdaee5533d4d3b2b612b55c81660da4731de"
+    }
+  ],
+  "limitations": [
+    "Host timings are observations, not a zero-overhead or speedup guarantee.",
+    "M0 benchmark source included the recorded explicit ExecutionLane API repair.",
+    "No GPU hardware, hardware memory-traffic counters, or aggregate MPI-worker peak RSS was measured.",
+    "No comparable baseline native shared-kernel witness: baseline authoring failed before native execution."
+  ],
+  "valid_records": 8
+}

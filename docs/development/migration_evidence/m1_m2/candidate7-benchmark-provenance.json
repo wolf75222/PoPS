@@ -1,0 +1,47 @@
+{
+  "schema": "pops.migration.benchmark-provenance.v1",
+  "source_revision": "bd583faf196f3c1faeedec489e04d24e959ed00b",
+  "source_root": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8",
+  "source_clean": true,
+  "benchmark_project_root": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/benchmarks",
+  "benchmark_tracked_files_identical_to_frozen_source": 25,
+  "benchmark_executable": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-benchmarks/bin/pops_benchmark",
+    "sha256": "1041f5d0edcb8f74c61bd9147d0d08a4f61b19d749bbd6213744f050d3033152",
+    "bytes": 975792
+  },
+  "cmake_cache_sha256": "69bd96ac8208bf90a894a4f9f46927d17a56666f781b07355c977dbef2fc8ea9",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false"
+  },
+  "reproduction_argv": [
+    [
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-benchmarks/bin/pops_benchmark",
+      "--case=all",
+      "--warmups=2",
+      "--repetitions=7",
+      "--output=rank1.jsonl"
+    ],
+    [
+      "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/mpiexec.hydra",
+      "-n",
+      "2",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-benchmarks/bin/pops_benchmark",
+      "--case=all",
+      "--warmups=2",
+      "--repetitions=7",
+      "--output=rank2.jsonl"
+    ]
+  ],
+  "protocol": "Rank 1 then rank 2, after other migration test workloads completed; full defaults, paired ABBA arithmetic, cold repeated MG. Reproduction argv is normalized; raw measurement metadata records the executed parameters.",
+  "evidence_sha256": {
+    "candidate7-benchmark-configure.log": "00860e4463513375e460a46aa2b4f01b91f292bf7a81206c6dbae3931e8d63a5",
+    "candidate7-benchmark-build.log": "d4c04b4463a15e6b7119a1d1fe6e679f913614f8f0956507f55fba3e035416fe",
+    "candidate7-benchmarks.json": "3376a511bc85e05fd1f1d6723786f7ae6907d3f41359eb4258977fc59f5e929e",
+    "candidate7-benchmarks-mpi2.json": "4458f3ecc31c2c33041daad71076fdaee5533d4d3b2b612b55c81660da4731de",
+    "candidate7-benchmarks.log": "3376a511bc85e05fd1f1d6723786f7ae6907d3f41359eb4258977fc59f5e929e",
+    "candidate7-benchmarks-mpi2.log": "4458f3ecc31c2c33041daad71076fdaee5533d4d3b2b612b55c81660da4731de",
+    "candidate7-benchmark-comparison.json": "377f9b98b6db9aff19a251beb7084a81f638b9719b837677e91d14f260144a62"
+  }
+}

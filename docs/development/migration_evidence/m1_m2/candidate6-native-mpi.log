@@ -1,0 +1,168 @@
+UpdateCTestConfiguration  from :/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/DartConfiguration.tcl
+Test project /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 1016
+    Start 1016: test_mpi_prepared_amr_ghost_fill_np3
+
+1016: Test command: /Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/mpiexec "-n" "3" "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/bin/test_mpi_prepared_amr_ghost_fill" "--gtest_output=xml:/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/test-results/gtest/test_mpi_prepared_amr_ghost_fill_np3.xml"
+1016: Working Directory: /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests
+1016: Environment variables: 
+1016:  POPS_TEST_EXPECT_RANKS=3
+1016: Test timeout computed to be: 600
+1016: [==========] Running 1 test from 1 test suite.
+1016: [----------] Global test environment set-up.
+1016: [----------] 1 test from test_mpi_prepared_amr_ghost_fill
+1016: [ RUN      ] test_mpi_prepared_amr_ghost_fill.partitioned_parent_and_swapped_fine_ownership_fill_one_exact_candidate
+1016: [==========] Running 1 test from 1 test suite.
+1016: [----------] Global test environment set-up.
+1016: [----------] 1 test from test_mpi_prepared_amr_ghost_fill
+1016: [ RUN      ] test_mpi_prepared_amr_ghost_fill.partitioned_parent_and_swapped_fine_ownership_fill_one_exact_candidate
+1016: [==========] Running 1 test from 1 test suite.
+1016: [----------] Global test environment set-up.
+1016: [----------] 1 test from test_mpi_prepared_amr_ghost_fill
+1016: [ RUN      ] test_mpi_prepared_amr_ghost_fill.partitioned_parent_and_swapped_fine_ownership_fill_one_exact_candidate
+1016: [       OK ] test_mpi_prepared_amr_ghost_fill.partitioned_parent_and_swapped_fine_ownership_fill_one_exact_candidate (110 ms)
+1016: [----------] 1 test from test_mpi_prepared_amr_ghost_fill (110 ms total)
+1016: 
+1016: [----------] Global test environment tear-down
+1016: [       OK ] test_mpi_prepared_amr_ghost_fill.partitioned_parent_and_swapped_fine_ownership_fill_one_exact_candidate (104 ms)
+1016: [----------] 1 test from test_mpi_prepared_amr_ghost_fill (104 ms total)
+1016: 
+1016: [----------] Global test environment tear-down
+1016: [       OK ] test_mpi_prepared_amr_ghost_fill.partitioned_parent_and_swapped_fine_ownership_fill_one_exact_candidate (97 ms)
+1016: [----------] 1 test from test_mpi_prepared_amr_ghost_fill (98 ms total)
+1016: 
+1016: [----------] Global test environment tear-down
+1016: [==========] 1 test from 1 test suite ran. (110 ms total)
+1016: [  PASSED  ] 1 test.
+1016: [==========] 1 test from 1 test suite ran. (104 ms total)
+1016: [  PASSED  ] 1 test.
+1016: [==========] 1 test from 1 test suite ran. (98 ms total)
+1016: [  PASSED  ] 1 test.
+1/4 Test #1016: test_mpi_prepared_amr_ghost_fill_np3 ...   Passed    0.47 sec
+test 1031
+    Start 1031: test_coupled_fieldsolve_np2
+
+1031: Test command: /Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/mpiexec "-n" "2" "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/bin/test_coupled_fieldsolve" "--gtest_output=xml:/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/test-results/gtest/test_coupled_fieldsolve_np2.xml" "--gtest_filter=test_coupled_fieldsolve.named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs"
+1031: Working Directory: /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests
+1031: Environment variables: 
+1031:  OMP_NUM_THREADS=1
+1031: Test timeout computed to be: 30
+1031: Note: Google Test filter = test_coupled_fieldsolve.named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs
+1031: [==========] Running 1 test from 1 test suite.
+1031: [----------] Global test environment set-up.
+1031: [----------] 1 test from test_coupled_fieldsolve
+1031: [ RUN      ] test_coupled_fieldsolve.named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs
+1031: Note: Google Test filter = test_coupled_fieldsolve.named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs
+1031: [==========] Running 1 test from 1 test suite.
+1031: [----------] Global test environment set-up.
+1031: [----------] 1 test from test_coupled_fieldsolve
+1031: [ RUN      ] test_coupled_fieldsolve.named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs
+1031: [       OK ] test_coupled_fieldsolve.named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs (38 ms)
+1031: [----------] 1 test from test_coupled_fieldsolve (38 ms total)
+1031: 
+1031: [----------] Global test environment tear-down
+1031: [       OK ] test_coupled_fieldsolve.named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs (38 ms)
+1031: [----------] 1 test from test_coupled_fieldsolve (38 ms total)
+1031: 
+1031: [----------] Global test environment tear-down
+1031: [==========] 1 test from 1 test suite ran. (38 ms total)
+1031: [  PASSED  ] 1 test.
+1031: [==========] 1 test from 1 test suite ran. (38 ms total)
+1031: [  PASSED  ] 1 test.
+2/4 Test #1031: test_coupled_fieldsolve_np2 ............   Passed    0.14 sec
+test 1033
+    Start 1033: test_program_context_contract_np2
+
+1033: Test command: /Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/mpiexec "-n" "2" "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/bin/test_program_context_contract" "--gtest_output=xml:/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/test-results/gtest/test_program_context_contract_np2.xml" "--gtest_filter=ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors:ProgramContextContract.AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch:ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection:ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation"
+1033: Working Directory: /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests
+1033: Environment variables: 
+1033:  POPS_TEST_EXPECT_RANKS=2
+1033: Test timeout computed to be: 600
+1033: Note: Google Test filter = ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors:ProgramContextContract.AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch:ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection:ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation
+1033: [==========] Running 4 tests from 1 test suite.
+1033: [----------] Global test environment set-up.
+1033: [----------] 4 tests from ProgramContextContract
+1033: [ RUN      ] ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors
+1033: Note: Google Test filter = ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors:ProgramContextContract.AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch:ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection:ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation
+1033: [==========] Running 4 tests from 1 test suite.
+1033: [----------] Global test environment set-up.
+1033: [----------] 4 tests from ProgramContextContract
+1033: [ RUN      ] ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors
+1033: [       OK ] ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors (34 ms)
+1033: [ RUN      ] ProgramContextContract.AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch
+1033: [       OK ] ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors (35 ms)
+1033: [ RUN      ] ProgramContextContract.AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch
+1033: [       OK ] ProgramContextContract.AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch (2 ms)
+1033: [ RUN      ] ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection
+1033: [       OK ] ProgramContextContract.AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch (2 ms)
+1033: [ RUN      ] ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection
+1033: [       OK ] ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection (4 ms)
+1033: [ RUN      ] ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation
+1033: [       OK ] ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection (4 ms)
+1033: [ RUN      ] ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation
+1033: [       OK ] ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation (0 ms)
+1033: [       OK ] ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation (0 ms)
+1033: [----------] 4 tests from ProgramContextContract (43 ms total)
+1033: 
+1033: [----------] Global test environment tear-down
+1033: [----------] 4 tests from ProgramContextContract (41 ms total)
+1033: 
+1033: [----------] Global test environment tear-down
+1033: [==========] 4 tests from 1 test suite ran. (42 ms total)
+1033: [  PASSED  ] 4 tests.
+1033: [==========] 4 tests from 1 test suite ran. (43 ms total)
+1033: [  PASSED  ] 4 tests.
+3/4 Test #1033: test_program_context_contract_np2 ......   Passed    0.11 sec
+test 1034
+    Start 1034: test_generated_amr_system_block_np2
+
+1034: Test command: /Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/mpiexec "-n" "2" "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/bin/test_generated_amr_system_block" "--gtest_output=xml:/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/test-results/gtest/test_generated_amr_system_block_np2.xml" "--gtest_filter=GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance"
+1034: Working Directory: /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests
+1034: Environment variables: 
+1034:  POPS_TEST_EXPECT_RANKS=2
+1034:  OMP_NUM_THREADS=1
+1034: Test timeout computed to be: 30
+1034: Note: Google Test filter = GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance
+1034: [==========] Running 1 test from 1 test suite.
+1034: [----------] Global test environment set-up.
+1034: [----------] 1 test from GeneratedAmrSystemBlock
+1034: [ RUN      ] GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance
+1034: Note: Google Test filter = GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance
+1034: [==========] Running 1 test from 1 test suite.
+1034: [----------] Global test environment set-up.
+1034: [----------] 1 test from GeneratedAmrSystemBlock
+1034: [ RUN      ] GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance
+1034: [       OK ] GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance (93 ms)
+1034: [----------] 1 test from GeneratedAmrSystemBlock (93 ms total)
+1034: 
+1034: [----------] Global test environment tear-down
+1034: [       OK ] GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance (93 ms)
+1034: [----------] 1 test from GeneratedAmrSystemBlock (93 ms total)
+1034: 
+1034: [----------] Global test environment tear-down
+1034: [==========] 1 test from 1 test suite ran. (93 ms total)
+1034: [  PASSED  ] 1 test.
+1034: [==========] 1 test from 1 test suite ran. (93 ms total)
+1034: [  PASSED  ] 1 test.
+4/4 Test #1034: test_generated_amr_system_block_np2 ....   Passed    0.20 sec
+
+The following tests passed:
+	test_mpi_prepared_amr_ghost_fill_np3
+	test_coupled_fieldsolve_np2
+	test_program_context_contract_np2
+	test_generated_amr_system_block_np2
+
+100% tests passed out of 4
+
+Label Time Summary:
+backend    =   2.30 sec*proc (4 tests)
+medium     =   2.30 sec*proc (4 tests)
+mpi        =   2.30 sec*proc (4 tests)
+
+Total Test time (real) =   0.96 sec

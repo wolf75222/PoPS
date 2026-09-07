@@ -1,0 +1,174 @@
+INSTALLED /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/__init__.py
+NATIVE /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so SHA256 d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518
+FIXTURE /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/tests/python/unit/runtime/test_predictor_corrector.py SHA256 49043c1c1ff54a44c9a14abb1d215e685e752b962943cd672f7bd936106903bc SOURCE_SHA bd583faf196f3c1faeedec489e04d24e959ed00b
+== (A) named-source rhs codegen from a public resolved Case ==
+  [OK ] named electric source uses the flux-only base (no implicit default source)
+  [OK ] the named electric source is a per-cell kernel
+  [OK ] the electric kernel reads -rho*grad_x / -rho*grad_y
+  [OK ] grad_x / grad_y use canonical typed-provider slots 0 / 1
+  [OK ] the named source is accumulated onto the residual
+  [OK ] a free/unknown source name is rejected by the typed public Program contract
+  [OK ] predictor and corrector re-solve exact providers from their own level/stage states
+  [OK ] the resolved predictor-corrector emits C++ with named sources and local Lorentz solves
+== compile public artifacts (Case -> validate -> resolve -> compile -> verify) ==
+== (B) named-source FE Program == public rate-operator FE Program ==
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : pc_manual_fe-case
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : plasma
+  numerics plasma     : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 16 x 16 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.02)
+  interval            : 0 -> 0.02 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : bcde9659ed5bb165
+  run identity        : b7abb45c3ae7c93c
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.02 / 1
+  elapsed             : 0.002317 s
+  run identity        : b7abb45c3ae7c93c
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : pc_rate_fe-case
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : plasma
+  numerics plasma     : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 16 x 16 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.02)
+  interval            : 0 -> 0.02 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 604ee80ad95ceec7
+  run identity        : 0154674bdf4becc6
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.02 / 1
+  elapsed             : 0.002317 s
+  run identity        : 0154674bdf4becc6
+  [OK ] public Forward-Euler reference accepted exactly one step
+  focused FE parity: max|d| = 0.00e+00
+  [OK ] public named-source FE run accepted exactly one step
+  [OK ] explicit named-source rhs equals the public rate-operator path (max|d| = 0.00e+00)
+  [OK ] the field-coupled electric/transport step changed the state
+== (C) full public predictor-corrector parity ==
+  [OK ] artifact carries the canonical public PredictorCorrector Program name
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : pc_public-case
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : plasma
+  numerics plasma     : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 16 x 16 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.02)
+  interval            : 0 -> 0.02 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 03086cd793aebbaf
+  run identity        : 5d433fca94a296a6
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.02 / 1
+  elapsed             : 0.002485 s
+  run identity        : 5d433fca94a296a6
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : pc_rate_fe-case
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : plasma
+  numerics plasma     : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 16 x 16 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.02)
+  interval            : 0 -> 0.02 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 604ee80ad95ceec7
+  run identity        : 0154674bdf4becc6
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.02 / 1
+  elapsed             : 0.002174 s
+  run identity        : 0154674bdf4becc6
+  [OK ] public Forward-Euler reference accepted exactly one step
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : pc_rate_fe-case
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : plasma
+  numerics plasma     : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 16 x 16 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.02)
+  interval            : 0 -> 0.02 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 604ee80ad95ceec7
+  run identity        : 6769942b44052af3
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.02 / 1
+  elapsed             : 0.001894 s
+  run identity        : 6769942b44052af3
+  [OK ] public Forward-Euler reference accepted exactly one step
+  predictor-corrector parity: max|d| = 4.44e-16
+  [OK ] public predictor-corrector run accepted exactly one step
+  [OK ] public predictor-corrector equals the independent staged replay (max|d| = 4.44e-16)
+  [OK ] mass is conserved over the periodic step (|d| = 0.00e+00)
+  [OK ] the predictor-corrector step changed the state
+PASS test_predictor_corrector

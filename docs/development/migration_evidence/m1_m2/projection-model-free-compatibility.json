@@ -1,0 +1,11 @@
+{
+  "source_before": "a760245b004008cd464ad44ef7b5c629c3e728db",
+  "source_after": "bd583faf196f3c1faeedec489e04d24e959ed00b",
+  "change": "One Python guard preserves the existing model-free Program projection adapter; exact preparation remains required for attached models.",
+  "tested_state": "The exact one-line change was tested before committing; no other dirty source files.",
+  "command": "rtk proxy env PYTHONPATH=python /Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/python -m pytest -q tests/python/unit/time/test_time_ops_polish.py::test_project_ir_and_codegen tests/python/unit/codegen/test_projection_auxiliary_preparation.py -m 'not process_isolated' --tb=short --maxfail=1",
+  "returncode": 0,
+  "stdout_summary": "5 passed in 8.39s",
+  "ruff": "All checks passed!",
+  "native_headers_and_sources_changed": false
+}

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="1" failures="0" disabled="0" errors="0" time="0.093" timestamp="2026-09-08T00:51:25.371" name="AllTests">
+  <testsuite name="GeneratedAmrSystemBlock" tests="1" failures="0" disabled="0" skipped="0" errors="0" time="0.093" timestamp="2026-09-08T00:51:25.371">
+    <testcase name="DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance" file="/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/unit/runtime/test_generated_amr_system_block.cpp" line="1272" status="run" result="completed" time="0.093" timestamp="2026-09-08T00:51:25.371" classname="GeneratedAmrSystemBlock" />
+  </testsuite>
+</testsuites>

@@ -1,0 +1,237 @@
+{
+  "scope": "Full unchanged LocalLinear and LocalNewton manual scripts against authenticated installed candidate7; no dimension/tolerance/profile reductions",
+  "source_commit": "bd583faf196f3c1faeedec489e04d24e959ed00b",
+  "native_sha256": "d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518",
+  "private_prefix": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env",
+  "environment": {
+    "POPS_NATIVE_DIM": "2",
+    "POPS_REQUIRE_NATIVE_TESTS": "1",
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "PYTHONPATH": "unset"
+  },
+  "checkout_clean_after": true,
+  "fixtures": [
+    {
+      "fixture": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/tests/python/unit/time/test_time_local_solve_run.py",
+      "fixture_sha256": "863aa4f968a61f86e276849852795de9e125198943420eea7fc6d841154127b9",
+      "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8",
+      "source_commit": "bd583faf196f3c1faeedec489e04d24e959ed00b",
+      "python": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/bin/python",
+      "prefix": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env",
+      "package": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/__init__.py",
+      "native_sha256": "d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518",
+      "fixture_result": "test_time_local_solve_run.py",
+      "exit_code": 0,
+      "seconds": 49.755,
+      "passed_assertions": 25,
+      "failed_assertions": [],
+      "skip_count": 0,
+      "skip_lines": [],
+      "terminal_marker": "PASS test_time_local_solve_run",
+      "numeric_evidence": [
+        "Lorentz parity: max|d(rho)| = 0.00e+00  max|d(mx,my)| = 1.11e-16"
+      ],
+      "fault_matrix": [],
+      "log": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-native-time/test_time_local_solve_run.log",
+      "log_sha256": "1e694136840b66841d713a66235e765ff392f5495cff29cfd2e25eaa83c92947",
+      "executed_steps": {
+        "successful_parity_steps": 1,
+        "parity_dt": 0.05,
+        "rejected_nan_attempts": 1,
+        "nan_attempt_dt": 0.05
+      }
+    },
+    {
+      "fixture": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/tests/python/unit/time/test_time_local_newton.py",
+      "fixture_sha256": "b8ba7e58eec00eebd3e702ba1eadee40b6e6a1e7144a1fcde19905b73e776082",
+      "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8",
+      "source_commit": "bd583faf196f3c1faeedec489e04d24e959ed00b",
+      "python": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/bin/python",
+      "prefix": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env",
+      "package": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/__init__.py",
+      "native_sha256": "d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518",
+      "fixture_result": "test_time_local_newton.py",
+      "exit_code": 0,
+      "seconds": 73.267,
+      "passed_assertions": 120,
+      "failed_assertions": [],
+      "skip_count": 0,
+      "skip_lines": [],
+      "terminal_marker": "PASS test_time_local_newton",
+      "numeric_evidence": [
+        "[OK ] the Newton kernel has 'auto residual_eval = [&]'",
+        "[OK ] the generated residual route has no 'for (int it_ ='",
+        "== (B) end-to-end: per-cell implicit reaction vs analytic + offline Newton ==",
+        "implicit reaction: max|rho-closed| = 5.73e-13  max|rho-offline_newton| = 5.73e-13",
+        "offline Newton: iters(max) = 4  residual 6.58e-01 -> 2.22e-16  |compiled residual| = 7.85e-13  moved 3.70e-01",
+        "[OK ] stepped rho == analytic implicit reaction (max|d| = 5.73e-13)",
+        "[OK ] stepped rho == offline numpy Newton (max|d| = 5.73e-13)",
+        "reject_attempt/invalid_residual observed StepAttemptRejected: step attempt rejected during local_nonlinear: solve status=invalid_evaluation (local_nonlinear failed: auxiliary_nonfinite_candidate)",
+        "fail_run/invalid_residual observed RuntimeError: local_nonlinear failed: invalid_evaluation action=fail_run reason=auxiliary_nonfinite_candidate"
+      ],
+      "fault_matrix": [
+        {
+          "action": "reject_attempt",
+          "fault": "singular",
+          "observed_exception": "StepAttemptRejected",
+          "message": "step attempt rejected during local_nonlinear: solve status=singular (local_nonlinear failed: local_nonlinear_singular_jacobian)",
+          "passed_assertions": 9,
+          "assertions": [
+            "reject_attempt/singular starts without a terminal attempt report",
+            "reject_attempt/singular publishes a failed solve",
+            "reject_attempt/singular carries typed status singular",
+            "reject_attempt/singular restores the accepted state",
+            "reject_attempt/singular restores physical time and macro-step",
+            "reject_attempt/singular restores history metadata, slots and pending rotation",
+            "reject_attempt/singular restores caches and provisional diagnostics",
+            "reject_attempt/singular preserves schedule cursors and the installed transaction contract",
+            "reject_attempt/singular publishes only the terminal rejected report"
+          ]
+        },
+        {
+          "action": "reject_attempt",
+          "fault": "iteration_limit",
+          "observed_exception": "StepAttemptRejected",
+          "message": "step attempt rejected during local_nonlinear: solve status=iteration_limit (local_nonlinear failed: local_nonlinear_iteration_limit)",
+          "passed_assertions": 9,
+          "assertions": [
+            "reject_attempt/iteration_limit starts without a terminal attempt report",
+            "reject_attempt/iteration_limit publishes a failed solve",
+            "reject_attempt/iteration_limit carries typed status iteration_limit",
+            "reject_attempt/iteration_limit restores the accepted state",
+            "reject_attempt/iteration_limit restores physical time and macro-step",
+            "reject_attempt/iteration_limit restores history metadata, slots and pending rotation",
+            "reject_attempt/iteration_limit restores caches and provisional diagnostics",
+            "reject_attempt/iteration_limit preserves schedule cursors and the installed transaction contract",
+            "reject_attempt/iteration_limit publishes only the terminal rejected report"
+          ]
+        },
+        {
+          "action": "reject_attempt",
+          "fault": "invalid_residual",
+          "observed_exception": "StepAttemptRejected",
+          "message": "step attempt rejected during local_nonlinear: solve status=invalid_evaluation (local_nonlinear failed: auxiliary_nonfinite_candidate)",
+          "passed_assertions": 9,
+          "assertions": [
+            "reject_attempt/invalid_residual starts without a terminal attempt report",
+            "reject_attempt/invalid_residual publishes a failed solve",
+            "reject_attempt/invalid_residual carries typed status invalid_evaluation",
+            "reject_attempt/invalid_residual restores the accepted state",
+            "reject_attempt/invalid_residual restores physical time and macro-step",
+            "reject_attempt/invalid_residual restores history metadata, slots and pending rotation",
+            "reject_attempt/invalid_residual restores caches and provisional diagnostics",
+            "reject_attempt/invalid_residual preserves schedule cursors and the installed transaction contract",
+            "reject_attempt/invalid_residual publishes only the terminal rejected report"
+          ]
+        },
+        {
+          "action": "reject_attempt",
+          "fault": "invalid_jacobian",
+          "observed_exception": "StepAttemptRejected",
+          "message": "step attempt rejected during local_nonlinear: solve status=invalid_evaluation (local_nonlinear failed: local_nonlinear_invalid_evaluation)",
+          "passed_assertions": 9,
+          "assertions": [
+            "reject_attempt/invalid_jacobian starts without a terminal attempt report",
+            "reject_attempt/invalid_jacobian publishes a failed solve",
+            "reject_attempt/invalid_jacobian carries typed status invalid_evaluation",
+            "reject_attempt/invalid_jacobian restores the accepted state",
+            "reject_attempt/invalid_jacobian restores physical time and macro-step",
+            "reject_attempt/invalid_jacobian restores history metadata, slots and pending rotation",
+            "reject_attempt/invalid_jacobian restores caches and provisional diagnostics",
+            "reject_attempt/invalid_jacobian preserves schedule cursors and the installed transaction contract",
+            "reject_attempt/invalid_jacobian publishes only the terminal rejected report"
+          ]
+        },
+        {
+          "action": "fail_run",
+          "fault": "singular",
+          "observed_exception": "RuntimeError",
+          "message": "local_nonlinear failed: singular action=fail_run reason=local_nonlinear_singular_jacobian",
+          "passed_assertions": 9,
+          "assertions": [
+            "fail_run/singular starts without a terminal attempt report",
+            "fail_run/singular publishes a failed solve",
+            "fail_run/singular fails the run with status singular",
+            "fail_run/singular restores the accepted state",
+            "fail_run/singular restores physical time and macro-step",
+            "fail_run/singular restores history metadata, slots and pending rotation",
+            "fail_run/singular restores caches and provisional diagnostics",
+            "fail_run/singular preserves schedule cursors and the installed transaction contract",
+            "fail_run/singular publishes only the terminal failed report"
+          ]
+        },
+        {
+          "action": "fail_run",
+          "fault": "iteration_limit",
+          "observed_exception": "RuntimeError",
+          "message": "local_nonlinear failed: iteration_limit action=fail_run reason=local_nonlinear_iteration_limit",
+          "passed_assertions": 9,
+          "assertions": [
+            "fail_run/iteration_limit starts without a terminal attempt report",
+            "fail_run/iteration_limit publishes a failed solve",
+            "fail_run/iteration_limit fails the run with status iteration_limit",
+            "fail_run/iteration_limit restores the accepted state",
+            "fail_run/iteration_limit restores physical time and macro-step",
+            "fail_run/iteration_limit restores history metadata, slots and pending rotation",
+            "fail_run/iteration_limit restores caches and provisional diagnostics",
+            "fail_run/iteration_limit preserves schedule cursors and the installed transaction contract",
+            "fail_run/iteration_limit publishes only the terminal failed report"
+          ]
+        },
+        {
+          "action": "fail_run",
+          "fault": "invalid_residual",
+          "observed_exception": "RuntimeError",
+          "message": "local_nonlinear failed: invalid_evaluation action=fail_run reason=auxiliary_nonfinite_candidate",
+          "passed_assertions": 9,
+          "assertions": [
+            "fail_run/invalid_residual starts without a terminal attempt report",
+            "fail_run/invalid_residual publishes a failed solve",
+            "fail_run/invalid_residual fails the run with status invalid_evaluation",
+            "fail_run/invalid_residual restores the accepted state",
+            "fail_run/invalid_residual restores physical time and macro-step",
+            "fail_run/invalid_residual restores history metadata, slots and pending rotation",
+            "fail_run/invalid_residual restores caches and provisional diagnostics",
+            "fail_run/invalid_residual preserves schedule cursors and the installed transaction contract",
+            "fail_run/invalid_residual publishes only the terminal failed report"
+          ]
+        },
+        {
+          "action": "fail_run",
+          "fault": "invalid_jacobian",
+          "observed_exception": "RuntimeError",
+          "message": "local_nonlinear failed: invalid_evaluation action=fail_run reason=local_nonlinear_invalid_evaluation",
+          "passed_assertions": 9,
+          "assertions": [
+            "fail_run/invalid_jacobian starts without a terminal attempt report",
+            "fail_run/invalid_jacobian publishes a failed solve",
+            "fail_run/invalid_jacobian fails the run with status invalid_evaluation",
+            "fail_run/invalid_jacobian restores the accepted state",
+            "fail_run/invalid_jacobian restores physical time and macro-step",
+            "fail_run/invalid_jacobian restores history metadata, slots and pending rotation",
+            "fail_run/invalid_jacobian restores caches and provisional diagnostics",
+            "fail_run/invalid_jacobian preserves schedule cursors and the installed transaction contract",
+            "fail_run/invalid_jacobian publishes only the terminal failed report"
+          ]
+        }
+      ],
+      "log": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-native-time/test_time_local_newton.log",
+      "log_sha256": "e25a5a9b685a2501801099b6afcd3d399db8ac61ebc1c703ecdadcc24fbf7b7d",
+      "executed_steps": {
+        "successful_parity_steps": 1,
+        "parity_dt": 0.2,
+        "failed_fault_attempts": 8,
+        "fault_attempt_dt": 0.1,
+        "fault_grid_cells": [
+          8,
+          8
+        ]
+      }
+    }
+  ],
+  "total_passed_assertions": 145,
+  "total_failed_assertions": 0,
+  "total_skips": 0,
+  "native_build_or_ctest_run": false
+}

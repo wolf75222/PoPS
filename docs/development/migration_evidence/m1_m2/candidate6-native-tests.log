@@ -1,0 +1,357 @@
+Test project /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native
+        Start  98: test_nd_cluster.one_dimensional_holes_split_into_deterministic_boxes
+  1/159 Test  #98: test_nd_cluster.one_dimensional_holes_split_into_deterministic_boxes ............................................   Passed    0.42 sec
+        Start  99: test_nd_cluster.anisotropic_final_chop_is_axis_indexed
+  2/159 Test  #99: test_nd_cluster.anisotropic_final_chop_is_axis_indexed ..........................................................   Passed    0.02 sec
+        Start 100: test_nd_cluster.three_dimensional_axis_permutation_maps_to_the_same_clusters
+  3/159 Test #100: test_nd_cluster.three_dimensional_axis_permutation_maps_to_the_same_clusters ....................................   Passed    0.02 sec
+        Start 101: test_nd_cluster.equal_length_axis_ties_are_permutation_equivariant
+  4/159 Test #101: test_nd_cluster.equal_length_axis_ties_are_permutation_equivariant ..............................................   Passed    0.02 sec
+        Start 102: test_nd_cluster.partitioned_shards_are_canonicalized_and_exactly_authenticated
+  5/159 Test #102: test_nd_cluster.partitioned_shards_are_canonicalized_and_exactly_authenticated ..................................   Passed    0.02 sec
+        Start 103: test_nd_cluster.replicated_shards_are_authenticated_and_canonicalized
+  6/159 Test #103: test_nd_cluster.replicated_shards_are_authenticated_and_canonicalized ...........................................   Passed    0.02 sec
+        Start 104: test_nd_cluster.invalid_or_exhausted_work_budgets_fail_closed
+  7/159 Test #104: test_nd_cluster.invalid_or_exhausted_work_budgets_fail_closed ...................................................   Passed    0.02 sec
+        Start 105: test_nd_cluster.proper_nesting_preserves_parent_seams_and_authenticates_periodic_images
+  8/159 Test #105: test_nd_cluster.proper_nesting_preserves_parent_seams_and_authenticates_periodic_images .........................   Passed    0.02 sec
+        Start 116: test_nd_flux_ledger.composite_reflux_conserves_accepted_transport_in_1d_2d_3d
+  9/159 Test #116: test_nd_flux_ledger.composite_reflux_conserves_accepted_transport_in_1d_2d_3d ...................................   Passed    0.29 sec
+        Start 117: test_nd_flux_ledger.anisotropic_3d_faces_close_the_exact_tangential_surface_product
+ 10/159 Test #117: test_nd_flux_ledger.anisotropic_3d_faces_close_the_exact_tangential_surface_product .............................   Passed    0.02 sec
+        Start 118: test_nd_flux_ledger.axis_permutation_uses_explicit_coordinate_oracles
+ 11/159 Test #118: test_nd_flux_ledger.axis_permutation_uses_explicit_coordinate_oracles ...........................................   Passed    0.02 sec
+        Start 119: test_nd_flux_ledger.exact_stage_weights_are_applied_before_metric_reflux
+ 12/159 Test #119: test_nd_flux_ledger.exact_stage_weights_are_applied_before_metric_reflux ........................................   Passed    0.02 sec
+        Start 120: test_nd_flux_ledger.coarse_window_matches_two_exact_fine_substeps
+ 13/159 Test #120: test_nd_flux_ledger.coarse_window_matches_two_exact_fine_substeps ...............................................   Passed    0.02 sec
+        Start 121: test_nd_flux_ledger.gaps_overlaps_duration_and_stage_weight_fail_closed
+ 14/159 Test #121: test_nd_flux_ledger.gaps_overlaps_duration_and_stage_weight_fail_closed .........................................   Passed    0.02 sec
+        Start 122: test_nd_flux_ledger.tiny_physical_clock_mismatch_is_not_unit_scaled_roundoff
+ 15/159 Test #122: test_nd_flux_ledger.tiny_physical_clock_mismatch_is_not_unit_scaled_roundoff ....................................   Passed    0.02 sec
+        Start 123: test_nd_flux_ledger.declared_durations_preserve_clock_rate_after_timestamp_rounding
+ 16/159 Test #123: test_nd_flux_ledger.declared_durations_preserve_clock_rate_after_timestamp_rounding .............................   Passed    0.02 sec
+        Start 124: test_nd_flux_ledger.tangential_product_and_reflux_budgets_fail_closed
+ 17/159 Test #124: test_nd_flux_ledger.tangential_product_and_reflux_budgets_fail_closed ...........................................   Passed    0.02 sec
+        Start 125: test_nd_flux_ledger.identity_ratios_and_incomplete_fine_surfaces_fail_closed
+ 18/159 Test #125: test_nd_flux_ledger.identity_ratios_and_incomplete_fine_surfaces_fail_closed ....................................   Passed    0.02 sec
+        Start 126: test_nd_flux_ledger.rejected_attempt_never_publishes_pending_faces
+ 19/159 Test #126: test_nd_flux_ledger.rejected_attempt_never_publishes_pending_faces ..............................................   Passed    0.02 sec
+        Start 127: test_nd_flux_ledger.ledger_budgets_and_discard_published_attempt_fail_closed
+ 20/159 Test #127: test_nd_flux_ledger.ledger_budgets_and_discard_published_attempt_fail_closed ....................................   Passed    0.02 sec
+        Start 128: test_nd_flux_ledger.failed_commit_preserves_accepted_and_pending_transactions
+ 21/159 Test #128: test_nd_flux_ledger.failed_commit_preserves_accepted_and_pending_transactions ...................................   Passed    0.02 sec
+        Start 129: test_nd_flux_ledger.subnormal_cell_measure_fails_before_non_finite_axpy
+ 22/159 Test #129: test_nd_flux_ledger.subnormal_cell_measure_fails_before_non_finite_axpy .........................................   Passed    0.02 sec
+        Start 130: test_nd_flux_ledger.sources_cell_centering_and_stale_attempts_fail_closed
+ 23/159 Test #130: test_nd_flux_ledger.sources_cell_centering_and_stale_attempts_fail_closed .......................................   Passed    0.02 sec
+        Start 134: test_prepared_amr_ghost_fill.sparse_parent_interpolation_is_exact_in_1d_2d_and_3d
+ 24/159 Test #134: test_prepared_amr_ghost_fill.sparse_parent_interpolation_is_exact_in_1d_2d_and_3d ...............................   Passed    0.40 sec
+        Start 135: test_prepared_amr_ghost_fill.full_profile_parent_corner_is_reclustered_before_interpolation
+ 25/159 Test #135: test_prepared_amr_ghost_fill.full_profile_parent_corner_is_reclustered_before_interpolation .....................   Passed    0.03 sec
+        Start 136: test_prepared_amr_ghost_fill.sparse_parent_level_keeps_two_halo_linear_accuracy_in_1d_2d_and_3d
+ 26/159 Test #136: test_prepared_amr_ghost_fill.sparse_parent_level_keeps_two_halo_linear_accuracy_in_1d_2d_and_3d .................   Passed    0.03 sec
+        Start 137: test_prepared_amr_ghost_fill.sparse_parent_level_rejects_missing_stencil_cells_and_holes
+ 27/159 Test #137: test_prepared_amr_ghost_fill.sparse_parent_level_rejects_missing_stencil_cells_and_holes ........................   Passed    0.02 sec
+        Start 138: test_prepared_amr_ghost_fill.sparse_parent_level_still_rejects_overlap_and_outside_domain
+ 28/159 Test #138: test_prepared_amr_ghost_fill.sparse_parent_level_still_rejects_overlap_and_outside_domain .......................   Passed    0.02 sec
+        Start 139: test_prepared_amr_ghost_fill.periodic_sparse_parent_edges_and_corners_keep_local_staging_and_linear_accuracy
+ 29/159 Test #139: test_prepared_amr_ghost_fill.periodic_sparse_parent_edges_and_corners_keep_local_staging_and_linear_accuracy ....   Passed    0.03 sec
+        Start 140: test_prepared_amr_ghost_fill.periodic_sparse_parent_edges_and_corners_preserve_constants
+ 30/159 Test #140: test_prepared_amr_ghost_fill.periodic_sparse_parent_edges_and_corners_preserve_constants ........................   Passed    0.03 sec
+        Start 141: test_prepared_amr_ghost_fill.periodic_sparse_parent_edges_and_corners_refuse_wrapped_source_gaps
+ 31/159 Test #141: test_prepared_amr_ghost_fill.periodic_sparse_parent_edges_and_corners_refuse_wrapped_source_gaps ................   Passed    0.02 sec
+        Start 142: test_prepared_amr_ghost_fill.two_destination_halos_keep_linear_accuracy_at_physical_faces
+ 32/159 Test #142: test_prepared_amr_ghost_fill.two_destination_halos_keep_linear_accuracy_at_physical_faces .......................   Passed    0.03 sec
+        Start 143: test_prepared_amr_ghost_fill.two_destination_halos_preserve_constants_at_physical_faces
+ 33/159 Test #143: test_prepared_amr_ghost_fill.two_destination_halos_preserve_constants_at_physical_faces .........................   Passed    0.03 sec
+        Start 144: test_prepared_amr_ghost_fill.physical_faces_do_not_authorize_missing_interior_stencils
+ 34/159 Test #144: test_prepared_amr_ghost_fill.physical_faces_do_not_authorize_missing_interior_stencils ..........................   Passed    0.02 sec
+        Start 145: test_prepared_amr_ghost_fill.prepared_prototype_rebinds_an_exact_candidate_without_mutating_the_prototype
+ 35/159 Test #145: test_prepared_amr_ghost_fill.prepared_prototype_rebinds_an_exact_candidate_without_mutating_the_prototype .......   Passed    0.03 sec
+        Start 146: test_prepared_amr_ghost_fill.fifth_order_route_stages_its_radius_two_parent_stencil_without_linear_fallback
+ 36/159 Test #146: test_prepared_amr_ghost_fill.fifth_order_route_stages_its_radius_two_parent_stencil_without_linear_fallback .....   Passed    0.03 sec
+        Start 147: test_prepared_amr_ghost_fill.same_level_values_override_parent_interpolation
+ 37/159 Test #147: test_prepared_amr_ghost_fill.same_level_values_override_parent_interpolation ....................................   Passed    0.03 sec
+        Start 148: test_prepared_amr_ghost_fill.physical_face_ghosts_remain_for_the_boundary_provider
+ 38/159 Test #148: test_prepared_amr_ghost_fill.physical_face_ghosts_remain_for_the_boundary_provider ..............................   Passed    0.03 sec
+        Start 149: test_prepared_amr_ghost_fill.periodic_sparse_ghost_without_a_fine_peer_uses_the_parent
+ 39/159 Test #149: test_prepared_amr_ghost_fill.periodic_sparse_ghost_without_a_fine_peer_uses_the_parent ..........................   Passed    0.03 sec
+        Start 150: test_prepared_amr_ghost_fill.stale_generation_rejects_before_mutation
+ 40/159 Test #150: test_prepared_amr_ghost_fill.stale_generation_rejects_before_mutation ...........................................   Passed    0.03 sec
+        Start 215: test_nd_transfer.anisotropic_ratios_validate_once_and_fail_closed
+ 41/159 Test #215: test_nd_transfer.anisotropic_ratios_validate_once_and_fail_closed ...............................................   Passed    0.29 sec
+        Start 216: test_nd_transfer.prepared_contract_is_fixed_size_and_reports_exact_capabilities
+ 42/159 Test #216: test_nd_transfer.prepared_contract_is_fixed_size_and_reports_exact_capabilities .................................   Passed    0.02 sec
+        Start 217: test_nd_transfer.conservative_restriction_preserves_constants_bit_exact_in_1d_2d_3d
+ 43/159 Test #217: test_nd_transfer.conservative_restriction_preserves_constants_bit_exact_in_1d_2d_3d .............................   Passed    0.02 sec
+        Start 218: test_nd_transfer.linear_prolongation_and_restriction_reproduce_affine_fields_in_1d_2d_3d
+ 44/159 Test #218: test_nd_transfer.linear_prolongation_and_restriction_reproduce_affine_fields_in_1d_2d_3d ........................   Passed    0.02 sec
+        Start 219: test_nd_transfer.limited_linear_prolongation_preserves_every_parent_average_in_1d_2d_3d
+ 45/159 Test #219: test_nd_transfer.limited_linear_prolongation_preserves_every_parent_average_in_1d_2d_3d .........................   Passed    0.02 sec
+        Start 220: test_nd_transfer.constant_injection_is_explicit_and_never_a_linear_fallback
+ 46/159 Test #220: test_nd_transfer.constant_injection_is_explicit_and_never_a_linear_fallback .....................................   Passed    0.02 sec
+        Start 221: test_nd_transfer.limited_linear_prolongation_converges_at_second_order_in_1d_2d_3d
+ 47/159 Test #221: test_nd_transfer.limited_linear_prolongation_converges_at_second_order_in_1d_2d_3d ..............................   Passed    0.02 sec
+        Start 222: test_nd_transfer.coarse_fine_ghost_interpolation_handles_negative_offsets_in_1d_2d_3d
+ 48/159 Test #222: test_nd_transfer.coarse_fine_ghost_interpolation_handles_negative_offsets_in_1d_2d_3d ...........................   Passed    0.02 sec
+        Start 223: test_nd_transfer.fifth_order_coarse_fine_reproduces_quartics_and_parent_averages_for_ratios_two_and_three
+ 49/159 Test #223: test_nd_transfer.fifth_order_coarse_fine_reproduces_quartics_and_parent_averages_for_ratios_two_and_three .......   Passed    0.02 sec
+        Start 224: test_nd_transfer.node_multilinear_prolongation_reproduces_multilinear_fields_for_exact_ranked_ratios
+ 50/159 Test #224: test_nd_transfer.node_multilinear_prolongation_reproduces_multilinear_fields_for_exact_ranked_ratios ............   Passed    0.02 sec
+        Start 225: test_nd_transfer.coupled_face_prolongation_preserves_boundary_fluxes_and_cell_divergence_in_1d_2d_3d
+ 51/159 Test #225: test_nd_transfer.coupled_face_prolongation_preserves_boundary_fluxes_and_cell_divergence_in_1d_2d_3d ............   Passed    0.02 sec
+        Start 226: test_nd_transfer.linear_temporal_provider_interpolates_two_qualified_states_for_exact_ranked_transitions
+ 52/159 Test #226: test_nd_transfer.linear_temporal_provider_interpolates_two_qualified_states_for_exact_ranked_transitions ........   Passed    0.02 sec
+        Start 227: test_nd_transfer.preparation_rejects_missing_stencils_components_aliases_and_regions
+ 53/159 Test #227: test_nd_transfer.preparation_rejects_missing_stencils_components_aliases_and_regions ............................   Passed    0.02 sec
+        Start 228: test_nd_transfer.prepared_coarse_fine_authority_is_exact_ranked_in_1d_2d_3d
+ 54/159 Test #228: test_nd_transfer.prepared_coarse_fine_authority_is_exact_ranked_in_1d_2d_3d .....................................   Passed    0.02 sec
+        Start 229: test_nd_transfer.prepared_coarse_fine_authority_fails_closed_on_incomplete_or_overflowing_metadata
+ 55/159 Test #229: test_nd_transfer.prepared_coarse_fine_authority_fails_closed_on_incomplete_or_overflowing_metadata ..............   Passed    0.02 sec
+        Start 277: ComponentInterfaces.FallibleOutcomeKeepsTransactionActionExplicit
+ 56/159 Test #277: ComponentInterfaces.FallibleOutcomeKeepsTransactionActionExplicit ...............................................   Passed    0.30 sec
+        Start 278: ComponentInterfaces.PersistentTaggingStateUsesExactRankAndCanonicalRestartImage
+ 57/159 Test #278: ComponentInterfaces.PersistentTaggingStateUsesExactRankAndCanonicalRestartImage .................................   Passed    0.02 sec
+        Start 279: ComponentInterfaces.SolveReportCarriesTypedIncompatibleRhsReason
+ 58/159 Test #279: ComponentInterfaces.SolveReportCarriesTypedIncompatibleRhsReason ................................................   Passed    0.02 sec
+        Start 280: ComponentInterfaces.RegistryIsCollisionSafeIdempotentAndExplicitlyFrozen
+ 59/159 Test #280: ComponentInterfaces.RegistryIsCollisionSafeIdempotentAndExplicitlyFrozen ........................................   Passed    0.02 sec
+        Start 281: ComponentInterfaces.PreparedTaggingExecutionIsExactRankedAndAllocationFree
+ 60/159 Test #281: ComponentInterfaces.PreparedTaggingExecutionIsExactRankedAndAllocationFree ......................................   Passed    0.02 sec
+        Start 282: ComponentInterfaces.PreparedTaggingRejectsNonFiniteBeforePublishingMasks
+ 61/159 Test #282: ComponentInterfaces.PreparedTaggingRejectsNonFiniteBeforePublishingMasks ........................................   Passed    0.02 sec
+        Start 283: ComponentInterfaces.TopologyMaterialFractionsUseExactRankedStridesAndGhosts
+ 62/159 Test #283: ComponentInterfaces.TopologyMaterialFractionsUseExactRankedStridesAndGhosts .....................................   Passed    0.02 sec
+        Start 284: ComponentInterfaces.TopologyMaterialFractionsFailClosedOnRankAndStrideOverflow
+ 63/159 Test #284: ComponentInterfaces.TopologyMaterialFractionsFailClosedOnRankAndStrideOverflow ..................................   Passed    0.02 sec
+        Start 285: ComponentInterfaces.BoundaryFluxValidatesCoordinatesAndNormalsAcrossExactRank
+ 64/159 Test #285: ComponentInterfaces.BoundaryFluxValidatesCoordinatesAndNormalsAcrossExactRank ...................................   Passed    0.02 sec
+        Start 286: ComponentInterfaces.RefluxBatchAcceptsAxisTwoAndRejectsAxesOutsideExactRank
+ 65/159 Test #286: ComponentInterfaces.RefluxBatchAcceptsAxisTwoAndRejectsAxesOutsideExactRank .....................................   Passed    0.02 sec
+        Start 287: ComponentInterfaces.ExactAbiConsumersExecuteEveryClosedScientificFamily
+ 66/159 Test #287: ComponentInterfaces.ExactAbiConsumersExecuteEveryClosedScientificFamily .........................................   Passed    0.02 sec
+        Start 288: ComponentInterfaces.FieldSolverV2CarriesOneBinaryCoverageMultilevelBatch
+ 67/159 Test #288: ComponentInterfaces.FieldSolverV2CarriesOneBinaryCoverageMultilevelBatch ........................................   Passed    0.02 sec
+        Start 289: ComponentInterfaces.PreparedExecutionContextBindsExactExecutionLaneAuthority
+ 68/159 Test #289: ComponentInterfaces.PreparedExecutionContextBindsExactExecutionLaneAuthority ....................................   Passed    0.03 sec
+        Start 518: NativeFieldAttachment.ExistingAggregateRetainsOutputAuthority
+ 69/159 Test #518: NativeFieldAttachment.ExistingAggregateRetainsOutputAuthority ...................................................   Passed    0.28 sec
+        Start 519: NativeFieldAttachment.DistinctRhsContributionsShareNegativeGradientOutputAuthority
+ 70/159 Test #519: NativeFieldAttachment.DistinctRhsContributionsShareNegativeGradientOutputAuthority ..............................   Passed    0.02 sec
+        Start 520: NativeFieldAttachment.BothRolesRequireFieldRhsIdentityCallbackAndValidSign
+ 71/159 Test #520: NativeFieldAttachment.BothRolesRequireFieldRhsIdentityCallbackAndValidSign ......................................   Passed    0.02 sec
+        Start 521: NativeFieldAttachment.RhsOnlyRequiresBothExactBindingIdentities
+ 72/159 Test #521: NativeFieldAttachment.RhsOnlyRequiresBothExactBindingIdentities .................................................   Passed    0.02 sec
+        Start 522: NativeFieldAttachment.RhsOnlyCannotClaimOutputsOrGradientOrientation
+ 73/159 Test #522: NativeFieldAttachment.RhsOnlyCannotClaimOutputsOrGradientOrientation ............................................   Passed    0.02 sec
+        Start 523: NativeFieldAttachment.RoleRelabelingCannotBypassEitherContract
+ 74/159 Test #523: NativeFieldAttachment.RoleRelabelingCannotBypassEitherContract ..................................................   Passed    0.02 sec
+        Start 524: NativeFieldAttachment.OutputAuthorityRejectsRhsRoleMetadata
+ 75/159 Test #524: NativeFieldAttachment.OutputAuthorityRejectsRhsRoleMetadata .....................................................   Passed    0.02 sec
+        Start 525: NativeFieldAttachment.OnlyExactLegacyFieldAllowsAnEmptyOutputClaim
+ 76/159 Test #525: NativeFieldAttachment.OnlyExactLegacyFieldAllowsAnEmptyOutputClaim ..............................................   Passed    0.02 sec
+        Start 526: NativeFieldAttachment.OutputAuthorityRequiresExactKeysAndGradientSign
+ 77/159 Test #526: NativeFieldAttachment.OutputAuthorityRequiresExactKeysAndGradientSign ...........................................   Passed    0.02 sec
+        Start 527: NativeFieldAttachment.ExactPackageIdentitySealsRoleSlotAndBinding
+ 78/159 Test #527: NativeFieldAttachment.ExactPackageIdentitySealsRoleSlotAndBinding ...............................................   Passed    0.02 sec
+        Start 593: ProviderValues.EmptyPackIsAFirstClassDeviceCarrier
+ 79/159 Test #593: ProviderValues.EmptyPackIsAFirstClassDeviceCarrier ..............................................................   Passed    0.28 sec
+        Start 594: ProviderValues.QualifiedConsumersDoNotAliasBySpelling
+ 80/159 Test #594: ProviderValues.QualifiedConsumersDoNotAliasBySpelling ...........................................................   Passed    0.02 sec
+        Start 595: ProviderValues.GradientSourcesUseExplicitPermutedSlotsInEveryRank
+ 81/159 Test #595: ProviderValues.GradientSourcesUseExplicitPermutedSlotsInEveryRank ...............................................   Passed    0.02 sec
+        Start 596: ProviderValues.ExBUsesExplicitPermutedGradientSlots
+ 82/159 Test #596: ProviderValues.ExBUsesExplicitPermutedGradientSlots .............................................................   Passed    0.02 sec
+        Start 597: ProviderValues.CartesianExBConsumesEveryVectorComponentInThreeDimensions
+ 83/159 Test #597: ProviderValues.CartesianExBConsumesEveryVectorComponentInThreeDimensions ........................................   Passed    0.02 sec
+        Start 598: ProviderValues.CartesianExBOneDimensionalProjectionUsesTheSameContraction
+ 84/159 Test #598: ProviderValues.CartesianExBOneDimensionalProjectionUsesTheSameContraction .......................................   Passed    0.02 sec
+        Start 599: ProviderValues.LorentzUsesItsExplicitMagneticProvider
+ 85/159 Test #599: ProviderValues.LorentzUsesItsExplicitMagneticProvider ...........................................................   Passed    0.02 sec
+        Start 600: ProviderValues.MagneticFactoryDispatchAndRuntimeAreExactRanked
+ 86/159 Test #600: ProviderValues.MagneticFactoryDispatchAndRuntimeAreExactRanked ..................................................   Passed    0.02 sec
+        Start 601: ProviderValues.CompositePropagatesItsExactProviderCount
+ 87/159 Test #601: ProviderValues.CompositePropagatesItsExactProviderCount .........................................................   Passed    0.02 sec
+        Start 602: NarrowPhysicalOperations.EllipticOnlyContributesAndRejectsFailureBeforePublication
+ 88/159 Test #602: NarrowPhysicalOperations.EllipticOnlyContributesAndRejectsFailureBeforePublication ..............................   Passed    0.29 sec
+        Start 603: NarrowPhysicalOperations.SourceOnlyUsesTheProductionRankedCellKernel
+ 89/159 Test #603: NarrowPhysicalOperations.SourceOnlyUsesTheProductionRankedCellKernel ............................................   Passed    0.02 sec
+        Start 604: NarrowPhysicalOperations.TransportOnlyUsesExistingPhysicalFluxAndRusanovContracts
+ 90/159 Test #604: NarrowPhysicalOperations.TransportOnlyUsesExistingPhysicalFluxAndRusanovContracts ...............................   Passed    0.02 sec
+        Start 605: NarrowPhysicalOperations.LegacyAggregateRetainsMeaningfulOperations
+ 91/159 Test #605: NarrowPhysicalOperations.LegacyAggregateRetainsMeaningfulOperations .............................................   Passed    0.02 sec
+        Start 606: NarrowPhysicalOperations.SourceOnlyRecoveryUsesDeclaredConversionInsteadOfIdentity
+ 92/159 Test #606: NarrowPhysicalOperations.SourceOnlyRecoveryUsesDeclaredConversionInsteadOfIdentity ..............................   Passed    0.02 sec
+        Start 693: GeneratedAmrSystemBlock.PreparesOneExactNativePackageImage
+ 93/159 Test #693: GeneratedAmrSystemBlock.PreparesOneExactNativePackageImage ......................................................   Passed    0.73 sec
+        Start 694: GeneratedAmrSystemBlock.PackageContractAuthenticatesPhysicalModelParameters
+ 94/159 Test #694: GeneratedAmrSystemBlock.PackageContractAuthenticatesPhysicalModelParameters .....................................   Passed    0.04 sec
+        Start 695: GeneratedAmrSystemBlock.PackageContractAuthenticatesVariableNamesRolesAndUserRoles
+ 95/159 Test #695: GeneratedAmrSystemBlock.PackageContractAuthenticatesVariableNamesRolesAndUserRoles ..............................   Passed    0.04 sec
+        Start 696: GeneratedAmrSystemBlock.RejectsUnpreparedOptionalAuthorities
+ 96/159 Test #696: GeneratedAmrSystemBlock.RejectsUnpreparedOptionalAuthorities ....................................................   Passed    0.04 sec
+        Start 697: GeneratedAmrSystemBlock.CellPrimitiveConversionConsumesPreparedRecoveryOutcome
+ 97/159 Test #697: GeneratedAmrSystemBlock.CellPrimitiveConversionConsumesPreparedRecoveryOutcome ..................................   Passed    0.05 sec
+        Start 698: GeneratedAmrSystemBlock.PrimitiveToConservativePublicationRoundtripsBeforeCommit
+ 98/159 Test #698: GeneratedAmrSystemBlock.PrimitiveToConservativePublicationRoundtripsBeforeCommit ................................   Passed    0.04 sec
+        Start 699: GeneratedAmrSystemBlock.FacadeRetainsAndExecutesPreparedRootLevel
+ 99/159 Test #699: GeneratedAmrSystemBlock.FacadeRetainsAndExecutesPreparedRootLevel ...............................................   Passed    0.06 sec
+        Start 700: GeneratedAmrSystemBlock.VariableNamesReadAuthenticatedPreparedBlockMetadata
+100/159 Test #700: GeneratedAmrSystemBlock.VariableNamesReadAuthenticatedPreparedBlockMetadata .....................................   Passed    0.05 sec
+        Start 701: GeneratedAmrSystemBlock.RegridRebuildsExactFineGhostProvidersAndInvalidatesLedger
+101/159 Test #701: GeneratedAmrSystemBlock.RegridRebuildsExactFineGhostProvidersAndInvalidatesLedger ...............................   Passed    0.05 sec
+        Start 702: GeneratedAmrSystemBlock.SparseParentRegridRequiresOnlyChildInterpolationSources
+102/159 Test #702: GeneratedAmrSystemBlock.SparseParentRegridRequiresOnlyChildInterpolationSources .................................   Passed    0.14 sec
+        Start 703: GeneratedAmrSystemBlock.SubcyclingRetainsDeclaredDurationAcrossAbsoluteTimeBinade
+103/159 Test #703: GeneratedAmrSystemBlock.SubcyclingRetainsDeclaredDurationAcrossAbsoluteTimeBinade ...............................   Passed   33.73 sec
+        Start 704: GeneratedAmrSystemBlock.EmbeddedBoundaryRematerializesPerLevelAndWeightsCompositeMassAndSidecars
+104/159 Test #704: GeneratedAmrSystemBlock.EmbeddedBoundaryRematerializesPerLevelAndWeightsCompositeMassAndSidecars ................   Passed    0.10 sec
+        Start 705: GeneratedAmrSystemBlock.CutCellCapabilityExecutesAtExactRank
+105/159 Test #705: GeneratedAmrSystemBlock.CutCellCapabilityExecutesAtExactRank ....................................................   Passed    0.08 sec
+        Start 706: GeneratedAmrSystemBlock.DiffusiveEmbeddedRoutesRefuseWithoutFaceGeometry
+106/159 Test #706: GeneratedAmrSystemBlock.DiffusiveEmbeddedRoutesRefuseWithoutFaceGeometry ........................................   Passed    0.10 sec
+        Start 707: GeneratedAmrSystemBlock.EmbeddedBoundaryAuthoringRejectsDivergentMpiInputBeforeMutation
+107/159 Test #707: GeneratedAmrSystemBlock.EmbeddedBoundaryAuthoringRejectsDivergentMpiInputBeforeMutation .........................   Passed    0.05 sec
+        Start 708: GeneratedAmrSystemBlock.ProgramContextOwnsOneExactHierarchyTensorAuthority
+108/159 Test #708: GeneratedAmrSystemBlock.ProgramContextOwnsOneExactHierarchyTensorAuthority ......................................   Passed    0.10 sec
+        Start 709: GeneratedAmrSystemBlock.ProgramContextEvaluatesExactStageStateWithoutPublishingIt
+109/159 Test #709: GeneratedAmrSystemBlock.ProgramContextEvaluatesExactStageStateWithoutPublishingIt ...............................   Passed    0.09 sec
+        Start 710: GeneratedAmrSystemBlock.RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsAtomically
+110/159 Test #710: GeneratedAmrSystemBlock.RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsAtomically .............................   Passed    0.10 sec
+        Start 711: GeneratedAmrSystemBlock.RegistersOnlyExactRankedNullspaceProviders
+111/159 Test #711: GeneratedAmrSystemBlock.RegistersOnlyExactRankedNullspaceProviders ..............................................   Passed    0.07 sec
+        Start 712: GeneratedAmrSystemBlock.DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptance
+112/159 Test #712: GeneratedAmrSystemBlock.DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptance ....................................   Passed    0.09 sec
+        Start 713: GeneratedAmrSystemBlock.NamedFieldConsumesExactStageWithoutPublishingState
+113/159 Test #713: GeneratedAmrSystemBlock.NamedFieldConsumesExactStageWithoutPublishingState ......................................   Passed    0.09 sec
+        Start 714: GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance
+114/159 Test #714: GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance .............   Passed    0.09 sec
+        Start 715: GeneratedAmrSystemBlock.CompositeFieldInstallsCoverageAwareNullspaceOnEveryLiveLevel
+115/159 Test #715: GeneratedAmrSystemBlock.CompositeFieldInstallsCoverageAwareNullspaceOnEveryLiveLevel ............................   Passed    0.07 sec
+        Start 716: GeneratedAmrSystemBlock.BootstrapRecomputeHelmholtzAfterCreateLevel
+116/159 Test #716: GeneratedAmrSystemBlock.BootstrapRecomputeHelmholtzAfterCreateLevel .............................................   Passed    0.40 sec
+        Start 717: GeneratedAmrSystemBlock.ProgramContextRefusesUnsynchronizedHierarchyBeforeMutation
+117/159 Test #717: GeneratedAmrSystemBlock.ProgramContextRefusesUnsynchronizedHierarchyBeforeMutation ..............................   Passed    0.06 sec
+        Start 718: GeneratedAmrSystemBlock.ProgramContextRetainsAndInterpolatesExactLevelHistory
+118/159 Test #718: GeneratedAmrSystemBlock.ProgramContextRetainsAndInterpolatesExactLevelHistory ...................................   Passed    0.06 sec
+        Start 719: GeneratedAmrSystemBlock.ProgramContextRefusesHistoryRegridBeforeTopologyMutation
+119/159 Test #719: GeneratedAmrSystemBlock.ProgramContextRefusesHistoryRegridBeforeTopologyMutation ................................   Passed    0.06 sec
+        Start 720: GeneratedAmrSystemBlock.PreparedHistoryRemapAcceptsPublishedReplacement
+120/159 Test #720: GeneratedAmrSystemBlock.PreparedHistoryRemapAcceptsPublishedReplacement .........................................   Passed    0.54 sec
+        Start 721: GeneratedAmrSystemBlock.NoopPreparedRegridPreservesInitializedHistory
+121/159 Test #721: GeneratedAmrSystemBlock.NoopPreparedRegridPreservesInitializedHistory ...........................................   Passed    0.07 sec
+        Start 722: GeneratedAmrSystemBlock.CflUsesFinestExactGeometryAndPreparedModelSpeed
+122/159 Test #722: GeneratedAmrSystemBlock.CflUsesFinestExactGeometryAndPreparedModelSpeed .........................................   Passed    0.07 sec
+        Start 723: GeneratedAmrSystemBlock.DiffusiveCflUsesFinestParabolicGeometryAndReportsFrequency
+123/159 Test #723: GeneratedAmrSystemBlock.DiffusiveCflUsesFinestParabolicGeometryAndReportsFrequency ..............................   Passed    0.08 sec
+        Start 724: GeneratedAmrSystemBlock.CflAuthenticatesRequestsAndBoundOrderBeforeCallbacks
+124/159 Test #724: GeneratedAmrSystemBlock.CflAuthenticatesRequestsAndBoundOrderBeforeCallbacks ....................................   Passed    0.07 sec
+        Start 763: test_coupled_fieldsolve.simultaneous_stage_rhs_uses_every_qualified_block
+125/159 Test #763: test_coupled_fieldsolve.simultaneous_stage_rhs_uses_every_qualified_block .......................................   Passed    1.07 sec
+        Start 764: test_coupled_fieldsolve.named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs
+126/159 Test #764: test_coupled_fieldsolve.named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs ...   Passed    0.10 sec
+        Start 765: test_coupled_fieldsolve.native_load_keys_use_the_case_output_and_each_exact_coefficient
+127/159 Test #765: test_coupled_fieldsolve.native_load_keys_use_the_case_output_and_each_exact_coefficient .........................   Passed    0.09 sec
+        Start 766: test_coupled_fieldsolve.native_output_alias_requires_one_exact_provider_on_its_block
+128/159 Test #766: test_coupled_fieldsolve.native_output_alias_requires_one_exact_provider_on_its_block ............................   Passed    0.09 sec
+        Start 767: test_coupled_fieldsolve.native_missing_and_foreign_loads_reject_before_block_publication
+129/159 Test #767: test_coupled_fieldsolve.native_missing_and_foreign_loads_reject_before_block_publication ........................   Passed    0.10 sec
+        Start 768: test_coupled_fieldsolve.native_default_poisson_attachment_retains_its_prepared_block_rhs
+130/159 Test #768: test_coupled_fieldsolve.native_default_poisson_attachment_retains_its_prepared_block_rhs ........................   Passed    0.08 sec
+        Start 769: test_coupled_fieldsolve.native_rhs_only_repeated_signed_coefficients_preserve_case_gradient
+131/159 Test #769: test_coupled_fieldsolve.native_rhs_only_repeated_signed_coefficients_preserve_case_gradient .....................   Passed    0.09 sec
+        Start 770: test_coupled_fieldsolve.native_rhs_only_electron_and_ion_blocks_share_one_case_output
+132/159 Test #770: test_coupled_fieldsolve.native_rhs_only_electron_and_ion_blocks_share_one_case_output ...........................   Passed    0.09 sec
+        Start 771: test_coupled_fieldsolve.native_rhs_only_forged_authorities_reject_before_block_publication
+133/159 Test #771: test_coupled_fieldsolve.native_rhs_only_forged_authorities_reject_before_block_publication ......................   Passed    0.10 sec
+        Start 772: test_coupled_fieldsolve.native_output_bearing_wrong_gradient_rejects_before_block_publication
+134/159 Test #772: test_coupled_fieldsolve.native_output_bearing_wrong_gradient_rejects_before_block_publication ...................   Passed    0.10 sec
+        Start 812: test_amr_synthetic_program_loader_transaction.SourceBuiltArtifactLoadsBudgetRollsBackAndRetries
+135/159 Test #812: test_amr_synthetic_program_loader_transaction.SourceBuiltArtifactLoadsBudgetRollsBackAndRetries .................   Passed   50.72 sec
+        Start 846: test_program_reflux_ledger.CanonicalMetricLedgerAndAcceptedCheckpointAreExactInOneTwoAndThreeDimensions
+136/159 Test #846: test_program_reflux_ledger.CanonicalMetricLedgerAndAcceptedCheckpointAreExactInOneTwoAndThreeDimensions .........   Passed    0.34 sec
+        Start 847: test_program_reflux_ledger.InvalidCheckpointAndDuplicateFacesRejectBeforeMutation
+137/159 Test #847: test_program_reflux_ledger.InvalidCheckpointAndDuplicateFacesRejectBeforeMutation ...............................   Passed    0.03 sec
+        Start 904: ProgramContextContract.SystemMoveTransfersPreparedExecutionLane
+138/159 Test #904: ProgramContextContract.SystemMoveTransfersPreparedExecutionLane .................................................   Passed    0.56 sec
+        Start 905: ProgramContextContract.AnonymousRateIdentityIsRejectedBeforeTopologyLookup
+139/159 Test #905: ProgramContextContract.AnonymousRateIdentityIsRejectedBeforeTopologyLookup ......................................   Passed    0.07 sec
+        Start 906: ProgramContextContract.ProviderFreeViewDoesNotRequireAPlanOrStorageCarrier
+140/159 Test #906: ProgramContextContract.ProviderFreeViewDoesNotRequireAPlanOrStorageCarrier ......................................   Passed    0.06 sec
+        Start 907: ProgramContextContract.LocalLinearConsumerPublishesStagedInputAndRejectsNanAtomically
+141/159 Test #907: ProgramContextContract.LocalLinearConsumerPublishesStagedInputAndRejectsNanAtomically ...........................   Passed    0.06 sec
+        Start 908: ProgramContextContract.AuxiliaryReadClosureKeepsUnrelatedDirtyInputsAndDerivedFreshness
+142/159 Test #908: ProgramContextContract.AuxiliaryReadClosureKeepsUnrelatedDirtyInputsAndDerivedFreshness .........................   Passed    0.07 sec
+        Start 909: ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors
+143/159 Test #909: ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors .......................   Passed    0.07 sec
+        Start 910: ProgramContextContract.AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch
+144/159 Test #910: ProgramContextContract.AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch ...........................***Skipped   0.06 sec
+        Start 911: ProgramContextContract.PreparedLinearSolveAcceptsDistinctCongruentWorkspaceLane
+145/159 Test #911: ProgramContextContract.PreparedLinearSolveAcceptsDistinctCongruentWorkspaceLane .................................   Passed    0.07 sec
+        Start 912: ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection
+146/159 Test #912: ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection ....................***Skipped   0.07 sec
+        Start 913: ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation
+147/159 Test #913: ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation ............***Skipped   0.09 sec
+        Start 914: ProgramContextContract.ProjectionReportSurvivesScientificRollbackUntilConsumed
+148/159 Test #914: ProgramContextContract.ProjectionReportSurvivesScientificRollbackUntilConsumed ..................................   Passed    0.07 sec
+        Start 915: ProgramContextContract.AcceptedBalanceEvidenceIsCurrentAttemptExactAndFailClosed
+149/159 Test #915: ProgramContextContract.AcceptedBalanceEvidenceIsCurrentAttemptExactAndFailClosed ................................   Passed    0.07 sec
+        Start 916: ProgramContextContract.ForwardEulerViaContextMatchesReference
+150/159 Test #916: ProgramContextContract.ForwardEulerViaContextMatchesReference ...................................................   Passed    0.06 sec
+        Start 917: ProgramContextContract.RankedHyperbolicBoundaryRefusesMappedPeriodicityWithoutProvider
+151/159 Test #917: ProgramContextContract.RankedHyperbolicBoundaryRefusesMappedPeriodicityWithoutProvider ..........................   Passed    0.06 sec
+        Start 918: ProgramContextContract.CommitManySnapshotsSourcesThatAreAlsoTargets
+152/159 Test #918: ProgramContextContract.CommitManySnapshotsSourcesThatAreAlsoTargets .............................................   Passed    0.06 sec
+        Start 919: ProgramContextContract.GeneratedScratchIsPersistentExactAndNonAliasing
+153/159 Test #919: ProgramContextContract.GeneratedScratchIsPersistentExactAndNonAliasing ..........................................   Passed    0.06 sec
+        Start 920: ProgramContextContract.SimultaneousNamedFieldWorkspaceIsPersistentSubsetSafeAndTransactional
+154/159 Test #920: ProgramContextContract.SimultaneousNamedFieldWorkspaceIsPersistentSubsetSafeAndTransactional ....................   Passed    0.06 sec
+        Start 921: ProgramContextContract.SsprkTwoStageViaContextMatchesReference
+155/159 Test #921: ProgramContextContract.SsprkTwoStageViaContextMatchesReference ..................................................   Passed    0.07 sec
+        Start 922: ProgramContextContract.SeamSurfaceIsConsistent
+156/159 Test #922: ProgramContextContract.SeamSurfaceIsConsistent ..................................................................   Passed    0.07 sec
+        Start 923: ProgramContextContract.LaplacianPreservesEveryComponentAndExactStencilAuthority
+157/159 Test #923: ProgramContextContract.LaplacianPreservesEveryComponentAndExactStencilAuthority .................................   Passed    0.06 sec
+        Start 924: ProgramContextContract.LogicalSubcycleSnapshotsCarryExactChildWindowsAndRestoreParents
+158/159 Test #924: ProgramContextContract.LogicalSubcycleSnapshotsCarryExactChildWindowsAndRestoreParents ..........................   Passed    0.09 sec
+        Start 925: ProgramContextContract.BlockResolutionRequiresACompleteExplicitMap
+159/159 Test #925: ProgramContextContract.BlockResolutionRequiresACompleteExplicitMap ..............................................   Passed    0.07 sec
+
+100% tests passed out of 159
+
+Label Time Summary:
+amr                                                         =   2.25 sec*proc (49 tests)
+checkpoint                                                  =   0.38 sec*proc (2 tests)
+codegen                                                     =  50.72 sec*proc (1 test)
+compiler                                                    =  50.72 sec*proc (1 test)
+cpp-target:test_amr_synthetic_program_loader_transaction    =  50.72 sec*proc (1 test)
+cpp-target:test_aux_single_source                           =   0.41 sec*proc (9 tests)
+cpp-target:test_component_interfaces                        =   0.53 sec*proc (13 tests)
+cpp-target:test_coupled_fieldsolve                          =   1.92 sec*proc (10 tests)
+cpp-target:test_generated_amr_system_block                  =  37.43 sec*proc (32 tests)
+cpp-target:test_narrow_physical_operations                  =   0.36 sec*proc (5 tests)
+cpp-target:test_native_field_attachment                     =   0.44 sec*proc (10 tests)
+cpp-target:test_nd_cluster                                  =   0.54 sec*proc (8 tests)
+cpp-target:test_nd_flux_ledger                              =   0.53 sec*proc (15 tests)
+cpp-target:test_nd_transfer                                 =   0.53 sec*proc (15 tests)
+cpp-target:test_prepared_amr_ghost_fill                     =   0.81 sec*proc (17 tests)
+cpp-target:test_program_context_contract                    =   1.99 sec*proc (22 tests)
+cpp-target:test_program_reflux_ledger                       =   0.38 sec*proc (2 tests)
+elliptic                                                    =   1.92 sec*proc (10 tests)
+fast                                                        =  45.50 sec*proc (156 tests)
+integration                                                 =  51.09 sec*proc (3 tests)
+medium                                                      =  51.09 sec*proc (3 tests)
+mesh                                                        =   0.54 sec*proc (8 tests)
+native_loader                                               =  50.72 sec*proc (1 test)
+nd                                                          =   0.38 sec*proc (2 tests)
+physics                                                     =   0.78 sec*proc (14 tests)
+runtime                                                     =  40.38 sec*proc (77 tests)
+unit                                                        =  45.50 sec*proc (156 tests)
+
+Total Test time (real) =  96.70 sec
+
+The following tests did not run:
+	910 - ProgramContextContract.AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch (Skipped)
+	912 - ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection (Skipped)
+	913 - ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation (Skipped)
