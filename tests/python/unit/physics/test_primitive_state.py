@@ -296,7 +296,13 @@ def test_production_model_primitive_roundtrip_and_step():
     assert component.backend == "production"
     assert component.prim_names == ("rho", "u", "v", "p")
 
-    simulation = pops.bind(artifact, initial_state={"gas": initial.copy()})
+    from tests.python.support.native_execution_context import artifact_execution_context
+
+    simulation = pops.bind(
+        artifact,
+        initial_state={"gas": initial.copy()},
+        execution_context=artifact_execution_context(artifact),
+    )
     bound = np.asarray(simulation.state_global("gas"), dtype=np.float64).reshape(initial.shape)
     bound_rho = bound[0]
     bound_u = bound[1] / bound_rho

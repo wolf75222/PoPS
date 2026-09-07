@@ -118,7 +118,13 @@ def test_case_freezes_external_board_reference_and_keeps_snapshot_stable():
     assert build_problem_snapshot(case).hash == snapshot.hash
     assert "U" in model.inspect()["states"]
     assert "A" in model.module.list_operators()
-    assert "void" in model._dsl._m.emit_cpp()
+    formulas_before = dict(model._dsl._m._flux)
+    first_emission = model._dsl._m.emit_cpp()
+    assert "void" in first_emission
+    assert model._dsl._m.emit_cpp() == first_emission
+    assert dict(model._dsl._m._flux) == formulas_before
+    assert model.module.module_hash() == module_hash
+    assert build_problem_snapshot(case).hash == snapshot.hash
 
 
 def test_multispecies_owned_module_and_registry_are_sealed():

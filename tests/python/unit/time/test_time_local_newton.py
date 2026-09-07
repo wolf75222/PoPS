@@ -117,10 +117,10 @@ def fault_model(name):
     m.conservative_from([rho])
     m.flux(x=[0.0 * rho], y=[0.0 * rho])
     m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
-    offset = m.aux_field("fault_offset")
-    linear = m.aux_field("fault_linear")
-    quadratic = m.aux_field("fault_quadratic")
-    boundary = m.aux_field("fault_boundary")
+    offset = m.aux("fault_offset")
+    linear = m.aux("fault_linear")
+    quadratic = m.aux("fault_quadratic")
+    boundary = m.aux("fault_boundary")
     root_weight = m.aux("B_z")
     m.source_term(
         "fault",
@@ -258,7 +258,14 @@ def section_a(t):
 
     # --- the codegen lowers the residual into the unique prepared provider ---
     m = reaction_model("react_cg", 2.0)
-    src = emit_cpp_program(reaction_program(t, "react_cg", model=m), model=m)
+    from pops.codegen.module_lowering import lower_and_validate
+
+    def emit_with_model_authority(program, model):
+        emit_model, source_module = lower_and_validate(model, facade=model)
+        assert source_module is model.module
+        return emit_cpp_program(program, model=emit_model)
+
+    src = emit_with_model_authority(reaction_program(t, "react_cg", model=m), model=m)
     for frag in (
         "auto residual_eval = [&]",
         "pops::prepare_local_nonlinear_problem<1>",
@@ -268,7 +275,8 @@ def section_a(t):
         "pops::local_nonlinear_solve_report(",
         "pops::for_each_cell(",
         "ctx.pointwise_active_mask(0,",
-        "pops::reduce_max(ln_status_",
+        "pops::all_reduce_max(pops::reduce_max_local(ln_status_",
+        "ctx.prepared_execution_lane()",
         "pops::local_nonlinear_status_from_priority(",
         "pops::collective_first_local_nonlinear_failure(",
         "collective status/location precedence mismatch",
@@ -292,7 +300,7 @@ def section_a(t):
     # RejectAttempt statuses reject, every unselected status fails the run, and the consumed report
     # carries the authoritative action used by the guard.
     fault = fault_model("fault_cg")
-    reject_src = emit_cpp_program(
+    reject_src = emit_with_model_authority(
         fault_program(
             t,
             name="fault_reject_cg",
@@ -327,7 +335,7 @@ def section_a(t):
         "the rejection guard reads the report returned by SolveOutcome.consume",
     )
 
-    fail_src = emit_cpp_program(
+    fail_src = emit_with_model_authority(
         fault_program(t, name="fault_fail_cg", model=fault, action=t.FailRun()),
         model=fault,
     )
@@ -372,7 +380,7 @@ def section_a(t):
             action=t.FailRun()
         ),
     )
-    big_src = emit_cpp_program(Pbig, model=big)
+    big_src = emit_with_model_authority(Pbig, model=big)
     chk(
         "pops::prepare_local_nonlinear_problem<9>" in big_src
         and "pops::LocalNonlinearCellResult<9>" in big_src

@@ -133,6 +133,13 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
     provider_binding = _provider_binding(
         impl, exprs if plan_exprs is None else plan_exprs, provider_plans, consumer_qid)
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
+    helpers = getattr(provider_plans, "source_kernel_helpers", None)
+    if helpers is not None:
+        shared_call = helpers.call(
+            impl, exprs, binding=provider_binding, state_var=state_var,
+            out_var=out_var, block_index=block_idx)
+        if shared_call is not None:
+            return shared_call
     params_block = block_idx if _has_runtime_param(exprs) else None
     body = _kernel_open(out_var, state_var, params_block, provider_binding=provider_binding,
                         program_block=block_idx)
@@ -164,11 +171,12 @@ def _component_sources(
             "multi-state operator references ambiguous bare component(s) %s; obtain exact "
             "coordinates with module.state_symbols(state_space)" % ambiguous)
     sources = {}
-    from pops.model.state_symbols import native_input_state_component_symbol
+    from pops.model.state_symbols import native_input_state_component_symbols
+    coordinates = native_input_state_component_symbols(state.space for state in states)
     for ordinal, state in enumerate(states):
         for index, component in enumerate(state.space.components):
             source = source_for_state(state, index)
-            bound = native_input_state_component_symbol(ordinal, index)
+            bound = coordinates[ordinal][index]
             if bound in referenced:
                 sources[bound] = source
             qualified = state_component_symbol(state.space, component)

@@ -14,10 +14,13 @@ import inspect
 import pytest
 
 from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen.module_lowering import lower_and_validate
 from pops.lib.time import IMEX
+from pops.physics import Density, Momentum
 from pops.physics._facade import Model
 from pops.problem import Case
 from pops.solvers.nonlinear import LocalNewton
+from tests.python.support.physics_roles import X_AXIS, Y_AXIS
 
 
 def _partial_momentum_program():
@@ -26,7 +29,7 @@ def _partial_momentum_program():
         "rho",
         "momentum_x",
         "momentum_y",
-        roles=("Density", "MomentumX", "MomentumY"),
+        roles=(Density(), Momentum(X_AXIS), Momentum(Y_AXIS)),
     )
     explicit = model.rate("transport", flux=False, sources=())
     drag = model.source_term(
@@ -71,7 +74,9 @@ def test_partial_implicit_source_is_one_authenticated_program_operator():
     assert consume["attrs"]["action"]["kind"] == "fail_run"
     assert len(program.commits()) == 1
 
-    generated = emit_cpp_program(program, model=model)
+    emitter, source_module = lower_and_validate(model, facade=model)
+    assert source_module is model.module
+    generated = emit_cpp_program(program, model=emitter)
     assert "pops::prepare_local_nonlinear_problem<3>" in generated
     assert "pops::solve_prepared_local_nonlinear(prepared_, Gval)" in generated
     assert "pops::detail::mat_inverse<3>(" not in generated

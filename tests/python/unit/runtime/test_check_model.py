@@ -48,15 +48,17 @@ def _isothermal_model(*, broken_roundtrip: bool = False, nan_flux: bool = False)
         },
     )
 
+    model.primitive_state(
+        rho, u, v,
+        conservative=[rho, rho * u, (2.0 if broken_roundtrip else 1.0) * rho * v],
+    )
+    model._dsl.elliptic_rhs(0.0 * rho)
     lowering = model.__pops_compiler_lowering__()
     assert lowering.facade is model
     assert lowering.source_module is model.module
-    emitter = lowering.emit_model
-    emitter.primitive_vars(rho, u, v)
-    emitter.conservative_from(
-        [rho, rho * u, (2.0 if broken_roundtrip else 1.0) * rho * v]
-    )
-    emitter.elliptic_rhs(0.0 * rho)
+    from pops.codegen.module_lowering import lower_and_validate
+    emitter, source = lower_and_validate(model)
+    assert source is lowering.source_module
     return model, emitter
 
 

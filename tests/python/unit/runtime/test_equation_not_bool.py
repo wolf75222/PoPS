@@ -13,19 +13,26 @@ from tests.python.support.requirements import require_native_or_skip
 try:
     from pops import math as bm
     from pops.math import Equation
+    from pops.model import Module
 except Exception as exc:  # pops not importable here -> skip, never fake
     require_native_or_skip('test_equation_not_bool (pops unavailable: %s)' % exc)
 
 
+_module = Module("equation_truth_values")
+_state = _module.state_handle(_module.state_space("U", ("q",)))
+_rate = _module.field_handle(_module.field_space("R", ("r",)))
+_potential = _module.field_handle(_module.field_space("phi", ("phi",)))
+
+
 def test_equal_on_board_node_builds_an_equation():
-    eq = bm.ddt("U") == bm.unknown("R")
+    eq = bm.ddt(_state) == bm.unknown(_rate)
     assert isinstance(eq, Equation), type(eq)
     assert eq.lhs is not None and eq.rhs is not None
     print("OK  '==' on a board node still builds an inspectable Equation")
 
 
 def test_bool_of_equation_raises():
-    eq = bm.ddt("U") == bm.unknown("R")
+    eq = bm.ddt(_state) == bm.unknown(_rate)
     try:
         bool(eq)
         raise AssertionError("bool(Equation) must raise")
@@ -37,7 +44,7 @@ def test_bool_of_equation_raises():
 
 
 def test_if_equation_raises():
-    eq = -bm.laplacian(bm.unknown("phi")) == bm.unknown("rhs")
+    eq = -bm.laplacian(bm.unknown(_potential)) == bm.unknown(_rate)
     try:
         if eq:  # noqa: SIM102 -- deliberately exercising the refusal
             pass
@@ -49,7 +56,7 @@ def test_if_equation_raises():
 
 def test_bare_board_node_bool_raises():
     # A board node itself (before ==) must also refuse truthiness, catching e.g. a stray 'if ddt(U):'.
-    node = bm.ddt("U")
+    node = bm.ddt(_state)
     try:
         bool(node)
         raise AssertionError("bool(board node) must raise")

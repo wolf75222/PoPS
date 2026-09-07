@@ -74,6 +74,13 @@ def _resolved_native_amr_field_roles(plan: Any) -> dict[str, tuple[dict[str, Any
 
 
 def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
+    from pops.codegen._resolved_operation_ownership import require_block_plan_owner
+
+    # Authenticate every Case block before the first native compilation can run.
+    for block in plan.blocks:
+        require_block_plan_owner(
+            block.resolved_operations, block.instance_owner_qid,
+            where="compiled block %r" % block.name, required=True)
     compile_options = {
         key: value for key, value in options.items() if key in ("include", "cxx", "std")
     }
@@ -107,7 +114,12 @@ def build_program_model_graph(plan: Any) -> Any:
     if type(plan) is not ResolvedSimulationPlan:
         raise TypeError("program model graph requires an exact ResolvedSimulationPlan")
     from pops.codegen.program_models import ProgramModelGraph
+    from pops.codegen._resolved_operation_ownership import require_block_plan_owner
 
+    for block in plan.blocks:
+        require_block_plan_owner(
+            block.resolved_operations, block.instance_owner_qid,
+            where="Program block %r" % block.name, required=True)
     return ProgramModelGraph.from_resolved_blocks(plan.blocks)
 
 
@@ -127,6 +139,10 @@ def compile_install_model(
     from pops.codegen.loader import CompiledModel
     from pops.codegen._compiled_model_boundary import validate_compiled_model_result
     from pops.codegen._compiled_model_identity import authenticate_compiled_model
+    from pops.codegen._resolved_operation_ownership import require_block_plan_owner
+
+    require_block_plan_owner(
+        resolved_operations, consumer_owner_qid, where="compiled block %r" % name)
 
     if target == "system":
         if native_field_roles is not None:

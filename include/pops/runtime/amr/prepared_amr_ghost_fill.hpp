@@ -393,16 +393,9 @@ class PreparedAmrGhostFill {
         for (const auto& region : plan.fine_destination_regions) {
           ::pops::amr::transfer::IndexMapping<Dim> mapping{};
           mapping.coarse_origin = preparation.coarse_domain.lo;
-          for (int axis = 0; axis < Dim; ++axis) {
-            const std::int64_t origin =
-                static_cast<std::int64_t>(preparation.fine_domain.lo[axis]) -
-                region.periodic_source_from_destination[axis];
-            if (origin < std::numeric_limits<int>::min() ||
-                origin > std::numeric_limits<int>::max())
-              throw std::overflow_error(
-                  "prepared AMR ghost periodic interpolation origin exceeds native indices");
-            mapping.fine_origin[axis] = static_cast<int>(origin);
-          }
+          // Periodic sources have already been copied into the child's unwrapped parent
+          // staging chart. Interpolation must use that same chart for every destination.
+          mapping.fine_origin = preparation.fine_domain.lo;
           patch.interpolations.push_back(
               InterpolationSlot{region.destination, mapping, std::nullopt});
         }

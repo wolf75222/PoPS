@@ -83,6 +83,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         # same-named Var from another model.
         self._primitive_vars = {}
         self._primitive_state_authored = False
+        self._primitive_state_values = ()
         self._fields = {}
         self._field_operators = {}
         self._fluxes = {}
@@ -346,6 +347,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             (hyp, "cons_from"),
             (hyp, "_state_space_metadata"),
             (self, "_states"),
+            (self, "_primitive_state_values"),
         ):
             hyp._state_space_metadata = metadata
             vars_ = self._dsl.conservative_vars(*components, roles=role_list)
@@ -377,6 +379,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             handle = StateHandle(
                 name, components, qualified, role_map, owner=self.owner_path, space=typed_space)
             self._states[handle.name] = handle
+            self._primitive_state_values = qualified
         return handle
 
     def species(self, name: Any, state: Any = (), roles: Any = None) -> Any:
@@ -507,6 +510,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         with atomic_attrs(
             (hyp, "prim_state"), (hyp, "prim_roles"), (hyp, "cons_from"),
             (self, "_primitive_state_authored"),
+            (self, "_primitive_state_values"),
         ):
             layout_variables = tuple(
                 Var(value.component, "cons") if isinstance(value, QuantityRef) else value
@@ -514,6 +518,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             self._dsl.primitive_vars(*layout_variables, roles=role_list)
             self._dsl.conservative_from(inverse)
             self._primitive_state_authored = True
+            self._primitive_state_values = values
         self._dsl._invalidate_authoring_views()
         self._invalidate_authoring_views()
 
@@ -530,9 +535,13 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 "recovery_admissibility requires a single-state model; multi-species policies "
                 "must be supplied by a species-qualified recovery provider"
             )
-        self._dsl.recovery_admissibility(
-            **{name: self._to_expr(predicate) for name, predicate in constraints.items()}
+        from pops._ir.quantity import QuantityRef
+        self._dsl._m._declare_recovery_admissibility(
+            {name: self._to_expr(predicate) for name, predicate in constraints.items()},
+            primitive_quantities=tuple(value for value in self._primitive_state_values
+                                       if isinstance(value, QuantityRef)),
         )
+        self._dsl._invalidate_authoring_views()
         self._invalidate_authoring_views()
 
     def scalar(self, name: Any, expr: Any) -> Any:

@@ -404,6 +404,10 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     # identity depend on call order, that synthesized view is intentionally shaped for the legacy
     # emitter and need not have the same structural hash as the source compile IR.
     object.__setattr__(m, "_module_cache", module)
+    # Every state-bearing formula above crossed _body_for_state for this exact
+    # selected route. Preserve that fact without reinterpreting the full source
+    # Module as a single-state model at a later raw-carrier emission boundary.
+    object.__setattr__(m._m, "_formula_native_bound", True)
     return m
 
 

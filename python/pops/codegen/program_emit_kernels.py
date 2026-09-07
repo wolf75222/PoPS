@@ -108,7 +108,10 @@ class ProgramProviderPlans:
     """
 
     def __init__(self) -> None:
+        from pops.codegen._program_kernel_reuse import ProgramSourceKernelHelpers
+
         self._plans: dict[str, tuple[tuple[Any, Any], ...]] = {}
+        self.source_kernel_helpers = ProgramSourceKernelHelpers()
 
     def bind(self, impl: Any, exprs: Any, qid: str) -> dict[str, Any]:
         if not isinstance(qid, str) or not qid:

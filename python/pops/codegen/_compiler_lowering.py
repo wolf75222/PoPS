@@ -30,6 +30,9 @@ class CompilerLowering:
 
     def bind_component_provider_packs(self, packs: Any) -> None:
         """Bind one resolved provider-pack authority before native source emission."""
+        retain_source = getattr(self.emit_model, "__pops_retain_compiler_source__", None)
+        if callable(retain_source) and retain_source(self.source_module) is not None:
+            raise TypeError("compiler source retention protocol must return None")
         result = self.emit_model.__pops_bind_component_provider_packs__(packs)
         if result is not None:
             raise TypeError(

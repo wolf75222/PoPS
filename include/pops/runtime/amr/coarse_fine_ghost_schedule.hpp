@@ -133,13 +133,15 @@ template <int Dim>
 Box<Dim> required_parent_stencil(const Box<Dim>& fine_region,
                                  const ::pops::amr::RefinementRatio<Dim>& ratio,
                                  const Box<Dim>& coarse_domain, const Box<Dim>& fine_domain,
-                                 const Index<Dim>& periodic_source_from_destination,
                                  int stencil_radius) {
   Box<Dim> result{};
   for (int axis = 0; axis < Dim; ++axis) {
     const auto parent = [&](int fine_coordinate) {
-      const std::int64_t relative = static_cast<std::int64_t>(fine_coordinate) +
-                                    periodic_source_from_destination[axis] - fine_domain.lo[axis];
+      // All regions of one child use its unwrapped parent chart. Wrapping before their
+      // bounding union would join opposite domain edges through unrelated sparse cells.
+      // prepare_jobs_ wraps source cells into this chart after its extent is known.
+      const std::int64_t relative =
+          static_cast<std::int64_t>(fine_coordinate) - fine_domain.lo[axis];
       const std::int64_t quotient = relative / ratio[axis];
       const std::int64_t remainder = relative % ratio[axis];
       return static_cast<std::int64_t>(coarse_domain.lo[axis]) +
@@ -372,7 +374,7 @@ class CoarseFineGhostSchedule {
         staging = coarse_fine_ghost_detail::bounding_union(
             staging, coarse_fine_ghost_detail::required_parent_stencil(
                          destination.destination, ratio_, coarse_domain_, fine_domain_,
-                         destination.periodic_source_from_destination, parent_stencil_radius_));
+                         parent_stencil_radius_));
       if (!staging.empty()) {
         for (int axis = 0; axis < Dim; ++axis) {
           const bool crosses_lower = topology_.is_physical(Face<Dim>{axis, BoundarySide::lower}) &&

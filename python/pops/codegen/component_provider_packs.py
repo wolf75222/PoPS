@@ -301,6 +301,32 @@ class ComponentProviderPacks:
             target, emitter_carrier_snapshot(target), _ATTACH_CAPABILITY))
 
 
+def unbound_emitter_attributes(target: Any) -> dict[str, Any]:
+    """Copy authoring attributes without inheriting another object's compiler binding.
+
+    An existing source binding must remain complete and authenticated. Only the new
+    emitter starts unbound, so a selected operation plan can attach its exact consumer
+    projection without overwriting the source's pack or copying its object witness.
+    """
+    attrs = vars(target)
+    binding_names = (*EMITTER_CARRIER_ATTRS, _WITNESS_ATTR)
+    if any(name in attrs for name in binding_names):
+        require_emitter_provider_carrier(target, where="source of private emitter")
+    return {name: value for name, value in attrs.items()
+            if name not in (*binding_names, "_resolved_operations")}
+
+
+def resolve_emitter_provider_packs(target: Any, module: Any) -> ComponentProviderPacks:
+    """Use the emitter's authenticated selected plan, or its unselected source plan."""
+    plan = getattr(target, "_resolved_operations", None)
+    if plan is None:
+        return resolve_component_provider_packs(module)
+    from .resolved_operations import ResolvedOperationPlan
+    if type(plan) is not ResolvedOperationPlan:
+        raise TypeError("compiler emitter requires an exact resolved operation plan")
+    return plan.require_provider_packs(module)
+
+
 def bind_emitter_provider_packs(target: Any) -> None:
     """Bind the exact Module ProviderPack onto one compiler emitter.
 
@@ -315,7 +341,7 @@ def bind_emitter_provider_packs(target: Any) -> None:
     from pops.model import Module
 
     if callable(bind) and isinstance(module, Module):
-        bind(resolve_component_provider_packs(module))
+        bind(resolve_emitter_provider_packs(target, module))
 
 
 def resolve_component_provider_packs(module: Any) -> ComponentProviderPacks:

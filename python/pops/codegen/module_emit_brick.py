@@ -352,9 +352,12 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     # Foncteurs nommes des temoins de VP (EigWitness) : methodes statiques POPS_HD remplissant
     # M[k][k] + real_eig_minmax, declarees une fois par couple (field, k). Device-clean (ADC-289).
     S += _eig_witness_helpers(eig_pairs)
-    # Compact auxiliary width comes exclusively from the resolved ProviderPack.
-    if model._total_n_aux():
-        S.append("  static constexpr int n_aux = %d;" % model._total_n_aux())
+    # Native operation consumers need the full resolved carrier width, which may
+    # exceed the physical-flux subpack. Keep n_aux as a compatibility spelling.
+    provider_width = model._total_n_aux()
+    S.append("  static constexpr int n_providers = %d;" % provider_width)
+    if provider_width:
+        S.append("  static constexpr int n_aux = %d;" % provider_width)
     S += [
         "",
         "  template <int Axis>",

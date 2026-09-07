@@ -238,6 +238,31 @@ def test_arbitrary_stencil_depth_is_authenticated_and_lowered(t):
     assert "{1, krylov_input_ghosts" in source and ", false};" in source
 
 
+def test_stencil_boundary_uses_authenticated_input_ghosts(t):
+    import re
+
+    program = t.Program("deep_laplacian_stencil")
+    state = typed_state(program, "blk")
+    operator = program.matrix_free_operator("A", stencil_depth=3)
+    program.set_apply(operator, lambda P, _out, value: _helmholtz(P, value))
+    solution = program.solve(
+        LinearProblem(operator, state, nullspace=None),
+        solver=_krylov("gmres", max_iter=10, rel_tol=1e-9),
+    ).consume(action=FailRun())
+    endpoint = typed_state(program, "blk", state_name="U").next
+    program.commit(endpoint, program.value("next", solution, at=endpoint.point))
+    source = emit_cpp_program(program)
+    boundary = re.search(
+        r"auto session_(\w+) = ctx_owner->prepare_mesh_boundary_session\(\*session_(\w+),",
+        source)
+    assert boundary is not None
+    assert (
+        "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+        "ctx.alloc_scalar_field(1, 3));" % boundary[2]) in source
+    assert source.index(boundary[0]) < source.index("pops::ApplyFn<")
+    assert re.search(r"ctx\.laplacian\([^\n]+\*%s\);" % boundary[1], source)
+
+
 def test_stencil_depth_validation_and_inferred_minimum(t):
     for bad in (True, -1, 1.5, "2"):
         try:

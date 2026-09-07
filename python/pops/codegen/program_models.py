@@ -123,6 +123,12 @@ class ProgramModelGraph:
                     "owner %s" % canonical
                 )
             operation_plan = getattr(block, "resolved_operations", None)
+            from pops.codegen._resolved_operation_ownership import require_block_plan_owner
+
+            require_block_plan_owner(
+                operation_plan, block.instance_owner_qid,
+                where="Program block %r" % block.name,
+                required=operation_plan is not None or bool(block.instance_owner_qid))
             authority_key = (id(block.model), block.state_spaces,
                              None if operation_plan is None else operation_plan.identity.token)
             lowered = lowered_by_authority.get(authority_key)

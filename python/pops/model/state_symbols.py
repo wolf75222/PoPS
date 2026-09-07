@@ -138,9 +138,11 @@ def native_formula_view(facade: Any, module: Any, *, quantity_handles: Any = ())
     The clone owns its rebound expression containers; authoring graph nodes and
     declaration identities remain the source authority.
     """
+    from pops.codegen.component_provider_packs import unbound_emitter_attributes
+    facade_attributes = unbound_emitter_attributes(facade)
     emitter = _native_formula_model_view(facade._m, module, quantity_handles=quantity_handles)
     view = object.__new__(type(facade))
-    vars(view).update(vars(facade))
+    vars(view).update(facade_attributes)
     object.__setattr__(view, "_m", emitter)
     object.__setattr__(view, "_module_cache", module)
     object.__setattr__(view, "_compile_source_module_hash", module.module_hash())
@@ -152,11 +154,12 @@ def _native_formula_model_view(model: Any, module: Any, *, quantity_handles: Any
     if len(states) != 1:
         raise ValueError("a formula-emitter view requires one explicitly selected state route")
     state = next(iter(states.values()))
+    from pops.codegen.component_provider_packs import unbound_emitter_attributes
     emitter = object.__new__(type(model))
     vars(emitter).update({
         name: rebind_state_symbols(value, state, states.values(), module=module,
                                   quantity_handles=quantity_handles)
-        for name, value in vars(model).items()
+        for name, value in unbound_emitter_attributes(model).items()
     })
     object.__setattr__(emitter, "_formula_native_bound", True)
     return emitter
@@ -189,6 +192,30 @@ def native_input_state_component_symbol(input_index: int, component_index: int) 
            for value in (input_index, component_index)):
         raise ValueError("native state coordinates require non-negative integer indices")
     return "pops_input_%d_component_%d" % (input_index, component_index)
+
+
+def native_input_state_component_symbols(spaces: Any) -> tuple[tuple[str, ...], ...]:
+    """Choose private coordinates disjoint from every authored input coordinate.
+
+    Both binding and emission use the same ordered input Space tuple. Physical
+    component names remain legal even when they resemble our default spelling;
+    aliases are avoided without reserving any user namespace.
+    """
+    spaces = tuple(spaces)
+    occupied = {component for space in spaces for component in space.components}
+    occupied.update(state_component_symbol(space, component)
+                    for space in spaces for component in space.components)
+    rows = []
+    for ordinal, space in enumerate(spaces):
+        row = []
+        for index, _ in enumerate(space.components):
+            candidate = native_input_state_component_symbol(ordinal, index)
+            while candidate in occupied:
+                candidate += "_"
+            occupied.add(candidate)
+            row.append(candidate)
+        rows.append(tuple(row))
+    return tuple(rows)
 
 
 __all__ = ["rebind_state_symbols", "state_component_symbol", "native_formula_view"]

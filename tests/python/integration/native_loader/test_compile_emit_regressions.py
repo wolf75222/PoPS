@@ -142,8 +142,54 @@ def _assert_bound_elliptic_closures(loader: str) -> None:
     named_start = loader.index("struct RuntimeEllipticGenEll_psi {")
     named_end = loader.index("}  // namespace pops_generated", named_start)
     named_brick = loader[named_start:named_end]
+    assert "static constexpr int dimension = 2;" in named_brick
     assert "pops::RuntimeParams params" in named_brick
     assert "params.get(0)" in named_brick
+
+
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_named_elliptic_rhs_declares_its_exact_consumer_dimension(dimension: int) -> None:
+    from pops.codegen.module_codegen import emit_cpp_elliptic_field
+
+    model = _ranked_scalar_model(dimension)
+    model.aux("phi")
+    model.elliptic_field("phi", rhs=model._m.cons_from[0], aux=["phi"])
+    model._model_hash()
+    brick = emit_cpp_elliptic_field(model._m, "phi", "ExactRankEllipticRhs")
+    assert "static constexpr int dimension = %d;" % dimension in brick
+    assert "static constexpr int n_vars = 1;" in brick
+    assert "using State = pops::StateVec<1>;" in brick
+    assert "elliptic_rhs(const State& U)" in brick
+    assert "return state;" in brick
+
+
+def test_generated_bricks_retain_the_full_native_provider_carrier() -> None:
+    from pops.codegen.module_codegen import emit_cpp_source
+
+    model = _ranked_scalar_model(2)
+    state = model._m.cons_from[0]
+    grad_x = model.aux("grad_x")
+    grad_y = model.aux("grad_y")
+    forcing = model.aux("forcing")
+    model.flux(x=[-grad_y * state], y=[grad_x * state])
+    model.source([forcing * state])
+    model._model_hash()
+
+    hyperbolic = model._m.emit_cpp_brick(name="ProviderCarrierHyperbolic")
+    source = emit_cpp_source(model._m, name="ProviderCarrierSource")
+    assert model._m._total_n_aux() == 3
+    assert "static constexpr int n_flux_providers = 2;" in hyperbolic
+    for brick in (hyperbolic, source):
+        assert "static constexpr int n_providers = 3;" in brick
+        assert "static constexpr int n_aux = 3;" in brick
+
+
+def test_generated_provider_free_brick_declares_zero_native_carrier() -> None:
+    model = _ranked_scalar_model(2)
+    model._model_hash()
+    brick = model._m.emit_cpp_brick(name="ProviderFreeHyperbolic")
+    assert "static constexpr int n_providers = 0;" in brick
+    assert "static constexpr int n_aux" not in brick
 
 
 def test_uniform_loader_builds_elliptic_closures_before_moving_bound_model() -> None:

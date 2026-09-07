@@ -33,7 +33,7 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
     from pops._ir.expr import Var
     from pops._ir.quantity import QuantityRef
     from pops._ir.application import substitute_quantities
-    from pops.model.state_symbols import native_input_state_component_symbol
+    from pops.model.state_symbols import native_input_state_component_symbols
     op_name = v.attrs["operator"]
     from pops.time.operator_resolution import resolve_operator_handle
     operator_handle = v.attrs.get("operator_handle")
@@ -74,6 +74,7 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
     # Bind qualified leaves only after matching the exact declaration/instance and
     # complete physical type of one Program input. The private symbols are positional
     # within this kernel; equal scientific display names cannot alias one another.
+    coordinates = native_input_state_component_symbols(state.space for state in v.inputs)
     bindings = {}
     for comps in expr.values():
         for expression in comps:
@@ -97,7 +98,7 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
                 if quantity.handle.kind != "state" or quantity.component not in state.space.components:
                     raise ValueError("coupled_rate native formulas require a declared state component")
                 bindings[(quantity.handle, quantity.index)] = Var(
-                    native_input_state_component_symbol(ordinal, quantity.index), "cons")
+                    coordinates[ordinal][quantity.index], "cons")
     private_symbols = {symbol.name for symbol in bindings.values()}
     if any(isinstance(node, Var) and node.name in private_symbols
            for formulas in expr.values() for formula in formulas for node in _walk_expr(formula)):

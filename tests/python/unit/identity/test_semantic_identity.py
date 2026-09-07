@@ -61,7 +61,7 @@ def test_space_physics_and_owner_are_semantic():
 def test_opaque_space_units_are_rejected_before_semantic_identity():
     import pytest
 
-    with pytest.raises(TypeError, match="Space units are unsupported"):
+    with pytest.raises(TypeError, match="Space units require PhysicalDimension values"):
         _snapshot(units=("kg/m3",))
 
 

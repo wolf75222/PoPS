@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pops
+import pytest
 from pops.codegen import Production
 from pops.identity.semantic import program_semantic_data, semantic_identity_of
 from pops.time import ValueRef
@@ -18,8 +19,8 @@ ROOT = Path(__file__).resolve().parents[5]
 EXAMPLE = ROOT / "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py"
 
 
-def _example():
-    spec = importlib.util.spec_from_file_location("pops_final_imex_amr", EXAMPLE)
+def _example(path=EXAMPLE):
+    spec = importlib.util.spec_from_file_location("pops_final_" + path.stem, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -105,7 +106,8 @@ def test_stage_field_contexts_are_distinct_and_read_at_their_exact_stage():
     assert fields[1].point.time_for("implicit").offset.to_python() == Fraction(1)
 
 
-def test_runtime_snapshot_compares_every_amr_level_by_exact_bits():
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_runtime_snapshot_compares_every_amr_level_by_exact_bits(dimension):
     example = _example()
 
     class TwoLevelRuntime:
@@ -143,7 +145,10 @@ def test_runtime_snapshot_compares_every_amr_level_by_exact_bits():
 
         @staticmethod
         def patch_boxes():
-            return ((0, 0, 0, 7, 7), (1, 2, 2, 5, 5))
+            return (
+                (1, tuple(2 + axis for axis in range(dimension)),
+                 tuple(5 + 2 * axis for axis in range(dimension))),
+            )
 
         @staticmethod
         def installed_program_hash():
@@ -178,6 +183,7 @@ def test_runtime_snapshot_compares_every_amr_level_by_exact_bits():
             return 3
 
     snapshot = example._snapshot(TwoLevelRuntime())
+    assert snapshot.patch_boxes == TwoLevelRuntime.patch_boxes()
     assert tuple(map(len, snapshot.states.values())) == (2,)
     assert tuple(map(len, snapshot.fields.values())) == (2,)
     assert example._snapshots_bit_identical(snapshot, snapshot)
@@ -194,6 +200,26 @@ def test_runtime_snapshot_compares_every_amr_level_by_exact_bits():
     field_levels[1][0] = -0.0
     changed_field = replace(snapshot, fields={slot: tuple(field_levels)})
     assert not example._snapshots_bit_identical(snapshot, changed_field)
+
+    scalar_example = _example(
+        EXAMPLE.with_name("EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"))
+    scalar_snapshot = scalar_example._snapshot(TwoLevelRuntime())
+    assert scalar_snapshot.patch_boxes == TwoLevelRuntime.patch_boxes()
+    # Level and every inclusive lower/upper coordinate remain exact parity inputs.
+    for module, captured in ((example, snapshot), (scalar_example, scalar_snapshot)):
+        level, lower, upper = captured.patch_boxes[0]
+        changed_rows = [(level + 1, lower, upper)]
+        for axis in range(dimension):
+            changed_lower = list(lower)
+            changed_lower[axis] += 1
+            changed_rows.append((level, tuple(changed_lower), upper))
+            changed_upper = list(upper)
+            changed_upper[axis] += 1
+            changed_rows.append((level, lower, tuple(changed_upper)))
+        for row in changed_rows:
+            changed = replace(captured, patch_boxes=(row,))
+            with pytest.raises(RuntimeError, match="changed patch_boxes"):
+                module._require_same_snapshot(captured, changed, where="topology parity")
 
 
 def test_field_install_consumes_the_public_amr_layout_contract():

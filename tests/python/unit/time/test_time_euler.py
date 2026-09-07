@@ -115,10 +115,14 @@ def _initial_state() -> np.ndarray:
 
 
 def _run(method: str, steps: int, cxx: str) -> np.ndarray:
+    from tests.python.support.native_execution_context import artifact_execution_context
+
     resolved, instance = _resolved(method, cxx=cxx)
+    artifact = pops.compile(resolved)
     simulation = pops.bind(
-        pops.compile(resolved),
+        artifact,
         initial_values={instance: _initial_state()},
+        execution_context=artifact_execution_context(artifact),
     )
     report = pops.run(simulation, t_end=steps * DT, max_steps=steps)
     assert report.accepted_steps == simulation.macro_step() == steps

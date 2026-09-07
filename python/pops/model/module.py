@@ -760,9 +760,13 @@ class Module(ModuleFreezable):
         """Provide the explicit compiler-provider boundary for this canonical IR."""
         from pops.codegen import CompilerLowering
         from pops.codegen.module_lowering import _module_to_model
+        from pops.model.state_symbols import native_formula_view
 
+        # The adapter's default pack serves its internal construction. The public
+        # compiler emitter is a separate authenticated view, ready to bind exactly
+        # the nominated resolved consumer plan without retaining that default binding.
         return CompilerLowering(
-            emit_model=_module_to_model(self),
+            emit_model=native_formula_view(_module_to_model(self), self),
             source_module=self,
             facade=self,
         )

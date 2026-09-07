@@ -36,6 +36,7 @@ from pops.codegen.program_emit_kernels import (
     _emit_field_combine,
 )
 from pops.codegen.krylov_contract import (
+    _authenticated_operator_footprint,
     validated_krylov_footprint,
     validated_prepared_problem_contract,
 )
@@ -447,12 +448,12 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     # NOTHING per Krylov iteration (the runtime r/p/Ap scratch in generic_krylov.hpp is likewise
     # alloc-once). _emit_field_combine writes the affine into `out` through it. It carries the
     # operator's component count so the axpy / lincomb cover ALL components (a vector / state apply).
-    op_ncomp = int(v.attrs["ncomp"])
+    op_ncomp, op_input_ghosts = _authenticated_operator_footprint(v)
     acc_sp = "acc%d" % apply_id
     prelude.append(
         "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-        "ctx.alloc_scalar_field(%d, 1));"
-        % (acc_sp, op_ncomp))
+        "ctx.alloc_scalar_field(%d, %d));"
+        % (acc_sp, op_ncomp, op_input_ghosts))
     captures.append(acc_sp)
     session_fields.append(acc_sp)
     # The ApplyFn is constructed at install time, outside ``ctx.install([=](double dt) {...})``,
@@ -721,12 +722,25 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         jac_entry = jac_scratch[jac_ops[0].id]
         stencil_boundary = boundary_sessions[jac_entry[-2]]
         stencil_point = jac_entry[6]
-    elif has_stencil:
-        stencil_boundary = "operator_mesh_boundary_session%d" % apply_id
-        session_dynamic.append(
-            (stencil_boundary,
-             "ctx_owner->prepare_mesh_boundary_session("
-             "*session_%s, ctx_owner->prepared_execution_lane())" % acc_sp))
+    mesh_stencil_boundaries = {}
+
+    def stencil_boundary_for(value: Any) -> str:
+        if stencil_boundary is not None:
+            return stencil_boundary
+        # Halo sessions authenticate components and ghosts as well as the mesh.  Bind each
+        # consumer to its actual input allocation; the accumulator is an exact prototype of
+        # the external Krylov input/output.  Scratch producers may have different widths.
+        token = sub[value.id]
+        prototype = acc_sp if token in ("in", "out") else token
+        if prototype not in mesh_stencil_boundaries:
+            name = "operator_mesh_boundary_session%d_%d" % (
+                apply_id, len(mesh_stencil_boundaries))
+            mesh_stencil_boundaries[prototype] = name
+            session_dynamic.append(
+                (name,
+                 "ctx_owner->prepare_mesh_boundary_session("
+                 "*session_%s, ctx_owner->prepared_execution_lane())" % prototype))
+        return mesh_stencil_boundaries[prototype]
     var[("operator_prepare_refresh", apply_id)] = tuple(prepare_refresh)
     # 2) The lambda body: the laplacian / gradient ops + the result write into `out`.
     body = ["const pops::Real dt = *%s;" % apply_dt]
@@ -746,26 +760,26 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             sub[w.id] = sub[o.id]
             point_arg = ", *%s" % stencil_point if stencil_point else ""
             body.append("ctx.laplacian(*%s, %s, *%s%s);"
-                        % (sub[o.id], _apply_in_arg(sub, i), stencil_boundary, point_arg))
+                        % (sub[o.id], _apply_in_arg(sub, i), stencil_boundary_for(i), point_arg))
         elif w.op == "gradient":
             o, p = w.inputs
             sub[w.id] = sub[o.id]
             point_arg = ", *%s" % stencil_point if stencil_point else ""
             body.append("ctx.gradient(*%s, %s, *%s%s);"
-                        % (sub[o.id], _apply_in_arg(sub, p), stencil_boundary, point_arg))
+                        % (sub[o.id], _apply_in_arg(sub, p), stencil_boundary_for(p), point_arg))
         elif w.op == "divergence":
             o, flux = w.inputs
             sub[w.id] = sub[o.id]
             point_arg = ", *%s" % stencil_point if stencil_point else ""
             body.append("ctx.divergence(*%s, %s, *%s%s);"
-                        % (sub[o.id], _apply_in_arg(sub, flux), stencil_boundary,
+                        % (sub[o.id], _apply_in_arg(sub, flux), stencil_boundary_for(flux),
                            point_arg))
         elif w.op == "apply_laplacian_coeff":
             # out = div(A grad in), with one exact row-major Dim*Dim tensor field.
             o, i, coeffs = w.inputs
             tensor = frozen_coefficients[var[coeffs.id]]
             sub[w.id] = sub[o.id]
-            boundary = tensor_boundary or stencil_boundary
+            boundary = tensor_boundary or stencil_boundary_for(i)
             point = tensor_point if tensor_boundary else stencil_point
             point_arg = ", *%s" % point if point else ""
             body.append("ctx.tensor_laplacian(*%s, %s, *%s, *%s%s);"

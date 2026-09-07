@@ -8,6 +8,9 @@
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
 
+#include "../mesh/nd_multifab_test_utils.hpp"
+
+#include <limits>
 #include <utility>
 
 namespace {
@@ -41,6 +44,35 @@ struct TransportOnly {
     return Real(axis + 1);
   }
 };
+
+template <int Dim>
+struct EllipticOnly {
+  using State = StateVec<2>;
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = 2;
+  bool fail = false;
+  POPS_HD Real elliptic_rhs(const State& state) const {
+    return fail ? std::numeric_limits<Real>::quiet_NaN() : Real(2) * state[0] - state[1];
+  }
+};
+
+struct UnrankedElliptic {
+  using State = StateVec<2>;
+  static constexpr int n_vars = 2;
+  POPS_HD Real elliptic_rhs(const State& state) const { return state[0]; }
+};
+
+template <class Model>
+concept CanMakePoissonRhs = requires(Model model) { make_poisson_rhs(model); };
+static_assert(CanMakePoissonRhs<EllipticOnly<kNativeDimension>>);
+static_assert(!CanMakePoissonRhs<UnrankedElliptic>);
+static_assert(!CanMakePoissonRhs<EllipticOnly<(kNativeDimension % 3) + 1>>);
+static_assert(!CanMakePoissonRhs<SourceOnly<kNativeDimension>>);
+static_assert(PhysicalEllipticRhsFor<EllipticOnly<1>, 1>);
+static_assert(PhysicalEllipticRhsFor<EllipticOnly<2>, 2>);
+static_assert(PhysicalEllipticRhsFor<EllipticOnly<3>, 3>);
+static_assert(!PhysicalSourceFor<EllipticOnly<1>, 1>);
+static_assert(!PhysicalTransportFor<EllipticOnly<1>, 1>);
 
 template <int Dim>
 struct LegacyAggregate : TransportOnly<Dim> {
@@ -142,6 +174,41 @@ void transport_only_flux() {
     EXPECT_EQ(flux.checked_density().value[0], Real(3 * (axis + 1)));
     EXPECT_EQ(flux.stability.value, Real(axis + 1));
   }
+}
+
+template <int Dim>
+void materialize_elliptic_only() {
+  const mesh::BoxArray<Dim> layout(
+      std::vector<Box<Dim>>{test::nd::cube<Dim>(0, 3)});
+  const auto distribution = mesh::Distribution<Dim>::replicated(
+      layout, test::nd::one_rank_space<Dim>());
+  MultiFab<Dim> state(layout, distribution, Index<Dim>{}, 2, Extent<Dim>{});
+  MultiFab<Dim> rhs(layout, distribution, Index<Dim>{}, 1, Extent<Dim>{});
+  state.set_val(Real(3));
+  rhs.set_val(Real(5));
+  // Exercise the complete production accumulation, where an invalid narrow contract
+  // previously silently skipped every cell rather than contributing the load.
+  generated_system_detail::add_poisson_rhs<Dim>(EllipticOnly<Dim>{}, state, rhs);
+  for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+    auto host = rhs.fab(local).create_host_mirror();
+    rhs.fab(local).copy_to_host(host);
+    for (std::size_t cell = 0; cell < static_cast<std::size_t>(rhs.box(local).numPts()); ++cell)
+      EXPECT_EQ(host(cell), Real(8));
+  }
+  EXPECT_THROW(generated_system_detail::add_poisson_rhs<Dim>(
+                   EllipticOnly<Dim>{true}, state, rhs), std::runtime_error);
+  for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+    auto host = rhs.fab(local).create_host_mirror();
+    rhs.fab(local).copy_to_host(host);
+    for (std::size_t cell = 0; cell < static_cast<std::size_t>(rhs.box(local).numPts()); ++cell)
+      EXPECT_EQ(host(cell), Real(8));
+  }
+}
+
+TEST(NarrowPhysicalOperations, EllipticOnlyContributesAndRejectsFailureBeforePublication) {
+  materialize_elliptic_only<1>();
+  materialize_elliptic_only<2>();
+  materialize_elliptic_only<3>();
 }
 
 TEST(NarrowPhysicalOperations, SourceOnlyUsesTheProductionRankedCellKernel) {

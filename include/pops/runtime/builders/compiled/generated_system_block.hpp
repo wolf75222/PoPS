@@ -88,9 +88,8 @@ void publish_conservative_state(const Model& model, const double* primitive, dou
 template <int Dim, class Model>
 concept GeneratedSourceModel = PhysicalSourceFor<Model, Dim>;
 
-template <class Model>
-concept GeneratedEllipticRhsModel =
-    PhysicalEllipticRhsFor<Model, physical_model_dimension<Model>>;
+template <int Dim, class Model>
+concept GeneratedEllipticRhsModel = PhysicalEllipticRhsFor<Model, Dim>;
 
 template <int Dim>
 struct CopyValidField {
@@ -620,7 +619,11 @@ void add_poisson_rhs(const Model& model, const MultiFab<Dim>& state, MultiFab<Di
   if (rhs.ncomp() != 1)
     throw std::invalid_argument("generated Poisson RHS destination must have one component");
   require_same_layout(state, rhs, 1, "generated Poisson RHS");
-  if constexpr (GeneratedEllipticRhsModel<Model>) {
+  if constexpr (requires(const Model& provider, const typename Model::State& value) {
+                  provider.elliptic_rhs(value);
+                }) {
+    static_assert(GeneratedEllipticRhsModel<Dim, Model>,
+                  "declared elliptic RHS requires its exact physical rank and scalar result");
     MultiFab<Dim> candidate(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
     MultiFab<Dim> status(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
     for (std::size_t local = 0; local < state.local_size(); ++local)
@@ -1150,6 +1153,7 @@ PreparedSystemBlock<Dim> select_reconstruction(Request request) {
 /// Materialize the exact-ranked elliptic RHS closure owned by one bound generated model. Native
 /// System and AMR packages use the same typed closure; only the host field layout differs.
 template <class Model>
+  requires PhysicalEllipticRhsFor<Model, kNativeDimension>
 auto make_poisson_rhs(Model model) {
   return [model = std::move(model)](const MultiFab<kNativeDimension>& state,
                                     MultiFab<kNativeDimension>& rhs) {

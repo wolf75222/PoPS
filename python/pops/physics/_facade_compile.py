@@ -42,17 +42,44 @@ class _FacadeCompileMixin(_FacadeModel):
             facade=self,
         )
 
+    def __pops_retain_compiler_source__(self, source_module: Any) -> None:
+        """Retain the explicitly nominated source as compiler metadata only."""
+        self._require_compiler_source(source_module)
+        previous = getattr(self, "_retained_compiler_source", None)
+        if previous is not None and (
+                previous.owner_path != source_module.owner_path
+                or previous.module_hash() != source_module.module_hash()):
+            raise ValueError("compiler emitter cannot replace its retained source authority")
+        object.__setattr__(self, "_retained_compiler_source", source_module)
+
+    def _require_compiler_source(self, source_module: Any) -> None:
+        from pops.model import Module
+        if not isinstance(source_module, Module):
+            raise TypeError("compiler source authority must be a Module")
+        if source_module.owner_path != self._m.owner_path:
+            raise ValueError("compiler source Module owner differs from its formula emitter")
+        expected_hash = getattr(self, "_compile_source_module_hash", None)
+        if expected_hash is not None and source_module.module_hash() != expected_hash:
+            raise ValueError("compiler source Module hash differs from its lowered emitter")
+
     def __pops_bind_component_provider_packs__(self, packs: Any) -> None:
         """Bind the exact Module provider resolution to both native-emitter carriers."""
         from pops.codegen.component_provider_packs import ComponentProviderPacks
 
         if type(packs) is not ComponentProviderPacks:
             raise TypeError("compiler provider-pack binding requires exact ComponentProviderPacks")
+        # A frozen multi-state facade may intentionally have no derived Module
+        # cache. CompilerLowering supplies its exact source through the internal
+        # retain hook; direct authoring binds an already materialized cache.
+        source_module = getattr(self, "_retained_compiler_source", None)
+        if source_module is None:
+            source_module = getattr(self, "_module_cache", None)
+        if source_module is not None:
+            self._require_compiler_source(source_module)
         packs.attach(self)
         packs.attach(self._m)
-        # Retain the same source authority for direct private-carrier emission.
-        # Emitter symbols are bound on a detached view, never on this authoring model.
-        object.__setattr__(self._m, "_formula_source_module", self.module)
+        if source_module is not None:
+            object.__setattr__(self._m, "_formula_source_module", source_module)
 
     def __pops_native_loader_source__(
         self,
@@ -64,9 +91,9 @@ class _FacadeCompileMixin(_FacadeModel):
         declare_auxiliary_providers: bool = True,
     ) -> str:
         """Emit a native package without exposing the private formula carrier."""
-        from pops.codegen.component_provider_packs import resolve_component_provider_packs
+        from pops.codegen.component_provider_packs import resolve_emitter_provider_packs
 
-        self.__pops_bind_component_provider_packs__(resolve_component_provider_packs(self.module))
+        self.__pops_bind_component_provider_packs__(resolve_emitter_provider_packs(self, self.module))
         return self._m.emit_cpp_native_loader(
             name=name,
             target=target,
@@ -81,9 +108,9 @@ class _FacadeCompileMixin(_FacadeModel):
         n_aux + NAMED params (m.params). Used to identify/reuse an already-compiled .so (cache key)
         and to trace the run. Delegates to the shared computation HyperbolicModel._model_hash, passing it
         the Param of the facade (otherwise two models differing only by a param would have the same hash)."""
-        from pops.codegen.component_provider_packs import resolve_component_provider_packs
+        from pops.codegen.component_provider_packs import resolve_emitter_provider_packs
 
-        self.__pops_bind_component_provider_packs__(resolve_component_provider_packs(self.module))
+        self.__pops_bind_component_provider_packs__(resolve_emitter_provider_packs(self, self.module))
         return self._m._model_hash(params=self.params)
 
     def compile(
@@ -182,9 +209,9 @@ class _FacadeCompileMixin(_FacadeModel):
             raise ValueError(
                 "named AMR elliptic providers require exact resolved per-block field roles"
             )
-        from pops.codegen.component_provider_packs import resolve_component_provider_packs
+        from pops.codegen.component_provider_packs import resolve_emitter_provider_packs
 
-        self.__pops_bind_component_provider_packs__(resolve_component_provider_packs(self.module))
+        self.__pops_bind_component_provider_packs__(resolve_emitter_provider_packs(self, self.module))
         model_dimension = len(m._flux)
         if model_dimension not in (1, 2, 3):
             raise ValueError("compile: model has no exact 1D/2D/3D physical flux rank")

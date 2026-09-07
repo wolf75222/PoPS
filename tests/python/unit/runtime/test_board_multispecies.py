@@ -24,6 +24,7 @@ Runs BOTH as a script (``python3 test_board_multispecies.py``, the CI-style invo
 pytest (the test_* functions take no args and importorskip pops.time / pops.physics).
 """
 from pops.codegen.program_codegen import emit_cpp_program
+import re
 
 import pytest
 
@@ -226,11 +227,18 @@ def test_board_two_fluid_emits_identical_cpp_to_handwritten():
     bsrc = emit_cpp_program(_two_fluid_program(
         bm.module, board_spaces[be.name], board_spaces[bi.name]), model=None)
     hsrc = emit_cpp_program(_two_fluid_program(hmod, he, hi), model=None)
-    assert bsrc == hsrc
-    # one shared multi-state kernel binds both species, reads cons from each state (sanity)
+    # Independently authored Cases carry distinct temporal authorities. Isolate only
+    # their authenticated Program hash; every route, provider and kernel byte must match.
+    hash_line = r'extern "C" const char\* pops_program_hash\(\) \{ return "([0-9a-f]{64})"; \}'
+    board_hashes, handwritten_hashes = re.findall(hash_line, bsrc), re.findall(hash_line, hsrc)
+    assert len(board_hashes) == len(handwritten_hashes) == 1
+    assert board_hashes != handwritten_hashes
+    assert re.sub(hash_line, "AUTHENTICATED_PROGRAM_HASH", bsrc) == re.sub(
+        hash_line, "AUTHENTICATED_PROGRAM_HASH", hsrc)
+    # One shared multi-state kernel binds both exact input state coordinates.
     assert bsrc.count("pops::for_each_cell") == 1
-    assert be["ne"].name in bsrc
-    assert bi["ni"].name in bsrc
+    assert "pops_input_0_component_0" in bsrc
+    assert "pops_input_1_component_0" in bsrc
 
 
 def test_same_physical_component_name_needs_no_species_rename():

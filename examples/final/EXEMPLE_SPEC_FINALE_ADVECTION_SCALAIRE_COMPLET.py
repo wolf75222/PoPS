@@ -124,7 +124,7 @@ class ScalarRuntimeSnapshot:
     time: float
     macro_step: int
     states: tuple[np.ndarray, ...]
-    patch_boxes: tuple[tuple[int, ...], ...]
+    patch_boxes: tuple[tuple[int, tuple[int, ...], tuple[int, ...]], ...]
     regrid_count: int
     topology_epoch: int
     program_hash: str
@@ -600,8 +600,9 @@ def _snapshot(simulation: Any) -> ScalarRuntimeSnapshot:
             for level in range(level_count)
         ),
         patch_boxes=tuple(
-            tuple(int(value) for value in row)
-            for row in simulation.patch_boxes()
+            (int(level), tuple(int(value) for value in lower),
+             tuple(int(value) for value in upper))
+            for level, lower, upper in simulation.patch_boxes()
         ),
         regrid_count=int(regrid.regrid_count),
         topology_epoch=int(regrid.topology_epoch),

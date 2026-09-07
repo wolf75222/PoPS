@@ -38,9 +38,9 @@ from types import SimpleNamespace
 
 from pops._ir.expr import Const, Var
 from pops._ir.ops import abs_, eig_lmax, eig_lmin, eig_max_im, sign
-from pops.physics._model import HyperbolicModel
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
-from tests.python.support.explicit_program import install_forward_euler_program
+from pops.codegen.module_lowering import lower_and_validate
+from pops.model import ProviderPack
+from pops.physics._facade import Model
 from tests.python.support.requirements import repo_include
 
 dsl = SimpleNamespace(
@@ -51,7 +51,7 @@ dsl = SimpleNamespace(
     eig_lmax=eig_lmax,
     eig_lmin=eig_lmin,
     eig_max_im=eig_max_im,
-    HyperbolicModel=HyperbolicModel,
+    Model=Model,
 )
 
 INCLUDE = repo_include()
@@ -59,6 +59,14 @@ TOL_EVAL = 1e-12  # eval numpy vs np.linalg.eigvals (meme algebre numpy des deux
 TOL_CPP = 1e-10  # brique C++ (Francis QR sur pile) vs numpy : matrices saines, simples/separees
 
 fails = 0
+
+
+def _emit_brick(model, **options):
+    """Resolve the canonical model and exact provider packs before brick emission."""
+    emitter, source_module = lower_and_validate(model, facade=model)
+    assert source_module is model.module
+    assert type(emitter._m._auxiliary_provider_pack) is ProviderPack
+    return emitter._m.emit_cpp_brick(**options)
 
 
 def chk(cond, label):
@@ -118,12 +126,12 @@ def build_eig_model(tag):
     (VP = q0 +- i q1) a une |Im| > tol, mettre q2 a une cible ; sinon q2 inchange. Ecrit en masque
     max/min/sign sur max_im, SANS if : mask = (sign(max_im - tol) + 1)/2 ; q2 <- q2 (1-mask) + cible*mask."""
     tol, target = 0.5, 9.0
-    m = dsl.HyperbolicModel("toyeig_" + tag)
+    m = dsl.Model("toyeig_" + tag)
     q0, q1, q2 = m.conservative_vars("q0", "q1", "q2")
-    m.set_flux(x=[q0, q1, q2], y=[0.5 * q0, 0.5 * q1, 0.5 * q2])
-    m.set_eigenvalues(x=[dsl.Const(1.0)], y=[dsl.Const(0.5)])
-    m.set_primitive_state("q0", "q1", "q2")
-    m.set_conservative_from([q0, q1, q2])
+    m.flux(x=[q0, q1, q2], y=[0.5 * q0, 0.5 * q1, 0.5 * q2])
+    m.eigenvalues(x=[dsl.Const(1.0)], y=[dsl.Const(0.5)])
+    m.primitive_vars(q0=q0, q1=q1, q2=q2)
+    m.conservative_from([q0, q1, q2])
     wit = dsl.eig_max_im([[q0, -q1], [q1, q0]])
     mask = 0.5 * (dsl.sign(wit - tol) + 1.0)  # 1 si max_im > tol, 0 sinon (branchless)
     m.projection([q0, q1, q2 * (1.0 - mask) + target * mask])
@@ -133,7 +141,7 @@ def build_eig_model(tag):
 def test_codegen():
     print("== (2) codegen : include dense_eig + foncteur nomme (pas de lambda) ==")
     m, _, _ = build_eig_model("cg")
-    src = m.emit_cpp_brick(name="ToyEigCg")
+    src = _emit_brick(m, name="ToyEigCg")
     chk("#include <pops/numerics/linalg/dense_eig.hpp>" in src, "brique inclut dense_eig.hpp")
     chk(
         "static POPS_HD pops::Real pops_eig_max_im_2x2(" in src,
@@ -156,7 +164,7 @@ def test_cpp_brick_vs_numpy(cxx, tmp):
     m, tol, target = build_eig_model("cpp")
     hpp = os.path.join(tmp, "eig_brick.hpp")
     with open(hpp, "w") as f:
-        f.write(m.emit_cpp_brick(name="ToyEigCpp"))
+        f.write(_emit_brick(m, name="ToyEigCpp"))
 
     # champ de N cellules : q0, q1 varies -> matrice [[q0,-q1],[q1,q0]], VP q0 +- i q1, max_im = |q1|.
     rng = np.random.default_rng(2890)
@@ -233,14 +241,14 @@ def test_cpp_brick_vs_numpy(cxx, tmp):
 
 def test_additive():
     print("== (5) extension ADDITIVE : projection SANS temoin VP inchangee (ADC-177) ==")
-    m = dsl.HyperbolicModel("toyplain")
+    m = dsl.Model("toyplain")
     q0, q1 = m.conservative_vars("q0", "q1")
-    m.set_flux(x=[q0, q1], y=[0.5 * q0, 0.5 * q1])
-    m.set_eigenvalues(x=[dsl.Const(1.0)], y=[dsl.Const(0.5)])
-    m.set_primitive_state("q0", "q1")
-    m.set_conservative_from([q0, q1])
+    m.flux(x=[q0, q1], y=[0.5 * q0, 0.5 * q1])
+    m.eigenvalues(x=[dsl.Const(1.0)], y=[dsl.Const(0.5)])
+    m.primitive_vars(q0=q0, q1=q1)
+    m.conservative_from([q0, q1])
     m.projection([(q0 + dsl.abs_(q0)) / 2.0, q1])  # clamp ADC-177, aucun temoin VP
-    src = m.emit_cpp_brick(name="ToyPlain")
+    src = _emit_brick(m, name="ToyPlain")
     chk("dense_eig.hpp" not in src, "aucun include dense_eig sans temoin VP")
     chk("pops_eig_" not in src, "aucun foncteur eig sans temoin VP (additif)")
 
@@ -250,6 +258,8 @@ def test_system_end_to_end():
     Garde sur la disponibilite de l'extension compilee (import pops) ; sinon ignore."""
     print("== (4) [_pops] semantique POST-PAS (production) == reference numpy ==")
     try:
+        from pops.runtime._system import System  # ADC-545 advanced runtime seam
+        from tests.python.support.explicit_program import install_forward_euler_program
         from pops.codegen.loader import CompiledModel
         from pops.codegen.abi import _abi_key_python
         from pops.codegen.toolchain import loader_cxx_std

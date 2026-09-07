@@ -63,6 +63,9 @@ def emit_cpp(model: Any, func: Any = None, cse: bool = True) -> str:
     the common subexpressions (H, c...) into ``cseK_`` locals ; cse=False recomputes them inline.
 
     Step (2) of the DSL (see docs/ARCHITECTURE_CIBLE.md sect. 3) : HOST C++ (templatable on Real)."""
+    from pops.model.state_symbols import native_formula_carrier_view
+
+    model = native_formula_carrier_view(model)
     name = _cpp_identifier(func or model.name)
     if not model._flux:
         raise ValueError("emit_cpp : call set_flux(...) first")
@@ -174,8 +177,9 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
     ]
     if rt_member:  # pops::RuntimeParams params{count, {defaults}} member (P7-b)
         S.append(rt_member.rstrip("\n"))
-    # The exact ProviderPack owns the compact channel width.  Zero is valid and
-    # deliberately emits no auxiliary storage declaration.
+    # The exact ProviderPack owns the native carrier width. Keep n_aux as a
+    # compatibility spelling; zero explicitly selects a provider-free consumer.
+    S.append("  static constexpr int n_providers = %d;" % na)
     if na:
         S.append("  static constexpr int n_aux = %d;" % na)
     S += _exact_brick_contract(
@@ -459,6 +463,7 @@ def emit_cpp_elliptic_field(model: Any, field: Any, struct_name: Any, namespace:
     if rt_member:
         out.append("#include <pops/runtime/config/runtime_params.hpp>")
     out += ["namespace %s {" % namespace, "struct %s {" % struct_name,
+            "  static constexpr int dimension = %d;" % len(_ranked_axes(model)),
             "  static constexpr int n_vars = %d;" % model.n_vars,
             "  using State = pops::StateVec<%d>;" % model.n_vars]
     if rt_member:

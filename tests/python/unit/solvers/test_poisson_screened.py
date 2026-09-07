@@ -20,8 +20,9 @@ from pops.fields.bcs import (
 )
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
-from pops.math import Const, laplacian, unknown
+from pops.math import Const, ValueExpr, laplacian, unknown
 from pops.mesh import CartesianGrid
+from pops.mesh._amr import Above
 from pops.params import ConstParam, RuntimeParam
 from pops.physics import Model
 from pops.solvers.elliptic import FFT, GeometricMG
@@ -34,6 +35,28 @@ ROOT = Path(__file__).resolve().parents[4]
 N = 64
 KAPPA = 50.0
 DT = 1.0e-3
+
+
+class _ScalarFieldIndicator(ValueExpr):
+    """Test-owned symbolic indicator using the installed scalar-field tag leaf."""
+    def __init__(self, handle, layout_subject):
+        super().__init__(handle)
+        self.layout_subject = layout_subject
+
+    def __pops_ir_key__(self, recurse):
+        return ("mms_scalar_field_indicator", self.handle.qualified_id,
+                self.layout_subject.qualified_id)
+
+    def resolve_for_amr_tagging(self, context, *, action, comparison, threshold):
+        if action != "refine" or comparison != "gt":
+            raise ValueError("MMS field indicator requires strict refine-above semantics")
+        if self.handle.owner_path.nodes[0] != context.owner.nodes[0]:
+            raise ValueError("MMS field indicator belongs to another Case")
+        from pops.physics.board_handles import FieldHandle
+        if not isinstance(self.handle, FieldHandle) or self.handle.kind != "field":
+            raise ValueError("MMS field indicator requires an exact scalar model field")
+        context.layout_plan.layout_for(self.layout_subject)
+        return Above(self.handle, threshold)
 
 
 def _screened_registration(*, solver, boundary):
@@ -218,6 +241,20 @@ def test_screened_authoring_refuses_an_unlowered_state_dependent_coefficient() -
 
 
 def _resolved_mms_case():
+    from pops.amr import (
+        AMRClockRelation, AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging, AMRTransfer,
+        Buffer, ConflictPolicy, EqualityPolicy, Hysteresis, Tag,
+    )
+    from pops.boundary import TransportBoundarySet
+    from pops.boundary.transport import Outflow
+    from pops.initial import InitialCondition
+    from pops.layouts import AMR
+    from pops.lib.amr import EllipticRecompute, StateTransfer
+    from pops.lib.initial import BindArray
+    from pops.math import ddt, div
+    from pops.numerics import DiscretizationPlan, FiniteVolume, reconstruction, riemann, variables
+    from pops.projection import ConservativeCellAverage
+
     frame = Rectangle(
         "screened-mms-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
     ).frame(Cartesian2D())
@@ -225,7 +262,7 @@ def _resolved_mms_case():
     state = model.state("U", components=("pure_forcing", "screened_forcing"))
     pure_forcing, screened_forcing = state
     x_axis, y_axis = frame.axes
-    model.flux(
+    stationary_flux = model.flux(
         "stationary_forcing",
         frame=frame,
         state=state,
@@ -238,6 +275,7 @@ def _resolved_mms_case():
             y_axis: (0.0 * pure_forcing, 0.0 * screened_forcing),
         },
     )
+    stationary_rate = model.rate("stationary_rate", equation=ddt(state) == -div(stationary_flux))
     kappa = model.param(RuntimeParam("kappa", default=KAPPA))
 
     pure_potential = model.field("pure_potential")
@@ -271,6 +309,24 @@ def _resolved_mms_case():
         )
     case = pops.Case("screened-mms-case")
     block = case.block("charge", model)
+    state_instance = block[state]
+    # The forcing arrays are static physical data: dU/dt = -div(0) = 0.
+    # Give that balance its explicit representation, boundary and bootstrap authorities.
+    numerics = DiscretizationPlan()
+    numerics.rates.add(stationary_rate, FiniteVolume(
+        flux=stationary_flux,
+        variables=variables.Conservative(state),
+        reconstruction=reconstruction.FirstOrder(),
+        riemann=riemann.Rusanov(),
+    ))
+    numerics.boundaries.add(TransportBoundarySet({
+        face: Outflow(state=state_instance)
+        for face in (frame.boundaries.x_min, frame.boundaries.x_max,
+                     frame.boundaries.y_min, frame.boundaries.y_max)
+    }))
+    case.numerics(numerics, block=block)
+    case.initials.add(InitialCondition(
+        state=state_instance, value=BindArray(), projection=ConservativeCellAverage()))
     pure_field = case.field(pure_operator, discretization())
     screened_field = case.field(screened_operator, discretization())
 
@@ -285,12 +341,28 @@ def _resolved_mms_case():
 
     validated = pops.validate(case)
     bound_kappa = validated.resolve(kappa)
+    transfer = AMRTransfer()
+    transfer.state(state_instance, StateTransfer())
+    transfer.field(pure_field, EllipticRecompute())
+    transfer.field(screened_field, EllipticRecompute())
+    predicate = _ScalarFieldIndicator(block[pure_potential], pure_field) > model.value(kappa)
+    # AMR's provider contract owns an explicit possible transition. No tags and a
+    # frozen hierarchy keep this MMS on exactly one N x N level, checked at runtime.
+    layout = AMR(
+        grid=CartesianGrid(frame=frame, cells=(N, N), periodic=None),
+        hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
+        tagging=AMRTagging(
+            rules=(Tag(predicate & ~predicate), Buffer(1)),
+            hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
+            conflict_policy=ConflictPolicy.REFINE_WINS,
+        ),
+        regrid=AMRRegrid.frozen(),
+        transfer=transfer,
+        execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
+    )
     resolved = pops.resolve(
         validated,
-        layout=final_amr_layout(
-            CartesianGrid(frame=frame, cells=(N, N), periodic=None),
-            max_levels=1,
-        ),
+        layout=layout,
         backend=Production(),
         compile_options={"include": str(ROOT / "include")},
     )
@@ -308,6 +380,53 @@ def _resolved_mms_case():
     return resolved, bound_kappa, slots, initial, exact
 
 
+def test_mms_tagging_maps_the_qualified_unknown_to_its_scalar_output() -> None:
+    from types import SimpleNamespace
+
+    from pops.runtime._runtime_mesh_lowering import flow_bootstrap_tagging
+
+    resolved, parameter, _, _, _ = _resolved_mms_case()
+    pure_plan = resolved.field_plans["pure_poisson"]
+    assert pure_plan.operator.unknown.local_id == "pure_potential"
+    assert pure_plan.operator.outputs[0].name == "pure_phi"
+    calls = []
+
+    class Probe:
+        def _set_bootstrap_tagging(self, *args):
+            calls.append(args)
+
+    flow_bootstrap_tagging(
+        Probe(), resolved.bootstrap_plan, {parameter: KAPPA},
+        clock_identity="mms-tagging-clock", field_plans=resolved.field_plans,
+    )
+    (call,) = calls
+    assert call[1] == [pure_plan.operator.unknown.qualified_id] * 2
+    assert call[3] == ["pure_phi"] * 2
+    assert call[4] == [0, 0]
+
+    calls.clear()
+    with pytest.raises(ValueError, match="no authenticated field plan"):
+        flow_bootstrap_tagging(
+            Probe(), resolved.bootstrap_plan, {parameter: KAPPA},
+            clock_identity="mms-tagging-clock",
+            field_plans={"screened_poisson": resolved.field_plans["screened_poisson"]},
+        )
+    assert calls == []
+
+    data = resolved.bootstrap_plan.tagging.runtime_tagging_data({parameter: KAPPA})
+    data["refine"]["children"][0]["variable"] = "pure_potential"
+    explicit_unknown_name = SimpleNamespace(tagging=SimpleNamespace(
+        qualified_id=resolved.bootstrap_plan.tagging.qualified_id,
+        runtime_tagging_data=lambda params: data,
+    ))
+    with pytest.raises(ValueError, match="absent from its prepared output route"):
+        flow_bootstrap_tagging(
+            Probe(), explicit_unknown_name, {parameter: KAPPA},
+            clock_identity="mms-tagging-clock", field_plans=resolved.field_plans,
+        )
+    assert calls == []
+
+
 @pytest.mark.compiler
 @pytest.mark.native_loader
 def test_pure_and_screened_public_equations_match_the_native_mms(
@@ -318,16 +437,27 @@ def test_pure_and_screened_public_equations_match_the_native_mms(
     artifact = pops.compile(resolved)
     artifact.verify()
     execution_context = artifact_execution_context(artifact)
+    (initial_binding,) = resolved.initial_condition_plan.bindings
 
     def solve(value: float):
         instance = pops.bind(
             artifact,
-            initial_state={"charge": initial},
+            initial_values={initial_binding.subject: np.ascontiguousarray(initial)},
             params={parameter: value},
-            execution_context=execution_context,
+            resources={"execution_context": execution_context},
+        )
+        assert instance.n_levels() == 1
+        np.testing.assert_array_equal(
+            np.asarray(instance.block_level_state_global("charge", 0)).reshape(initial.shape),
+            initial,
         )
         report = pops.run(instance, t_end=DT, max_steps=1)
         assert report.accepted_steps == 1
+        assert instance.n_levels() == 1
+        np.testing.assert_array_equal(
+            np.asarray(instance.block_level_state_global("charge", 0)).reshape(initial.shape),
+            initial,
+        )
         return {
             name: np.asarray(instance.field_potential_global(slot)).reshape(N, N)
             for name, slot in slots.items()
@@ -354,7 +484,7 @@ def test_pure_and_screened_public_equations_match_the_native_mms(
         with pytest.raises(ValueError, match="strictly positive at bind"):
             pops.bind(
                 artifact,
-                initial_state={"charge": initial},
+                initial_values={initial_binding.subject: np.ascontiguousarray(initial)},
                 params={parameter: invalid},
-                execution_context=execution_context,
+                resources={"execution_context": execution_context},
             )
