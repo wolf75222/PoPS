@@ -183,12 +183,15 @@ if not hasattr(System(n=8, L=1.0, periodicity=(True, True)), "install_program"):
 print("== (B) end-to-end: implicit Lorentz solve vs analytic rotation ==")
 
 
-def make_sim():
+def make_sim(model):
+    from pops.codegen.component_provider_packs import resolve_component_provider_packs
+
     n = 16
     sim = System(n=n, L=1.0, periodicity=(True, True))
-    # Production-backend DSL model added as a native block; the Program drives the step.
+    # The native block and Program read the same exact physical input authority.
+    (magnetic_key,) = resolve_component_provider_packs(model.module).auxiliary
     try:
-        compiled_model = lorentz_model("lorentz_block").compile(backend="production")
+        compiled_model = model.compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         _skip("model compile could not build the .so: %s" % str(exc)[:160])
     sim.add_equation(
@@ -198,14 +201,14 @@ def make_sim():
         time=engine.Explicit(method="euler"),
     )
     bz = 3.0
-    sim.set_magnetic_field(bz * np.ones(n * n))  # constant B_z over the grid
+    sim.stage_auxiliary_input(magnetic_key, bz * np.ones(n * n))
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     mx = 0.5 * rho
     my = -0.2 * rho
     sim.set_state("plasma", np.stack([rho, mx, my]))
-    return sim, bz, np.stack([rho, mx, my])
+    return sim, bz, np.stack([rho, mx, my]), magnetic_key
 
 
 dt = 0.05
@@ -221,7 +224,7 @@ except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile fai
 
 chk(compiled.program_name == "lorentz_step", "handle carries the program name")
 
-prog, bz, U0 = make_sim()
+prog, bz, U0, magnetic_key = make_sim(program_model)
 prog.install_program(compiled.so_path)  # dlopen + ABI-key check + pops_install_program(this)
 prog.step(dt)
 U = np.array(prog.get_state("plasma"))
@@ -245,7 +248,7 @@ chk(float(np.abs(U[1] - mx0).max()) > 1e-6, "the step actually rotated the momen
 # Fault injection on the same compiled Program: a non-finite coefficient must be reduced into one
 # invalid-evaluation SolveReport, rejected before commit, and leave the accepted state untouched.
 accepted = np.array(prog.get_state("plasma"))
-prog.set_magnetic_field(np.full(accepted[0].size, np.nan))
+prog.stage_auxiliary_input(magnetic_key, np.full(accepted[0].size, np.nan))
 rejected = None
 try:
     prog.step(dt)
