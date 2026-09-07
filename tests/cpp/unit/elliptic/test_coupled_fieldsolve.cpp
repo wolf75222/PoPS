@@ -49,6 +49,8 @@ void install_execution_lane(NativeSystem& system) {
 }
 
 pops::SystemConfig<Dim> config(int cells) {
+  // System materializes its rank space in the constructor, before the prepared lane is installed.
+  pops::comm_init();
   pops::SystemConfig<Dim> result;
   for (int axis = 0; axis < Dim; ++axis) {
     result.shape[axis] = cells;
@@ -395,8 +397,16 @@ TEST(test_coupled_fieldsolve,
   ASSERT_TRUE(override_report.solved()) << override_report.reason;
   EXPECT_GT(max_difference(system.field_potential_global(slot), all_live), 1e-5)
       << "the named prepared plan must consume both qualified simultaneous stage slots";
-  EXPECT_EQ(system.density("first"), first);
-  EXPECT_EQ(system.density("second"), second);
+  // Both gathers are collective; their global vectors belong only to communicator rank zero.
+  const auto first_after = system.density("first");
+  const auto second_after = system.density("second");
+  if (pops::my_rank() == 0) {
+    EXPECT_EQ(first_after, first);
+    EXPECT_EQ(second_after, second);
+  } else {
+    EXPECT_TRUE(first_after.empty());
+    EXPECT_TRUE(second_after.empty());
+  }
 }
 
 TEST(test_coupled_fieldsolve, native_load_keys_use_the_case_output_and_each_exact_coefficient) {
