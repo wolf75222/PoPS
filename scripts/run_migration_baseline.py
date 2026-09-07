@@ -32,7 +32,9 @@ def main() -> int:
     args = parser.parse_args()
     source, output = args.source.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    python = str(args.python.resolve())
+    # Preserve a virtual environment's executable path: resolving its symlink would launch
+    # the base interpreter and silently select a different installed package.
+    python = str(args.python.absolute())
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
     environment.update(POPS_NATIVE_DIM="2", PYTHONNOUSERSITE="1", OMP_NUM_THREADS="2")
@@ -71,6 +73,8 @@ def main() -> int:
         profiles = tuple(row for row in profiles if row[0] in selected)
     report = {
         "schema": "pops.migration.m0.reference-examples.v1", "phase": args.phase,
+        "runner": str(Path(__file__).resolve()),
+        "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "source": str(source), "revision": revision, "dirty": bool(status),
         "platform": platform.platform(), "python": python, "installation": installation,
         "dimension": 2, "omp_num_threads": 2, "profiles": [],

@@ -31,7 +31,10 @@ def construction(identity="numerical", consumes=("term",), evaluation="evaluatio
     return NumericalConstruction(identity, evaluation, consumes, **kwargs)
 
 
-def plan(operations, terms=(occurrence(),)):
+_DEFAULT_TERMS = (occurrence(),)
+
+
+def plan(operations, terms=_DEFAULT_TERMS):
     return ResolvedOperationPlan("source-hash", (EvaluationRequest("evaluation", terms),), operations)
 
 

@@ -70,7 +70,7 @@ def test_two_balances_keep_one_joint_application_and_each_signed_occurrence():
 def test_canonical_balance_resolution_keeps_shared_application_in_repeated_projections():
     model, left, _right, application, _captures = _joint_model()
     rate = model.rate("balance", equation=ddt(left) == application[left] + application[left])
-    model.module
+    _ = model.module
     resolved = rate.balance.resolve_references(lambda handle: handle._resolved())
     first, second = resolved.occurrences
     assert first.payload.application is second.payload.application
