@@ -577,8 +577,10 @@ TEST(test_amr_synthetic_program_loader_transaction,
     ASSERT_EQ(same_geometry.accepted_face_flux[axis].size(),
               before_regrid.accepted_face_flux[axis].size());
     for (std::size_t index = 0; index < before_regrid.accepted_face_flux[axis].size(); ++index) {
-      EXPECT_EQ(same_geometry.accepted_face_flux[axis][index].key,
-                before_regrid.accepted_face_flux[axis][index].key);
+      const auto& actual_key = same_geometry.accepted_face_flux[axis][index].key;
+      const auto& expected_key = before_regrid.accepted_face_flux[axis][index].key;
+      EXPECT_FALSE(actual_key < expected_key);
+      EXPECT_FALSE(expected_key < actual_key);
       EXPECT_EQ(same_geometry.accepted_face_flux[axis][index].payload,
                 before_regrid.accepted_face_flux[axis][index].payload);
     }
