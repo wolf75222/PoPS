@@ -44,7 +44,7 @@ def test_scalar_literal_target_and_algebraic_spellings_are_strict_strings():
 
 
 def test_diff_rejects_implicit_variable_stringification():
-    with pytest.raises(TypeError, match="Var, declaration Handle"):
+    with pytest.raises(TypeError, match="Var, QuantityRef, declaration Handle"):
         diff(Var("u", "cons"), _Stringable())
 
 
