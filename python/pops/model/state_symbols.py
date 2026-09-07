@@ -23,7 +23,8 @@ def state_component_symbol(space: Any, component: Any) -> str:
         space_name.encode("utf-8").hex(), component.encode("utf-8").hex())
 
 
-def rebind_state_symbols(value: Any, state: Any, spaces: Any) -> Any:
+def rebind_state_symbols(value: Any, state: Any, spaces: Any, *, module: Any = None,
+                         quantity_handles: Any = ()) -> Any:
     """Clone an operator body for one single-state backend coordinate system.
 
     The canonical Module IR keeps state coordinates qualified.  A block kernel
@@ -32,6 +33,22 @@ def rebind_state_symbols(value: Any, state: Any, spaces: Any) -> Any:
     rejects a coordinate owned by a different state instead of aliasing it.
     """
     from pops._ir.expr import Expr, Var
+    from pops._ir.quantity import QuantityRef
+
+    def physical_type(space: Any) -> Any:
+        data = space.to_data()
+        return {key: item for key, item in data.items() if key != "name"}
+
+    # The blackboard may expose an explicit scientific state name while its legacy
+    # single-state emitter calls that same bound storage U. This is an authenticated
+    # alias supplied by the owner, never guessed from a component/display name.
+    aliases = tuple(quantity_handles)
+    if aliases and module is None:
+        raise TypeError("quantity aliases require a Module authority")
+    for handle in aliases:
+        if handle.kind != "state" or handle.owner_path != module.owner_path \
+                or physical_type(handle.space) != physical_type(state):
+            raise ValueError("native quantity alias must preserve its exact physical state type")
 
     selected = {
         state_component_symbol(state, component): component
@@ -44,6 +61,27 @@ def rebind_state_symbols(value: Any, state: Any, spaces: Any) -> Any:
     memo: dict[int, Any] = {}
 
     def _clone(item: Any) -> Any:
+        from pops._ir.application import ApplicationProjection
+        if isinstance(item, ApplicationProjection):
+            if item.application.effects:
+                raise TypeError("effectful application requires a resolved native realization")
+            return _clone(item.expression)
+        if isinstance(item, QuantityRef):
+            if module is None:
+                raise TypeError("qualified quantity lowering requires its Module authority")
+            if item.handle.kind == "state":
+                expected = module.state_handle(state)
+                alias = next((handle for handle in aliases if item.handle == handle), None)
+                if alias is not None:
+                    if item.space != alias.space:
+                        raise ValueError("quantity alias cannot change its authenticated physical type")
+                elif item.handle != expected or item.space != state:
+                    raise ValueError("single-state lowering cannot read a foreign qualified quantity")
+                return Var(item.component, "cons")
+            expected = module.field_handle(item.space)
+            if item.handle != expected:
+                raise ValueError("field quantity does not match its registered Module authority")
+            return Var(item.component, "aux")
         if isinstance(item, Var):
             component = selected.get(item.name)
             if component is not None:
@@ -92,4 +130,30 @@ def rebind_state_symbols(value: Any, state: Any, spaces: Any) -> Any:
     return _clone(value)
 
 
-__all__ = ["rebind_state_symbols", "state_component_symbol"]
+def native_formula_view(facade: Any, module: Any, *, quantity_handles: Any = ()) -> Any:
+    """Bind a private formula-emitter copy while retaining the untouched authored Module.
+
+    Unlike rebuilding a Module through the generic legacy adapter, this preserves
+    primitive conversions, spectral hooks and all existing supported model metadata.
+    The clone owns its rebound expression containers; authoring graph nodes and
+    declaration identities remain the source authority.
+    """
+    states = module.state_spaces()
+    if len(states) != 1:
+        raise ValueError("a formula-emitter view requires one explicitly selected state route")
+    state = next(iter(states.values()))
+    view = object.__new__(type(facade))
+    vars(view).update(vars(facade))
+    emitter = object.__new__(type(facade._m))
+    vars(emitter).update({
+        name: rebind_state_symbols(value, state, states.values(), module=module,
+                                  quantity_handles=quantity_handles)
+        for name, value in vars(facade._m).items()
+    })
+    object.__setattr__(view, "_m", emitter)
+    object.__setattr__(view, "_module_cache", module)
+    object.__setattr__(view, "_compile_source_module_hash", module.module_hash())
+    return view
+
+
+__all__ = ["rebind_state_symbols", "state_component_symbol", "native_formula_view"]

@@ -44,7 +44,7 @@ class _MultiSpeciesMixin(_BoardModel):
         promoted = {}
         for nm, h in self._species.items():
             promoted[nm] = self._declare_species_on(
-                candidate, nm, h.components, dict(h.roles))
+                candidate, nm, h.components, dict(h.roles), template=h.space)
         result = None
         if extra is not None:
             name, components, roles = extra
@@ -71,13 +71,22 @@ class _MultiSpeciesMixin(_BoardModel):
         return handle
 
     def _declare_species_on(self, module: Any, name: Any, components: Any,
-                            roles: Any) -> StateHandle:
+                            roles: Any, *, template: Any = None) -> StateHandle:
         """Build one complete typed species on an unpublished/guarded Module."""
         name = require_name(name, "species name")
         comps = normalize_components(components, "species %s state" % name)
         role_map = normalize_roles(roles, comps, "species %s" % name)
         canon = {component: _canon_role(role) for component, role in role_map.items()}
-        space = module.state_space(name, comps, roles=canon)
+        if template is None:
+            space = module.state_space(name, comps, roles=canon)
+        else:
+            # Promotion must preserve the physical type referenced by already
+            # returned QuantityRef leaves, including its exact registered object
+            # identity. Reconstructing an equal Space would invalidate old handles.
+            if template.name != name or template.components != comps:
+                raise ValueError("promoted species must preserve its exact StateSpace declaration")
+            space = module._declare_descriptor(
+                module._state_spaces, module._state_handles, template, "StateSpace", "state")
         vars_ = module.state_symbols(space)
         return StateHandle(
             name, comps, vars_, role_map, owner=self.owner_path, space=space)
@@ -87,6 +96,7 @@ class _MultiSpeciesMixin(_BoardModel):
     ) -> dict[str, Any]:
         """Validate one exact block-local symbolic map without mutating a registry."""
         from pops._ir import Var, _children, _wrap
+        from pops._ir.quantity import QuantityRef
         from pops.model.state_symbols import state_component_symbol
 
         name = require_name(name, "local_transform name")
@@ -114,6 +124,7 @@ class _MultiSpeciesMixin(_BoardModel):
             for component in on.space.components
         }
         aux_reads = set()
+        state_handle = self._multi_module.state_handle(on.space)
         seen = set()
         stack = [*wrapped, predicate]
         while stack:
@@ -121,6 +132,19 @@ class _MultiSpeciesMixin(_BoardModel):
             if id(node) in seen:
                 continue
             seen.add(id(node))
+            if isinstance(node, QuantityRef):
+                if node.handle != state_handle or node.space != on.space:
+                    foreign_space = state_spaces.get(node.handle.local_id)
+                    if (foreign_space is not None and node.handle != state_handle
+                            and node.handle == self._multi_module.state_handle(foreign_space)):
+                        raise ValueError(
+                            "local_transform(%r) on StateSpace %r reads component %r from "
+                            "StateSpace %r; a local transform may read only its exact on= state"
+                            % (name, on.space.name, node.component, foreign_space.name))
+                    raise ValueError(
+                        "local_transform(%r) on StateSpace %r reads unauthenticated quantity %r; "
+                        "a local transform may read only its exact on= state"
+                        % (name, on.space.name, node.handle.local_id))
             if isinstance(node, Var):
                 if node.kind in ("cons", "prim") and node.name not in allowed_symbols:
                     foreign = known_symbols.get(node.name)

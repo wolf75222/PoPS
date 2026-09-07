@@ -59,7 +59,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
     _physics_mutators = frozenset({
         "state", "species", "primitive", "primitive_state", "scalar", "aux", "field",
         "vector", "flux", "source", "local_linear_operator", "field_operator",
-        "operator", "riemann", "invariant", "rate",
+        "operator", "riemann", "invariant", "rate", "select_balance",
         "finite_volume_rate", "coupled_rate",
         "field_provider", "local_transform", "projection", "wave_speeds", "wave_speeds_from_jacobian",
         "roe_from_jacobian", "recovery_admissibility",
@@ -239,13 +239,14 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                         % (handle.name, authenticated.registered_operator_name)
                     )
                 continue
-            target = None
+            target = (handle.reg_name if handle.reg_name in registered
+                      and registry.get(handle.reg_name).kind == "grid_operator" else None)
             if (
-                handle.name in registered
+                target is None and handle.name in registered
                 and registry.get(handle.name).kind == "grid_operator"
             ):
                 target = handle.name
-            elif handle.name in aliases:
+            elif target is None and handle.name in aliases:
                 alias_target = aliases[handle.name]
                 if registry.get(alias_target).kind == "grid_operator":
                     target = alias_target
@@ -285,6 +286,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                     % (handle.local_id, existing.registered_operator_name,
                        canonical.registered_operator_name)
                 )
+        self._install_retained_rates(module)
         self._module_cache = module
         return module
 
@@ -369,6 +371,11 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             )
             handle = StateHandle(
                 name, components, vars_, role_map, owner=self.owner_path, space=typed_space)
+            from pops._ir.quantity import QuantityRef
+            qualified = tuple(QuantityRef(handle, component, space=typed_space)
+                              for component in components)
+            handle = StateHandle(
+                name, components, qualified, role_map, owner=self.owner_path, space=typed_space)
             self._states[handle.name] = handle
         return handle
 
@@ -396,21 +403,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             # First species: retain the single-state dsl-backed execution path.
             handle = self.state(
                 name, components=components, roles=None if roles is None else role_map)
-            # A species coordinate must retain its state owner if this model is later promoted to
-            # multiple blocks. The single-state backend rebinds these exact coordinates at its
-            # target boundary, so the executable result remains identical without mutating this
-            # immutable handle when a second species is declared.
-            from pops._ir.expr import Var
-            from pops.model.state_symbols import state_component_symbol
-
-            qualified = tuple(
-                Var(state_component_symbol(handle.space, component), "cons")
-                for component in handle.components
-            )
-            handle = StateHandle(
-                handle.name, handle.components, qualified, dict(handle.roles),
-                owner=self.owner_path, space=handle.space)
-            self._states[handle.name] = handle
+            # state() already retains qualified quantity leaves. Promotion keeps
+            # their exact declaration identity even when components are homonymous.
             self._species[handle.name] = handle
             return handle
         if self._multi_module is None:
@@ -454,6 +448,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             raise ValueError("primitive_state is already declared for this physics model")
 
         from .._ir import Expr, Var, _children
+        from .._ir.quantity import QuantityRef
 
         values = normalize_sequence(components, "primitive_state components", nonempty=True)
         state = next(iter(self._states.values()))
@@ -463,17 +458,18 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 "primitive_state requires %d primitive component(s), matching state %r; got %d"
                 % (expected, state.name, len(values))
             )
-        if any(not isinstance(value, Var) for value in values):
+        if any(not isinstance(value, (Var, QuantityRef)) for value in values):
             raise TypeError(
                 "primitive_state components must be exact variables returned by state() or "
                 "primitive()"
             )
-        names = tuple(value.name for value in values)
+        names = tuple(value.component if isinstance(value, QuantityRef) else value.name
+                      for value in values)
         if len(set(names)) != len(names):
             raise ValueError("primitive_state component names must be unique")
 
         owned = tuple(state.vars) + tuple(self._primitive_vars.values())
-        foreign = [value.name for value in values
+        foreign = [name for value, name in zip(values, names, strict=True)
                    if not any(value is candidate for candidate in owned)]
         if foreign:
             raise ValueError(
@@ -497,10 +493,11 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             stack = [expression]
             while stack:
                 node = stack.pop()
-                if isinstance(node, Var) and id(node) not in selected_ids:
+                if isinstance(node, (Var, QuantityRef)) and id(node) not in selected_ids:
                     raise ValueError(
                         "primitive_state conservative inverse %d references variable %r that is "
-                        "not an owned selected primitive component" % (index, node.name)
+                        "not an owned selected primitive component" % (
+                            index, node.component if isinstance(node, QuantityRef) else node.name)
                     )
                 stack.extend(_children(node))
 
@@ -511,7 +508,10 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             (hyp, "prim_state"), (hyp, "prim_roles"), (hyp, "cons_from"),
             (self, "_primitive_state_authored"),
         ):
-            self._dsl.primitive_vars(*values, roles=role_list)
+            layout_variables = tuple(
+                Var(value.component, "cons") if isinstance(value, QuantityRef) else value
+                for value in values)
+            self._dsl.primitive_vars(*layout_variables, roles=role_list)
             self._dsl.conservative_from(inverse)
             self._primitive_state_authored = True
         self._dsl._invalidate_authoring_views()
@@ -673,13 +673,15 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             raise TypeError("flux requires a typed frame and an axis-to-expression mapping")
         if set(components) != set(frame.axes):
             raise ValueError("flux components must name every typed frame axis exactly once")
-        if self._multi_module is None and self._fluxes:
-            raise ValueError("flux %r cannot replace already declared physical flux %r"
-                             % (name, next(iter(self._fluxes))))
+        if name in self._fluxes:
+            raise ValueError("physical flux %r is already declared" % name)
         axes = canonical_axis_mapping(
             {axis.name: axis for axis in frame.axes}, where="flux frame"
         )
-        h = FluxHandle(name, is_default=True, owner=self.owner_path)
+        is_default = self._multi_module is not None or not self._fluxes
+        route = ("flux_default" if is_default and self._multi_module is None
+                 else _multi_flux_operator_name(state, name))
+        h = FluxHandle(name, is_default=is_default, owner=self.owner_path, reg_name=route)
         axis_values = {
             axis_name: normalize_sequence(
                 components[axis], "flux %s expressions" % axis_name, nonempty=True
@@ -751,18 +753,29 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 return h
 
         hyp = self._dsl._m
-        with atomic_attrs((hyp, "_provider_components"), (hyp, "_flux"),
+        with atomic_attrs((hyp, "_provider_components"), (hyp, "_flux"), (hyp, "_flux_terms"),
                           (hyp, "_eig"), (self, "_fluxes")):
             expressions = {
                 axis: [_wrap(self._to_expr(value)) for value in values]
                 for axis, values in axis_values.items()
             }
-            self._dsl.flux(**expressions)
+            if is_default:
+                self._dsl.flux(**expressions)
+            else:
+                self._dsl.flux_term(route, **expressions)
             if wave_values is not None:
-                self._dsl.eigenvalues(**{
+                proposed = {
                     axis: [_wrap(self._to_expr(value)) for value in values]
                     for axis, values in wave_values.items()
-                })
+                }
+                if is_default:
+                    self._dsl.eigenvalues(**proposed)
+                else:
+                    from pops.model.hash_data import canonical_hash_data
+                    if canonical_hash_data(proposed) != canonical_hash_data(hyp._eig):
+                        raise ValueError(
+                            "an additional physical flux cannot replace the default wave-speed law; "
+                            "independent wave-speed realization requires numerical resolution")
             self._fluxes[name] = h
         return h
 
@@ -785,7 +798,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             where="flux_value frame",
         )
         directions = {candidate: index for index, candidate in enumerate(axes.values())}
-        return self._dsl.eval_flux(
+        return self.__pops_compiler_lowering__().emit_model.eval_flux(
             state, {} if aux is None else aux, directions[axis])
 
     def projection(self, expressions: Any) -> None:
@@ -838,11 +851,11 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             raise ValueError(
                 "local_transform_value does not select a multi-state transform by name; "
                 "call the typed transform handle from a Program")
-        return self._dsl.local_transform_value(name, state, aux)
+        return self.__pops_compiler_lowering__().emit_model.local_transform_value(name, state, aux)
 
     def projection_value(self, state: Any, aux: Any = None) -> Any:
         """Evaluate the installed pointwise projection through its public host oracle."""
-        return self._dsl.projection_value(state, aux)
+        return self.__pops_compiler_lowering__().emit_model.projection_value(state, aux)
 
     def wave_speeds(self, flux: Any, *, frame: Any, values: Any) -> None:
         """Declare the explicit signed ``(s_min, s_max)`` pair consumed by HLL.
@@ -1143,8 +1156,9 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         through the Program lowerability gate.
         This is structural validation only: it emits no native source and compiles no artifact.
         """
+        self.validate_balance_selection()
         if self._multi_module is None:
-            return self._dsl.check()
+            return self.__pops_compiler_lowering__().emit_model.check()
 
         module = self.module
         from pops.codegen.module_lowering import _module_to_model

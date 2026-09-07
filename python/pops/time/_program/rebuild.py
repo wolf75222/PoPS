@@ -83,6 +83,7 @@ def rebuild_program(
         )
         object.__setattr__(out, "clock", Clock("macro", owner=out.owner_path))
     out.dt = self.dt
+    out._next_stage_identity = self._next_stage_identity
     out._step_strategy = getattr(self, "_step_strategy", None)
     out._cadence = getattr(self, "_cadence", None)
     out._cell_local_time = getattr(self, "_cell_local_time", None)
@@ -109,7 +110,7 @@ def rebuild_program(
             return StagePoint(point.name, {
                 partition: remap_point(coordinate)
                 for partition, coordinate in point.partitions.items()
-            })
+            }, identity=point.identity)
         raise TypeError("Program rebuild encountered a value without an exact evaluation point")
     out._state_spaces = {
         reference_of(state_ref): space

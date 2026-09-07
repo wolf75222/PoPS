@@ -61,6 +61,10 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
         node = _ProgramPasses._serialize_node(v, include_provenance=False)
         node.pop("id", None)
         node["inputs"] = tuple(canon.get(i, i) for i in node["inputs"])
+        # Exact evaluation coordinates and fresh stage ordinals are part of the
+        # computation even when its operands coincide. Stage labels are diagnostic.
+        point = dict(node["point"])
+        point.pop("name", None)
         # JSON-serialize the attrs dict to a stable string so the whole key is hashable / comparable
         # exactly as the IR hash compares it.
         # Typed block/state identities are canonical JSON mappings, not scalar labels.  Encode both
@@ -73,6 +77,7 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
                 node["inputs"],
                 json.dumps(node.get("space"), sort_keys=True, separators=(",", ":")),
                 json.dumps(node.get("field_context"), sort_keys=True, separators=(",", ":")),
+                json.dumps(point, sort_keys=True, separators=(",", ":")),
                 json.dumps(node["attrs"], sort_keys=True, separators=(",", ":")))
 
     def _live_value_ids(self) -> Any:

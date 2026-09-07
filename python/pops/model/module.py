@@ -18,7 +18,7 @@ from .ownership import OwnerKind, OwnerPath
 from .param_registry import ParamRegistry
 from .registry import DeclarationIndex, OperatorRegistry
 from .signatures import Signature
-from .spaces import AuxSpace, FieldSpace, RateSpace, StateSpace
+from .spaces import AuxSpace, FieldSpace, RateSpace, Space, StateSpace
 
 
 class Module(ModuleFreezable):
@@ -53,6 +53,8 @@ class Module(ModuleFreezable):
         # eigenvalues, or None (set via eigenvalues()). Carried so a pure Module is self-contained;
         # lowered to dsl.Model.eigenvalues by compile_problem.
         self._eigenvalues = None
+        self._constitutive = None
+        self._application_sequence = 0
         # Canonical detached source of the signed pair consumed by HLL.  This is metadata, not a
         # numerics selection: Einfeldt/Davis remain Riemann-provider strategies and are therefore
         # deliberately absent from this model-source vocabulary.
@@ -93,21 +95,27 @@ class Module(ModuleFreezable):
     def state_space(self, name: Any = "U", components: Any = (), roles: Any = None, layout: str = "cell",
                     storage: str = "multifab", *, representation: Any = "conservative",
                     centering: Any = None, units: Any = None, frame: Any = "model",
-                    clock: Any = "simulation") -> Any:
+                    clock: Any = "simulation", support: Any = None,
+                    sampling: Any = "unspecified", value_shape: Any = None,
+                    domain: Any = "real") -> Any:
         """Declare and return a :class:`StateSpace`."""
         space = StateSpace(
             name, components, roles, layout, storage, representation=representation,
-            centering=centering, units=units, frame=frame, clock=clock)
+            centering=centering, units=units, frame=frame, clock=clock,
+            support=support, sampling=sampling, value_shape=value_shape, domain=domain)
         return self._declare_descriptor(
             self._state_spaces, self._state_handles, space, "StateSpace", "state")
 
     def field_space(self, name: Any, components: Any = (), layout: str = "cell", *,
                     representation: Any = "field", centering: Any = None, units: Any = None,
-                    frame: Any = "model", clock: Any = "simulation") -> Any:
+                    frame: Any = "model", clock: Any = "simulation", support: Any = None,
+                    sampling: Any = "unspecified", value_shape: Any = None,
+                    domain: Any = "real") -> Any:
         """Declare and return a :class:`FieldSpace`."""
         space = FieldSpace(
             name, components, layout, representation=representation, centering=centering,
-            units=units, frame=frame, clock=clock)
+            units=units, frame=frame, clock=clock, support=support,
+            sampling=sampling, value_shape=value_shape, domain=domain)
         return self._declare_descriptor(
             self._field_spaces, self._field_handles, space, "FieldSpace", "field")
 
@@ -137,6 +145,27 @@ class Module(ModuleFreezable):
         from pops._ir import parameter_value
 
         return parameter_value(self._param_registry, parameter)
+
+    def constitutive(self, *, gamma: Any) -> None:
+        """Declare ideal-gas EOS metadata explicitly, independently of parameter spelling."""
+        from pops.identity.scalar import exact_numeric_scalar
+        from pops.params import ConstParam
+        self._guard_mutable("declare constitutive metadata")
+        parameter = None
+        if isinstance(gamma, ParamHandle):
+            declaration = self._param_registry.declaration(gamma)
+            if not isinstance(declaration, ConstParam):
+                raise TypeError("ideal-gas gamma must be a compile-time ConstParam")
+            parameter = gamma.local_id
+            gamma = declaration.value
+        value = exact_numeric_scalar(gamma, where="ideal-gas gamma")
+        if value <= 1:
+            raise ValueError("ideal-gas gamma must be greater than one")
+        data = {"kind": "ideal_gas", "gamma": value,
+                "parameter": parameter}
+        if self._constitutive is not None:
+            raise ValueError("constitutive metadata is already declared")
+        self._constitutive = MappingProxyType(data)
 
     def aux_field(self, name: Any, kind: str = "cell_scalar", *,
                   representation: Any = "auxiliary", centering: Any = "cell",
@@ -183,12 +212,14 @@ class Module(ModuleFreezable):
     # --- operators ---
     def operator(self, name: Any = None, signature: Any = None, kind: Any = None,
                  capabilities: Any = None, requirements: Any = None, lowering: Any = None,
-                 expr: Any = None) -> Any:
+                 expr: Any = None, specialization: Any = None) -> Any:
         """Register a typed operator.
 
         Builder mode (``expr`` given) registers the operator immediately and returns its
-        public :class:`OperatorHandle`. Decorator mode records the decorated body internally
-        and replaces the decorated name with the same public handle::
+        public :class:`OperatorHandle`. Decorator mode invokes the authoring function once
+        with qualified symbolic tuples and captures an immutable expression body. Optional
+        ``specialization`` supplies explicit static keyword arguments. The decorated name
+        becomes the same public handle::
 
             @module.operator(name="explicit_rhs",
                              signature=(U, Fields) >> Rate(U), kind="local_rate")
@@ -209,7 +240,7 @@ class Module(ModuleFreezable):
                 raise ValueError(
                     "field_operator lowering must declare its field_provider route")
 
-        def _register(body: Any) -> Any:
+        def _register(body: Any, *, capture: bool = False) -> Any:
             self._guard_mutable("register an operator")
             from pops.provenance import ProvenanceRecord, callable_span, source_span
             primary = callable_span(body) if callable(body) else source_span()
@@ -218,6 +249,12 @@ class Module(ModuleFreezable):
                 owner=self.owner_path,
                 authoring_api="pops.model.Module.operator",
             )
+            if callable(body) and (capture or specialization is not None or kind == "expression"):
+                body = self._capture_operator(body, signature, specialization=specialization)
+            elif specialization is not None:
+                raise TypeError("specialization is only valid for a captured authoring callable")
+            if kind == "expression":
+                body = self._normalize_expression_output(body, signature.output, directional=False)
             op = Operator(name, kind, signature, capabilities=capabilities,
                           requirements=requirements, lowering=lowering, source=provenance,
                           body=body)
@@ -228,9 +265,109 @@ class Module(ModuleFreezable):
             return _register(expr)
 
         def decorator(func: Any) -> Any:
-            return _register(func)
+            return _register(func, capture=True)
 
         return decorator
+
+    def _capture_operator(self, function: Any, signature: Any, *, specialization: Any) -> Any:
+        """Invoke authoring once for this explicitly registered type/static specialization."""
+        from collections.abc import Mapping
+        from pops._ir.symbolic import freeze_symbolic_metadata
+        arguments = []
+        for space in signature.inputs:
+            if isinstance(space, StateSpace):
+                arguments.append(self.state_symbols(space))
+            elif isinstance(space, FieldSpace):
+                arguments.append(self.field_symbols(space))
+            else:
+                raise TypeError("callable capture requires declared StateSpace/FieldSpace inputs")
+        options = {} if specialization is None else specialization
+        if not isinstance(options, Mapping) or any(not isinstance(key, str) for key in options):
+            raise TypeError("operator specialization must be a mapping of static keyword values")
+        options = freeze_symbolic_metadata(options)
+        result = function(*arguments, **options)
+        return self._normalize_expression_output(result, signature.output)
+
+    @staticmethod
+    def _normalize_expression_output(result: Any, output: Any, *, directional: bool = True) -> Any:
+        from collections.abc import Mapping
+        from pops._ir.expr import Expr, _wrap
+        from pops._ir.symbolic import freeze_symbolic_metadata
+        from .bundles import ProductSpace, RateBundle
+        from numbers import Number
+
+        def vector(value: Any, width: int) -> tuple[Any, ...]:
+            values = (value,) if isinstance(value, (Expr, Number)) else tuple(value)
+            if len(values) != width:
+                raise ValueError("captured operator output does not match its declared component shape")
+            return tuple(_wrap(value) for value in values)
+        if isinstance(output, (RateBundle, ProductSpace)):
+            if not isinstance(result, Mapping) or set(result) != set(output.keys()):
+                raise ValueError("captured joint output must name every %s output exactly once"
+                                 % type(output).__name__)
+            result = {key: vector(result[key], len(space.components))
+                      for key, space in output.items()}
+        elif isinstance(output, Space):
+            if isinstance(result, Mapping):
+                if not directional:
+                    raise TypeError("a single expression Space requires one component tuple")
+                result = {key: vector(value, len(output.components))
+                          for key, value in result.items()}
+            else:
+                result = vector(result, len(output.components))
+        else:
+            raise TypeError("this callable output has no supported capture protocol")
+        return freeze_symbolic_metadata(result)
+
+    def apply(self, operator: Any, *arguments: Any, context: Any = None) -> Any:
+        """Instantiate a captured expression operator and retain one joint application identity."""
+        from collections.abc import Mapping
+        from pops._ir.application import ApplicationProjection, OperatorApplication, substitute_quantities
+        from pops._ir.expr import Expr, _wrap
+        from pops._ir.quantity import QuantityRef
+        from .bundles import ProductSpace, RateBundle
+        self._guard_mutable("instantiate an expression application")
+        if not isinstance(operator, OperatorHandle) or operator.owner_path != self.owner_path:
+            raise ValueError("application requires an operator issued by this Module")
+        expected_handle = self.operator_handle(operator.local_id)
+        if operator != expected_handle or operator.signature != expected_handle.signature:
+            raise ValueError("application operator metadata does not match the registered declaration")
+        declaration = self._registry.get(operator.registered_operator_name)
+        if callable(declaration.body) or declaration.body is None:
+            raise TypeError("application requires a captured immutable expression body")
+        if len(arguments) != len(declaration.signature.inputs):
+            raise ValueError("application argument count differs from its signature")
+        inputs = []
+        bindings = {}
+        for space, argument in zip(declaration.signature.inputs, arguments, strict=True):
+            values = (argument,) if isinstance(argument, Expr) else tuple(argument)
+            if len(values) != len(space.components):
+                raise ValueError("application input component shape differs from its signature")
+            values = tuple(_wrap(value) for value in values)
+            for value in values:
+                actual_space = value.space if isinstance(value, QuantityRef) else None
+                if isinstance(value, ApplicationProjection):
+                    actual_space = value.application.operator.signature.output
+                    if isinstance(actual_space, (ProductSpace, RateBundle)):
+                        actual_space = actual_space[value.output]
+                if actual_space is not None and actual_space != space:
+                    raise TypeError("application input support/representation/shape differs from its signature")
+            symbols = self.state_symbols(space) if isinstance(space, StateSpace) else self.field_symbols(space)
+            bindings.update({(symbol.handle, symbol.index): value
+                             for symbol, value in zip(symbols, values, strict=True)})
+            inputs.append(values)
+        body = substitute_quantities(declaration.body, bindings)
+        if isinstance(declaration.signature.output, (RateBundle, ProductSpace)):
+            outputs = body
+        else:
+            if isinstance(body, Mapping):
+                raise TypeError("directional operator application requires a selected numerical sampling route")
+            outputs = {"value": body}
+        effects = declaration.capabilities.get("effects", ())
+        result = OperatorApplication(operator, inputs, outputs, context=context, effects=effects,
+                                     occurrence=self._application_sequence)
+        self._application_sequence += 1
+        return result
 
     def rate_operator(self, name: Any, state_space: Any, flux: bool = True,
                       sources: Any = (), fluxes: Any = None,
@@ -521,18 +658,21 @@ class Module(ModuleFreezable):
         These expressions are the canonical authoring path for operators that read
         several state spaces.  Unlike bare component names, they remain unambiguous
         when, for example, both an electron and ion state contain ``"density"``.
-        They are ordinary immutable :class:`pops._ir.Var` nodes and introduce no
-        separate multi-species runtime or lowering path.
+        These immutable QuantityRef leaves retain their declaration Handle and physical
+        Space until an authenticated target binding supplies native coordinates.
         """
-        from pops._ir.expr import Var
-        from pops.model.state_symbols import state_component_symbol
+        from pops._ir.quantity import QuantityRef
 
         handle = self.state_handle(state)
         space = self._state_spaces[handle.local_id]
-        return tuple(
-            Var(state_component_symbol(space, component), "cons")
-            for component in space.components
-        )
+        return tuple(QuantityRef(handle, component, space=space) for component in space.components)
+
+    def field_symbols(self, field: Any) -> tuple[Any, ...]:
+        """Read each field component through its authenticated declaration."""
+        from pops._ir.quantity import QuantityRef
+        handle = self.field_handle(field)
+        space = self._field_spaces[handle.local_id]
+        return tuple(QuantityRef(handle, component, space=space) for component in space.components)
 
     def field_handle(self, field: Any) -> Handle:
         """Return the registry-issued handle of a declared :class:`FieldSpace`."""
@@ -712,7 +852,9 @@ class Module(ModuleFreezable):
         any spec1 key.
         """
         from ._module_hash import module_content_hash
-        return module_content_hash(self)
+        from pops._ir.quantity import local_expression_identity
+        with local_expression_identity(self.owner_path):
+            return module_content_hash(self)
 
     def __repr__(self) -> str:
         return "Module(%r, operators=[%s])" % (self.name, ", ".join(self._registry.names()))

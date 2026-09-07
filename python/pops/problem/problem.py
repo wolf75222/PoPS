@@ -415,9 +415,12 @@ class Case:
                 plan.validate_for(spec["model"], states=spec["states"])
                 self._resolved_numerics_for(block_name)
             except Exception as exc:  # noqa: BLE001 -- aggregate exact numerical refusal
+                from pops.numerics.plan import UnsupportedBalanceRealizationError
+                unsupported = isinstance(exc, UnsupportedBalanceRealizationError)
                 report = report.error(
-                    "numerics", "invalid_discretization_plan", str(exc),
-                    context={"block": block_name})
+                    "numerics", exc.code if unsupported else "invalid_discretization_plan", str(exc),
+                    context={"block": block_name, **({"phase": exc.phase, **exc.context}
+                                                    if unsupported else {})})
         return report
 
     def _field_validation_context(self, context: Any) -> Any:

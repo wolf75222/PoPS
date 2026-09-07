@@ -79,6 +79,7 @@ class _ProgramBase:
     _time_current_values: dict
     _time_stage_handles: dict
     _time_stage_values: dict
+    _next_stage_identity: int
     _time_history_handles: dict
     _time_history_values: dict
     _time_history_configs: dict

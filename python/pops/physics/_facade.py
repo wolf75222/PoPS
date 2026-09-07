@@ -481,24 +481,7 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         storage lifetime must never be inferred silently.  A handle is identity,
         not an expression; call :meth:`value` when a physics formula reads it.
         """
-        from pops.params import ConstParam
-
-        if getattr(declaration, "name", None) == "gamma" and not isinstance(
-            declaration, ConstParam
-        ):
-            raise ValueError(
-                "the EOS metadata parameter 'gamma' must be a ConstParam; the native block "
-                "exports gamma as compile-time metadata"
-            )
         handle = self._param_registry.register(declaration)
-        if declaration.name == "gamma":
-            self._m.set_gamma(declaration.value)
-            # ``set_gamma`` changes model-source metadata and rebuilds the derived
-            # operator registry, so the Module projection must be rebuilt as well.
-            self._invalidate_authoring_views()
-        # Every other parameter is carried by the ParamRegistry already shared with
-        # an existing Module projection.  Rebuilding that projection here would try
-        # to attach the same OperatorRegistry to a second mutation authority.
         return handle
 
     def value(self, parameter: Any) -> Any:
@@ -602,6 +585,10 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
             units=st.units,
             frame=st.frame,
             clock=st.clock,
+            support=st.support,
+            sampling=st.sampling,
+            value_shape=st.value_shape,
+            domain=st.domain,
         )
         fs = self._m.field_space()
         mod.field_space(
@@ -613,11 +600,17 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
             units=fs.units,
             frame=fs.frame,
             clock=fs.clock,
+            support=fs.support,
+            sampling=fs.sampling,
+            value_shape=fs.value_shape,
+            domain=fs.domain,
         )
         # ``module`` is a typed view of this exact model definition, not another
         # declaration owner. Share the one registry so handles never acquire a
         # parallel authority with merely equal-looking IDs.
         mod._param_registry = self._param_registry
+        if self._m.gamma is not None:
+            mod.constitutive(gamma=self._m.gamma)
         mod.adopt_registry(self._m.operator_registry())
         if self._m._wave_speeds is not None:
             mod.set_wave_speed_provider("explicit_pair")

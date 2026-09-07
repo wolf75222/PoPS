@@ -561,7 +561,7 @@ class RateTerm(_BoardNode):
     """A summand of a rate equation right-hand side.
 
     Divergences and source handles compose through ``+`` / ``-`` into a
-    :class:`RateExpr`, which the model splits into flux and source terms."""
+    :class:`RateExpr`, whose signed occurrences the model retains as one balance."""
 
     def _rate_terms(self) -> Any:
         """Return ``[(kind, payload, sign)]`` -- one entry per primitive summand."""
@@ -579,6 +579,17 @@ class RateTerm(_BoardNode):
     def __sub__(self, other: Any) -> Any:
         return self + (-_as_rate(other))
 
+    def __rsub__(self, other: Any) -> Any:
+        return _as_rate(other) + (-self)
+
+    def __mul__(self, coefficient: Any) -> Any:
+        return RateExpr([(kind, payload, multiply_exact_scalars(
+            scale, coefficient, where="rate term coefficient"))
+            for kind, payload, scale in self._rate_terms()])
+
+    def __rmul__(self, coefficient: Any) -> Any:
+        return self * coefficient
+
 
 def _as_rate(x: Any) -> Any:
     """Coerce ``x`` to a :class:`RateTerm` or raise a clear error."""
@@ -591,7 +602,7 @@ def _as_rate(x: Any) -> Any:
             return term
         raise TypeError("__pops_rate_term__() must return a RateTerm expression")
     raise TypeError(
-        "a rate equation right-hand side must be a sum of -div(flux) and source "
+        "a rate equation right-hand side must be a signed sum of div(flux) and source "
         "terms; got %r" % (x,))
 
 
@@ -604,9 +615,13 @@ class RateExpr(RateTerm):
             if not isinstance(term, (tuple, list)) or len(term) != 3:
                 raise TypeError("a rate term must be a (kind, payload, sign) triple")
             kind, payload, sign = term
-            if kind not in ("flux", "source"):
+            if kind not in ("flux", "source", "projection"):
                 raise ValueError("unknown rate term kind %r" % (kind,))
-            if getattr(payload, "kind", None) != kind:
+            if kind == "projection":
+                from .application import RateApplicationProjection
+                if not isinstance(payload, RateApplicationProjection):
+                    raise TypeError("a projection rate term requires a whole typed RateSpace projection")
+            elif getattr(payload, "kind", None) != kind:
                 raise TypeError("rate term %s payload must be a matching declaration Handle" % kind)
             sign = exact_numeric_scalar(sign, where="rate term sign")
             normalized.append((kind, payload, sign))
@@ -622,7 +637,7 @@ class RateExpr(RateTerm):
 class Divergence(RateTerm):
     """``scale * div(flux)``; usually written ``-div(F)`` for a hyperbolic rate."""
 
-    def __init__(self, flux: Any, scale: Any = 1.0) -> None:
+    def __init__(self, flux: Any, scale: Any = 1) -> None:
         self.flux = flux
         self.scale = exact_numeric_scalar(scale, where="Divergence scale")
 
@@ -637,7 +652,9 @@ class TimeDerivative(_BoardNode):
     """``ddt(U)`` / ``rate(U)`` -- the left-hand side of a rate equation."""
 
     def __init__(self, state: Any) -> None:
-        self.state = state
+        from .balance import Accumulation
+        self.accumulation = state if isinstance(state, Accumulation) else Accumulation(state)
+        self.state = self.accumulation.state
 
     def __repr__(self) -> str:
         return "ddt(%r)" % (self.state,)

@@ -114,7 +114,7 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     from pops.model.state_symbols import rebind_state_symbols  # noqa: PLC0415
 
     def _body_for_state(body: Any) -> Any:
-        return rebind_state_symbols(body, state, states.values())
+        return rebind_state_symbols(body, state, states.values(), module=module)
 
     m = Model(module.name)
     # Preserve the canonical source-Module identity across the internal facade lowering. The
@@ -158,20 +158,14 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     for declaration in module.params().values():
         if registry.handle(declaration) != module.param_handle(declaration):
             raise ValueError("compile_problem: Module parameter authority is inconsistent")
-        if declaration.name == "gamma":
-            from pops.params import ConstParam
-
-            if not isinstance(declaration, ConstParam):
-                raise ValueError(
-                    "compile_problem: EOS metadata parameter 'gamma' must be a ConstParam"
-                )
-            m._m.set_gamma(declaration.value)
         handle = module.param_handle(declaration)
         targets = ["dsl:param_registry:%s" % handle.qualified_id]
-        if declaration.name == "gamma":
-            targets.append("dsl:eos:gamma")
         coverage_rows.append(LoweringCoverageRow(
             "parameter:%s" % handle.qualified_id, "lowered", tuple(targets)))
+    if module._constitutive is not None:
+        m._m.set_gamma(module._constitutive["gamma"])
+        coverage_rows.append(LoweringCoverageRow(
+            "constitutive:ideal_gas", "lowered", ("dsl:eos:gamma",)))
     declared = {}
 
     def _declare_aux(nm: Any, key: Any) -> None:

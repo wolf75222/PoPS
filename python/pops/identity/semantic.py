@@ -180,7 +180,10 @@ def _drop_program_presentation(value: Any, program_clock_owner: Any) -> Any:
         ):
             normalized["owner"] = None
         if (
-            set(normalized) == {"schema_version", "name", "partitions"}
+            set(normalized) in (
+                {"schema_version", "name", "partitions"},
+                {"schema_version", "name", "partitions", "identity"},
+            )
             and normalized.get("schema_version") == 1
             and isinstance(normalized.get("partitions"), Mapping)
         ):

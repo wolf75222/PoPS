@@ -24,7 +24,7 @@ from .ownership import OwnerPath
 from .provider_pack import ProviderPack
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 _WAVE_SPEED_PROVIDERS = frozenset({"explicit_pair", "jacobian", "pressure_derived"})
 
@@ -49,11 +49,11 @@ _PARAM_ROW_KEYS = {
 _DECLARATION_ROW_KEYS = {
     "state": ({
         "components", "roles", "layout", "storage", "representation", "centering",
-        "units", "frame", "clock", "qid", "handle",
+        "units", "frame", "clock", "support", "sampling", "value_shape", "domain", "qid", "handle",
     },),
     "field": ({
         "components", "layout", "representation", "centering", "units", "frame", "clock",
-        "qid", "handle",
+        "support", "sampling", "value_shape", "domain", "qid", "handle",
     },),
     "parameter": (_PARAM_ROW_KEYS,),
     "aux": ({
@@ -90,6 +90,16 @@ def _validate_declaration_rows(
             kind=kind,
             where="%s %s" % (where, name),
         )
+        if kind in {"state", "field"}:
+            from .spaces import FieldSpace, StateSpace
+
+            descriptor = StateSpace if kind == "state" else FieldSpace
+            fields = {key: value for key, value in row.items() if key not in {"qid", "handle"}}
+            reconstructed = descriptor(name, **fields)
+            canonical = reconstructed.to_data()
+            for key in ("support", "sampling", "value_shape", "domain", "units"):
+                if canonical[key] != row[key]:
+                    raise ValueError("%s %s has noncanonical %s" % (where, name, key))
         if kind == "parameter":
             from .handles import ParamHandle
             from pops.params import validate_parameter_data

@@ -92,6 +92,7 @@ def module_content_hash(module: Any) -> str:
             for direction in module._eigenvalues
         },
         "wave_speed_provider": module._wave_speed_provider,
+        "constitutive": module._constitutive,
         # Registry order is semantic: it determines stable OperatorId values.
         "operators": [{
             "name": operator.name,

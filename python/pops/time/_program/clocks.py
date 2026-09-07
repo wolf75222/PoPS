@@ -15,6 +15,19 @@ else:
 
 
 class _ProgramClocks(_ProgramBase):
+    def stage(self, name: str, *, c: Any) -> StagePoint:
+        """Declare a fresh stage at exact fraction ``c`` of this Program's local step.
+
+        Reusing a name or an abscissa still creates a distinct stage. The name is a
+        diagnostic label; the Program-local ordinal persists through graph rebuilds.
+        Use ``StagePoint`` directly for partitioned or explicitly clocked coordinates.
+        """
+        self._guard_mutable("declare a temporal stage")
+        point = StagePoint(
+            name, {"main": TimePoint(self.clock, c)}, identity=self._next_stage_identity)
+        self._next_stage_identity += 1
+        return point
+
     def synchronize(
         self, value: Any, *, at: Any, relation: Any, name: Any = None
     ) -> Any:

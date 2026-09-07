@@ -43,7 +43,7 @@ from pops.params import RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.representations import Conservative
 from pops.spaces import CellState
-from pops.time import AdaptiveCFL, StagePoint, TimePoint, every
+from pops.time import AdaptiveCFL, every
 
 
 NX = 32
@@ -133,20 +133,14 @@ case.numerics(numerics, block=tracer)
 program = pops.Program("SSPRK2")
 q = program.state(tracer_U)
 
-stage_0 = StagePoint(
-    "ssprk2_stage_0",
-    {"main": TimePoint(program.clock, 0)},
-)
+stage_0 = program.stage("ssprk2_stage_0", c=0)
 k0 = program.value(
     "ssprk2_k_0",
     advection_rate(q.n),
     at=stage_0,
 )
 
-stage_1 = StagePoint(
-    "ssprk2_stage_1",
-    {"main": TimePoint(program.clock, 1)},
-)
+stage_1 = program.stage("ssprk2_stage_1", c=1)
 q_stage = program.value(
     "ssprk2_U1",
     q.n + program.dt * k0,
@@ -217,7 +211,18 @@ layout = AMR(
 validated = pops.validate(case)
 resolved = pops.resolve(validated, layout=layout)
 artifact = pops.compile(resolved)
-simulation = pops.bind(artifact)
+communicator = artifact.platform_manifest.communicator.require(
+    "scalar AMR tutorial artifact communicator",
+)
+if communicator == "serial":
+    execution_resources = {}
+elif communicator == "MPI_COMM_WORLD":
+    execution_resources = {
+        "execution_context": pops.ExecutionContext.mpi_world(artifact),
+    }
+else:
+    raise RuntimeError("unsupported tutorial communicator %r" % communicator)
+simulation = pops.bind(artifact, resources=execution_resources)
 
 pops.run(simulation, t_end=T_END, max_steps=MAX_STEPS)
 

@@ -55,7 +55,7 @@ class ComponentContract:
 
     representation: str
     centering: str
-    unit: str | None
+    unit: Any
     layout: str
     value_kind: str | None = None
 
@@ -63,14 +63,21 @@ class ComponentContract:
         _non_empty(self.representation, "ComponentContract representation")
         _non_empty(self.centering, "ComponentContract centering")
         if self.unit is not None:
-            _non_empty(self.unit, "ComponentContract unit")
+            from pops._ir.quantity import PhysicalDimension
+            if isinstance(self.unit, Mapping):
+                object.__setattr__(self, "unit", PhysicalDimension.from_data(dict(self.unit)))
+            elif not isinstance(self.unit, PhysicalDimension):
+                # Named auxiliary units remain a compatibility declaration; state and field
+                # dimensions use exact exponents, including an explicit dimensionless value.
+                _non_empty(self.unit, "ComponentContract unit")
         _non_empty(self.layout, "ComponentContract layout")
         if self.value_kind is not None:
             _non_empty(self.value_kind, "ComponentContract value_kind")
 
     def to_data(self) -> dict[str, Any]:
         return {"representation": self.representation, "centering": self.centering,
-                "unit": self.unit, "layout": self.layout, "value_kind": self.value_kind}
+                "unit": self.unit.to_data() if hasattr(self.unit, "to_data") else self.unit,
+                "layout": self.layout, "value_kind": self.value_kind}
 
 
 @dataclass(frozen=True, slots=True)

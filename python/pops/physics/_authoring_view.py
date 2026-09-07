@@ -15,6 +15,7 @@ from pops._cartesian_axes import flattened_axis_values
 from ._modelpkg import model as _model
 from .aux import roles_for
 from pops._ir.visitors import _dependencies
+from pops._ir.symbolic import freeze_symbolic_metadata
 
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
@@ -68,6 +69,10 @@ class _OperatorViewMixin(_HyperbolicModel):
             units=metadata["units"],
             frame=metadata["frame"],
             clock=metadata["clock"],
+            support=metadata.get("support"),
+            sampling=metadata.get("sampling", "unspecified"),
+            value_shape=metadata.get("value_shape"),
+            domain=metadata.get("domain", "real"),
         )
 
     def field_space(self, name: str = "fields") -> Any:
@@ -141,6 +146,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                     },
                     requirements=self._aux_requirements(exprs),
                     source=None,
+                    body=freeze_symbolic_metadata(self._flux),
                 )
             )
         for nm in sorted(self._flux_terms):
@@ -165,6 +171,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                     },
                     requirements=self._aux_requirements(exprs),
                     source=None,
+                    body=freeze_symbolic_metadata(term),
                 )
             )
 
@@ -187,6 +194,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                     requirements=self._aux_requirements(self._source),
                     lowering={"source": "default"},
                     source=None,
+                    body=freeze_symbolic_metadata(self._source),
                 )
             )
             # ``source_term("default", ...)`` returns a readable ``default`` handle,
@@ -210,6 +218,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                     },
                     requirements=self._aux_requirements(exprs),
                     source=None,
+                    body=freeze_symbolic_metadata(exprs),
                 )
             )
 
@@ -233,6 +242,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                     },
                     requirements=self._aux_requirements(coeffs),
                     source=None,
+                    body=freeze_symbolic_metadata(self._linear_sources[nm]),
                 )
             )
 
@@ -251,7 +261,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                     capabilities={"local": True, "supports_device": True, "fail_closed": True},
                     requirements=self._aux_requirements(exprs + [valid_if]),
                     source=None,
-                    body={"expressions": tuple(exprs), "valid_if": valid_if},
+                    body=freeze_symbolic_metadata({"expressions": tuple(exprs), "valid_if": valid_if}),
                 )
             )
 
@@ -274,7 +284,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                     requirements={"elliptic_operator": "poisson"},
                     lowering={"field_provider": {"key": "fields_from_state"}},
                     source=None,
-                    body=self._elliptic,
+                    body=freeze_symbolic_metadata(self._elliptic),
                 )
             )
         for nm in sorted(self._elliptic_fields):
@@ -291,7 +301,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                         "gradient_sign": info["gradient_sign"],
                     },
                     source=None,
-                    body=info["rhs"],
+                    body=freeze_symbolic_metadata(info["rhs"]),
                 )
             )
 
@@ -306,6 +316,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                     capabilities={"local": True, "idempotent": True, "supports_device": True},
                     requirements=self._aux_requirements(self._proj),
                     source=None,
+                    body=freeze_symbolic_metadata(self._proj),
                 )
             )
 

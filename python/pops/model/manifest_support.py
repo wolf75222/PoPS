@@ -36,9 +36,13 @@ def state_space_row(space: Any) -> Any:
         "storage": getattr(space, "storage", "multifab"),
         "representation": space.representation,
         "centering": space.centering,
-        "units": list(space.units),
+        "units": space.to_data()["units"],
         "frame": space.frame,
         "clock": space.clock,
+        "support": space.to_data()["support"],
+        "sampling": space.sampling,
+        "value_shape": list(space.value_shape),
+        "domain": space.domain,
     }
 
 
@@ -48,9 +52,13 @@ def field_space_row(space: Any) -> Any:
         "layout": getattr(space, "layout", "cell"),
         "representation": space.representation,
         "centering": space.centering,
-        "units": list(space.units),
+        "units": space.to_data()["units"],
         "frame": space.frame,
         "clock": space.clock,
+        "support": space.to_data()["support"],
+        "sampling": space.sampling,
+        "value_shape": list(space.value_shape),
+        "domain": space.domain,
     }
 
 
