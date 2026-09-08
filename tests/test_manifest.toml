@@ -1173,6 +1173,11 @@ sources = ["tests/cpp/integration/amr/test_cell_temporal_program_route.cpp"]
 labels = ["integration", "runtime", "amr", "medium"]
 
 [[cpp.suite]]
+name = "test_prepared_spatial_residual"
+sources = ["tests/cpp/unit/runtime/test_prepared_spatial_residual.cpp"]
+labels = ["unit", "runtime", "elliptic", "fast"]
+
+[[cpp.suite]]
 name = "test_residual_operator"
 sources = ["tests/cpp/unit/runtime/test_residual_operator.cpp"]
 labels = ["unit", "runtime", "fast"]
