@@ -419,6 +419,50 @@ class _CustomNPZ:
         return NPZWriter(self._mode)
 
 
+class _ContextMatchedMonitorOperation:
+    """Retain a generic observer session while matching the sealed artifact's MPI mode.
+
+    ``LiveVisualization`` deliberately defaults generic observers to SERIAL.  This runtime gate
+    is also executed against the MPI native fixture, where a serial monitor is refused before its
+    lifecycle oracles run.  Keep the provider/session authority from the original operation, but
+    expose the real artifact-compatible mode and formatter evidence used by this fixture.
+    """
+
+    __pops_ir_immutable__ = True
+
+    def __init__(self, operation, mode: ParallelMode) -> None:
+        if type(mode) is not ParallelMode:
+            raise TypeError("context-matched monitor mode must be an exact ParallelMode")
+        data = operation.consumer_data()
+        if data["parallel_mode"] != ParallelMode.SERIAL.value:
+            raise ValueError("context-matched monitor expects a SERIAL source operation")
+        self._operation = operation
+        self._format = _CustomNPZ(mode)
+        observer = dict(data["observer"])
+        observer["format"] = self._format.consumer_data()
+        self._data = {
+            **data,
+            "parallel_mode": mode.value,
+            "observer": observer,
+        }
+
+    def consumer_data(self):
+        return dict(self._data)
+
+    def preflight(self, execution_context):
+        preflight = getattr(self._operation, "preflight", None)
+        return None if not callable(preflight) else preflight(execution_context)
+
+    def preopen_session(self, execution_context):
+        preopen = getattr(self._operation, "preopen_session", None)
+        if callable(preopen):
+            return preopen(execution_context)
+        return self._operation.open_session(execution_context)
+
+    def open_session(self, execution_context):
+        return self._operation.open_session(execution_context)
+
+
 def _scientific_output_mode(artifact: CompiledSimulationArtifact) -> ParallelMode:
     """Select an explicit publication mode compatible with the sealed native artifact."""
     communicator = artifact.platform_manifest.communicator.require(
@@ -442,6 +486,13 @@ def _with_graph(
 ):
     base = _install()
     parallel_mode = _scientific_output_mode(base.artifact)
+    if kind is ConsumerKind.MONITOR and operation is not None:
+        operation_data = operation.consumer_data()
+        if (
+            operation_data["parallel_mode"] == ParallelMode.SERIAL.value
+            and parallel_mode is not ParallelMode.SERIAL
+        ):
+            operation = _ContextMatchedMonitorOperation(operation, parallel_mode)
     if isinstance(output_format, type):
         output_format = output_format(parallel_mode)
     (assignment,) = tuple(
