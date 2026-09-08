@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import math
-from typing import Any
+from typing import Any, cast
 
 from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
 from pops._geometry_contracts import cartesian_geometry_contract
@@ -319,7 +319,7 @@ def flow_bootstrap_tagging(
                     subject_kind,
                     subject_identity,
                     block_name,
-                    variable,
+                    cast(str, variable),
                     field_component_index,
                     leaf_op,
                     float(threshold),

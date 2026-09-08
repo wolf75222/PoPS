@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from pops.identity.scalar import ScalarLiteral, scalar_cpp, scalar_literal
@@ -19,7 +20,8 @@ from .nullspace import PreparedNullspace
 from .problem import SharedMeanGauge
 
 
-def _author(options: Any, gauge: Any, _properties: Any, where: str) -> Any:
+def _author(options: Mapping[str, Any], gauge: Any, operator_properties: Mapping[str, bool],
+            where: str) -> PreparedNullspaceContracts:
     if set(options) != {"components"} or type(options["components"]) is not int \
             or options["components"] != 2:
         raise TypeError("%s shared-constant provider currently requires exactly two components" % where)
@@ -44,13 +46,14 @@ def _validate(use: PreparedNullspaceUse, where: str) -> None:
         raise ValueError("%s shared kernel requires symmetry and positivity on its complement" % where)
 
 
-def _emit(_node: Any, _prelude: Any, contracts: Any, identity: str, _provider: Any) -> Any:
+def _emit(node: Any, prelude: list[str], contracts: PreparedNullspaceContracts,
+          plan_identity: str, provider: PreparedNullspaceProvider) -> PreparedNullspaceNativeEmission:
     expression = (
         "[&]() { auto plan = pops::constant_mean_zero_nullspace<pops::kNativeDimension>(%s, "
         "\"one shared field constant mode\"); plan.bases.front().component_count = 2; "
         "plan.gauges.front().value = static_cast<pops::Real>(%s) / pops::Real(2); "
         "return plan; }()"
-        % (json.dumps(identity), scalar_cpp(contracts.gauge["value"]))
+        % (json.dumps(plan_identity), scalar_cpp(contracts.gauge["value"]))
     )
     return PreparedNullspaceNativeEmission(expression)
 

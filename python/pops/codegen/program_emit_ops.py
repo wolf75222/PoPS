@@ -142,7 +142,7 @@ def _canonical_metadata_int(value: Any, *, where: str) -> int:
 
 def _append_local_auxiliary_preparation(
     program: Any, solve: Any, lines: list[str], *, provider_plans: Any,
-    consumer_qid: str, block: int, state: str, label: str,
+    consumer_qid: str, block: int | None, state: str, label: str,
 ) -> None:
     """Consume only numerical prerequisite failure through this local solve's authored action."""
     binding = provider_plans.preparation_binding(consumer_qid)

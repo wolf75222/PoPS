@@ -143,7 +143,7 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
                         if quantity.space != state.space:
                             raise ValueError("coupled_rate qualified input changes its physical state type")
                         if canonical_match and any(
-                                candidate.space != state.space
+                                candidate is not None and candidate.space != state.space
                                 for candidate in (reference, declaration)):
                             raise ValueError("coupled_rate qualified input changes its physical state type")
                         matches.append((ordinal, state))

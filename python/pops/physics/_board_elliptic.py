@@ -10,7 +10,7 @@ from pops.model import Handle
 from ._board_contract import atomic_attrs, require_name
 
 if TYPE_CHECKING:
-    from pops.fields import FieldOperator
+    from pops.fields import FieldProblem
     from ._model_contract import _BoardModel
 else:
     _BoardModel = object
@@ -36,7 +36,7 @@ class _EllipticAuthoringMixin(_BoardModel):
         gauge: Any = None,
         branch: Any = None,
         outputs: Any = (),
-    ) -> FieldOperator:
+    ) -> FieldProblem:
         """Return a generic physical operator over a model-owned unknown.
 
         The returned descriptor is paired later with exactly one
@@ -56,13 +56,23 @@ class _EllipticAuthoringMixin(_BoardModel):
         if general:
             if joint and (unknown is not None or equation is not None):
                 raise TypeError("field_operator uses unknown/equation or unknowns/equations, not both")
-            selected_unknowns = tuple(unknowns) if joint else (unknown,)
-            selected_equations = tuple(equations) if joint else (equation,)
+            if joint and (unknowns is None or equations is None):
+                raise TypeError("field_operator requires both unknowns and equations")
+            selected_unknowns = tuple(unknowns) if unknowns is not None else (unknown,)
+            selected_equations = tuple(equations) if equations is not None else (equation,)
+            validated_unknowns: list[Handle] = []
             for declaration in selected_unknowns:
                 if not isinstance(declaration, Handle) or declaration.owner_path != self.owner_path \
                         or self._fields.get(declaration.local_id) != declaration:
                     raise ValueError("field_operator unknown must be declared by this physics model")
-            problem = FieldProblem(name, unknowns=selected_unknowns, equations=selected_equations,
+                validated_unknowns.append(declaration)
+            if len(selected_equations) != len(validated_unknowns) or any(
+                    not isinstance(row, _math.Equation) for row in selected_equations):
+                from pops.fields.problem import FieldProblemError
+                raise FieldProblemError("field.equation.arity", "one symbolic equation per field unknown is required")
+            from typing import cast
+            problem = FieldProblem(name, unknowns=tuple(validated_unknowns),
+                equations=cast(tuple[_math.Equation, ...], selected_equations),
                 boundaries=tuple(boundaries), gauge=gauge, branch=branch, outputs=tuple(outputs))
             with atomic_attrs((self, "_field_operators"), (self, "_module_cache")):
                 self._field_operators[name] = problem
@@ -81,6 +91,8 @@ class _EllipticAuthoringMixin(_BoardModel):
         from pops._ir.elliptic import constant_reaction_scalar
         from pops._ir.values import RuntimeParamRef
 
+        if not isinstance(equation, _math.Equation):
+            raise TypeError("field_operator equation must be a pops Equation")
         terms = _math.elliptic_terms(equation.lhs)
         laplacians = [term for term in terms if isinstance(term, _math.Laplacian)]
         reactions = [term for term in terms if isinstance(term, _math.Reaction)]

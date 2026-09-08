@@ -21,10 +21,11 @@ def _source(value: Any) -> tuple[int, Any]:
 
 def _target_space(target: Handle) -> Any:
     registry = getattr(target.block_ref, "_instance_registry", None)
-    if registry is None:
+    block_owner = getattr(target.block_ref, "model_owner_path", None)
+    if registry is None or block_owner is None:
         raise ValueError("field publication target requires its authoritative Case registry")
     instances = tuple(block for block in registry.handles().values()
-                      if block.model_owner_path.canonical() == target.block_ref.model_owner_path.canonical())
+                      if block.model_owner_path.canonical() == block_owner.canonical())
     if len(instances) != 1:
         raise ValueError("consumed field publication cannot share a model-definition provider key across block instances")
     model = registry.spec(target.block_ref.local_id)["model"]
@@ -71,7 +72,7 @@ def publish_field_solution(solution: Any, bindings: Any, *, states: Any = None) 
             raise ValueError("one field publication context requires a common declared input field space")
         field_space = target_space
         source, selected = supplied if isinstance(supplied, tuple) and len(supplied) == 2 else (supplied, 0)
-        require_top_level(program, source, "field publication")
+        source = require_top_level(program, source, "field publication")
         width, solve = _source(source)
         if solve is not expected_solve or source.point != solution.packed.point:
             raise ValueError("field publication observation belongs to another consumed solve or stage")

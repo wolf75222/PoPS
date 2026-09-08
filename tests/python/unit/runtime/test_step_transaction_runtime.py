@@ -750,3 +750,28 @@ def test_retry_extensions_require_an_explicit_finite_integer_budget(budget):
             engine=_Native(), controller=SimpleNamespace(), attempt=lambda: None,
             retry=lambda error, count: True, retry_budget=budget,
         )
+
+
+@pytest.mark.parametrize("legacy_exception", [False, True])
+def test_retry_budget_diagnostic_survives_without_exception_add_note(legacy_exception):
+    from pops.runtime._step_strategy import _PreparedStepAttempts
+
+    class LegacyRejected(StepAttemptRejected):
+        def __getattribute__(self, name):
+            if name == "add_note":
+                raise AttributeError(name)
+            return super().__getattribute__(name)
+
+    native = _Native()
+    attempts = _PreparedStepAttempts(
+        engine=native, controller=SimpleNamespace(), attempt=lambda: None,
+        retry=lambda error, count: True, retry_budget=0,
+    )
+    error = (LegacyRejected if legacy_exception else StepAttemptRejected)("candidate failed")
+    error.__notes__ = ["original rejection detail"]
+    attempts.execute()
+    assert attempts.retry(error) is False
+    report = native._last_step_transaction_report
+    assert (report.status, report.action, report.attempts) == ("rejected", "reject_attempt", 1)
+    assert report.diagnostics[1] == "original rejection detail"
+    assert "finite retry budget exhausted" in report.diagnostics[2]

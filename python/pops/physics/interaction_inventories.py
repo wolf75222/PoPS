@@ -23,9 +23,10 @@ class InventoryProjection:
     def __post_init__(self):
         from pops.model.handles import Handle
         from pops.model.spaces import StateSpace
-        if not isinstance(self.state, Handle) or self.state.kind != "state" or not isinstance(self.state.space, StateSpace):
+        space = getattr(self.state, "space", None)
+        if not isinstance(self.state, Handle) or self.state.kind != "state" or not isinstance(space, StateSpace):
             raise TypeError("inventory projection requires a qualified StateHandle")
-        if type(self.weights) is not tuple or len(self.weights) != len(self.state.space.components):
+        if type(self.weights) is not tuple or len(self.weights) != len(space.components):
             raise ValueError("inventory projection must match its own exact state component shape")
         object.__setattr__(self, "weights", tuple(exact_numeric_scalar(v, where="inventory map weight")
                                                  for v in self.weights))

@@ -660,7 +660,7 @@ class Divergence(RateTerm):
         self.scale = exact_numeric_scalar(scale, where="Divergence scale")
 
     def _rate_terms(self) -> Any:
-        kind = {"diffusive_flux":"diffusion","drift_flux":"drift"}.get(getattr(self.flux,"kind",None),"flux")
+        kind = {"diffusive_flux":"diffusion","drift_flux":"drift"}.get(getattr(self.flux,"kind",""),"flux")
         return [(kind, self.flux, self.scale)]
 
     def __repr__(self) -> str:

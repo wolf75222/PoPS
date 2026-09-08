@@ -1,7 +1,7 @@
 """Authenticate a resolved numerical plan at its Case-block execution boundary."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NoReturn, cast
 
 
 def require_block_plan_owner(plan: Any, owner_qid: Any, *, where: str,
@@ -13,7 +13,7 @@ def require_block_plan_owner(plan: Any, owner_qid: Any, *, where: str,
     case_plan = is_plan and any("block_instance" in operation.guarantees
                                 for operation in plan.operations)
 
-    def reject(message: str) -> None:
+    def reject(message: str) -> NoReturn:
         raise LoweringRejection(
             "%s %s" % (where, message),
             coverage_report=plan.coverage if is_plan else LoweringCoverageReport(()),
@@ -30,7 +30,7 @@ def require_block_plan_owner(plan: Any, owner_qid: Any, *, where: str,
             return
     if plan is None and not required:
         return
-    if not is_plan:
+    if type(plan) is not ResolvedOperationPlan:
         reject("requires its exact Case-block resolved operation plan")
     mismatches = tuple(operation.identity for operation in plan.operations
                        if operation.guarantees.get("block_instance") != owner_qid)
@@ -38,4 +38,4 @@ def require_block_plan_owner(plan: Any, owner_qid: Any, *, where: str,
         raise LoweringRejection(
             "%s received a resolved operation plan for a different block instance: %s"
             % (where, ", ".join(mismatches)), coverage_report=plan.coverage,
-            source="block:" + owner_qid, gate="resolved_operation_block_owner_mismatch")
+            source="block:" + cast(str, owner_qid), gate="resolved_operation_block_owner_mismatch")

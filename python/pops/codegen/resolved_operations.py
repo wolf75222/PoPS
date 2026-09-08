@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 from pops.identity.digest import Identity, make_identity
 
@@ -187,9 +187,10 @@ class ResolvedOperationPlan:
         self.require_provider_packs(module)
         operation = self.operation(identity)
         if operation.native_route is None:
+            # NumericalConstruction validates a refusal whenever its route is absent.
             raise LoweringRejection(
                 "operation has no native realization: %s" % operation.refusal,
-                coverage_report=self.coverage, source=identity, gate=operation.refusal)
+                coverage_report=self.coverage, source=identity, gate=cast(str, operation.refusal))
         from ._resolved_operation_authority import require_operation_authority
 
         require_operation_authority(self, operation, module)

@@ -153,11 +153,12 @@ def _reference(value: Any) -> str:
         return qualified
     if isinstance(value, tuple) and len(value) == 2 and type(value[1]) is int:
         return "%s/occurrence:%d" % (_reference(value[0]), value[1])
-    if callable(getattr(value, "to_data", None)):
+    to_data = getattr(value, "to_data", None)
+    if callable(to_data):
         from ._plans import _evidence
 
         return make_identity("physical_reference", _evidence(
-            value.to_data(), where="physical reference")).token
+            to_data(), where="physical reference")).token
     raise TypeError("scientific reference has no qualified identity")
 
 

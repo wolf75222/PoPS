@@ -36,7 +36,7 @@ def require_operation_authority(plan: Any, operation: Any, module: Any) -> None:
     selection = None if context is None else context.get("selection")
     centered = False
 
-    if selection is not None:
+    if context is not None and selection is not None:
         # The retained Program.rhs adapter selects one grid/source contribution per
         # clone. Its sign comes from that operation kind, never from wire metadata.
         if context.get("operation") != "rhs" or definition.kind not in {

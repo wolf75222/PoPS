@@ -13,7 +13,7 @@ class JointEvaluation(Descriptor):
     def __init__(self, state, *, sampling="cell"):
         from pops.model.handles import Handle
         from pops.model.spaces import StateSpace
-        if not isinstance(state, Handle) or state.kind != "state" or not isinstance(state.space, StateSpace):
+        if not isinstance(state, Handle) or state.kind != "state" or not isinstance(getattr(state, "space", None), StateSpace):
             raise TypeError("JointEvaluation requires the exact evolved StateHandle")
         if sampling != "cell":
             raise ValueError("JointEvaluation implements cell sampling; face laws require a flux construction")

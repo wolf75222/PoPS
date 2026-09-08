@@ -146,7 +146,9 @@ def validate_solve_request_node(program: Any, token: Any) -> None:
     unknowns = request.get("unknowns")
     if not isinstance(unknowns, list) or len(unknowns) != 1 or not isinstance(unknowns[0], dict):
         raise SolveRequestError("invalid_unknown", "the native unknown product changed")
-    unknown = SolveUnknown(unknowns[0].get("name"), token)
+    from pops.time.solve_request import residual_name
+    unknown_name = residual_name(unknowns[0].get("name"), "SolveUnknown name")
+    unknown = SolveUnknown(unknown_name, token)
     if unknown.to_data() != unknowns[0] or request.get("outputs") != [unknown.name]:
         raise SolveRequestError("unknown_type_mismatch", "the result identity/owner/space changed")
     problem_data = {key: request[key] for key in (

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from pops._ir.expr import Const, Expr, Gradient, Mul, Partial, Var, _wrap
 from pops._ir.elliptic import CoeffGradient
@@ -128,8 +128,9 @@ class DiffusiveFluxLaw:
         }
 
     def flux_expressions(self) -> tuple[Expr, ...]:
-        return tuple(sum((coefficient * Partial(self.variable, axis)
-                          for axis, coefficient in enumerate(row)), Const(0))
+        # The typed Expr products and Const seed keep the symbolic sum in Expr.
+        return tuple(cast(Expr, sum((coefficient * Partial(self.variable, axis)
+                          for axis, coefficient in enumerate(row)), Const(0)))
                      for row in self.coefficients)
 
 

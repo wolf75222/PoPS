@@ -31,7 +31,8 @@ def normalize_field_definition(operator: FieldProblem, discretization: Any) -> N
     numerical = field_discretization_data(discretization, where="field normalization")
     combined_boundaries = tuple(discretization.boundaries)
     authored_boundaries = () if isinstance(operator, FieldOperator) else operator.boundaries
-    if len(operator.unknowns) > 1 and combined_boundaries:
+    unknowns = operator.unknowns
+    if len(unknowns) > 1 and combined_boundaries:
         raise FieldProblemError("field.boundary.joint_ownership_required",
                                 "joint field boundaries must name their exact unknowns")
     combined = tuple(FieldBoundary(operator.unknowns[0], relation)

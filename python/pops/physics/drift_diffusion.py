@@ -34,9 +34,10 @@ class DriftFluxLaw:
 
     def resolve_references(self,resolver):
         from pops._ir.expr_references import resolve_reference_value
-        return DriftFluxLaw(resolver(self.state),*(resolve_reference_value(
-            value,resolver,{},allow_formula_vars=True) for value in self.expressions),
-            self.axes,self.inputs,self.boundaries)
+        density, mobility, potential = (resolve_reference_value(
+            value,resolver,{},allow_formula_vars=True) for value in self.expressions)
+        return DriftFluxLaw(resolver(self.state), density, mobility, potential,
+                            self.axes,self.inputs,self.boundaries)
 
     def to_data(self):
         from pops._ir.balance import _handle_data

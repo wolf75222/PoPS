@@ -431,7 +431,16 @@ class _PreparedStepAttempts:
         return True
 
     def _stop_retry(self, error: BaseException, reason: str) -> None:
-        error.add_note("retry stopped: " + reason)
+        note = "retry stopped: " + reason
+        add_note = getattr(error, "add_note", None)
+        if callable(add_note):
+            add_note(note)
+        else:
+            # Python 3.10 has no BaseException.add_note; the report reads this
+            # same notes sequence on every supported Python version.
+            notes: list[str] = list(getattr(error, "__notes__", ()))
+            notes.append(note)
+            error.__dict__["__notes__"] = notes
         _record_failure(self.engine, error, self.attempts)
 
     def accept(self) -> None:

@@ -27,7 +27,7 @@ def observe_operation(value: Any, var: Any, *, model: Any = None) -> None:
         from pops._ir.expr import Var
         impl = _model_impl(model) if model is not None else None
         declaration = getattr(impl, "_local_transforms", {}).get(value.attrs["transform"])
-        if declaration is not None and len(value.inputs) == 1:
+        if impl is not None and declaration is not None and len(value.inputs) == 1:
             expressions = declaration["expressions"]
             names = tuple(impl.cons_names)
             if len(expressions) == len(names):

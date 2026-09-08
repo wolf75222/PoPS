@@ -108,7 +108,7 @@ class OperatorApplication(Expr):
             result_type.items() if callable(getattr(result_type, "items", None)) else ())
         matches = [(name, space) for name, space in entries
                    if isinstance(space, RateSpace) and space.base_space.name == target.local_id
-                   and (not hasattr(target, "space") or target.space == space.base_space)
+                   and (getattr(target, "space", space.base_space) == space.base_space)
                    and (output is None or name == output)]
         if len(matches) != 1:
             raise ValueError(
@@ -203,7 +203,7 @@ class RateApplicationProjection(RateTerm):
                 or target.kind != "state" or not isinstance(rate_space, RateSpace)
                 or target.owner_path != application.operator.owner_path
                 or target.local_id != rate_space.base_space.name
-                or (hasattr(target, "space") and target.space != rate_space.base_space)):
+                or (getattr(target, "space", rate_space.base_space) != rate_space.base_space)):
             raise ValueError("rate projection target and declared RateSpace must agree exactly")
         result_type = application.operator.signature.output
         declared = (result_type if isinstance(result_type, RateSpace) and output == "value"

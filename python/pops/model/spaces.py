@@ -15,7 +15,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 import math
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pops._ir.quantity import PhysicalSupport
 
 
 def _freeze_metadata(value: Any) -> Any:
@@ -102,6 +105,10 @@ class Space(_ImmutableTypeValue):
     units: tuple[Any, ...]
     frame: str
     clock: str
+    support: PhysicalSupport | None
+    sampling: str
+    value_shape: tuple[int, ...]
+    domain: str
 
     def __init__(
         self,
