@@ -43,9 +43,12 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
         if (source.patches[global_patch].length(axis) > std::numeric_limits<int>::max())
           throw std::length_error(
               "Berger-Rigoutsos patch axis exceeds deterministic signature indexing");
-      const TagMask<Dim>& owner = owner_for_patch_(canonical, source, global_patch);
-      cluster_rec_(owner, source.patches[global_patch], options, work, raw);
     }
+
+    // Patch and rank boundaries are storage choices, not refinement decisions. One
+    // authenticated tag union must therefore feed one deterministic clustering tree.
+    const TagUnion tags{canonical, source};
+    cluster_rec_(tags, source.domain, options, work, raw);
 
     std::vector<Box<Dim>> boxes;
     for (const Box<Dim>& box : raw) {
@@ -243,17 +246,29 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
     return left * right;
   }
 
-  static const TagMask<Dim>& owner_for_patch_(const std::vector<const TagMask<Dim>*>& shards,
-                                              const hierarchy::LevelLayoutIdentity<Dim>& source,
-                                              std::size_t global_patch) {
-    if (source.distribution_mode == mesh::DistributionMode::replicated)
-      return *shards.front();
-    const std::size_t rank = source.rank_space.linear_rank(source.owners.at(global_patch));
-    return *shards.at(rank);
-  }
+  struct TagUnion {
+    const std::vector<const TagMask<Dim>*>& shards;
+    const hierarchy::LevelLayoutIdentity<Dim>& source;
 
-  static Scan scan_(const TagMask<Dim>& mask, const Box<Dim>& region, Work& work) {
-    work.visit_cells(static_cast<std::size_t>(region.numPts()));
+    const hierarchy::LevelLayoutIdentity<Dim>& level_identity() const noexcept { return source; }
+
+    template <class Function>
+    void for_each_cell_in(const Box<Dim>& region, Function&& function) const {
+      const std::size_t count =
+          source.distribution_mode == mesh::DistributionMode::replicated ? 1 : shards.size();
+      for (std::size_t shard = 0; shard < count; ++shard)
+        shards[shard]->for_each_cell_in(region, function);
+    }
+
+    void account_cells(const Box<Dim>& region, Work& work) const {
+      // Sparse parent levels do not allocate or scan the holes in their bounding domain.
+      for (const Box<Dim>& patch : source.patches)
+        work.visit_cells(static_cast<std::size_t>(patch.intersect(region).numPts()));
+    }
+  };
+
+  static Scan scan_(const TagUnion& mask, const Box<Dim>& region, Work& work) {
+    mask.account_cells(region, work);
     Scan scan;
     bool found = false;
     mask.for_each_cell_in(region, [&](const Index<Dim>& index, bool tagged) {
@@ -273,10 +288,10 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
     return scan;
   }
 
-  static std::array<std::vector<std::int64_t>, Dim> signatures_(const TagMask<Dim>& mask,
+  static std::array<std::vector<std::int64_t>, Dim> signatures_(const TagUnion& mask,
                                                                 const Box<Dim>& region,
                                                                 Work& work) {
-    work.visit_cells(static_cast<std::size_t>(region.numPts()));
+    mask.account_cells(region, work);
     std::array<std::vector<std::int64_t>, Dim> signatures;
     for (int axis = 0; axis < Dim; ++axis)
       signatures[axis].assign(static_cast<std::size_t>(region.length(axis)), 0);
@@ -335,9 +350,6 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
   static bool nesting_covered_(const Box<Dim>& region,
                                const hierarchy::LevelLayoutIdentity<Dim>& source,
                                const ClusterOptions<Dim>& options, Work& work) {
-    if (std::all_of(options.nesting_buffer.begin(), options.nesting_buffer.end(),
-                    [](int width) { return width == 0; }))
-      return true;
     std::vector<Box<Dim>> canonical{region};
     for (int axis = 0; axis < Dim; ++axis) {
       std::vector<Box<Dim>> next;
@@ -384,7 +396,7 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
     return true;
   }
 
-  static void cluster_rec_(const TagMask<Dim>& mask, const Box<Dim>& candidate,
+  static void cluster_rec_(const TagUnion& mask, const Box<Dim>& candidate,
                            const ClusterOptions<Dim>& options, Work& work,
                            std::vector<Box<Dim>>& output) {
     work.visit_node();
