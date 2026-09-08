@@ -2454,6 +2454,8 @@ struct AmrSystem<Dim>::Impl {
   struct BlockSpec {
     std::string name;
     int ncomp = 0;
+    bool compiled = false;
+    double positivity_floor = 0.0;
     double gamma = static_cast<double>(kPhysicalDefaultGamma);
     int substeps = 1;
     int stride = 1;
@@ -11202,6 +11204,10 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
         p_->native_package_install_contract.empty())
       throw std::logic_error(
           "AmrSystem native package did not publish one complete prepared block");
+    // Retain only validated, successfully installed native options. BlockSpec participates in
+    // blocks_snapshot rollback if any later collective publication check fails.
+    p_->blocks.back().compiled = true;
+    p_->blocks.back().positivity_floor = positivity_floor;
     ExactContractBuilder published;
     published.text(p_->native_package_install_contract)
         .bytes(p_->native_package_publication_contract());
@@ -17812,6 +17818,8 @@ EffectiveOptionsReport AmrSystem<Dim>::effective_options_report() const {
   for (const typename Impl::BlockSpec& block : p_->blocks) {
     EffectiveBlockOptions row;
     row.name = block.name;
+    row.compiled = block.compiled;
+    row.positivity_floor = block.positivity_floor;
     row.ncomp = block.ncomp;
     row.n_ghost = block.required_ghost_depth;
     row.gamma = block.gamma;
