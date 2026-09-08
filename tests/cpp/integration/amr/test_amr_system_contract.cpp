@@ -156,7 +156,7 @@ void verify_rectangular_geometry_and_independent_periodicity() {
 template <int Dim>
 GasModel<Dim> gas_model() {
   return GasModel<Dim>{
-      {}, pops::EulerND<Dim>{pops::Real(1.4)}, pops::NoSource{}, pops::NoElliptic{}};
+      {}, {}, pops::EulerND<Dim>{pops::Real(1.4)}, pops::NoSource{}, pops::NoElliptic{}};
 }
 
 template <int Dim>
@@ -599,7 +599,7 @@ std::vector<std::vector<double>> run_magnetic_source(pops::Real bz) {
   system.set_temporal_relations({2}, {1}, {"integral_only"});
   const auto keys = install_magnetic_provider(system, {consumer_qid});
   system.install_block_state_route("fluid", "tests.amr.system-contract/magnetic/state");
-  MagneticModel<Dim> model{{},
+  MagneticModel<Dim> model{{}, {},
                            pops::EulerND<Dim>{pops::Real(1.4)},
                            pops::MagneticLorentzForceND<Dim>{pops::Real(1)},
                            pops::NoElliptic{}};
@@ -767,7 +767,7 @@ MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
     system.install_block_state_route(names[block], state_routes[block]);
 
   for (std::size_t block = 0; block < names.size(); ++block) {
-    MagneticModel<Dim> model{{},
+    MagneticModel<Dim> model{{}, {},
                              pops::EulerND<Dim>{pops::Real(1.4)},
                              pops::MagneticLorentzForceND<Dim>{pops::Real(1)},
                              pops::NoElliptic{}};
