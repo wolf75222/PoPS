@@ -105,8 +105,8 @@ struct AmrSpatialReconciliationTestAccess {
     auto detached = ctx.scratch_state_like(mapped);
     EXPECT_THROW(ctx.rhs_scratch(903, 0, detached), std::invalid_argument);
     // Identical shape and a real block owner cannot authorize another level's object.
-    const Context::ScratchKey foreign_key{Context::ScratchKind::State, ctx.active_level_ + 1,
-                                          owner, 904, 0};
+    const Context::ScratchKey foreign_key{Context::ScratchKind::State, ctx.active_level_ + 1, owner,
+                                          904, 0};
     auto& foreign = ctx.scratches_.emplace(foreign_key, std::move(detached)).first->second;
     EXPECT_THROW(ctx.rhs_scratch(903, 0, foreign), std::invalid_argument);
     ctx.scratches_.erase(foreign_key);

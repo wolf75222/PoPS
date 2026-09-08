@@ -128,6 +128,137 @@ TEST(PreparedDiffusion, SparseAmrLevelPreservesFullDomainRefusalAndUsesPreparedG
   EXPECT_NEAR(reduce_max_local(output), 0, 2e-13);
 }
 
+TEST(PreparedDiffusion, SparsePeriodicEdgesAndCornersUsePreparedGhostsWithoutFineDonors) {
+  DiffusionContext context;
+  context.coverage = HaloLayoutCoverage::sparse_level;
+  for (const auto& active :
+       {Box<2>{Index<2>{0, 1}, Index<2>{1, 2}}, Box<2>{Index<2>{2, 1}, Index<2>{3, 2}},
+        Box<2>{Index<2>{0, 0}, Index<2>{1, 1}}, Box<2>{Index<2>{2, 2}, Index<2>{3, 3}}}) {
+    auto q = field(active), output = field(active);
+    q.set_val(1);
+    PreparedDiffusion<2> prepared(context, q, {}, true);
+    prepared.apply(q, output, identity_law(q));
+    EXPECT_NEAR(norm_inf(output), 0, 2e-13);
+  }
+}
+
+TEST(PreparedDiffusion, SparsePeriodicVariableLawMatchesFullDomainReference) {
+  DiffusionContext reference_context;
+  const auto geometry = reference_context.geometry();
+  // A coordinate-dependent law uses its periodic physical extension while the
+  // state view reads the authenticated storage index, including coarse-filled ghosts.
+  const auto coordinates = [=] POPS_HD(const Index<2>& cell) {
+    RealVector<2> point;
+    for (int axis = 0; axis < 2; ++axis) {
+      const int length = geometry.domain().length(axis);
+      const int offset = cell[axis] - geometry.domain().lo[axis];
+      const int wrapped = geometry.domain().lo[axis] + (offset % length + length) % length;
+      point[axis] = geometry.cell_coordinate(axis, wrapped);
+    }
+    return point;
+  };
+  const auto initialize = [&](Field& q) {
+    const auto values = q.fab(0).view();
+    for_each_cell(q.fab(0).grown_box(), [=] POPS_HD(const Index<2>& cell) {
+      const auto x = coordinates(cell);
+      values(cell, 0) = 1 + .2 * Kokkos::cos(6.2831853071795864769 * x[0]) +
+                        .1 * Kokkos::sin(6.2831853071795864769 * x[1]);
+    });
+  };
+  const auto law = [&](Field& q) {
+    return [&q, coordinates](std::size_t local) {
+      const auto values = std::as_const(q).fab(local).view();
+      return [=] POPS_HD(const Index<2>& cell) {
+        const auto x = coordinates(cell);
+        const Real u = values(cell, 0);
+        return std::array<Real, 4>{u + .05 * u * u,
+                                   1 + .25 * Kokkos::cos(6.2831853071795864769 * x[0]),
+                                   2 + .3 * Kokkos::sin(6.2831853071795864769 * x[1]), 1 + .1 * u};
+      };
+    };
+  };
+  auto full = field(), reference = field();
+  initialize(full);
+  PreparedDiffusion<2> complete(reference_context, full, {});
+  complete.apply(full, reference, law(full));
+  const auto expected = std::as_const(reference).fab(0).view();
+  DiffusionContext sparse_context;
+  sparse_context.coverage = HaloLayoutCoverage::sparse_level;
+  for (const auto& active :
+       {Box<2>{Index<2>{0, 0}, Index<2>{1, 1}}, Box<2>{Index<2>{2, 2}, Index<2>{3, 3}}}) {
+    auto q = field(active), output = field(active);
+    initialize(q);
+    PreparedDiffusion<2> sparse(sparse_context, q, {}, true);
+    sparse.apply(q, output, law(q));
+    const auto actual = std::as_const(output).fab(0).view();
+    EXPECT_NEAR(for_each_cell_reduce_max(active,
+                                         [=] POPS_HD(const Index<2>& cell) {
+                                           return Kokkos::abs(actual(cell, 0) - expected(cell, 0));
+                                         }),
+                0, 2e-13);
+  }
+}
+
+TEST(PreparedDiffusion, SparsePeriodicGhostStatusAndNonfiniteValuesFailBeforeWriting) {
+  DiffusionContext context;
+  context.coverage = HaloLayoutCoverage::sparse_level;
+  for (const int mode : {0, 1}) {
+    auto q = field(Box<2>{Index<2>{0, 0}, Index<2>{1, 1}}),
+         output = field(Box<2>{Index<2>{0, 0}, Index<2>{1, 1}});
+    q.set_val(1);
+    output.set_val(7);
+    PreparedDiffusion<2> prepared(context, q, {}, true);
+    try {
+      prepared.apply(q, output, [=](std::size_t) {
+        return [=] POPS_HD(const Index<2>& cell) {
+          DiffusiveLawResult<2> result;
+          result.values = {1, .1, .1, 1};
+          if (cell[0] == -1 && cell[1] == -1) {
+            if (mode == 0) {
+              result.evaluation_status = 2;
+              result.reason_code = 778;
+            } else {
+              result.values[1] = std::numeric_limits<Real>::quiet_NaN();
+            }
+          }
+          return result;
+        };
+      });
+      FAIL() << "periodic ghost failure was not consumed";
+    } catch (const DiffusiveEvaluationError& error) {
+      EXPECT_EQ(error.status(), 2);
+      EXPECT_EQ(error.reason(), mode == 0 ? 778 : 501);
+    }
+    EXPECT_EQ(norm_inf(output), 7);
+    EXPECT_THROW(prepared.explicit_frequency(), std::logic_error);
+    EXPECT_TRUE(context.ledger.records().empty());
+  }
+}
+
+TEST(PreparedDiffusion, SparseMixedBoundaryExcludesPhysicalExteriorFromConstitutiveLaw) {
+  DiffusionContext context;
+  context.coverage = HaloLayoutCoverage::sparse_level;
+  context.topology = BoundaryTopology<2>::axis_periodic({true, false});
+  auto q = field(Box<2>{Index<2>{0, 0}, Index<2>{1, 1}}),
+       output = field(Box<2>{Index<2>{0, 0}, Index<2>{1, 1}});
+  q.set_val(1);
+  std::array<DiffusiveBoundary<2>, 4> physical{};
+  physical[2] = physical[3] = {DiffusiveBoundaryKind::value, 1, {0, 0}};
+  PreparedDiffusion<2> prepared(context, q, physical, true);
+  prepared.apply(q, output, [](std::size_t) {
+    return [] POPS_HD(const Index<2>& cell) {
+      DiffusiveLawResult<2> result;
+      result.values = {1, .1, .1, 1};
+      if (cell[1] < 0 || cell[1] > 3) {
+        result.evaluation_status = 2;
+        result.reason_code = 779;
+      }
+      return result;
+    };
+  });
+  EXPECT_NEAR(norm_inf(output), 0, 2e-13);
+}
+
 TEST(PreparedDiffusion, VariableDiagonalStaysInsideDivergenceWithPhysicalValueTrace) {
   DiffusionContext context;
   context.topology = BoundaryTopology<2>::physical();

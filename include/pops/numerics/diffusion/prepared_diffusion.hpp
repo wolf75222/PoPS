@@ -73,6 +73,22 @@ class PreparedDiffusion {
            field.ncomp() == 1;
   }
 
+  Box<Dim> evaluation_box_(const Field& input, std::size_t local) const {
+    if (!prepared_amr_ghosts_)
+      return input.box(local);
+    auto box = input.fab(local).grown_box();
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (physical_[2 * axis].kind != DiffusiveBoundaryKind::periodic)
+        box.lo[axis] = std::max(box.lo[axis], geometry_.domain().lo[axis]);
+      if (physical_[2 * axis + 1].kind != DiffusiveBoundaryKind::periodic)
+        box.hi[axis] = std::min(box.hi[axis], geometry_.domain().hi[axis]);
+    }
+    // Periodic AMR ghosts may have only a coarse donor. Evaluate their prepared
+    // storage values directly; coordinate-dependent laws retain their periodic extension.
+    // Physical exterior cells instead use the authored face trace below.
+    return box;
+  }
+
  public:
   template <class Context>
   PreparedDiffusion(Context& ctx, Field& prototype,
@@ -176,9 +192,7 @@ class PreparedDiffusion {
         const auto a = coefficients_.fab(local).view();
         const auto status = status_.fab(local).view();
         const auto reason = reason_.fab(local).view();
-        const Box<Dim> evaluation_box =
-            prepared_amr_ghosts_ ? input.fab(local).grown_box().intersect(geometry_.domain())
-                                 : input.box(local);
+        const Box<Dim> evaluation_box = evaluation_box_(input, local);
         for_each_cell(evaluation_box, [=] POPS_HD(const Index<Dim>& cell) {
           const auto evaluation = law(cell);
           std::array<Real, Dim + 2> values;
@@ -233,9 +247,7 @@ class PreparedDiffusion {
     try {
       for (std::size_t local = 0; local < input.local_size(); ++local) {
         const auto status = std::as_const(status_).fab(local).view();
-        const Box<Dim> evaluation_box =
-            prepared_amr_ghosts_ ? input.fab(local).grown_box().intersect(geometry_.domain())
-                                 : input.box(local);
+        const Box<Dim> evaluation_box = evaluation_box_(input, local);
         local_category = std::max(
             local_category,
             for_each_cell_reduce_max(
@@ -260,8 +272,7 @@ class PreparedDiffusion {
           selected_reason = std::max(
               selected_reason,
               for_each_cell_reduce_max(
-                  prepared_amr_ghosts_ ? input.fab(local).grown_box().intersect(geometry_.domain())
-                                       : input.box(local),
+                  evaluation_box_(input, local),
                   [=] POPS_HD(const Index<Dim>& cell) {
                     return status(cell, 0) == category ? reason(cell, 0) : Real(0);
                   }));
