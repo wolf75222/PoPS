@@ -4240,6 +4240,17 @@ struct AmrSystem<Dim>::Impl {
     }
   }
 
+  std::vector<Box<Dim>> materialized_coarse_boxes() const {
+    // Explicit geometry is authoritative. Otherwise the distributed patch policy must
+    // actually consume its authored per-axis tile caps before assigning ownership.
+    if (!cfg.distribute_coarse || !cfg.boxes.empty())
+      return cfg.materialized_boxes();
+    Extent<Dim> maximum{};
+    for (int axis = 0; axis < Dim; ++axis)
+      maximum[axis] = cfg.coarse_max_grid[axis] > 0 ? cfg.coarse_max_grid[axis] : 32;
+    return mesh::BoxArray<Dim>::from_domain(cfg.index_domain(), maximum).boxes();
+  }
+
   std::string initial_materialization_contract() const {
     if (program.hierarchy_refresh_)
       throw std::logic_error(
@@ -4281,7 +4292,7 @@ struct AmrSystem<Dim>::Impl {
         contract.scalar(cfg.transition_ratios[transition][axis])
             .scalar(cfg.transition_buffers[transition][axis])
             .scalar(cfg.transition_lookaheads[transition][axis]);
-    const std::vector<Box<Dim>> boxes = cfg.materialized_boxes();
+    const std::vector<Box<Dim>> boxes = materialized_coarse_boxes();
     contract.scalar(static_cast<std::uint64_t>(boxes.size()));
     for (const Box<Dim>& box : boxes)
       for (int axis = 0; axis < Dim; ++axis)
@@ -9785,7 +9796,7 @@ struct AmrSystem<Dim>::Impl {
     std::exception_ptr layout_error;
     try {
       domain_candidate.emplace(cfg.index_domain());
-      patches_candidate.emplace(cfg.materialized_boxes());
+      patches_candidate.emplace(materialized_coarse_boxes());
       ranks_candidate.emplace(process_rank_space<Dim>(package_lane));
       local_rank_candidate.emplace(
           ranks_candidate->coordinate(static_cast<std::size_t>(package_lane.rank())));

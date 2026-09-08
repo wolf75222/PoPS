@@ -1132,6 +1132,40 @@ TEST(test_amr_system_contract, RebuildDistributionModesPreserveReplicaAndPartiti
   verify_exact_rebuild_distribution_modes<pops::kNativeDimension>();
 }
 
+TEST(test_amr_system_contract, InitialCoarseTilingConsumesCapsAndPreservesExplicitBoxes) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  constexpr int Dim = pops::kNativeDimension;
+  for (int mode = 0; mode < 3; ++mode) {
+    auto config = single_level_config<Dim>(10);
+    config.distribute_coarse = mode != 0;
+    std::size_t tiled_count = 1;
+    for (int axis = 0; axis < Dim; ++axis) {
+      config.coarse_max_grid[axis] = 4;
+      tiled_count *= 3;
+    }
+    if (mode == 2) {
+      auto left = config.index_domain();
+      auto right = left;
+      left.hi[0] = 4;
+      right.lo[0] = 5;
+      config.boxes = {left, right};
+    }
+    pops::AmrSystem<Dim> system(config);
+    pops::test::install_amr_runtime_authority(system, "tests.coarse-tiling/runtime");
+    system.install_block_state_route("tracer", "tests.coarse-tiling/state");
+    install_direct_tracer(system, "tracer", "tests.coarse-tiling/flux");
+    const std::vector<double> initial(cell_count(config.shape), 1.0);
+    system.set_conservative_state("tracer", initial);
+    const auto expected = mode == 0 ? std::size_t{1} : mode == 1 ? tiled_count : std::size_t{2};
+    EXPECT_EQ(system.coarse_total_boxes(), static_cast<int>(expected));
+    EXPECT_EQ(system.level_distribution_mode(0), mode == 0 ? "replicated" : "partitioned");
+    EXPECT_EQ(system.level_owner_ranks(0).size(), mode == 0 ? 0u : expected);
+    EXPECT_EQ(system.block_level_state_global("tracer", 0), initial);
+  }
+}
+
 TEST(test_amr_system_contract, VariableDtStrideUsesOneExactPublicWindow) {
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard;
