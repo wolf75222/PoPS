@@ -622,6 +622,39 @@ def _implicit_pair_program(left_state, right_state, rate, packed_state=None):
     return program
 
 
+def _uniform_accepted_program_image(native):
+    """Read exact Uniform persistence seams; packed Program bytes are AMR-only."""
+    return {
+        "auxiliary": bytes(native.capture_auxiliary_checkpoint_accepted_state()),
+        "cadence": (
+            native.program_cadence_window_steps(),
+            np.asarray((native.program_cadence_window_dt(),
+                        native.program_cadence_window_start_time(), native.program_last_dt()),
+                       dtype=np.float64).tobytes(),
+        ),
+        "diagnostics": tuple(
+            (name, np.asarray(value, dtype=np.float64).tobytes())
+            for name, value in sorted(native.program_diagnostics().items())
+        ),
+        "exchanges": deepcopy(native._program_exchange_records()),
+        "histories": tuple(
+            (name, native.history_ncomp(name), native.history_initialized(name),
+             native.history_fill_count(name), tuple(
+                 (np.asarray(native.history_slot_dt(name, slot), dtype=np.float64).tobytes(),
+                  np.asarray(native.history_global(name, slot), dtype=np.float64).tobytes())
+                 for slot in range(native.history_depth(name))))
+            for name in native.history_names()
+        ),
+        "held_values": tuple(
+            (node, native.program_cache_name(node), native.program_cache_ncomp(node),
+             native.program_cache_ngrow(node), native.program_cache_last_update_step(node),
+             np.asarray(native.program_cache_accumulated_dt(node), dtype=np.float64).tobytes(),
+             np.asarray(native.program_cache_global(node), dtype=np.float64).tobytes())
+            for node in native.program_cache_nodes()
+        ),
+    }
+
+
 def _shared_interface_accepted_image(runtime):
     native = runtime._executor._s
     levels = int(runtime.n_levels())
@@ -733,7 +766,7 @@ def test_runtime_instance_executes_external_ghost_with_rollback_and_retry(tmp_pa
     before = (
         float(runtime.time()),
         int(runtime.macro_step()),
-        bytes(native.program_accepted_state()),
+        _uniform_accepted_program_image(native),
         np.asarray(runtime.get_state("tracer"), dtype=np.float64).copy(),
     )
 
@@ -748,7 +781,7 @@ def test_runtime_instance_executes_external_ghost_with_rollback_and_retry(tmp_pa
     assert rejected.value.detail == "injected ghost failure"
 
     assert (float(runtime.time()), int(runtime.macro_step())) == before[:2]
-    assert bytes(native.program_accepted_state()) == before[2]
+    assert _uniform_accepted_program_image(native) == before[2]
     np.testing.assert_array_equal(
         np.asarray(runtime.get_state("tracer"), dtype=np.float64), before[3]
     )
