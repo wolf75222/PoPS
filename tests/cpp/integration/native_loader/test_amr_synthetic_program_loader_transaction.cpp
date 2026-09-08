@@ -628,7 +628,17 @@ TEST(test_amr_synthetic_program_loader_transaction,
   const auto first_revision = system.program_accepted_state_revision();
   const auto first_capacity = system.checkpoint_program_state_capacity();
   const auto first_budget = system.prepared_amr_interface_flux_ledger_budget();
-  EXPECT_GT(first_budget.max_fragments_per_window, 0u);
+  // The public ledger budget describes the one live level before bootstrap. It has no adjacent
+  // coarse/fine window, so the scheduler produces exactly zero oriented fragments and payload.
+  // The checkpoint ceiling instead reserves the configured two-level hierarchy; adding another
+  // logical interface below must still enlarge that authentic future capacity. This fixture
+  // proves publication/rollback and capacity assembly without evaluating flux. The full
+  // multilevel execution oracle belongs to test_shared_interface_runtime.py.
+  EXPECT_EQ(system.n_levels(), 1);
+  EXPECT_EQ(system.configured_n_levels(), 2);
+  EXPECT_EQ(first_budget.max_fragments_per_window, 0u);
+  EXPECT_EQ(first_budget.max_payload_terms_per_window, 0u);
+  EXPECT_NE(first_budget.exact_contract, before_budget);
   EXPECT_LE(first_bytes.size(), first_capacity.first);
 
   reject_refresh(pops::my_rank() == 0);
