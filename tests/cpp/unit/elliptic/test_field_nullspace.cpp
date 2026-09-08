@@ -745,3 +745,30 @@ TEST(test_field_nullspace, general_fields_complete_predeclared_refinement_matrix
     (void)solve_manufactured_general_field<2>(cells, true, true);
   }
 }
+
+TEST(test_field_nullspace, general_field_preflight_refuses_rank_local_storage_before_exchange) {
+  comm_init();
+  constexpr int Dim = 2;
+  const Box<Dim> domain{Index<Dim>{0, 0}, Index<Dim>{3, 3}};
+  const mesh::BoxArray<Dim> layout(std::vector<Box<Dim>>{domain});
+  const mesh::RankSpace<Dim> ranks{Index<Dim>{}, Extent<Dim>{n_ranks(), 1}};
+  const auto distribution = mesh::Distribution<Dim>::replicated(layout, ranks);
+  const Index<Dim> local_rank{my_rank(), 0};
+  const Extent<Dim> ghosts{1, 1};
+  MultiFab<Dim> input(layout, distribution, local_rank, 1, ghosts);
+  MultiFab<Dim> output(layout, distribution, local_rank, 1, ghosts);
+  MultiFab<Dim> coefficient(layout, distribution, local_rank, my_rank() == 0 ? 2 : 1, ghosts);
+  input.set_val(Real(0));
+  coefficient.set_val(Real(1));
+  const auto geometry =
+      Geometry<Dim>::from_bounds(domain, RealVector<Dim>{0, 0}, RealVector<Dim>{1, 1});
+  const auto topology = BoundaryTopology<Dim>::axis_periodic(std::array<bool, Dim>{true, true});
+  const auto lane = ExecutionLane::world("field-preflight");
+  auto boundary = runtime::program::PreparedScalarBoundarySession<Dim>::prepare(geometry, topology,
+                                                                                input, lane, 1);
+  std::array<elliptic::nd::PhysicalFieldBoundary, 2 * Dim> laws{};
+  laws.fill(elliptic::nd::PhysicalFieldBoundary::periodic);
+  EXPECT_THROW((elliptic::nd::apply_general_field<Dim, 1>(output, input, coefficient, *boundary,
+                                                          std::array<Real, 1>{0}, laws)),
+               std::invalid_argument);
+}

@@ -46,16 +46,29 @@ inline void apply_general_field(
     const std::array<PhysicalFieldBoundary, 2 * Dim>& physical) {
   static_assert(Components == 1 || Components == 2,
                 "general field realization supports scalar or joint two-field tuples");
-  require_field_boundary(boundary, physical);
-  if (input.ncomp() != Components || output.ncomp() != Components ||
-      coefficients.ncomp() != Components || input.layout() != output.layout() ||
-      input.layout() != coefficients.layout() || input.distribution() != output.distribution() ||
-      input.distribution() != coefficients.distribution() ||
-      input.local_rank() != output.local_rank() || input.local_rank() != coefficients.local_rank())
-    throw std::invalid_argument("general field apply lost its exact packed storage layout");
-  for (int axis = 0; axis < Dim; ++axis)
-    if (input.ghosts()[axis] < 1 || coefficients.ghosts()[axis] < 1)
-      throw std::invalid_argument("general field apply requires one coefficient and unknown halo");
+  long invalid = 0;
+  try {
+    require_field_boundary(boundary, physical);
+    if (input.ncomp() != Components || output.ncomp() != Components ||
+        coefficients.ncomp() != Components || input.layout() != output.layout() ||
+        input.layout() != coefficients.layout() || input.distribution() != output.distribution() ||
+        input.distribution() != coefficients.distribution() ||
+        input.local_rank() != output.local_rank() ||
+        input.local_rank() != coefficients.local_rank())
+      invalid = 1;
+    for (int axis = 0; axis < Dim; ++axis)
+      if (input.ghosts()[axis] < 1 || coefficients.ghosts()[axis] < 1)
+        invalid = 1;
+    for (const Real value : reaction)
+      if (!std::isfinite(value))
+        invalid = 1;
+  } catch (...) {
+    invalid = 1;
+  }
+  if (all_reduce_max(invalid, boundary.lane()) != 0)
+    throw std::invalid_argument(
+        "general field apply storage, halo, reaction or physical boundary rejected on a "
+        "communicator rank");
   boundary.fill(input);
   const Geometry<Dim> geometry = boundary.geometry();
   for (std::size_t local = 0; local < output.local_size(); ++local) {
