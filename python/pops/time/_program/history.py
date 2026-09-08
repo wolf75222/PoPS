@@ -262,6 +262,13 @@ class _ProgramHistory(_ProgramBase):
             raise ValueError("store_history: cannot store a scalar field in a full-state ring")
         elif name in self._history_blocks and self._history_blocks[name] != value.block:
             raise ValueError("store_history: scalar history block provenance mismatch")
+        if value.op == "field_component":
+            from pops.fields._observation_contract import validate_field_observation
+
+            validate_field_observation(value)
+            if self._histories_ncomp.get(name, 1) != 1:
+                raise ValueError("store_history: solved field history component width changed")
+            self._histories_ncomp[name] = 1
         node = self._new(
             "state", "store_history", (value,),
             {"history": name, "state": value.state_ref}, name, value.block,
