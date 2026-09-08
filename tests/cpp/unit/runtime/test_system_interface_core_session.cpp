@@ -1,9 +1,21 @@
 #include <gtest/gtest.h>
 #include <pops/runtime/system/system_block_store.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/runtime/builders/compiled/dsl_block.hpp>
+#include <pops/runtime/builders/compiled/generated_system_block.hpp>
+#include <pops/runtime/system.hpp>
 #include <pops/mesh/boundary/prepared_boundary_component.hpp>
 
 #include <stdexcept>
 #include <thread>
+
+namespace pops {
+template <int Dim, class Model>
+PreparedSystemBlock<Dim> prepare_exact_system_block(
+    CompiledSystemBlockPreparation<Dim, Model> request) {
+  return prepare_generated_system_block(std::move(request));
+}
+}  // namespace pops
 
 namespace {
 template <int Dim>
@@ -203,3 +215,194 @@ TEST(SystemInterfaceCoreSession, exception_and_missing_core_all_dimensions) {
   exceptions_and_missing_core<3>();
 }
 }  // namespace
+
+namespace {
+constexpr int kDim = pops::kNativeDimension;
+using NativeSystem = pops::System<kDim>;
+using NativeField = pops::MultiFab<kDim>;
+using NativeProvider = pops::SystemInterfaceProvider<kDim>;
+using NativePoint = NativeProvider::point_type;
+
+struct NativeFixture {
+  std::unique_ptr<NativeSystem> system;
+  std::unique_ptr<NativeField> left_output, right_output;
+  NativeProvider::CoreSession retained;
+  std::function<void()> before_core;
+  int completed = 0;
+
+  explicit NativeFixture(const std::string& identity) {
+    pops::SystemConfig<kDim> config;
+    for (int axis = 0; axis < kDim; ++axis) {
+      config.shape[axis] = 8;
+      config.lower[axis] = 0;
+      config.upper[axis] = 1;
+      config.periodicity[axis] = true;
+    }
+    config.boxes = {pops::Box<kDim>::from_extents(config.shape)};
+    system = std::make_unique<NativeSystem>(config);
+    system->install_prepared_boundary_execution_lane(std::make_shared<pops::ExecutionLane>(
+        pops::ExecutionLane::duplicate_world_collectively(identity)));
+    for (const auto* name : {"left", "right"})
+      system->install_block_state_route(name, identity + "/" + name + "/state");
+    system->seal_auxiliary_providers();
+    pops::RealVector<kDim> velocity{};
+    velocity[0] = pops::Real(0.25);
+    for (const auto* name : {"left", "right"})
+      pops::add_compiled_model(*system, name, pops::nd::ScalarAdvection<kDim>::prepare(velocity),
+                               "none", "rusanov", "conservative", "explicit");
+    auto allocate = [&](int block) {
+      auto& state = system->block_state(block);
+      state.set_val(pops::Real(block + 1));
+      return std::make_unique<NativeField>(state.layout(), state.distribution(), state.local_rank(),
+                                           state.ncomp(), state.ghosts());
+    };
+    left_output = allocate(0);
+    right_output = allocate(1);
+    NativeProvider provider;
+    provider.provider_identity = identity + "/provider";
+    provider.collective_contract = identity + "/contract";
+    provider.has_interfaces = [](int block) { return block == 0 || block == 1; };
+    provider.evaluation_count = [this](const auto&, int) { return std::size_t(completed); };
+    provider.discard = [] {};
+    provider.evaluate_rhs = provider.evaluate_core = [this](const auto&, const auto&, const auto&,
+                                                            const auto&, const auto& core) {
+      retained = core;
+      if (before_core)
+        before_core();
+      core->evaluate();  // Intentionally no provider preflight: the real System owns it.
+      ++completed;
+    };
+    system->install_interface_provider(std::move(provider));
+    // The installed issuer must follow the stable Impl, not the moved facade address.
+    system = std::make_unique<NativeSystem>(std::move(*system));
+  }
+
+  NativePoint point() const {
+    NativePoint result;
+    result.clock = "macro";
+    result.dt = 0.001;
+    result.physical_time = 0.0;
+    result.graph_identity = "exact-group-graph";
+    result.rate_identity = "exact-group-rate";
+    result.application_identity = "exact-group-application";
+    return result;
+  }
+
+  void reset_outputs() {
+    left_output->set_val(pops::Real(-17));
+    right_output->set_val(pops::Real(-17));
+  }
+
+  void evaluate(const NativePoint& at, std::vector<int> blocks = {0, 1},
+                std::vector<int> modes = {1, 1}, bool alias = false) {
+    std::vector<NativeField*> states, outputs;
+    for (const auto block : blocks) {
+      states.push_back(&system->block_state(block));
+      outputs.push_back(block == 0 ? left_output.get() : right_output.get());
+    }
+    if (alias)
+      outputs[0] = &system->block_state(1);
+    system->block_rhs_group(at, blocks, states, outputs, modes);
+  }
+
+  void expect_outputs(pops::Real value) const {
+    for (auto* output : {left_output.get(), right_output.get()})
+      for (std::size_t local = 0; local < output->local_size(); ++local) {
+        auto host = output->fab(local).create_host_mirror();
+        output->fab(local).copy_to_host(host);
+        const auto valid = output->fab(local).box();
+        const auto grown = output->fab(local).grown_box();
+        for (std::int64_t cell = 0; cell < valid.numPts(); ++cell) {
+          auto remaining = cell;
+          std::size_t offset = 0, stride = 1;
+          for (int axis = 0; axis < kDim; ++axis) {
+            const auto index = valid.lo[axis] + remaining % valid.length(axis);
+            remaining /= valid.length(axis);
+            offset += static_cast<std::size_t>(index - grown.lo[axis]) * stride;
+            stride *= static_cast<std::size_t>(grown.length(axis));
+          }
+          EXPECT_EQ(host(offset), value);
+        }
+      }
+  }
+};
+}  // namespace
+
+TEST(SystemInterfaceCoreSession, real_system_exact_request_after_move_and_stale_refusal) {
+  NativeFixture fixture("interface-real-system");
+  fixture.reset_outputs();
+  fixture.evaluate(fixture.point());
+  EXPECT_EQ(fixture.completed, 1);
+  fixture.expect_outputs(pops::Real(0));
+  EXPECT_THROW(fixture.retained->evaluate(), std::logic_error);
+  fixture.reset_outputs();
+  fixture.evaluate(fixture.point());
+  EXPECT_EQ(fixture.completed, 2);
+  fixture.expect_outputs(pops::Real(0));
+}
+
+TEST(SystemInterfaceCoreSession, real_system_rejects_divergent_group_before_output_then_retries) {
+  if (pops::n_ranks() < 2)
+    GTEST_SKIP() << "requires distinct MPI ranks";
+  NativeFixture fixture("interface-real-consensus");
+  const bool last_rank = pops::my_rank() == pops::n_ranks() - 1;
+  const char* cases[] = {"point",         "clock", "graph",        "rate",          "application",
+                         "active_blocks", "mode",  "invalid_mode", "invalid_point", "output_alias"};
+  for (const auto* kind : cases) {
+    SCOPED_TRACE(kind);
+    auto point = fixture.point();
+    std::vector<int> blocks{0, 1}, modes{1, 1};
+    bool alias = false;
+    if (last_rank) {
+      const std::string selected(kind);
+      if (selected == "point")
+        point.physical_time = 0.125;
+      if (selected == "clock")
+        point.clock = "other-clock";
+      if (selected == "graph")
+        point.graph_identity = "other-graph";
+      if (selected == "rate")
+        point.rate_identity = "other-rate";
+      if (selected == "application")
+        point.application_identity = "other-application";
+      if (selected == "active_blocks") {
+        blocks.pop_back();
+        modes.pop_back();
+      }
+      if (selected == "mode")
+        modes[1] = 0;
+      if (selected == "invalid_mode")
+        modes[1] = 2;
+      if (selected == "invalid_point")
+        point.dt = -1;
+      if (selected == "output_alias")
+        alias = true;
+    }
+    fixture.reset_outputs();
+    const auto completed = fixture.completed;
+    EXPECT_THROW(fixture.evaluate(point, blocks, modes, alias), std::runtime_error);
+    EXPECT_EQ(fixture.completed, completed);
+    fixture.expect_outputs(pops::Real(-17));
+    fixture.evaluate(fixture.point());
+    EXPECT_EQ(fixture.completed, completed + 1);
+    fixture.expect_outputs(pops::Real(0));
+  }
+}
+
+TEST(SystemInterfaceCoreSession, real_system_cannot_consume_another_system_active_session) {
+  NativeFixture outer("interface-real-outer"), inner("interface-real-inner");
+  bool refused = false;
+  inner.before_core = [&] {
+    EXPECT_THROW(outer.retained->evaluate(), std::logic_error);
+    refused = true;
+  };
+  outer.before_core = [&] { inner.evaluate(inner.point()); };
+  outer.evaluate(outer.point());
+  EXPECT_TRUE(refused);
+  EXPECT_EQ(outer.completed, 1);
+  EXPECT_EQ(inner.completed, 1);
+  outer.expect_outputs(pops::Real(0));
+  inner.expect_outputs(pops::Real(0));
+  EXPECT_THROW(outer.retained->evaluate(), std::logic_error);
+  EXPECT_THROW(inner.retained->evaluate(), std::logic_error);
+}
