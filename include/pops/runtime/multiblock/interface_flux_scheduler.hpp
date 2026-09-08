@@ -24,6 +24,7 @@
 #include <exception>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -332,6 +333,7 @@ class InterfaceFluxScheduler {
       prepared.execution_memory_space = execution.memory_space;
       prepared.device_identity = execution.device_identity;
       prepared.collective_identity = collective_identity;
+      prepared.evaluation_count = std::make_shared<std::size_t>(0);
       materialize_storage_(prepared);
     } catch (...) {
       materialization_failure = std::current_exception();
@@ -793,7 +795,7 @@ class InterfaceFluxScheduler {
   std::size_t evaluation_count(const std::string& identity, int level) const {
     for (const PreparedInterface& prepared : interfaces_)
       if (prepared.route.identity == identity && prepared.route.level == level)
-        return prepared.evaluation_count;
+        return *prepared.evaluation_count;
     throw std::out_of_range("multi-block interface identity is not installed on level");
   }
 
@@ -883,7 +885,9 @@ class InterfaceFluxScheduler {
     std::string device_identity;
     std::string collective_identity;
     InterfaceFluxEvaluator evaluator;
-    std::size_t evaluation_count = 0;
+    // Execution observations belong to the installed route's lifetime. Transaction snapshots
+    // and rematerialized views share them, so restoring scientific state cannot erase work.
+    std::shared_ptr<std::size_t> evaluation_count;
   };
 
   struct PackKernel {
@@ -1495,7 +1499,7 @@ class InterfaceFluxScheduler {
         std::terminate();
       throw;
     }
-    ++prepared.evaluation_count;
+    ++*prepared.evaluation_count;
   }
 
   static void require_distributed_flux_consensus_(PreparedInterface& prepared, std::size_t packed) {

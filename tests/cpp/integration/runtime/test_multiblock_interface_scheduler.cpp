@@ -492,10 +492,13 @@ TEST(test_multiblock_interface_scheduler,
       });
   MultiFab<2> replacement_left_rhs = make_field<2>(replacement_left.layout().boxes(), 1);
   MultiFab<2> replacement_right_rhs = make_field<2>(replacement_right.layout().boxes(), 1);
+  const InterfaceFluxScheduler<2> accepted_snapshot = scheduler;
   replacement.apply(point(), std::vector<MultiFab<2>*>{&replacement_left, &replacement_right},
                     std::vector<MultiFab<2>*>{&replacement_left_rhs, &replacement_right_rhs});
   EXPECT_EQ(scheduler.size(), 1u);
-  EXPECT_EQ(scheduler.evaluation_count(route.identity, 0), 0u);
+  // Restoring either topology view must not erase the provider execution observation.
+  EXPECT_EQ(scheduler.evaluation_count(route.identity, 0), 1u);
+  EXPECT_EQ(accepted_snapshot.evaluation_count(route.identity, 0), 1u);
   EXPECT_EQ(replacement.size(), 1u);
   EXPECT_EQ(replacement.evaluation_count(route.identity, 0), 1u);
   EXPECT_EQ(calls, 1);
