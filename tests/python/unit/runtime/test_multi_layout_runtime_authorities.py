@@ -647,15 +647,23 @@ def _object_graph_holds(root, predicate, *, seen=None, depth=0):
     elif isinstance(root, (list, tuple, set, frozenset)):
         values.extend(root)
     else:
-        namespace = getattr(root, "__dict__", None)
+        # Inspect retained storage without running lazy imports or user lookup hooks.
+        try:
+            namespace = object.__getattribute__(root, "__dict__")
+        except AttributeError:
+            namespace = None
         if isinstance(namespace, dict):
             values.extend(namespace.values())
-        slots = getattr(root, "__slots__", ())
-        if isinstance(slots, str):
-            slots = (slots,)
-        for name in slots or ():
-            if name != "__dict__" and hasattr(root, name):
-                values.append(getattr(root, name))
+        for cls in type(root).__mro__:
+            slots = vars(cls).get("__slots__", ())
+            if isinstance(slots, str):
+                slots = (slots,)
+            for name in slots or ():
+                if name != "__dict__":
+                    try:
+                        values.append(object.__getattribute__(root, name))
+                    except AttributeError:
+                        pass
     return any(
         _object_graph_holds(value, predicate, seen=seen, depth=depth + 1) for value in values
     )
@@ -1077,4 +1085,3 @@ def test_constructor_failure_after_capture_scrubs_self_and_rolls_back_snapshots(
     ]
     assert all(event[2] != PublishedSnapshot() for event in events if event[0] == "destroy")
     assert all(event[2].startswith("child-") for event in events if event[0] == "destroy")
-
