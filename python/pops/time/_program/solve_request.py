@@ -109,6 +109,13 @@ def build_solve_request(program: Any, request: Any, prepared: Any, *, name: Any)
     from pops.linalg import LinearProblem
     from pops.time._program.value_validation import require_owned, validate_input_regions
     from pops.time.solve_outcome import ResidualSolution, SolveOutcome
+    from pops.time.method_regions import TemporalProblemRegion, resolve_temporal_problem
+    if type(request.problem) is TemporalProblemRegion:
+        resolved = resolve_temporal_problem(request, program=program)
+        native = resolved.disposition.to_data()
+        raise SolveRequestError(native["code"], native["detail"])
+    if any(unknown.interval is not None for unknown in request.unknowns):
+        raise SolveRequestError("unsupported_interval_unknown", "point-native adapters cannot realize interval unknowns")
     from pops.time.implicit_diffusion import ImplicitDiffusionStage
 
     if type(request.problem) is ImplicitDiffusionStage:

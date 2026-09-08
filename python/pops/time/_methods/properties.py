@@ -167,6 +167,32 @@ def certify_runge_kutta(tableau: Any) -> MethodCertificate:
     return _certificate_from_coefficients(A, b, c)
 
 
+@dataclass(frozen=True, slots=True)
+class ImplicitMethodProperties:
+    order: int | UnknownOrder
+    abscissae: tuple[Fraction, ...]
+    flux_weights: tuple[Fraction, ...]
+    # An implicit stability function is generally rational. Never publish the
+    # truncated explicit polynomial as a stability certificate.
+    stability_status: str = "unverified"
+
+
+@dataclass(frozen=True, slots=True)
+class ImplicitMethodCertificate:
+    A: tuple[tuple[Fraction, ...], ...]
+    b: tuple[Fraction, ...]
+    c: tuple[Fraction, ...]
+    properties: ImplicitMethodProperties
+
+
+def certify_implicit_runge_kutta(tableau: Any) -> ImplicitMethodCertificate:
+    A = _dense(tableau)
+    b = tuple(exact_fraction(x, "tableau.b") for x in tableau.b)
+    c = tuple(exact_fraction(x, "tableau.c") for x in tableau.c)
+    return ImplicitMethodCertificate(A, b, c, ImplicitMethodProperties(
+        _proved_order(A, b, c), c, b))
+
+
 def certify_additive_runge_kutta(tableau: Any) -> AdditiveMethodCertificate:
     explicit = certify_runge_kutta(tableau.explicit)
     stages = tableau.stages

@@ -117,3 +117,8 @@ __all__ = ["Program", "ProgramValue", "StageStateSet", "StencilAccess", "Residua
            "eliminate_redundant_field_solves", "optimize",
            "HoldCatchupBlock", "adaptive_strides", "hold_catchup_program",
            "step_adaptive_program"]
+
+from .method_regions import (TemporalInterval, TemporalProblemRegion, ResolvedTemporalProblem,
+                             resolve_temporal_problem)
+__all__ += ["TemporalInterval", "TemporalProblemRegion", "ResolvedTemporalProblem",
+            "resolve_temporal_problem"]

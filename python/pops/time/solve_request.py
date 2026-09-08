@@ -69,6 +69,7 @@ class SolveUnknown:
 
     name: str
     template: Any = field(repr=False, compare=False)
+    interval: Any = None
 
     def __post_init__(self) -> None:
         from pops.time.values import ProgramValue
@@ -79,6 +80,15 @@ class SolveUnknown:
         ):
             raise SolveRequestError(
                 "invalid_unknown", "unknown template must be a typed state or field ProgramValue")
+
+        if self.interval is not None:
+            from pops.time.method_regions import TemporalInterval
+            if type(self.interval) is not TemporalInterval:
+                raise SolveRequestError("invalid_interval", "unknown interval must be a TemporalInterval")
+            point = self.template.point
+            point = point.time if hasattr(point, "time") else point
+            if not self.interval.contains(point):
+                raise SolveRequestError("invalid_interval", "unknown template point must lie in its interval")
 
     def to_data(self) -> dict[str, Any]:
         from pops.time.canonical_data import _json_ready
@@ -92,6 +102,7 @@ class SolveUnknown:
             "space": _json_ready(value.space),
             "components": value.logical_shape.get("n_comp") or value.attrs.get("ncomp", 1),
             "point": value.point.to_data(),
+            **({"interval": self.interval.to_data()} if self.interval is not None else {}),
         }
 
     @property
