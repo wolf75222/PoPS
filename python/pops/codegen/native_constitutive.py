@@ -35,9 +35,9 @@ def emit_native_constitutive(expressions, *, indent="    "):
         lines += [indent + "{",
             indent + "  const int raw_ = static_cast<int>(%s.status);" % name,
             indent + "  const int selected_ = raw_ >= 0 && raw_ <= 3 ? raw_ : 3;",
-            indent + "  if (selected_ > %s) { %s = selected_; %s = %s.reason_code; }" %
+            indent + "  if (selected_ > %s) { %s = selected_; %s = %s.reason; }" %
                 (status, status, reason, name),
-            indent + "  else if (selected_ == %s && %s.reason_code > %s) %s = %s.reason_code;" %
+            indent + "  else if (selected_ == %s && %s.reason > %s) %s = %s.reason;" %
                 (status, name, reason, reason, name),
             indent + "}"]
     return NativeConstitutiveEmission(tuple(lines), tuple(values), status, reason, functions)
