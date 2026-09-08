@@ -1358,7 +1358,8 @@ void System<Dim>::discard_hyperbolic_boundaries() {
   std::erase_if(p_->pending_native_packages_, [](const auto& package) {
     return package.kind == NativePackageKind::prepared_boundary;
   });
-  prepared_boundary_execution_lane_.reset();
+  // The authenticated runtime lane outlives any assembling boundary transaction. Prepared
+  // closures may already borrow it, and a rank-local discard must not change collective dispatch.
 }
 
 template <int Dim>

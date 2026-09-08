@@ -249,6 +249,7 @@ using NativeProvider = pops::SystemInterfaceProvider<kDim>;
 using NativePoint = NativeProvider::point_type;
 
 struct NativeFixture {
+  std::shared_ptr<pops::ExecutionLane> lane;
   std::unique_ptr<NativeSystem> system;
   std::unique_ptr<NativeField> left_output, right_output;
   NativeProvider::CoreSession retained;
@@ -266,8 +267,9 @@ struct NativeFixture {
     }
     config.boxes = {pops::Box<kDim>::from_extents(config.shape)};
     system = std::make_unique<NativeSystem>(config);
-    system->install_prepared_boundary_execution_lane(std::make_shared<pops::ExecutionLane>(
-        pops::ExecutionLane::duplicate_world_collectively(identity)));
+    lane = std::make_shared<pops::ExecutionLane>(
+        pops::ExecutionLane::duplicate_world_collectively(identity));
+    system->install_prepared_boundary_execution_lane(lane);
     for (const auto* name : {"left", "right"})
       system->install_block_state_route(name, identity + "/" + name + "/state");
     system->seal_auxiliary_providers();
@@ -484,4 +486,30 @@ TEST(SystemInterfaceCoreSession,
   EXPECT_EQ(evaluations, 5);
   fixture.expect_outputs(pops::Real(0));
   EXPECT_EQ(transports, prepared);
+}
+
+TEST(SystemInterfaceCoreSession, real_system_rank_local_boundary_discard_retains_runtime_lane) {
+  int evaluations = 0;
+  NativeFactoryProbe probe;
+  probe.observe_transport = [](const void*) {};
+  probe.ghost = [&](const auto&, auto&, const auto&, const auto&) { ++evaluations; };
+  NativeFixture fixture("physical-group-discard-lane", false, &probe);
+  const auto retained = fixture.lane;
+  const bool last_rank = retained->rank() == retained->size() - 1;
+  if (last_rank)
+    fixture.system->discard_hyperbolic_boundaries();
+  ASSERT_EQ(&fixture.system->prepared_boundary_execution_lane(), retained.get());
+  // Boundary transaction retry must retain the original lane; replacing it stays forbidden.
+  EXPECT_THROW(fixture.system->install_prepared_boundary_execution_lane(retained), std::exception);
+  fixture.reset_outputs();
+  if (retained->size() > 1) {
+    EXPECT_THROW(fixture.evaluate(fixture.point()), std::runtime_error);
+    fixture.expect_outputs(pops::Real(-17));
+  }
+  EXPECT_EQ(evaluations, 0);
+  fixture.system->discard_hyperbolic_boundaries();
+  EXPECT_EQ(&fixture.system->prepared_boundary_execution_lane(), retained.get());
+  fixture.evaluate(fixture.point());
+  fixture.expect_outputs(pops::Real(0));
+  EXPECT_EQ(evaluations, 0);
 }
