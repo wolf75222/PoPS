@@ -1,10 +1,9 @@
 #pragma once
 
 #include <pops/runtime/multiblock/evaluation_point.hpp>
-#include <pops/parallel/execution_lane.hpp>
+#include <pops/runtime/program/collective_step_rejection.hpp>
 
 #include <exception>
-#include <optional>
 
 #include <bit>
 #include <algorithm>
@@ -209,43 +208,39 @@ template <class Producer, class Qualify>
 std::vector<ExchangeRecord> prepare_exchange_batch(Producer&& producer, Qualify&& qualify,
                                                    const ExecutionLane& lane) {
   std::vector<ExchangeRecord> records;
-  std::exception_ptr error;
-  try {
-    std::forward<Producer>(producer)([&](ExchangeRecord record) {
-      qualify(record);
-      records.push_back(std::move(record));
-    });
-  } catch (...) {
-    error = std::current_exception();
-  }
-  if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && error)
-      std::rethrow_exception(error);
-    throw std::runtime_error("Program exchange batch preparation failed collectively");
-  }
+  collective_step_rejection_phase(
+      lane.communicator(),
+      {"pops.exchange-batch.prepare.v1", "pops.exchange-batch.prepare", false, false},
+      "Program exchange batch preparation failed collectively", [&] {
+        std::forward<Producer>(producer)([&](ExchangeRecord record) {
+          qualify(record);
+          records.push_back(std::move(record));
+        });
+      });
   return records;
 }
 
 /// The existing ledger remains the sole mailbox and the enclosing native transaction remains
-/// the sole acceptance authority. A detached batch candidate changes no transaction depth.
+/// the sole acceptance authority. The producer is complete before append starts; failure restores
+/// the exact pre-batch prefix without copying prior records or consuming transaction depth.
 inline void stage_exchange_batch_collectively(AcceptedExchangeLedger& ledger,
                                               std::span<ExchangeRecord> records,
                                               const ExecutionLane& lane) {
-  std::optional<AcceptedExchangeLedger> candidate;
+  const auto prior_size = ledger.records().size();
   std::exception_ptr error;
   try {
-    candidate.emplace(ledger);
     for (auto& record : records)
-      candidate->stage(std::move(record));
+      ledger.stage(std::move(record));
   } catch (...) {
     error = std::current_exception();
   }
-  if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && error)
-      std::rethrow_exception(error);
-    throw std::runtime_error("Program exchange batch staging failed collectively");
+  try {
+    collectively_rethrow_exception(error, lane,
+                                   "Program exchange batch staging failed collectively");
+  } catch (...) {
+    ledger.restore_size(prior_size);
+    throw;
   }
-  ledger.swap(*candidate);
 }
 
 }  // namespace pops::runtime::program

@@ -95,10 +95,35 @@ TEST(ExchangeBatches, UnequalPhysicalBoundaryOwnershipConservesAndFailuresRollba
   EXPECT_EQ(all_reduce_sum(refused ? 1L : 0L, context.lane), 3);
   EXPECT_EQ(context.ledger.checkpoint(), before);
 
+  // A rejection authored by one producer retains its typed control envelope on every rank.
+  bool typed_rejection = false;
+  try {
+    context.stage_exchange_batch([&](auto&& stage) {
+      if (my_rank() == 0)
+        stage(record("prepared-before-rejection"));
+      if (my_rank() == 1)
+        throw StepAttemptRejected(SolveStatus::kInvalidEvaluation, StepAttemptDisposition::kReject,
+                                  0x45584241u, "exchange-producer", "retry this attempt");
+    });
+  } catch (const StepAttemptRejected& rejected) {
+    typed_rejection = true;
+    EXPECT_EQ(rejected.status(), SolveStatus::kInvalidEvaluation);
+    EXPECT_EQ(rejected.disposition(), StepAttemptDisposition::kReject);
+    EXPECT_EQ(rejected.reason_code(), 0x45584241u);
+    EXPECT_EQ(rejected.phase(), "exchange-producer");
+    EXPECT_EQ(rejected.detail(), "retry this attempt");
+  }
+  EXPECT_EQ(all_reduce_sum(typed_rejection ? 1L : 0L, context.lane), 3);
+  EXPECT_EQ(context.ledger.checkpoint(), before);
+  EXPECT_EQ(integral(q, context.lane), state_before);
+  EXPECT_EQ(integral(rhs, context.lane), rhs_before);
+
   for (const bool duplicate : {false, true}) {
     refused = false;
     try {
       context.stage_exchange_batch([&](auto&& stage) {
+        if (my_rank() == 2)
+          stage(record("peer-retryable"));
         if (my_rank() == 0) {
           stage(record("retryable"));
           auto bad = record(duplicate ? "retryable" : "invalid");
@@ -119,6 +144,8 @@ TEST(ExchangeBatches, UnequalPhysicalBoundaryOwnershipConservesAndFailuresRollba
   context.stage_exchange_batch([&](auto&& stage) {
     if (my_rank() == 0)
       stage(record("retryable"));
+    if (my_rank() == 2)
+      stage(record("peer-retryable"));
   });
-  EXPECT_EQ(context.ledger.records().size(), my_rank() == 0 ? 2u : (my_rank() == 1 ? 0u : 1u));
+  EXPECT_EQ(context.ledger.records().size(), my_rank() == 1 ? 0u : 2u);
 }
