@@ -56,9 +56,16 @@ OUTPUT_ROOT = Path("outputs/advection_imex_amr")
 def _native_output_mode() -> Any:
     """Return the shared-file topology proved by the loaded native backend."""
 
+    import os
+
+    from pops._native_selector import select_native_dimension, selected_native_module
     from pops.output import ParallelMode
     from pops.runtime_environment import runtime_environment_report
 
+    if selected_native_module(required=False) is None:
+        launched = os.environ.get("POPS_NATIVE_DIM")
+        if launched in {"1", "2", "3"}:
+            select_native_dimension(int(launched))
     communicator = runtime_environment_report().get("communicator")
     if communicator == "serial":
         return ParallelMode.SERIAL
@@ -98,7 +105,7 @@ IMEX_CN_HEUN = AdditiveRungeKuttaTableau(
     implicit_c=(Fraction(0), Fraction(1)),
     name="cn-heun-imex",
 )
-HYSTERESIS_MIN_CYCLES = 0
+HYSTERESIS_MIN_CYCLES = 2
 
 
 @dataclass(frozen=True, slots=True)

@@ -45,9 +45,16 @@ DEFAULT_DT = 1.0e-3
 def _native_output_mode() -> Any:
     """Return the portable shared-file topology for the loaded native backend."""
 
+    import os
+
+    from pops._native_selector import select_native_dimension, selected_native_module
     from pops.output import ParallelMode
     from pops.runtime_environment import runtime_environment_report
 
+    if selected_native_module(required=False) is None:
+        launched = os.environ.get("POPS_NATIVE_DIM")
+        if launched in {"1", "2", "3"}:
+            select_native_dimension(int(launched))
     communicator = runtime_environment_report().get("communicator")
     if communicator == "serial":
         return ParallelMode.SERIAL

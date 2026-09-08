@@ -77,16 +77,16 @@ def test_example_script_runs_outputs_and_restart_without_mock_or_fallback(tmp_pa
 
     for row in diagnostic_rows:
         quantity = quantities[row["key"]["state_id"]]
-        assert row["key"]["reference"] == quantity.reference.canonical_identity()
+        assert row["key"]["reference"] == quantity.handle.canonical_identity()
         assert row["key"]["reduction"] == "integral"
         assert row["key"]["level"] == 0
         assert Identity.from_token(row["key"]["layout_identity"]).domain == "layout"
         block = quantity.reference.block_ref.local_id
         role = quantity.execution["role"]
         coefficient = quantity.execution["operations"][0]["coefficient"]
-        expected_coefficient = -1.0 if (block, role) == ("electrons", "Density") else 1.0
+        expected_coefficient = -1.0 if (block, role) == ("electrons", "density") else 1.0
         assert coefficient == expected_coefficient.hex()
-        if role == "Density":
+        if role == "density":
             value = float.fromhex(row["value"])
             assert value < 0.0 if block == "electrons" else value > 0.0
         # State-space units intentionally fail closed until PoPS has a typed unit protocol.
@@ -251,12 +251,12 @@ def test_case_resolves_explicit_layout_consumers_and_two_provider_field() -> Non
     assert len(diagnostic_output.diagnostics) == 6
     assert len(diagnostic_output.diagnostic_quantities) == 6
     expected_diagnostics = {
-        ("electrons", "Density"),
-        ("electrons", "MomentumX"),
-        ("electrons", "MomentumY"),
-        ("ions", "Density"),
-        ("ions", "MomentumX"),
-        ("ions", "MomentumY"),
+        ("electrons", "density"),
+        ("electrons", "momentum:0"),
+        ("electrons", "momentum:1"),
+        ("ions", "density"),
+        ("ions", "momentum:0"),
+        ("ions", "momentum:1"),
     }
     actual_diagnostics = {
         (
@@ -281,7 +281,7 @@ def test_case_resolves_explicit_layout_consumers_and_two_provider_field() -> Non
                 "coefficient": (
                     -1.0
                     if quantity.reference.block_ref.local_id == "electrons"
-                    and quantity.execution["role"] == "Density"
+                    and quantity.execution["role"] == "density"
                     else 1.0
                 ).hex(),
             },
