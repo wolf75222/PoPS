@@ -18,6 +18,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -342,4 +343,98 @@ TEST(test_amr_multiblock_implicit_transaction, MetadataNeverCreatesAnImplicitTem
     EXPECT_STREQ(error.what(), "AmrSystem::step requires an installed whole-system Program");
   }
   EXPECT_EQ(system.block_level_state_global("tracer", 0), accepted);
+}
+
+TEST(test_amr_multiblock_implicit_transaction,
+     BalanceMailboxResetsOnlyInsideOutermostTransactionSnapshot) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 1;
+  config.transition_ratios.clear();
+  config.transition_buffers.clear();
+  config.transition_lookaheads.clear();
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 4;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.balance-mailbox.amr-runtime@1");
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", relaxing_model<Dim>(pops::Real(0), pops::Real(0)),
+                                "minmod", "rusanov", "conservative", "explicit",
+                                static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+                                static_cast<double>(pops::kWenoEpsilon), false,
+                                "tests.balance-mailbox.amr/physical-flux");
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("clock.amr-balance-mailbox");
+  const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '3');
+  const std::array<std::pair<const char*, pops::Real>, 5> terms{{
+      {"storage_change", 11}, {"outward_boundary_flux", 2}, {"sources", 5},
+      {"reflux", 3}, {"projection", 1},
+  }};
+  auto record = [&](pops::Real weight) {
+    for (const auto& [name, value] : terms)
+      context->record_balance_term(route, name, weight * value);
+  };
+  auto expect_mailbox = [&](pops::Real weight) {
+    // Inspect retained native storage without relaxing the active-transaction public consumer gate.
+    const auto actual = context->runtime_state().accepted_balance_terms(route, "test");
+    ASSERT_EQ(actual.size(), terms.size());
+    for (const auto& [name, value] : terms)
+      EXPECT_EQ(actual.at(name), weight * value) << name;
+  };
+  context->install([&](double macro_dt) {
+    context->advance_hierarchy(macro_dt, [&](double) { record(pops::Real(1)); });
+  }, context);
+  system.set_program_block_map({0});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "tests.balance-mailbox.amr-program@1", std::vector<FluxBudget>{{1, 1}}, 0, 0);
+  const auto initial = system.block_level_state_global("tracer", 0);
+
+  for (int step = 0; step < 2; ++step) {
+    system.step(0.125);
+    expect_mailbox(pops::Real(1));
+  }
+  EXPECT_EQ(system.macro_step(), 2);
+  EXPECT_DOUBLE_EQ(system.time(), 0.25);
+  EXPECT_THROW((void)system.accepted_balance_terms(route), std::runtime_error);
+
+  system.begin_step_transaction();
+  EXPECT_THROW((void)system.accepted_balance_terms(route), std::runtime_error);
+  record(pops::Real(0.5));
+  system.begin_nested_step_transaction();
+  expect_mailbox(pops::Real(0.5));
+  system.step(0.125);
+  expect_mailbox(pops::Real(1.5));
+  system.commit_step_transaction();
+  system.finalize_step_transaction();
+  expect_mailbox(pops::Real(1.5));
+  EXPECT_EQ(system.accepted_balance_terms(route).size(), terms.size());
+  system.begin_nested_step_transaction();
+  system.step(0.125);
+  expect_mailbox(pops::Real(2.5));
+  system.rollback_step_transaction();
+  expect_mailbox(pops::Real(1.5));
+  system.rollback_step_transaction();
+  expect_mailbox(pops::Real(1));
+  EXPECT_EQ(system.step_transaction_depth(), 0u);
+  EXPECT_EQ(system.macro_step(), 2);
+  EXPECT_DOUBLE_EQ(system.time(), 0.25);
+  EXPECT_EQ(system.block_level_state_global("tracer", 0), initial);
+
+  system.begin_step_transaction();
+  record(pops::Real(0.25));
+  system.begin_nested_step_transaction();
+  system.step(0.125);
+  system.commit_step_transaction();
+  system.finalize_step_transaction();
+  expect_mailbox(pops::Real(1.25));
+  system.commit_step_transaction();
+  system.finalize_step_transaction();
+  expect_mailbox(pops::Real(1.25));
+  system.step(0.125);
+  expect_mailbox(pops::Real(1));
+  EXPECT_EQ(system.macro_step(), 4);
+  EXPECT_DOUBLE_EQ(system.time(), 0.5);
+  EXPECT_EQ(system.block_level_state_global("tracer", 0), initial);
 }

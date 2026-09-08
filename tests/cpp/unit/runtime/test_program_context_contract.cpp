@@ -873,6 +873,88 @@ TEST(ProgramContextContract, AcceptedBalanceEvidenceIsCurrentAttemptExactAndFail
   sim.rollback_step_transaction();
 }
 
+TEST(ProgramContextContract, BalanceMailboxResetsOnlyInsideOutermostTransactionSnapshot) {
+  ensure_kokkos();
+  comm_init();
+  constexpr int n = 4;
+  NativeSystem sim(native_config(n));
+  install_execution_lane(sim, "pops.test.program-context.balance-mailbox");
+  add_gas(sim);
+  sim.set_state("gas", ic(n));
+  NativeProgramContext context(&sim);
+  context.configure_primary_clock("clock.balance-mailbox");
+  const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '2');
+  const std::array<std::pair<const char*, Real>, 5> terms{{
+      {"storage_change", 11}, {"outward_boundary_flux", 2}, {"sources", 5},
+      {"reflux", 3}, {"projection", 1},
+  }};
+  auto record = [&](Real weight) {
+    for (const auto& [name, value] : terms)
+      context.record_balance_term(route, name, weight * value);
+  };
+  auto expect_mailbox = [&](Real weight) {
+    // Read-only native observation also checks the retained prior accepted mailbox after rollback;
+    // the public consumer still requires an active external transaction.
+    const auto actual = context.runtime_state().accepted_balance_terms(route, "test");
+    ASSERT_EQ(actual.size(), terms.size());
+    for (const auto& [name, value] : terms)
+      EXPECT_EQ(actual.at(name), weight * value) << name;
+  };
+  context.install([&](double dt) {
+    context.begin_step(dt);
+    record(Real(1));
+  });
+  sim.set_program_block_map({0});
+  const auto initial = sim.get_state("gas");
+
+  for (int step = 0; step < 2; ++step) {
+    sim.step(0.125);
+    expect_mailbox(Real(1));
+  }
+  EXPECT_EQ(sim.macro_step(), 2);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.25);
+  EXPECT_THROW((void)sim.accepted_balance_terms(route), std::runtime_error);
+
+  sim.begin_step_transaction();
+  EXPECT_THROW((void)sim.accepted_balance_terms(route), std::runtime_error);
+  record(Real(0.5));
+  sim.begin_nested_step_transaction();
+  expect_mailbox(Real(0.5));
+  sim.step(0.125);
+  expect_mailbox(Real(1.5));
+  sim.commit_step_transaction();
+  sim.finalize_step_transaction();
+  expect_mailbox(Real(1.5));
+  EXPECT_EQ(sim.accepted_balance_terms(route).size(), terms.size());
+  sim.begin_nested_step_transaction();
+  sim.step(0.125);
+  expect_mailbox(Real(2.5));
+  sim.rollback_step_transaction();
+  expect_mailbox(Real(1.5));
+  sim.rollback_step_transaction();
+  expect_mailbox(Real(1));
+  EXPECT_EQ(sim.step_transaction_depth(), 0u);
+  EXPECT_EQ(sim.macro_step(), 2);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.25);
+  EXPECT_EQ(sim.get_state("gas"), initial);
+
+  sim.begin_step_transaction();
+  record(Real(0.25));
+  sim.begin_nested_step_transaction();
+  sim.step(0.125);
+  sim.commit_step_transaction();
+  sim.finalize_step_transaction();
+  expect_mailbox(Real(1.25));
+  sim.commit_step_transaction();
+  sim.finalize_step_transaction();
+  expect_mailbox(Real(1.25));
+  sim.step(0.125);
+  expect_mailbox(Real(1));
+  EXPECT_EQ(sim.macro_step(), 4);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.5);
+  EXPECT_EQ(sim.get_state("gas"), initial);
+}
+
 double max_abs_diff(const std::vector<double>& a, const std::vector<double>& b) {
   double d = 0;
   for (std::size_t k = 0; k < a.size(); ++k) {
