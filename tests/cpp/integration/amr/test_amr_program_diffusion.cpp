@@ -240,8 +240,8 @@ void verify_refined_program_diffusion() {
   bool saw_coarse_flux = false;
   bool saw_fine_flux = false;
   for (const auto& row : trial_flux) {
-    if (row.size() != 13)
-      continue;
+    ASSERT_EQ(row.size(), 17u);
+    EXPECT_FALSE(row[13].empty());  // Exact accepted face-evidence space.
     saw_coarse_flux = saw_coarse_flux || row[10].ends_with("_coarse");
     saw_fine_flux = saw_fine_flux || row[10].ends_with("_fine");
   }

@@ -208,8 +208,8 @@ Snap run(AmrSystem<Dim>& s, int nsteps) {
     }
   }
   for (const auto& row : s.program_flux_ledger_manifest()) {
-    if (row.size() != 13)
-      continue;
+    if (row.size() != 17 || row[13].empty())
+      throw std::runtime_error("accepted AMR face ledger lacks its exact provenance columns");
     const bool coarse = row[10].ends_with("_coarse");
     const double duration = std::stod(row[12]);
     if (coarse) {

@@ -301,6 +301,8 @@ void verify_prepared_installation_parity() {
   prepared.set_conservative_state("tracer", initial);
   direct.set_program_block_map({0});
   prepared.set_program_block_map({0});
+  direct.refresh_prepared_amr_levels();
+  prepared.refresh_prepared_amr_levels();
 
   const pops::MultiFab<Dim>& direct_state = direct.prepared_amr_block_state(0, 0);
   const pops::MultiFab<Dim>& prepared_state = prepared.prepared_amr_block_state(0, 0);

@@ -727,6 +727,7 @@ TEST(ProgramRuntime, StrideHeldStepsPublishTheExactZeroBalance) {
   auto config = unit_domain_config<kNativeDimension>(4);
 
   System<kNativeDimension> system(config);
+  install_execution_lane(system, "test.program.stride-held-balance");
   runtime::program::ProgramContext context(&system);
   const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '7');
   const std::array<std::pair<const char*, double>, 5> records{{

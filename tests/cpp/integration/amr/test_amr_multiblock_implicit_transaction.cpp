@@ -202,7 +202,7 @@ TEST(test_amr_multiblock_implicit_transaction,
   context->configure_primary_clock("tests.implicit-transaction.multiblock-clock");
   context->install(
       [context, inject_retry, &system](double macro_dt) {
-        context->advance_hierarchy(macro_dt, [context, inject_retry](double level_dt) {
+        context->advance_hierarchy(macro_dt, [context, inject_retry, &system](double level_dt) {
           std::array<pops::MultiFab<Dim>*, 2> accepted{};
           std::array<pops::MultiFab<Dim>*, 2> candidates{};
           context->set_stage_time(0, 1);
@@ -231,10 +231,11 @@ TEST(test_amr_multiblock_implicit_transaction,
                 "injected-implicit-transaction-retry");
           }
           context->commit_many({{accepted[0], candidates[0]}, {accepted[1], candidates[1]}});
+          // This one-level fixture publishes within the actual accepted level interval.
+          context->stage_exchange({"test.nested.amr", "accepted.source",
+                                   std::to_string(system.macro_step()), "backward_euler", 1, 1.0,
+                                   1.0, level_dt, 1});
         });
-        context->stage_exchange({"test.nested.amr", "accepted.source",
-                                 std::to_string(system.macro_step()), "backward_euler", 1, 1.0, 1.0,
-                                 macro_dt, 1});
       },
       context);
   // Installing a whole-system Program resets its unverified binding image.  Bind this Program
