@@ -182,8 +182,15 @@ class _RateAuthoringMixin(_BoardModel):
         install_drift_fluxes(self,module)
         for handle, view in getattr(self, "_retained_rates", {}).items():
             reason = view.legacy_incompatibility()
+            storage = {}
+            if (self.frame is not None and view.accumulation.is_identity and view.occurrences
+                    and all(row.kind == "source" for row in view.occurrences)):
+                storage = {"storage_axes": tuple(axis.name for axis in self.frame.axes),
+                           "storage_frame": self.frame.canonical_id}
             if handle.registered_operator_name in registry.names():
                 operator = registry.get(handle.registered_operator_name)
+                if storage:
+                    operator.capabilities = {**operator.capabilities, **storage}
                 if operator.lowering.get("physical_balance") is view:
                     continue
                 lowering = dict(operator.lowering)
@@ -200,7 +207,7 @@ class _RateAuthoringMixin(_BoardModel):
                     }
                 registry.register(Operator(handle.registered_operator_name, "local_rate",
                     handle.signature, lowering=lowering,
-                    capabilities={"produces_rate": True, "local": False},
+                    capabilities={"produces_rate": True, "local": False, **storage},
                     source=ProvenanceRecord(primary=source_span(), owner=self.owner_path,
                         authoring_api="pops.physics.Model.rate")))
             # Raw Module flux contracts use operator packs, while board contracts

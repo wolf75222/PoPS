@@ -419,6 +419,8 @@ def _module_to_model(module: Any, state_space: Any = None,
             source, "lowered", (builder_targets[op.kind],)))
     from pops.codegen.diffusion_lowering import prepare_diffusion_carrier
     prepare_diffusion_carrier(m, module)
+    from pops.codegen.state_storage_lowering import prepare_source_storage_carrier
+    prepare_source_storage_carrier(m, module, state_space=state)
     # The executable DSL validates the spectrum against the already-selected
     # physical flux axes.  A Module deliberately stores those two declarations
     # independently, so materialize all grid operators before attaching the
