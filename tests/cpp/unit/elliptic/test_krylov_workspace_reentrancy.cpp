@@ -1299,12 +1299,21 @@ TEST(test_krylov_workspace_reentrancy,
       TestNullspacePolicy::nonsingular(), [&second_snapshot] { return second_snapshot; });
 
   std::string prepare_rejection;
-  try {
-    first_problem.prepare(first_snapshot);
-  } catch (const std::logic_error& error) {
-    prepare_rejection = error.what();
+  if (n_ranks() == 1) {
+    try {
+      first_problem.prepare(first_snapshot);
+    } catch (const std::runtime_error& error) {
+      prepare_rejection = error.what();
+    }
+    EXPECT_EQ(prepare_rejection, "rank-local frozen-resource failure");
+  } else {
+    try {
+      first_problem.prepare(first_snapshot);
+    } catch (const std::logic_error& error) {
+      prepare_rejection = error.what();
+    }
+    EXPECT_EQ(prepare_rejection, "prepared resource freeze failed on at least one communicator rank");
   }
-  EXPECT_EQ(prepare_rejection, "prepared resource freeze failed on at least one communicator rank");
 
   const TestKrylovMethod method = cg_krylov_method<kDim>();
   TestKrylovWorkspace workspace(prototype, method, footprint);
