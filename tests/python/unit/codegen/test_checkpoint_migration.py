@@ -139,7 +139,7 @@ def _migration_provenance(mapping=None):
 
 
 def _strict_uniform_preflight_payload():
-    return {
+    payload = {
         "t": np.asarray(0.0, dtype=np.float64),
         "macro_step": np.asarray(0, dtype=np.int64),
         "pops_spatial_contract": np.asarray("{}"),
@@ -156,6 +156,14 @@ def _strict_uniform_preflight_payload():
         "program_cadence_window_start_time": np.asarray(0.0, dtype=np.float64),
         "program_last_dt": np.asarray(0.0, dtype=np.float64),
     }
+    # The continuation members are captured through the production checkpoint writer.  They are
+    # native-owned accepted-state bytes and the resolved transition plan, so this fixture cannot
+    # silently drift by hand-recreating a now-required wire contract.
+    from pops.runtime._checkpoint_exchanges import capture_checkpoint_continuation
+    from tests.python.unit.runtime.test_continuation_transitions import _owner
+
+    capture_checkpoint_continuation(_owner(), payload)
+    return payload
 
 
 def test_checkpoint_migration_provenance_is_consumed_by_producer_and_restart():

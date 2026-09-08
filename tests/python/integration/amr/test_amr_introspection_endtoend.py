@@ -56,6 +56,7 @@ def _amr_metadata_fixture():
         block_names=("ne",),
         parameters=(alpha,),
         tag_parameter="alpha",
+        auxiliary_names=("B_z",),
         cells=64,
         name="amr-introspection-metadata",
     )
@@ -67,7 +68,7 @@ def _amr_metadata_fixture():
         caps={"cpu": True, "amr": True, "mpi": True},
         abi_key=pops._pops.abi_key(), model_hash="h", cxx="c++",
         std="c++23", native_dimension=2, target="amr_system",
-        aux_extra_names=["B_z"],
+        provider_components=["B_z"],
         consumer_owner_qid=resolved.blocks[0].instance_owner_qid)
     handle.definition_identity = compiled_model_identity(model_hash="h")
     schema = resolved.bind_schema
