@@ -25,11 +25,13 @@ def capture_checkpoint_continuation(owner, payload):
     topology = checkpoint_topology(owner)
     error = None
     local = b""
+    plan_json = ""
     try:
         plan = getattr(owner, "_continuation_transition_plan", None)
         if type(plan) is not ContinuationTransitionPlan:
             raise RuntimeError("checkpoint lacks resolved continuation obligations")
         plan.require("restart")
+        plan_json = plan._json
         local = owner._s._checkpoint_program_exchanges()
         if type(local) is not bytes or not local.startswith(b"POPSEX01"):
             raise RuntimeError("checkpoint accepted exchange mailbox is not an exact native image")
@@ -47,7 +49,7 @@ def capture_checkpoint_continuation(owner, payload):
             raise RuntimeError("accepted exchange checkpoint exceeds its resolved byte capacity")
         payload[_EXCHANGES] = np.frombuffer(b"".join(images), dtype=np.uint8).copy()
         payload[_OFFSETS] = np.asarray(offsets, dtype=np.int64)
-        payload[_TRANSITIONS] = np.asarray(plan._json)
+        payload[_TRANSITIONS] = np.asarray(plan_json)
     except BaseException as exc:
         error = exc
     # All per-rank allocations after the gather must converge before any caller's next

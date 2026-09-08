@@ -5,9 +5,10 @@ projection of those authorities, never a second user-authored policy registry.
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import json
-from typing import Any
+from typing import Any, cast
 
 from pops.identity import make_identity
 
@@ -157,6 +158,8 @@ def require_resolved_continuation(plan):
 def prepare_bind_continuation(owner, install_plan, *, program=None, block_names=None, field_names=None):
     plan = require_resolved_continuation(install_plan.artifact.plan)
     if block_names is not None:
+        if program is None:
+            raise ValueError("scoped continuation requires its resolved Program")
         allowed_blocks = set(block_names)
         temporal = program.temporal_manifest()
         histories = {row["name"] for row in temporal["histories"]}
@@ -193,7 +196,7 @@ def completed_initialization_receipt(owner, snapshot):
     receipt = prepare_receipt(owner, "initialization", evidence={"bind_identity": snapshot.bind_identity.token})
     epoch = getattr(owner._s, "checkpoint_topology_epoch", None)
     if callable(epoch):
-        receipt["evidence"]["topology_epoch"] = int(epoch())
+        receipt["evidence"]["topology_epoch"] = int(cast(Callable[[], int], epoch)())
     bootstrap = getattr(owner, "_bootstrap_execution", None)
     if bootstrap is not None:
         receipt["evidence"]["bootstrap_execution"] = bootstrap.to_data()
@@ -219,7 +222,7 @@ def completed_restart_receipt(owner):
             row["restored_slots"] = restored["stored_slots"] + restored["recomputed_slots"]
     epoch = getattr(owner._s, "checkpoint_topology_epoch", None)
     if callable(epoch):
-        receipt["evidence"]["topology_epoch"] = int(epoch())
+        receipt["evidence"]["topology_epoch"] = int(cast(Callable[[], int], epoch)())
     regrid = getattr(owner, "_last_restart_regrid_receipt", None)
     if regrid is not None and regrid["changed"]:
         receipt["evidence"]["regrid_on_restart"] = regrid
@@ -233,11 +236,12 @@ def committed_continuation_report(owner):
     if "_checkpoint_restart_python_snapshot" in owner.__dict__:
         raise RuntimeError("continuation receipt is unavailable during a provisional restart")
     depth = getattr(owner._s, "_step_transaction_depth", None)
-    if callable(depth) and int(depth()) != 0:
+    if callable(depth) and int(cast(Callable[[], int], depth)()) != 0:
         raise RuntimeError("continuation receipt is unavailable during a provisional attempt")
     prior = copy.deepcopy(getattr(owner, "_last_continuation_transition_report", None))
     native = getattr(owner._s, "_continuation_transition_rows", None)
-    rows = () if not callable(native) else native()
+    # Optional native methods are bound by System/AmrSystem; AMR emits string rows.
+    rows = () if not callable(native) else cast(Callable[[], Sequence[Sequence[str]]], native)()
     if not rows:
         return prior
     epoch = int(rows[0][5])

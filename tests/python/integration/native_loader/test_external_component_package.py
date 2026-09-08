@@ -53,8 +53,14 @@ def _require_installed_component_package_proof() -> None:
 
     from pops import _pops
 
+    from pops._native_selector import _variant_from_manifest, selected_native_dimension
+
+    dimension = selected_native_dimension()
+    assert dimension == 2
+    variant = _variant_from_manifest(dimension)
     native_path = Path(_pops.__file__).resolve()
-    assert native_path.parent == package_root
+    assert native_path == variant.path
+    assert native_path.parent == package_root / "_native" / f"dim{dimension}"
     assert any(
         native_path.name.endswith(suffix)
         for suffix in importlib.machinery.EXTENSION_SUFFIXES
