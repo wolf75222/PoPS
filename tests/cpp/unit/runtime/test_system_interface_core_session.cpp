@@ -281,14 +281,13 @@ struct NativeFixture {
       pops::add_compiled_model(*system, name, pops::nd::ScalarAdvection<kDim>::prepare(velocity),
                                "none", "rusanov", "conservative", "explicit");
       if (probe) {
-        std::array<pops::PreparedHyperbolicFace, 2 * kDim> faces{};
-        for (int face = 0; face < 2 * kDim; ++face) {
-          faces[face].law = pops::HyperbolicBoundaryLaw::Extrapolate;
-          faces[face].identity = identity + "/" + name + "/face/" + std::to_string(face);
-        }
+        std::vector<std::string> identities;
+        for (int face = 0; face < 2 * kDim; ++face)
+          identities.push_back(identity + "/" + name + "/face/" + std::to_string(face));
         auto boundary = std::make_shared<const pops::PreparedHyperbolicBoundary<kDim>>(
-            std::move(faces), std::vector<pops::HyperbolicComponentTransform<kDim>>{
-                                  pops::HyperbolicComponentTransform<kDim>::scalar()});
+            pops::prepare_hyperbolic_boundary<kDim>(std::vector<std::string>(2 * kDim, "foextrap"),
+                                                    std::vector<double>(2 * kDim, 0.0), identities,
+                                                    {"Scalar"}));
         system->install_prepared_hyperbolic_boundary(name, identity + "/" + name + "/boundary", 1,
                                                      identity + "/" + name + "/state", boundary);
       }
