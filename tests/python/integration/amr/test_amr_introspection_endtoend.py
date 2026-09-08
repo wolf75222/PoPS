@@ -145,6 +145,7 @@ def _built_amr(n=32):
     ne = 1.0 + 0.4 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.01)
     sim.set_density("ne", ne + (1.0 - ne.mean()))
     install_forward_euler_program(sim)
+    sim.mark_bound()  # close native assembly before transactional CFL stepping
     return sim
 
 

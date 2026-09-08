@@ -167,5 +167,5 @@ def test_magnitude_above_lowers_and_executes_on_the_native_amr_tagger():
     assert magnitude.patch_boxes()
     assert ordinary_created is False
     assert ordinary.n_levels() == 1
-    assert ordinary.n_patches() == 0
-    assert ordinary.patch_boxes() == []
+    assert ordinary.n_patches() == 1  # n_patches counts the finest existing level: the base here
+    assert not ordinary.patch_boxes()

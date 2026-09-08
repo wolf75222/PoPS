@@ -15,16 +15,16 @@ VERROUILLE :
   T4 - set_clock(.., -1) leve (macro_step >= 0 exige).
   T5 - macro_step() == 0 avant tout pas (parite System).
 
-LIMITE HONNETE. AmrSystem.checkpoint/restart reste NON cable (etats fins par patch absents de l'ABI,
-cf. test docstring de AmrSystem.checkpoint). Ce test ne valide donc PAS une reprise bit-identique de
-l'ETAT (impossible) ; il valide l'horloge + la cadence, qui sont independantes et utiles seules
-(p.ex. pour piloter une sortie write a cadence fixe et reprendre la phase regrid/stride).
+LIMITE. Ce test valide l'horloge, pas une reprise complete des etats fins et des curseurs temporels.
+Une modification de la seule horloge native ne constitue pas une transaction de restart et le
+runtime refuse de reprendre les pas si son etat temporel accepte n'est plus synchronise.
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
 import numpy as np
 import pops
+import pytest
 
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
@@ -77,6 +77,7 @@ def _build_stride(n=32):
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("slow", _bump(n, 0.20))
     install_forward_euler_program(sim)
+    sim.mark_bound()  # seals the installed Program's exact accepted-state capacity
     return sim
 
 
@@ -101,9 +102,13 @@ def test_amr_set_clock_roundtrip():
 
 
 def test_amr_clock_resumes_from_restored():
-    """T3 : apres set_clock(.., K) le compteur REPREND depuis K (K + 2 apres 2 pas)."""
+    """T3 : une horloge acceptee restauree reprend depuis K (K + 2 apres 2 pas)."""
     sim = _build_stride()
-    sim.set_clock(0.0, 3)  # restauration AVANT le 1er pas (build paresseux : phase poussee au 1er step)
+    for _ in range(3):
+        sim.step(1e-3)
+    # Keep the matching accepted Python temporal state. A raw native clock
+    # assignment alone is not a complete checkpoint/restart transaction.
+    sim.set_clock(sim.time(), 3)
     sim.step(1e-3)
     sim.step(1e-3)
     assert sim.macro_step() == 5, "macro_step() = %d (attendu 3 + 2)" % sim.macro_step()
@@ -112,12 +117,16 @@ def test_amr_clock_resumes_from_restored():
 def test_amr_set_clock_rejects_negative():
     """T4 : set_clock(.., macro_step < 0) leve (parite System)."""
     sim = _build_stride()
-    raised = False
-    try:
+    with pytest.raises(ValueError, match="clock requires finite time and non-negative step"):
         sim.set_clock(0.0, -1)
-    except RuntimeError:
-        raised = True
-    assert raised, "set_clock(.., -1) aurait du lever"
+
+
+def test_clock_only_restore_cannot_bypass_temporal_restart_authority():
+    sim = _build_stride()
+    sim.set_clock(0.0, 3)
+    with pytest.raises(RuntimeError, match="temporal state is desynchronized"):
+        sim.step(1e-3)
+    assert sim.time() == 0.0 and sim.macro_step() == 3
 
 
 if __name__ == "__main__":
@@ -129,4 +138,6 @@ if __name__ == "__main__":
     print("OK T3 : le compteur reprend depuis la valeur restauree")
     test_amr_set_clock_rejects_negative()
     print("OK T4 : set_clock(.., -1) rejete")
+    test_clock_only_restore_cannot_bypass_temporal_restart_authority()
+    print("OK : une horloge native seule ne contourne pas l'autorite de restart")
     print("test_amr_clock : OK")
