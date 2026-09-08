@@ -33,6 +33,11 @@
 #include <utility>
 #include <vector>
 
+namespace pops::runtime::amr {
+template <int Dim, class MemorySpace>
+class PreparedMultiBlockAmrHierarchy;
+}
+
 namespace pops::runtime::multiblock {
 
 enum class InterfaceSide : std::uint8_t { Low, High };
@@ -378,6 +383,9 @@ class InterfaceFluxScheduler {
     const bool collective = communicator.active() && communicator.size() > 1;
     std::exception_ptr point_failure;
     try {
+      if (topology_reconstruction_pending_)
+        throw std::logic_error(
+            "multi-block interface evaluation cannot run during hierarchy reconstruction");
       validate_point_(point);
       if (publication != nullptr)
         validate_fragment_publication_(point, *publication);
@@ -681,6 +689,7 @@ class InterfaceFluxScheduler {
     const CommunicatorView communicator =
         interfaces_.empty() ? CommunicatorView{} : interfaces_.front().communicator;
     InterfaceFluxScheduler candidate;
+    candidate.topology_reconstruction_pending_ = topology_reconstruction_pending_;
     std::exception_ptr allocation_failure;
     try {
       candidate.interfaces_.reserve(interfaces_.size());
@@ -734,7 +743,10 @@ class InterfaceFluxScheduler {
     return candidate;
   }
 
-  void swap(InterfaceFluxScheduler& other) noexcept { interfaces_.swap(other.interfaces_); }
+  void swap(InterfaceFluxScheduler& other) noexcept {
+    interfaces_.swap(other.interfaces_);
+    std::swap(topology_reconstruction_pending_, other.topology_reconstruction_pending_);
+  }
 
   void require_complete_active_level_registry(int active_level_count) const {
     if (active_level_count < 1)
@@ -786,6 +798,36 @@ class InterfaceFluxScheduler {
   }
 
  private:
+  friend class ::pops::runtime::amr::PreparedMultiBlockAmrHierarchy<Dim, memory_space>;
+
+  // Only the owning hierarchy's reconstruction scope may temporarily project its complete
+  // recipe onto a live prefix. The ordinary replacement API above retains its strict depth guard.
+  template <class StateProvider, class GeometryProvider>
+  InterfaceFluxScheduler rematerialized_reconstruction_prefix_(
+      int active_level_count, StateProvider&& state_provider,
+      GeometryProvider&& geometry_provider) const {
+    const CommunicatorView communicator =
+        interfaces_.empty() ? CommunicatorView{} : interfaces_.front().communicator;
+    InterfaceFluxScheduler prefix;
+    std::exception_ptr failure;
+    try {
+      if (active_level_count < 1)
+        throw std::invalid_argument("interface reconstruction requires a positive live prefix");
+      prefix.interfaces_.reserve(interfaces_.size());
+      for (const PreparedInterface& prepared : interfaces_)
+        if (prepared.route.level < active_level_count)
+          prefix.interfaces_.push_back(prepared);
+    } catch (...) {
+      failure = std::current_exception();
+    }
+    finish_collective_preflight_(communicator, failure, "reconstruction prefix allocation");
+    auto candidate =
+        prefix.rematerialized(active_level_count, std::forward<StateProvider>(state_provider),
+                              std::forward<GeometryProvider>(geometry_provider));
+    candidate.topology_reconstruction_pending_ = true;
+    return candidate;
+  }
+
   struct BoundaryCell {
     std::size_t local_box = field_type::not_local;
     index_type index{};
@@ -1754,6 +1796,7 @@ class InterfaceFluxScheduler {
   }
 
   std::vector<PreparedInterface> interfaces_;
+  bool topology_reconstruction_pending_ = false;
 };
 
 }  // namespace pops::runtime::multiblock

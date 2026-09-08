@@ -505,4 +505,57 @@ TEST(test_multiblock_interface_scheduler,
   }
 }
 
+TEST(test_multiblock_interface_scheduler,
+     OrdinaryReplacementCannotPublishATruncatedThreeLevelRegistry) {
+  ensure_runtime();
+  std::vector<MultiFab<2>> left;
+  std::vector<MultiFab<2>> right;
+  std::vector<Geometry<2>> geometries;
+  left.reserve(3);
+  right.reserve(3);
+  geometries.reserve(3);
+  InterfaceFluxScheduler<2> scheduler;
+  int calls = 0;
+  for (int level = 0; level < 3; ++level) {
+    const int n = 4 << level;
+    const Box<2> domain(Index<2>(0, 0), Index<2>(n - 1, n - 1));
+    left.push_back(make_field<2>(domain, 1));
+    right.push_back(make_field<2>(domain, 1));
+    geometries.push_back(geometry<2>(domain, {Real(0), Real(0)}, {Real(1), Real(1)}));
+    AxisAlignedInterface<2> route;
+    route.identity = "nd.strict-three-level";
+    route.level = level;
+    route.left_block = 0;
+    route.right_block = 1;
+    route.left_axis = route.right_axis = 0;
+    route.left_side = InterfaceSide::High;
+    route.right_side = InterfaceSide::Low;
+    route.right_component_for_left = {0};
+    route.affine_mapping_identity = "nd.periodic-x-translation";
+    route.right_normal_translation = Real(1);
+    authenticate(route);
+    scheduler.install(route, left.back(), geometries.back(), right.back(), geometries.back(),
+                      serial_execution(),
+                      [&](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+                        ++calls;
+                        for (int face = 0; face < batch.face_count; ++face)
+                          batch.shared_flux[face] = Real(1);
+                      });
+  }
+  ASSERT_NO_THROW(scheduler.require_runtime_rematerialization_ready(3));
+  const auto state = [&](std::size_t block, int level) -> MultiFab<2>& {
+    return (block == 0 ? left : right).at(static_cast<std::size_t>(level));
+  };
+  const auto geometry_at = [&](int level) { return geometries.at(level); };
+  EXPECT_THROW((void)scheduler.rematerialized(2, state, geometry_at), std::runtime_error);
+  EXPECT_THROW((void)scheduler.rematerialized(4, state, geometry_at), std::runtime_error);
+  EXPECT_EQ(scheduler.size(), 3u);
+  EXPECT_EQ(calls, 0);
+  for (int level = 0; level < 3; ++level)
+    EXPECT_EQ(scheduler.evaluation_count("nd.strict-three-level", level), 0u);
+  auto complete = scheduler.rematerialized(3, state, geometry_at);
+  EXPECT_EQ(complete.size(), 3u);
+  EXPECT_NO_THROW(complete.require_runtime_rematerialization_ready(3));
+}
+
 }  // namespace

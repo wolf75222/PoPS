@@ -670,6 +670,13 @@ struct SparseFieldImage {
 };
 
 template <int Dim>
+struct PreparedRegridStateImages {
+  // Cold topology-transaction storage, captured after advancement for every block/child level.
+  std::vector<std::vector<SparseFieldImage<Dim>>> blocks;
+  std::size_t retained_payload_bytes = 0;
+};
+
+template <int Dim>
 struct PreparedSparseFieldGather {
   SparseFieldImage<Dim> image;
   std::string exact_contract;
@@ -3392,6 +3399,7 @@ struct AmrSystem<Dim>::Impl {
   runtime::program::ProgramRuntimeState<Dim> program;
   mutable std::shared_ptr<const PreparedHistoryHierarchyImages<Dim>>
       history_regrid_sequence_sources;
+  std::shared_ptr<const PreparedRegridStateImages<Dim>> regrid_sequence_state_sources;
   mutable std::vector<const std::vector<field_type>*> program_hierarchy_candidates;
   mutable std::shared_ptr<const provider_snapshot_type> pending_provider_restore;
   mutable std::shared_ptr<const provider_registry_snapshot_type> pending_provider_registry_restore;
@@ -8390,6 +8398,55 @@ struct AmrSystem<Dim>::Impl {
     throw std::invalid_argument("AMR regrid selected an unsupported prolongation kernel");
   }
 
+  std::shared_ptr<const PreparedRegridStateImages<Dim>> prepare_regrid_state_images() const {
+    const ExecutionLane& lane = require_prepared_engine_lane("AMR regrid state images");
+    std::shared_ptr<PreparedRegridStateImages<Dim>> result;
+    std::string contract;
+    std::exception_ptr failure;
+    try {
+      if (regrid_sequence_state_sources)
+        throw std::logic_error("AMR state regrid sequence cannot nest");
+      result = std::make_shared<PreparedRegridStateImages<Dim>>();
+      result->blocks.resize(multiblock_hierarchy->block_count());
+      const std::size_t levels = multiblock_hierarchy->level_count();
+      for (std::size_t block = 0; block < result->blocks.size(); ++block) {
+        result->blocks[block].resize(levels - 1);
+        for (std::size_t level = 1; level < levels; ++level) {
+          const auto& state = multiblock_hierarchy->state(block, level);
+          const std::size_t cells = checked_cells(engine->hierarchy().layout(level).domain());
+          const std::size_t values = checked_size_product(
+              cells, static_cast<std::size_t>(state.ncomp()), "AMR retained state size overflow");
+          result->retained_payload_bytes = checked_size_sum(
+              result->retained_payload_bytes,
+              checked_size_sum(
+                  checked_size_product(values, sizeof(double), "AMR retained state bytes overflow"),
+                  cells, "AMR retained state bitmap bytes overflow"),
+              "AMR all-block retained state bytes overflow");
+        }
+      }
+      ExactContractBuilder exact;
+      exact.text("pops.amr-regrid-all-block-state-images")
+          .bytes(multiblock_hierarchy->collective_contract())
+          .scalar(engine->topology_epoch())
+          .scalar(engine->materialization_generation())
+          .scalar(static_cast<std::uint64_t>(result->retained_payload_bytes));
+      contract = std::move(exact).release();
+    } catch (...) {
+      failure = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        failure, &lane, "AMR all-block regrid image admission failed collectively");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("all-block-regrid-images"), contract}}, lane))
+      throw std::invalid_argument("AMR all-block retained state budget differs between ranks");
+    for (std::size_t block = 0; block < result->blocks.size(); ++block)
+      for (std::size_t child = 0; child < result->blocks[block].size(); ++child)
+        result->blocks[block][child] = gather_sparse_field(
+            multiblock_hierarchy->state(block, child + 1),
+            engine->hierarchy().layout(child + 1).domain(), lane.communicator());
+    return result;
+  }
+
   std::shared_ptr<const PreparedHistoryHierarchyImages<Dim>> prepare_history_hierarchy_images()
       const {
     if (!engine || !prepared_hierarchy || !prepared_hierarchy->lane)
@@ -9218,11 +9275,9 @@ struct AmrSystem<Dim>::Impl {
       history_sources = local_history_sources.get();
     }
     runtime::amr::PreparedTaggerCandidates<Dim> candidates = execute_tagging(parent_level);
-    std::optional<SparseFieldImage<Dim>> retained_child;
     std::optional<runtime::amr::PersistentTaggingState<Dim>> staged_state;
     std::exception_ptr state_preparation_error;
     try {
-      retained_child = previous_child;
       staged_state.emplace(hierarchy_cycle_state ? *hierarchy_cycle_state : tagging_state);
       if (hierarchy_cycle_state == nullptr)
         staged_state->begin_cycle(tagging_spec->min_cycles);
@@ -9234,10 +9289,6 @@ struct AmrSystem<Dim>::Impl {
         "AMR regrid retained-state preparation failed collectively");
 
     const std::size_t live_child = static_cast<std::size_t>(parent_level + 1);
-    if (!retained_child && live_child < engine->hierarchy().num_levels())
-      retained_child =
-          gather_sparse_field(engine->hierarchy().state(live_child),
-                              engine->hierarchy().layout(live_child).domain(), graph_communicator);
 
     std::vector<amr::tagging::TagMask<Dim>> shards;
     std::exception_ptr shard_error;
@@ -9393,12 +9444,18 @@ struct AmrSystem<Dim>::Impl {
               "AMR bootstrap child-carrier preparation failed collectively");
           continue;
         }
-        std::optional<SparseFieldImage<Dim>> retained;
+        std::optional<SparseFieldImage<Dim>> gathered_child;
+        const SparseFieldImage<Dim>* retained = nullptr;
         std::optional<amr::transfer::TransferKind> transfer_kind;
         std::exception_ptr transfer_preflight_error;
         try {
-          if (block == 0)
-            retained = retained_child;
+          if (regrid_sequence_state_sources) {
+            const auto& children = regrid_sequence_state_sources->blocks.at(block);
+            if (static_cast<std::size_t>(parent_level) < children.size())
+              retained = &children[static_cast<std::size_t>(parent_level)];
+          } else if (block == 0 && previous_child) {
+            retained = &*previous_child;
+          }
           transfer_kind.emplace(regrid_transfer_kind(parent_level, block));
         } catch (...) {
           transfer_preflight_error = std::current_exception();
@@ -9406,15 +9463,17 @@ struct AmrSystem<Dim>::Impl {
         runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
             transfer_preflight_error, &graph_lane,
             "AMR child-transfer preflight failed collectively");
-        if (!retained && live_child < multiblock_hierarchy->level_count())
-          retained = gather_sparse_field(multiblock_hierarchy->state(block, live_child),
-                                         engine->hierarchy().layout(live_child).domain(),
-                                         graph_communicator);
+        if (!retained && live_child < multiblock_hierarchy->level_count()) {
+          gathered_child = gather_sparse_field(multiblock_hierarchy->state(block, live_child),
+                                               engine->hierarchy().layout(live_child).domain(),
+                                               graph_communicator);
+          retained = &*gathered_child;
+        }
         std::exception_ptr transfer_error;
         try {
-          child_states[block].emplace(transfer_regridded_state(
-              parent_state, parent_layout, *prepared->fine_layout(),
-              retained ? &*retained : nullptr, graph_communicator, *transfer_kind));
+          child_states[block].emplace(transfer_regridded_state(parent_state, parent_layout,
+                                                               *prepared->fine_layout(), retained,
+                                                               graph_communicator, *transfer_kind));
         } catch (...) {
           transfer_error = std::current_exception();
         }
@@ -16426,20 +16485,24 @@ void AmrSystem<Dim>::step(double dt) {
         p_->macro_step % p_->cfg.regrid_every != 0)
       return;
     const auto history_sources = p_->prepare_history_hierarchy_images();
-    std::vector<std::optional<SparseFieldImage<Dim>>> previous(
-        p_->engine->hierarchy().num_levels());
-    for (std::size_t level = 1; level < p_->engine->hierarchy().num_levels(); ++level)
-      previous[level] = gather_sparse_field(p_->engine->hierarchy().state(level),
-                                            p_->engine->hierarchy().layout(level).domain(),
-                                            p_->prepared_hierarchy->lane->communicator());
+    // Freeze every block endpoint before a parent replacement truncates its descendants.
+    // execute_transaction remains the sole accepted-state publication/rollback authority.
+    const auto state_sources = p_->prepare_regrid_state_images();
     runtime::amr::PersistentTaggingState<Dim> staged_state = p_->tagging_state;
     staged_state.begin_cycle(p_->tagging_spec->min_cycles);
-    for (int parent_level = 0; parent_level < p_->cfg.level_count - 1; ++parent_level) {
-      const std::size_t child = static_cast<std::size_t>(parent_level + 1);
-      const std::optional<SparseFieldImage<Dim>> old_child =
-          child < previous.size() ? previous[child] : std::nullopt;
-      if (!p_->regrid_parent(parent_level, old_child, &staged_state, history_sources.get()))
-        break;
+    p_->multiblock_hierarchy->begin_interface_topology_replacement_();
+    p_->regrid_sequence_state_sources = state_sources;
+    try {
+      for (int parent_level = 0; parent_level < p_->cfg.level_count - 1; ++parent_level)
+        if (!p_->regrid_parent(parent_level, std::nullopt, &staged_state, history_sources.get()))
+          break;
+      p_->multiblock_hierarchy->finish_interface_topology_replacement_();
+      p_->regrid_sequence_state_sources.reset();
+    } catch (...) {
+      // Restore the complete interface recipe before the accepted snapshot restores old levels.
+      p_->multiblock_hierarchy->abort_interface_topology_replacement_();
+      p_->regrid_sequence_state_sources.reset();
+      throw;
     }
     p_->tagging_state = std::move(staged_state);
     p_->publish_tagging_checkpoint();
@@ -17045,8 +17108,15 @@ void AmrSystem<Dim>::regrid_on_restart() {
     throw std::logic_error("AmrSystem restart regrid requires one active restart transaction");
   const std::uint64_t prior_topology_epoch = p_->engine->topology_epoch();
   std::exception_ptr regrid_error;
+  bool reconstruction_started = false;
   try {
+    const auto state_sources = p_->prepare_regrid_state_images();
+    p_->multiblock_hierarchy->begin_interface_topology_replacement_();
+    reconstruction_started = true;
+    p_->regrid_sequence_state_sources = state_sources;
     p_->program.regrid_on_restart("AmrSystem::regrid_on_restart:");
+    p_->multiblock_hierarchy->finish_interface_topology_replacement_();
+    p_->regrid_sequence_state_sources.reset();
     p_->refresh_prepared_hierarchy();
     if (p_->engine->topology_epoch() == prior_topology_epoch)
       throw std::runtime_error("AmrSystem restart regrid authority did not publish a new topology");
@@ -17055,6 +17125,10 @@ void AmrSystem<Dim>::regrid_on_restart() {
       throw std::runtime_error(
           "AmrSystem restart regrid did not rematerialize derived providers on its final topology");
   } catch (...) {
+    if (reconstruction_started) {
+      p_->multiblock_hierarchy->abort_interface_topology_replacement_();
+      p_->regrid_sequence_state_sources.reset();
+    }
     regrid_error = std::current_exception();
   }
   if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)

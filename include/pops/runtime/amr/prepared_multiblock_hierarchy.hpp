@@ -69,6 +69,77 @@ class PreparedMultiBlockAmrHierarchy {
 
   friend class ::pops::AmrSystem<Dim>;
 
+  // This is a private preparation scope inside the existing owning System transaction. It cannot
+  // accept state: every temporary prefix is non-executable, and only the original complete route
+  // recipe can qualify the final hierarchy. In particular BindBootstrap is not a runtime bypass.
+  void begin_interface_topology_replacement_() {
+    std::exception_ptr failure;
+    std::optional<interface_scheduler_type> retained;
+    std::string request;
+    try {
+      ExactContractBuilder exact;
+      exact.text("pops.amr-interface-topology-reconstruction")
+          .bytes(collective_contract_)
+          .bytes(interface_provider_contract_)
+          .scalar(static_cast<std::uint64_t>(level_count()))
+          .scalar(static_cast<bool>(interface_scheduler_));
+      request = std::move(exact).release();
+      if (interface_reconstruction_active_)
+        throw std::logic_error("AMR interface topology reconstruction cannot nest");
+      if (interface_scheduler_)
+        retained.emplace(*interface_scheduler_);
+    } catch (...) {
+      failure = std::current_exception();
+    }
+    collectively_rethrow_(failure, "AMR interface reconstruction recipe allocation failed");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("interface-reconstruction"), request}}, lane_))
+      throw std::invalid_argument("AMR interface reconstruction request differs between ranks");
+    if (retained)
+      retained->require_runtime_rematerialization_ready(static_cast<int>(level_count()));
+    interface_reconstruction_active_ = true;
+    interface_reconstruction_depth_ = level_count();
+    interface_reconstruction_recipe_.swap(retained);
+    if (interface_scheduler_)
+      interface_scheduler_->topology_reconstruction_pending_ = true;
+  }
+
+  void finish_interface_topology_replacement_() {
+    if (!interface_reconstruction_recipe_) {
+      interface_reconstruction_active_ = false;
+      return;
+    }
+    std::exception_ptr failure;
+    try {
+      if (level_count() != interface_reconstruction_depth_)
+        throw std::runtime_error(
+            "multi-block interface replacement changed the active hierarchy depth");
+    } catch (...) {
+      failure = std::current_exception();
+    }
+    collectively_rethrow_(failure, "AMR final interface hierarchy depth differs between ranks");
+    const auto state_provider = [&](std::size_t block, int level) -> field_type& {
+      return state(block, static_cast<std::size_t>(level));
+    };
+    const auto geometry_provider = [&](int level) {
+      return Geometry<Dim>::from_bounds(primary_->hierarchy().layout(level).domain(),
+                                        interface_lower_, interface_upper_);
+    };
+    auto complete = interface_reconstruction_recipe_->rematerialized(
+        static_cast<int>(level_count()), state_provider, geometry_provider);
+    interface_scheduler_->swap(complete);
+    interface_reconstruction_recipe_.reset();
+    interface_reconstruction_active_ = false;
+  }
+
+  void abort_interface_topology_replacement_() noexcept {
+    if (interface_reconstruction_recipe_) {
+      interface_scheduler_->swap(*interface_reconstruction_recipe_);
+      interface_reconstruction_recipe_.reset();
+    }
+    interface_reconstruction_active_ = false;
+  }
+
  public:
   struct AdditionalBlock {
     std::string identity;
@@ -718,10 +789,16 @@ class PreparedMultiBlockAmrHierarchy {
               primary_publication->hierarchy().layout(static_cast<std::size_t>(level)).domain(),
               interface_lower_, interface_upper_);
         };
-        next_interface_scheduler.emplace(interface_scheduler_->rematerialized(
-            static_cast<int>(primary_publication->hierarchy().num_levels()), state_provider,
-            geometry_provider,
-            runtime::multiblock::InterfaceRematerializationAuthority::BindBootstrap));
+        if (interface_reconstruction_recipe_)
+          next_interface_scheduler.emplace(
+              interface_reconstruction_recipe_->rematerialized_reconstruction_prefix_(
+                  static_cast<int>(primary_publication->hierarchy().num_levels()), state_provider,
+                  geometry_provider));
+        else
+          next_interface_scheduler.emplace(interface_scheduler_->rematerialized(
+              static_cast<int>(primary_publication->hierarchy().num_levels()), state_provider,
+              geometry_provider,
+              runtime::multiblock::InterfaceRematerializationAuthority::BindBootstrap));
       }
       next_collective_contract = exact_hierarchy_contract_(
           primary_publication->hierarchy(), primary_publication->spatial_contract(),
@@ -781,9 +858,18 @@ class PreparedMultiBlockAmrHierarchy {
                                               .domain(),
                                           interface_lower_, interface_upper_);
       };
-      prepared.interface_scheduler.emplace(interface_scheduler_->rematerialized(
-          static_cast<int>(prepared.primary_publication->hierarchy().num_levels()), state_provider,
-          geometry_provider));
+      // A restart parent can fail inside its own accepted transaction while the enclosing
+      // complete-hierarchy reconstruction still owns the original recipe. Restore that parent's
+      // exact prefix through the private non-executable projection, not the live shorter recipe.
+      if (interface_reconstruction_recipe_)
+        prepared.interface_scheduler.emplace(
+            interface_reconstruction_recipe_->rematerialized_reconstruction_prefix_(
+                static_cast<int>(prepared.primary_publication->hierarchy().num_levels()),
+                state_provider, geometry_provider));
+      else
+        prepared.interface_scheduler.emplace(interface_scheduler_->rematerialized(
+            static_cast<int>(prepared.primary_publication->hierarchy().num_levels()),
+            state_provider, geometry_provider));
     }
     prepared.collective_contract = exact_hierarchy_contract_(
         prepared.primary_publication->hierarchy(), prepared.primary_publication->spatial_contract(),
@@ -1087,6 +1173,9 @@ class PreparedMultiBlockAmrHierarchy {
     std::exception_ptr presence_error;
     std::string presence_contract;
     try {
+      if (interface_reconstruction_active_)
+        throw std::logic_error(
+            "AMR Program execution cannot run during hierarchy reconstruction");
       require_map_(map);
       require_level_(level);
       if (require_sealed_couplings && !couplings_sealed_)
@@ -1270,6 +1359,9 @@ class PreparedMultiBlockAmrHierarchy {
   std::string coupling_registry_contract_;
   bool couplings_sealed_ = false;
   std::shared_ptr<interface_scheduler_type> interface_scheduler_;
+  std::optional<interface_scheduler_type> interface_reconstruction_recipe_;
+  std::size_t interface_reconstruction_depth_ = 0;
+  bool interface_reconstruction_active_ = false;
   std::string interface_provider_contract_;
   RealVector<Dim> interface_lower_{};
   RealVector<Dim> interface_upper_{};
