@@ -187,8 +187,11 @@ def build_block_resolved_operations(block: Any, program: Any):
             guarantees={**original.guarantees, "program_evaluation": context})
         operations.append(operation)
         values_to_operations[id(value)] = (identity,)
-    return build_resolved_operations(module, constructions=operations,
-                                     evaluation_requests=requests, boundary_data=boundaries)
+    plan = build_resolved_operations(module, constructions=operations,
+                                    evaluation_requests=requests, boundary_data=boundaries)
+    from .program_field_publication import attach_publication_claims, publication_claims
+
+    return attach_publication_claims(plan, module, publication_claims(block, program))
 
 
 def resolved_operation_mapping(blocks: Any):

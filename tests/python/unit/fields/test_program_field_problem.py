@@ -13,7 +13,7 @@ from pops.solvers import CG
 from pops.time import FailRun
 
 
-def field_case(*, joint=False, duplicate_input=False, component_transforms=False):
+def field_case(*, joint=False, duplicate_input=False, component_transforms=False, publication_fields=False):
     case = pops.Case("general fields")
     from pops.domain import Rectangle
     from pops.frames import Cartesian2D
@@ -25,6 +25,9 @@ def field_case(*, joint=False, duplicate_input=False, component_transforms=False
     components = ("rho", "a", "mx") if component_transforms else ("rho", "a")
     first_state = first_model.state("U", components=components)
     second_state = second_model.state("U", components=components)
+    if publication_fields:
+        for name in ("observed_phi", "observed_gx", "observed_gy", "observed_static"):
+            first_model.aux(name)
     if component_transforms:
         rho, coefficient, momentum = first_state
         first_model.local_transform("momentum_update", (rho, coefficient, momentum + 1))

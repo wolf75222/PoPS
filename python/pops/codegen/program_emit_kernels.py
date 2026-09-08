@@ -70,6 +70,7 @@ _ALLOWED_OPS = frozenset(
         "field_problem_apply",
         "field_component",
         "field_gradient",
+        "field_publication",
         "vector_field",
         "laplacian",
         "gradient",

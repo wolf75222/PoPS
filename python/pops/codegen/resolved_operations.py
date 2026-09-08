@@ -167,7 +167,15 @@ class ResolvedOperationPlan:
 
         self.require_module(module)
         packs = resolve_plan_provider_packs(module, self.operations)
-        if data(self.provider_evidence) != provider_evidence(packs):
+        claims = self.provider_evidence.get("program_field_publications")
+        if claims is not None:
+            from .program_field_publication import reproject_publication_packs
+
+            packs = reproject_publication_packs(module, packs, claims)
+        expected = provider_evidence(packs)
+        if claims is not None:
+            expected["program_field_publications"] = data(claims)
+        if data(self.provider_evidence) != expected:
             _reject("resolved-plan", "provider_plan_drift", "resolved provider access plan changed")
         return packs
 

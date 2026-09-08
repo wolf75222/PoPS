@@ -345,6 +345,11 @@ class _OperatorViewMixin(_HyperbolicModel):
                     needs = needs or (self._source is not None and reads_fields(self._source))
                 elif s in self._source_terms:
                     needs = needs or reads_fields(self._source_terms[s])
+            if cfg["flux"]:
+                flux_names = cfg["fluxes"] or ["flux_default"]
+                for flux_name in flux_names:
+                    dependency = reg.get(flux_name)
+                    needs = needs or bool(dependency.capabilities.get("requires_fields", False))
             reg.register(
                 _model.Operator(
                     nm,

@@ -991,6 +991,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "field_gradient":
         from pops.codegen.program_emit_field_gradient import emit_field_gradient
         emit_field_gradient(v, var, lines, prelude, target=target)
+    elif v.op == "field_publication":
+        from pops.codegen.program_emit_field_publication import emit_field_publication
+        emit_field_publication(v, var, lines, model, target=target,
+                               provider_plans=provider_plans, block_idx=block_idx)
     elif v.op in ("field_problem_load", "field_problem_coefficients", "field_component"):
         from pops.codegen.program_emit_field_problem import emit_field_problem_value
 

@@ -182,6 +182,12 @@ class FieldSolution:
     unknowns: tuple[Any, ...]
     problem_identity: str
 
+    def publish(self, bindings: Any) -> ProgramValue:
+        """Publish consumed scalar/gradient components to exact physics field inputs."""
+        from ._program_publication import publish_field_solution
+
+        return publish_field_solution(self, bindings)
+
     def __getitem__(self, unknown: Handle) -> ProgramValue:
         if not isinstance(unknown, Handle):
             raise TypeError("field observations require an exact field unknown Handle")
