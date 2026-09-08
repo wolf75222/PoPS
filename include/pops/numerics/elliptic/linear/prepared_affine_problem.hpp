@@ -106,9 +106,12 @@ struct MaterializePreparedNullspaceBasisKernel {
   int component;
   bool masked;
   bool covered;
+  int component_count = 1;
   POPS_HD void operator()(const Index<Dim>& index) const {
-    const Real basis = masked ? mask(index, 0) : Real(1);
-    values(index, component) = basis * (covered ? coverage(index, 0) : Real(1));
+    for (int offset = 0; offset < component_count; ++offset) {
+      const Real basis = masked ? mask(index, offset) : Real(1);
+      values(index, component + offset) = basis * (covered ? coverage(index, 0) : Real(1));
+    }
   }
 };
 
@@ -1115,7 +1118,8 @@ class PreparedNullspacePolicy {
           for_each_cell(materialized.box(local),
                         detail::MaterializePreparedNullspaceBasisKernel<Dim>{
                             materialized.fab(local).view(), mask_values, coverage_values,
-                            basis.field_component, mask != nullptr, coverage != nullptr});
+                            basis.field_component, mask != nullptr, coverage != nullptr,
+                            basis.component_count});
         }
       }
 
@@ -1126,7 +1130,10 @@ class PreparedNullspacePolicy {
       metric_scratch.assign(metric.reduction_scratch_value_count(), 0.0);
       for (std::size_t left = 0; left < plan_.bases.size(); ++left) {
         for (std::size_t right = left; right < plan_.bases.size(); ++right) {
-          if (plan_.bases[left].field_component == plan_.bases[right].field_component &&
+          if (plan_.bases[left].field_component <
+                  plan_.bases[right].field_component + plan_.bases[right].component_count &&
+              plan_.bases[right].field_component <
+                  plan_.bases[left].field_component + plan_.bases[left].component_count &&
               plan_.bases[left].measure(first_level_) != plan_.bases[right].measure(first_level_))
             throw std::invalid_argument(
                 "prepared nullspace bases disagree on the single-field cell measure");
@@ -2248,6 +2255,8 @@ class PreparedAffineLinearProblem {
       detail::fingerprint_mix(hash, basis.recipe_identity);
       detail::fingerprint_mix(
           hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(basis.field_component)));
+      detail::fingerprint_mix(
+          hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(basis.component_count)));
       detail::fingerprint_mix(hash, static_cast<std::uint64_t>(basis.masks.size()));
       for (std::size_t level = 0; level < basis.masks.size(); ++level) {
         const auto& mask = basis.masks[level];
