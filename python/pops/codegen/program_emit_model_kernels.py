@@ -86,10 +86,8 @@ def _emit_local_transform_kernel(
     temporaries, rendered, temporary_names = _cse_emit(
         roots, "pops::Real", "    ", materialize_all=True, return_names=True)
     body.append("    pops::Real transform_failed_ = pops::Real(0);")
-    for declaration_line, temporary_name in zip(
-        temporaries, temporary_names, strict=True,
-    ):
-        body.append(declaration_line)
+    body.extend(temporaries)
+    for temporary_name in temporary_names:
         body.append(
             "    if (!Kokkos::isfinite(%s)) transform_failed_ = pops::Real(1);"
             % temporary_name)

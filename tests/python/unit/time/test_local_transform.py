@@ -27,14 +27,14 @@ def _canonical_emit_model(model: Model) -> Model:
     return emit_model
 
 
-def _transform_program(*, transform_block_is_second: bool = False):
+def _transform_program(*, transform_block_is_second: bool = False, boolean_domain: bool = False):
     model = Model("local_transform_model", frame=Cartesian2D())
     state = model.state("U", components=("q",))
     cached = model.module
     transform = model.local_transform(
         "bounded_shift",
         (state[0] + 1.0,),
-        valid_if=state[0] > 0.0,
+        valid_if=((state[0] > 0.0) & (state[0] < 4.0)) if boolean_domain else state[0] > 0.0,
     )
     assert model.module is not cached
 
@@ -205,3 +205,52 @@ def test_local_transform_formula_and_domain_are_part_of_module_identity() -> Non
         changed_domain.module.module_hash(),
     }
     assert len(identities) == 3
+
+
+def test_local_transform_observes_guarded_temporaries_after_their_declarations():
+    import re
+    model, _, _, program = _transform_program(boolean_domain=True)
+    source = emit_cpp_program(program, model=_canonical_emit_model(model))
+    checks = re.findall(r"if \(!Kokkos::isfinite\(((?:guard[0-9]+_)?cse[0-9]+_)\)\)", source)
+    assert checks and any(name.startswith("guard") for name in checks)
+    last_evaluation = source.index("&&")
+    for name in checks:
+        declaration = re.search(r"(?:const )?pops::Real " + name + r" =", source)
+        assert declaration is not None
+        check = source.index("if (!Kokkos::isfinite(%s))" % name)
+        assert declaration.start() < check and last_evaluation < check
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_compiled_local_transform_body_keeps_guarded_finite_checks_in_scope(tmp_path):
+    import ctypes
+    import re
+    import subprocess
+    from pops.codegen.toolchain import _default_cxx, _probe_cxx_std, loader_cxx_std
+    model, _, _, program = _transform_program(boolean_domain=True)
+    generated = emit_cpp_program(program, model=_canonical_emit_model(model))
+    start = generated.index("pops::Real transform_failed_")
+    end = generated.index("statusA(index, 0) = transform_failed_;", start)
+    body = generated[start:end] + "statusA(index, 0) = transform_failed_;"
+    sources = set(re.findall(r"([A-Za-z0-9_]+A)\(index, 0\)", body)) - {"outA", "statusA"}
+    source = '#include <cmath>\nnamespace pops { using Real = double; }\nnamespace Kokkos { using std::isfinite; }\n'
+    source += 'extern "C" int evaluate(double q, double* output) { int index=0; double status=0;\n'
+    source += "\n".join("auto %s=[&](int,int){return q;};" % name for name in sources)
+    source += "\nauto outA=[&](int,int)->double&{return *output;}; auto statusA=[&](int,int)->double&{return status;};\n"
+    source += body + "\nreturn static_cast<int>(status);\n}\n"
+    path, binary = tmp_path / "transform.cpp", tmp_path / "transform.so"
+    path.write_text(source)
+    # This compiles the emitted scalar body only; it links no PoPS/Kokkos runtime ABI.
+    compiler = _default_cxx()
+    standard = _probe_cxx_std(compiler, loader_cxx_std())
+    compiled = subprocess.run([compiler, "-std=" + standard, "-shared", "-fPIC", "-O2",
+        str(path), "-o", str(binary)], capture_output=True, text=True)
+    assert compiled.returncode == 0, compiled.stderr
+    native = ctypes.CDLL(str(binary))
+    native.evaluate.argtypes = (ctypes.c_double, ctypes.POINTER(ctypes.c_double))
+    native.evaluate.restype = ctypes.c_int
+    for value, expected_status in ((1., 0), (-1., 1), (5., 1)):
+        output = ctypes.c_double(99)
+        assert native.evaluate(value, ctypes.byref(output)) == expected_status
+        assert output.value == value + 1
