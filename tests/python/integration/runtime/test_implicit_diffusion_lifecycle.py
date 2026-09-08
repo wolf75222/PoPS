@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import json
 
 import numpy as np
 import pops
@@ -94,7 +95,8 @@ def make_case(n, *, method="backward_euler", dt=0.0001, nonlinear=False, invalid
 def run_case(n, initial, *, steps=1, **kwargs):
     case, layout = make_case(n, **kwargs)
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
-    runtime = pops.bind(artifact, initial_state={"material": np.asarray(initial).reshape(1, n, n).copy()},
+    subject = artifact.plan.initial_condition_plan.bindings[0].subject
+    runtime = pops.bind(artifact, initial_values={subject: np.asarray(initial).reshape(1, n, n).copy()},
                         resources={"execution_context": artifact_execution_context(artifact)})
     dt = kwargs.get("dt", 0.0001)
     report = pops.run(runtime, t_end=steps * dt, max_steps=steps)
@@ -107,7 +109,8 @@ def mode(n):
     return np.sin(2 * np.pi * x)[:, None] * np.sin(2 * np.pi * x)[None, :]
 
 
-def test_same_physical_flux_explicit_implicit_fourier_parity(isolated_native_cache, native_cxx, kokkos_root):
+def test_same_physical_flux_explicit_implicit_fourier_parity(isolated_native_cache, native_cxx, kokkos_root,
+                                                          record_property):
     n, dt = 32, 0.0001
     wave = mode(n)
     eigenvalue = 8 * 0.1 * math.sin(math.pi / n) ** 2 * n ** 2
@@ -115,40 +118,58 @@ def test_same_physical_flux_explicit_implicit_fourier_parity(isolated_native_cac
                               ("backward_euler", 1 / (1 + dt * eigenvalue))):
         actual, _ = run_case(n, 1 + wave, method=method, dt=dt)
         np.testing.assert_allclose(actual, 1 + amplitude * wave, rtol=0, atol=1e-9)
+        record_property(method + "_max_error", float(np.max(np.abs(actual - (1 + amplitude * wave)))))
 
 
 @pytest.mark.parametrize("method", ["forward_euler", "backward_euler"])
-def test_scalar_diffusion_manufactured_convergence(method, isolated_native_cache, native_cxx, kokkos_root):
+def test_scalar_diffusion_manufactured_convergence(method, isolated_native_cache, native_cxx, kokkos_root,
+                                                 record_property):
     errors = []
     for n, steps in ((16, 4), (32, 16), (64, 64)):
         wave = mode(n)
         actual, _ = run_case(n, 1 + wave, method=method, dt=0.005 * (16 / n) ** 2, steps=steps)
         exact = 1 + math.exp(-8 * math.pi ** 2 * 0.1 * 0.02) * wave
         errors.append(float(np.sqrt(np.mean((actual - exact) ** 2))))
-    for coarse, fine in zip(errors[:-1], errors[1:], strict=True):
-        assert math.log2(coarse / fine) >= 1.7, errors
+    orders = [math.log2(coarse / fine) for coarse, fine in zip(errors[:-1], errors[1:], strict=True)]
+    record_property("errors_N16_N32_N64", json.dumps(errors))
+    record_property("orders", json.dumps(orders))
+    assert all(order >= 1.7 for order in orders), errors
 
 
-def test_shifted_operator_retains_nonzero_constant(isolated_native_cache, native_cxx, kokkos_root):
+def test_shifted_operator_retains_nonzero_constant(isolated_native_cache, native_cxx, kokkos_root,
+                                                 record_property):
     actual, _ = run_case(16, np.full((16, 16), 2.5), dt=0.125)
     np.testing.assert_allclose(actual, 2.5, rtol=0, atol=1e-11)
+    record_property("constant_max_error", float(np.max(np.abs(actual - 2.5))))
 
 
-def test_nonlinear_accumulation_preserves_energy(isolated_native_cache, native_cxx, kokkos_root):
-    energy, _ = run_case(16, np.zeros((16, 16)), dt=1.0, nonlinear=True)
+def test_nonlinear_accumulation_preserves_energy(isolated_native_cache, native_cxx, kokkos_root,
+                                               record_property):
+    energy, runtime = run_case(16, np.zeros((16, 16)), dt=1.0, nonlinear=True)
     temperature = (np.sqrt(1 + 4 * energy) - 1) / 2
     np.testing.assert_allclose(energy, 1.0, rtol=0, atol=1e-10)
     np.testing.assert_allclose(temperature, (-1 + math.sqrt(5)) / 2, rtol=0, atol=1e-10)
     assert float(np.min(temperature)) > 0.6
+    diagnostics = runtime._executor.program_diagnostics()
+    evaluations = [value for key, value in diagnostics.items() if key.endswith(".full_residual_evaluations")]
+    derivatives = [value for key, value in diagnostics.items() if key.endswith(".finite_difference_jvps")]
+    assert len(evaluations) == len(derivatives) == 1
+    assert evaluations[0] > 2 * derivatives[0] > 0
+    record_property("temperature_min_max", json.dumps([float(np.min(temperature)), float(np.max(temperature))]))
+    record_property("energy_max_error", float(np.max(np.abs(energy - 1))))
+    record_property("full_residual_evaluations", evaluations[0])
+    record_property("finite_difference_jvps", derivatives[0])
 
 
-def test_invalid_nonlinear_domain_leaves_accepted_state_unchanged(isolated_native_cache, native_cxx, kokkos_root):
+def test_invalid_nonlinear_domain_leaves_accepted_state_unchanged(isolated_native_cache, native_cxx, kokkos_root,
+                                                                record_property):
     n = 16
     case, layout = make_case(n, dt=1.0, nonlinear=True, invalid=True)
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
     initial = np.zeros((1, n, n))
     initial[0, 0, 0] = 2.0
-    runtime = pops.bind(artifact, initial_state={"material": initial.copy()},
+    subject = artifact.plan.initial_condition_plan.bindings[0].subject
+    runtime = pops.bind(artifact, initial_values={subject: initial.copy()},
                         resources={"execution_context": artifact_execution_context(artifact)})
     native = runtime._executor
 
@@ -164,6 +185,8 @@ def test_invalid_nonlinear_domain_leaves_accepted_state_unchanged(isolated_nativ
     with pytest.raises(RuntimeError, match="(?i)(invalid|domain|transform|spatial)") as failed:
         pops.run(runtime, t_end=1.0, max_steps=1)
     assert "coordinate_to_energy" in str(failed.value)
+    assert "action=fail_run" in str(failed.value)
+    record_property("failure_reason", str(failed.value))
     np.testing.assert_array_equal(np.asarray(runtime.state_global("material")).reshape(initial.shape), initial)
     assert envelope() == before
     assert native.history_fill_count("prior_energy") == 0
