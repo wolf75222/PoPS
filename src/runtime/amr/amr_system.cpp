@@ -16350,8 +16350,10 @@ void AmrSystem<Dim>::step(double dt) {
   if (p_->bootstrap_transaction)
     throw std::logic_error("AmrSystem cannot step during an active bootstrap transaction");
   p_->execute_transaction([&] {
-    if (!p_->external_step_transaction)
+    if (!p_->external_step_transaction) {
       p_->program.accepted_exchanges_.clear();
+      p_->program.begin_step_projection_report();
+    }
     p_->program.dispatch_cadence_step(p_->accepted_time, p_->macro_step, dt, "AmrSystem");
     p_->program.refresh_hierarchy_state("AmrSystem::step");
     if (!p_->tagging_spec || p_->cfg.regrid_every == 0 ||
@@ -16694,6 +16696,7 @@ void AmrSystem<Dim>::begin_step_transaction() {
       p_->prepare_accepted_snapshot_collectively("external step transaction");
   p_->external_step_committed = false;
   p_->program.accepted_exchanges_.clear();
+  p_->program.begin_step_projection_report();
 }
 
 template <int Dim>

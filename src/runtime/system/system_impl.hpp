@@ -851,8 +851,10 @@ struct System<Dim>::Impl {
   template <class Function>
   decltype(auto) execute_step_transaction(Function&& function) {
     AcceptedSnapshot snapshot(*this);
-    if (!external_step_transaction_)
+    if (!external_step_transaction_) {
       program_.accepted_exchanges_.clear();
+      program_.begin_step_projection_report();
+    }
     try {
       return std::forward<Function>(function)();
     } catch (...) {

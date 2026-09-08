@@ -92,6 +92,7 @@ void System<Dim>::begin_step_transaction() {
   p_->external_step_transaction_ = std::move(candidate);
   p_->external_step_transaction_committed_ = false;
   p_->program_.accepted_exchanges_.clear();
+  p_->program_.begin_step_projection_report();
 }
 
 template <int Dim>
