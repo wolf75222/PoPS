@@ -14,6 +14,7 @@
 #include <array>
 #include <cmath>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <exception>
 #include <initializer_list>
@@ -1121,14 +1122,16 @@ void bind_system_stepping(py::class_<System>& cls) {
            })
       .def("_validate_checkpoint_program_exchanges",
            [](const System&, py::bytes payload) {
-             const std::string bytes = payload;
+             const std::string_view bytes(PyBytes_AS_STRING(payload.ptr()),
+                                          static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
              (void)pops::runtime::program::AcceptedExchangeLedger::from_checkpoint(
                  std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(bytes.data()),
                                                bytes.size()));
            })
       .def("_restore_checkpoint_program_exchanges",
            [](System& system, py::bytes payload) {
-             const std::string bytes = payload;
+             const std::string_view bytes(PyBytes_AS_STRING(payload.ptr()),
+                                          static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
              system.restore_checkpoint_program_exchanges(std::span<const std::uint8_t>(
                  reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()));
            })

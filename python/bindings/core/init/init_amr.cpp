@@ -973,14 +973,16 @@ void bind_amr_stepping(py::class_<AmrSystem>& cls) {
            })
       .def("_validate_checkpoint_program_exchanges",
            [](const AmrSystem&, py::bytes payload) {
-             const std::string bytes = payload;
+             const std::string_view bytes(PyBytes_AS_STRING(payload.ptr()),
+                                          static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
              (void)pops::runtime::program::AcceptedExchangeLedger::from_checkpoint(
                  std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(bytes.data()),
                                                bytes.size()));
            })
       .def("_restore_checkpoint_program_exchanges",
            [](AmrSystem& system, py::bytes payload) {
-             const std::string bytes = payload;
+             const std::string_view bytes(PyBytes_AS_STRING(payload.ptr()),
+                                          static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
              system.restore_checkpoint_program_exchanges(std::span<const std::uint8_t>(
                  reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()));
            })
