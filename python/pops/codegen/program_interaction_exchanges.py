@@ -48,7 +48,8 @@ def accepted_interaction_quadrature(program):
                     destination = result.setdefault(key, defaultdict(Fraction))
                     for power, amount in _multiply(weights, _polynomial(coefficient)).items():
                         destination[power] += amount
-        elif value.op in ("state", "rhs", "source", "apply", "coupled_rate", "coupled_rate_out"):
+        elif value.op in ("state", "rhs", "source", "coupled_rate", "coupled_rate_out") or (
+                value.op == "apply" and value.vtype == "rhs"):
             result = {}
         elif value.op in ("acceptance_guard", "solve_outcome") and value.inputs:
             result = propagate(value.inputs[0])

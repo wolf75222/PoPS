@@ -16,7 +16,7 @@ from tests.python.support.layout_plan import cartesian_grid
 
 
 def interaction_case(*, n=16, left_weight=1, right_weight=1, repeated=False,
-                     inventories=True, native_function=None, stages=1, unshared=False):
+                     inventories=True, native_function=None, stages=1, unshared=False, transform_accepted=False):
     frame = Rectangle("domain", lower=(0, 0), upper=(1, 1)).frame(Cartesian2D())
     model = pops.Model("pair", frame=frame)
     left = model.species("a", state=("p", "E"))
@@ -40,6 +40,7 @@ def interaction_case(*, n=16, left_weight=1, right_weight=1, repeated=False,
     left_rate = model.rate("a_rate", equation=ddt(left) == (
         application[left] + application[left] if repeated else application[left]))
     right_rate = model.rate("b_rate", equation=ddt(right) == right_application[right])
+    transform = model.local_transform("square_momentum", (left[0] ** 2, left[1]), on=left) if transform_accepted else None
     case = pops.Case("pair")
     blocks = [case.block("left", model, states=(left,)), case.block("right", model, states=(right,))]
     for block, rate, state in zip(blocks, (left_rate, right_rate), (left, right), strict=True):
@@ -58,7 +59,10 @@ def interaction_case(*, n=16, left_weight=1, right_weight=1, repeated=False,
         rb = program.value("b_quadrature", Fraction(1, 2) * rb + Fraction(1, 2) * rb2, at=b.next.point)
     elif stages != 1:
         raise ValueError("matrix supports explicitly declared Euler or two-stage Heun")
-    program.commit(a.next, program.value("a_next", a.n + left_weight * program.dt * ra, at=a.next.point))
+    a_next = program.value("a_next", a.n + left_weight * program.dt * ra, at=a.next.point)
+    if transform is not None:
+        a_next = transform(a_next)
+    program.commit(a.next, a_next)
     program.commit(b.next, program.value("b_next", b.n + right_weight * program.dt * rb, at=b.next.point))
     program.step_strategy(pops.time.FixedDt(.001))
     case.program(program)
@@ -71,6 +75,19 @@ def test_post_affine_inventory_quadrature_rejects_unequal_weights_and_repeated_u
         with pytest.raises(ValueError, match="nonconservative"):
             accepted_interaction_quadrature(program)
 
+
+
+def test_accepted_state_transform_cannot_drop_joint_inventory():
+    _case, program, _model, _maps = interaction_case(transform_accepted=True)
+    with pytest.raises(ValueError, match="unproved local_transform quadrature"):
+        accepted_interaction_quadrature(program)
+
+
+def test_nonlinear_fresh_stage_rate_does_not_inherit_predictor_inventory():
+    _case, program, _model, _maps = interaction_case(stages=2)
+    rows = accepted_interaction_quadrature(program)
+    assert len(rows) == 8
+    assert all(weights == {1: Fraction(1, 2)} for _map, _row, weights in rows)
 
 def test_repeated_occurrences_preserved_with_compensating_accepted_weight():
     _case, program, _model, _maps = interaction_case(repeated=True, left_weight=Fraction(1, 2))

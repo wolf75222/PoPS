@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from pops._ir.expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign, Pow, Div, Mul, Minimum, Maximum
+from pops._ir.expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign, Pow, Div, Mul, Minimum, Maximum, BooleanAnd, BooleanOr, BooleanNot
 from pops._ir.values import EigWitness, StateRef, RuntimeParamRef, _EIG_FIELDS, _EIG_PREDICATES
 from pops._ir.visitors import _dag_key_ids, _key, _children
 from pops._ir.expr import _wrap
@@ -60,10 +60,10 @@ def _cpp_identifier(value: Any) -> str:
     return identifier
 
 
-def _cpp_expand(e: Any, cse_map: Any, key_memo: Any = None) -> str:
+def _cpp_expand(e: Any, cse_map: Any, key_memo: Any = None, guarded: Any = None) -> str:
     """C++ of node e expanding ITS level; the children go through _cpp_cse (-> CSE locals)."""
     from ._joint_cpp import joint_expand
-    joint = joint_expand(e, lambda value: _cpp_cse(value, cse_map, key_memo))
+    joint = joint_expand(e, lambda value: _cpp_cse(value, cse_map, key_memo, guarded))
     if joint is not None:
         return joint
     if isinstance(e, Const):
@@ -73,37 +73,43 @@ def _cpp_expand(e: Any, cse_map: Any, key_memo: Any = None) -> str:
     if isinstance(e, Var):
         return _cpp_identifier(e.name)
     if isinstance(e, Neg):
-        return "(-%s)" % _cpp_cse(e.a, cse_map, key_memo)
+        return "(-%s)" % _cpp_cse(e.a, cse_map, key_memo, guarded)
     if isinstance(e, Sqrt):
-        return "std::sqrt(%s)" % _cpp_cse(e.a, cse_map, key_memo)
+        return "std::sqrt(%s)" % _cpp_cse(e.a, cse_map, key_memo, guarded)
     if isinstance(e, Abs):
-        return "std::fabs(%s)" % _cpp_cse(e.a, cse_map, key_memo)
+        return "std::fabs(%s)" % _cpp_cse(e.a, cse_map, key_memo, guarded)
     if isinstance(e, Sign):
-        s = _cpp_cse(e.a, cse_map, key_memo)  # l'enfant peut etre une locale CSE : evalue UNE fois
+        s = _cpp_cse(e.a, cse_map, key_memo, guarded)  # l'enfant peut etre une locale CSE : evalue UNE fois
         return "(pops::Real(%s > 0) - pops::Real(%s < 0))" % (s, s)
     if isinstance(e, EigWitness):
         # appel du foncteur nomme (declare dans la brique) : chaque entree passee en argument scalaire
         # (via _cpp_cse -> partage les locales CSE, evaluee une seule fois cote appelant). Un predicat
         # ajoute le seuil im_tol en dernier argument (cf. _extra_args_cpp / _eig_witness_helpers).
-        args = [_cpp_cse(c, cse_map, key_memo) for c in e.entries()] + e._extra_args_cpp()
+        args = [_cpp_cse(c, cse_map, key_memo, guarded) for c in e.entries()] + e._extra_args_cpp()
         return "%s(%s)" % (e.helper_name(), ", ".join(args))
     if isinstance(e, Pow):
-        return "std::pow(%s, %s)" % (_cpp_cse(e.a, cse_map, key_memo), _cpp_cse(e.b, cse_map, key_memo))
+        return "std::pow(%s, %s)" % (_cpp_cse(e.a, cse_map, key_memo, guarded), _cpp_cse(e.b, cse_map, key_memo, guarded))
     if isinstance(e, Minimum):
-        return "Kokkos::fmin(%s, %s)" % (_cpp_cse(e.a, cse_map, key_memo), _cpp_cse(e.b, cse_map, key_memo))
+        return "Kokkos::fmin(%s, %s)" % (_cpp_cse(e.a, cse_map, key_memo, guarded), _cpp_cse(e.b, cse_map, key_memo, guarded))
     if isinstance(e, Maximum):
-        return "Kokkos::fmax(%s, %s)" % (_cpp_cse(e.a, cse_map, key_memo), _cpp_cse(e.b, cse_map, key_memo))
+        return "Kokkos::fmax(%s, %s)" % (_cpp_cse(e.a, cse_map, key_memo, guarded), _cpp_cse(e.b, cse_map, key_memo, guarded))
+    if isinstance(e, (BooleanAnd, BooleanOr)):
+        right = guarded(e.b, cse_map) if guarded is not None else _cpp_cse(e.b, cse_map, key_memo)
+        return "(%s %s %s)" % (_cpp_cse(e.a, cse_map, key_memo, guarded),
+                                "&&" if isinstance(e, BooleanAnd) else "||", right)
+    if isinstance(e, BooleanNot):
+        return "(!%s)" % _cpp_cse(e.a, cse_map, key_memo, guarded)
     if isinstance(e, _Bin):
-        return "(%s %s %s)" % (_cpp_cse(e.a, cse_map, key_memo), e.op, _cpp_cse(e.b, cse_map, key_memo))
+        return "(%s %s %s)" % (_cpp_cse(e.a, cse_map, key_memo, guarded), e.op, _cpp_cse(e.b, cse_map, key_memo, guarded))
     raise TypeError("expression not handled by the codegen: %r" % (e,))
 
 
-def _cpp_cse(e: Any, cse_map: Any, key_memo: Any = None) -> str:
+def _cpp_cse(e: Any, cse_map: Any, key_memo: Any = None, guarded: Any = None) -> str:
     """C++ of e; if e matches an already-defined CSE local, returns its name."""
     k = _key(e, key_memo)
     if k in cse_map:
         return cse_map[k]
-    return _cpp_expand(e, cse_map, key_memo)
+    return _cpp_expand(e, cse_map, key_memo, guarded)
 
 
 def _cse_emit(
@@ -130,55 +136,99 @@ def _cse_emit(
     (post-order of the first visit) -> emitted C++ is bit-identical."""
     from pops._ir.native_call import NativeCall
     from ._joint_cpp import joint_kind, native_declaration
-    counts, rep, size = {}, {}, {}
-    memo = {}  # id(e) -> (size, {key: occurrences} of the subtree, in post-order of insertion)
     key_memo, _, _ = _dag_key_ids(roots)
+    declarations, observed_names, native_statuses = [], [], []
+    next_scope = 0
+    full_sizes = {}
 
-    def visit(e: Any) -> Any:
-        if isinstance(e, (Const, Var)):
-            return 1, None
-        sub = memo.get(id(e))
-        if sub is None:
-            k = _key(e, key_memo)
-            s, cnt = 1, {}
-            for c in _children(e):
-                cs, ccnt = visit(c)
-                s += cs
-                if ccnt:
-                    for ck, cc in ccnt.items():
-                        cnt[ck] = cnt.get(ck, 0) + cc
-            cnt[k] = cnt.get(k, 0) + 1  # post-order: children first, like the historical re-walk
-            rep.setdefault(k, e)
-            size[k] = s
-            sub = (s, cnt)
-            memo[id(e)] = sub
-        return sub
+    def full_size(e):
+        if id(e) not in full_sizes:
+            full_sizes[id(e)] = 1 + sum(full_size(c) for c in _children(e))
+        return full_sizes[id(e)]
 
-    for r in roots:
-        _, cnt = visit(r)
-        if cnt:
-            for k, c in cnt.items():
-                counts[k] = counts.get(k, 0) + c
-    cand = sorted(
-        (k for k, count in counts.items() if materialize_all or count >= 2 or joint_kind(rep[k])),
-        key=lambda k: size[k],
-    )
-    cse_map, lines = {}, []
-    for i, k in enumerate(cand):
-        name = "cse%d_" % i
-        if isinstance(rep[k], NativeCall):
-            lines += native_declaration(rep[k], name,
-                lambda value: _cpp_cse(value, cse_map, key_memo), indent)
-        else:
-            lines.append("%sconst %s %s = %s;" % (
-                indent, "auto" if joint_kind(rep[k]) else real, name,
-                _cpp_expand(rep[k], cse_map, key_memo)))
-        cse_map[k] = name
-    rendered = [_cpp_cse(r, cse_map, key_memo) for r in roots]
+    def emit_scope(scope_roots, inherited, prefix, conditional):
+        counts, rep, size, memo = {}, {}, {}, {}
+
+        def visit(e):
+            if isinstance(e, (Const, Var)) or _key(e, key_memo) in inherited:
+                return 1, None
+            sub = memo.get(id(e))
+            if sub is None:
+                k = _key(e, key_memo)
+                s, cnt = 1, {}
+                # The right operand belongs to its selected control-flow region. Its operations
+                # may not become unconditional CSE declarations, even under materialize_all.
+                children = (e.a,) if isinstance(e, (BooleanAnd, BooleanOr)) else _children(e)
+                for c in children:
+                    cs, ccnt = visit(c)
+                    s += cs
+                    if ccnt:
+                        for ck, cc in ccnt.items():
+                            cnt[ck] = cnt.get(ck, 0) + cc
+                if isinstance(e, (BooleanAnd, BooleanOr)):
+                    # Already-unconditional dependencies must precede the guarded use, permitting
+                    # same-context reuse without moving a guarded-only operation out of its branch.
+                    s = full_size(e)
+                cnt[k] = cnt.get(k, 0) + 1
+                rep.setdefault(k, e)
+                size[k] = s
+                sub = (s, cnt)
+                memo[id(e)] = sub
+            return sub
+
+        for r in scope_roots:
+            _, cnt = visit(r)
+            if cnt:
+                for k, c in cnt.items():
+                    counts[k] = counts.get(k, 0) + c
+        cand = sorted(
+            (k for k, count in counts.items() if materialize_all or count >= 2 or joint_kind(rep[k])
+             or isinstance(rep[k], (BooleanAnd, BooleanOr))),
+            key=lambda k: size[k],
+        )
+        cse_map, lines = dict(inherited), []
+
+        def guarded(right, available):
+            nonlocal next_scope
+            next_scope += 1
+            branch_lines, (value,) = emit_scope([right], available, "guard%d_" % next_scope, True)
+            return "([&]() { %s return %s; }())" % (" ".join(line.strip() for line in branch_lines), value)
+
+        for i, k in enumerate(cand):
+            name = "%scse%d_" % (prefix, i)
+            expression = rep[k]
+            if isinstance(expression, NativeCall):
+                rendered = native_declaration(expression, name,
+                    lambda value: _cpp_cse(value, cse_map, key_memo, guarded), indent)
+                if conditional:
+                    # Only neutral storage is outside the branch; external code and argument
+                    # evaluation remain inside it. Inactive branches contribute kOk/no reason.
+                    result = "pops::NativeCallResult<%d>" % expression.function.output_width
+                    declarations.extend([indent + result + " " + name + "{};",
+                        indent + name + ".status = pops::EvaluationStatus::kOk;"])
+                    rendered[1] = indent + name + " = " + result + "::rejected();"
+                lines += rendered
+                native_statuses.append(name)
+            else:
+                value = _cpp_expand(expression, cse_map, key_memo, guarded)
+                if conditional and return_names and not joint_kind(expression):
+                    declarations.append("%s%s %s = 0;" % (indent, real, name))
+                    lines.append("%s%s = %s;" % (indent, name, value))
+                else:
+                    lines.append("%sconst %s %s = %s;" % (
+                        indent, "auto" if joint_kind(expression) else real, name, value))
+                if not joint_kind(expression):
+                    observed_names.append(name)
+            cse_map[k] = name
+        rendered = [_cpp_cse(r, cse_map, key_memo, guarded) for r in scope_roots]
+        return lines, rendered
+
+    lines, rendered = emit_scope(roots, {}, "", False)
+    lines = declarations + lines
     if return_names:
-        return lines, rendered, tuple(cse_map[key] for key in cand if not joint_kind(rep[key]))
+        return lines, rendered, tuple(observed_names)
     if return_native_statuses:
-        return lines, rendered, tuple(cse_map[key] for key in cand if isinstance(rep[key], NativeCall))
+        return lines, rendered, tuple(native_statuses)
     return lines, rendered
 
 
