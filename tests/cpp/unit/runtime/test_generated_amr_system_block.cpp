@@ -514,6 +514,8 @@ TEST(GeneratedAmrSystemBlock, PreparesOneExactNativePackageImage) {
   EXPECT_EQ(prepared.name, "tracer");
   EXPECT_EQ(prepared.ncomp, 1);
   EXPECT_EQ(prepared.provider_components, 0);
+  EXPECT_EQ(prepared.physical_boundary_authority,
+            pops::PreparedAmrPhysicalBoundaryAuthority::model_qualified_hyperbolic);
   EXPECT_EQ(prepared.reconstruction_order, 2);
   EXPECT_EQ(prepared.substeps, 2);
   EXPECT_EQ(prepared.stride, 3);
@@ -547,6 +549,8 @@ TEST(GeneratedAmrSystemBlock, ProgramStateRouteDoesNotInstantiateHyperbolicPhysi
   EXPECT_EQ(prepared.cut_cell_provider_identity,
             "pops.generated.amr.program-state.cut-cell-unavailable.nd/" + std::to_string(Dim));
   EXPECT_EQ(prepared.reconstruction_order, 1);
+  EXPECT_EQ(prepared.physical_boundary_authority,
+            pops::PreparedAmrPhysicalBoundaryAuthority::program_spatial_operator);
   EXPECT_EQ(prepared.time_route, "imex");
   EXPECT_TRUE(static_cast<bool>(prepared.materialize_level));
   for (int axis = 0; axis < Dim; ++axis)
@@ -566,6 +570,36 @@ TEST(GeneratedAmrSystemBlock, ProgramStateRouteDoesNotInstantiateHyperbolicPhysi
                                                                 "primitive", "imex", pops::Real(0),
                                                                 pops::kWenoEpsilon, false}),
                std::invalid_argument);
+}
+
+TEST(GeneratedAmrSystemBlock, PhysicalFacesUseTheirAuthenticatedNumericalAuthority) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 8;
+    config.periodicity[axis] = false;
+  }
+
+  pops::AmrSystem<Dim> storage(config);
+  storage.install_block_state_route("diffusion-state", "state/diffusion-state");
+  auto state_storage = pops::prepare_compiled_amr_system_block<Dim>(
+      "diffusion-state", ProgramStateModel<Dim>{}, "state_storage", "unavailable", "conservative",
+      "explicit", 1.4, 1, 1, 0.0, static_cast<double>(pops::kWenoEpsilon), false,
+      "test.diffusion-state/native_model");
+  EXPECT_NO_THROW(storage.install_prepared_amr_block(std::move(state_storage)));
+
+  pops::AmrSystem<Dim> hyperbolic(config);
+  hyperbolic.install_block_state_route("tracer", "state/tracer");
+  auto transport = pops::prepare_compiled_amr_system_block<Dim>(
+      "tracer", advection_model<Dim>(), "minmod", "rusanov", "conservative", "explicit", 1.4, 1,
+      1, 0.0, static_cast<double>(pops::kWenoEpsilon), false, "tests.tracer/physical_flux");
+  try {
+    hyperbolic.install_prepared_amr_block(std::move(transport));
+    FAIL() << "physical hyperbolic transport installed without its qualified boundary";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string_view(error.what()).find("requires a model-qualified boundary"),
+              std::string_view::npos);
+  }
 }
 
 TEST(GeneratedAmrSystemBlock, PackageContractAuthenticatesPhysicalModelParameters) {

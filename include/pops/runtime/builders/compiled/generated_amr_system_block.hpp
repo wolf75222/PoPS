@@ -853,6 +853,14 @@ class PreparedGeneratedAmrLevelBlock {
   std::uint64_t materialization_generation_ = 0;
 };
 
+/// Identifies the sole owner of physical-face numerical laws for one prepared block. A generated
+/// hyperbolic block consumes the model-qualified boundary registry; StateStorage leaves physical
+/// faces to the authenticated Program spatial operator, such as PreparedDiffusion.
+enum class PreparedAmrPhysicalBoundaryAuthority : std::uint8_t {
+  model_qualified_hyperbolic = 0,
+  program_spatial_operator = 1,
+};
+
 /// Complete package-owned image prepared before the AMR facade is mutated.
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 struct PreparedAmrSystemBlock {
@@ -874,6 +882,8 @@ struct PreparedAmrSystemBlock {
   int ncomp = 0;
   int provider_components = 0;
   bool has_pointwise_projection = false;
+  PreparedAmrPhysicalBoundaryAuthority physical_boundary_authority =
+      PreparedAmrPhysicalBoundaryAuthority::model_qualified_hyperbolic;
   VariableSet conservative_variables{};
   VariableSet primitive_variables{};
   double gamma = 1.0;
@@ -1061,6 +1071,8 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
   result.ncomp = Model::n_vars;
   result.provider_components = provider_count;
   result.has_pointwise_projection = HasPointwiseProjection<Model>;
+  result.physical_boundary_authority =
+      PreparedAmrPhysicalBoundaryAuthority::model_qualified_hyperbolic;
   result.conservative_variables = Model::conservative_vars();
   result.primitive_variables = Model::primitive_vars();
   result.gamma = request.gamma;
@@ -1074,7 +1086,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
 
   ExactContractBuilder package_contract;
   package_contract.text("pops.prepared-generated-amr-system-block")
-      .scalar(std::uint32_t{6})
+      .scalar(std::uint32_t{7})
       .scalar(std::int32_t{Dim})
       .text(name)
       .text(provider_identity)
@@ -1084,6 +1096,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
       .scalar(std::int32_t{Model::n_vars})
       .scalar(std::int32_t{provider_count})
       .presence(result.has_pointwise_projection)
+      .scalar(static_cast<std::uint8_t>(result.physical_boundary_authority))
       .scalar(std::int32_t{Reconstruction::formal_order})
       .scalar(request.gamma)
       .scalar(std::int32_t{request.substeps})
@@ -1713,6 +1726,8 @@ PreparedAmrSystemBlock<Dim> materialize_state_block(Request request) {
   result.ncomp = Model::n_vars;
   result.provider_components = provider_count;
   result.has_pointwise_projection = false;
+  result.physical_boundary_authority =
+      PreparedAmrPhysicalBoundaryAuthority::program_spatial_operator;
   result.conservative_variables = Model::conservative_vars();
   result.primitive_variables = Model::primitive_vars();
   result.gamma = request.gamma;
@@ -1726,7 +1741,7 @@ PreparedAmrSystemBlock<Dim> materialize_state_block(Request request) {
 
   ExactContractBuilder package_contract;
   package_contract.text("pops.prepared-generated-amr-program-state")
-      .scalar(std::uint32_t{1})
+      .scalar(std::uint32_t{2})
       .scalar(std::int32_t{Dim})
       .text(request.name)
       .text(provider_identity)
@@ -1736,6 +1751,7 @@ PreparedAmrSystemBlock<Dim> materialize_state_block(Request request) {
       .scalar(std::int32_t{Model::n_vars})
       .scalar(std::int32_t{provider_count})
       .presence(false)
+      .scalar(static_cast<std::uint8_t>(result.physical_boundary_authority))
       .scalar(std::int32_t{1})
       .scalar(request.gamma)
       .scalar(std::int32_t{request.substeps})

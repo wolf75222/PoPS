@@ -2368,6 +2368,13 @@ void validate_prepared_amr_block(const PreparedAmrSystemBlock<Dim>& block) {
       !block.conservative_to_primitive || !block.batch_conservative_to_primitive)
     throw std::invalid_argument(
         "prepared AMR block does not implement its complete exact-ranked execution contract");
+  switch (block.physical_boundary_authority) {
+    case PreparedAmrPhysicalBoundaryAuthority::model_qualified_hyperbolic:
+    case PreparedAmrPhysicalBoundaryAuthority::program_spatial_operator:
+      break;
+    default:
+      throw std::invalid_argument("prepared AMR block has an invalid physical-boundary authority");
+  }
 }
 
 template <int Dim>
@@ -11620,9 +11627,16 @@ void AmrSystem<Dim>::install_prepared_amr_block_candidate_(PreparedBlock prepare
     const auto* installed_boundary = p_->boundary_registry.find_boundary(prepared.name);
     const BoundaryTopology<Dim> exact_topology =
         BoundaryTopology<Dim>::axis_periodic(p_->cfg.periodicity);
-    if (generated_amr_detail::has_physical_faces(exact_topology) && installed_boundary == nullptr)
+    const bool uses_model_qualified_boundary =
+        prepared.physical_boundary_authority ==
+        PreparedAmrPhysicalBoundaryAuthority::model_qualified_hyperbolic;
+    if (uses_model_qualified_boundary && generated_amr_detail::has_physical_faces(exact_topology) &&
+        installed_boundary == nullptr)
       throw std::runtime_error(
           "prepared AMR block with physical faces requires a model-qualified boundary");
+    if (!uses_model_qualified_boundary && installed_boundary != nullptr)
+      throw std::invalid_argument(
+          "Program-owned AMR spatial boundaries cannot install hyperbolic boundary physics");
     if (installed_boundary != nullptr) {
       if (installed_boundary->state_identity != route->second ||
           installed_boundary->authority->ncomp() != prepared.ncomp ||
@@ -11660,11 +11674,12 @@ void AmrSystem<Dim>::install_prepared_amr_block_candidate_(PreparedBlock prepare
 
     ExactContractBuilder contract;
     contract.text("pops.amr-system.prepared-install")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .scalar(std::int32_t{Dim})
         .bytes(prepared.collective_contract)
         .text(prepared.provider_consumer_qid)
         .text(route->second)
+        .scalar(static_cast<std::uint8_t>(prepared.physical_boundary_authority))
         .scalar(has_boundary);
     if (installed_boundary != nullptr)
       contract.text(installed_boundary->identity)
