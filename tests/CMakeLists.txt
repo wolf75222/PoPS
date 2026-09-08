@@ -1097,7 +1097,7 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance")
+            "GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance:GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords:GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically")
       else()
         pops_add_mpi_rank_test(${_test} ${_np})
       endif()
