@@ -356,6 +356,7 @@ class InterfaceFluxScheduler {
       prepared.execution_memory_space = execution.memory_space;
       prepared.device_identity = execution.device_identity;
       prepared.collective_identity = collective_identity;
+      prepared.route_certificate = route_digest_(collective_identity);
       prepared.evaluation_count = std::make_shared<std::size_t>(0);
       materialize_storage_(prepared);
     } catch (...) {
@@ -494,7 +495,7 @@ class InterfaceFluxScheduler {
     const auto found = std::find_if(interfaces_.begin(), interfaces_.end(), [&](const auto& route) {
       return route.route.identity == sample.interface_identity && route.route.level == sample.level;
     });
-    if (found == interfaces_.end() || route_digest_(found->collective_identity) != sample.route_contract ||
+    if (found == interfaces_.end() || found->route_certificate != sample.route_contract ||
         found->route.left_block != sample.left_block || found->route.right_block != sample.right_block ||
         found->face_measure != sample.face_measure ||
         found->route.left_axis != sample.left_axis || found->route.right_axis != sample.right_axis ||
@@ -947,6 +948,8 @@ class InterfaceFluxScheduler {
     PopsMemorySpaceV1 execution_memory_space = POPS_MEMORY_SPACE_HOST_V1;
     std::string device_identity;
     std::string collective_identity;
+    // Derived once per immutable route/layout, outside stage evaluation and history reads.
+    std::string route_certificate;
     InterfaceFluxEvaluator evaluator;
     // Execution observations belong to the installed route's lifetime. Transaction snapshots
     // and rematerialized views share them, so restoring scientific state cannot erase work.
@@ -1391,6 +1394,7 @@ class InterfaceFluxScheduler {
         prepared.route, left_state, left_geometry, right_state, right_geometry,
         replacement.left_normal_spacing, replacement.right_normal_spacing, faces,
         prepared.component_count, prepared.communicator_identity, prepared.communicator_size);
+    replacement.route_certificate = route_digest_(replacement.collective_identity);
     materialize_storage_(replacement);
     return replacement;
   }
@@ -1545,7 +1549,7 @@ class InterfaceFluxScheduler {
       if (captured != nullptr) {
         sample.emplace();
         sample->interface_identity = prepared.route.identity;
-        sample->route_contract = route_digest_(prepared.collective_identity);
+        sample->route_contract = prepared.route_certificate;
         sample->left_block = prepared.route.left_block;
         sample->right_block = prepared.route.right_block;
         sample->level = point.level;
