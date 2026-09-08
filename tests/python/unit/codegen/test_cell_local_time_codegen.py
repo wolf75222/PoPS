@@ -17,7 +17,8 @@ def _emit_program(program, model, *, target):
 
 def _transport_program(factory=libtime.ForwardEuler):
     model = Model("cell_local_transport")
-    model.conservative_vars("u")
+    (u,) = model.conservative_vars("u")
+    model.flux(x=[u], y=[0 * u])
     rate = model.rate("transport", flux=True, sources=())
     state = next(
         declaration
@@ -85,7 +86,8 @@ def test_amr_codegen_selects_only_the_prepared_cell_local_driver() -> None:
 
 def test_amr_codegen_emits_one_typed_cell_local_route_per_block() -> None:
     model = Model("cell_local_multiroute")
-    model.conservative_vars("u")
+    (u,) = model.conservative_vars("u")
+    model.flux(x=[u], y=[0 * u])
     rate = model.rate("transport", flux=True, sources=())
     state = next(
         declaration
