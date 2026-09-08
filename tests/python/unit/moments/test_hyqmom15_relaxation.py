@@ -11,6 +11,7 @@ from pops._ir.ops import eig_lmin, eig_lmin_bound
 from pops.moments import CartesianVelocityMoments, HyQMOM15Closure, HyQMOM15Relaxation
 from pops.moments._relaxation_reference import _apply_hyqmom15_relaxation_array
 from pops.time import Program
+from tests.python.integration._final_field_program import compiler_model
 
 
 def _apply(values):
@@ -75,7 +76,7 @@ def test_relaxation15_emits_a_bounded_native_program_kernel() -> None:
         candidate, transform=transform, name="transformed_candidate")
     program.commit(moments.next, transformed)
 
-    source = emit_cpp_program(program, model=model)
+    source = emit_cpp_program(program, model=compiler_model(model))
     assert len(source) < 250_000
     assert "static POPS_HD pops::Real pops_eig_all_real_3x3" in source
     assert "static POPS_HD pops::Real pops_eig_lmin_bound_3x3" in source
