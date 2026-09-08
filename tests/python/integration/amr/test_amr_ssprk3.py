@@ -8,8 +8,6 @@ trajectory is closer than Forward Euler to an SSPRK3 small-step reference.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 import pops
 import pops.lib.time as libtime
@@ -27,6 +25,7 @@ from pops.numerics.spatial import FiniteVolume
 from pops.projection import ConservativeCellAverage
 from pops.time import FixedDt
 from pops.time._methods.properties import certify_program_graph
+from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.requirements import (
     default_cxx,
     missing_native_compile_requirement,
@@ -35,7 +34,6 @@ from tests.python.support.requirements import (
 )
 
 
-ROOT = Path(__file__).resolve().parents[4]
 N = 32
 POPS_PROCESS_TIMEOUT = 900
 
@@ -87,7 +85,7 @@ def _authoring(method: str, dt: float, *, cxx: str | None):
     )
     options = None
     if cxx is not None:
-        options = {"include": str(ROOT / "include"), "cxx": cxx}
+        options = {"include": repo_include(), "cxx": cxx}
     resolved = pops.resolve(
         pops.validate(case),
         layout=Uniform(
@@ -112,8 +110,10 @@ def _initial_state() -> np.ndarray:
 
 def _run(method: str, dt: float, nsteps: int, cxx: str) -> np.ndarray:
     resolved, instance, _rate = _authoring(method, dt, cxx=cxx)
+    artifact = pops.compile(resolved)
     simulation = pops.bind(
-        pops.compile(resolved),
+        artifact,
+        resources={"execution_context": artifact_execution_context(artifact)},
         initial_values={instance: _initial_state()},
     )
     report = pops.run(simulation, t_end=nsteps * dt, max_steps=nsteps)

@@ -235,7 +235,13 @@ def _system_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
     """Install `program` on a single-level System and return (density, potential) after nsteps."""
     sim = System(n=N, L=1.0)
     try:
-        block_cm = compile_block_model(model, target="system")
+        from pops.codegen._orchestration_compile import _resolved_native_amr_field_roles
+
+        roles = _resolved_native_amr_field_roles(plan)
+        assert set(roles) == {"plasma"}
+        block_cm = compiler_model(model).compile(
+            backend="production", target="system", _native_field_roles=roles["plasma"],
+        )
         compiled = compile_problem(
             model=model,
             time=plan.time,
@@ -244,16 +250,25 @@ def _system_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
         )
     except RuntimeError as exc:
         return None, "compile (System): %s" % str(exc)[:140]
-    for field, field_plan in plan.field_plans.items():
-        sim._install_field_plan(field, field_plan)
-    sim.add_equation(
-        "plasma",
-        block_cm,
-        spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-        time=engine.Explicit(method="ssprk2"),
-    )
+    # Stage the block RHS and the Case-owned field output before the one native commit,
+    # matching the internal unified installer used by public bind.
+    sim._batch_native_packages = True
+    try:
+        sim.add_equation(
+            "plasma",
+            block_cm,
+            spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+            time=engine.Explicit(method="ssprk2"),
+        )
+        for field, field_plan in plan.field_plans.items():
+            sim._install_field_plan(field, field_plan)
+            sim._install_field_method_runtime(field_plan, {"plasma": block_cm}, {})
+        sim._commit_pending_native_packages()
+    finally:
+        sim._batch_native_packages = False
     sim.set_density("plasma", u0)
     sim.install_program(compiled.so_path)
+    sim.mark_bound()
     for _ in range(nsteps):
         sim.step(dt)
     (provider_slot,) = tuple(sim.field_provider_slots())
@@ -268,7 +283,11 @@ def _amr_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
     (coarse density component-0, coarse potential, coarse mass) after nsteps. Uses the
     ``_install_compiled`` seam (the AMR counterpart of System's compiled install): a native instance
     carries the block model, the compiled handle carries the time Program installed on the hierarchy."""
-    amr = AmrSystem(n=N, L=1.0, regrid_every=0)
+    amr = AmrSystem(
+        n=N, L=1.0, periodicity=(True, True), regrid_every=0,
+        level_count=1, transition_ratios=(), transition_buffers=(), transition_lookaheads=(),
+    )
+    amr.set_temporal_relations([], [], [])
     if not hasattr(amr, "install_program"):
         return None, "the built _pops lacks AmrSystem.install_program (rebuild _pops)"
     try:
@@ -297,6 +316,7 @@ def _amr_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
         )
         amr.set_density("plasma", u0)
         amr.install_program(compiled.so_path)
+        amr.mark_bound()  # authenticate installed Program checkpoint capacity before stepping
     except RuntimeError as exc:
         return None, "install (AMR): %s" % str(exc)[:240]
     for _ in range(nsteps):
@@ -434,7 +454,11 @@ def test_custom_two_stage_runs_and_differs():
 def _amr_run_cfl(plan, model, u0, nsteps=NSTEPS, cfl=0.4):
     """Install `program` on a single-level AmrSystem and drive it with step_cfl (NOT step). Returns
     (coarse density, program hash, last dt) -- the step_cfl Program route (ADC-508 review fix 1)."""
-    amr = AmrSystem(n=N, L=1.0, regrid_every=0)
+    amr = AmrSystem(
+        n=N, L=1.0, periodicity=(True, True), regrid_every=0,
+        level_count=1, transition_ratios=(), transition_buffers=(), transition_lookaheads=(),
+    )
+    amr.set_temporal_relations([], [], [])
     if not hasattr(amr, "install_program") or not hasattr(amr, "step_cfl"):
         return None, "the built _pops lacks AmrSystem.install_program/step_cfl (rebuild _pops)"
     try:
@@ -459,6 +483,7 @@ def _amr_run_cfl(plan, model, u0, nsteps=NSTEPS, cfl=0.4):
         )
         amr.set_density("plasma", u0)
         amr.install_program(compiled.so_path)
+        amr.mark_bound()  # authenticate installed Program checkpoint capacity before stepping
         last_dt = 0.0
         for _ in range(nsteps):
             last_dt = float(amr.step_cfl(cfl))
