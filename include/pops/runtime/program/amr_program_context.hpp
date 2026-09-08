@@ -341,11 +341,8 @@ class AmrProgramContext {
     std::shared_ptr<PreparedAmrSpatialResidual<Dim>> workspace;
     std::vector<FluxExpression> previous_flux;
   };
+  friend struct AmrSpatialReconciliationTestAccess;
   mutable std::map<int, SpatialHierarchyResource> spatial_hierarchy_resources_;
-  struct SpatialConsumedFlux {
-    std::uint64_t attempt;
-    std::vector<std::uint8_t> weighted_fragments;
-  };
   mutable std::map<std::pair<std::size_t, std::size_t>, SpatialConsumedFlux> spatial_consumed_flux_;
   mutable std::mutex coupled_jacvec_mutex_;
   mutable std::unique_ptr<CoupledJacvecScratch> coupled_jacvec_scratch_;

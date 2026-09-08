@@ -1,6 +1,12 @@
 #include <gtest/gtest.h>
 #include <pops/runtime/program/prepared_amr_spatial_residual.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/runtime/program/amr_program_context.hpp>
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/physics/bricks/bricks.hpp>
+#include <pops/physics/fluids/euler.hpp>
+#include "amr_tagging_test_authority.hpp"
+#include "explicit_amr_program.hpp"
 
 namespace {
 class CommEnvironment final : public ::testing::Environment {
@@ -66,3 +72,164 @@ TEST(AmrSpatialNorm, MixedOwnershipCountsOnlyThePhysicalActiveCover) {
     EXPECT_EQ(report.iters, 0);
   }
 }
+
+// This facade fixture matches the Dim2 public implicit qualification matrix.
+#if POPS_NATIVE_DIM == 2
+namespace pops::runtime::program {
+// White-box access is limited to adversarial evidence setup; the tested operation
+// remains the real collective materialization entrypoint used by generated Programs.
+struct AmrSpatialReconciliationTestAccess {
+  using Context = AmrProgramContext<2>;
+  using Ledger = Context::multiblock_flux_ledger_type;
+  static void prepare(Context& ctx, MultiFab<2>& coarse, MultiFab<2>& middle, MultiFab<2>& fine,
+                      Ledger& incoming, Ledger& outgoing) {
+    ctx.active_level_ = 1;
+    ctx.active_subcycling_attempt_ = 7;
+    ctx.active_subcycling_window_ = {{1, 0, {0, 1}, 0}, {1, 0, {1, 1}, 1}};
+    ctx.active_attempt_states_ = {&middle};
+    ctx.active_incoming_flux_ = {&incoming};
+    ctx.active_outgoing_flux_ = {&outgoing};
+    ctx.active_block_identities_ = {"tracer"};
+    ctx.spatial_consumed_flux_.clear();
+    auto first = incoming, second = outgoing;
+    first.commit();
+    second.commit();
+    ctx.spatial_consumed_flux_.emplace(
+        std::make_pair(0, 0),
+        Context::SpatialConsumedFlux{7, ctx.spatial_weighted_fragments(first), &coarse, &middle});
+    ctx.spatial_consumed_flux_.emplace(
+        std::make_pair(0, 1),
+        Context::SpatialConsumedFlux{7, ctx.spatial_weighted_fragments(second), &middle, &fine});
+  }
+  static void damage(Context& ctx, int fault, MultiFab<2>& unrelated) {
+    if (my_rank() != 0)
+      return;
+    if (fault == 1)
+      ctx.spatial_consumed_flux_.erase({0, 0});
+    if (fault == 2)
+      ctx.spatial_consumed_flux_.clear();
+    if (fault == 3)
+      ++ctx.spatial_consumed_flux_.at({0, 0}).attempt;
+    if (fault == 4)
+      ctx.spatial_consumed_flux_.at({0, 0}).child_candidate = &unrelated;
+    if (fault == 5)
+      ctx.spatial_consumed_flux_.at({0, 1}).weighted_fragments.back() ^= 1;
+    if (fault == 6)
+      ctx.active_attempt_states_[0] = &unrelated;
+  }
+  static void materialize(Context& ctx, MultiFab<2>& candidate) {
+    ctx.materialize_active_flux_expression_(0, candidate);
+  }
+  static std::size_t proofs(const Context& ctx) { return ctx.spatial_consumed_flux_.size(); }
+  static bool consume(Context& ctx, std::size_t parent, MultiFab<2>& coarse, MultiFab<2>& fine,
+                      const Ledger& flux) {
+    const ::pops::amr::ClockWindow window{{static_cast<int>(parent), 0, {0, 1}, 0},
+                                          {static_cast<int>(parent), 0, {1, 1}, 1}};
+    Context::multiblock_reflux_context_type context{
+        0, "tracer", parent, 7, window, coarse, fine, flux, ::pops::amr::RefinementRatio<2>{2, 2},
+        {}};
+    return ctx.consume_spatial_reconciliation(context);
+  }
+};
+}  // namespace pops::runtime::program
+
+namespace {
+using SpatialAccess = pops::runtime::program::AmrSpatialReconciliationTestAccess;
+SpatialAccess::Ledger predictor_ledger(int parent, double weight = 1) {
+  SpatialAccess::Ledger result({8, 8, 1});
+  result.begin(7);
+  for (auto role :
+       {pops::amr::reflux::FaceLedgerRole::Coarse, pops::amr::reflux::FaceLedgerRole::Fine}) {
+    pops::amr::reflux::FaceFluxFragmentKey<2> key;
+    key.owner = "tracer";
+    key.state = "tracer/state";
+    key.stage = "predictor/dt-power/1/weight/1/1";
+    key.levels = {parent, parent + 1};
+    key.role = role;
+    key.axis = 0;
+    key.attempt = 7;
+    key.clock = {parent + (role == pops::amr::reflux::FaceLedgerRole::Fine), 0, {0, 1}, 0};
+    pops::amr::reflux::FaceFluxFragmentMeasure measure;
+    measure.stage_weight = {static_cast<std::int64_t>(weight), 1};
+    measure.substep_begin = {0, 1};
+    measure.substep_end = {1, 1};
+    measure.substep_duration = 1;
+    measure.face_measure = 0.125;
+    result.accumulate(key, measure, {pops::Real(3)});
+  }
+  return result;
+}
+}  // namespace
+
+TEST(AmrSpatialMaterialization, PendingProofSurvivesPublicationAndRejectsRankLocalDamage) {
+  using namespace pops;
+  AmrSystemConfig<2> config;
+  config.shape = Extent<2>{16, 16};
+  config.periodicity = {true, true};
+  config.level_count = 2;
+  config.regrid_every = 0;
+  AmrSystem<2> system(config);
+  test::install_amr_runtime_authority(system, "tests.spatial-proof/runtime@1");
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
+  system.install_block_state_route("tracer", "tests.spatial-proof/tracer/state@1");
+  system.install_hyperbolic_boundary("tracer", "tests.spatial-proof/boundary@1", 1,
+                                     {"periodic", "periodic", "periodic", "periodic"},
+                                     std::vector<double>(16, 0), {"xlo", "xhi", "ylo", "yhi"},
+                                     {"density", "momentum:0", "momentum:1", "energy"},
+                                     "tests.spatial-proof/tracer/state@1");
+  using Model = CompositeModel<EulerND<2>, NoSource, NoElliptic>;
+  add_compiled_model<2>(system, "tracer",
+                        Model{{}, {}, EulerND<2>::prepare(Real(1.4)), NoSource{}, NoElliptic{}},
+                        "minmod", "rusanov", "conservative", "explicit", 1.4, 1, 1, {}, {}, 0.0,
+                        static_cast<double>(kWenoEpsilon), false, "tests.spatial-proof/flux@1");
+  std::vector<double> initial(4 * 256, 0);
+  std::fill(initial.begin(), initial.begin() + 256, 1);
+  std::fill(initial.begin() + 3 * 256, initial.end(), 2.5);
+  system.set_conservative_state("tracer", initial);
+  system.install_program_step([](double) {});
+  system.set_program_block_map({0});
+  (void)system.mass("tracer");
+  SpatialAccess::Context context(system.engine(), &system);
+  auto coarse = field(false, false), middle = field(false, false), fine = field(true, false);
+  auto unrelated = field(false, false);
+  coarse.set_val(1);
+  middle.set_val(2);
+  fine.set_val(3);
+  unrelated.set_val(4);
+  for (int fault = 0; fault <= 8; ++fault) {
+    auto incoming = predictor_ledger(0), outgoing = predictor_ledger(1);
+    auto attempt = [&] {
+      SpatialAccess::prepare(context, coarse, middle, fine, incoming, outgoing);
+      SpatialAccess::damage(context, fault, unrelated);
+      if (my_rank() == 0 && fault == 7)
+        outgoing = predictor_ledger(1, 2);
+      if (my_rank() == 0 && fault == 8)
+        outgoing.rollback();
+      SpatialAccess::materialize(context, middle);
+      EXPECT_EQ(SpatialAccess::proofs(context), 2u);
+      EXPECT_EQ(incoming.pending_size(), 2u);
+      EXPECT_EQ(incoming.published_size(), 0u);
+      incoming.commit();
+      outgoing.commit();
+      EXPECT_TRUE(SpatialAccess::consume(context, 0, coarse, middle, incoming));
+      EXPECT_TRUE(SpatialAccess::consume(context, 1, middle, fine, outgoing));
+      EXPECT_EQ(SpatialAccess::proofs(context), 0u);
+    };
+    if (fault == 0) {
+      EXPECT_NO_THROW(context.with_spatial_reconciliation_attempt(attempt));
+    } else {
+      EXPECT_THROW(context.with_spatial_reconciliation_attempt(attempt), std::exception);
+      EXPECT_EQ(SpatialAccess::proofs(context), 0u);
+      incoming.rollback();
+      if (!(my_rank() == 0 && fault == 8))
+        outgoing.rollback();
+      EXPECT_EQ(incoming.published_size() + outgoing.published_size(), 0u);
+      EXPECT_EQ(incoming.pending_size() + outgoing.pending_size(), 0u);
+    }
+    EXPECT_DOUBLE_EQ(reduce_min_local(coarse), 1);
+    EXPECT_DOUBLE_EQ(reduce_min_local(middle), 2);
+    EXPECT_DOUBLE_EQ(reduce_min_local(fine), 3);
+  }
+}
+
+#endif  // POPS_NATIVE_DIM == 2

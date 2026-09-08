@@ -49,7 +49,17 @@ DT = 0.00025
 
 
 def build(
-    n, *, kind="constant", refined=True, boundary=False, invalid=False, subcycled=False, imex=False
+    n,
+    *,
+    kind="constant",
+    refined=True,
+    boundary=False,
+    invalid=False,
+    subcycled=False,
+    imex=False,
+    failure_action=None,
+    newton_iterations=20,
+    step_dt=DT,
 ):
     from pops.physics.diffusion import DiffusiveBoundary
 
@@ -115,7 +125,7 @@ def build(
     case.numerics(numerics, block=block)
     program = pops.Program("composite-implicit-stage")
     temporal = program.state(block[state])
-    if invalid:
+    if invalid or failure_action is not None:
         program.store_history("prior_energy", temporal.n, depth=1)
     coordinates = program.value("coordinates", temporal.n, at=temporal.next.point)
     previous = temporal.n
@@ -133,18 +143,18 @@ def build(
         request,
         solver=Newton(
             tolerance=1e-12,
-            max_iterations=20,
+            max_iterations=newton_iterations,
             linear_tolerance=1e-8,
             linear_max_iterations=100,
             restart=30,
         ),
-    ).consume(action=FailRun())[0]
+    ).consume(action=FailRun() if failure_action is None else failure_action)[0]
     conserved = (
         program.transform(solved, transform=accumulation) if accumulation is not None else solved
     )
     candidate = program.value("updated", conserved, at=temporal.next.point)
     program.commit(temporal.next, candidate)
-    program.step_strategy(FixedDt(DT))
+    program.step_strategy(FixedDt(step_dt))
     case.program(program)
     case.initials.add(
         InitialCondition(
@@ -268,42 +278,43 @@ def test_composite_implicit_physical_boundary_inventory(
         assert_no_second_reflux(runtime)
 
 
+def accepted_envelope(runtime):
+    native = runtime._executor
+    return (
+        runtime.time(),
+        runtime.macro_step(),
+        tuple(runtime.patch_boxes()),
+        tuple(
+            np.asarray(runtime.block_level_state_global("heat", level)).tobytes()
+            for level in range(runtime.n_levels())
+        ),
+        native._program_exchange_records(),
+        tuple(tuple(map(str, row)) for row in native.program_flux_ledger_manifest()),
+        tuple(
+            (
+                name,
+                native.history_initialized(name),
+                native.history_fill_count(name),
+                tuple(
+                    np.asarray(native.history_global(name, slot)).tobytes()
+                    for slot in range(native.history_depth(name))
+                ),
+            )
+            for name in native.history_names()
+        ),
+    )
+
+
 @pytest.mark.parametrize("imex", [False, True])
 def test_composite_implicit_failure_restores_every_level_history_and_exchange(
     imex, isolated_native_cache, native_cxx, kokkos_root
 ):
     runtime = bind(32, invalid=True, imex=imex)
-    native = runtime._executor
 
-    def envelope():
-        return (
-            runtime.time(),
-            runtime.macro_step(),
-            tuple(runtime.patch_boxes()),
-            tuple(
-                np.asarray(runtime.block_level_state_global("heat", level)).tobytes()
-                for level in range(runtime.n_levels())
-            ),
-            native._program_exchange_records(),
-            tuple(tuple(map(str, row)) for row in native.program_flux_ledger_manifest()),
-            tuple(
-                (
-                    name,
-                    native.history_initialized(name),
-                    native.history_fill_count(name),
-                    tuple(
-                        np.asarray(native.history_global(name, slot)).tobytes()
-                        for slot in range(native.history_depth(name))
-                    ),
-                )
-                for name in native.history_names()
-            ),
-        )
-
-    before = envelope()
+    before = accepted_envelope(runtime)
     with pytest.raises(RuntimeError, match="(?i)(invalid|diffus|spatial)"):
         pops.run(runtime, t_end=DT, max_steps=1, console=False)
-    assert envelope() == before
+    assert accepted_envelope(runtime) == before
 
 
 def test_composite_implicit_refuses_true_subcycling_before_publication(
@@ -321,3 +332,71 @@ def test_composite_implicit_refuses_true_subcycling_before_publication(
         np.asarray(runtime.block_level_state_global("heat", level)).tobytes()
         for level in range(runtime.n_levels())
     )
+
+
+@pytest.mark.parametrize("imex", [False, True])
+def test_composite_implicit_numerical_rejection_restores_pending_predictor(
+    imex, isolated_native_cache, native_cxx, kokkos_root
+):
+    from pops.time import RejectAttempt
+
+    runtime = bind(
+        32,
+        kind="nonlinear_accumulation",
+        imex=imex,
+        newton_iterations=1,
+        failure_action=RejectAttempt(statuses=("iteration_limit",)),
+    )
+    before = accepted_envelope(runtime)
+    with pytest.raises(RuntimeError, match="(?i)(spatial|iteration|reject)"):
+        pops.run(runtime, t_end=DT, max_steps=1, console=False)
+    assert accepted_envelope(runtime) == before
+    report = runtime._executor._last_step_transaction_report
+    assert report.action == "reject_attempt"
+    assert report.attempts == 1
+
+
+@pytest.mark.parametrize("imex", [False, True])
+def test_composite_implicit_manual_resumption_after_numerical_rejection(
+    imex, isolated_native_cache, native_cxx, kokkos_root
+):
+    from pops.time import RejectAttempt
+
+    options = dict(
+        kind="variable",
+        imex=imex,
+        newton_iterations=1,
+        failure_action=RejectAttempt(statuses=("iteration_limit",)),
+    )
+    runtime = bind(32, step_dt=16 * DT, **options)
+    before = accepted_envelope(runtime)
+    with pytest.raises(RuntimeError, match="(?i)(spatial|iteration|reject)"):
+        pops.run(runtime, t_end=16 * DT, max_steps=1, console=False)
+    assert runtime._executor._last_step_transaction_report.action == "reject_attempt"
+    assert accepted_envelope(runtime) == before
+    # FixedDt's public driver clips to t_end. This is a new caller-requested attempt
+    # on the same instance, not an adaptive retry or a changed solver tolerance.
+    endpoint = DT / 64
+    reference = bind(32, step_dt=endpoint, **options)
+    for current in (runtime, reference):
+        report = pops.run(current, t_end=endpoint, max_steps=1, console=False)
+        assert report.accepted_steps == 1 and report.rejected_steps == 0
+    assert runtime.time() == reference.time() == endpoint
+    for level in range(runtime.n_levels()):
+        np.testing.assert_array_equal(
+            runtime.block_level_state_global("heat", level),
+            reference.block_level_state_global("heat", level),
+        )
+    assert (
+        runtime._executor._program_exchange_records()
+        == reference._executor._program_exchange_records()
+    )
+    for name in runtime._executor.history_names():
+        assert runtime._executor.history_fill_count(name) == reference._executor.history_fill_count(
+            name
+        )
+        for slot in range(runtime._executor.history_depth(name)):
+            np.testing.assert_array_equal(
+                runtime._executor.history_global(name, slot),
+                reference._executor.history_global(name, slot),
+            )

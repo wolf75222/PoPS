@@ -71,3 +71,28 @@ def test_explicit_imex_predictor_is_reconciled_before_one_implicit_solve(kind):
     )
     assert "attach_diffusive_flux_basis" not in source
     assert "stage_spatial_hierarchy_previous" in source
+
+
+@pytest.mark.parametrize("imex", [False, True])
+def test_numerical_rejection_profile_preserves_iteration_limit_action(imex):
+    import pops
+    from pops.time import RejectAttempt
+    from tests.python.integration.runtime.test_amr_implicit_diffusion import build
+
+    case, layout = build(
+        32,
+        kind="nonlinear_accumulation",
+        imex=imex,
+        newton_iterations=1,
+        failure_action=RejectAttempt(statuses=("iteration_limit",)),
+    )
+    plan = pops.resolve(pops.validate(case), layout=layout)
+    source = emit_cpp_program(
+        plan.time, model=lower_and_validate(plan.blocks[0].model)[0], target="amr_system"
+    )
+    assert ".max_iterations = 1," in source
+    assert "pops::SolveStatus::kIterationLimit" in source
+    assert "pops::SolveAction::kRejectAttempt" in source
+    assert source.index("reconcile_spatial_hierarchy_previous") < source.index(
+        "solve_spatial_hierarchy"
+    )
