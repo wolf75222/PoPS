@@ -109,6 +109,17 @@ def validate_spatial_commit(program: Any, token: Any) -> None:
     """Only the complete solved conservative stage has an admitted exchange quadrature."""
     from pops.time.references import handle_data
     from pops.time._program.serialization import _json_ready
+    from pops.time._program.region_validation import _BLOCK_KEYS
+
+    pending = list(program._values)
+    while pending:
+        value = pending.pop()
+        # project() mutates its input even when the returned SSA alias is discarded.
+        # Such a correction requires its own accepted inventory/exchange accounting.
+        if value.op == "project" and value.block == token.block:
+            raise SolveRequestError("unsupported_commit", "spatial stage projection requires a declared correction quadrature")
+        for key in _BLOCK_KEYS:
+            pending.extend(value.attrs.get(key) or ())
 
     def unit_wrapper(value: Any) -> Any:
         while value.op == "linear_combine" and len(value.inputs) == 1 \

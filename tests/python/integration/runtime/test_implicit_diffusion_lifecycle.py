@@ -83,6 +83,8 @@ def make_case(n, *, method="backward_euler", dt=0.0001, nonlinear=False, invalid
         candidate = solved
     elif commit_mode == "wrong_accumulation":
         candidate = program.transform(solved, transform=seed_op)
+    elif commit_mode == "mutated_alias":
+        program.project(candidate)
     program.commit(temporal.next, candidate)
     program.step_strategy(FixedDt(dt))
     case.program(program)

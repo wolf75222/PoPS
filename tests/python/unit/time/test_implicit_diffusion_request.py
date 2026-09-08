@@ -99,7 +99,9 @@ def test_spatial_adapter_requires_explicit_supported_derivative():
         resolve_case(derivative_route="exact")
 
 
-@pytest.mark.parametrize("replacement", ["unused", "history_only", "weighted", "raw_coordinate", "wrong_accumulation"])
+@pytest.mark.parametrize("replacement", [
+    "unused", "history_only", "weighted", "raw_coordinate", "wrong_accumulation", "mutated_alias",
+])
 def test_spatial_exchange_refuses_unproved_commit_endpoint(replacement):
     case, layout = make_case(16, nonlinear=replacement in ("raw_coordinate", "wrong_accumulation"),
                              commit_mode=replacement)
