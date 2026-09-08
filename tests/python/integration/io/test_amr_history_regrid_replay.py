@@ -1,34 +1,16 @@
 #!/usr/bin/env python3
-"""AMR history persistence across regrid windows is exact, explicit and bit-identical.
+"""Two-block AMR selective history: exact frozen-grid replay and active-remap refusal.
 
-A selective replay window that straddles a head-of-step regrid cannot reconstruct values exactly from
-anchors already remapped to the checkpoint hierarchy. The resolved checkpoint plan therefore promotes
-that checkpoint instance to authenticated ``dense_regrid_safety`` storage. The authoring policy remains
-visible as the requested slots; the effective slots, promotion mode and regrid schedule are persisted.
-Clean hierarchy windows retain selective storage and native deterministic replay.
-
-The composition is TWO explicitly program-driven blocks: "blk" (ring, blob above the tag threshold)
-plus a background block "bg" (below threshold, never tagged). Both states advance through the same
-strictly affine dt-dependent recurrence. The second block keeps a real two-level hierarchy so scheduled
-regrids genuinely change/remap it; this prevents a coarse-only structural no-op from making an unsafe
-replay appear valid. Its smooth sub-threshold state keeps the tag union deterministic.
-
-The cases (all np.array_equal, no tolerance; a FRESH AmrSystem restart):
-
-  (a) one in-window regrid promotes effective storage to dense; no replay fires;
-  (b) multiple in-window regrids produce the same explicit dense safety promotion;
-  (c) NO-REGRID non-regression: a clean-window selective checkpoint still round-trips bit-identically
-      and actually replays the omitted slot;
-  (d) INVERTED GUARD: corrupting the recorded regrid-schedule fingerprint makes the restart raise the
-      hard coherence error; an uncorrupted file restarts clean.
-
-The model is the warm-start-independent passive-source class (a pointwise linear recurrence: the
-provably bit-exact replay class ADC-631 documents).
-Missing native prerequisites are explicit local skips and required-lane failures. Pytest + __main__.
+The original N16 two-level composition has both "blk" and "bg" advancing through affine dynamics.
+The original depth3/depth5 active-regrid graphs request new fine coverage that retained state rings
+cannot currently populate. They remain explicit refusal/rollback controls with unchanged geometry,
+depth, schedules and step budgets. This is an M6.4/M7 limitation, not qualified live regrid replay.
+Separately declared frozen-grid 1:1 runs preserve the full restart, omitted-slot and corrupted-fingerprint
+oracles. Frozen-grid 2:1 selective restart is a separate refusal/rollback control.
+All comparisons are bit-exact; every fresh runtime binds the same genuine compiled artifact.
 """
 import os
 import tempfile
-import hashlib
 import json
 
 from tests.python.support.requirements import (
@@ -37,8 +19,10 @@ from tests.python.support.requirements import (
     repo_include,
     require_native_or_skip,
 )
-from tests.python.support.amr_tagging import install_prepared_threshold_union
 
+
+# Full two-block matrix compiles nine distinct artifacts; retain a bounded process budget.
+POPS_PROCESS_TIMEOUT = 600
 
 _native_missing = missing_native_compile_requirement(repo_include(), default_cxx())
 if _native_missing:
@@ -48,18 +32,16 @@ try:
     import numpy as np
 
     import pops
-    from pops.codegen._compile_drivers import compile_problem
-    import pops.runtime._engine_descriptors as engine
-    from pops.numerics.reconstruction import FirstOrder
-    from pops.numerics.riemann import Rusanov
     from pops.domain import Rectangle
     from pops.frames import Cartesian2D
     from pops.math import ddt, div
     from pops.physics import Model
-    from pops.runtime._system import AmrSystem, AmrSystemConfig
     from pops.time._history.persistence import Interval
-    from tests.python.integration._final_field_program import compile_block_model
-    from tests.python.support.typed_program import program_states
+    from tests.python.integration.io.test_amr_history_checkpoint import (
+        _accepted_image, _assert_accepted_image_equal,
+        _assert_multirate_restart_refusal, _assert_new_coverage_refusal, _bind_checkpoint_artifact,
+        _compile_checkpoint_program, _program_states,
+    )
 except Exception as exc:  # noqa: BLE001
     require_native_or_skip(
         "test_amr_history_regrid_replay cannot import pops/numpy: %s" % exc)
@@ -67,17 +49,6 @@ except Exception as exc:  # noqa: BLE001
 N = 16
 DT = 2.0e-3
 _C = 0.6  # linear source S(rho) = _C*rho: the ring is load-bearing (R changes every step)
-
-
-def _amr_config(n: int, *, regrid_every: int) -> AmrSystemConfig:
-    config = AmrSystemConfig()
-    config.shape = (n, n)
-    config.lower = (0.0, 0.0)
-    config.upper = (1.0, 1.0)
-    config.periodicity = (True, True)
-    config.boxes = (((0, 0), (n, n)),)
-    config.regrid_every = regrid_every
-    return config
 
 
 def _advance(sim, nsteps):
@@ -93,8 +64,10 @@ def chk(cond, label):
 
 
 def _passive_source_model(name):
-    """1-variable rho, ZERO flux, linear source S=_C*rho, elliptic_rhs=rho. The dynamics never read
-    phi/aux (warm-start-independent -> the provably bit-exact replay class); the tags read the density."""
+    """One scalar, zero flux and linear source S=_C*rho; refinement tags read its density.
+
+    The field-free dynamics retain the deterministic affine replay class.
+    """
     frame = Rectangle(
         "%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)
     ).frame(Cartesian2D())
@@ -123,7 +96,7 @@ def _state_ring_program(model, depth, k, name):
     recurrence multi-term (a k-term recurrence would need k seed states the single-seed replay
     cannot supply -- the documented replay class)."""
     P = pops.time.Program(name)
-    _case, states = program_states(P, model, ("blk", "bg"))
+    _case, states = _program_states(P, model, ("blk", "bg"))
     U = states["blk"]
     background = states["bg"]
     # The helper argument is the physical slot count; keep_history authoring takes max lag.
@@ -141,7 +114,7 @@ def _state_ring_program(model, depth, k, name):
     )
     P.commit(background.next, background_next)
     P.step_strategy(pops.time.FixedDt(DT))
-    return P
+    return P, _case
 
 
 def _blob():
@@ -150,88 +123,25 @@ def _blob():
     return 1.0 + 0.5 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / (0.15 ** 2))
 
 
-def _complete_native_bind(amr, compiled, initials, *, regrid_every):
-    """Freeze the native history fixture at the real accepted bind boundary."""
-    from pops.identity import make_identity
-    from pops.model.bind_schema import BindSchema
-    from pops.runtime._bound_snapshot import BoundSnapshot
-    from tests.python.support.native_execution_context import (
-        compiled_problem_execution_context,
-    )
-
-    authored = compiled.program
-    authored = getattr(authored, "program", authored)
-    context = compiled_problem_execution_context(compiled, target="amr_system")
-    amr._execution_context = context
-    evidence = {}
-    for name, value in sorted(initials.items()):
-        array = np.ascontiguousarray(value, dtype=np.float64)
-        evidence[name] = {
-            "dtype": array.dtype.str,
-            "shape": list(array.shape),
-            "content_sha256": hashlib.sha256(array.view(np.uint8)).hexdigest(),
-        }
-    snapshot = BoundSnapshot(
-        semantic_identity=compiled.semantic_identity,
-        artifact_identity=compiled.artifact_identity,
-        layout={"kind": "amr", "cells": [N, N], "regrid_every": regrid_every},
-        blocks=[{"name": name} for name in initials],
-        field_plans={},
-        step_transaction=authored.transaction_plan().to_data(),
-        params=[],
-        aux_evidence={},
-        initial_evidence=evidence,
-        bind_schema_identity=make_identity(
-            "bind-schema", BindSchema().to_dict()),
-        execution_context=context.to_data(),
-    )
-    amr._temporal_restart_state.configure_program(
-        authored.temporal_manifest(), time=amr.time(), macro_step=amr.macro_step())
-    amr._finalize_bind(snapshot)
+_COMPILED_CASES = {}
 
 
-def _build(program_factory, regrid_every):
-    amr = AmrSystem(_amr_config(N, regrid_every=regrid_every))
-    amr.set_temporal_relations([2], [1], ["integral_only"])
-    if not hasattr(amr, "install_program") or not hasattr(amr, "history_names"):
-        require_native_or_skip(
-            "test_amr_history_regrid_replay requires install_program/history_names bindings")
-    model = _passive_source_model("history_regrid_model")
-    program = program_factory(model)
-    compiled = compile_problem(model=model, time=program, target="amr_system")
-    block_cm = compile_block_model(model, target="amr_system")
-    bg_cm = compile_block_model(model, target="amr_system")
-    amr.add_equation("blk", block_cm,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                     time=engine.Explicit(method="ssprk2"))
-    # The explicit background block keeps the historical 2-level seed (a single-block Program builds
-    # a coarse-only hierarchy where regrid() is a structural no-op). It is part of the same compiled
-    # Program and advances through the exact zero-transport conservative rate; its smooth density
-    # remains below the tag threshold throughout these short runs.
-    amr.add_equation("bg", bg_cm,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                     time=engine.Explicit(method="ssprk2"))
-    install_prepared_threshold_union(
-        amr, (("blk", "rho", 1.2), ("bg", "rho", 1.2)))
+def _build(program_factory, regrid_every, *, temporal_ratio=2):
+    key = (program_factory, regrid_every, temporal_ratio)
     initials = {"blk": _blob(), "bg": np.full((N, N), 0.5)}
-    amr.set_density("blk", initials["blk"])
-    amr.set_density("bg", initials["bg"])  # smooth and below threshold throughout the run
-    amr.install_program(compiled.so_path)
-    authored = compiled.program
-    amr._step_strategy = authored._step_strategy
-    amr._step_transaction_plan = authored.transaction_plan()
-    persistence = getattr(getattr(compiled, "program", None), "_history_persistence", None)
-    if persistence:
-        amr.set_history_persistence(
-            {name: policy for name, (_depth, policy) in persistence.items()})
-    _complete_native_bind(amr, compiled, initials, regrid_every=regrid_every)
-    return amr, None
+    if key not in _COMPILED_CASES:
+        model = _passive_source_model("history_regrid_model")
+        _COMPILED_CASES[key] = _compile_checkpoint_program(
+            model, program_factory(model), regrid_every=regrid_every, initials=initials,
+            temporal_ratio=temporal_ratio,
+        )
+    return _bind_checkpoint_artifact(_COMPILED_CASES[key], initials), None
 
 
 def _rings(amr):
     return {
         (h, int(level)): [
-            np.asarray(amr.history_global(h, level, k), dtype=np.float64).ravel()
+            np.asarray(amr.history_global(h, level, k), dtype=np.float64).ravel().copy()
             for k in range(int(amr.history_depth(h)))
         ]
         for h in amr.history_names()
@@ -247,9 +157,9 @@ def _rings_equal(first, second):
         for name in first)
 
 
-def _run_case(program_factory, nsteps, half, label, regrid_every):
+def _run_case(program_factory, nsteps, half, label, regrid_every, *, temporal_ratio):
     """continuous(nsteps) vs [run(half), ckpt, FRESH restart, continue]. Returns the comparison data."""
-    cont, err = _build(program_factory, regrid_every)
+    cont, err = _build(program_factory, regrid_every, temporal_ratio=temporal_ratio)
     assert cont is not None, err
     assert int(cont.n_levels()) >= 2, \
         "history regrid replay requires a real two-level hierarchy"
@@ -258,7 +168,7 @@ def _run_case(program_factory, nsteps, half, label, regrid_every):
     _advance(cont, nsteps - half)
     ref = np.asarray(cont.density("blk"))
 
-    run, _ = _build(program_factory, regrid_every)
+    run, _ = _build(program_factory, regrid_every, temporal_ratio=temporal_ratio)
     _advance(run, half)
     with tempfile.TemporaryDirectory() as tmp:
         ckpt = run.checkpoint(os.path.join(tmp, label))
@@ -274,9 +184,9 @@ def _run_case(program_factory, nsteps, half, label, regrid_every):
                 slot_dts = np.asarray(
                     d["history_slot_dt_%s_level_%d" % (h, level)], dtype=np.float64
                 ).reshape(-1)
-                expected_dts = np.full(depth, DT, dtype=np.float64)
+                expected_dts = np.full(depth, DT / (temporal_ratio ** level), dtype=np.float64)
                 if depth > 1:
-                    expected_dts[1] = accepted_dt
+                    expected_dts[1] = accepted_dt / (temporal_ratio ** level)
                 assert np.array_equal(slot_dts, expected_dts), (
                     "AMR history slot_dt must remain the level-qualified macro dt "
                     "(level=%d, got %r)" % (level, slot_dts.tolist())
@@ -289,7 +199,7 @@ def _run_case(program_factory, nsteps, half, label, regrid_every):
             mode = str(d["history_storage_mode_" + h])
             stored_info[h] = (
                 depth, sorted(requested), sorted(stored), mode, fingerprint)
-        fresh, _ = _build(program_factory, regrid_every)  # a FRESH AmrSystem (fresh install_program)
+        fresh, _ = _build(program_factory, regrid_every, temporal_ratio=temporal_ratio)  # a FRESH AmrSystem (fresh install_program)
         fresh.restart(ckpt)
         # Dense safety promotion and clean-window replay must both complete no structural regrid.
         # Read the native guard evidence immediately after restart.
@@ -299,6 +209,7 @@ def _run_case(program_factory, nsteps, half, label, regrid_every):
         report = fresh.last_restart_report()
         _advance(fresh, nsteps - half)
     got = np.asarray(fresh.density("blk"))
+    _assert_accepted_image_equal(_accepted_image(cont), _accepted_image(fresh))
     return (ref, got, cont_rings_at_half, rings_after_restart, stored_info, report, fired), None
 
 
@@ -309,23 +220,12 @@ def _assert_bit_identical(out, label, *, want_mode, want_fingerprint):
         "%s resolved storage mode is %s: %r" % (label, want_mode, stored_info))
     chk(all(fp == want_fingerprint for _, _, _, _, fp in stored_info.values()),
         "%s authenticated regrid fingerprint is %r" % (label, want_fingerprint))
-    if want_mode == "dense_regrid_safety":
-        chk(all(len(requested) < depth and len(stored) == depth
-                for depth, requested, stored, _, _ in stored_info.values()),
-            "%s preserves selective intent but stores every slot safely" % label)
-        chk(report is not None and all(
-            row["storage_mode"] == want_mode
-            and row["requested_slots"] < row["stored_slots"]
-            and row["recomputed_slots"] == 0
-            for row in report.histories),
-            "%s report exposes the dense safety promotion and zero replay" % label)
-    else:
-        chk(all(requested == stored and len(stored) < depth
-                for depth, requested, stored, _, _ in stored_info.values()),
-            "%s retains selective policy storage on the clean hierarchy window" % label)
-        chk(report is not None and any(row["recomputed_slots"] > 0
-                                      for row in report.histories),
-            "%s report records the native replay of omitted slots" % label)
+    chk(all(requested == stored and len(stored) < depth
+            for depth, requested, stored, _, _ in stored_info.values()),
+        "%s retains selective policy storage on the frozen hierarchy" % label)
+    chk(report is not None and any(row["recomputed_slots"] > 0
+                                  for row in report.histories),
+        "%s report records native replay of omitted slots" % label)
     chk(fired == [], "%s restart completes no structural regrid (got %r)" % (label, fired))
     ok_rings = _rings_equal(cont_rings, rest_rings)
     chk(ok_rings, "every post-restart ring slot (recomputed included) equals uninterrupted bit-for-bit")
@@ -334,40 +234,27 @@ def _assert_bit_identical(out, label, *, want_mode, want_fingerprint):
         % (label, float(np.abs(ref - got).max())))
 
 
-def test_a_in_window_regrid_bit_identical():
-    print("== (a) one in-window regrid -> explicit dense safety storage + bit-identical restart ==")
-    # depth 3, Interval(2) -> stored {0,2}; ckpt at m=6, regrid_every=4: the re-step producing slot 1
-    # runs at cursor 4 (a due regrid) -- INSIDE the replay window; the 2-level blob tags make it COMPLETE.
-    out, err = _run_case(lambda model: _state_ring_program(model, 3, 2, "adc635_a"), nsteps=10, half=6,
-                         label="a", regrid_every=4)
-    assert out is not None, err
-    _assert_bit_identical(
-        out, "in-window-regrid", want_mode="dense_regrid_safety", want_fingerprint=[4])
+def test_original_active_regrid_graphs_refuse_without_mutation():
+    # Preserve each original graph's physical slots, anchor spacing, program name, regrid cadence,
+    # full step budget and intended checkpoint. No graph is silently frozen or shortened.
+    for depth, interval, name, nsteps, half, cadence in (
+        (3, 2, "adc635_a", 10, 6, 4),
+        (5, 4, "adc635_b", 12, 8, 2),
+        (3, 2, "adc635_c", 12, 8, 4),
+        (3, 2, "adc635_d", 6, 6, 4),
+    ):
+        def factory(model, depth=depth, interval=interval, name=name):
+            return _state_ring_program(model, depth, interval, name)
+
+        live, _ = _build(factory, regrid_every=cadence)
+        _assert_new_coverage_refusal(live, nsteps=nsteps, label="%s-ckpt%d" % (name, half))
 
 
-def test_b_multiple_in_window_regrids_bit_identical():
-    print("== (b) multiple in-window regrids -> explicit dense safety storage ==")
-    # depth 5, Interval(4) -> stored {0,4}; ckpt at m=8, regrid_every=2: the gap 0..4 re-steps at
-    # cursors 4,5,6,7 (producing slots 3,2,1,0) -> due regrids at BOTH cursor 4 and cursor 6.
-    out, err = _run_case(lambda model: _state_ring_program(model, 5, 4, "adc635_b"), nsteps=12, half=8,
-                         label="b", regrid_every=2)
-    assert out is not None, err
-    _, _, _, _, stored_info, _, _ = out
-    chk(any(fp is not None and len(fp) >= 2
-            for _, _, _, _, fp in stored_info.values()),
-        "the storage plan records >= 2 in-window regrids: %r"
-        % {h: v[4] for h, v in stored_info.items()})
-    _assert_bit_identical(
-        out, "multi-in-window-regrid", want_mode="dense_regrid_safety",
-        want_fingerprint=[4, 6])
-
-
-def test_c_clean_window_non_regression():
+def test_c_frozen_hierarchy_interval_replay_bit_identical():
     print("== (c) no-regrid non-regression: a clean replay window still round-trips bit-identically ==")
-    # depth 3, Interval(2) -> stored {0,2}; ckpt at m=8, regrid_every=4: the re-steps run at cursors 6,7
-    # (no due regrid) -- the ADC-631 clean-window case, an empty fingerprint AND an empty fired schedule.
+    # Explicitly frozen positive: same two blocks, N16, depth3, 12 steps and checkpoint at 8.
     out, err = _run_case(lambda model: _state_ring_program(model, 3, 2, "adc635_c"), nsteps=12, half=8,
-                         label="c", regrid_every=4)
+                         label="c-frozen-1to1", regrid_every=0, temporal_ratio=1)
     assert out is not None, err
     _, _, _, _, stored_info, _, _ = out
     chk(all(fp is not None and len(fp) == 0
@@ -378,19 +265,38 @@ def test_c_clean_window_non_regression():
         out, "clean-window", want_mode="policy", want_fingerprint=[])
 
 
+def test_b_frozen_multiple_anchor_gaps_bit_identical():
+    out, err = _run_case(lambda model: _state_ring_program(model, 5, 4, "adc635_b_frozen"),
+                         nsteps=12, half=8, label="b-frozen-1to1", regrid_every=0, temporal_ratio=1)
+    assert out is not None, err
+    _assert_bit_identical(out, "frozen-five-slot", want_mode="policy", want_fingerprint=[])
+    assert all(row["recomputed_slots"] == 3 for row in out[5].histories)
+
+
+def test_two_block_multirate_selective_restart_refuses_without_mutation():
+    for depth, interval, name, half in ((3, 2, "adc635_c", 8), (5, 4, "adc635_b", 8)):
+        def factory(model, depth=depth, interval=interval, name=name):
+            return _state_ring_program(model, depth, interval, name)
+
+        _assert_multirate_restart_refusal(
+            lambda factory=factory: _build(factory, regrid_every=0, temporal_ratio=2)[0],
+            half=half, label="%s-2to1" % name,
+        )
+
+
 def test_d_corrupted_fingerprint_refused():
     print("== (d) inverted guard: a corrupted regrid-schedule fingerprint fails the restart LOUD ==")
     def factory(model):
         return _state_ring_program(model, 3, 2, "adc635_d")
 
-    run, err = _build(factory, regrid_every=4)
+    run, err = _build(factory, regrid_every=0, temporal_ratio=1)
     assert run is not None, err
-    _advance(run, 6)  # ckpt at m=6: one in-window regrid at cursor 4
+    _advance(run, 6)  # frozen-grid control isolates authenticated fingerprint validation
     with tempfile.TemporaryDirectory() as tmp:
         ckpt = run.checkpoint(os.path.join(tmp, "d"))
         d = dict(np.load(ckpt, allow_pickle=False))
         # An uncorrupted file restarts clean.
-        clean, _ = _build(factory, regrid_every=4)
+        clean, _ = _build(factory, regrid_every=0, temporal_ratio=1)
         ok = True
         try:
             clean.restart(ckpt)
@@ -417,21 +323,24 @@ def test_d_corrupted_fingerprint_refused():
         seal_checkpoint_payload(run, d, runtime_kind="amr")
         bad = os.path.join(tmp, "d_bad.npz")
         np.savez_compressed(bad, **d)
-        fresh, _ = _build(factory, regrid_every=4)
+        fresh, _ = _build(factory, regrid_every=0, temporal_ratio=1)
+        before = _accepted_image(fresh)
         raised = ""
         try:
             fresh.restart(bad)
         except (ValueError, RuntimeError) as exc:
             raised = str(exc)
-    chk("regrid" in raised and ("inconsistent" in raised or "corrupted" in raised),
+        _assert_accepted_image_equal(before, _accepted_image(fresh))
+    chk("regrid fingerprint [999]" in raised and "differs from manifest cadence []" in raised,
         "the corrupted fingerprint is REFUSED loud (got: %s)" % (raised[:140] or "<none>"))
 
 
 def main():
-    test_a_in_window_regrid_bit_identical()
-    test_b_multiple_in_window_regrids_bit_identical()
-    test_c_clean_window_non_regression()
+    test_original_active_regrid_graphs_refuse_without_mutation()
+    test_c_frozen_hierarchy_interval_replay_bit_identical()
+    test_b_frozen_multiple_anchor_gaps_bit_identical()
     test_d_corrupted_fingerprint_refused()
+    test_two_block_multirate_selective_restart_refuses_without_mutation()
     print("PASS test_amr_history_regrid_replay")
 
 
