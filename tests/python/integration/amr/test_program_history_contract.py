@@ -35,6 +35,7 @@ try:
     from pops.runtime._system import AmrSystem, System
     from tests.python.integration._final_field_program import (
         compile_block_model,
+        compiler_model,
         passive_field_model,
         resolve_periodic_field_program,
     )
@@ -113,25 +114,42 @@ def _system_run(u0):
             "test_program_history_contract requires System install_program/history_names bindings")
     model = _passive_source_model("blkS")
     plan = _ab2_plan(model, target="system")
-    block_cm = compile_block_model(model, target="system")
+    from pops.codegen._orchestration_compile import _resolved_native_amr_field_roles
+    roles = _resolved_native_amr_field_roles(plan)
+    block_cm = compiler_model(model).compile(
+        backend="production", target="system", _native_field_roles=roles["blk"],
+    )
     compiled = compile_problem(
         model=model,
         time=plan.time,
         field_plans=plan.field_plans,
         problem_snapshot=plan.snapshot,
     )
-    sim.add_equation("blk", block_cm,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                     time=engine.Explicit(method="ssprk2"))
+    sim._batch_native_packages = True
+    try:
+        sim.add_equation("blk", block_cm,
+                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                         time=engine.Explicit(method="ssprk2"))
+        for field, field_plan in plan.field_plans.items():
+            sim._install_field_plan(field, field_plan)
+            sim._install_field_method_runtime(field_plan, {"blk": block_cm}, {})
+        sim._commit_pending_native_packages()
+    finally:
+        sim._batch_native_packages = False
     sim.set_state("blk", np.stack([u0]))
     sim.install_program(compiled.so_path)
+    sim.mark_bound()
     for _ in range(NSTEPS):
         sim.step(DT)
     return (np.array(sim.get_state("blk"))[0], _ring_slots(sim)), None
 
 
 def _amr_run(u0):
-    amr = AmrSystem(n=N, L=1.0, regrid_every=0)  # FLAT: no refinement -> nlev=1 (coarse-only)
+    amr = AmrSystem(
+        n=N, L=1.0, periodicity=(True, True), regrid_every=0,
+        level_count=1, transition_ratios=(), transition_buffers=(), transition_lookaheads=(),
+    )
+    amr.set_temporal_relations([], [], [])
     if not hasattr(amr, "install_program") or not hasattr(amr, "history_names"):
         require_native_or_skip(
             "test_program_history_contract requires AmrSystem install_program/history_names bindings")
@@ -145,11 +163,14 @@ def _amr_run(u0):
         problem_snapshot=plan.snapshot,
     )
     block_cm = compile_block_model(model, target="amr_system", plan=plan)
+    for field, field_plan in plan.field_plans.items():
+        amr._install_field_plan(field, field_plan)
     amr.add_equation("blk", block_cm,
                      spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                      time=engine.Explicit(method="ssprk2"))
     amr.set_density("blk", u0)
     amr.install_program(compiled.so_path)
+    amr.mark_bound()
     for _ in range(NSTEPS):
         amr.step(DT)
     return (np.array(amr.density("blk")), _ring_slots(amr), int(amr.n_levels())), None
