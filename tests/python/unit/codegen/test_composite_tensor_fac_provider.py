@@ -1448,13 +1448,18 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         # materializes the accepted interface-flux ledger and the same macro-step then executes the
         # hierarchy-scoped condensed solve.  Every refined level participates and synchronization
         # remains conservative reflux followed by average-down.
-        assert {row["level"] for row in program_report.flux_ledger} == set(
-            range(max_levels)
-        )
-        assert {row["phase"] for row in program_report.synchronization} == {
-            "reflux",
-            "average_down",
-        }
+        if max_levels == 1:
+            # These reports describe coarse/fine interfaces, absent in a flat hierarchy.
+            assert program_report.flux_ledger == []
+            assert program_report.synchronization == []
+        else:
+            assert {row["level"] for row in program_report.flux_ledger} == set(
+                range(max_levels)
+            )
+            assert {row["phase"] for row in program_report.synchronization} == {
+                "reflux",
+                "average_down",
+            }
 
         if bound_plasma and not manufactured_plasma:
             # ADC-639 composition: the Gaussian marker has nontrivial C/F transport fluxes while the
