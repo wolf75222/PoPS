@@ -27,6 +27,8 @@ from pops.external import build_source_package_manifest, load
 from pops.fields import ExternalFieldSolver
 from pops.lib.amr import BergerRigoutsos
 from pops.lib.initial import Gaussian
+from pops.lib.time import ForwardEuler
+from pops.time import FailRun, FixedDt
 
 from _compile_once import compile_resolved_plan_once
 from tests.python.integration._final_field_program import (
@@ -35,7 +37,6 @@ from tests.python.integration._final_field_program import (
 )
 from tests.python.integration.native_loader.test_external_field_solver_runtime import (
     _manifest,
-    _moving_amr_program,
     _mpi_faulted_solver_source,
     _topology_source,
 )
@@ -43,6 +44,15 @@ from tests.python.integration.native_loader.test_external_field_solver_runtime i
 
 _COMM = _pops.mpi_world()
 _fails = 0
+
+
+def _mpi_field_program(state: Any, rate: Any, field: Any) -> Any:
+    # Every attempted step must invoke the provider: the two failure markers below target
+    # consecutive attempts, including the one without a layout-changing regrid.  The loader
+    # suite's Every(5)/Hold-or-Skip helper instead tests off-cadence topology refresh.
+    program = ForwardEuler(state, rate=rate, fields=field, solve_action=FailRun())
+    program.step_strategy(FixedDt(8.0e-2))
+    return program
 
 
 def chk(condition: Any, label: str) -> None:
@@ -236,7 +246,7 @@ def test_external_amr_field_bridge_executes_and_refuses_collectively() -> None:
         x_axis, y_axis = model.frame.axes
         resolved = resolve_periodic_field_program(
             model,
-            _moving_amr_program,
+            _mpi_field_program,
             name="external-amr-field-mpi",
             block_name="material",
             target="amr_system",
