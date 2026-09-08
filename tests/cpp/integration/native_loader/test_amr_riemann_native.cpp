@@ -225,8 +225,8 @@ Snap run(AmrSystem<Dim>& s, int nsteps) {
     }
   }
   for (const auto& row : s.program_sync_manifest()) {
-    if (row.size() != 7)
-      continue;
+    if (row.size() != 11 || row[7].empty())
+      throw std::runtime_error("accepted AMR synchronization lacks its exact provenance columns");
     if (row[3] == "reflux")
       ++snap.reflux_syncs;
     else if (row[3] == "average_down")
