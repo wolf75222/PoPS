@@ -450,9 +450,13 @@ void expect_partitioned_fac_embedded_boundary() {
   EXPECT_LT(maximum_constant_error(solver.phi_level(1), lane), Real(0.12));
 }
 
+enum class ForcingCase { Gaussian, BoundaryOnly, ZeroWithNonzeroGuess, SmallGaussian };
+
 template <bool PartitionedBackend = false>
 void expect_periodic_partition_independence(int refinement_case, int partition_profile = 0,
-                                            bool exhaust_coarse = false) {
+                                            bool exhaust_coarse = false,
+                                            ForcingCase forcing_case = ForcingCase::Gaussian) {
+  const Real forcing_scale = forcing_case == ForcingCase::SmallGaussian ? Real(1e-8) : Real(1);
   const bool corner = refinement_case == 1;
   const bool strip = refinement_case == 2;
   constexpr int Dim = 2;
@@ -502,8 +506,19 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
                     (strip && level == 1)
                         ? std::vector<Index<Dim>>{rank_coordinate<Dim>(1), rank_coordinate<Dim>(0)}
                         : owners);
+      auto boundary = periodic_boundary<Dim>(geometry);
+      if (forcing_case == ForcingCase::BoundaryOnly) {
+        std::array<pops::PhysicalBoundaryFace, 2 * Dim> faces{};
+        for (auto& face : faces)
+          face = {pops::PhysicalBoundaryKind::dirichlet, Real(2), Real(1), Real(0)};
+        pops::RealVector<Dim> spacing{};
+        for (int axis = 0; axis < Dim; ++axis)
+          spacing[axis] = geometry.spacing(axis);
+        boundary = PhysicalBoundaryConditions<Dim>{BoundaryTopology<Dim>::axis_periodic({}), faces,
+                                                   spacing};
+      }
       request.levels.push_back(EllipticBuildRequest<Dim>{
-          geometry, boxes, distribution, local_rank, periodic_boundary<Dim>(geometry),
+          geometry, boxes, distribution, local_rank, boundary,
           Extent<Dim>{}, integer_extent<Dim>(1), BoxArrayValidationBudget{4, 6}});
     }
     request.ratios = {RefinementRatio<Dim>{{2, 2}}};
@@ -543,11 +558,16 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
             const auto dy = geometry.cell_coordinate(1, y) - Real(0.5);
             host(static_cast<std::size_t>(x - grown.lo[0]) +
                  static_cast<std::size_t>(y - grown.lo[1]) * grown.length(0)) =
-                Real(1) + Real(0.5) * std::exp(-Real(140) * (dx * dx + dy * dy));
+                forcing_case == ForcingCase::BoundaryOnly ||
+                        forcing_case == ForcingCase::ZeroWithNonzeroGuess
+                    ? Real(0)
+                    : forcing_scale *
+                          (Real(1) + Real(0.5) * std::exp(-Real(140) * (dx * dx + dy * dy)));
           }
         fab.copy_from_host(host);
       }
-      solver->phi_level(level).set_val(Real(0));
+      solver->phi_level(level).set_val(
+          forcing_case == ForcingCase::ZeroWithNonzeroGuess ? Real(1) : Real(0));
     }
     return solver;
   };
@@ -559,6 +579,7 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
     std::cout << std::setprecision(17) << "periodic FAC backend="
               << (PartitionedBackend ? "amr" : "mg") << " refinement_case=" << refinement_case
               << " partition_profile=" << partition_profile << " exhaust_coarse=" << exhaust_coarse
+              << " forcing_case=" << static_cast<int>(forcing_case)
               << " replicated_status=" << reference_report.reason
               << " replicated_residual=" << reference_report.residual_norm
               << " partitioned_status=" << partitioned_report.reason
@@ -574,6 +595,32 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
     }
     return;
   }
+  if (forcing_case == ForcingCase::ZeroWithNonzeroGuess) {
+    // With R(0)=0 and abs_tol=0 only an exact zero residual may be accepted,
+    // regardless of the nonzero warm guess. The report must stay finite in either outcome.
+    for (const auto* report : {&reference_report, &partitioned_report}) {
+      EXPECT_EQ(report->reference_residual_norm, Real(0));
+      EXPECT_TRUE(pops::solve_report_is_publishable(*report, 30));
+      EXPECT_TRUE(std::isfinite(report->rel_residual));
+      EXPECT_EQ(report->rel_residual, report->residual_norm);
+      if (report->solved())
+        EXPECT_EQ(report->residual_norm, Real(0));
+      else {
+        EXPECT_EQ(report->status, pops::SolveStatus::kIterationLimit);
+        EXPECT_EQ(report->action, pops::SolveAction::kFailRun);
+      }
+    }
+    return;
+  }
+  if (forcing_case == ForcingCase::BoundaryOnly)
+    for (const auto* report : {&reference_report, &partitioned_report})
+      // Each corner has two reflected Dirichlet ghosts of value 4 and h=1/16.
+      EXPECT_EQ(report->reference_residual_norm, Real(2 * 4 * 16 * 16));
+  if (forcing_case == ForcingCase::SmallGaussian)
+    for (const auto* report : {&reference_report, &partitioned_report}) {
+      EXPECT_GE(report->reference_residual_norm, forcing_scale);
+      EXPECT_LE(report->reference_residual_norm, Real(1.5) * forcing_scale);
+    }
   ASSERT_TRUE(reference_report.solved())
       << reference_report.reason << " residual=" << reference_report.residual_norm;
   ASSERT_TRUE(partitioned_report.solved())
@@ -595,6 +642,12 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
           const auto offset = static_cast<std::size_t>(x - grown.lo[0]) +
                               static_cast<std::size_t>(y - grown.lo[1]) * grown.length(0);
           maximum = std::max(maximum, std::abs(host(offset) - reference_host(offset)));
+          if (forcing_case == ForcingCase::BoundaryOnly) {
+            // The screened equation has reaction=1: use its independent maximum principle
+            // bounds for the positive, boundary-driven RHS=0 solution.
+            EXPECT_GT(host(offset), Real(0));
+            EXPECT_LE(host(offset), Real(2));
+          }
         }
     }
   }
@@ -605,7 +658,24 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
               << " replicated_residual=" << reference_report.residual_norm
               << " partitioned_residual=" << partitioned_report.residual_norm
               << " max_partition_difference=" << global_difference << '\n';
-  EXPECT_LT(global_difference, 1e-8);
+  EXPECT_LT(global_difference, 1e-8 * forcing_scale);
+  if constexpr (PartitionedBackend) {
+    // Re-evaluating the same equation with its accepted candidate must preserve the
+    // declared forcing scale, rather than demand another relative reduction of roundoff.
+    for (auto* solver : {reference.get(), partitioned.get()}) {
+      const auto cold = solver->last_solve_report();
+      const auto warm = solver->solve();
+      if (pops::my_rank() == 0)
+        std::cout << std::setprecision(17) << "warm FAC refinement_case=" << refinement_case
+                  << " initial_reference=" << cold.reference_residual_norm
+                  << " warm_reference=" << warm.reference_residual_norm
+                  << " residual=" << warm.residual_norm << " status=" << warm.reason << '\n';
+      EXPECT_TRUE(warm.solved()) << warm.reason << " residual=" << warm.residual_norm;
+      EXPECT_EQ(warm.reference_residual_norm, cold.reference_residual_norm);
+      EXPECT_LE(warm.residual_norm, Real(1e-9) * cold.reference_residual_norm);
+      EXPECT_EQ(warm.iters, 0);
+    }
+  }
 }
 
 int run_partitioned_fac_matrix(int argc, char** argv) {
@@ -638,6 +708,9 @@ int run_partitioned_fac_matrix(int argc, char** argv) {
       expect_periodic_partition_independence<true>(2, 1);
       expect_periodic_partition_independence<true>(2, 2);
       expect_periodic_partition_independence<true>(0, 0, true);
+      expect_periodic_partition_independence<true>(0, 0, false, ForcingCase::BoundaryOnly);
+      expect_periodic_partition_independence<true>(0, 0, false, ForcingCase::ZeroWithNonzeroGuess);
+      expect_periodic_partition_independence<true>(0, 0, false, ForcingCase::SmallGaussian);
     }
     result = ::testing::Test::HasFailure() ? 1 : 0;
   }

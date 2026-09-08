@@ -808,21 +808,31 @@ class CompositeFacPoisson {
       last_report_ = report;
       return last_report_;
     }
-    compute_composite_residual_();
-    const Real reference = composite_residual_norm_();
+    // The declared relative scale is R(0), the exact affine forcing. A warm
+    // candidate changes the initial error, not the accuracy required of this equation.
+    const Real reference = composite_forcing_norm_();
     SolveReport report;
     report.evaluations = 1;
     if (!std::isfinite(static_cast<double>(reference))) {
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
+                         "partitioned_fac_non_finite_forcing");
+      last_report_ = report;
+      return last_report_;
+    }
+    compute_composite_residual_();
+    const Real initial = composite_residual_norm_();
+    ++report.evaluations;
+    if (!std::isfinite(static_cast<double>(initial))) {
       report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
                          "partitioned_fac_non_finite_initial_residual");
       last_report_ = report;
       return last_report_;
     }
     report.reference_residual_norm = reference;
-    report.residual_norm = reference;
-    report.rel_residual = reference > Real(0) ? Real(1) : Real(0);
+    report.residual_norm = initial;
+    report.rel_residual = relative_residual_(initial, reference);
     const Real stop = std::max(options_.abs_tol, options_.rel_tol * reference);
-    if (reference <= stop) {
+    if (initial <= stop) {
       fill_all_solution_ghosts_();
       report.mark_solved("partitioned_fac_initial_residual");
       last_report_ = report;
@@ -842,7 +852,7 @@ class CompositeFacPoisson {
       if (!coarse_report.solved()) {
         report.iters = iteration;
         report.residual_norm = composite_residual_norm_();
-        report.rel_residual = report.residual_norm / reference;
+        report.rel_residual = relative_residual_(report.residual_norm, reference);
         report.mark_failed(
             coarse_report.status, SolveAction::kFailRun,
             std::string("partitioned_fac_coarse_correction_failed:") + coarse_report.reason +
@@ -865,7 +875,7 @@ class CompositeFacPoisson {
       ++report.evaluations;
       report.iters = iteration + 1;
       report.residual_norm = composite_residual_norm_();
-      report.rel_residual = report.residual_norm / reference;
+      report.rel_residual = relative_residual_(report.residual_norm, reference);
       if (!std::isfinite(static_cast<double>(report.residual_norm))) {
         report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
                            "partitioned_fac_non_finite_iteration");
@@ -1599,17 +1609,18 @@ class CompositeFacPoisson {
     }
   }
 
-  void compute_level_residual_(std::size_t level_index) {
+  void compute_level_residual_(std::size_t level_index, field_type& iterate,
+                               const field_type* parent_override = nullptr) {
     Level& level = *levels_[level_index];
-    fill_ghosts_(level_index, level.phi, false);
+    fill_ghosts_(level_index, iterate, false, parent_override);
     fill_coefficient_ghosts_(level_index);
     if (uses_weighted_operator_(level)) {
       ::pops::elliptic::mg::weighted_poisson_residual_valid(
-          level.phi, level.rhs, level.geometry, level.residual, reaction_,
+          iterate, level.rhs, level.geometry, level.residual, reaction_,
           weighted_fields_(level));
       return;
     }
-    ::pops::elliptic::mg::poisson_residual_valid(level.phi, level.rhs, level.geometry,
+    ::pops::elliptic::mg::poisson_residual_valid(iterate, level.rhs, level.geometry,
                                                  level.residual, reaction_);
     for (std::size_t local = 0; local < level.residual.local_size(); ++local)
       for_each_cell(level.residual.box(local), fac_detail::MaskResidualKernel<Dim>{
@@ -1620,11 +1631,33 @@ class CompositeFacPoisson {
 
   void compute_composite_residual_() {
     for (std::size_t level = 0; level < levels_.size(); ++level)
-      compute_level_residual_(level);
+      compute_level_residual_(level, levels_[level]->phi);
     for (std::size_t connection = 0; connection < connections_.size(); ++connection)
       connections_[connection]->apply_flux_mismatch(
           levels_[connection]->phi, levels_[connection + 1]->phi, levels_[connection]->residual,
           levels_[connection]->scratch);
+  }
+
+  Real composite_forcing_norm_() {
+    // Existing operator scratch keeps the accepted/warm candidate untouched, including
+    // if a halo or coefficient evaluation throws before the solve can begin.
+    for (auto& level : levels_)
+      level->residual_operator_view.set_val(Real(0));
+    for (std::size_t level = 0; level < levels_.size(); ++level)
+      compute_level_residual_(level, levels_[level]->residual_operator_view,
+                              level == 0 ? nullptr : &levels_[level - 1]->residual_operator_view);
+    for (std::size_t connection = 0; connection < connections_.size(); ++connection)
+      connections_[connection]->apply_flux_mismatch(
+          levels_[connection]->residual_operator_view,
+          levels_[connection + 1]->residual_operator_view, levels_[connection]->residual,
+          levels_[connection]->scratch);
+    return composite_residual_norm_();
+  }
+
+  static Real relative_residual_(Real residual, Real reference) {
+    // Match generic_krylov's zero-reference reporting convention. This does not
+    // affect the stopping bound, whose relative contribution remains exactly zero.
+    return residual / (reference > Real(0) ? reference : Real(1));
   }
 
   void restrict_residual_tower_() {
