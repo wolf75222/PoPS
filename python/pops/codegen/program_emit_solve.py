@@ -1227,6 +1227,9 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
 
     Uniform and level-scoped AMR solves use the generic context seam. A prepared hierarchy provider
     owns the refined native emission and declares its exact flat Krylov fallback contract."""
+    from pops.codegen.program_field_reuse import publish_field_solve, reuse_field_solve
+    if reuse_field_solve(v, var, lines, target=target):
+        return
     op_value = v.inputs[0]
     rhs_in = v.inputs[1]
     guess_in = v.inputs[2] if v.attrs["has_guess"] else None
@@ -1483,6 +1486,7 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         % (kr, problem_name, workspace_name, sol_sp, rhs_tok, controls_name))
     _append_solve_report_guard(
         program, v, kr, lines, label="solve_linear", phase="solve")
+    publish_field_solve(v, var, lines, target=target)
     if v.vtype == "state" and v.attrs.get("scope") != "hierarchy":
         # Krylov coordinates carry the operator's exact stencil halo, which may be
         # zero for a pointwise operator. A physical State keeps its own storage

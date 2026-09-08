@@ -338,6 +338,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     node_model = model_for_node(model, v) if model is not None and (
         v.block is not None or v.attrs.get("operator_handle") is not None) else model
     provider_plans = var.get(("program_provider_plans",))
+    from pops.codegen.program_field_reuse import observe_operation
+    observe_operation(v, var)
     # PER-NODE PROFILING (ADC-459): bracket this op's emitted C++ with a steady_clock pair
     # recorded under "node:<v.name>" (shown by sim.profile_report next to the coarse phases). A
     # now() + ctx.profile_record pair (NOT a RAII ProfileScope { }) keeps the emitted declarations
