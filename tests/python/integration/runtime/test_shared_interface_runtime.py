@@ -1275,8 +1275,12 @@ def test_frozen_two_level_generated_program_executes_shared_interface_implicit_p
 
 
 def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
+    # Retrying an identical failed invocation is supported when it owns no external
+    # consumer lifecycle. The separate restart scenario below retains checkpoint coverage.
     authoring = _shared_interface_amr_authoring(
-        tmp_path, tagger_component=_tagger_source_component(tmp_path / "tagger")
+        tmp_path,
+        tagger_component=_tagger_source_component(tmp_path / "tagger"),
+        with_checkpoint=False,
     )
     example = authoring.example
     core = authoring.core
@@ -1325,6 +1329,7 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     )
 
     assert runtime.n_levels() == 3
+    assert not runtime.consumer_graph.nodes
     # The required two-cell nesting buffer can merge the coarse tagged bands at L1.
     # Sparsity belongs to the finest interface level; patch_boxes uses inclusive indices
     # in that level's coordinates, so derive its extents from the actual authored ratios.
@@ -1398,18 +1403,31 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     # The three-level route above proves arbitrary-depth execution. Use the independently compiled
     # two-level route for the restart transaction: replacing its only fine transition is the exact
     # dynamic topology capability currently authenticated by the interface scheduler.
-    restart_resolved = _resolve_shared_interface_amr(authoring, max_levels=2)
+    # This independent authoring owns the original checkpoint consumer. Each runtime
+    # opens its output invocation once; post-restart continuation starts at a later
+    # accepted time and has a distinct run identity, so no closed output session reopens.
+    restart_authoring = _shared_interface_amr_authoring(
+        tmp_path / "restart-authoring",
+        component=authoring.component,
+        tagger_component=authoring.tagger_component,
+        with_checkpoint=True,
+    )
+    np.testing.assert_array_equal(restart_authoring.left_initial, left_initial)
+    np.testing.assert_array_equal(restart_authoring.right_initial, right_initial)
+    restart_initial_values = {
+        restart_authoring.core.tracer_state: restart_authoring.left_initial,
+        restart_authoring.right_state: restart_authoring.right_initial,
+    }
+    restart_resolved = _resolve_shared_interface_amr(restart_authoring, max_levels=2)
     restart_artifact = pops.compile(restart_resolved)
     restart_interface = restart_resolved.blocks[0].numerics.boundaries[0].interfaces[0]
-    restart_source = example._bind_artifact(
+    restart_source = restart_authoring.example._bind_artifact(
         restart_artifact,
-        initial_values={
-            core.tracer_state: left_initial,
-            right_state: right_initial,
-        },
-        params=params,
+        initial_values=restart_initial_values,
+        params=restart_authoring.params,
     )
     assert restart_source.n_levels() == 2
+    assert len(restart_source.consumer_graph.nodes) == 1
     restart_initial_integral = restart_source.integral("tracer") + restart_source.integral("right")
     source_report = pops.run(
         restart_source,
@@ -1439,13 +1457,10 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     # RegridOnRestart enters the native tag/cluster/regrid boundary. A deliberately rejected
     # post-transform validation must restore the fresh runtime exactly before the same restart is
     # retried and committed. This remains independent of the typed Tagger retry proved above.
-    restarted = example._bind_artifact(
+    restarted = restart_authoring.example._bind_artifact(
         restart_artifact,
-        initial_values={
-            core.tracer_state: left_initial,
-            right_state: right_initial,
-        },
-        params=params,
+        initial_values=restart_initial_values,
+        params=restart_authoring.params,
     )
     priming_report = pops.run(
         restarted,
@@ -1500,7 +1515,8 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
             restarted._executor._s._interface_evaluation_count(restart_interface.qualified_id, level)
             for level in range(2)
         )
-        pops.run(restarted, t_end=2.0e-3, max_steps=1, console=False)
+        continuation_report = pops.run(restarted, t_end=2.0e-3, max_steps=1, console=False)
+        assert continuation_report.run_identity != priming_report.run_identity
         counts_after_continuation = tuple(
             restarted._executor._s._interface_evaluation_count(restart_interface.qualified_id, level)
             for level in range(2)
