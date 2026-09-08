@@ -529,3 +529,27 @@ TEST(test_geometric_mg_nd, unsupported_operator_families_fail_closed_at_capabili
   EXPECT_FALSE(fac.cross_tensor);
   EXPECT_TRUE(fac.embedded_boundary);
 }
+
+TEST(test_geometric_mg_nd, small_forcing_obeys_the_authored_relative_initial_residual) {
+  const auto lane = ExecutionLane::world("tests.geometric-mg.small-forcing");
+  GeometricMultigridOptions options;
+  options.reaction = Real(1);
+  options.relative_tolerance = Real(1e-9);
+  options.absolute_tolerance = Real(0);
+  options.maximum_cycles = 100;
+  for (const Real initial : {Real(0), Real(1e-10)}) {
+    GeometricMG<1> solver(complete_request<1>(4, true), lane, options);
+    solver.install_nullspace(FieldNullspacePlan<1>{}, PreparedVectorDistribution<1>::replicated());
+    solver.rhs().set_val(Real(1e-13));
+    solver.phi().set_val(initial);
+    const auto report = solver.solve();
+    // A constant periodic field has no Laplacian: ||R(initial)||=|rhs-initial|.
+    // The second guess is 1000 times the solution; both references remain below one.
+    const Real expected_reference = std::abs(Real(1e-13) - initial);
+    EXPECT_NEAR(report.reference_residual_norm, expected_reference,
+                Real(1e-14) * expected_reference);
+    ASSERT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm;
+    EXPECT_GT(report.iters, 0);
+    EXPECT_LE(report.residual_norm, options.relative_tolerance * expected_reference);
+  }
+}

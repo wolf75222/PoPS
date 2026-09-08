@@ -1162,7 +1162,38 @@ class CompositeFacPoisson {
             "composite FAC could not prepare every coarse/fine ghost destination");
     }
 
-    if (!gather_jobs.empty() || !restriction_jobs.empty()) {
+    // Quadratic fine interpolation can reach one physical parent ghost even when the
+    // fine patch is interior. Transport the authenticated, already-filled ghost values;
+    // a zero staging cell is not a Dirichlet/Neumann extension. Keep these jobs separate
+    // from coarse/fine flux scatter, which only targets valid parent control volumes.
+    std::vector<transfer_job> physical_gather_jobs;
+    if (!parent.phi.distribution().replicated())
+      for (std::size_t fine_patch = 0; fine_patch < child.phi.layout().size(); ++fine_patch) {
+        const auto staging = coarsen(child.phi.layout()[fine_patch], ratio_value).grow(2);
+        for (std::size_t parent_patch = 0; parent_patch < parent.phi.layout().size();
+             ++parent_patch) {
+          auto owner_region = parent.phi.layout()[parent_patch];
+          for (int axis = 0; axis < Dim; ++axis) {
+            if (owner_region.lo[axis] == parent.geometry.domain().lo[axis])
+              --owner_region.lo[axis];
+            if (owner_region.hi[axis] == parent.geometry.domain().hi[axis])
+              ++owner_region.hi[axis];
+          }
+          for (const auto& boundary_region : parent.physical_boundary.schedule().entries()) {
+            if (!boundary_region.has_physical())
+              continue;
+            const auto region =
+                staging.intersect(owner_region).intersect(boundary_region.destination);
+            if (region.empty())
+              continue;
+            physical_gather_jobs.push_back(
+                transfer_job{parent_patch, fine_patch, patch_owner_(parent, parent_patch),
+                             patch_owner_(child, fine_patch), region, region});
+          }
+        }
+      }
+
+    if (!gather_jobs.empty() || !restriction_jobs.empty() || !physical_gather_jobs.empty()) {
       std::vector<transfer_job> flux_jobs;
       // Gathering is not the inverse of an additive flux scatter: a gather includes
       // interpolation halo cells and may contain overlapping periodic images. Restrict
@@ -1223,6 +1254,7 @@ class CompositeFacPoisson {
       }
       for (const auto& [key, box] : flux_destination_boxes)
         connection.flux_destinations.emplace(key, Fab<Dim, MemorySpace>(box, 1, Extent<Dim>{}));
+      gather_jobs.insert(gather_jobs.end(), physical_gather_jobs.begin(), physical_gather_jobs.end());
       const auto gather_budget = Connection::transfer_plan::budget_from_jobs(gather_jobs);
       const auto restriction_budget = Connection::transfer_plan::budget_from_jobs(restriction_jobs);
       const auto flux_budget = Connection::transfer_plan::budget_from_jobs(flux_jobs);

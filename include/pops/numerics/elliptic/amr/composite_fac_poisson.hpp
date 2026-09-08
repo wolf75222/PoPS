@@ -1234,6 +1234,38 @@ class CompositeFacPoisson {
                                 "partitioned FAC flux destination scratch budget exceeded");
         flux_destinations.emplace(key, Fab<Dim, MemorySpace>(box, 1, Extent<Dim>{}));
       }
+      // Quadratic fine interpolation can reach one physical parent ghost even when the
+      // fine patch is interior. Transport the authenticated, already-filled ghost values;
+      // a zero staging cell is not a Dirichlet/Neumann extension. Keep these jobs separate
+      // from coarse/fine flux scatter, which only targets valid parent control volumes.
+      std::vector<transfer_job> physical_gather_jobs;
+      for (std::size_t fine_patch = 0; fine_patch < child->phi.layout().size(); ++fine_patch) {
+        const auto staging = coarsen(child->phi.layout()[fine_patch], ratio_value).grow(2);
+        for (std::size_t parent_patch = 0; parent_patch < parent->phi.layout().size();
+             ++parent_patch) {
+          auto owner_region = parent->phi.layout()[parent_patch];
+          for (int axis = 0; axis < Dim; ++axis) {
+            if (owner_region.lo[axis] == parent->geometry.domain().lo[axis])
+              --owner_region.lo[axis];
+            if (owner_region.hi[axis] == parent->geometry.domain().hi[axis])
+              ++owner_region.hi[axis];
+          }
+          for (const auto& boundary_region : parent->physical_boundary.schedule().entries()) {
+            if (!boundary_region.has_physical())
+              continue;
+            const auto region =
+                staging.intersect(owner_region).intersect(boundary_region.destination);
+            if (region.empty())
+              continue;
+            for (const Index<Dim>& dest_rank : receive_ranks(child_dist, fine_patch))
+              physical_gather_jobs.push_back(transfer_job{
+                  parent_patch, fine_patch, unique_owner(parent_dist, parent_patch, dest_rank),
+                  dest_rank, region, region});
+          }
+        }
+      }
+      gather_jobs.insert(gather_jobs.end(), physical_gather_jobs.begin(),
+                         physical_gather_jobs.end());
       gather = std::make_unique<transport_type>(
           transfer_plan{parent->phi.rank_space(), parent->phi.local_rank(), 1,
                         std::move(gather_jobs), budget.parent_gather});
@@ -1491,11 +1523,15 @@ class CompositeFacPoisson {
     Level& level = *levels_[level_index];
     if (level_index > 0) {
       Connection& connection = *connections_[level_index - 1];
+      field_type& current_parent = homogeneous || &field == &level.correction
+                                       ? levels_[level_index - 1]->correction
+                                       : levels_[level_index - 1]->phi;
+      // Smoothing changes parent valid values after its last halo fill. Rebuild its
+      // actual boundary extension before a child reads that quadratic stencil.
+      if (parent_override == nullptr)
+        fill_ghosts_(level_index - 1, current_parent, homogeneous);
       const field_type& parent_field =
-          parent_override != nullptr
-              ? *parent_override
-              : (homogeneous || &field == &level.correction ? levels_[level_index - 1]->correction
-                                                            : levels_[level_index - 1]->phi);
+          parent_override != nullptr ? *parent_override : current_parent;
       connection.gather_parent(parent_field);
       connection.interpolate_ghosts(field);
     }
@@ -1767,6 +1803,7 @@ class CompositeFacPoisson {
 
   void prolong_one_(std::size_t parent) {
     Connection& connection = *connections_.at(parent);
+    fill_ghosts_(parent, levels_[parent]->correction, true);
     connection.gather_parent(levels_[parent]->correction);
     levels_[parent + 1]->correction.set_val(Real(0));
     connection.prolong_valid(levels_[parent + 1]->correction);
@@ -1882,7 +1919,8 @@ class CompositeFacPoisson {
   void fill_dynamic_residual_ghosts_(std::size_t level_index, int iteration) {
     Level& level = *levels_.at(level_index);
     copy_valid_(level.phi, level.residual_operator_view);
-    fill_ghosts_(level_index, level.residual_operator_view, false);
+    fill_ghosts_(level_index, level.residual_operator_view, false,
+                 level_index > 0 ? &levels_[level_index - 1]->residual_operator_view : nullptr);
     if (boundary_kernel_) {
       auto context = boundary_context_at_(level_index, iteration);
       context.failure->reset();
@@ -1898,7 +1936,7 @@ class CompositeFacPoisson {
     Level& level = *levels_.at(level_index);
     copy_valid_(level.correction, level.direction_operator_view);
     fill_ghosts_(level_index, level.direction_operator_view, true,
-                 level_index > 0 ? &levels_[level_index - 1]->correction : nullptr);
+                 level_index > 0 ? &levels_[level_index - 1]->direction_operator_view : nullptr);
     if (boundary_kernel_) {
       auto context = boundary_context_at_(level_index, iteration);
       context.failure->reset();

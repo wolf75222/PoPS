@@ -538,9 +538,10 @@ class GeometricMG {
     report.reference_residual_norm = reference;
     report.residual_norm = reference;
     report.rel_residual = reference > Real(0) ? Real(1) : Real(0);
+    // The absolute floor is authored separately; an implicit unit floor defeats
+    // strict small-forcing solves, including FAC coarse correction equations.
     const Real stop =
-        std::max(options_.absolute_tolerance,
-                 options_.relative_tolerance * std::max(reference, Real(1)));
+        std::max(options_.absolute_tolerance, options_.relative_tolerance * reference);
     if (reference <= stop) {
       fill_ghosts_(fine);
       report.mark_solved("geometric_mg_initial_residual");

@@ -450,7 +450,9 @@ void expect_partitioned_fac_embedded_boundary() {
   EXPECT_LT(maximum_constant_error(solver.phi_level(1), lane), Real(0.12));
 }
 
-enum class ForcingCase { Gaussian, BoundaryOnly, ZeroWithNonzeroGuess, SmallGaussian };
+enum class ForcingCase {
+  Gaussian, BoundaryOnly, ZeroWithNonzeroGuess, SmallGaussian, DirichletConstant, NeumannConstant
+};
 
 template <bool PartitionedBackend = false>
 void expect_periodic_partition_independence(int refinement_case, int partition_profile = 0,
@@ -507,10 +509,14 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
                         ? std::vector<Index<Dim>>{rank_coordinate<Dim>(1), rank_coordinate<Dim>(0)}
                         : owners);
       auto boundary = periodic_boundary<Dim>(geometry);
-      if (forcing_case == ForcingCase::BoundaryOnly) {
+      if (forcing_case == ForcingCase::BoundaryOnly ||
+          forcing_case == ForcingCase::DirichletConstant ||
+          forcing_case == ForcingCase::NeumannConstant) {
         std::array<pops::PhysicalBoundaryFace, 2 * Dim> faces{};
         for (auto& face : faces)
-          face = {pops::PhysicalBoundaryKind::dirichlet, Real(2), Real(1), Real(0)};
+          face = forcing_case == ForcingCase::NeumannConstant
+                     ? pops::PhysicalBoundaryFace{pops::PhysicalBoundaryKind::neumann, Real(0)}
+                     : pops::PhysicalBoundaryFace{pops::PhysicalBoundaryKind::dirichlet, Real(2)};
         pops::RealVector<Dim> spacing{};
         for (int axis = 0; axis < Dim; ++axis)
           spacing[axis] = geometry.spacing(axis);
@@ -561,13 +567,19 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
                 forcing_case == ForcingCase::BoundaryOnly ||
                         forcing_case == ForcingCase::ZeroWithNonzeroGuess
                     ? Real(0)
+                : forcing_case == ForcingCase::DirichletConstant ||
+                        forcing_case == ForcingCase::NeumannConstant
+                    ? Real(2)
                     : forcing_scale *
                           (Real(1) + Real(0.5) * std::exp(-Real(140) * (dx * dx + dy * dy)));
           }
         fab.copy_from_host(host);
       }
-      solver->phi_level(level).set_val(
-          forcing_case == ForcingCase::ZeroWithNonzeroGuess ? Real(1) : Real(0));
+      solver->phi_level(level).set_val(forcing_case == ForcingCase::ZeroWithNonzeroGuess ? Real(1)
+                                       : forcing_case == ForcingCase::DirichletConstant ||
+                                               forcing_case == ForcingCase::NeumannConstant
+                                           ? Real(2)
+                                           : Real(0));
     }
     return solver;
   };
@@ -609,6 +621,19 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
         EXPECT_EQ(report->status, pops::SolveStatus::kIterationLimit);
         EXPECT_EQ(report->action, pops::SolveAction::kFailRun);
       }
+    }
+    return;
+  }
+  if (forcing_case == ForcingCase::DirichletConstant ||
+      forcing_case == ForcingCase::NeumannConstant) {
+    // Independent discrete oracle: reaction=1, RHS=2, u=2. Every physical
+    // extension and quadratic C/F stencil is exactly constant, so R(u)=0.
+    for (const auto* report : {&reference_report, &partitioned_report}) {
+      EXPECT_TRUE(report->solved()) << report->reason;
+      EXPECT_EQ(report->iters, 0);
+      EXPECT_EQ(report->residual_norm, Real(0));
+      EXPECT_EQ(report->reference_residual_norm,
+                forcing_case == ForcingCase::DirichletConstant ? Real(2050) : Real(2));
     }
     return;
   }
@@ -715,6 +740,8 @@ int run_partitioned_fac_matrix(int argc, char** argv) {
       expect_periodic_partition_independence(false);
       expect_periodic_partition_independence(true);
       expect_periodic_partition_independence(2);
+      expect_periodic_partition_independence(0, 0, false, ForcingCase::DirichletConstant);
+      expect_periodic_partition_independence(0, 0, false, ForcingCase::NeumannConstant);
       expect_periodic_partition_independence(0, 0, false, ForcingCase::BoundaryOnly);
       expect_periodic_partition_independence(0, 0, false, ForcingCase::ZeroWithNonzeroGuess);
       expect_periodic_partition_independence(0, 0, false, ForcingCase::SmallGaussian);
@@ -724,6 +751,8 @@ int run_partitioned_fac_matrix(int argc, char** argv) {
       expect_periodic_partition_independence<true>(2, 1);
       expect_periodic_partition_independence<true>(2, 2);
       expect_periodic_partition_independence<true>(0, 0, true);
+      expect_periodic_partition_independence<true>(0, 0, false, ForcingCase::DirichletConstant);
+      expect_periodic_partition_independence<true>(0, 0, false, ForcingCase::NeumannConstant);
       expect_periodic_partition_independence<true>(0, 0, false, ForcingCase::BoundaryOnly);
       expect_periodic_partition_independence<true>(0, 0, false, ForcingCase::ZeroWithNonzeroGuess);
       expect_periodic_partition_independence<true>(0, 0, false, ForcingCase::SmallGaussian);
