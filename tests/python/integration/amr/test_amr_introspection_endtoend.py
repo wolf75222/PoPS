@@ -133,11 +133,24 @@ def test_static_metadata_inspection_surfaces_the_carried_refine_regrid_tags():
 
 # --- live runtime profile + CFL on a real AmrSystem ------------------------------
 def _built_amr(n=32):
+    from pops.physics import Density
+    from pops.physics._facade import Model
+
+    model = Model("amr-introspection-scalar-advection")
+    (rho,) = model.conservative_vars("n", roles=(Density(),))
+    model.flux(x=[0.3 * rho], y=[0.2 * rho])
+    model.eigenvalues(x=[0.3 + 0.0 * rho], y=[0.2 + 0.0 * rho])
+    model.primitive_vars(rho)
+    model.conservative_from([rho])
+    model.elliptic_rhs(rho - 1.0)
+    compiled = model.compile(
+        backend="production", target="amr_system", name="amr_introspection_scalar",
+        consumer_owner_qid="tests.amr-introspection.ne",
+    )
     sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=2, coarse_max_grid=16)
     sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.set_poisson(bc=Periodic())
-    sim.add_equation("ne", engine.Model(engine.Scalar(), engine.ExB(), engine.NoSource(),
-                                   engine.BackgroundDensity(alpha=1.0, n0=1.0)),
+    sim.add_equation("ne", compiled,
                   spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     install_prepared_threshold_union(sim, (("ne", "n", 1.05),))
     xs = (np.arange(n) + 0.5) / n

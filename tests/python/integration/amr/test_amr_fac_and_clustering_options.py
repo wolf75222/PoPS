@@ -3,30 +3,10 @@
 Both surface in the AmrSystem effective-options report (sim.inspect()) and refuse out-of-domain
 values structurally. Kokkos-gated (self-skips without _pops); a small Serial AmrSystem is enough.
 """
-import numpy as np
 import pytest
 from pops.runtime._system import AmrSystem
-from tests.python.support.amr_tagging import install_prepared_threshold_union
 
 pops = pytest.importorskip("pops")
-import pops.runtime._engine_descriptors as engine  # noqa: E402
-
-
-def _model():
-    return engine.Model(state=engine.Scalar(), transport=engine.ExB(),
-                      source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
-
-
-def _built(**cfg):
-    sim = AmrSystem(n=32, L=1.0, periodicity=(True, True), regrid_every=2, coarse_max_grid=16, **cfg)
-    sim.block("ne", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit())
-    install_prepared_threshold_union(sim, (("ne", "n", 0.5),))
-    ne = np.ones((32, 32))
-    ne[10:22, 10:22] = 5.0
-    sim.set_density("ne", ne)
-    for _ in range(3):
-        sim.step_cfl(0.4)
-    return sim
 
 
 # --- ADC-616 clustering ------------------------------------------------------

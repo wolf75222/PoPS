@@ -39,8 +39,21 @@ def _bump(n, amp):
     return r + (1.0 - r.mean())  # moyenne nulle -> Sum q n solvable en periodique
 
 
-def _scalar_charge(q, B0=1.0):
-    return engine.Model(engine.Scalar(), engine.ExB(), engine.NoSource(), engine.ChargeDensity(charge=q))
+def _scalar_charge(name, q):
+    from pops.physics import Density
+    from pops.physics._facade import Model
+
+    model = Model("%s-scalar-advection" % name)
+    (rho,) = model.conservative_vars("n", roles=(Density(),))
+    model.flux(x=[0.3 * rho], y=[0.2 * rho])
+    model.eigenvalues(x=[0.3 + 0.0 * rho], y=[0.2 + 0.0 * rho])
+    model.primitive_vars(rho)
+    model.conservative_from([rho])
+    model.elliptic_rhs(q * rho)
+    return model.compile(
+        backend="production", target="amr_system", name=name,
+        consumer_owner_qid="tests.amr-clock.%s" % name,
+    )
 
 
 def _amr_config(n: int, *, regrid_every: int) -> AmrSystemConfig:
@@ -69,9 +82,9 @@ def _build_stride(n=32):
         sim._s._install_block_state_route(name, validated.resolve(block[state]).qualified_id)
     sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.set_poisson(bc=Periodic())
-    sim.add_equation("ions", _scalar_charge(+1.0),
+    sim.add_equation("ions", _scalar_charge("amr_clock_ions", +1.0),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()))
-    sim.add_equation("slow", _scalar_charge(-1.0),
+    sim.add_equation("slow", _scalar_charge("amr_clock_slow", -1.0),
                   spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()),
                   time=engine.Explicit(stride=2))  # bloc lent : cadence stride=2
     sim.set_density("ions", _bump(n, 0.40))
