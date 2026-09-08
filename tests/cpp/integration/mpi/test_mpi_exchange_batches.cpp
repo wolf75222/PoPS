@@ -16,7 +16,8 @@ class CommEnvironment final : public ::testing::Environment {
 struct Context {
   Geometry<1> geometry_ = Geometry<1>::from_bounds(Box<1>{Index<1>{0}, Index<1>{11}},
                                                    RealVector<1>{0}, RealVector<1>{1});
-  ExecutionLane lane = ExecutionLane::world("test.exchange-batch.boundary-interior");
+  ExecutionLane lane =
+      ExecutionLane::duplicate_world_collectively("test.exchange-batch.boundary-interior");
   AcceptedExchangeLedger ledger;
   const auto& geometry() const { return geometry_; }
   const auto& prepared_execution_lane() const { return lane; }
