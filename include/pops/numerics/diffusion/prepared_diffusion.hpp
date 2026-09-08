@@ -61,6 +61,8 @@ template<int Dim> class PreparedDiffusion {
         variable_(prototype.layout(),prototype.distribution(),prototype.local_rank(),2,prototype.ghosts()),
         coefficients_(prototype.layout(),prototype.distribution(),prototype.local_rank(),Dim,prototype.ghosts()),
         status_(prototype.layout(),prototype.distribution(),prototype.local_rank(),1,prototype.ghosts()) {
+    if constexpr (!Kokkos::SpaceAccessibility<Kokkos::HostSpace,typename Field::memory_space>::accessible)
+      throw std::invalid_argument("selected diffusion face ledger requires host-accessible native storage");
     if (ctx.prepared_execution_lane().size() != 1)
       throw std::invalid_argument("diffusion currently qualifies one MPI rank only");
     if (prototype.ncomp() != 1)

@@ -15,12 +15,17 @@ from pops.lib.initial import BindArray
 from pops.projection import ConservativeCellAverage
 
 
-def resolved_heat(*, n=16, coefficient=0.1, method="euler", variable=None, transport=None):
+def resolved_heat(*, n=16, coefficient=0.1, method="euler", variable=None, transport=None,
+                  runtime_coefficient=False):
     frame=Rectangle("diffusion_domain",lower=(0.,0.),upper=(1.,1.)).frame(Cartesian2D())
     model=pops.Model("heat",frame=frame)
     state=model.state("U",components=("u",))
     expression=state if variable is None else variable(state[0])
-    flux=model.diffusive_flux("conduction",state=state,value=coefficient*math.grad(expression))
+    selected_coefficient=coefficient
+    if runtime_coefficient:
+        from pops.params import RuntimeParam
+        selected_coefficient=model.value(model.param(RuntimeParam("nu",default=coefficient)))
+    flux=model.diffusive_flux("conduction",state=state,value=selected_coefficient*math.grad(expression))
     rhs=math.div(flux)
     transport_method=None
     if transport is not None:
@@ -81,3 +86,20 @@ def test_combined_transport_retains_native_riemann_and_adds_stability_frequencie
     assert ".explicit_frequency() + ctx.max_wave_speed" in code
     assert code.index(".stage_accepted_exchanges(")<code.index("ctx.commit_many(")
     assert model._dsl._m._flux
+
+
+def test_runtime_diffusion_coefficient_is_retained_in_program_parameter_metadata():
+    from pops.codegen.module_lowering import lower_and_validate
+    from pops.codegen.program_emit_params import program_param_entries
+    resolved,_,model=resolved_heat(runtime_coefficient=True)
+    assert program_param_entries(resolved.time,lower_and_validate(model)[0])==[(0,"nu",0,.1)]
+
+
+def test_unproved_accepted_transform_cannot_silently_drop_diffusive_exchanges():
+    from types import SimpleNamespace
+    from pops.codegen.program_diffusion_exchanges import accepted_diffusive_quadrature
+    resolved,_,_=resolved_heat()
+    accepted=next(iter(resolved.time._commits.values()))
+    transformed=SimpleNamespace(op="local_transform",inputs=(accepted,))
+    with pytest.raises(ValueError,match="hides diffusive exchanges"):
+        accepted_diffusive_quadrature(SimpleNamespace(_commits={"state":transformed}))

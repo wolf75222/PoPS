@@ -8,6 +8,15 @@ def accepted_diffusive_quadrature(program):
     """Stop at each fresh residual: a predictor's ancestry is not an accepted exchange."""
     selected = {}
 
+    def hides_diffusion(value):
+        if value.op == "diffusive_rhs":
+            return True
+        # Fresh residual evaluation consumes a predictor; its state ancestry is not another
+        # contribution to the accepted affine quadrature.
+        if value.op in {"rhs", "source", "coupled_rate"}:
+            return False
+        return any(hides_diffusion(child) for child in value.inputs)
+
     def walk(value, weight):
         if value.op == "diffusive_rhs":
             entry = selected.setdefault(value.id, (value, {}))[1]
@@ -15,6 +24,8 @@ def accepted_diffusive_quadrature(program):
                 entry[power] = entry.get(power, Fraction()) + coefficient
             return
         if value.op != "linear_combine":
+            if hides_diffusion(value):
+                raise ValueError("accepted state transform hides diffusive exchanges outside an authenticated affine quadrature")
             return
         for child, coefficients in zip(value.inputs, value.attrs["coeffs"], strict=True):
             product = {}

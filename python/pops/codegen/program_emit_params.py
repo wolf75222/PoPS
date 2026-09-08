@@ -31,7 +31,7 @@ def _formula_carrier(model: Any) -> Any:
 
 
 _MODEL_PARAM_OPS = frozenset({
-    "source", "apply", "local_transform", "solve_local_linear", "rhs",
+    "source", "apply", "local_transform", "solve_local_linear", "rhs", "diffusive_rhs",
     "solve_local_nonlinear",
 })
 
@@ -65,7 +65,25 @@ def _op_model_exprs(impl: Any, v: Any) -> list:
     lin = getattr(impl, "_linear_sources", {}) or {}
     flux = getattr(impl, "_flux_terms", {}) or {}
     transforms = getattr(impl, "_local_transforms", {}) or {}
-    if v.op == "source":
+    if v.op == "diffusive_rhs":
+        from pops.codegen.program_emit_diffusion import _selected
+        _, selected, _ = _selected(v, impl)
+        out.extend((selected["variable"], *selected["diagonal"], selected["derivative"]))
+        for row in v.attrs["physical_balance"].occurrences:
+            if row.kind == "source":
+                out.extend(src[row.payload.reg_name])
+        from pops._ir.expr import Var
+        from pops._ir.visitors import _children
+        pending, expanded = list(out), set()
+        while pending:
+            expression = pending.pop()
+            if isinstance(expression, Var) and expression.kind == "prim" and expression.name not in expanded:
+                expanded.add(expression.name)
+                recipe = impl.prim_defs[expression.name]
+                out.append(recipe)
+                pending.append(recipe)
+            pending.extend(_children(expression))
+    elif v.op == "source":
         out += list(src.get(v.attrs.get("source"), []))
     elif v.op == "apply" or v.op == "solve_local_linear":
         for row in lin.get(v.attrs.get("linear_source"), []):
