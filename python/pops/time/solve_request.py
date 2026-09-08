@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Any
 
 from pops.identity import make_identity
-from pops.time._graph.base import CanonicalData
+from pops.time.canonical_data import CanonicalData
 from pops.time.residual_common import residual_name
 
 
@@ -81,7 +81,7 @@ class SolveUnknown:
                 "invalid_unknown", "unknown template must be a typed state or field ProgramValue")
 
     def to_data(self) -> dict[str, Any]:
-        from pops.time._program.serialization import _json_ready
+        from pops.time.canonical_data import _json_ready
 
         value = self.template
         return {
@@ -171,9 +171,7 @@ class SolveRequest:
 
     def build_program_solve(self, *, program: Any, prepared_solver: Any,
                             name: Any = None) -> Any:
-        from pops.time._program.solve_request import build_solve_request
-
-        return build_solve_request(program, self, prepared_solver, name=name)
+        return program._build_solve_request(self, prepared_solver=prepared_solver, name=name)
 
 
 __all__ = ["DerivativeStrategy", "SolveRequest", "SolveRequestError", "SolveUnknown"]

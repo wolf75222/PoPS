@@ -192,7 +192,7 @@ class _ProgramCall(_ProgramBase):
         if op.lowering.get("joint_balance"):
             from .interactions import lower_joint_balance
             return lower_joint_balance(self, op, args, name)
-        from pops.codegen.diffusion_lowering import lower_diffusive_rate
+        from .diffusion import lower_diffusive_rate
         diffusion = lower_diffusive_rate(self, op, args, name)
         if diffusion is not None:
             return diffusion

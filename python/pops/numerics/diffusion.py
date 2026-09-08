@@ -1,15 +1,7 @@
 """Selected cell-gradient / constitutive-face / divergence diffusion construction."""
 from __future__ import annotations
 from pops.descriptors import Descriptor
-from pops._ir.expr import Const
-from pops.physics.diffusion import DiffusiveFluxHandle, DiffusiveFluxLaw
-
-
-def diffusion_balance_supported(view):
-    if view is None or not view.accumulation.is_identity or not any(
-            row.kind == "diffusion" for row in view.occurrences):
-        return False
-    return all(row.kind in {"diffusion", "source", "flux"} for row in view.occurrences)
+from pops.model.balance_analysis import diffusion_balance_supported
 
 
 class Diffusion(Descriptor):
@@ -22,6 +14,8 @@ class Diffusion(Descriptor):
         return 2 if self.transport is None else min(2,self.transport.formal_order)
 
     def __init__(self, *, flux, transport=None):
+        from pops.physics.diffusion import DiffusiveFluxHandle
+
         if type(flux) is not DiffusiveFluxHandle:
             raise TypeError("Diffusion requires the exact constitutive diffusive flux declaration")
         self.flux = flux
@@ -30,6 +24,9 @@ class Diffusion(Descriptor):
         self.validate()
 
     def validate(self):
+        from pops._ir.expr import Const
+        from pops.physics.diffusion import DiffusiveFluxLaw
+
         if self.transport is not None:
             from .spatial import FiniteVolume
             if type(self.transport) is not FiniteVolume:

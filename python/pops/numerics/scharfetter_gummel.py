@@ -1,16 +1,7 @@
 """One fitted face construction consuming an exact drift/diffusion occurrence pair."""
 import math
-from pops._ir.expr import Const
-from pops._ir.quantity import QuantityRef
-from pops.physics.drift_diffusion import DriftFluxHandle
+from pops.model.balance_analysis import fitted_balance_supported
 from .diffusion import Diffusion
-
-
-def fitted_balance_supported(view):
-    return (view is not None and view.accumulation.is_identity
-        and sum(row.kind=="drift" for row in view.occurrences)==1
-        and sum(row.kind=="diffusion" for row in view.occurrences)==1
-        and all(row.kind in {"drift","diffusion","source"} for row in view.occurrences))
 
 
 class ScharfetterGummel(Diffusion):
@@ -18,12 +9,17 @@ class ScharfetterGummel(Diffusion):
     native_id="pops::runtime::program::PreparedDiffusion::apply_fitted"
 
     def __init__(self,*,drift,flux):
+        from pops.physics.drift_diffusion import DriftFluxHandle
+
         if type(drift) is not DriftFluxHandle:
             raise TypeError("ScharfetterGummel requires an exact physical drift flux")
         self.drift=drift
         super().__init__(flux=flux)
 
     def validate(self):
+        from pops._ir.expr import Const
+        from pops._ir.quantity import QuantityRef
+
         super().validate()
         if self.law.dimension!=1 or self.drift.state!=self.law.state:
             raise ValueError("fitted drift diffusion requires one exact Dim1 scalar state")

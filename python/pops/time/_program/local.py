@@ -181,6 +181,15 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             return problem.build_program_solve(program=self, prepared_solver=prepared, name=name)
         return build(program=self, problem=problem, name=name)
 
+    def _build_solve_request(self, request: Any, *, prepared_solver: Any,
+                             name: Any = None) -> Any:
+        from .solve_request import build_solve_request
+        return build_solve_request(self, request, prepared_solver, name=name)
+
+    def _validate_solve_request_node(self, token: Any) -> None:
+        from .solve_request import validate_solve_request_node
+        validate_solve_request_node(self, token)
+
     def _solve_coupled_implicit(self, operator: Any, states: Any, *, prepared: Any,
                                 name: Any = None, at: Any = None, coefficient: Any,
                                 derivative: Any = None) -> Any:

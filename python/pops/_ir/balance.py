@@ -6,16 +6,17 @@ view, but cannot alter its coefficients or manufacture a second physical equatio
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pops.identity.scalar import exact_numeric_scalar, scalar_data
-from pops.model.handles import Handle
+if TYPE_CHECKING:
+    from pops.model.handles import Handle
 
 
 def _handle_data(handle: Handle) -> dict[str, Any]:
     from .quantity import _hash_owner
     if handle.owner_path == _hash_owner.get():
-        result = {"kind": handle.kind, "local_id": handle.local_id,
+        result: dict[str, Any] = {"kind": handle.kind, "local_id": handle.local_id,
                   "schema_version": handle.schema_version}
         target = getattr(handle, "registered_operator_name", None)
         if target is not None:
@@ -40,6 +41,8 @@ class Accumulation:
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
+        from pops.model.handles import Handle
+
         from .expr import Expr
         from .symbolic import freeze_symbolic_metadata
 
@@ -68,6 +71,7 @@ class Accumulation:
         return DiscreteAccumulationEquation(self, candidate, previous, interval, rate)
 
     def declaration_references(self) -> tuple[Handle, ...]:
+
         from .expr_references import collect_reference_value
         result: list[Handle] = [self.state]
         for value in (self.coordinates, self.law, self.representation, self.quadrature):
@@ -121,6 +125,8 @@ class BalanceOccurrence:
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
+        from pops.model.handles import Handle
+
         if not isinstance(self.balance, Handle) or self.balance.kind != "local_rate":
             raise TypeError("balance occurrence requires a local_rate Handle")
         if isinstance(self.ordinal, bool) or not isinstance(self.ordinal, int) or self.ordinal < 0:
@@ -147,6 +153,8 @@ class BalanceOccurrence:
         return abs(self.coefficient)
 
     def to_data(self) -> dict[str, Any]:
+        from pops.model.handles import Handle
+
         payload = (_handle_data(self.payload) if isinstance(self.payload, Handle)
                    else self.payload.to_data())
         return {"balance": _handle_data(self.balance), "ordinal": self.ordinal,
@@ -241,6 +249,8 @@ class BalanceView:
         return self.balance.accumulation
 
     def select(self, *selectors: Any) -> BalanceView:
+        from pops.model.handles import Handle
+
         if not selectors:
             raise ValueError("select requires a physical term or an exact occurrence")
         selected: set[int] = set()
@@ -251,8 +261,8 @@ class BalanceView:
                 matches = [item.ordinal for item in self.occurrences
                            if item.payload is selector or (isinstance(item.payload, Handle)
                                                           and item.payload == selector)
-                           or (callable(getattr(item.payload, "same_projection", None))
-                               and item.payload.same_projection(selector))]
+                           or (callable(projection := getattr(item.payload, "same_projection", None))
+                               and projection(selector))]
             if not matches:
                 raise ValueError("select cannot add a term absent from this physical balance view")
             selected.update(matches)

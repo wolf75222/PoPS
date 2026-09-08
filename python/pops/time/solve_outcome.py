@@ -123,9 +123,7 @@ class SolveOutcome:
         if self._result is not None:
             raise RuntimeError("SolveOutcome has already been consumed")
         if "solve_request" in self._token.attrs:
-            from pops.time._program.solve_request import validate_solve_request_node
-
-            validate_solve_request_node(self._program, self._token)
+            self._program._validate_solve_request_node(self._token)
         with authoring_transaction(self._program):
             node = self._program._new(
                 "solve_outcome", "solve_outcome", (self._token,),

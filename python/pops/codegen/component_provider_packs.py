@@ -17,6 +17,7 @@ from pops.model.provider_pack import (
     ProviderPack,
     build_operator_provider_pack,
     build_provider_pack,
+    compact_auxiliary_provider_pack,
 )
 
 
@@ -493,40 +494,6 @@ def auxiliary_provider_routes(
     for key in derived:
         visit(key)
     return MappingProxyType(routes), tuple(metadata)
-
-
-def compact_auxiliary_provider_pack(pack: Any) -> ProviderPack:
-    """Project declared :class:`AuxSpace` values to compact native-channel slots.
-
-    A slot is not inferred from a spelling, an axis, or a physics role.  It is
-    assigned once, in declaration order, from the exact owner-qualified
-    ``aux`` and ``field`` rows of the complete provider pack.  The empty pack
-    is valid: a model without auxiliary inputs or field outputs allocates no
-    channel at all.
-    """
-    if type(pack) is not ProviderPack:
-        raise TypeError("auxiliary projection requires an exact ProviderPack")
-    rows = []
-    for key in pack:
-        if key.space_kind not in {"aux", "field"}:
-            continue
-        component_contract = pack.contract(key)
-        if component_contract.centering != "cell" or component_contract.layout != "cell":
-            raise ValueError(
-                "auxiliary carrier accepts only cell-centered cell-layout components; "
-                "%s has centering=%r layout=%r and remains solver-owned"
-                % (key.space, component_contract.centering, component_contract.layout)
-            )
-        # A FieldSpace may deliberately be provided later by the case-owned
-        # field provider.  Its slot is still part of the package ABI, while
-        # availability is verified at bind rather than guessed at codegen.
-        entry = pack.declared_entry(key)
-        rows.append((
-            key,
-            component_contract,
-            type(entry)(entry.producer, entry.available, len(rows)),
-        ))
-    return ProviderPack(rows, capacity=len(rows))
 
 
 def auxiliary_component_slot(pack: Any, *, owner_qid: Any, name: Any) -> int:

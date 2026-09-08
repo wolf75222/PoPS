@@ -1,6 +1,8 @@
 """Canonical Program serialization and hashing."""
 from __future__ import annotations
 
+from pops.time.canonical_data import _json_ready as _json_ready
+
 import hashlib
 import json
 from collections.abc import Mapping
@@ -86,38 +88,6 @@ def _serialize_schedule(schedule: Any) -> dict[str, Any]:
         "off": (None if schedule.off is None
                 else _schedule_component(schedule.off, OffPolicy, "schedule off-policy")),
     }
-
-
-def _json_ready(value: Any) -> Any:
-    if isinstance(value, Handle):
-        return {"handle": handle_data(value)}
-    from pops._ir.expr import Expr
-    if isinstance(value, Expr):
-        from pops._ir.visitors import _dag_key_data
-        from pops.time.references import canonical_handle
-        return _json_ready(_dag_key_data((value.resolve_references(canonical_handle),)))
-    references = getattr(value, "declaration_references", None)
-    resolve = getattr(value, "resolve_references", None)
-    if callable(references) and references() and callable(resolve):
-        from pops.time.references import canonical_handle
-        value = resolve(canonical_handle)
-    hook = getattr(value, "to_data", None)
-    if callable(hook):
-        return _json_ready(hook())
-    if isinstance(value, Mapping):
-        if all(isinstance(key, str) and key for key in value):
-            return {key: _json_ready(item) for key, item in value.items()}
-        entries = [[_json_ready(key), _json_ready(item)] for key, item in value.items()]
-        entries.sort(key=lambda item: json.dumps(
-            item[0], sort_keys=True, separators=(",", ":")))
-        return {"mapping_entries": entries}
-    if isinstance(value, (list, tuple)):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, (set, frozenset)):
-        items = [_json_ready(item) for item in value]
-        return sorted(items, key=lambda item: json.dumps(
-            item, sort_keys=True, separators=(",", ":")))
-    return value
 
 
 def _serialize_field_context(context: Any) -> dict[str, Any]:
