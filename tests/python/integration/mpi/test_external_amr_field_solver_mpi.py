@@ -359,12 +359,20 @@ def test_external_amr_field_bridge_executes_and_refuses_collectively() -> None:
         chk(
             len(set(divergent_errors)) == 1
             and divergent_errors[0] is not None
-            and "provider report differs between MPI ranks" in divergent_errors[0],
-            "a rank-local non-finite candidate is refused by exact report consensus",
+            and "invalid_evaluation action=fail_run" in divergent_errors[0]
+            and "native FieldSolver v2 marked a non-finite active solution as solved"
+            in divergent_errors[0],
+            "a rank-local non-finite candidate becomes one collective typed FailRun",
         )
         chk(
             _snapshot_is_exact(runtime, slot, before_divergence),
-            "rank-divergent refusal publishes no field, state, clock or topology mutation",
+            "non-finite candidate refusal publishes no field, state, clock or topology mutation",
+        )
+        _set_marker(divergent_fault, False)
+        finite_retry = pops.run(runtime, t_end=4.0e-1, max_steps=1, console=False)
+        chk(
+            finite_retry.accepted_steps == 1 and runtime.macro_step() == 5,
+            "the exact accepted state remains retryable after non-finite candidate rollback",
         )
 
 

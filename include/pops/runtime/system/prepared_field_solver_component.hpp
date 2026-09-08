@@ -11,6 +11,7 @@
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 #include <pops/runtime/dynamic/prepared_execution_context.hpp>
+#include <pops/runtime/system/field_topology_report.hpp>
 
 #include <algorithm>
 #include <array>
@@ -52,16 +53,6 @@ struct PreparedFieldSolverSpec {
   std::shared_ptr<const component::PreparedExecutionContextV1> execution;
 };
 
-struct FieldTopologyReportRow {
-  std::string patch_identity;
-  std::string topology_digest;
-  std::string provenance;
-  std::size_t material_points = 0;
-  std::size_t connected_components = 0;
-  std::string source_layout_identity;
-  std::string materialized_layout_identity;
-};
-
 /// Installed adapter for one indivisible generated FieldTopology+FieldSolver provider.
 ///
 /// The two component instances are prepared once at installation.  The global topology is then
@@ -69,7 +60,7 @@ struct FieldTopologyReportRow {
 /// local patch view in one request and calls the component exactly once on every participating rank,
 /// including ranks with zero local patches. The specialization carries one exact rank through
 /// geometry, patch metadata, borrowed views and topology identities. The proven route is
-/// host-resident, Cartesian, cell-centered and full-material; serial and explicitly declared
+/// host-resident, Cartesian and cell-centered, with full or binary hierarchy material coverage; serial and explicitly declared
 /// MPI_COMM_WORLD component pairs use the same ranked algorithm. Unsupported execution/layout
 /// facts are rejected before either component can mutate the solution.
 template <int Dim>
@@ -86,19 +77,56 @@ class PreparedFieldSolverComponent final {
 
   PreparedFieldSolverComponent(PreparedFieldSolverSpec spec,
                                std::shared_ptr<component::LoadedComponent> topology,
-                               std::shared_ptr<component::LoadedComponent> solver)
+                               std::shared_ptr<component::LoadedComponent> solver,
+                               bool fresh_materialization = false)
       : spec_(std::move(spec)),
         topology_component_(std::move(topology)),
         solver_component_(std::move(solver)) {
-    validate_();
-    prepare_provider_contract_();
-    const PopsExecutionContextV1 execution = spec_.execution->view();
-    topology_state_ = topology_component_->prepared_state(
-        POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2, spec_.topology_interface_version, execution,
-        spec_.topology_parameters_json);
-    solver_state_ = solver_component_->prepared_state(POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2,
-                                                      spec_.solver_interface_version, execution,
-                                                      spec_.solver_parameters_json);
+    if (fresh_materialization) {
+      collective_preflight_(
+          [&] {
+            validate_();
+            prepare_provider_contract_();
+          },
+          "external FieldSolver specification failed collectively");
+      std::optional<component::LoadedComponent::PreparedStateRequest> topology_request;
+      std::optional<component::LoadedComponent::PreparedStateRequest> solver_request;
+      collective_preflight_(
+          [&] {
+            const auto execution = spec_.execution->view();
+            topology_request.emplace(topology_component_->prepare_state_request(
+                POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2, spec_.topology_interface_version,
+                execution, spec_.topology_parameters_json));
+            solver_request.emplace(solver_component_->prepare_state_request(
+                POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, spec_.solver_interface_version, execution,
+                spec_.solver_parameters_json));
+          },
+          "external FieldSolver state request preparation failed collectively");
+      collective_preflight_(
+          [&] {
+            owned_topology_state_ =
+                topology_component_->execute_prepared_state(std::move(*topology_request));
+          },
+          "external FieldTopology state preparation failed collectively");
+      collective_preflight_(
+          [&] {
+            owned_solver_state_ =
+                solver_component_->execute_prepared_state(std::move(*solver_request));
+          },
+          "external FieldSolver state preparation failed collectively");
+      topology_state_ = owned_topology_state_.get();
+      solver_state_ = owned_solver_state_.get();
+    } else {
+      validate_();
+      prepare_provider_contract_();
+      const PopsExecutionContextV1 execution = spec_.execution->view();
+      topology_state_ = topology_component_->prepared_state(
+          POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2, spec_.topology_interface_version, execution,
+          spec_.topology_parameters_json);
+      solver_state_ = solver_component_->prepared_state(POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2,
+                                                        spec_.solver_interface_version, execution,
+                                                        spec_.solver_parameters_json);
+    }
   }
 
   [[nodiscard]] std::string_view provider_identity() const noexcept { return provider_identity_; }
@@ -128,6 +156,121 @@ class PreparedFieldSolverComponent final {
         std::rethrow_exception(request_error);
       throw std::runtime_error("external FieldSolver request binding failed collectively");
     }
+    return execute_bound_solve_([&] { return active_solution_is_finite_(solution); });
+  }
+
+  /// Bind one immutable hierarchy; the exact adapter owns metadata and borrowed field views.
+  void bind_hierarchy(const PopsFieldGlobalTopologyV1& global,
+                      const std::vector<component::FieldTopologyPatchInputV2>& local,
+                      const std::vector<component::FieldSolverPatchBindingV2>& bindings) {
+    collective_preflight_(
+        [&] {
+          if (topology_ || solver_request_ || global.dimension != Dim ||
+              global.source_layout_identity == nullptr ||
+              global.topology_recipe_identity == nullptr ||
+              global.materialized_layout_identity == nullptr ||
+              spec_.source_layout_identity != global.source_layout_identity ||
+              spec_.topology_recipe_identity != global.topology_recipe_identity)
+            throw std::invalid_argument(
+                "external hierarchy binding has changed its exact identity");
+        },
+        "external hierarchy identity validation failed collectively");
+    materialized_layout_identity_ = global.materialized_layout_identity;
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"external-system-field-layout", materialized_layout_identity_}}))
+      throw std::invalid_argument("external FieldTopology global layout differs between MPI ranks");
+    collective_preflight_(
+        [&] {
+          const auto& api = topology_component_->table<PopsFieldTopologyApiV2>(
+              POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2, spec_.topology_interface_version);
+          topology_.emplace(component::prepare_field_topology(api, topology_state_, global, local,
+                                                              spec_.execution->view()));
+        },
+        "external FieldTopology preparation failed collectively");
+    collective_preflight_(
+        [&] {
+          solver_request_.emplace(component::bind_field_solver_request(
+              *topology_, bindings, spec_.execution->view(), spec_.boundary_contract_json.c_str(),
+              spec_.relative_tolerance, spec_.absolute_tolerance, spec_.max_iterations));
+        },
+        "external FieldSolver hierarchy request binding failed collectively");
+  }
+
+  static component::FieldSolverPatchBindingV2 hierarchy_patch_binding(
+      std::size_t metadata_index, const fab_type& rhs, fab_type& candidate, const box_type& valid,
+      const char* layout, const char* patch) {
+    return {metadata_index,
+            const_view_(rhs, valid, layout, patch),
+            field_view_(candidate, valid, layout, patch),
+            {}};
+  }
+
+  bool hierarchy_binding_matches(std::size_t local,
+                                 const component::FieldSolverPatchBindingV2& expected) const {
+    if (!solver_request_ || local >= solver_request_->request().local_patch_count)
+      return false;
+    const auto& cached = solver_request_->request().local_patches[local];
+    return cached.metadata_index == expected.metadata_index &&
+           same_field_view_(cached.rhs, expected.rhs) &&
+           same_field_view_(cached.solution, expected.solution);
+  }
+
+  SolveReport solve_hierarchy() {
+    if (!topology_ || !solver_request_)
+      throw std::logic_error("external hierarchy solve has no bound topology");
+    Kokkos::fence();
+    return execute_bound_solve_([&] {
+      const auto& patches = solver_request_->request().local_patches;
+      const auto& local = topology_->local_patches();
+      for (std::size_t p = 0; p < local.size(); ++p) {
+        const auto& view = patches[p].solution;
+        const auto* values = static_cast<const double*>(view.data);
+        const auto& mask = local[p].material_mask;
+        for (std::size_t ordinal = 0; ordinal < mask.size(); ++ordinal) {
+          std::size_t remainder = ordinal;
+          std::ptrdiff_t offset = 0;
+          for (int axis = 0; axis < Dim; ++axis) {
+            offset += static_cast<std::ptrdiff_t>(remainder % view.extents[axis]) *
+                      view.axis_strides[axis];
+            remainder /= view.extents[axis];
+          }
+          if (mask[ordinal] > 1 || (mask[ordinal] == 1 && !std::isfinite(values[offset])))
+            return false;
+        }
+      }
+      return true;
+    });
+  }
+
+  [[nodiscard]] std::vector<FieldTopologyReportRow> topology_report() const {
+    if (!topology_)
+      return {};
+    std::vector<FieldTopologyReportRow> result;
+    result.reserve(topology_->local_patches().size());
+    for (const auto& local : topology_->local_patches()) {
+      const auto& metadata = topology_->global_patches().at(local.metadata_index);
+      std::vector<std::int32_t> components;
+      components.reserve(local.component_labels.size());
+      for (const auto label : local.component_labels)
+        if (label > 0 && std::find(components.begin(), components.end(), label) == components.end())
+          components.push_back(label);
+      result.push_back({
+          metadata.patch_identity,
+          topology_->topology_digest(),
+          topology_->provenance(),
+          static_cast<std::size_t>(
+              std::count(local.material_mask.begin(), local.material_mask.end(), std::uint8_t{1})),
+          components.size(),
+          spec_.source_layout_identity,
+          materialized_layout_identity_,
+      });
+    }
+    return result;
+  }
+
+ private:
+  template <class FiniteCheck>
+  SolveReport execute_bound_solve_(FiniteCheck&& active_solution_is_finite) {
     PopsSolveReportV2 native{};
     std::exception_ptr solve_error;
     try {
@@ -170,7 +313,7 @@ class PreparedFieldSolverComponent final {
       // The component writes directly into the host-resident warm-start buffer.  Do not publish
       // that provisional iterate to the device until every active valid cell has been checked.
       // Inactive material cells and ghosts are outside the provider's solved-value contract.
-      if (all_reduce_max(active_solution_is_finite_(solution) ? 0L : 1L) != 0) {
+      if (all_reduce_max(active_solution_is_finite() ? 0L : 1L) != 0) {
         report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
                            "native FieldSolver v2 marked a non-finite active solution as solved");
         return report;
@@ -183,33 +326,6 @@ class PreparedFieldSolverComponent final {
     return report;
   }
 
-  [[nodiscard]] std::vector<FieldTopologyReportRow> topology_report() const {
-    if (!topology_)
-      return {};
-    std::vector<FieldTopologyReportRow> result;
-    result.reserve(topology_->local_patches().size());
-    for (const auto& local : topology_->local_patches()) {
-      const auto& metadata = topology_->global_patches().at(local.metadata_index);
-      std::vector<std::int32_t> components;
-      components.reserve(local.component_labels.size());
-      for (const auto label : local.component_labels)
-        if (label > 0 && std::find(components.begin(), components.end(), label) == components.end())
-          components.push_back(label);
-      result.push_back({
-          metadata.patch_identity,
-          topology_->topology_digest(),
-          topology_->provenance(),
-          static_cast<std::size_t>(
-              std::count(local.material_mask.begin(), local.material_mask.end(), std::uint8_t{1})),
-          components.size(),
-          spec_.source_layout_identity,
-          materialized_layout_identity_,
-      });
-    }
-    return result;
-  }
-
- private:
   template <class Function>
   static void collective_preflight_(Function&& function, const char* collective_message) {
     std::exception_ptr local_error;
@@ -757,6 +873,8 @@ class PreparedFieldSolverComponent final {
   std::string collective_contract_;
   std::shared_ptr<component::LoadedComponent> topology_component_;
   std::shared_ptr<component::LoadedComponent> solver_component_;
+  component::LoadedComponent::PreparedState owned_topology_state_;
+  component::LoadedComponent::PreparedState owned_solver_state_;
   void* topology_state_ = nullptr;
   void* solver_state_ = nullptr;
   std::optional<component::PreparedFieldTopologyV2> topology_;

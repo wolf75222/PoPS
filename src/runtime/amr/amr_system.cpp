@@ -20,6 +20,7 @@
 #include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
+#include <pops/runtime/amr/component_field_solver_provider.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/amr/amr_tensor_elliptic.hpp>
 #include <pops/runtime/amr/composite_reduction.hpp>
@@ -14199,13 +14200,18 @@ void AmrSystem<Dim>::register_field_solver_provider(
 
 template <int Dim>
 std::string AmrSystem<Dim>::register_field_solver_provider(
-    const std::string& provider_slot, runtime::field::PreparedFieldSolverSpec,
-    std::shared_ptr<component::LoadedComponent>, std::shared_ptr<component::LoadedComponent>) {
+    const std::string& provider_slot, runtime::field::PreparedFieldSolverSpec spec,
+    std::shared_ptr<component::LoadedComponent> topology,
+    std::shared_ptr<component::LoadedComponent> solver) {
   require_amr_assembling(p_->lifecycle, "register_field_solver_provider");
   if (provider_slot.empty())
     throw std::invalid_argument("AMR component field provider slot must be non-empty");
-  throw std::logic_error(
-      "AMR component FieldTopology/FieldSolver pairs require an exact-ranked hierarchy provider");
+  if (spec.provider_slot != provider_slot)
+    throw std::invalid_argument("AMR component field provider slot differs from its specification");
+  register_field_solver_provider(
+      runtime::amr::make_component_exact_amr_field_solver_provider<Dim>(
+          std::move(spec), std::move(topology), std::move(solver)));
+  return provider_slot;
 }
 
 template <int Dim>
@@ -14479,9 +14485,11 @@ void AmrSystem<Dim>::set_field_topology_authority(const std::string& provider_sl
 template <int Dim>
 std::vector<runtime::field::FieldTopologyReportRow> AmrSystem<Dim>::field_topology_report(
     const std::string& provider_slot) const {
-  if (!p_->field_plans.contains(provider_slot))
+  const auto found = p_->field_plans.find(provider_slot);
+  if (found == p_->field_plans.end())
     throw std::out_of_range("unknown exact AMR field provider slot");
-  return {};
+  return found->second.prepared_solver ? found->second.prepared_solver->topology_report()
+                                       : std::vector<runtime::field::FieldTopologyReportRow>{};
 }
 
 template <int Dim>
