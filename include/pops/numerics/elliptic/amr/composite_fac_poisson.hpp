@@ -794,6 +794,8 @@ class CompositeFacPoisson {
       if (nullspace_workspace_) {
         nullspace_workspace_->require_compatible(nullspace_rhs_);
         nullspace_workspace_->apply_gauge(nullspace_candidates_);
+        // Gauge shifts act on the active cover; covered parents remain derived data.
+        average_solution_down_();
       }
       used_fft_coarse_ = false;
     } catch (const FieldNullspaceIncompatibleRhs& error) {
@@ -866,9 +868,9 @@ class CompositeFacPoisson {
       if (levels_.size() > 2)
         smooth_(levels_.size() - 1, levels_.back()->phi, levels_.back()->rhs, options_.fine_sweeps,
                 true, false);
-      average_solution_down_();
       if (nullspace_workspace_)
         nullspace_workspace_->apply_gauge(nullspace_candidates_);
+      average_solution_down_();
 
       compute_composite_residual_();
       ++report.evaluations;

@@ -408,6 +408,8 @@ class CompositeFacPoisson {
       return last_report_;
     }
     nullspace_workspace_->apply_gauge(nullspace_candidates_);
+    // Gauge shifts act on the active cover; covered parents remain derived data.
+    average_solution_down_();
     used_fft_coarse_ = false;
 
     if (newton_workspace_ || boundary_kernel_)
@@ -484,8 +486,8 @@ class CompositeFacPoisson {
       prolong_correction_tower_();
       for (std::size_t level = 1; level < levels_.size(); ++level)
         smooth_level_(level, post);
-      average_solution_down_();
       nullspace_workspace_->apply_gauge(nullspace_candidates_);
+      average_solution_down_();
 
       compute_composite_residual_();
       ++report.evaluations;

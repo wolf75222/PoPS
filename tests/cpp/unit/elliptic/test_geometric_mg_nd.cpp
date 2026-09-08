@@ -237,6 +237,10 @@ void expect_composite_singular_authority_covers_the_complete_hierarchy() {
   solver.rhs_level(0).set_val(Real(0));
   const pops::SolveReport solved = solver.solve();
   ASSERT_TRUE(solved.solved()) << solved.reason;
+  // Removing a constant nullspace component is already an exact solution, including
+  // the covered parent values used by fine interpolation. No FAC cycle is needed.
+  EXPECT_EQ(solved.iters, 0);
+  EXPECT_EQ(solved.residual_norm, Real(0));
   EXPECT_LE(pops::norm_inf(solver.phi_level(0)), Real(1e-8));
   EXPECT_LE(pops::norm_inf(solver.phi_level(1)), Real(1e-8));
 }
@@ -551,5 +555,74 @@ TEST(test_geometric_mg_nd, small_forcing_obeys_the_authored_relative_initial_res
     ASSERT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm;
     EXPECT_GT(report.iters, 0);
     EXPECT_LE(report.residual_norm, options.relative_tolerance * expected_reference);
+  }
+}
+
+
+template <int Dim>
+void expect_tiled_anisotropic_correction_linearity(PhysicalBoundaryKind kind) {
+  const auto lane = ExecutionLane::world("tests.geometric-mg.anisotropic-correction");
+  Index<Dim> high = index<Dim>(7);
+  high[0] = 31;
+  const Box<Dim> domain{Index<Dim>{}, high};
+  RealVector<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis)
+    upper[axis] = Real(1);
+  const auto geometry = Geometry<Dim>::from_bounds(domain, RealVector<Dim>{}, upper);
+  auto build = request<Dim>(geometry, BoxArray<Dim>::from_domain(domain, extent<Dim>(4)),
+                             kind == PhysicalBoundaryKind::external);
+  if (kind == PhysicalBoundaryKind::neumann) {
+    std::array<PhysicalBoundaryFace, 2 * Dim> faces{};
+    faces.fill(PhysicalBoundaryFace{kind, Real(0)});
+    build.boundary = PhysicalBoundaryConditions<Dim>{BoundaryTopology<Dim>::physical(), faces,
+                                                       build.boundary.spacing()};
+  }
+  GeometricMultigridOptions options;
+  options.reaction = Real(1);
+  options.relative_tolerance = Real(1e-10);
+  options.absolute_tolerance = Real(0);
+  options.maximum_cycles = 192;
+  GeometricMG<Dim> solver(std::move(build), lane, options);
+  solver.install_nullspace(FieldNullspacePlan<Dim>{},
+                           PreparedVectorDistribution<Dim>::replicated());
+  using Field = typename GeometricMG<Dim>::field_type;
+  std::array<std::unique_ptr<Field>, 4> solutions;
+  for (int mode = 0; mode < 4; ++mode) {
+    solver.phi().set_val(Real(0));
+    const Real scale = mode == 3 ? Real(1e-12) : Real(1);
+    for (std::size_t local = 0; local < solver.rhs().local_size(); ++local) {
+      auto values = solver.rhs().fab(local).view();
+      pops::for_each_cell(solver.rhs().box(local), [=] POPS_HD(const Index<Dim>& cell) {
+        const Real a = Real(1);
+        const Real b = (cell[Dim - 1] % 3 == 0) ? Real(0.5) : Real(-0.25);
+        values(cell, 0) = scale * (mode == 0 ? a : mode == 1 ? b : a + b);
+      });
+    }
+    const auto report = solver.solve();
+    ASSERT_TRUE(report.solved()) << "Dim=" << Dim << " mode=" << mode
+                                << " boundary=" << static_cast<int>(kind) << " " << report.reason
+                                << " relative=" << report.rel_residual;
+    EXPECT_LE(report.residual_norm,
+              options.relative_tolerance * report.reference_residual_norm);
+    solutions[mode] = std::make_unique<Field>(solver.phi().layout(), solver.phi().distribution(),
+                                                solver.phi().local_rank(), 1, Extent<Dim>{});
+    pops::elliptic::mg::copy_scalar_valid(solver.phi(), *solutions[mode]);
+  }
+  // A linear correction hierarchy must respect superposition and forcing amplitude;
+  // the residual bound and reaction=1 also bound the absolute solution error.
+  pops::saxpy(*solutions[2], Real(-1), *solutions[0]);
+  pops::saxpy(*solutions[2], Real(-1), *solutions[1]);
+  EXPECT_LE(pops::norm_inf(*solutions[2]), Real(4) * options.relative_tolerance);
+  pops::saxpy(*solutions[0], Real(1), *solutions[1]);
+  pops::saxpy(*solutions[0], Real(-1e12), *solutions[3]);
+  EXPECT_LE(pops::norm_inf(*solutions[0]), Real(4) * options.relative_tolerance);
+}
+
+TEST(test_geometric_mg_nd, tiled_anisotropic_corrections_preserve_linearity_and_small_forcing) {
+  for (const auto kind : {PhysicalBoundaryKind::dirichlet, PhysicalBoundaryKind::neumann,
+                          PhysicalBoundaryKind::external}) {
+    expect_tiled_anisotropic_correction_linearity<1>(kind);
+    expect_tiled_anisotropic_correction_linearity<2>(kind);
+    expect_tiled_anisotropic_correction_linearity<3>(kind);
   }
 }
