@@ -515,11 +515,10 @@ struct SameLevelTransportEulerDeviceView {
       return CellTemporalStageOutcome::failed(0x756002u);
 
     for (int component = 0; component < components; ++component) {
-      // Program Forward Euler materializes dt*R before adding it to U. Keep that
-      // rounding boundary in this combined kernel: fma(1, U, increment) performs
-      // an ordinary addition without contracting the multiplication into U+dt*R.
-      const Real next =
-          Kokkos::fma(Real(1), cell.stage(index, component), dt * cell.residual(index, component));
+      // Match the generated Forward Euler axpy, including the selected compiler
+      // contraction mode. Its increment is added directly to the copied stage.
+      Real next = cell.stage(index, component);
+      next += dt * cell.residual(index, component);
       std::array<Real, std::size_t{2} * Dim> integrated_faces{};
       bool finite = finite_device_value(next);
       for (int axis = 0; axis < Dim; ++axis) {

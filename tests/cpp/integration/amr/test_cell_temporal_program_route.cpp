@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/runtime/program/same_level_cell_temporal_provider.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
 
 #include <Kokkos_Core.hpp>
 
@@ -410,7 +411,7 @@ TEST(test_cell_temporal_program_route,
   prove_rollback_and_generation_authentication<3>();
 }
 
-TEST(test_cell_temporal_program_route, cell_update_preserves_materialized_euler_rounding) {
+TEST(test_cell_temporal_program_route, cell_update_matches_generated_euler_axpy_rounding) {
   ensure_runtime();
   using namespace pops::runtime::program::same_level_cell_temporal_detail;
   const Real epsilon = std::ldexp(Real(1), -(std::numeric_limits<Real>::digits / 2 + 1));
@@ -444,10 +445,14 @@ TEST(test_cell_temporal_program_route, cell_update_preserves_materialized_euler_
   const auto result =
       view.evaluate_local_stage_and_record_space_time_flux(CellTemporalStagePoint{.end_tick = 1});
   ASSERT_EQ(result.disposition, CellTemporalStageDisposition::Accepted);
-  // The exact product is 1-epsilon^2. A materialized product rounds to 1,
-  // whereas contracting the whole update retains the nonzero -epsilon^2.
-  ASSERT_NE(std::fma(dt, rhs, Real(-1)), Real(0));
-  EXPECT_EQ(candidate_b.view()(Index<1>{0}, 0), Real(0));
+  // Exercise the actual two axpy kernels emitted by RungeKutta's noncommitted
+  // step value, rather than assuming a materialized-product rounding boundary.
+  candidate_a.set_val(Real(0));
+  pops::mf_arith_detail::SaxpyKernel<1>{candidate_a.view(), std::as_const(stage).view(), Real(1), 0}(
+      Index<1>{0});
+  pops::mf_arith_detail::SaxpyKernel<1>{candidate_a.view(), std::as_const(residual).view(), dt, 0}(
+      Index<1>{0});
+  EXPECT_EQ(candidate_b.view()(Index<1>{0}, 0), candidate_a.view()(Index<1>{0}, 0));
   EXPECT_EQ(integrated_flux[0], Real(0));
   EXPECT_EQ(integrated_flux[1], Real(0));
 }

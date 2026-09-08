@@ -16,6 +16,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -301,6 +302,39 @@ TEST(test_program_reflux_ledger,
   prove_ranked_reflux_and_checkpoint<1>();
   prove_ranked_reflux_and_checkpoint<2>();
   prove_ranked_reflux_and_checkpoint<3>();
+}
+
+TEST(test_program_reflux_ledger, SingleWindowDensityAvoidsAnExtraTemporalRounding) {
+  const auto query = coarse_key<1>(0);
+  const pops::Real density = pops::Real(1) + pops::Real(21) * std::numeric_limits<pops::Real>::epsilon();
+  for (const double dt : {0.001, 0.0005}) {
+    const auto integrate = [&](pops::Real coarse_density) {
+      reflux::TransactionalFaceFluxLedger<1, program::AmrProgramFacePayload> ledger(kLedgerBudget);
+      auto coarse = fragment(query, query.coarse_face, reflux::FaceLedgerRole::Coarse,
+                             1.0, coarse_density);
+      auto fine = fragment(query, query.coarse_face, reflux::FaceLedgerRole::Fine, 1.0, density);
+      coarse.measure.substep_duration = dt;
+      fine.measure.substep_duration = dt;
+      ledger.begin(query.attempt);
+      ledger.accumulate(std::move(coarse.key), coarse.measure, std::move(coarse.payload));
+      ledger.accumulate(std::move(fine.key), fine.measure, std::move(fine.payload));
+      ledger.commit();
+      return reflux::metric_reflux(ledger, query, ratio_two<1>(),
+                                    reflux::FaceRefinementMapping<1>{}, kMetricBudget, payload_axpy);
+    };
+    const auto retained = integrate(density);
+    ASSERT_EQ(retained.mismatch.size(), 1U);
+    EXPECT_EQ(retained.mismatch[0], pops::Real(0));
+    EXPECT_EQ(retained.coarse_integrated[0], static_cast<pops::Real>(dt) * density);
+
+    // These volatile stores represent the two separate field kernels used by
+    // the former full-window dt*F then (1/dt)*F path. The ledger must still apply
+    // dt, so that unnecessary round trip can create reflux for identical fluxes.
+    volatile pops::Real integrated = static_cast<pops::Real>(dt) * density;
+    volatile pops::Real reconstructed = integrated * (pops::Real(1) / static_cast<pops::Real>(dt));
+    const auto rounded_twice = integrate(reconstructed);
+    EXPECT_NE(rounded_twice.mismatch[0], pops::Real(0));
+  }
 }
 
 TEST(test_program_reflux_ledger, InvalidCheckpointAndDuplicateFacesRejectBeforeMutation) {
