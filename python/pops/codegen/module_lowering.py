@@ -344,6 +344,14 @@ def _module_to_model(module: Any, state_space: Any = None,
                 source, "documentary"))
             continue
         refusal = op.lowering.get("native_unsupported")
+        from pops.numerics.diffusion import diffusion_balance_supported
+        diffusion_view = op.lowering.get("physical_balance")
+        if diffusion_balance_supported(diffusion_view):
+            coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:diffusive_rhs",)))
+            continue
+        if op.lowering.get("diffusive_law") is not None:
+            coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:constitutive_flux",)))
+            continue
         if refusal:
             _reject(source, "unsupported_balance_realization",
                     "operator %r retains a physical balance without a native realization: %s"
@@ -394,6 +402,8 @@ def _module_to_model(module: Any, state_space: Any = None,
             _reject(source, "operator_lowering_failed", str(exc))
         coverage_rows.append(LoweringCoverageRow(
             source, "lowered", (builder_targets[op.kind],)))
+    from pops.codegen.diffusion_lowering import prepare_diffusion_carrier
+    prepare_diffusion_carrier(m, module)
     # The executable DSL validates the spectrum against the already-selected
     # physical flux axes.  A Module deliberately stores those two declarations
     # independently, so materialize all grid operators before attaching the

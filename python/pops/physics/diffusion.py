@@ -11,6 +11,60 @@ from pops._ir.visitors import _children
 from pops.model import Handle, Signature, FieldSpace
 
 
+@dataclass(frozen=True, slots=True)
+class DiffusiveBoundary:
+    """A physical value W or outward conormal Fd.n on one Cartesian face.
+
+    ``value + slope.x`` is an affine physical trace, independent of a ghost-cell closure.
+    Periodicity is declared on both faces and must agree with the bound mesh topology.
+    """
+    axis: int
+    side: str
+    kind: str
+    value: float = 0.0
+    slope: tuple[float, ...] = ()
+    __pops_ir_immutable__ = True
+
+    def __post_init__(self):
+        import math
+        if type(self.axis) is not int or self.axis not in range(3):
+            raise ValueError("diffusive boundary requires a Cartesian axis ordinal")
+        if self.side not in ("lower", "upper") or self.kind not in ("periodic", "value", "conormal"):
+            raise ValueError("diffusive boundary requires one physical value, conormal or periodic law")
+        if not math.isfinite(self.value) or any(not math.isfinite(x) for x in self.slope):
+            raise ValueError("diffusive boundary data must be finite")
+        if self.kind == "periodic" and (self.value != 0 or any(self.slope)):
+            raise ValueError("periodic diffusion boundary carries no physical trace")
+        object.__setattr__(self, "slope", tuple(self.slope))
+
+    def to_data(self):
+        return {"axis": self.axis, "side": self.side, "kind": self.kind,
+                "value": self.value, "slope": self.slope}
+
+
+def _physical_boundaries(values, dimension):
+    if values is None:
+        # No physical boundary is an explicitly periodic-only law. The native preparation
+        # authenticates this against the actual mesh; it never invents wall data.
+        values = tuple(DiffusiveBoundary(axis, side, "periodic")
+                       for axis in range(dimension) for side in ("lower", "upper"))
+    values = tuple(values)
+    if any(type(value) is not DiffusiveBoundary for value in values):
+        raise TypeError("diffusive boundaries require immutable DiffusiveBoundary values")
+    keys = [(row.axis, row.side) for row in values]
+    expected = [(axis, side) for axis in range(dimension) for side in ("lower", "upper")]
+    if len(keys) != len(set(keys)) or set(keys) != set(expected):
+        raise ValueError("diffusive boundary faces must be covered exactly once")
+    result = tuple(sorted(values, key=lambda row: (row.axis, row.side == "upper")))
+    for axis in range(dimension):
+        pair = result[2*axis:2*axis+2]
+        if (pair[0].kind == "periodic") != (pair[1].kind == "periodic"):
+            raise ValueError("periodicity must cover both faces of an axis")
+    if any(row.slope and len(row.slope) != dimension for row in result):
+        raise ValueError("boundary affine trace rank differs from physical frame")
+    return result
+
+
 class DiffusiveFluxHandle(Handle):
     """An owned constitutive flux; it is never a hyperbolic Riemann flux."""
 
@@ -32,6 +86,7 @@ class DiffusiveFluxLaw:
     coefficients: tuple[tuple[Expr, ...], ...]
     axes: tuple[str, ...]
     inputs: tuple[Any, ...]
+    boundaries: tuple[DiffusiveBoundary, ...]
     __pops_ir_immutable__ = True
 
     @property
@@ -54,10 +109,14 @@ class DiffusiveFluxLaw:
             resolver(self.state),
             resolve_reference_value(self.variable, resolver, {}, allow_formula_vars=True),
             resolve_reference_value(self.coefficients, resolver, {}, allow_formula_vars=True),
-            self.axes, self.inputs,
+            self.axes, self.inputs, self.boundaries,
         )
 
     def to_data(self) -> dict[str, Any]:
+        from pops._ir.quantity import _hash_owner
+        if not self.state.is_resolved and self.state.owner_path != _hash_owner.get():
+            return self.resolve_references(lambda handle: handle._resolved(
+                handle.owner_path.canonical())).to_data()
         from pops._ir.balance import _handle_data
         from pops.model.hash_data import canonical_hash_data
         return {
@@ -65,6 +124,7 @@ class DiffusiveFluxLaw:
             "gradient_variable": canonical_hash_data(self.variable),
             "coefficient_tensor": canonical_hash_data(self.coefficients),
             "axes": self.axes, "inputs": [space.to_data() for space in self.inputs],
+            "boundaries": [row.to_data() for row in self.boundaries],
         }
 
     def flux_expressions(self) -> tuple[Expr, ...]:
@@ -133,7 +193,8 @@ def _authenticate_expression(model: Any, expression: Expr, state: Any) -> None:
             raise ValueError("diffusive law reads a foreign declaration")
 
 
-def declare_diffusive_flux(model: Any, name: Any, *, state: Any, value: Any) -> DiffusiveFluxHandle:
+def declare_diffusive_flux(model: Any, name: Any, *, state: Any, value: Any,
+                           boundaries: Any = None) -> DiffusiveFluxHandle:
     from ._board_contract import require_name
     from .board_handles import StateHandle
 
@@ -169,7 +230,8 @@ def declare_diffusive_flux(model: Any, name: Any, *, state: Any, value: Any) -> 
     existing = getattr(model, "_diffusive_fluxes", {})
     if name in existing or name in model._fluxes:
         raise ValueError("physical flux %r is already declared" % name)
-    law = DiffusiveFluxLaw(state, variable, coefficients, axes, tuple(inputs))
+    law = DiffusiveFluxLaw(state, variable, coefficients, axes, tuple(inputs),
+                           _physical_boundaries(boundaries, len(axes)))
     handle = DiffusiveFluxHandle(name, law, owner=model.owner_path)
     model._diffusive_fluxes = {**existing, name: handle}
     model._invalidate_authoring_views()
@@ -199,4 +261,4 @@ def install_diffusive_fluxes(model: Any, module: Any) -> None:
                               declarations=declarations)
 
 
-__all__ = ["DiffusiveFluxHandle", "DiffusiveFluxLaw"]
+__all__ = ["DiffusiveFluxHandle", "DiffusiveFluxLaw", "DiffusiveBoundary"]

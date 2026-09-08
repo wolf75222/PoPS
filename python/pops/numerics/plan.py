@@ -531,8 +531,8 @@ class DiscretizationPlan(Descriptor):
             if view is not None:
                 reason = view.legacy_incompatibility()
                 if reason is not None:
-                    validate_view = getattr(method, "validate_balance_view", None)
-                    if not callable(validate_view) or validate_view(view) is not True:
+                    validate_balance = getattr(method, "validate_balance_view", None)
+                    if not callable(validate_balance) or validate_balance(view) is not True:
                         raise UnsupportedBalanceRealizationError(rate, reason)
             rates.append(ResolvedRateMethod(
                 case.resolve(rate, block=block), method.resolve_references(resolve_handle)))

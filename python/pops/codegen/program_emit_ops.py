@@ -734,6 +734,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 )
             )
         var[v.id] = var[scalar_in.id]
+    elif v.op == "diffusive_rhs":
+        from pops.codegen.program_emit_diffusion import _emit_diffusive_rhs
+        _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target)
     elif v.op == "rhs":
         state_in = v.inputs[0]  # rhs inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id

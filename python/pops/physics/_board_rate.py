@@ -17,10 +17,10 @@ else:
 class _RateAuthoringMixin(_BoardModel):
     """Retain physical equations and derive checked finite-volume adapters."""
 
-    def diffusive_flux(self, name: Any, *, state: Any, value: Any) -> Any:
+    def diffusive_flux(self, name: Any, *, state: Any, value: Any, boundaries: Any = None) -> Any:
         """Declare a constitutive A*grad(W) flux without choosing its discrete gradient."""
         from .diffusion import declare_diffusive_flux
-        return declare_diffusive_flux(self, name, state=state, value=value)
+        return declare_diffusive_flux(self, name, state=state, value=value, boundaries=boundaries)
 
     def rate(self, name: Any, *, equation: Any) -> Any:
         reg = _safe_name(name)

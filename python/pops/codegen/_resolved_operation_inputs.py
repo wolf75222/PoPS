@@ -23,6 +23,11 @@ _LEGACY_ROUTES = {
 
 def native_route(module: Any, operator: Any) -> tuple[str | None, str | None]:
     """Current checked adapter vocabulary; no capability follows from a type name alone."""
+    from pops.numerics.diffusion import diffusion_balance_supported
+    if diffusion_balance_supported(operator.lowering.get("physical_balance")):
+        return "program:diffusive_rhs", None
+    if operator.lowering.get("diffusive_law") is not None:
+        return "program:constitutive_flux", None
     if operator.lowering.get("native_unsupported"):
         return None, "unsupported_physical_balance"
     if operator.lowering.get("joint_balance"):
@@ -343,7 +348,8 @@ def _occurrences(module: Any, operator: Any, identity: str) -> tuple[TermOccurre
     target_space = getattr(operator.signature.output, "base", operator.signature.output)
     from pops.model.spaces import FieldSpace
 
-    if (operator.kind == "field_operator" and isinstance(target_space, FieldSpace)
+    if ((operator.kind == "field_operator" or operator.lowering.get("diffusive_law") is not None)
+            and isinstance(target_space, FieldSpace)
             and target_space.name not in module.field_spaces()):
         # A field provider may project one result from a shared registered
         # carrier. This is the operator's typed result, not a new stored field:

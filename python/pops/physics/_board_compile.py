@@ -21,6 +21,9 @@ class _BoardCompileMixin(_BoardModel):
             emitter = native_formula_view(
                 self._dsl, source_module, quantity_handles=tuple(self._states.values()))
 
+        from pops.codegen.diffusion_lowering import prepare_diffusion_carrier
+        prepare_diffusion_carrier(emitter, source_module,
+                                  quantity_handles=tuple(self._states.values()))
         return CompilerLowering(
             emit_model=emitter,
             source_module=source_module,

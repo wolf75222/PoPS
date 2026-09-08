@@ -646,7 +646,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
             raise ValueError("branch: both arms must return the same field context")
 
     _POST_SYNC_FORBIDDEN_OPS = frozenset({
-        "rhs",
+        "rhs", "diffusive_rhs",
         "source",
         "implicit_source",
         "apply",

@@ -233,7 +233,7 @@ def _is_explicit_rate_call(node: Any) -> bool:
     canonical typed handle and lowering metadata; names and debug labels are deliberately ignored.
     """
     if node.kind == "program_value":
-        return node.op == "rhs"
+        return node.op in {"rhs", "diffusive_rhs"}
     if node.kind != "operator_call":
         return False
     operator = node.operator.to_data()
@@ -241,7 +241,7 @@ def _is_explicit_rate_call(node: Any) -> bool:
     lowering = operator.get("lowering", {})
     return (
         handle.get("kind") in {"grid_operator", "local_rate"}
-        and lowering.get("op") == "rhs"
+        and lowering.get("op") in {"rhs", "diffusive_rhs"}
         and lowering.get("value_type") == "rhs"
     )
 

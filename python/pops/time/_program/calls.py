@@ -192,6 +192,10 @@ class _ProgramCall(_ProgramBase):
         if op.lowering.get("joint_balance"):
             from .interactions import lower_joint_balance
             return lower_joint_balance(self, op, args, name)
+        from pops.codegen.diffusion_lowering import lower_diffusive_rate
+        diffusion = lower_diffusive_rate(self, op, args, name)
+        if diffusion is not None:
+            return diffusion
         # grid_operator (flux divergence only) and local_rate (flux + sources per op.lowering).
         fields = args[1] if len(args) > 1 else None
         if op.kind == "grid_operator":

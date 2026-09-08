@@ -16,7 +16,7 @@ class StateStorage(Descriptor):
     """
 
     category = "state_storage"
-    native_id = "pops::prepare_generated_state_block"
+    native_id = "pops::prepare_generated_system_block"
     formal_order = 1
     ghost_depth = 1
 
