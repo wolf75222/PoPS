@@ -1495,16 +1495,20 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             )
         self._builtin_catalyst_consumers = tuple(sorted(builtin_catalyst))
         self._builtin_catalyst_run_started = False
+        # The caller-thread lane owns ROOT gathers and synchronous COLLECTIVE writers.  Async
+        # consumers retain their separate worker lanes; neither route may borrow MPI_COMM_WORLD.
         self._root_output_consumers = tuple(
             sorted(
                 candidate.qualified_id
                 for candidate in owner._consumer_graph.nodes
-                if candidate.kind
-                in {
-                    ConsumerKind.SCIENTIFIC_OUTPUT,
-                    ConsumerKind.MONITOR,
-                }
-                and candidate.parallel_mode is ParallelMode.ROOT
+                if (
+                    candidate.kind in {ConsumerKind.SCIENTIFIC_OUTPUT, ConsumerKind.MONITOR}
+                    and candidate.parallel_mode is ParallelMode.ROOT
+                )
+                or (
+                    candidate.kind is ConsumerKind.SCIENTIFIC_OUTPUT
+                    and candidate.parallel_mode is ParallelMode.COLLECTIVE
+                )
             )
         )
         from pops import interfaces
@@ -3730,7 +3734,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         return reports
 
     def _root_output_communicator(self) -> Any:
-        """Return the one active duplicated lane used by native ROOT snapshot gathers."""
+        """Return the active caller-thread lane for ROOT gathers and collective writers."""
 
         if not self._root_output_consumers:
             raise RuntimeError("the ConsumerGraph declares no ROOT snapshot consumer")
@@ -4433,6 +4437,8 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         _rank, _size, communicator = _execution_topology(self._owner)
         if effect.target.parallel_mode is ParallelMode.SERIAL:
             communicator = None
+        elif effect.target.parallel_mode is ParallelMode.COLLECTIVE:
+            communicator = self._root_output_communicator()
         return OutputPreparation(fmt, snapshot, request, target, communicator)
 
     def _prepare_live_visualization(
