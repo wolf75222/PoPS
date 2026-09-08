@@ -374,7 +374,8 @@ class PreparedMultiBlockAmrHierarchy {
   }
 
   void install_interface_flux_provider(std::string provider_contract, const Geometry<Dim>& geometry,
-                                       interface_installer_type installer) {
+                                       interface_installer_type installer,
+                                       std::function<void()> after_publication = {}) {
     std::exception_ptr local_error;
     std::string next_contract;
     try {
@@ -424,9 +425,30 @@ class PreparedMultiBlockAmrHierarchy {
         std::rethrow_exception(local_error);
       throw std::runtime_error("prepared AMR interface provider installation failed collectively");
     }
+    const auto accepted_lower = interface_lower_;
+    const auto accepted_upper = interface_upper_;
     interface_lower_ = geometry.lower();
     interface_upper_ = geometry.upper();
     interface_provider_contract_.swap(next_contract);
+    local_error = nullptr;
+    try {
+      if (after_publication)
+        after_publication();
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane_) != 0) {
+      interface_provider_contract_.swap(next_contract);
+      interface_lower_ = accepted_lower;
+      interface_upper_ = accepted_upper;
+      interface_scheduler_->rollback_installations(accepted_size);
+      if (created)
+        interface_scheduler_.reset();
+      if (lane_.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error(
+          "prepared AMR interface provider accepted-state publication failed collectively");
+    }
   }
 
   bool has_interface_flux_provider() const noexcept {

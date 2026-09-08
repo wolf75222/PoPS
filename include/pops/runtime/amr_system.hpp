@@ -1363,6 +1363,8 @@ class AmrSystem {
   std::vector<double> potential();
 
  private:
+  std::pair<std::size_t, std::size_t> checkpoint_program_state_capacity_(
+      const std::vector<std::uint8_t>* interface_candidate) const;
   template <int ContextDim, class MemorySpace>
   friend class runtime::program::AmrProgramContext;
   /// Private DSO seam: only the generated AmrProgramContext may install the post-publication

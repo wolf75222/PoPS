@@ -3432,6 +3432,7 @@ struct AmrSystem<Dim>::Impl {
       checkpoint_program_state_capacity_value;
   mutable std::string checkpoint_program_state_capacity_contract;
   mutable bool checkpoint_program_state_capacity_provisional = false;
+  bool interface_program_state_refresh = false;
   std::optional<TaggingSpec> tagging_spec;
   struct TaggerComponentAuthority {
     std::shared_ptr<component::LoadedComponent> component{};
@@ -12147,12 +12148,58 @@ void AmrSystem<Dim>::install_prepared_amr_interface_flux_provider(
     std::function<void(runtime::multiblock::InterfaceFluxScheduler<Dim>&)> installer) {
   require_amr_assembling(p_->lifecycle, "install_prepared_amr_interface_flux_provider");
   p_->ensure_engine();
-  p_->multiblock_hierarchy->install_interface_flux_provider(
-      std::move(provider_contract), prepared_amr_level_geometry(0), std::move(installer));
-  // Bind publishes each interface prefix after its endpoint levels materialize. An installed
-  // Program must reseal its accepted ledger budget before bootstrap snapshots consume that prefix.
-  if (p_->program_flux_expression_budget)
-    p_->program.refresh_hierarchy_state("AmrSystem::install_prepared_amr_interface_flux_provider");
+  const ExecutionLane& lane = p_->multiblock_hierarchy->lane();
+  std::unique_ptr<runtime::program::AcceptedProgramContextSnapshot> accepted_context;
+  std::vector<std::uint8_t> accepted_bytes;
+  std::string accepted_capacity_contract;
+  std::function<void()> refresh_accepted;
+  const auto accepted_capacity = p_->checkpoint_program_state_capacity_value;
+  const bool accepted_provisional = p_->checkpoint_program_state_capacity_provisional;
+  const auto accepted_revision = p_->program_accepted_revision;
+  const bool accepted_runtime_owned = p_->program_accepted_bytes_runtime_owned;
+  std::exception_ptr local_error;
+  try {
+    if (p_->interface_program_state_refresh)
+      throw std::logic_error("AMR interface publication cannot reenter its Program refresh");
+    if (p_->program_flux_expression_budget) {
+      accepted_context = p_->program.capture_accepted_context_snapshot("AMR interface publication");
+      accepted_bytes = p_->program_accepted_bytes;
+      accepted_capacity_contract = p_->checkpoint_program_state_capacity_contract;
+      refresh_accepted = [this]() {
+        // The new prefix determines the exact configured capacity. Prepare it from the new
+        // Program-owned accepted candidate, then validate and publish both inside this scope.
+        p_->interface_program_state_refresh = true;
+        p_->program.refresh_hierarchy_state(
+            "AmrSystem::install_prepared_amr_interface_flux_provider");
+        p_->interface_program_state_refresh = false;
+      };
+    }
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR interface publication snapshot failed collectively");
+  }
+  try {
+    p_->multiblock_hierarchy->install_interface_flux_provider(
+        std::move(provider_contract), prepared_amr_level_geometry(0), std::move(installer),
+        std::move(refresh_accepted));
+  } catch (...) {
+    p_->interface_program_state_refresh = false;
+    if (p_->program_flux_expression_budget) {
+      if (accepted_context)
+        accepted_context->publish_restore();
+      p_->program_accepted_bytes.swap(accepted_bytes);
+      p_->program_accepted_revision = accepted_revision;
+      p_->program_accepted_bytes_runtime_owned = accepted_runtime_owned;
+      p_->checkpoint_program_state_capacity_value = accepted_capacity;
+      p_->checkpoint_program_state_capacity_contract.swap(accepted_capacity_contract);
+      p_->checkpoint_program_state_capacity_provisional = accepted_provisional;
+    }
+    throw;
+  }
 }
 
 template <int Dim>
@@ -19203,6 +19250,17 @@ std::vector<double> AmrSystem<Dim>::density(const std::string& name) {
 
 template <int Dim>
 std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_capacity() const {
+  return checkpoint_program_state_capacity_(nullptr);
+}
+
+template <int Dim>
+std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_capacity_(
+    const std::vector<std::uint8_t>* interface_candidate) const {
+  if (interface_candidate) {
+    require_amr_assembling(p_->lifecycle, "interface checkpoint capacity");
+    if (!p_->interface_program_state_refresh)
+      throw std::logic_error("AMR interface checkpoint capacity requires its publication scope");
+  }
   if (!p_->engine || !p_->multiblock_hierarchy || !p_->prepared_hierarchy ||
       !p_->prepared_hierarchy->lane)
     throw std::logic_error(
@@ -19575,7 +19633,8 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
 
     // The live prelude is evidence, never the capacity source.  It must be an exact subset of the
     // frozen DSO shape and already fit the independently counted configured-depth envelope.
-    const std::vector<std::uint8_t> live_bytes = program_accepted_state();
+    const std::vector<std::uint8_t> live_bytes =
+        interface_candidate ? *interface_candidate : program_accepted_state();
     const auto live =
         runtime::program::deserialize_amr_program_accepted_state<Dim>(live_bytes, &interface);
     std::vector<std::string> live_clocks;
@@ -19642,6 +19701,19 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
           lane.communicator()))
     throw std::invalid_argument(
         "AMR Program checkpoint capacities differ between prepared-lane ranks");
+  if (interface_candidate) {
+    // Only an assembling interface publication can change this exact configured-depth proof.
+    // Normal restores keep the existing ceiling; the final resource/bind read seals its contract.
+    if (p_->checkpoint_program_state_capacity_value && p_->cfg.explicit_bootstrap &&
+        (p_->bootstrap_transaction || p_->automatic_bootstrap_complete) &&
+        *p_->checkpoint_program_state_capacity_value != *candidate)
+      throw std::logic_error(
+          "AMR interface checkpoint byte capacity changed after bootstrap began");
+    p_->checkpoint_program_state_capacity_value = candidate;
+    p_->checkpoint_program_state_capacity_contract.swap(candidate_contract);
+    p_->checkpoint_program_state_capacity_provisional = true;
+    return *candidate;
+  }
   if (p_->checkpoint_program_state_capacity_value) {
     if (*p_->checkpoint_program_state_capacity_value != *candidate)
       throw std::logic_error(
@@ -19700,6 +19772,8 @@ void AmrSystem<Dim>::restore_program_accepted_state(const std::vector<std::uint8
   if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
     throw std::logic_error("AMR Program accepted-state restore requires its prepared lane");
   const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
+  const bool prepare_interface_capacity =
+      p_->interface_program_state_refresh && p_->program.artifact_backed_;
   const std::string_view request_view(
       state.empty() ? "" : reinterpret_cast<const char*>(state.data()), state.size());
   if (!all_ranks_agree_exact_ordered_byte_pairs(
@@ -19712,7 +19786,8 @@ void AmrSystem<Dim>::restore_program_accepted_state(const std::vector<std::uint8
   try {
     if (p_->program_accepted_revision == std::numeric_limits<std::uint64_t>::max())
       throw std::overflow_error("AmrSystem Program accepted-state revision overflow");
-    p_->require_program_checkpoint_capacity(state.size(), "AMR Program accepted-state restore");
+    if (!prepare_interface_capacity)
+      p_->require_program_checkpoint_capacity(state.size(), "AMR Program accepted-state restore");
     const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
     decoded.emplace(
         runtime::program::deserialize_amr_program_accepted_state<Dim>(state, &interface_budget));
@@ -19728,8 +19803,9 @@ void AmrSystem<Dim>::restore_program_accepted_state(const std::vector<std::uint8
     runtime::program::require_live_amr_program_checkpoint(*decoded, *p_->engine);
     p_->require_accepted_state_authority_contracts(*decoded);
     candidate = runtime::program::serialize_amr_program_accepted_state(*decoded);
-    p_->require_program_checkpoint_capacity(candidate.size(),
-                                            "AMR Program accepted-state restore candidate");
+    if (!prepare_interface_capacity)
+      p_->require_program_checkpoint_capacity(candidate.size(),
+                                              "AMR Program accepted-state restore candidate");
   } catch (...) {
     local_error = std::current_exception();
   }
@@ -19743,6 +19819,11 @@ void AmrSystem<Dim>::restore_program_accepted_state(const std::vector<std::uint8
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{std::string_view("pops.amr-program-checkpoint"), candidate_view}}, lane))
     throw std::runtime_error("exact AMR Program checkpoint differs between communicator ranks");
+  if (prepare_interface_capacity)
+    (void)checkpoint_program_state_capacity_(&candidate);
+  p_->require_program_checkpoint_capacity(state.size(), "AMR Program accepted-state restore");
+  p_->require_program_checkpoint_capacity(candidate.size(),
+                                          "AMR Program accepted-state restore candidate");
   p_->program_accepted_bytes.swap(candidate);
   p_->program_accepted_bytes_runtime_owned = false;
   ++p_->program_accepted_revision;
