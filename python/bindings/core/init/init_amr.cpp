@@ -313,19 +313,15 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              const std::vector<std::string>& face_analytic_clocks) {
             reject_unqualified_periodic_identifications<pops::kNativeDimension>(
                 periodic_identifications, "ranked Cartesian AMR boundary authority");
-            std::vector<bool> omitted(face_types.size(), false);
-            for (int ordinal : omitted_interface_faces) {
-              if (ordinal < 0 || static_cast<std::size_t>(ordinal) >= face_types.size() ||
-                  face_types[static_cast<std::size_t>(ordinal)] != "external" ||
-                  omitted[static_cast<std::size_t>(ordinal)])
-                throw py::value_error(
-                    "every omitted AMR interface face must be one unique external ranked face");
-              omitted[static_cast<std::size_t>(ordinal)] = true;
-            }
-            system.install_hyperbolic_boundary(
-                name, identity, required_depth, face_types, face_values, face_identities,
-                component_roles, state_identity, face_representations, face_converter_identities,
-                face_analytic_opcodes, face_analytic_literals, face_analytic_clocks);
+            auto boundary = pops::prepare_hyperbolic_boundary<pops::kNativeDimension>(
+                                face_types, face_values, face_identities, component_roles, false,
+                                face_representations, face_converter_identities,
+                                face_analytic_opcodes, face_analytic_literals, face_analytic_clocks)
+                                .with_omitted_interface_faces(omitted_interface_faces);
+            system.install_prepared_hyperbolic_boundary(
+                name, identity, required_depth, state_identity,
+                std::make_shared<pops::PreparedHyperbolicBoundary<pops::kNativeDimension>>(
+                    std::move(boundary)));
           },
           py::arg("name"), py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
           py::arg("face_values"), py::arg("face_identities"), py::arg("component_roles"),

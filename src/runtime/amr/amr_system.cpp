@@ -2380,6 +2380,7 @@ std::string exact_hyperbolic_boundary_contract(const PreparedHyperbolicBoundary<
       contract.scalar(std::int32_t{axis})
           .scalar(std::int32_t{side})
           .scalar(face.law)
+          .scalar(boundary.omitted_interface_faces()[2 * axis + (side > 0 ? 1 : 0)])
           .text(face.identity)
           .scalar(face.identity_token)
           .scalar(face.authored_representation)

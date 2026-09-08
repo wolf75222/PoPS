@@ -464,3 +464,33 @@ TEST(test_prepared_hyperbolic_boundary,
   EXPECT_EQ(value_at(state, Index<Dim>{-1}, 0), Real(-3));
   EXPECT_EQ(value_at(state, Index<Dim>{3}, 0), Real(3));
 }
+
+TEST(test_prepared_hyperbolic_boundary, omitted_interface_faces_require_exact_external_owners) {
+  const auto boundary =
+      prepare_hyperbolic_boundary<2>({"external", "foextrap", "external", "external"},
+                                     {0.0, 0.0, 0.0, 0.0}, identities<2>(), {"Scalar"});
+  EXPECT_THROW(boundary.with_omitted_interface_faces({-1}), std::invalid_argument);
+  EXPECT_THROW(boundary.with_omitted_interface_faces({4}), std::invalid_argument);
+  EXPECT_THROW(boundary.with_omitted_interface_faces({0, 0}), std::invalid_argument);
+  EXPECT_THROW(boundary.with_omitted_interface_faces({1}), std::invalid_argument);
+  const auto shared = boundary.with_omitted_interface_faces({0, 3});
+  EXPECT_EQ(shared.omitted_interface_faces(), (std::array<bool, 4>{true, false, false, true}));
+  EXPECT_EQ(boundary.omitted_interface_faces(), (std::array<bool, 4>{}));
+  EXPECT_EQ(
+      shared
+          .with_prepared_geometry(Geometry<2>::from_bounds(
+              Box<2>::from_extents(Extent<2>{4, 4}), RealVector<2>{0, 0}, RealVector<2>{1, 1}))
+          .omitted_interface_faces(),
+      shared.omitted_interface_faces());
+}
+
+TEST(test_prepared_hyperbolic_boundary, fixed_state_conversion_retains_interface_omission) {
+  const auto boundary = prepare_hyperbolic_boundary<1>(
+                            {"external", "dirichlet"}, {0.0, 3.0}, identities<1>(), {"Scalar"},
+                            false, {"conservative", "primitive"}, {"", "convert@1"})
+                            .with_omitted_interface_faces({0});
+  const auto converted = boundary.with_converted_fixed_states(
+      [](const double* input, double* output) { output[0] = 2 * input[0]; });
+  EXPECT_EQ(converted.face(0, 1).fixed_state.front(), Real(6));
+  EXPECT_EQ(converted.omitted_interface_faces(), boundary.omitted_interface_faces());
+}

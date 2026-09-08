@@ -651,6 +651,25 @@ class PreparedHyperbolicBoundary {
       throw std::out_of_range("prepared hyperbolic face selector is outside the model dimension");
     return faces_[static_cast<std::size_t>(2 * axis + (side > 0 ? 1 : 0))];
   }
+  /// Reserve only explicitly shared interface faces for the shared flux scheduler.
+  /// An ordinary External ghost provider still owns a local Riemann evaluation.
+  PreparedHyperbolicBoundary with_omitted_interface_faces(const std::vector<int>& ordinals) const {
+    std::array<bool, 2 * Dim> omitted{};
+    for (int ordinal : ordinals) {
+      if (ordinal < 0 || ordinal >= 2 * Dim ||
+          faces_[static_cast<std::size_t>(ordinal)].law != HyperbolicBoundaryLaw::External ||
+          omitted[static_cast<std::size_t>(ordinal)])
+        throw std::invalid_argument(
+            "every omitted interface face must be one unique external ranked face");
+      omitted[static_cast<std::size_t>(ordinal)] = true;
+    }
+    PreparedHyperbolicBoundary copy(*this);
+    copy.omitted_interface_faces_ = omitted;
+    return copy;
+  }
+  const std::array<bool, 2 * Dim>& omitted_interface_faces() const noexcept {
+    return omitted_interface_faces_;
+  }
   const Transform& component_transform(int component) const {
     if (component < 0 || component >= ncomp())
       throw std::out_of_range("prepared hyperbolic component is outside the state");
@@ -754,6 +773,7 @@ class PreparedHyperbolicBoundary {
     auto converted = PreparedHyperbolicBoundary(std::move(converted_faces), component_transforms_,
                                                 corner_policy_, explicit_periodic_identifications_);
     converted.prepared_geometry_ = prepared_geometry_;
+    converted.omitted_interface_faces_ = omitted_interface_faces_;
     return converted;
   }
 
@@ -1560,6 +1580,7 @@ class PreparedHyperbolicBoundary {
   }
 
   std::array<PreparedHyperbolicFace, 2 * Dim> faces_{};
+  std::array<bool, 2 * Dim> omitted_interface_faces_{};
   std::vector<Transform> component_transforms_;
   HyperbolicCornerPolicy corner_policy_ = HyperbolicCornerPolicy::NotRequired;
   bool explicit_periodic_identifications_ = false;

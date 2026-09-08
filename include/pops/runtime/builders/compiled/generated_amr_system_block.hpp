@@ -1295,19 +1295,22 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                   }
                 }
               } else {
+                const auto omitted_faces = physical && physical_boundary
+                                               ? physical_boundary->omitted_interface_faces()
+                                               : std::array<bool, 2 * Dim>{};
                 for (std::size_t local = 0; local < image.local_size(); ++local) {
                   if constexpr (provider_count == 0)
                     spatial.materialize_face_fluxes(
                         image.fab(local), faces[local],
                         evaluation_scratch->spatial.face_candidate(local),
-                        evaluation_scratch->spatial.face_status(local));
+                        evaluation_scratch->spatial.face_status(local), omitted_faces);
                   else
                     spatial.materialize_face_fluxes(
                         image.fab(local),
                         runtime::system::bind_provider_storage_view<Dim, provider_count>(
                             provider_plan, provider_storage, local),
                         faces[local], evaluation_scratch->spatial.face_candidate(local),
-                        evaluation_scratch->spatial.face_status(local));
+                        evaluation_scratch->spatial.face_status(local), omitted_faces);
                   if (physical && physical_boundary)
                     physical_boundary->apply_physical_flux_conditions(faces[local],
                                                                       geometry.domain());

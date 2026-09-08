@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/numerics/spatial/operators/cartesian_operator.hpp>
 #include <pops/numerics/spatial/operators/masked_operator.hpp>
 #include <pops/numerics/spatial/primitives/state_access.hpp>
@@ -559,4 +560,154 @@ TEST(test_prepared_cartesian_nd, state_and_aux_access_share_one_ranked_pointwise
   check_ranked_state_access<1>();
   check_ranked_state_access<2>();
   check_ranked_state_access<3>();
+}
+
+namespace {
+
+template <int Dim>
+void check_exact_interface_face_omission() {
+  const Box<Dim> domain = Box<Dim>::from_extents(uniform_extent<Dim>(4));
+  RealVector<Dim> velocity{};
+  for (int axis = 0; axis < Dim; ++axis)
+    velocity[axis] = Real(1);
+  const auto op = nd::prepare_cartesian_operator<Dim>(
+      unit_geometry(domain), nd::ScalarAdvection<Dim>::prepare(velocity), NoSlope{}, RusanovFlux{});
+  Fab<Dim> state(domain, 1, uniform_extent<Dim>(1));
+  state.set_val(Real(2));
+  auto host = state.create_host_mirror();
+  state.copy_to_host(host);
+  for_each_host_index(state.grown_box(), [&](const Index<Dim>& index) {
+    if (index[0] < domain.lo[0])
+      host(host_offset(state.grown_box(), index, 0)) = std::numeric_limits<Real>::quiet_NaN();
+  });
+  state.copy_from_host(host);
+  std::vector<std::string> types(2 * Dim, "external");
+  std::vector<std::string> identities;
+  for (int face = 0; face < 2 * Dim; ++face)
+    identities.push_back("interface-omission/face/" + std::to_string(face));
+  const auto ordinary = prepare_hyperbolic_boundary<Dim>(types, std::vector<double>(2 * Dim, 0.0),
+                                                         identities, {"Scalar"});
+  const auto shared = ordinary.with_omitted_interface_faces({0});
+  nd::FaceField<Dim> faces(domain, 1);
+  nd::FaceField<Dim> candidate(domain, 1);
+  nd::FaceField<Dim> status(domain, 1);
+  EXPECT_THROW(op.materialize_face_fluxes(state, faces, ordinary.omitted_interface_faces()),
+               std::runtime_error);
+  ASSERT_NO_THROW(op.materialize_face_fluxes(state, faces, candidate, status,
+                                             shared.omitted_interface_faces()));
+  const auto values = valid_values(faces.template field<0>());
+  const Real expected =
+      Real(2) *
+      nd::metric_face_context<0, MetricFaceSide::Lower>(op.metric(), Index<Dim>{}).face_measure;
+  std::size_t offset = 0;
+  for_each_host_index(faces.template field<0>().box(), [&](const Index<Dim>& index) {
+    EXPECT_EQ(values[offset++], index[0] == domain.lo[0] ? Real(0) : expected);
+  });
+
+  // The high External face has no shared owner and must still evaluate its ghost trace.
+  state.copy_to_host(host);
+  Index<Dim> high{};
+  high[0] = domain.hi[0] + 1;
+  host(host_offset(state.grown_box(), high, 0)) = std::numeric_limits<Real>::quiet_NaN();
+  state.copy_from_host(host);
+  EXPECT_THROW(op.materialize_face_fluxes(state, faces, shared.omitted_interface_faces()),
+               std::runtime_error);
+  const auto both_shared = ordinary.with_omitted_interface_faces({0, 1});
+  ASSERT_NO_THROW(op.materialize_face_fluxes(state, faces, both_shared.omitted_interface_faces()));
+  const auto both_values = valid_values(faces.template field<0>());
+  offset = 0;
+  for_each_host_index(faces.template field<0>().box(), [&](const Index<Dim>& index) {
+    const bool omitted = index[0] == domain.lo[0] || index[0] == domain.hi[0] + 1;
+    EXPECT_EQ(both_values[offset++], omitted ? Real(0) : expected);
+  });
+
+  // A patch boundary inside the domain is not a reserved physical interface face.
+  auto interior = domain;
+  interior.lo[0] = 1;
+  Fab<Dim> patch(interior, 1, uniform_extent<Dim>(1));
+  patch.set_val(Real(2));
+  nd::FaceField<Dim> patch_faces(interior, 1);
+  ASSERT_NO_THROW(op.materialize_face_fluxes(patch, patch_faces, shared.omitted_interface_faces()));
+  for (const Real value : valid_values(patch_faces.template field<0>()))
+    EXPECT_EQ(value, expected);
+}
+
+}  // namespace
+
+TEST(test_prepared_cartesian_nd, exact_shared_faces_are_omitted_before_trace_evaluation) {
+  check_exact_interface_face_omission<1>();
+  check_exact_interface_face_omission<2>();
+  check_exact_interface_face_omission<3>();
+}
+
+TEST(test_prepared_cartesian_nd, shared_face_omission_preserves_unowned_physical_no_flux) {
+  const Box<1> domain = Box<1>::from_extents(Extent<1>{4});
+  const auto geometry = unit_geometry(domain);
+  const auto op = nd::prepare_cartesian_operator<1>(
+      geometry, nd::ScalarAdvection<1>::prepare(RealVector<1>{Real(1)}), NoSlope{}, RusanovFlux{});
+  const auto boundary = prepare_hyperbolic_boundary<1>({"external", "no_flux"}, {0.0, 0.0},
+                                                       {"shared", "physical"}, {"Scalar"})
+                            .with_omitted_interface_faces({0});
+  Fab<1> state(domain, 1, Extent<1>{1});
+  state.set_val(Real(2));
+  nd::FaceField<1> faces(domain, 1);
+  op.materialize_face_fluxes(state, faces, boundary.omitted_interface_faces());
+  auto before = valid_values(faces.field<0>());
+  EXPECT_EQ(before.front(), Real(0));
+  EXPECT_EQ(before.back(), Real(2));
+  boundary.apply_physical_flux_conditions(faces, domain);
+  auto after = valid_values(faces.field<0>());
+  EXPECT_EQ(after.front(), Real(0));
+  EXPECT_EQ(after.back(), Real(0));
+  EXPECT_EQ(after[1], Real(2));
+}
+
+namespace {
+
+template <int Dim>
+void check_provider_interface_face_omission() {
+  const auto domain = Box<Dim>::from_extents(uniform_extent<Dim>(4));
+  const auto op = nd::prepare_cartesian_operator<Dim>(
+      unit_geometry(domain), ProviderAdvection<Dim>{}, NoSlope{}, RusanovFlux{});
+  Fab<Dim> state(domain, 1, uniform_extent<Dim>(1));
+  Fab<Dim> providers(domain, 1, uniform_extent<Dim>(1));
+  state.set_val(Real(2));
+  providers.set_val(Real(1));
+  auto host = providers.create_host_mirror();
+  providers.copy_to_host(host);
+  for_each_host_index(providers.grown_box(), [&](const Index<Dim>& index) {
+    if (index[0] < domain.lo[0])
+      host(host_offset(providers.grown_box(), index, 0)) = std::numeric_limits<Real>::quiet_NaN();
+  });
+  providers.copy_from_host(host);
+  std::array<bool, 2 * Dim> omitted{};
+  omitted[0] = true;
+  nd::FaceField<Dim> faces(domain, 1);
+  nd::FaceField<Dim> candidate(domain, 1);
+  nd::FaceField<Dim> status(domain, 1);
+  EXPECT_THROW(op.materialize_face_fluxes(state, providers, faces), std::runtime_error);
+  ASSERT_NO_THROW(op.materialize_face_fluxes(state, providers, faces, omitted));
+  ASSERT_NO_THROW(op.materialize_face_fluxes(state, providers, faces, candidate, status, omitted));
+  ProviderStorageView<Dim, 1> mapped{};
+  mapped.storage[0] = std::as_const(providers).view();
+  mapped.storage_components[0] = 0;
+  EXPECT_THROW(op.materialize_face_fluxes(state, mapped, faces), std::runtime_error);
+  ASSERT_NO_THROW(op.materialize_face_fluxes(state, mapped, faces, omitted));
+  ASSERT_NO_THROW(op.materialize_face_fluxes(state, mapped, faces, candidate, status, omitted));
+  const auto values = valid_values(faces.template field<0>());
+  std::size_t offset = 0;
+  const Real expected =
+      Real(2) *
+      nd::metric_face_context<0, MetricFaceSide::Lower>(op.metric(), Index<Dim>{}).face_measure;
+  for_each_host_index(faces.template field<0>().box(), [&](const Index<Dim>& index) {
+    EXPECT_EQ(values[offset++], index[0] == domain.lo[0] ? Real(0) : expected);
+  });
+}
+
+}  // namespace
+
+TEST(test_prepared_cartesian_nd, shared_face_omission_precedes_dense_and_mapped_provider_reads) {
+  check_provider_interface_face_omission<1>();
+  check_provider_interface_face_omission<2>();
+  check_provider_interface_face_omission<3>();
 }

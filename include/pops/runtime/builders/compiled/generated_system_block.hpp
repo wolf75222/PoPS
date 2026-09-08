@@ -754,16 +754,18 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     require_same_layout(state, residual, Model::n_vars, "generated flux residual");
     prepare_state(state, boundary);
 
+    const auto omitted_faces =
+        boundary == nullptr ? std::array<bool, 2 * Dim>{} : boundary->omitted_interface_faces();
     auto faces = nd::make_face_flux_workspace(state);
     for (std::size_t local = 0; local < state.local_size(); ++local) {
       if constexpr (flux_provider_count<Model> == 0)
-        spatial.materialize_face_fluxes(state.fab(local), faces[local]);
+        spatial.materialize_face_fluxes(state.fab(local), faces[local], omitted_faces);
       else
         spatial.materialize_face_fluxes(
             state.fab(local),
             runtime::system::bind_provider_storage_view<Dim, flux_provider_count<Model>>(
                 provider_plan, provider_storage, local),
-            faces[local]);
+            faces[local], omitted_faces);
       if (boundary != nullptr)
         boundary->apply_physical_flux_conditions(faces[local], geometry.domain());
     }
@@ -813,6 +815,8 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     prepare_state_with_external(point, state, boundary, lane, transport);
     transport.with_boundary_scratch(state, [&](auto& scratch) {
       auto& faces = scratch.generated_faces;
+      const auto omitted_faces =
+          boundary == nullptr ? std::array<bool, 2 * Dim>{} : boundary->omitted_interface_faces();
       prepared_boundary_collective_phase(
           lane,
           [&] {
@@ -820,14 +824,15 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
               if constexpr (flux_provider_count<Model> == 0)
                 spatial.materialize_face_fluxes(state.fab(local), faces[local],
                                                 scratch.cartesian_operator.face_candidate(local),
-                                                scratch.cartesian_operator.face_status(local));
+                                                scratch.cartesian_operator.face_status(local),
+                                                omitted_faces);
               else
                 spatial.materialize_face_fluxes(
                     state.fab(local),
                     runtime::system::bind_provider_storage_view<Dim, flux_provider_count<Model>>(
                         provider_plan, provider_storage, local),
                     faces[local], scratch.cartesian_operator.face_candidate(local),
-                    scratch.cartesian_operator.face_status(local));
+                    scratch.cartesian_operator.face_status(local), omitted_faces);
               if (boundary != nullptr)
                 boundary->apply_physical_flux_conditions(faces[local], geometry.domain());
             }
