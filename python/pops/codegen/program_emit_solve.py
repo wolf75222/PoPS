@@ -1424,3 +1424,22 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         % (kr, problem_name, workspace_name, sol_sp, rhs_tok, controls_name))
     _append_solve_report_guard(
         program, v, kr, lines, label="solve_linear", phase="solve")
+    if v.vtype == "state" and v.attrs.get("scope") != "hierarchy":
+        # Krylov coordinates carry the operator's exact stencil halo, which may be
+        # zero for a pointwise operator. A physical State keeps its own storage
+        # contract. Materialize only when these halos differ, after consumption;
+        # a failed solve must never copy a candidate into readable state storage.
+        block_indices = program._block_indices()
+        if v.block not in block_indices:
+            raise ValueError("state solve result has no authenticated Program block")
+        owner = block_indices[v.block]
+        state_result = "solved_state%d" % v.id
+        lines.append("auto* %s = %s.get();" % (state_result, sol_sp))
+        lines.append("if (%s->ghosts() != ctx.state(%d).ghosts()) {" % (sol_sp, owner))
+        lines.append(
+            "  auto& materialized = ctx.scratch_state(%d, 0, ctx.state(%d));"
+            % (int(v.id), owner))
+        lines.append("  pops::PureFieldAlgebra::copy(materialized, *%s);" % sol_sp)
+        lines.append("  %s = &materialized;" % state_result)
+        lines.append("}")
+        var[v.id] = "(*%s)" % state_result

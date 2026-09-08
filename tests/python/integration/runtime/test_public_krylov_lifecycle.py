@@ -16,13 +16,14 @@ from pops.physics import Density
 from pops.representations import Conservative
 from pops.solvers import GMRES
 from pops.spaces import CellState
-from pops.time import FailRun, FixedDt
+from pops.time import FailRun, FixedDt, SolveRequest, SolveUnknown
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 
 
-def _public_diagonal_krylov_case():
+def _public_diagonal_krylov_case(*, general_request=False):
     frame = Rectangle(
         "public_krylov_square", lower=(0.0, 0.0), upper=(1.0, 1.0)
     ).frame(Cartesian2D())
@@ -65,16 +66,28 @@ def _public_diagonal_krylov_case():
         "double_identity", domain="state", range_="state", ncomp=1
     )
     program.set_apply(operator, lambda _program, _out, value: 2.0 * value)
-    solution = program.solve(
-        LinearProblem(
+    problem = LinearProblem(
             operator,
             temporal.n,
             properties=LinearOperatorProperties.symmetric_positive_definite(),
             nullspace=None,
-        ),
+        )
+    if general_request:
+        # This nonzero seed differs from both the RHS and the exact answer. It must
+        # initialize the iteration without changing the frozen equation 2 I x = b.
+        seed = program.value("independent_seed", 3.0 * temporal.n)
+        problem = SolveRequest(
+            problem, unknowns=(SolveUnknown("inventory", temporal.n),),
+            equation_inputs={"operator": operator, "rhs": temporal.n},
+            seeds={"inventory": seed},
+            problem_metadata={"physical_equation": "2 inventory = inventory_n"})
+    solution = program.solve(
+        problem,
         solver=GMRES(max_iter=4, restart=2, rel_tol=1.0e-13),
         name="diagonal_solution",
     ).consume(action=FailRun())
+    if general_request:
+        solution = solution["inventory"]
     accepted = program.value("accepted", solution, at=temporal.next.point)
     program.commit(temporal.next, accepted)
     program.step_strategy(FixedDt(0.125))
@@ -97,11 +110,29 @@ def test_public_case_resolve_bind_run_executes_prepared_gmres(
     case, layout = _public_diagonal_krylov_case()
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
     initial = np.arange(16, dtype=np.float64).reshape(1, 4, 4) / 16.0
-    runtime = pops.bind(artifact, initial_state={"tracer": initial.copy()})
+    runtime = pops.bind(artifact, initial_state={"tracer": initial.copy()},
+                        resources={"execution_context": artifact_execution_context(artifact)})
     report = pops.run(runtime, t_end=0.125, max_steps=1)
 
     assert report.accepted_steps == 1
     actual = np.asarray(runtime.state_global("tracer"), dtype=np.float64).reshape(1, 4, 4)
     # A copy of the RHS is not a solution of 2 I x = b.  This independently proves that the
     # built-in prepared GMRES provider executed rather than merely forwarding its input.
+    np.testing.assert_allclose(actual, 0.5 * initial, rtol=0.0, atol=2.0e-15)
+
+
+def test_general_request_validate_resolve_compile_bind_run_with_independent_seed(
+    isolated_native_cache, native_cxx, kokkos_root,
+):
+    del isolated_native_cache, native_cxx, kokkos_root
+    case, layout = _public_diagonal_krylov_case(general_request=True)
+    validated = pops.validate(case)
+    resolved = pops.resolve(validated, layout=layout)
+    artifact = pops.compile(resolved)
+    initial = np.arange(16, dtype=np.float64).reshape(1, 4, 4) / 16.0
+    runtime = pops.bind(artifact, initial_state={"tracer": initial.copy()},
+                        resources={"execution_context": artifact_execution_context(artifact)})
+    report = pops.run(runtime, t_end=0.125, max_steps=1)
+    assert report.accepted_steps == 1
+    actual = np.asarray(runtime.state_global("tracer"), dtype=np.float64).reshape(1, 4, 4)
     np.testing.assert_allclose(actual, 0.5 * initial, rtol=0.0, atol=2.0e-15)

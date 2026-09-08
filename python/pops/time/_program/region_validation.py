@@ -32,6 +32,10 @@ def _block_region(program: Any, block: Any, where: str, hint: Any = None) -> int
         raise ValueError("%s: recorded region metadata does not match its nodes" % where)
     for value in block:
         require_owned(program, value, where)
+        if "solve_request" in value.attrs:
+            from pops.time._program.solve_request import validate_solve_request_node
+
+            validate_solve_request_node(program, value)
         validate_input_regions(program, value.inputs, region, where)
         for key in _BLOCK_KEYS:
             nested = value.attrs.get(key)
@@ -45,6 +49,10 @@ def _block_region(program: Any, block: Any, where: str, hint: Any = None) -> int
 def validate_program_regions(program: Any) -> None:
     """Fail if a value is foreign, fabricated, or escapes/crosses an undeclared region."""
     for value in program._values:
+        if "solve_request" in value.attrs:
+            from pops.time._program.solve_request import validate_solve_request_node
+
+            validate_solve_request_node(program, value)
         require_top_level(program, value, "Program.validate top-level")
         validate_input_regions(program, value.inputs, 0, "Program.validate top-level")
         attrs = value.attrs

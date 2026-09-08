@@ -42,7 +42,7 @@ struct ResidualDomain {
   std::vector<BlockSlot> blocks;
 };
 
-enum class LinearizationFidelity { kExact, kJvp, kApproximate };
+enum class LinearizationFidelity { kExact, kJvp, kApproximate, kFiniteDifference };
 enum class MassKind { kIdentity, kConstant, kAlgebraic };
 enum class DaeIndex { kNotDae, kIndex1, kHigherIndex };
 enum class ConsistentInitializationPolicy { kValidateOnly, kRequireInitializer };
@@ -171,6 +171,13 @@ class ResidualOperator {
       return {SupportRefusal::kUnsupportedLinearization, "exact fidelity requires an exact JVP"};
     if (fidelity_ == LinearizationFidelity::kJvp && !jvp_)
       return {SupportRefusal::kUnsupportedLinearization, "JVP fidelity requires a JVP evaluator"};
+    if (fidelity_ == LinearizationFidelity::kApproximate && !jvp_)
+      return {SupportRefusal::kUnsupportedLinearization,
+              "approximate fidelity requires an explicit approximate JVP evaluator"};
+    if (fidelity_ != LinearizationFidelity::kExact && fidelity_ != LinearizationFidelity::kJvp &&
+        fidelity_ != LinearizationFidelity::kApproximate &&
+        fidelity_ != LinearizationFidelity::kFiniteDifference)
+      return {SupportRefusal::kUnsupportedLinearization, "unknown derivative fidelity"};
     if (index_ == DaeIndex::kIndex1 &&
         initialization_policy_ == ConsistentInitializationPolicy::kRequireInitializer &&
         !consistent_initializer_)
@@ -195,7 +202,8 @@ class ResidualOperator {
     std::vector<double> out(state.size());
     if (fidelity_ == LinearizationFidelity::kExact)
       exact_jvp_(state, direction, out);
-    else if (fidelity_ == LinearizationFidelity::kJvp)
+    else if (fidelity_ == LinearizationFidelity::kJvp ||
+             fidelity_ == LinearizationFidelity::kApproximate)
       jvp_(state, direction, out);
     else
       finite_difference_jvp(state, direction, out);

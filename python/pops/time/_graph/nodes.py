@@ -228,10 +228,11 @@ class Solve(_Node):
     point: TimePoint | StagePoint
     name: str
     attrs: CanonicalData
+    initial: ValueRef | None
 
     def __init__(self, node_id: int, unknown: ValueRef, operator: ValueRef, rhs: ValueRef,
                  clock: Clock, point: TimePoint | StagePoint, *, name: str = "solve",
-                 attrs: Any = None) -> None:
+                 attrs: Any = None, initial: ValueRef | None = None) -> None:
         object.__setattr__(self, "node_id", _node_id(node_id))
         for label, value in (("unknown", unknown), ("operator", operator), ("rhs", rhs)):
             if type(value) is not ValueRef:
@@ -242,14 +243,21 @@ class Solve(_Node):
         object.__setattr__(self, "name", _nonempty(name, where="Solve name"))
         object.__setattr__(
             self, "attrs", CanonicalData({} if attrs is None else attrs, where="Solve.attrs"))
+        if initial is not None and type(initial) is not ValueRef:
+            raise TypeError("Solve initial must be an exact ValueRef or explicit zero initialization")
+        object.__setattr__(self, "initial", initial)
 
     def references(self) -> tuple[ValueRef, ...]:
-        return (self.unknown, self.operator, self.rhs)
+        refs = (self.unknown, self.operator, self.rhs)
+        return refs if self.initial is None else (*refs, self.initial)
 
     def to_data(self) -> dict[str, Any]:
-        return _node_data(
+        data = _node_data(
             self, unknown=self.unknown.to_data(), operator=self.operator.to_data(),
             rhs=self.rhs.to_data(), name=self.name, attrs=self.attrs.to_data())
+        if self.initial is not None:
+            data["initial"] = self.initial.to_data()
+        return data
 
 @dataclass(frozen=True, slots=True, init=False)
 class Synchronize(_Node):

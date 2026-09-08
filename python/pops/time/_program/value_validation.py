@@ -128,6 +128,11 @@ def validate_input_clocks(
 def require_top_level(program: Any, value: Any, where: str) -> ProgramValue:
     value = require_owned(program, value, where)
     if value.region != TOP_LEVEL_REGION:
+        if "problem_identity" in value.attrs:
+            from pops.time.solve_request import SolveRequestError
+
+            raise SolveRequestError(
+                "result_scope", "solved value cannot escape its authoring region", where=where)
         raise ValueError(
             "%s: sub-block value %r cannot escape its authoring region" % (where, value.name))
     return value
@@ -170,6 +175,12 @@ def validate_input_regions(program: Any, inputs: Any, region: int, where: str) -
             continue
         if value.region in program._region_imports.get(region, ()):
             continue
+        if "problem_identity" in value.attrs:
+            from pops.time.solve_request import SolveRequestError
+
+            raise SolveRequestError(
+                "result_scope", "solved value cannot be consumed outside its legal region",
+                where=where)
         raise ValueError(
             "%s: value %r from authoring region %s cannot be consumed in region %s"
             % (where, value.name, value.region, region))

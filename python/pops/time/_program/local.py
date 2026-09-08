@@ -145,13 +145,24 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         return SolveOutcome(self, token, project, outcome_name)
 
     @atomic_authoring
-    def solve(self, problem: Any, *, solver: Any, name: Any = None) -> Any:
+    def solve(self, problem: Any, *, solver: Any = None, name: Any = None,
+              values: Any = None, at: Any = None) -> Any:
         """Build one typed solve through the solver's small Program provider interface.
 
         The Program does not select a PDE family or algorithm.  A solver descriptor prepares an
         immutable provider and that provider builds the normalized IR through private primitives.
         Strings, option bags and parallel ``solve_*`` public verbs are deliberately absent.
         """
+        if solver is None:
+            default_solver = getattr(problem, "default_program_solver", None)
+            if not callable(default_solver):
+                raise TypeError("solve: an explicit solver or default_program_solver is required")
+            solver = default_solver()
+        if values is not None or at is not None:
+            bind_inputs = getattr(problem, "bind_program_inputs", None)
+            if not callable(bind_inputs):
+                raise TypeError("solve: values/at require a problem with bind_program_inputs")
+            problem = bind_inputs(program=self, values=values, at=at)
         if isinstance(solver, str):
             raise TypeError("solve: solver must be a typed descriptor, not %r" % solver)
         prepare = getattr(solver, "prepare_program_solve", None)
@@ -165,6 +176,10 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             raise TypeError(
                 "solve: prepared solver must implement build_program_solve(); got %r"
                 % type(prepared).__name__)
+        from pops.time.solve_request import SolveRequest
+
+        if type(problem) is SolveRequest:
+            return problem.build_program_solve(program=self, prepared_solver=prepared, name=name)
         return build(program=self, problem=problem, name=name)
 
     def _solve_coupled_implicit(self, operator: Any, states: Any, *, prepared: Any,
