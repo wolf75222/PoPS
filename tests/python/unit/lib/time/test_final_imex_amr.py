@@ -245,7 +245,7 @@ def test_field_install_consumes_the_public_amr_layout_contract():
     assert type(graph.refine) is AnyOf
     assert tuple(type(child) for child in graph.refine.children) == (Above, GradientAbove)
     assert type(graph.coarsen) is Below
-    assert graph.hysteresis.min_cycles == 0
+    assert graph.hysteresis.min_cycles == 2
     assert graph.hysteresis.equality is EqualityPolicy.HOLD
     assert graph.conflict_policy is ConflictPolicy.REFINE_WINS
 
