@@ -297,17 +297,20 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
     }
     assert variant_targets == {
         "test_amr_multiblock_coupled_source": (2,),
+        "test_amr_multiblock_implicit_transaction": (2,),
         "test_amr_program_positivity_floor": (2,),
         "test_copy_schedule_cache": (1, 2, 4),
         "test_coupled_fieldsolve": (2,),
         "test_fill_boundary_cache": (1, 2, 4),
         "test_generated_amr_system_block": (2,),
+        "test_generated_stability_speed": (2,),
         "test_geometric_mg": (2,),
         "test_krylov_workspace_reentrancy": (2,),
         "test_prepared_embedded_boundary_nd": (2,),
         "test_program_context_contract": (2,),
         "test_program_runtime": (2,),
         "test_pure_field_algebra_extreme_dot": (2,),
+        "test_system_interface_core_session": (2,),
         "test_world_communicator": (1, 2),
     }
     serial_targets = {
@@ -324,7 +327,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 95
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 99
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
@@ -1318,7 +1321,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "Save prewarm ccache" not in python_prewarm_block
     assert "CCACHE_CACHE_KEY" not in python_prewarm_block
     assert "timeout-minutes: 50" in python_shards_block
-    assert "shard: [0, 1, 2, 3, 4, 5, 6]" in python_shards_block
+    assert "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]" in python_shards_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_shards_block
     assert "timeout-minutes: 30" in python_cache_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_cache_block

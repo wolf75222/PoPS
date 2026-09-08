@@ -74,7 +74,7 @@ def test_duration_catalog_exactly_matches_manifest_selection_universe():
 
 
 def test_full_manifest_pack_stays_within_python_shard_test_budget():
-    """Measured tests leave setup/runner margin inside the 50-minute job watchdog."""
+    """Recorded weights reserve setup/runner margin inside the 50-minute job watchdog."""
     selector = _load("ci_select_tests")
     universe = sorted(
         {
@@ -87,13 +87,13 @@ def test_full_manifest_pack_stays_within_python_shard_test_budget():
     excluded = set(binpack.EXCLUDED_FROM_SHARDS)
     shards = binpack.assign_shards(
         [path for path in universe if path not in excluded],
-        shard_total=7,
+        shard_total=12,
         durations=durations,
     )
     binpack.verify_partition(universe, shards)
     loads = [sum(durations[path] for path in shard) for shard in shards]
     assert max(loads) <= 35.0 * 60.0, (
-        "measured Python test load leaves less than 15 minutes for setup/runner variance: "
+        "modeled Python test load leaves less than 15 minutes for setup/runner variance: "
         f"max={max(loads):.1f}s"
     )
 

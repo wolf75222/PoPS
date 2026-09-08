@@ -1047,6 +1047,12 @@ labels = ["unit", "runtime", "fast"]
 mpi_variants = [2]
 
 [[cpp.suite]]
+name = "test_system_interface_core_session"
+sources = ["tests/cpp/unit/runtime/test_system_interface_core_session.cpp"]
+labels = ["unit", "runtime", "fast"]
+mpi_variants = [2]
+
+[[cpp.suite]]
 name = "test_coupled_source"
 sources = ["tests/cpp/unit/runtime/test_coupled_source.cpp"]
 labels = ["unit", "runtime", "fast"]

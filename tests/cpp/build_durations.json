@@ -43,6 +43,7 @@
       "test_prepared_spatial_residual",
       "test_prepared_stream_executor",
       "test_spatial_provider_matrix",
+      "test_system_interface_core_session",
       "test_temporal_partition_restart",
       "test_variable_recovery_chain"
     ],
@@ -53,7 +54,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 179,
+    "target_count": 180,
     "unit_seconds": "modeled shard wall time: measured serial-pool TU or parallel-share floor"
   },
   "test_amr_compiled_model": 2.0,
@@ -234,5 +235,6 @@
   "test_weno5_compiled_model": 24.29,
   "test_weno_convergence": 2.0,
   "test_world_communicator": 2.0,
-  "test_generated_stability_speed": 300.0
+  "test_generated_stability_speed": 300.0,
+  "test_system_interface_core_session": 300.0
 }

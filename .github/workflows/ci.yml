@@ -1119,8 +1119,8 @@ jobs:
     name: ubuntu-latest / Kokkos Serial (Python) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     # Shards are independent (`fail-fast: false`) and must all report a result.  Native-loader
-    # tests can legitimately run for tens of minutes on a cold public runner.  Six measured-duration
-    # shards keep the test critical path below the watchdog; the remaining margin covers setup and
+    # tests can legitimately run for tens of minutes on a cold public runner. Duration-weighted
+    # shards reserve room below the watchdog; the remaining margin covers setup and
     # transient runner variance without turning a stalled test into an unbounded job.
     timeout-minutes: 50
     needs: [changes, set-mode, gate-python-build]
@@ -1129,14 +1129,15 @@ jobs:
       fail-fast: false
       matrix:
         # Shard ids MUST stay contiguous 0..N-1: the harness pairs SHARD_INDEX=matrix.shard with
-        # SHARD_TOTAL=strategy.job-total. ADC-623: files are packed by MEASURED DURATION
+        # SHARD_TOTAL=strategy.job-total. ADC-623: files are packed by recorded duration weights
         # (scripts/ci_shard_binpack.py, greedy LPT over tests/python/test_durations.json), not by a
         # modulo of the file list, so the slowest shard -- the gate critical path -- is minimized.
-        # 7 shards: the measured 417-file universe packs to a 32.2-minute maximum test load, leaving
-        # setup and runner variance inside the unchanged 50-minute watchdog. To rebalance,
+        # 12 shards: the 496-file catalog, including explicit unmeasured migration estimates,
+        # models a 34.3-minute maximum test load. This is a scheduling estimate, not an executed
+        # CI timing qualification; retain the unchanged 50-minute watchdog. To rebalance,
         # change the COUNT here only (job names stay "... shard N"; the required `gate` aggregates
         # them via a single matrix entry in its `needs`).
-        shard: [0, 1, 2, 3, 4, 5, 6]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 
     env:
       POPS_NATIVE_DIM: "2"

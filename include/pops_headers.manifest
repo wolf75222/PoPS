@@ -322,6 +322,7 @@ sdk-support pops/runtime/system/prepared_embedded_boundary.hpp
 sdk-support pops/runtime/system/prepared_field_solver_component.hpp
 sdk-support pops/runtime/system/system_block_store.hpp
 sdk-support pops/runtime/system/system_block_closures.hpp
+sdk-support pops/runtime/system/system_interface_core_session.hpp
 sdk-support pops/runtime/system/system_boundary_registry.hpp
 sdk-support pops/runtime/system/system_coupling_registry.hpp
 sdk-support pops/runtime/system/system_diagnostics_registry.hpp

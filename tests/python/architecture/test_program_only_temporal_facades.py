@@ -657,7 +657,9 @@ def test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker():
     assert "expect_amr_newton_rejection" not in v3
     d2_guard = _python_function_source(v3, "expect_imex_program_required")
     assert "engine.IMEX(" in d2_guard
-    assert "installed whole-system Program" in d2_guard
+    assert "except TypeError as error" in d2_guard
+    assert "exact registered StepStrategy" in d2_guard
+    assert "Program.step_strategy" in d2_guard
 
 
 def test_program_contexts_do_not_claim_implicit_temporal_primitives():

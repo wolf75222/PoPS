@@ -112,9 +112,11 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
 }
 # Intentional Phase 0 policy envelopes: fragment and scaffolding growth remain
 # separately bounded, and their aggregate remains independently enforced.
-PROGRAM_FRAGMENT_BUDGET = 7_450
+# M6 solve outcomes, accepted exchange transactions, and authenticated history replay add
+# explicit contracts to these fixed fragments. Retain a bounded allowance for those foundations.
+PROGRAM_FRAGMENT_BUDGET = 7_550
 PROGRAM_SCAFFOLDING_BUDGET = 1_850
-PROGRAM_SEMANTIC_CLOSURE_BUDGET = 9_300
+PROGRAM_SEMANTIC_CLOSURE_BUDGET = 9_400
 SEMANTIC_AUTHORITIES = frozenset(
     {
         "pops/numerics/time/amr/reflux/amr_flux_execution.hpp",

@@ -583,6 +583,8 @@ pops_add_gtest_suite(NAME test_exb_seam SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_
 
 pops_test_source(_src test_coupled_fieldsolve)
 pops_add_gtest_suite(NAME test_coupled_fieldsolve SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
+pops_test_source(_src test_system_interface_core_session)
+pops_add_gtest_suite(NAME test_system_interface_core_session SOURCES "${_src}" EXTRA_LIBS pops_runtime_system)
 
 pops_test_source(_src test_config_model_validation)
 pops_add_gtest_suite(NAME test_config_model_validation SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
@@ -663,10 +665,6 @@ pops_add_gtest_suite(NAME test_amr_coupled_source_role_strict SOURCES "${_src}" 
 
 pops_test_source(_src test_amr_multiblock_implicit_transaction)
 pops_add_gtest_suite(NAME test_amr_multiblock_implicit_transaction SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
-if(POPS_USE_MPI)
-  pops_add_mpi_rank_test(test_amr_multiblock_implicit_transaction 2
-    GTEST_FILTER "test_amr_multiblock_implicit_transaction.TwoBlockImplicitSourceTransactionRollsBackAndRetriesExactly")
-endif()
 
 pops_test_source(_src test_amr_multiblock_regrid_union)
 pops_add_gtest_suite(NAME test_amr_multiblock_regrid_union SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
@@ -835,12 +833,14 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_pure_field_algebra_extreme_dot 2)
   set(POPS_MPI_RANKS_test_geometric_mg 2)
   set(POPS_MPI_RANKS_test_coupled_fieldsolve 2)
+  set(POPS_MPI_RANKS_test_amr_multiblock_implicit_transaction 2)
   set(POPS_MPI_RANKS_test_amr_program_positivity_floor 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_coupled_source 2)
   set(POPS_MPI_RANKS_test_program_context_contract 2)
   set(POPS_MPI_RANKS_test_program_runtime 2)
   set(POPS_MPI_RANKS_test_generated_amr_system_block 2)
   set(POPS_MPI_RANKS_test_generated_stability_speed 2)
+  set(POPS_MPI_RANKS_test_system_interface_core_session 2)
   set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
   set(POPS_MPI_RANKS_test_copy_schedule_cache 1 2 4)
   set(POPS_MPI_RANKS_test_world_communicator 1 2)
@@ -995,10 +995,12 @@ if(POPS_HAS_MPI)
     test_pure_field_algebra_extreme_dot
     test_geometric_mg
     test_coupled_fieldsolve
+    test_amr_multiblock_implicit_transaction
     test_program_runtime
     test_program_context_contract
     test_generated_amr_system_block
     test_generated_stability_speed
+    test_system_interface_core_session
     test_fill_boundary_cache
     test_copy_schedule_cache
     test_world_communicator
@@ -1061,7 +1063,12 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "test_coupled_fieldsolve.named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs")
+            "test_coupled_fieldsolve.named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs:test_coupled_fieldsolve.exact_interface_masks_bind_collectively_without_partial_publication:test_coupled_fieldsolve.exact_interface_masks_finalize_collectively_without_partial_publication")
+      elseif(_test STREQUAL "test_amr_multiblock_implicit_transaction")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "test_amr_multiblock_implicit_transaction.TwoBlockImplicitSourceTransactionRollsBackAndRetriesExactly:test_amr_multiblock_implicit_transaction.BalanceMailboxResetsOnlyInsideOutermostTransactionSnapshot")
       elseif(_test STREQUAL "test_program_runtime")
         pops_add_mpi_rank_test(
           ${_test} ${_np}
