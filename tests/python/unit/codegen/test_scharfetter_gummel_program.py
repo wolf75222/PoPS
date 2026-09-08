@@ -11,14 +11,21 @@ from pops.codegen import Production
 from pops.time import FixedDt, Program
 
 
-def fitted_case(*,n=16,diffusivity=.1,mobility=.1,potential=None):
+def fitted_case(*,n=16,diffusivity=.1,mobility=.1,potential=None,coverage="complete"):
     frame=CartesianDomain("fitted_domain",(0.,),(1.,)).frame(Cartesian1D())
     model=pops.Model("fitted_model",frame=frame)
     state=model.state("U",components=("n",))
     phi=model.aux("potential") if potential is None else potential
     drift=model.drift_flux("drift",state=state,mobility=mobility,potential=phi)
     diffusion=model.diffusive_flux("diffusion",state=state,value=diffusivity*math.grad(state))
-    rate=model.rate("fitted_rate",equation=math.ddt(state)==-math.div(drift)+math.div(diffusion))
+    rhs=-math.div(drift)+math.div(diffusion)
+    if coverage=="repeated_diffusion":
+        rhs=rhs+math.div(diffusion)
+    rate=model.rate("fitted_rate",equation=math.ddt(state)==rhs)
+    if coverage=="split_drift":
+        rate=rate.select(drift)
+    elif coverage=="split_diffusion":
+        rate=rate.select(diffusion)
     method=ScharfetterGummel(drift=drift,flux=diffusion)
     case=pops.Case("fitted_case")
     block=case.block("density",model,states=(state,))
@@ -69,3 +76,10 @@ def test_fitted_pair_rejects_foreign_drift_even_with_matching_names():
     _,_,_,_,diffusion,_,_=fitted_case()
     with pytest.raises(ValueError,match="exact Dim1 scalar state"):
         ScharfetterGummel(drift=foreign_drift,flux=diffusion)
+
+
+@pytest.mark.parametrize("coverage",("repeated_diffusion","split_drift","split_diffusion"))
+def test_public_fitted_selection_refuses_duplicate_and_separate_imex_partitions(coverage):
+    message="together exactly once" if coverage=="repeated_diffusion" else "rate coverage mismatch"
+    with pytest.raises(ValueError,match=message):
+        fitted_case(coverage=coverage)
