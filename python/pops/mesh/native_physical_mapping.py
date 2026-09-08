@@ -76,7 +76,8 @@ int apply(void*, const PopsTransferRequestV1* r, PopsComponentStatusV1* status) 
   const auto* source = static_cast<const double*>(s.data);
   auto* destination = static_cast<double*>(d.data);
   const std::size_t count = d.component_count * d.extents[0] * d.extents[1];
-  Kokkos::parallel_for("pops_explicit_physical_map", Kokkos::RangePolicy<>(0, count),
+  using Policy = Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace, Kokkos::IndexType<std::size_t>>;
+  Kokkos::parallel_for("pops_explicit_physical_map", Policy(0, count),
     KOKKOS_LAMBDA(const std::size_t i) {
       const auto x = i % d.extents[0];
       const auto v = (i / d.extents[0]) % d.extents[1];
@@ -94,15 +95,16 @@ int apply(void*, const PopsTransferRequestV1* r, PopsComponentStatusV1* status) 
     });
   Kokkos::fence();
   int invalid = 0;
-  Kokkos::parallel_reduce("pops_physical_map_finite", Kokkos::RangePolicy<>(0, count),
+  Kokkos::parallel_reduce("pops_physical_map_finite", Policy(0, count),
     KOKKOS_LAMBDA(const std::size_t i, int& bad) {
       const auto x = i % d.extents[0];
       const auto v = (i / d.extents[0]) % d.extents[1];
       const auto c = i / (d.extents[0] * d.extents[1]);
       const double value = destination[c * d.component_stride + x * d.axis_strides[0] +
                                        v * d.axis_strides[1]];
-      if (!Kokkos::isfinite(value)) ++bad;
-    }, invalid);
+      if (!Kokkos::isfinite(value)) bad = 1;
+      else if (bad < 0) bad = 0;
+    }, Kokkos::Max<int>(invalid));
   if (invalid) return 4;
   *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
   return 0;
