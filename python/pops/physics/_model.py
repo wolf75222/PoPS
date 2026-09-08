@@ -80,6 +80,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
             wave_speed_provider = "jacobian"
         elif "p" in self.prim_defs:
             wave_speed_provider = "pressure_derived"
+        n_aux = self._total_n_aux()
         return {
             "schema_version": 3,
             "native_dimension": len(self._flux),
@@ -88,8 +89,9 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
             "cons_roles": tuple(roles_for(self.cons_names, self.cons_roles)),
             "n_vars": self.n_vars,
             "params": params,
-            "provider_components": tuple(self._provider_components),
-            "n_aux": self._total_n_aux(),
+            "provider_components": tuple(dict.fromkeys(
+                key.component for key in self._auxiliary_provider_pack)),
+            "n_aux": n_aux,
             "capabilities": {},
             "wave_speed_provider": wave_speed_provider,
         }

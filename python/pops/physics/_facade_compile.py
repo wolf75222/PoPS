@@ -346,7 +346,8 @@ class _FacadeCompileMixin(_FacadeModel):
             roe_entropy_policy=riemann_evidence.roe_entropy_policy,
             roe_entropy_delta=riemann_evidence.roe_entropy_delta,
             characteristic_no_inflow=has_characteristic_no_inflow_provider(m),
-            provider_components=m._provider_components,
+            # Module-level providers need not appear in the façade formula declarations.
+            provider_components=[key.component for key in m._auxiliary_provider_pack],
             wave_speeds=wave_speed_provider is not None,
             wave_speed_provider=(None if wave_speed_provider is None else wave_speed_provider.kind),
             # NAMED elliptic fields the model declares (m.elliptic_field, ADC-419 / ADC-428): the
