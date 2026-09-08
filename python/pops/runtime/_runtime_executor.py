@@ -78,6 +78,38 @@ def _uniform_initial_sources(plan: Any) -> dict[str, dict[str, Any]]:
     return result
 
 
+def _adaptive_initial_location(
+    plan: Any, subject: Any, physical: dict[str, Any]
+) -> tuple[str, str]:
+    """Read initial storage from the transfer action or exact flat state declaration."""
+    requirement = physical.get(subject.qualified_id)
+    if requirement is not None:
+        key = requirement.key.to_data()
+        return key["space"]["name"], key["centering"]["name"]
+    from pops.mesh._amr.transfer import ResolvedAMRTransfer
+    from pops.model.spaces import StateSpace
+
+    transfer = plan.amr_transfer
+    if type(transfer) is not ResolvedAMRTransfer or transfer.flat_layout_plan is None:
+        raise ValueError("adaptive initial subject has no physical transfer authority")
+    layout_plan = plan.artifact.layout_plan
+    if transfer.flat_layout_plan.qualified_id != layout_plan.qualified_id \
+            or plan.resolved_hierarchy.plan.transitions:
+        raise ValueError("flat adaptive initials require their exact zero-transition layout")
+    if not any(row.canonical_identity() == subject.canonical_identity()
+               for row in transfer.flat_physical_subjects):
+        raise ValueError("flat adaptive initial subject is outside its physical authority")
+    normalized = layout_plan.normalized(layout_plan.layout_for(subject))
+    if not normalized.adaptive or normalized.transition_ratios or len(normalized.levels) != 1:
+        raise ValueError("flat adaptive initials require their exact zero-transition layout")
+    space = getattr(getattr(subject, "declaration_ref", None), "space", None)
+    if subject.kind != "state" or subject.block_ref is None or type(space) is not StateSpace:
+        raise NotImplementedError("flat adaptive initials require a declared block-qualified StateSpace")
+    if (space.layout, space.centering, space.representation) != ("cell", "cell", "conservative"):
+        raise NotImplementedError("flat adaptive initials support declared conservative cell storage only")
+    return space.layout, space.centering
+
+
 def _require_supported_execution_context(
     plan: Any, native_facts: dict[str, Any] | None = None
 ) -> None:
@@ -381,16 +413,15 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
                 raise NotImplementedError(
                     "RuntimeInstance adaptive bootstrap currently accepts state Handles only"
                 )
-            requirement = physical[subject.qualified_id]
-            key = requirement.key.to_data()
+            space, centering = _adaptive_initial_location(plan, subject, physical)
             block = subject.block_ref.local_id if subject.block_ref is not None else None
             initial_rows.append(
                 (
                     subject.qualified_id,
                     block,
                     by_id.get(subject.qualified_id),
-                    key["space"]["name"],
-                    key["centering"]["name"],
+                    space,
+                    centering,
                     "analytic"
                     if type(selections[subject.qualified_id]) is AnalyticReprojection
                     else "prolong",

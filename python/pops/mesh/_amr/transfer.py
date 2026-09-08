@@ -327,14 +327,17 @@ class AMRTransfer:
                     "transfer subjects outside state/field/block require an explicit plan layout"
                 ) from exc
         normalized = layout_plan.normalized(layout)
+        if not normalized.adaptive:
+            raise ValueError("AMRTransfer requires an adaptive layout")
         dimension = normalized.geometry.dimension
         authenticated_dimension = normalized.capabilities.get("dim")
         if dimension not in (1, 2, 3) or authenticated_dimension != dimension:
             raise ValueError(
                 "AMR layout geometry and manifest must authenticate one dimension from {1,2,3}"
             )
-        if not normalized.adaptive or not normalized.transition_ratios:
-            raise ValueError("AMRTransfer requires an adaptive layout with level transitions")
+        if not normalized.transition_ratios and subject.kind in {"state", "field", "block"}:
+            if layout_plan.layout_for(subject) != layout:
+                raise ValueError("flat AMR transfer subject belongs to another layout")
         transition_ratios = tuple(
             _ranked_axis_values(
                 ratio,
@@ -653,6 +656,11 @@ class AMRTransfer:
                         CanonicalOptions({"native_route": policy.native_route}),
                     ),
                 )
+        if not resolver._requirements:
+            physical_subjects = tuple(subject for subject, _, _ in self._states) + tuple(
+                subject for subjects, _, _ in self._faces for subject in subjects
+            ) + tuple(subject for subject, _, _ in self._nodes)
+            return resolver._resolve_flat(physical_subjects)
         return resolver.resolve()
 
 
@@ -751,6 +759,38 @@ class AMRTransferBuilder:
             layout=layout,
             materializer=materializer,
         )
+
+    def _resolve_flat(self, physical_subjects: tuple[Any, ...]) -> ResolvedAMRTransfer:
+        """Retain level-zero ownership without inventing an inter-level action."""
+        if self._requirements:
+            raise ValueError("flat AMR transfer cannot discard existing requirements")
+        dimensions = set()
+        for subject in physical_subjects:
+            layout = self._layout_plan.normalized(self._layout_plan.layout_for(subject))
+            if not layout.adaptive or layout.transition_ratios or len(layout.levels) != 1:
+                raise ValueError("empty AMR transfer requires an authenticated flat adaptive layout")
+            dimensions.add(layout.geometry.dimension)
+        if len(dimensions) != 1:
+            raise ValueError("flat AMR physical subjects require one exact layout dimension")
+        dimension = dimensions.pop()
+        # Policies remain typed and target-compatible even though no level edge uses them.
+        for provider in self._providers.values():
+            for route in provider.routes:
+                if dimension not in route.capabilities.dimensions:
+                    raise ValueError("flat AMR transfer provider does not support the layout dimension")
+                _ranked_axis_values(route.capabilities.ghost_depth, dimension=dimension,
+                                    where="flat AMR transfer provider ghost_depth", minimum=0)
+        subjects = tuple(sorted(physical_subjects, key=lambda value: value.qualified_id))
+        nesting = NestingRequirementSource(
+            Handle("flat_" + make_identity("amr-flat-transfer-source", {
+                "layout_plan_id": self._layout_plan.qualified_id,
+                "physical_subjects": [subject.canonical_identity() for subject in subjects],
+            }).token, kind="amr_transfer_requirement", owner=self._layout_plan.owner),
+            (0,) * dimension, 0,
+        )
+        return ResolvedAMRTransfer(self._layout_plan.qualified_id, (), (), nesting,
+                                   flat_physical_subjects=subjects,
+                                   flat_layout_plan=self._layout_plan)
 
     def resolve(self) -> ResolvedAMRTransfer:
         if not self._requirements:

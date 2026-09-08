@@ -137,6 +137,13 @@ def validate_amr_authorities(plan: Any) -> None:
             or plan.bootstrap_plan.transfer_identity != plan.amr_transfer.identity \
             or plan.bootstrap_plan.initial_identity != plan.initial_condition_plan.identity:
         raise ValueError("ResolvedSimulationPlan bootstrap does not authenticate AMR authorities")
+    flat_physical_subjects = set()
+    if plan.amr_transfer.flat_layout_plan is not None:
+        if plan.resolved_hierarchy.plan.transitions:
+            raise ValueError("flat AMR transfer cannot authorize hierarchy transitions")
+        flat_physical_subjects = {
+            subject.qualified_id for subject in plan.amr_transfer.flat_physical_subjects
+        }
     providers = plan.amr_providers
     if tuple(providers) != ("clustering", "tagger", "reflux"):
         raise ValueError(
@@ -450,6 +457,8 @@ def validate_amr_authorities(plan: Any) -> None:
             raise TypeError("AMR spatial provider lacks exact reconstruction order/halo metadata")
         for subject in block.state_identities:
             selected = coarse_fine_capabilities.get(subject)
+            if selected is None and subject in flat_physical_subjects:
+                continue  # No level edge exists for this authenticated physical subject.
             if selected is None:
                 raise ValueError(
                     "AMR state %s has no resolved coarse/fine transfer authority" % subject)
