@@ -1772,10 +1772,7 @@ class InterfaceFluxScheduler {
     if (publication.ledger == nullptr || !publication.ledger->in_transaction())
       throw std::invalid_argument(
           "AMR interface-flux fragment publication requires an active transaction");
-    const ::pops::amr::Rational span =
-        publication.interval.end.phase - publication.interval.begin.phase;
-    const ::pops::amr::Rational expected_phase =
-        publication.interval.begin.phase + point.stage_fraction * span;
+    const auto expected_clock = clock_stamp_in_window(point, publication.interval);
     const double expected_time =
         publication.interval.begin.physical_time +
         point.stage_fraction.value() *
@@ -1788,7 +1785,8 @@ class InterfaceFluxScheduler {
         publication.interval.end.level != point.level ||
         publication.interval.begin.macro_step != point.tick ||
         publication.interval.end.macro_step != point.tick ||
-        publication.clock.macro_step != point.tick || publication.clock.phase != expected_phase ||
+        publication.clock.macro_step != point.tick ||
+        publication.clock.phase != expected_clock.phase ||
         publication.clock.physical_time != point.physical_time ||
         publication.clock.physical_time != expected_time || publication.stage_identity.empty())
       throw std::invalid_argument(

@@ -354,6 +354,14 @@ void rhs_jacvec_pair_into_at(const runtime::multiblock::BoundaryEvaluationPoint&
   if (first_block == second_block || !(point.dt > 0.0))
     throw std::invalid_argument(
         "AMR coupled Jacobian residual requires two distinct qualified Program blocks");
+  const auto& expression = facade_->prepared_amr_program_flux_expression_budget();
+  for (const int block : {first_block, second_block}) {
+    (void)sys_block(block);
+    const auto& row = expression.blocks.at(static_cast<std::size_t>(block));
+    if (row.rhs_basis_bound == 0 || row.coefficient_term_bound == 0)
+      throw std::invalid_argument(
+          "AMR coupled Jacobian endpoint lacks an active authored RHS budget");
+  }
   std::unique_lock scratch_lock(coupled_jacvec_mutex_, std::try_to_lock);
   if (!scratch_lock.owns_lock())
     throw std::logic_error("AMR coupled Jacobian scratch is already in use");
@@ -403,21 +411,46 @@ void rhs_jacvec_pair_into_at(const runtime::multiblock::BoundaryEvaluationPoint&
       interface_flux_ledger_.get(),
       runtime_->topology_epoch(),
       nlev(),
-      {active_level_, static_cast<std::int64_t>(facade_->macro_step()), point.stage_fraction,
-       point.physical_time},
+      runtime::multiblock::clock_stamp_in_window(point, active_subcycling_window_),
       "program-jacvec-pair",
       active_subcycling_window_,
       exact_binary_rational_(static_cast<Real>(point.dt) /
                              (active_subcycling_window_.end.physical_time -
                               active_subcycling_window_.begin.physical_time)),
       true};
-  interface_flux_ledger_->begin();
+  const ExecutionLane& lane = prepared_execution_lane();
+  runtime::multiblock::BoundaryEvaluationPoint evaluation_point;
+  std::optional<typename interface_flux_ledger_type::PreparedBegin> evaluation_begin;
+  std::exception_ptr preparation_error;
+  try {
+    evaluation_point = point;
+    evaluation_point.graph_identity =
+        "pops.amr-program.paired-evaluation/" + expression.program_hash;
+    evaluation_point.rate_identity = "rhs-coherence/" + std::to_string(point.stage);
+    evaluation_point.application_identity =
+        "program-pair/" + std::to_string(first_block) + "/" + std::to_string(second_block) +
+        "/runtime-pair/" + std::to_string(first_runtime) + "/" + std::to_string(second_runtime);
+    evaluation_begin.emplace(interface_flux_ledger_->prepare_evaluation_begin());
+  } catch (...) {
+    preparation_error = std::current_exception();
+  }
+  if (all_reduce_max(preparation_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && preparation_error)
+      std::rethrow_exception(preparation_error);
+    throw std::runtime_error("AMR coupled Jacobian evaluation preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-coupled-jacobian-evaluation"),
+            evaluation_begin->exact_contract()}},
+          lane))
+    throw std::invalid_argument("AMR coupled Jacobian evaluation scope differs between ranks");
+  interface_flux_ledger_->publish_prepared_begin(*evaluation_begin);
   try {
     (void)facade_->apply_prepared_amr_program_candidates(
         active_level_, static_cast<Real>(point.dt),
         std::span<field_type* const>(scratch.program_candidates.data(),
                                      scratch.program_candidates.size()),
-        point, &publication);
+        evaluation_point, &publication);
     interface_flux_ledger_->rollback();
   } catch (...) {
     if (interface_flux_ledger_->transaction_depth() > 1)

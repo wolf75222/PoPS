@@ -638,6 +638,9 @@ TEST(test_amr_synthetic_program_loader_transaction,
   EXPECT_EQ(system.configured_n_levels(), 2);
   EXPECT_EQ(first_budget.max_fragments_per_window, 0u);
   EXPECT_EQ(first_budget.max_payload_terms_per_window, 0u);
+  EXPECT_EQ(first_budget.max_transaction_depth, 1u);
+  EXPECT_EQ(first_budget.max_evaluation_fragments, 0u);
+  EXPECT_EQ(first_budget.max_evaluation_payload_terms, 0u);
   EXPECT_NE(first_budget.exact_contract, before_budget);
   EXPECT_LE(first_bytes.size(), first_capacity.first);
 

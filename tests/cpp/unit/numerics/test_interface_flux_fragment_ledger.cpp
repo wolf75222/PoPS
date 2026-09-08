@@ -134,6 +134,38 @@ TEST(test_interface_flux_fragment_ledger, rollback_never_publishes_pending_fragm
   EXPECT_TRUE(ledger.aggregate(scalar_axpy).empty());
 }
 
+TEST(test_interface_flux_fragment_ledger,
+     rollback_only_evaluation_has_separate_capacity_and_survives_snapshot_copy) {
+  auto budget = test_budget();
+  budget.max_evaluation_fragments = 1;
+  budget.max_evaluation_payload_terms = 1;
+  amr::TransactionalInterfaceFluxLedger<double> ledger(9, budget);
+  ledger.begin();
+  ledger.accumulate(fragment_key(), {amr::Rational(1, 1), 0.5, 0.25}, 2.0);
+  auto evaluation = ledger.prepare_evaluation_begin();
+  ledger.publish_prepared_begin(evaluation);
+  auto probe = fragment_key();
+  probe.graph_identity = "pops.amr-program.paired-evaluation/test-program";
+  ledger.accumulate(probe, {amr::Rational(1, 1), 0.5, 0.25}, 4.0);
+  auto extra = probe;
+  extra.application_identity = "another-probe";
+  // The outer accepted budget still has fourteen unused entries. A trial cannot borrow them.
+  EXPECT_THROW(ledger.accumulate(extra, {amr::Rational(1, 1), 0.5, 0.25}, 6.0), std::length_error);
+  EXPECT_EQ(ledger.pending_size(), 2u);
+  auto snapshot = ledger;
+  EXPECT_THROW(snapshot.commit(), std::runtime_error);
+  EXPECT_THROW(snapshot.begin(), std::runtime_error);
+  snapshot.rollback();
+  EXPECT_EQ(snapshot.pending_size(), 1u);
+  snapshot.commit();
+  ASSERT_EQ(snapshot.published_size(), 1u);
+  EXPECT_EQ(snapshot.published_entries().front().key.graph_identity, fragment_key().graph_identity);
+  EXPECT_THROW(ledger.commit(), std::runtime_error);
+  ledger.rollback();
+  ledger.commit();
+  EXPECT_EQ(ledger.published_entries().front().payload, 2.0);
+}
+
 TEST(test_interface_flux_fragment_ledger, stale_topology_epoch_is_rejected_before_storage) {
   amr::TransactionalInterfaceFluxLedger<double> ledger(9, test_budget());
   auto stale = fragment_key();

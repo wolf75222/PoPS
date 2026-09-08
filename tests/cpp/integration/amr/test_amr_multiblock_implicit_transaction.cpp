@@ -341,10 +341,14 @@ TEST(test_amr_multiblock_implicit_transaction,
                                   std::vector<double>(cell_count(config.shape), initial[block]));
 
   auto inject_failure = std::make_shared<bool>(true);
+  auto coupling_calls = std::make_shared<int>(0);
+  auto injected_locally = std::make_shared<bool>(false);
   system.install_prepared_amr_coupling_operator(
       "tests.coupled-jacvec/aux-qualified-exchange@1",
       pops::CouplingOperatorView{"aux-qualified-exchange"},
-      [inject_failure](pops::Real dt, const std::vector<pops::MultiFab<Dim>*>& states) {
+      [inject_failure, coupling_calls, injected_locally](
+          pops::Real dt, const std::vector<pops::MultiFab<Dim>*>& states) {
+        ++*coupling_calls;
         if (states.size() != 3)
           throw std::runtime_error("paired Jacobian lost its complete canonical carrier");
         for (std::size_t local = 0; local < states[0]->local_size(); ++local) {
@@ -361,15 +365,18 @@ TEST(test_amr_multiblock_implicit_transaction,
               });
         }
         Kokkos::fence();
-        if (*inject_failure && pops::my_rank() == 0)
+        if (*inject_failure && pops::my_rank() == 0) {
+          *injected_locally = true;
           throw std::runtime_error("injected rank-local paired coupling failure");
+        }
       });
 
   auto context = pops::runtime::program::make_program_execution_provider(&system);
   context->configure_primary_clock("tests.coupled-jacvec.complete-carrier-clock");
   context->install(
-      [context, inject_failure, &system](double macro_dt) {
-        context->advance_hierarchy(macro_dt, [context, inject_failure, &system](double) {
+      [context, inject_failure, coupling_calls, injected_locally, &system](double macro_dt) {
+        context->advance_hierarchy(macro_dt, [context, inject_failure, coupling_calls,
+                                              injected_locally, &system](double) {
           context->set_stage_time(0, 1);
           auto& right = context->state(0);
           auto& aux = context->state(1);
@@ -390,6 +397,9 @@ TEST(test_amr_multiblock_implicit_transaction,
           EXPECT_THROW(context->rhs_jacvec_pair_into_at(point, 0, first, first_result, true, 3,
                                                         second, second_result, true),
                        std::out_of_range);
+          EXPECT_THROW(context->rhs_jacvec_pair_into_at(point, 0, first, first_result, true, 1,
+                                                        second, second_result, true),
+                       std::invalid_argument);
           auto foreign_point = point;
           ++foreign_point.level;
           EXPECT_THROW(context->rhs_jacvec_pair_into_at(foreign_point, 0, first, first_result, true,
@@ -407,7 +417,18 @@ TEST(test_amr_multiblock_implicit_transaction,
             first_result.set_val(pops::Real(-99));
             second_result.set_val(pops::Real(-99));
             if (*inject_failure) {
-              EXPECT_ANY_THROW(apply_pair());
+              try {
+                apply_pair();
+                FAIL() << "the rank-local coupling failure was not surfaced";
+              } catch (const std::runtime_error& error) {
+                const std::string expected =
+                    context->prepared_execution_lane().size() == 1
+                        ? "injected rank-local paired coupling failure"
+                        : "prepared AMR coupling failed and rolled back collectively";
+                EXPECT_EQ(std::string(error.what()), expected);
+              }
+              EXPECT_EQ(*coupling_calls, 1);
+              EXPECT_EQ(*injected_locally, pops::my_rank() == 0);
               *inject_failure = false;
               EXPECT_TRUE(byte_exact_equal(aux_before, aux));
               EXPECT_EQ(pops::reduce_min_local(first_result), pops::Real(-99));
@@ -445,7 +466,18 @@ TEST(test_amr_multiblock_implicit_transaction,
   using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
   system.install_prepared_amr_program_flux_expression_budget(
       "tests.coupled-jacvec.complete-carrier-program-v1",
-      std::vector<FluxBudget>{{1, 1}, {1, 1}, {1, 1}}, 0, 0);
+      std::vector<FluxBudget>{{1, 1}, {0, 0}, {1, 1}}, 0, 0);
+  const auto ledger_budget = system.prepared_amr_interface_flux_ledger_budget();
+  EXPECT_EQ(ledger_budget.max_transaction_depth, 2u);
+  pops::runtime::multiblock::InterfaceFluxFragmentLedger depth_probe(0, ledger_budget);
+  depth_probe.begin();
+  auto evaluation = depth_probe.prepare_evaluation_begin();
+  depth_probe.publish_prepared_begin(evaluation);
+  EXPECT_THROW(depth_probe.begin(), std::runtime_error);
+  EXPECT_THROW(depth_probe.commit(), std::runtime_error);
+  depth_probe.rollback();
+  depth_probe.commit();
+  EXPECT_EQ(depth_probe.published_size(), 0u);
   const pops::MultiFab<Dim> aux_before(system.prepared_amr_block_state(0, 0));
   const pops::MultiFab<Dim> left_before(system.prepared_amr_block_state(1, 0));
   const pops::MultiFab<Dim> right_before(system.prepared_amr_block_state(2, 0));
@@ -455,6 +487,131 @@ TEST(test_amr_multiblock_implicit_transaction,
   EXPECT_TRUE(byte_exact_equal(aux_before, system.prepared_amr_block_state(0, 0)));
   EXPECT_TRUE(byte_exact_equal(left_before, system.prepared_amr_block_state(1, 0)));
   EXPECT_TRUE(byte_exact_equal(right_before, system.prepared_amr_block_state(2, 0)));
+}
+
+TEST(test_amr_multiblock_implicit_transaction,
+     MultilevelPairBudgetReservesOneEvaluationWithoutAcceptedApplications) {
+  constexpr int Dim = pops::kNativeDimension;
+  using namespace pops::runtime::multiblock;
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 2;
+  config.transition_ratios = {uniform_extent<Dim>(2)};
+  config.transition_buffers = {uniform_extent<Dim>(1)};
+  config.transition_lookaheads = {uniform_extent<Dim>(1)};
+  config.shape = uniform_extent<Dim>(8);
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.pair-budget/multilevel-runtime@1");
+  const std::array<std::string, 2> names{"left", "right"};
+  for (const auto& name : names)
+    system.install_block_state_route(name, "state/" + name);
+  for (const auto& name : names)
+    pops::add_compiled_model<Dim>(system, name, relaxing_model<Dim>(pops::Real(0), pops::Real(0)),
+                                  "minmod", "rusanov", "conservative", "explicit",
+                                  static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {},
+                                  0.0, static_cast<double>(pops::kWenoEpsilon), false,
+                                  "tests.pair-budget/" + name + "/physical-flux");
+  for (const auto& name : names)
+    system.set_conservative_state(name, std::vector<double>(cell_count(config.shape), 1.0));
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
+  const auto fine_shape = uniform_extent<Dim>(16);
+  system.rebuild_hierarchy({pops::AmrPatch<Dim>{1, pops::Box<Dim>::from_extents(fine_shape)}}, {0});
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("tests.pair-budget.clock");
+  context->install(
+      [](double) {
+        throw std::logic_error("budget fixture does not execute an authored time step");
+      },
+      context);
+  system.set_program_block_map({1, 0});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "tests.pair-budget/multilevel-program@1", std::vector<FluxBudget>{{1, 1}, {1, 1}}, 0, 0);
+  const auto raw = pops::component::test_support::host_execution_context();
+  const pops::component::PreparedExecutionContextV1 parent(
+      raw.execution_identity, raw.context_version, raw.memory_space, raw.backend_identity,
+      raw.device_identity, raw.scalar_type, raw.storage_precision, raw.compute_precision,
+      raw.accumulation_precision, raw.reduction_precision, raw.stream_handle, raw.stream_identity,
+      raw.communicator_f_handle, raw.communicator_datatype_f_handle, raw.communicator_identity,
+      raw.communicator_datatype_identity);
+  const auto execution = parent.for_lane(context->prepared_execution_lane());
+  system.install_prepared_amr_interface_flux_provider(
+      "tests.pair-budget/interface@1", [&](auto& scheduler) {
+        for (int level = 0; level < 2; ++level) {
+          AxisAlignedInterface<Dim> route;
+          route.identity = "tests.pair-budget/interface";
+          route.level = level;
+          route.left_block = 0;
+          route.right_block = 1;
+          route.left_axis = route.right_axis = 0;
+          route.left_side = InterfaceSide::High;
+          route.right_side = InterfaceSide::Low;
+          route.right_component_for_left = {0};
+          route.affine_mapping_identity = "tests.pair-budget/translation";
+          route.right_normal_translation = pops::Real(1);
+          route.left_trace_projection_identity = "tests.pair-budget/left.trace";
+          route.right_trace_projection_identity = "tests.pair-budget/right.trace";
+          route.left_trace_provider_identity = "test.cell-average.left";
+          route.right_trace_provider_identity = "test.cell-average.right";
+          route.left_trace_operation = route.right_trace_operation =
+              InterfaceTraceOperation::CellAverage;
+          route.left_trace_required_depth = route.right_trace_required_depth = 1;
+          const auto geometry = system.prepared_amr_level_geometry(level);
+          scheduler.install(route, system.prepared_amr_block_state(0, level), geometry,
+                            system.prepared_amr_block_state(1, level), geometry, execution.view(),
+                            InterfaceFluxEvaluatorFactory([] {
+                              return InterfaceFluxEvaluator([](const auto&, const auto&) {
+                                throw std::logic_error("budget fixture does not evaluate flux");
+                              });
+                            }));
+        }
+      });
+  ASSERT_EQ(system.n_levels(), 2);
+  const auto budget = system.prepared_amr_interface_flux_ledger_budget();
+  EXPECT_EQ(budget.max_fragments_per_window, 0u);
+  EXPECT_EQ(budget.max_payload_terms_per_window, 0u);
+  EXPECT_EQ(budget.max_transaction_depth, 2u);
+  EXPECT_EQ(budget.max_evaluation_fragments, 1u);
+  EXPECT_EQ(budget.max_evaluation_payload_terms,
+            cell_count(fine_shape) / static_cast<std::size_t>(fine_shape[0]));
+  const auto before = system.program_accepted_state();
+  const auto epoch = system.engine()->topology_epoch();
+  InterfaceFluxFragmentLedger ledger(epoch, budget);
+  ledger.begin();
+  auto begin = ledger.prepare_evaluation_begin();
+  ledger.publish_prepared_begin(begin);
+  const BoundaryEvaluationPoint point{
+      "tests.pair-budget.clock", 0, 1, 1, 23, {0, 1}, 0.0625, 0.0625};
+  const pops::amr::ClockWindow window{{1, 0, {1, 2}, 0.0625}, {1, 0, {1, 1}, 0.125}};
+  const auto clock = clock_stamp_in_window(point, window);
+  EXPECT_EQ(clock.phase, pops::amr::Rational(1, 2));
+  EXPECT_DOUBLE_EQ(clock.physical_time, 0.0625);
+  const pops::amr::InterfaceFluxFragmentKey probe{
+      "tests.pair-budget/interface",
+      epoch,
+      0,
+      1,
+      clock,
+      "program-jacvec-pair",
+      "pops.amr-program.paired-evaluation/tests.pair-budget/multilevel-program@1",
+      "rhs-coherence/23",
+      "program-pair/0/1/runtime-pair/1/0",
+      window,
+      pops::amr::InterfaceFluxOrientation::FineOutward};
+  const pops::amr::InterfaceFluxFragmentMeasure measure{{1, 1}, 1.0, 0.0625};
+  const std::vector<pops::Real> payload(budget.max_evaluation_payload_terms, pops::Real(2));
+  ASSERT_NO_THROW(ledger.accumulate(probe, measure, payload));
+  EXPECT_THROW(ledger.commit(), std::runtime_error);
+  auto extra = probe;
+  extra.application_identity = "second-evaluation";
+  EXPECT_THROW(ledger.accumulate(extra, measure, payload), std::length_error);
+  ledger.rollback();
+  EXPECT_EQ(ledger.pending_size(), 0u);
+  ledger.commit();
+  EXPECT_EQ(ledger.published_size(), 0u);
+  ledger.begin();
+  EXPECT_THROW(ledger.accumulate(probe, measure, payload), std::length_error);
+  ledger.rollback();
+  EXPECT_EQ(system.program_accepted_state(), before);
 }
 
 TEST(test_amr_multiblock_implicit_transaction, MetadataNeverCreatesAnImplicitTemporalFallback) {

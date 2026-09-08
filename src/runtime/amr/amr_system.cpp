@@ -4594,12 +4594,21 @@ struct AmrSystem<Dim>::Impl {
         production.exact_contract.empty())
       throw std::logic_error(
           "AMR interface ledger budget differs from its scheduler/hierarchy authorities");
+    // The only child transaction is one non-reentrant paired residual evaluation. Its two
+    // endpoints require active authored RHS rows; unrelated state storage grants no capacity.
+    const bool paired_evaluation =
+        std::count_if(artifact.blocks.begin(), artifact.blocks.end(), [](const auto& block) {
+          return block.rhs_basis_bound != 0 && block.coefficient_term_bound != 0;
+        }) >= 2;
+    const std::size_t transaction_depth = paired_evaluation ? 2 : 1;
+    std::size_t evaluation_fragments = 0;
+    std::size_t evaluation_terms = 0;
     std::size_t executions = 1;
     std::size_t fragments = 0;
     std::size_t terms = 0;
     ExactContractBuilder exact;
     exact.text("pops.amr-system.prepared-interface-flux-ledger-budget")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .scalar(std::int32_t{Dim})
         .text(artifact.program_hash)
         .scalar(artifact.generation)
@@ -4623,6 +4632,10 @@ struct AmrSystem<Dim>::Impl {
                                           "AMR interface level-execution budget exceeds size_t");
       }
       const auto& row = production.levels[level];
+      if (paired_evaluation) {
+        evaluation_fragments = std::max(evaluation_fragments, row.fragment_count_per_application);
+        evaluation_terms = std::max(evaluation_terms, row.payload_terms_per_application);
+      }
       const std::size_t applications =
           checked_size_product(executions, artifact.interface_coupling_application_bound,
                                "AMR interface application budget exceeds size_t");
@@ -4643,10 +4656,19 @@ struct AmrSystem<Dim>::Impl {
     }
     if ((fragments == 0) != (terms == 0))
       throw std::logic_error("AMR interface scheduler produced a partial ledger budget");
+    (void)checked_size_sum(fragments, evaluation_fragments,
+                           "AMR interface fragment workspace exceeds size_t");
+    (void)checked_size_sum(terms, evaluation_terms,
+                           "AMR interface payload workspace exceeds size_t");
     exact.scalar(static_cast<std::uint64_t>(fragments))
         .scalar(static_cast<std::uint64_t>(terms))
-        .text("latest-accepted-root-window");
-    return {fragments, terms, 1, std::move(exact).release()};
+        .scalar(static_cast<std::uint64_t>(transaction_depth))
+        .scalar(static_cast<std::uint64_t>(evaluation_fragments))
+        .scalar(static_cast<std::uint64_t>(evaluation_terms))
+        .text("latest-accepted-root-window;one-rollback-only-live-level-evaluation");
+    return {
+        fragments,       terms, transaction_depth, std::move(exact).release(), evaluation_fragments,
+        evaluation_terms};
   }
 
   ::pops::amr::InterfaceFluxLedgerBudget prepared_interface_flux_ledger_budget() const {
