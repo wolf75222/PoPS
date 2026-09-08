@@ -17,6 +17,7 @@
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -449,7 +450,9 @@ void expect_partitioned_fac_embedded_boundary() {
   EXPECT_LT(maximum_constant_error(solver.phi_level(1), lane), Real(0.12));
 }
 
-void expect_periodic_partition_independence(int refinement_case) {
+template <bool PartitionedBackend = false>
+void expect_periodic_partition_independence(int refinement_case, int partition_profile = 0,
+                                            bool exhaust_coarse = false) {
   const bool corner = refinement_case == 1;
   const bool strip = refinement_case == 2;
   constexpr int Dim = 2;
@@ -478,12 +481,21 @@ void expect_periodic_partition_independence(int refinement_case) {
   const std::vector<Index<Dim>> owners{rank_coordinate<Dim>(0), rank_coordinate<Dim>(1),
                                        rank_coordinate<Dim>(1), rank_coordinate<Dim>(0)};
   auto make = [&](bool replicated) {
-    pops::elliptic::mg::CompositeFacBuildRequest<Dim> request;
+    using Request = std::conditional_t<PartitionedBackend,
+        pops::elliptic::amr::CompositeFacBuildRequest<Dim>,
+        pops::elliptic::mg::CompositeFacBuildRequest<Dim>>;
+    Request request;
+    if constexpr (PartitionedBackend) {
+      request.budget = budget();
+      request.budget.parent_gather.canonical_jobs = 1024;
+    }
     for (int level = 0; level < 2; ++level) {
       const auto& boxes = level == 0 ? coarse_boxes : fine_boxes;
       const auto& geometry = level == 0 ? coarse_geometry : fine_geometry;
+      const bool level_replicated = replicated ||
+          (partition_profile == 1 && level == 0) || (partition_profile == 2 && level == 1);
       const auto distribution =
-          replicated
+          level_replicated
               ? Distribution<Dim>::replicated(boxes, ranks)
               : Distribution<Dim>::partitioned(
                     boxes, ranks,
@@ -502,14 +514,21 @@ void expect_periodic_partition_independence(int refinement_case) {
     options.abs_tol = Real(0);
     options.coarse_rel_tol = Real(1e-12);
     options.coarse_abs_tol = Real(0);
-    options.coarse_cycles = 100;
-    auto solver = std::make_unique<pops::elliptic::mg::CompositeFacPoisson<Dim>>(
-        std::move(request), lane, options, Real(1));
-    solver->install_nullspace(
-        pops::FieldNullspacePlan<Dim>{},
-        std::vector<pops::PreparedVectorDistribution<Dim>>(
-            2, replicated ? pops::PreparedVectorDistribution<Dim>::replicated()
-                          : pops::PreparedVectorDistribution<Dim>::distributed()));
+    options.coarse_cycles = exhaust_coarse ? 1 : 100;
+    auto solver = [&] {
+      if constexpr (PartitionedBackend)
+        return std::make_unique<pops::elliptic::amr::CompositeFacPoisson<Dim>>(
+            std::move(request), options, Real(1));
+      else
+        return std::make_unique<pops::elliptic::mg::CompositeFacPoisson<Dim>>(
+            std::move(request), lane, options, Real(1));
+    }();
+    std::vector<pops::PreparedVectorDistribution<Dim>> distributions;
+    for (int level = 0; level < 2; ++level)
+      distributions.push_back(solver->phi_level(level).distribution().replicated()
+                                  ? pops::PreparedVectorDistribution<Dim>::replicated()
+                                  : pops::PreparedVectorDistribution<Dim>::distributed());
+    solver->install_nullspace(pops::FieldNullspacePlan<Dim>{}, std::move(distributions));
     for (int level = 0; level < 2; ++level) {
       auto& rhs = solver->rhs_level(level);
       const auto& geometry = level == 0 ? coarse_geometry : fine_geometry;
@@ -536,6 +555,25 @@ void expect_periodic_partition_independence(int refinement_case) {
   auto partitioned = make(false);
   const auto reference_report = reference->solve();
   const auto partitioned_report = partitioned->solve();
+  if (pops::my_rank() == 0)
+    std::cout << std::setprecision(17) << "periodic FAC backend="
+              << (PartitionedBackend ? "amr" : "mg") << " refinement_case=" << refinement_case
+              << " partition_profile=" << partition_profile << " exhaust_coarse=" << exhaust_coarse
+              << " replicated_status=" << reference_report.reason
+              << " replicated_residual=" << reference_report.residual_norm
+              << " partitioned_status=" << partitioned_report.reason
+              << " partitioned_residual=" << partitioned_report.residual_norm << '\n';
+  if (exhaust_coarse) {
+    for (const auto* report : {&reference_report, &partitioned_report}) {
+      EXPECT_EQ(report->status, pops::SolveStatus::kIterationLimit);
+      EXPECT_EQ(report->action, pops::SolveAction::kFailRun);
+      EXPECT_NE(report->reason.find("coarse_correction_failed:"), std::string::npos);
+      EXPECT_FALSE(report->solved());
+      EXPECT_EQ(pops::all_reduce_min(static_cast<long>(report->status), lane),
+                pops::all_reduce_max(static_cast<long>(report->status), lane));
+    }
+    return;
+  }
   ASSERT_TRUE(reference_report.solved())
       << reference_report.reason << " residual=" << reference_report.residual_norm;
   ASSERT_TRUE(partitioned_report.solved())
@@ -562,7 +600,8 @@ void expect_periodic_partition_independence(int refinement_case) {
   }
   const double global_difference = pops::all_reduce_max(static_cast<double>(maximum), lane);
   if (pops::my_rank() == 0)
-    std::cout << std::setprecision(17) << "periodic FAC refinement_case=" << refinement_case
+    std::cout << std::setprecision(17) << "periodic FAC backend=" << (PartitionedBackend ? "amr" : "mg")
+              << " refinement_case=" << refinement_case << " partition_profile=" << partition_profile
               << " replicated_residual=" << reference_report.residual_norm
               << " partitioned_residual=" << partitioned_report.residual_norm
               << " max_partition_difference=" << global_difference << '\n';
@@ -593,6 +632,12 @@ int run_partitioned_fac_matrix(int argc, char** argv) {
       expect_periodic_partition_independence(false);
       expect_periodic_partition_independence(true);
       expect_periodic_partition_independence(2);
+      expect_periodic_partition_independence<true>(0);
+      expect_periodic_partition_independence<true>(1);
+      expect_periodic_partition_independence<true>(2);
+      expect_periodic_partition_independence<true>(2, 1);
+      expect_periodic_partition_independence<true>(2, 2);
+      expect_periodic_partition_independence<true>(0, 0, true);
     }
     result = ::testing::Test::HasFailure() ? 1 : 0;
   }

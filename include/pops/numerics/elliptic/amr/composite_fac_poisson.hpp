@@ -34,6 +34,7 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -973,6 +974,7 @@ class CompositeFacPoisson {
     std::unique_ptr<transport_type> gather{};
     std::unique_ptr<transport_type> restriction{};
     std::unique_ptr<transport_type> flux{};
+    std::map<std::pair<std::size_t, std::size_t>, Fab<Dim, MemorySpace>> flux_destinations{};
     std::string gather_contract{};
     std::string restriction_contract{};
     std::string flux_contract{};
@@ -994,9 +996,11 @@ class CompositeFacPoisson {
         const Box<Dim>& valid = child->phi.layout()[fine_patch];
         const Box<Dim> restricted_box = coarsen(valid, ratio_value);
         const Box<Dim> staging = restricted_box.grow(2);
-        fac_detail::checked_add(local_cells, static_cast<std::size_t>(staging.numPts()),
-                                budget.local_scratch_cells,
-                                "partitioned FAC parent staging budget exceeded");
+        fac_detail::checked_add(
+            local_cells,
+            fac_detail::checked_product(static_cast<std::size_t>(staging.numPts()), 3,
+                                        "partitioned FAC staging cell count overflows"),
+            budget.local_scratch_cells, "partitioned FAC parent staging budget exceeded");
         fac_detail::checked_add(local_cells, static_cast<std::size_t>(restricted_box.numPts()),
                                 budget.local_scratch_cells,
                                 "partitioned FAC restriction scratch budget exceeded");
@@ -1010,9 +1014,33 @@ class CompositeFacPoisson {
         patch.covered_staging.set_val(Real(0));
         for_each_cell(restricted_box,
                       fac_detail::SetScalarKernel<Dim>{patch.covered_staging.view(), Real(1)});
-        std::vector<Box<Dim>> pending{fac_detail::clipped_growth(valid, child->geometry.domain())};
+        // Keep periodic ghost coordinates unwrapped, and let the same-level halo
+        // schedule own every ghost for which a fine source exists.
+        std::vector<Box<Dim>> pending;
+        constexpr int images = Dim == 1 ? 3 : Dim == 2 ? 9 : 27;
+        for (int image = 0; image < images; ++image) {
+          int ordinal = image;
+          Index<Dim> shift{};
+          bool permitted = true;
+          for (int axis = 0; axis < Dim; ++axis) {
+            const int offset = ordinal % 3 - 1;
+            ordinal /= 3;
+            if (offset != 0 &&
+                !child->boundary.topology().is_periodic(Face<Dim>{axis, BoundarySide::lower}))
+              permitted = false;
+            shift[axis] = offset * static_cast<int>(child->geometry.domain().length(axis));
+          }
+          if (permitted) {
+            const Box<Dim> region = valid.grow(1).intersect(child->geometry.domain().shift(shift));
+            if (!region.empty())
+              pending.push_back(region);
+          }
+        }
         for (const Box<Dim>& peer : child->phi.layout().boxes())
           fac_detail::subtract_from(pending, peer);
+        for (const HaloJob<Dim>& halo : child->halo_schedule.canonical_jobs())
+          if (halo.destination_box == fine_patch)
+            fac_detail::subtract_from(pending, halo.destination_region);
         interpolation_regions += pending.size();
         if (interpolation_regions > budget.interpolation_regions)
           throw std::length_error("partitioned FAC interpolation-region budget exceeded");
@@ -1078,6 +1106,49 @@ class CompositeFacPoisson {
             }
           }
         }
+        // The coarse stencil extends beyond the periodic domain even for an
+        // interior fine patch. Transport every intersecting periodic source image
+        // directly into that unwrapped stencil; local wrapping cannot fetch a
+        // wrapped source outside this patch's staging allocation.
+        constexpr int images = Dim == 1 ? 3 : Dim == 2 ? 9 : 27;
+        for (int image = 0; image < images; ++image) {
+          int ordinal = image;
+          Index<Dim> shift{};
+          Index<Dim> inverse_shift{};
+          bool permitted = true;
+          bool shifted = false;
+          for (int axis = 0; axis < Dim; ++axis) {
+            const int offset = ordinal % 3 - 1;
+            ordinal /= 3;
+            shifted = shifted || offset != 0;
+            if (offset != 0 &&
+                !parent->boundary.topology().is_periodic(Face<Dim>{axis, BoundarySide::lower}))
+              permitted = false;
+            shift[axis] = offset * static_cast<int>(parent->geometry.domain().length(axis));
+            inverse_shift[axis] = -shift[axis];
+          }
+          if (!permitted || !shifted)
+            continue;
+          const Box<Dim> image_staging =
+              footprint.grow(2).intersect(parent->geometry.domain().shift(shift));
+          mesh::ExactCellCount image_coverage;
+          for (std::size_t parent_patch = 0; parent_patch < parent->phi.layout().size();
+               ++parent_patch) {
+            const Box<Dim> destination =
+                image_staging.intersect(parent->phi.layout()[parent_patch].shift(shift));
+            if (destination.empty())
+              continue;
+            if (!image_coverage.add(mesh::ExactCellCount::from_box(destination)))
+              throw std::overflow_error("partitioned FAC periodic gather coverage overflows");
+            for (const Index<Dim>& dest_rank : receive_ranks(child_dist, fine_patch))
+              gather_jobs.push_back(transfer_job{
+                  parent_patch, fine_patch, unique_owner(parent_dist, parent_patch, dest_rank),
+                  dest_rank, destination.shift(inverse_shift), destination});
+          }
+          if (image_coverage != mesh::ExactCellCount::from_box(image_staging))
+            throw std::invalid_argument(
+                "partitioned FAC parent layout does not cover a periodic interpolation footprint");
+        }
         if (gather_coverage != mesh::ExactCellCount::from_box(staging))
           throw std::invalid_argument(
               "partitioned FAC parent layout does not cover a child interpolation footprint");
@@ -1086,10 +1157,73 @@ class CompositeFacPoisson {
               "partitioned FAC parent layout does not cover a child restriction footprint");
       }
       std::vector<transfer_job> flux_jobs;
-      flux_jobs.reserve(gather_jobs.size());
-      for (const transfer_job& job : gather_jobs)
-        flux_jobs.push_back(transfer_job{job.destination_patch, job.source_patch, job.destination_rank,
-                                         job.source_rank, job.destination_region, job.source_region});
+      // A parent gather includes interpolation halo cells, so reversing it is not
+      // an additive flux scatter. Canonicalize actual physical interface faces,
+      // preserving separate fine-face contributions to the same coarse cell.
+      for (const transfer_job& gather_job : gather_jobs) {
+        const std::size_t fine_patch = gather_job.destination_patch;
+        if (fine_patch > (std::numeric_limits<std::size_t>::max() - (2 * Dim - 1)) / (2 * Dim))
+          throw std::overflow_error("partitioned FAC fine-face transport identity overflow");
+        const Box<Dim> footprint = coarsen(child->phi.layout()[fine_patch], ratio_value);
+        Index<Dim> destination_shift{};
+        for (int axis = 0; axis < Dim; ++axis)
+          destination_shift[axis] =
+              gather_job.source_region.lo[axis] - gather_job.destination_region.lo[axis];
+        for (int axis = 0; axis < Dim; ++axis) {
+          for (int side = 0; side < 2; ++side) {
+            Box<Dim> face = footprint;
+            face.lo[axis] = side == 0 ? footprint.lo[axis] - 1 : footprint.hi[axis] + 1;
+            face.hi[axis] = face.lo[axis];
+            const Box<Dim> matched = face.intersect(gather_job.destination_region);
+            if (matched.empty())
+              continue;
+            const std::size_t face_identity = fine_patch * (2 * Dim) + axis * 2 + side;
+            for (const Index<Dim>& destination_rank :
+                 receive_ranks(parent_dist, gather_job.source_patch)) {
+              const Index<Dim> source_rank = unique_owner(child_dist, fine_patch, destination_rank);
+              std::vector<Box<Dim>> pending{matched};
+              for (const transfer_job& previous : flux_jobs) {
+                if (previous.source_patch != face_identity ||
+                    previous.destination_patch != gather_job.source_patch ||
+                    previous.source_rank != source_rank ||
+                    previous.destination_rank != destination_rank)
+                  continue;
+                bool same_image = true;
+                for (int coordinate = 0; coordinate < Dim; ++coordinate)
+                  same_image = same_image && previous.destination_region.lo[coordinate] -
+                                                     previous.source_region.lo[coordinate] ==
+                                                 destination_shift[coordinate];
+                if (same_image)
+                  fac_detail::subtract_from(pending, previous.source_region);
+              }
+              for (const Box<Dim>& region : pending)
+                flux_jobs.push_back(transfer_job{face_identity, gather_job.source_patch,
+                                                 source_rank, destination_rank,
+                                                 region, region.shift(destination_shift)});
+            }
+          }
+        }
+      }
+      std::map<std::pair<std::size_t, std::size_t>, Box<Dim>> flux_destination_boxes;
+      for (const transfer_job& job : flux_jobs) {
+        if (job.destination_rank != parent->phi.local_rank())
+          continue;
+        auto& box = flux_destination_boxes[{job.source_patch, job.destination_patch}];
+        if (box.empty()) {
+          box = job.destination_region;
+        } else {
+          for (int axis = 0; axis < Dim; ++axis) {
+            box.lo[axis] = std::min(box.lo[axis], job.destination_region.lo[axis]);
+            box.hi[axis] = std::max(box.hi[axis], job.destination_region.hi[axis]);
+          }
+        }
+      }
+      for (const auto& [key, box] : flux_destination_boxes) {
+        fac_detail::checked_add(local_cells, static_cast<std::size_t>(box.numPts()),
+                                budget.local_scratch_cells,
+                                "partitioned FAC flux destination scratch budget exceeded");
+        flux_destinations.emplace(key, Fab<Dim, MemorySpace>(box, 1, Extent<Dim>{}));
+      }
       gather = std::make_unique<transport_type>(
           transfer_plan{parent->phi.rank_space(), parent->phi.local_rank(), 1,
                         std::move(gather_jobs), budget.parent_gather});
@@ -1126,19 +1260,6 @@ class CompositeFacPoisson {
         return scratch_for(job.destination_patch).parent_staging.view();
       };
       gather->execute(source_view, destination_view);
-      bool periodic[Dim]{};
-      for (int axis = 0; axis < Dim; ++axis)
-        periodic[axis] =
-            parent->boundary.topology().is_periodic(Face<Dim>{axis, BoundarySide::lower});
-      for (ScratchPatch& patch : scratch) {
-        fac_detail::WrapStagingKernel<Dim> kernel{patch.parent_staging.view(),
-                                                  parent->geometry.domain(),
-                                                  patch.parent_staging.box(),
-                                                  {}};
-        for (int axis = 0; axis < Dim; ++axis)
-          kernel.periodic[axis] = periodic[axis];
-        for_each_cell(patch.parent_staging.box(), kernel);
-      }
       Kokkos::fence();
     }
 
@@ -1150,7 +1271,7 @@ class CompositeFacPoisson {
         auto fine = destination.fab_global(patch.fine_patch).view();
         for (const Box<Dim>& region : patch.ghost_regions)
           for_each_cell(region, ::pops::elliptic::mg::fac_detail::QuadraticInterpolationTransfer<Dim>{
-                                    coarse, fine, region, ratio, mapping, child->geometry.domain()});
+                                    coarse, fine, region, ratio, mapping, Box<Dim>{}});
       }
       Kokkos::fence();
     }
@@ -1197,19 +1318,6 @@ class CompositeFacPoisson {
               ++interface.hi[axis];
               interface.lo[axis] = interface.hi[axis];
             }
-            const Box<Dim>& parent_domain = parent->geometry.domain();
-            if (parent->boundary.topology().is_periodic(Face<Dim>{axis, BoundarySide::lower})) {
-              const int length = static_cast<int>(parent_domain.length(axis));
-              if (length > 0 && interface.hi[axis] < parent_domain.lo[axis]) {
-                geometry_shift[axis] = -length;
-                interface.lo[axis] += length;
-                interface.hi[axis] += length;
-              } else if (length > 0 && interface.lo[axis] > parent_domain.hi[axis]) {
-                geometry_shift[axis] = length;
-                interface.lo[axis] -= length;
-                interface.hi[axis] -= length;
-              }
-            }
             const Box<Dim> destination = interface.intersect(patch.flux_increment.box());
             if (destination.empty())
               continue;
@@ -1231,13 +1339,18 @@ class CompositeFacPoisson {
       }
       Kokkos::fence();
       parent_scratch.set_val(Real(0));
+      for (auto& [key, destination] : flux_destinations)
+        destination.set_val(Real(0));
       auto source_view = [this](const transfer_job& job) -> FieldView<const Real, Dim> {
-        return std::as_const(scratch_for(job.source_patch).flux_increment).view();
+        return std::as_const(scratch_for(job.source_patch / (2 * Dim)).flux_increment).view();
       };
-      auto destination_view = [&parent_scratch](const transfer_job& job) -> FieldView<Real, Dim> {
-        return parent_scratch.fab_global(job.destination_patch).view();
+      auto destination_view = [this](const transfer_job& job) -> FieldView<Real, Dim> {
+        return flux_destinations.at({job.source_patch, job.destination_patch}).view();
       };
       flux->execute(source_view, destination_view);
+      for (const auto& [key, increment] : flux_destinations)
+        for_each_cell(increment.box(), fac_detail::AddKernel<Dim>{
+            parent_scratch.fab_global(key.second).view(), increment.view()});
       for (std::size_t local = 0; local < parent_residual.local_size(); ++local) {
         for_each_cell(parent_residual.box(local),
                       fac_detail::AddKernel<Dim>{
@@ -1547,8 +1660,6 @@ class CompositeFacPoisson {
     controls.maximum_cycles = options_.coarse_cycles;
     controls.reaction = reaction_;
     controls.allow_coarsening = allow_coarsening;
-    if (coarse_request.boxes.size() > 2)
-      return;
     EllipticBuildRequest<Dim> correction_request = coarse_request;
     correction_request.boundary = ::pops::elliptic::mg::detail::boundary_for_geometry(
         coarse_request.boundary, coarse_request.geometry, true);
@@ -1636,29 +1747,13 @@ class CompositeFacPoisson {
       used_fft_coarse_ = true;
       if (coarse_report.solved())
         fill_ghosts_(0, levels_.front()->correction, true);
-    } else if (coarse_solver_) {
+    } else {
       coarse_solver_->phi().set_val(Real(0));
       ::pops::elliptic::mg::copy_scalar_valid(levels_.front()->residual, coarse_solver_->rhs());
       coarse_report = coarse_solver_->solve();
       if (coarse_report.solved())
         ::pops::elliptic::mg::copy_scalar_valid(coarse_solver_->phi(),
                                                 levels_.front()->correction);
-    } else {
-      Level& coarse = *levels_.front();
-      coarse.correction.set_val(Real(0));
-      const Real reference = global_norm_inf_(coarse.residual);
-      const Real stop = std::max(options_.coarse_abs_tol, options_.coarse_rel_tol * reference);
-      for (int sweep = 0; sweep < options_.coarse_cycles; ++sweep) {
-        smooth_(0, coarse.correction, coarse.residual, 1, false, true);
-        if ((sweep + 1) % 8 == 0 || sweep + 1 == options_.coarse_cycles) {
-          fill_ghosts_(0, coarse.correction, true);
-          ::pops::elliptic::mg::poisson_residual_valid(coarse.correction, coarse.residual,
-                                                       coarse.geometry, coarse.scratch, reaction_);
-          if (global_norm_inf_(coarse.scratch) <= stop)
-            break;
-        }
-      }
-      coarse_report.mark_solved("partitioned_fac_coarse_correction");
     }
     if (!coarse_report.solved())
       return coarse_report;
