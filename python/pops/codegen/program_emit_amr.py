@@ -707,8 +707,8 @@ def _emit_amr_install(
         installed_driver = (
             "    auto _advance_hierarchy = [&](double hierarchy_dt) {\n"
             "      _refresh_level_programs();\n"
-            "      // The subcycling engine invokes this body once per level. The candidate tower\n"
-            "      // is complete before the root callback, so gather/solve/publish run there once.\n"
+            "      // The synchronized engine prepares every complete level envelope before this callback.\n"
+            "      // Gather/solve/publish run once through the root callback.\n"
             "      if (ctx.level() != 0)\n"
             "        return;\n"
             "      const int _nlev = ctx.program_resource_topology().levels;\n"

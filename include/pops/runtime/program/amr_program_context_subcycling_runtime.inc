@@ -348,10 +348,34 @@ void activate_multiblock_level_group_(multiblock_level_group_type group, double 
 template <class Body>
 void advance_multiblock_level_group_(multiblock_level_group_type group, double macro_dt,
                                      Body& body) const {
-  activate_multiblock_level_group_(group, macro_dt);
-  synchronized_level_envelopes_.clear();
-  facade_->clear_prepared_amr_level_evaluations();
+  std::exception_ptr preparation_error;
   try {
+    activate_multiblock_level_group_(group, macro_dt);
+    synchronized_level_envelopes_.clear();
+    if (multiblock_subcycling_->has_synchronized_groups()) {
+      LevelAttemptEnvelope prior;
+      swap_level_attempt_envelope_(prior);
+      try {
+        for (int level = 0; level < nlev(); ++level) {
+          auto& envelope = synchronized_level_envelopes_[level];
+          activate_multiblock_level_group_(
+              multiblock_subcycling_->synchronized_level_group(static_cast<std::size_t>(level)),
+              macro_dt);
+          swap_level_attempt_envelope_(envelope);
+        }
+      } catch (...) {
+        swap_level_attempt_envelope_(prior);
+        throw;
+      }
+      swap_level_attempt_envelope_(prior);
+    }
+  } catch (...) {
+    preparation_error = std::current_exception();
+  }
+  try {
+    collectively_rethrow_exception(preparation_error, prepared_execution_lane(),
+                                   "AMR Program level envelope preparation failed collectively");
+    facade_->clear_prepared_amr_level_evaluations();
     body(current_dt_);
     if (multiblock_subcycling_->has_synchronized_groups()) {
       for (int level = 0; level < nlev(); ++level)

@@ -298,15 +298,15 @@ void with_program_attempt_level(int selected, Function&& function) const {
     throw std::logic_error("hierarchy Program stage requires synchronized level attempt envelopes");
   if (selected < 0 || selected >= nlev())
     throw std::out_of_range("synchronized Program stage level lies outside its hierarchy");
-  auto& envelope = synchronized_level_envelopes_[selected];
+  auto found = synchronized_level_envelopes_.find(selected);
+  if (found == synchronized_level_envelopes_.end() || found->second.active_attempt_states_.empty())
+    throw std::logic_error(
+        "synchronized Program stage has no collectively prepared level envelope");
+  auto& envelope = found->second;
   LevelAttemptEnvelope prior;
   swap_level_attempt_envelope_(prior);
   swap_level_attempt_envelope_(envelope);
   try {
-    if (active_attempt_states_.empty())
-      activate_multiblock_level_group_(
-          multiblock_subcycling_->synchronized_level_group(static_cast<std::size_t>(selected)),
-          prior.current_dt_);
     facade_->clear_prepared_amr_level_evaluations();
     std::forward<Function>(function)();
   } catch (...) {

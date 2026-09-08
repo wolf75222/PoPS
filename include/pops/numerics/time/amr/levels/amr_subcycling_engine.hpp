@@ -663,8 +663,12 @@ class PreparedMultiBlockAmrSubcyclingEngine {
         execute_average_down_collectively(hierarchy_->topology_runtime(), child,
                                           std::as_const(candidates[block][child]),
                                           candidates[block][parent], hierarchy_->lane());
-        histories[block][parent]->newer = field_type(candidates[block][parent]);
-        candidate_ledgers[block][parent].push_back(std::move(ledgers[parent][block]));
+        invoke_collectively_(
+            [&] {
+              histories[block][parent]->newer = field_type(candidates[block][parent]);
+              candidate_ledgers[block][parent].push_back(std::move(ledgers[parent][block]));
+            },
+            "AMR synchronized accepted-record preparation failed collectively");
       }
     }
   }
@@ -760,8 +764,12 @@ class PreparedMultiBlockAmrSubcyclingEngine {
       execute_average_down_collectively(hierarchy_->topology_runtime(), level + 1,
                                         std::as_const(candidates[block][level + 1]),
                                         candidates[block][level], hierarchy_->lane());
-      histories[block][level]->newer = field_type(candidates[block][level]);
-      candidate_ledgers[block][level].push_back(std::move(outgoing_flux[block]));
+      invoke_collectively_(
+          [&] {
+            histories[block][level]->newer = field_type(candidates[block][level]);
+            candidate_ledgers[block][level].push_back(std::move(outgoing_flux[block]));
+          },
+          "multi-block AMR accepted-record preparation failed collectively");
     }
   }
 

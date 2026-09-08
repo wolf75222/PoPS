@@ -485,16 +485,17 @@ void prove_synchronized_envelopes() {
           ASSERT_NE(context.staged_parent, nullptr);
           // Parent candidates have already changed. Its staged state remains the old,
           // block-qualified value at the common physical-time origin.
-          EXPECT_EQ(pops::reduce_min_local(*context.staged_parent),
-                    context.block == 0 ? pops::Real(1) : pops::Real(4));
+          if (context.staged_parent->local_size() != 0)
+            EXPECT_EQ(pops::reduce_min_local(*context.staged_parent),
+                      context.block == 0 ? pops::Real(1) : pops::Real(4));
           EXPECT_EQ(context.incoming_flux,
                     engine.synchronized_level_group(level - 1)[context.block].outgoing_flux);
         }
         context.candidate.set_val(context.block == 0 ? pops::Real(2) : pops::Real(8));
       }
     }
-    if (inject_failure)
-      throw std::runtime_error("injected synchronized solve failure");
+    if (inject_failure && hierarchy.lane().rank() == 0)
+      throw std::runtime_error("injected rank-local synchronized solve failure");
   };
   std::vector<std::size_t> reflux_order;
   auto reconcile = [&](auto& context) { reflux_order.push_back(context.parent_level); };
@@ -505,8 +506,10 @@ void prove_synchronized_envelopes() {
   EXPECT_FALSE(engine.has_synchronized_groups());
   EXPECT_EQ(engine.last_accepted_attempt(), 0U);
   for (std::size_t level = 0; level < 3; ++level) {
-    EXPECT_EQ(pops::reduce_min_local(hierarchy.state(0, level)), pops::Real(1));
-    EXPECT_EQ(pops::reduce_min_local(hierarchy.state(1, level)), pops::Real(4));
+    if (hierarchy.state(0, level).local_size() != 0)
+      EXPECT_EQ(pops::reduce_min_local(hierarchy.state(0, level)), pops::Real(1));
+    if (hierarchy.state(1, level).local_size() != 0)
+      EXPECT_EQ(pops::reduce_min_local(hierarchy.state(1, level)), pops::Real(4));
   }
   const std::vector<pops::amr::ParentChildClockRelation> asynchronous_relations{
       {0, 1, {2, 1}, pops::amr::RemainderPolicy::IntegralOnly}, relations[1]};
@@ -524,8 +527,10 @@ void prove_synchronized_envelopes() {
   EXPECT_EQ(callbacks, 2);
   EXPECT_EQ(reflux_order, (std::vector<std::size_t>{1, 1, 0, 0}));
   for (std::size_t level = 0; level < 3; ++level) {
-    EXPECT_EQ(pops::reduce_min_local(hierarchy.state(0, level)), pops::Real(2));
-    EXPECT_EQ(pops::reduce_min_local(hierarchy.state(1, level)), pops::Real(8));
+    if (hierarchy.state(0, level).local_size() != 0)
+      EXPECT_EQ(pops::reduce_min_local(hierarchy.state(0, level)), pops::Real(2));
+    if (hierarchy.state(1, level).local_size() != 0)
+      EXPECT_EQ(pops::reduce_min_local(hierarchy.state(1, level)), pops::Real(8));
     EXPECT_EQ(engine.accepted_clock(0, level)->physical_time, window.end.physical_time);
   }
 }
