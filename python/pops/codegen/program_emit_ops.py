@@ -347,6 +347,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     # is off (record early-returns), changes no numerics; ops emitting no statement (pure inline
     # token: cfl / compare) are skipped by the len guard below. _start marks this op's first line.
     _profile_start = len(lines)
+    if "evaluation_partition" in v.attrs and v.op in {
+            "source", "implicit_source", "local_transform", "apply",
+            "solve_local_linear", "solve_local_nonlinear", "solve_implicit_source"}:
+        from pops.time._evaluation_point import evaluation_stage_fraction
+        stage = evaluation_stage_fraction(v)
+        lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
     if v.op == "post_synchronization":
         var[v.id] = "/* post_synchronization */"
     elif v.op == "state":
@@ -777,16 +783,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # the explicit list. An EMPTY list [] (or a list of only named sources) excludes it -> flux
         # only. None and [] are recorded distinctly in the IR, so this is unambiguous.
         want_default_source = requested is None or "default" in requested
-        if hasattr(v.point, "offset"):
-            stage_point = v.point
-        else:
-            try:
-                stage_point = v.point.time
-            except ValueError:
-                # A conservative flux belongs to the explicit partition of an ARK stage.  Its
-                # implicit coordinate may differ and must never be silently substituted here.
-                stage_point = v.point.time_for("explicit")
-        stage = Fraction(stage_point.step) + Fraction(stage_point.offset.to_python())
+        from pops.time._evaluation_point import evaluation_stage_fraction
+        stage = evaluation_stage_fraction(v, ark_partition="explicit")
         lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
         if not want_flux:
             # SOURCE-ONLY (ADC-430): flux=False -- NO -div F base (the rhs_scratch starts at zero).

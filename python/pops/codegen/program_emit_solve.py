@@ -28,7 +28,6 @@ from pops.solvers.providers import (
     PreparedHierarchySolverEmitRequest,
     prepared_hierarchy_solver_provider_from_attrs,
 )
-from pops.time.points import StagePoint, TimePoint
 
 from pops.codegen.program_emit_kernels import (
     _apply_in_arg,
@@ -222,35 +221,9 @@ def _validate_matrix_free_contract(v: Any, model: Any) -> None:
 
 
 def _rhs_stage_fraction(value: Any) -> Fraction:
-    """Return the exact explicit residual coordinate carried by one RHS-like IR value.
-
-    A partitioned stage may expose distinct explicit and implicit coordinates.  Conservative RHS
-    evaluation belongs to the explicit partition, exactly as in the top-level RHS emitter.  This
-    helper deliberately accepts only the typed temporal IR: a missing/opaque point is a codegen
-    error, never a reason to invent stage zero for a matrix-free callback that will outlive the
-    authoring scope.
-    """
-    point = getattr(value, "point", None)
-    if type(point) is TimePoint:
-        stage_point = point
-    elif type(point) is StagePoint:
-        try:
-            stage_point = point.time
-        except ValueError:
-            try:
-                stage_point = point.time_for("explicit")
-            except (KeyError, TypeError, ValueError) as exc:
-                raise ValueError(
-                    "rhs_jacvec r0 requires an exact explicit StagePoint coordinate"
-                ) from exc
-    else:
-        raise ValueError(
-            "rhs_jacvec r0 requires an exact TimePoint or StagePoint in the Program IR")
-    try:
-        return Fraction(stage_point.step) + Fraction(stage_point.offset.to_python())
-    except (AttributeError, TypeError, ValueError, ZeroDivisionError) as exc:
-        raise ValueError(
-            "rhs_jacvec r0 carries no exact stage fraction") from exc
+    """Use the same qualified residual coordinate as the top-level RHS emitter."""
+    from pops.time._evaluation_point import evaluation_stage_fraction
+    return evaluation_stage_fraction(value, ark_partition="explicit")
 
 
 def _rhs_evaluation_identity(program: Any, value: Any) -> int:
@@ -267,28 +240,9 @@ def _rhs_evaluation_identity(program: Any, value: Any) -> int:
 
 
 def _solve_stage_fraction(value: Any) -> Fraction:
-    """Return the exact solve evaluation coordinate, preferring the implicit partition."""
-    point = getattr(value, "point", None)
-    if type(point) is TimePoint:
-        time_point = point
-    elif type(point) is StagePoint:
-        try:
-            time_point = point.time
-        except ValueError:
-            for partition in ("implicit", "explicit"):
-                try:
-                    time_point = point.time_for(partition)
-                    break
-                except (KeyError, TypeError, ValueError):
-                    continue
-            else:
-                raise ValueError("solve_linear carries no exact implicit stage coordinate")
-    else:
-        raise ValueError("solve_linear requires an exact TimePoint or StagePoint")
-    try:
-        return Fraction(time_point.step) + Fraction(time_point.offset.to_python())
-    except (AttributeError, TypeError, ValueError, ZeroDivisionError) as exc:
-        raise ValueError("solve_linear carries no exact stage fraction") from exc
+    """Respect a split subflow or the solve's exact implicit ARK coordinate."""
+    from pops.time._evaluation_point import evaluation_stage_fraction
+    return evaluation_stage_fraction(value, ark_partition="implicit")
 
 
 def _rhs_jacvec_field_slot(r0: Any, field_plans: Any) -> str:

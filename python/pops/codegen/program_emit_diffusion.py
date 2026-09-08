@@ -65,6 +65,10 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
                         prepared_var=None):
     if target not in {"system", "amr_system"}:
         raise ValueError("diffusion execution requires a Uniform or AMR native install scope")
+    if "evaluation_partition" in v.attrs:
+        from pops.time._evaluation_point import evaluation_stage_fraction
+        stage = evaluation_stage_fraction(v)
+        lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
     impl,selected,rows=_selected(v,node_model)
     state_var=var[v.inputs[0].id]
     out="diffusive_rhs_%d" % v.id

@@ -89,6 +89,8 @@ class _ProgramCore(
         value_inputs = [i for i in inputs if isinstance(i, ProgramValue)]
         if point is None:
             point = value_inputs[0].point if value_inputs else TimePoint(self.clock)
+        from pops.time._evaluation_point import qualify_evaluation_attrs
+        attrs = qualify_evaluation_attrs(self, op, attrs)
         validate_input_clocks(
             value_inputs, point, "IR op %r" % op,
             constructing_synchronize=op == "synchronize")
