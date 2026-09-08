@@ -280,7 +280,90 @@ void check_ranked_state_access() {
     EXPECT_EQ(providers[slot], Real(10 * (ncomp - 1 - slot)) + coordinate_sum);
 }
 
+template <int Dim>
+struct ProviderAdvection : nd::ScalarAdvection<Dim> {
+  using State = typename nd::ScalarAdvection<Dim>::State;
+  static constexpr int n_providers = 1;
+  POPS_HD State flux(const State& state, const auto& providers, int) const {
+    return {state[0] * providers.template provider<0>()};
+  }
+  POPS_HD Real max_wave_speed(const State&, const auto& providers, int) const {
+    return Kokkos::abs(providers.template provider<0>());
+  }
+};
+
+template <int Dim>
+void check_mapped_provider_face_extent() {
+  const Box<Dim> box = Box<Dim>::from_extents(uniform_extent<Dim>(4));
+  const auto geometry = unit_geometry(box);
+  const auto op = nd::prepare_cartesian_operator<Dim>(geometry, ProviderAdvection<Dim>{});
+  Fab<Dim> state(box, 1, uniform_extent<Dim>(NoSlope::n_ghost));
+  state.set_val(Real(2));
+  Fab<Dim> short_provider(box, 2);
+  short_provider.set_val(Real(3));
+  Fab<Dim> provider(box, 2, uniform_extent<Dim>(1));
+  fill_periodic(provider,
+                [](const auto&, int component) { return component == 1 ? Real(3) : Real(99); });
+  ProviderStorageView<Dim, 1> mapped{};
+  mapped.storage[0] = std::as_const(short_provider).view();
+  mapped.storage_components[0] = 1;
+  nd::FaceField<Dim> output(box, 1), candidate(box, 1), status(box, 1);
+  [&]<std::size_t... Axis>(std::index_sequence<Axis...>) {
+    (output.template field<Axis>().set_val(Real(91)), ...);
+  }(std::make_index_sequence<Dim>{});
+  std::array<Real, Dim> unchanged{};
+  unchanged.fill(Real(91));
+  EXPECT_THROW(op.materialize_face_fluxes(state, mapped, output), std::invalid_argument);
+  EXPECT_THROW(op.materialize_face_fluxes(state, mapped, output, candidate, status),
+               std::invalid_argument);
+  check_constant_face_axis<0, Dim>(output, unchanged);
+  mapped.storage[0] = std::as_const(provider).view();
+  mapped.storage_components[0] = 2;
+  EXPECT_THROW(op.materialize_face_fluxes(state, mapped, output), std::invalid_argument);
+  mapped.storage_components[0] = 1;
+  const auto valid = mapped.storage[0];
+  mapped.storage[0].data = nullptr;
+  EXPECT_THROW(op.materialize_face_fluxes(state, mapped, output), std::invalid_argument);
+  mapped.storage[0] = valid;
+  mapped.storage[0].extents[0] = std::numeric_limits<std::int64_t>::min();
+  EXPECT_THROW(op.materialize_face_fluxes(state, mapped, output), std::invalid_argument);
+  mapped.storage[0] = valid;
+  mapped.storage[0].origin[0] += 1;
+  EXPECT_THROW(op.materialize_face_fluxes(state, mapped, output), std::invalid_argument);
+  check_constant_face_axis<0, Dim>(output, unchanged);
+  mapped.storage[0] = valid;
+  ASSERT_NO_THROW(op.materialize_face_fluxes(state, mapped, output, candidate, status));
+  std::array<Real, Dim> expected{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    expected[axis] = Real(6);
+    for (int tangent = 0; tangent < Dim; ++tangent)
+      if (tangent != axis)
+        expected[axis] *= geometry.spacing(tangent);
+  }
+  check_constant_face_axis<0, Dim>(output, expected);
+
+  const auto masked = nd::prepare_masked_cartesian_operator<Dim>(
+      ProviderAdvection<Dim>{}, op.metric(), NoSlope{}, RusanovFlux{});
+  Fab<Dim> active(box, 1, uniform_extent<Dim>(1)), residual(box, 1);
+  active.set_val(Real(1));
+  residual.set_val(Real(91));
+  mapped.storage[0] = std::as_const(short_provider).view();
+  EXPECT_THROW(masked.assemble_residual(state, mapped, active, residual), std::invalid_argument);
+  for (const auto value : valid_values(residual))
+    EXPECT_EQ(value, Real(91));
+  mapped.storage[0] = valid;
+  ASSERT_NO_THROW(masked.assemble_residual(state, mapped, active, residual));
+  for (const auto value : valid_values(residual))
+    EXPECT_NEAR(value, Real(0), Real(1e-13));
+}
+
 }  // namespace
+
+TEST(test_prepared_cartesian_nd, mapped_provider_face_extent_is_checked_before_publication) {
+  check_mapped_provider_face_extent<1>();
+  check_mapped_provider_face_extent<2>();
+  check_mapped_provider_face_extent<3>();
+}
 
 TEST(test_prepared_cartesian_nd, one_dimensional_kernel_preserves_constant_state_and_conservation) {
   check_constant_and_conservation<1>(Extent<1>{32});
