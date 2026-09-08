@@ -186,7 +186,8 @@ def _tagger_source_component(tmp_path: Path):
         interfaces=interface.manifest_declarations(),
         capabilities=(capability,),
         # Successful masks use only finite per-cell comparisons and fixed-order boolean OR.
-        # The explicit fail-once status publishes no candidate hierarchy.
+        # The explicit fail-once status publishes no Tagger result; the owning transaction
+        # must restore any hierarchy prefix already rebuilt by the previous parent.
         determinism={"classification": "bitwise", "scope": ["same-input"]},
         target={"variants": [{
             "dimension": 2, "scalar": "float64", "device": "cpu", "features": [],
@@ -238,7 +239,9 @@ int tag_batch(void* state, const PopsTaggerRequestV2* request, PopsComponentStat
       request->refine_equalities.size != request->refine_candidates.size ||
       request->coarsen_equalities.size != request->refine_candidates.size ||
       request->logical_time.tick < 0) return 72;
-  if (request->logical_time.tick > 0 && fail_once.fetch_add(1) == 0) {{
+  // Fail only after parent zero has replaced the hierarchy with its temporary two-level prefix.
+  if (request->logical_time.tick > 0 && request->logical_time.level == 1 &&
+      fail_once.fetch_add(1) == 0) {{
     *status = {{sizeof(PopsComponentStatusV1), 73, POPS_COMPONENT_RETRY_STEP_V1,
                 "injected rank-local Tagger failure"}};
     return 0;
@@ -1400,9 +1403,8 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     final_integral = final_left + final_right
     np.testing.assert_allclose(final_integral, initial_integral, rtol=0.0, atol=2.0e-13)
 
-    # The three-level route above proves arbitrary-depth execution. Use the independently compiled
-    # two-level route for the restart transaction: replacing its only fine transition is the exact
-    # dynamic topology capability currently authenticated by the interface scheduler.
+    # Keep the original independent two-level checkpoint/restart coverage alongside the full
+    # three-level dynamic replacement and post-publication Tagger rollback/retry above.
     # This independent authoring owns the original checkpoint consumer. Each runtime
     # opens its output invocation once; post-restart continuation starts at a later
     # accepted time and has a distinct run identity, so no closed output session reopens.
