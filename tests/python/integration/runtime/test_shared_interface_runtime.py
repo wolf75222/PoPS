@@ -1225,7 +1225,16 @@ def test_frozen_two_level_shared_interface_implicit_pair_compiles_native_route(t
     assert artifact.program is not None
     generated_path = artifact.program.dump_cpp(tmp_path / "implicit_pair.cpp")
     source = Path(generated_path).read_text(encoding="utf-8")
-    assert source.count("ctx.rhs_jacvec_pair_into_at(") == 1
+    assert source.count("ctx.rhs_jacvec_pair_into_at(") == 2
+    paired_calls = [line for line in source.splitlines() if "ctx.rhs_jacvec_pair_into_at(" in line]
+    assert "jac_up" in paired_calls[0] and "jac_rp" in paired_calls[0]
+    assert "jac_uk" in paired_calls[1] and "jac_r0" in paired_calls[1]
+    base = source.index(paired_calls[1])
+    assert source.index("pops::PureFieldAlgebra::copy(*jac_r0") < base
+    assert base < source.index("->prepare(", base)
+    # The finite-difference numerator must be formed before multiplication by dt/h.
+    assert re.search(r"axpy\(\*jac_rp\w+, pops::Real\(-1\), \*jac_r0\w+\);\s*"
+                     r"pops::PureFieldAlgebra::axpy\(\*jac_up\w+, -jc, \*jac_rp\w+\);", source)
     assert source.count("ctx.copy_component_span(") >= 7
     assert "ctx.rhs_core_into_at(" not in source
     assert "PreparedOperatorConcurrency::Exclusive" in source

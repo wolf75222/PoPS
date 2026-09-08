@@ -666,6 +666,20 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             "pops::PureFieldAlgebra::copy(*%s, %s);" % (r0, var[r0_in.id]))
         if coupled_pair is None or w is coupled_pair[0]:
             prepare_refresh.append("*%s = %s;" % (cdt, _coeff_cpp(w.attrs["c_dt"])))
+    if coupled_pair is not None:
+        # The authored r0 values carry per-block residuals. The paired apply also
+        # includes the shared-interface scheduler, so its frozen base must be
+        # evaluated by that exact same function. Retain the authored values for
+        # their ordinary Program consumers; only the solve-owned captures change.
+        first, second = coupled_pair
+        first_entry, second_entry = jac_scratch[first.id], jac_scratch[second.id]
+        first_sources, second_sources = first.attrs.get("sources"), second.attrs.get("sources")
+        first_flux_only = "false" if first_sources is None or "default" in first_sources else "true"
+        second_flux_only = "false" if second_sources is None or "default" in second_sources else "true"
+        prepare_refresh.append(
+            "ctx.rhs_jacvec_pair_into_at(*%s, %d, *%s, *%s, %s, %d, *%s, *%s, %s);"
+            % (first_entry[6], first_entry[10], first_entry[0], first_entry[1], first_flux_only,
+               second_entry[10], second_entry[0], second_entry[1], second_flux_only))
     tensor_ops = [w for w in block if w.op == "apply_laplacian_coeff"]
     tensor_boundary = None
     tensor_point = None
@@ -882,21 +896,25 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                 body.append(
                     "  ctx.copy_component_span(*%s, 0, in, 0, %d);"
                     % (first_up, first_width))
+                # Subtract residuals before scaling: adding v between two O(1/h)
+                # terms loses the correction even for a linear flux.
                 body.append(
-                    "  pops::PureFieldAlgebra::lincomb(*%s, pops::Real(1), *%s, -jc, *%s);"
-                    % (first_up, first_up, first_rp))
+                    "  pops::PureFieldAlgebra::axpy(*%s, pops::Real(-1), *%s);"
+                    % (first_rp, first_r0))
                 body.append(
-                    "  pops::PureFieldAlgebra::axpy(*%s, jc, *%s);"
-                    % (first_up, first_r0))
+                    "  pops::PureFieldAlgebra::axpy(*%s, -jc, *%s);"
+                    % (first_up, first_rp))
                 body.append(
                     "  ctx.copy_component_span(*%s, 0, in, %d, %d);"
                     % (second_up, first_width, second_width))
+                # Subtract residuals before scaling: adding v between two O(1/h)
+                # terms loses the correction even for a linear flux.
                 body.append(
-                    "  pops::PureFieldAlgebra::lincomb(*%s, pops::Real(1), *%s, -jc, *%s);"
-                    % (second_up, second_up, second_rp))
+                    "  pops::PureFieldAlgebra::axpy(*%s, pops::Real(-1), *%s);"
+                    % (second_rp, second_r0))
                 body.append(
-                    "  pops::PureFieldAlgebra::axpy(*%s, jc, *%s);"
-                    % (second_up, second_r0))
+                    "  pops::PureFieldAlgebra::axpy(*%s, -jc, *%s);"
+                    % (second_up, second_rp))
                 body.append(
                     "  ctx.copy_component_span(out, 0, *%s, 0, %d);"
                     % (first_up, first_width))

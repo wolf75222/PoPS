@@ -393,15 +393,34 @@ void rhs_jacvec_pair_into_at(const runtime::multiblock::BoundaryEvaluationPoint&
     copy_full_(*source, candidate);
     scratch.program_candidates[static_cast<std::size_t>(program_block)] = &candidate;
   }
+  // Freeze coarse/fine equation data from the same active attempt as rhs_group.
+  // Falling back to accepted hierarchy parents would differentiate another stage.
+  const bool active = !active_attempt_states_.empty();
   const auto& first_evaluation =
       first_flux_only
-          ? facade_->evaluate_prepared_amr_block_level_flux_at(first_runtime, point, first_state)
-          : facade_->evaluate_prepared_amr_block_level_at(first_runtime, point, first_state);
+          ? (active ? facade_->evaluate_prepared_amr_block_level_flux_at(
+                          first_runtime, point, first_state, active_level_ - 1,
+                          staged_parent_for_block_(first_runtime))
+                    : facade_->evaluate_prepared_amr_block_level_flux_at(
+                          first_runtime, point, first_state))
+          : (active ? facade_->evaluate_prepared_amr_block_level_at(
+                          first_runtime, point, first_state, active_level_ - 1,
+                          staged_parent_for_block_(first_runtime))
+                    : facade_->evaluate_prepared_amr_block_level_at(
+                          first_runtime, point, first_state));
   copy_valid_(first_evaluation.residual, first_candidate);
   const auto& second_evaluation =
       second_flux_only
-          ? facade_->evaluate_prepared_amr_block_level_flux_at(second_runtime, point, second_state)
-          : facade_->evaluate_prepared_amr_block_level_at(second_runtime, point, second_state);
+          ? (active ? facade_->evaluate_prepared_amr_block_level_flux_at(
+                          second_runtime, point, second_state, active_level_ - 1,
+                          staged_parent_for_block_(second_runtime))
+                    : facade_->evaluate_prepared_amr_block_level_flux_at(
+                          second_runtime, point, second_state))
+          : (active ? facade_->evaluate_prepared_amr_block_level_at(
+                          second_runtime, point, second_state, active_level_ - 1,
+                          staged_parent_for_block_(second_runtime))
+                    : facade_->evaluate_prepared_amr_block_level_at(
+                          second_runtime, point, second_state));
   copy_valid_(second_evaluation.residual, second_candidate);
 
   if (!interface_flux_ledger_ || !interface_flux_ledger_->in_transaction())
