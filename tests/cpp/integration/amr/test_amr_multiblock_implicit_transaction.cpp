@@ -346,6 +346,77 @@ TEST(test_amr_multiblock_implicit_transaction, MetadataNeverCreatesAnImplicitTem
 }
 
 TEST(test_amr_multiblock_implicit_transaction,
+     InterfaceProviderPublicationRefreshesExactAcceptedProgramContracts) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 1;
+  config.transition_ratios.clear();
+  config.transition_buffers.clear();
+  config.transition_lookaheads.clear();
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 4;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.interface-publication.amr-runtime@1");
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", relaxing_model<Dim>(pops::Real(0), pops::Real(0)),
+                                "minmod", "rusanov", "conservative", "explicit",
+                                static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+                                static_cast<double>(pops::kWenoEpsilon), false,
+                                "tests.interface-publication.amr/physical-flux");
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  const auto initial_state = system.block_level_state_global("tracer", 0);
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("clock.amr-interface-publication");
+  int refreshes = 0;
+  std::string observed_budget;
+  context->install([](double) {}, context,
+                   [&]() {
+                     ++refreshes;
+                     observed_budget =
+                         system.prepared_amr_interface_flux_ledger_budget().exact_contract;
+                   });
+  system.set_program_block_map({0});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "tests.interface-publication.amr-program@1", std::vector<FluxBudget>{{1, 1}}, 0, 0);
+  const auto initial_budget = system.prepared_amr_interface_flux_ledger_budget().exact_contract;
+
+  // An empty authenticated prefix still changes the exact provider/production contracts. Exercise
+  // their publication without advancing a clock or adding numerical fixture work to this test.
+  system.install_prepared_amr_interface_flux_provider("tests.interface-prefix@1", [](auto&) {});
+  EXPECT_EQ(refreshes, 1);
+  EXPECT_NE(observed_budget, initial_budget);
+  EXPECT_EQ(observed_budget, system.prepared_amr_interface_flux_ledger_budget().exact_contract);
+  const auto first_bytes = system.program_accepted_state();
+  ASSERT_FALSE(first_bytes.empty());
+  auto interface_budget = system.prepared_amr_interface_flux_ledger_budget();
+  const auto first = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+      first_bytes, &interface_budget);
+  const auto first_revision = system.program_accepted_state_revision();
+
+  EXPECT_THROW(system.install_prepared_amr_interface_flux_provider(
+                   "tests.rejected-interface-prefix@1",
+                   [](auto&) { throw std::runtime_error("rejected interface installer"); }),
+               std::runtime_error);
+  EXPECT_EQ(refreshes, 1);
+  EXPECT_EQ(system.program_accepted_state_revision(), first_revision);
+  EXPECT_EQ(system.program_accepted_state(), first_bytes);
+
+  system.install_prepared_amr_interface_flux_provider("tests.interface-prefix@2", [](auto&) {});
+  EXPECT_EQ(refreshes, 2);
+  EXPECT_EQ(system.program_accepted_state_revision(), first_revision + 1);
+  const auto second_bytes = system.program_accepted_state();
+  interface_budget = system.prepared_amr_interface_flux_ledger_budget();
+  const auto second = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+      second_bytes, &interface_budget);
+  EXPECT_EQ(second.flux_budget_contract, first.flux_budget_contract);
+  EXPECT_NE(second.coupling_contract, first.coupling_contract);
+  EXPECT_EQ(system.block_level_state_global("tracer", 0), initial_state);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_DOUBLE_EQ(system.time(), 0.0);
+}
+
+TEST(test_amr_multiblock_implicit_transaction,
      BalanceMailboxResetsOnlyInsideOutermostTransactionSnapshot) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;

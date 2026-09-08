@@ -12149,6 +12149,10 @@ void AmrSystem<Dim>::install_prepared_amr_interface_flux_provider(
   p_->ensure_engine();
   p_->multiblock_hierarchy->install_interface_flux_provider(
       std::move(provider_contract), prepared_amr_level_geometry(0), std::move(installer));
+  // Bind publishes each interface prefix after its endpoint levels materialize. An installed
+  // Program must reseal its accepted ledger budget before bootstrap snapshots consume that prefix.
+  if (p_->program_flux_expression_budget)
+    p_->program.refresh_hierarchy_state("AmrSystem::install_prepared_amr_interface_flux_provider");
 }
 
 template <int Dim>
