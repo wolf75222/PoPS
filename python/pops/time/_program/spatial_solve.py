@@ -56,7 +56,7 @@ def spatial_newton_options(controls: Any) -> dict[str, Any]:
 
 
 def _equation(program: Any, token: Any) -> dict[str, Any]:
-    from pops.time._program.solve_request import _equation_value
+    from .equation_identity import _equation_value
 
     return {"kind": "spatial_accumulation_residual",
             "previous": _equation_value(program, token.inputs[0]),
@@ -67,7 +67,7 @@ def _equation(program: Any, token: Any) -> dict[str, Any]:
 
 def _request_data(program: Any, token: Any, unknown: SolveUnknown,
                   physical_problem: Any) -> dict[str, Any]:
-    from pops.time._program.solve_request import _equation_value
+    from .equation_identity import _equation_value
     from pops.time._program.serialization import _json_ready
 
     equation = _json_ready(_equation(program, token))
@@ -109,7 +109,7 @@ def validate_spatial_commit(program: Any, token: Any) -> None:
     """Only the complete solved conservative stage has an admitted exchange quadrature."""
     from pops.time.references import handle_data
     from pops.time._program.serialization import _json_ready
-    from pops.time._program.region_validation import _BLOCK_KEYS
+    from .value_validation import _BLOCK_KEYS
 
     pending = list(program._values)
     while pending:

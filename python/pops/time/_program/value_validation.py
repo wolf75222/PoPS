@@ -10,6 +10,12 @@ from pops.time.points import point_clock
 TOP_LEVEL_REGION = 0
 
 
+_BLOCK_KEYS = (
+    "cond_block", "body_block", "apply_block", "residual_block",
+    "true_block", "false_block",
+)
+
+
 def structural_state_space(space: Any) -> Any:
     """Return the complete StateSpace behind a State/Rate tag, when known."""
     kind = getattr(space, "kind", None)

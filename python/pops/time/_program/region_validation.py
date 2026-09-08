@@ -5,15 +5,10 @@ from typing import Any
 
 from pops.time.values import ProgramValue
 from pops.time._program.value_validation import (
-    require_affine_region, require_owned, require_region, require_top_level,
+    _BLOCK_KEYS, require_affine_region, require_owned, require_region, require_top_level,
     validate_input_regions,
 )
 
-
-_BLOCK_KEYS = (
-    "cond_block", "body_block", "apply_block", "residual_block",
-    "true_block", "false_block",
-)
 
 
 def _block_region(program: Any, block: Any, where: str, hint: Any = None) -> int:
