@@ -526,6 +526,16 @@ class PreparedMultiBlockAmrHierarchy {
     return interface_scheduler_ && interface_scheduler_->size() != 0;
   }
 
+  std::size_t interface_evaluation_count(const std::string& identity, int level) const {
+    if (interface_reconstruction_active_)
+      throw std::logic_error("AMR interface count requires a complete hierarchy boundary");
+    if (!interface_scheduler_)
+      throw std::logic_error("AMR interface count requires an installed interface provider");
+    if (level < 0 || static_cast<std::size_t>(level) >= level_count())
+      throw std::out_of_range("AMR interface count level is outside the active hierarchy");
+    return interface_scheduler_->evaluation_count(identity, level);
+  }
+
   std::string_view interface_flux_provider_contract() const noexcept {
     return interface_provider_contract_;
   }

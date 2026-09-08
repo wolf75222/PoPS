@@ -12202,6 +12202,14 @@ const MultiFab<Dim>* AmrSystem<Dim>::prepared_amr_block_level_active_mask(int ru
 }
 
 template <int Dim>
+std::size_t AmrSystem<Dim>::interface_evaluation_count(const std::string& identity,
+                                                       int level) const {
+  if (!p_->multiblock_hierarchy)
+    throw std::logic_error("AMR interface count requires a materialized hierarchy");
+  return p_->multiblock_hierarchy->interface_evaluation_count(identity, level);
+}
+
+template <int Dim>
 void AmrSystem<Dim>::install_prepared_amr_interface_flux_provider(
     std::string provider_contract,
     std::function<void(runtime::multiblock::InterfaceFluxScheduler<Dim>&)> installer) {
@@ -20455,6 +20463,8 @@ template void AmrSystem<kNativeDimension>::install_prepared_amr_coupling_operato
 template void AmrSystem<kNativeDimension>::install_prepared_amr_interface_flux_provider(
     std::string,
     std::function<void(runtime::multiblock::InterfaceFluxScheduler<kNativeDimension>&)>);
+template std::size_t AmrSystem<kNativeDimension>::interface_evaluation_count(const std::string&,
+                                                                             int) const;
 template const AmrSystem<kNativeDimension>::ProgramBlockMap&
 AmrSystem<kNativeDimension>::prepared_amr_program_block_map() const;
 template void AmrSystem<kNativeDimension>::install_prepared_amr_program_flux_expression_budget(

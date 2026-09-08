@@ -1165,6 +1165,8 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
 // Data + IO accessors: block/patch introspection, mass/density/potential, level/var shape.
 void bind_amr_data(py::class_<AmrSystem>& cls) {
   cls.def("n_blocks", &AmrSystem::n_blocks)
+      .def("_interface_evaluation_count", &AmrSystem::interface_evaluation_count,
+           py::arg("identity"), py::arg("level") = 0)
       .def("block_names", &AmrSystem::block_names)
       .def("variable_names", &AmrSystem::variable_names,
            "Installed variable names of one authenticated AMR block. kind = 'conservative' | "

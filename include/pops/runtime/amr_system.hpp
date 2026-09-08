@@ -385,6 +385,10 @@ class AmrSystem {
   POPS_EXPORT void install_prepared_amr_interface_flux_provider(
       std::string provider_contract,
       std::function<void(runtime::multiblock::InterfaceFluxScheduler<Dim>&)> installer);
+  /// Read the existing logical interface execution counter without materializing or changing state.
+  /// The identity and level must select one installed route in the live complete registry.
+  [[nodiscard]] POPS_EXPORT std::size_t interface_evaluation_count(const std::string& identity,
+                                                                   int level = 0) const;
   POPS_EXPORT const ProgramBlockMap& prepared_amr_program_block_map() const;
   POPS_EXPORT void install_prepared_amr_program_flux_expression_budget(
       std::string program_hash, std::vector<PreparedAmrProgramFluxExpressionBlockBudget> blocks,
