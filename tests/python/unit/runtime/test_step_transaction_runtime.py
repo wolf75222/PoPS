@@ -489,6 +489,8 @@ def test_error_controlled_retry_exhaustion_restores_the_last_accepted_boundary()
         )
 
     assert native.native_attempts == 2
+    assert any("finite retry budget exhausted" in item
+               for item in native._last_step_transaction_report.diagnostics)
     assert native.accepted_stores() == accepted
     assert native.events == ["begin", "rollback", "begin", "rollback"]
     assert runtime._attempt == 4
@@ -702,3 +704,49 @@ def test_fault_injection_matrix_restores_every_available_store_and_reports_exact
     assert report.attempts == 1
     assert report.projections == ()
     assert report.diagnostics == (diagnostic,)
+
+
+@pytest.mark.parametrize("status", ["capability_failure", "invalid_input", "incompatible_rhs"])
+def test_dt_retry_refuses_categories_that_smaller_steps_cannot_repair(status):
+    class RejectCategoryNative(_Native):
+        def __init__(self):
+            super().__init__()
+            self.native_attempts = 0
+
+        def step(self, dt):
+            self.native_attempts += 1
+            self._mutate_provisional_stores(dt)
+            error = StepAttemptRejected("unrepairable native problem")
+            error.status = status
+            error.phase = "native_evaluation"
+            error.disposition = "retry"
+            error.reason_code = 71
+            raise error
+
+    native = RejectCategoryNative()
+    runtime = _Runtime(native)
+    accepted = native.accepted_stores()
+    strategy = ErrorControlledDt(
+        dt_init=0.2, rtol=1e-4, atol=1e-8, dt_min=0.001, dt_max=0.5,
+        max_rejections=5, shrink=0.5, growth=1.5,
+    )
+    with pytest.raises(StepAttemptRejected) as caught:
+        runtime._accepted_controller_step(native, native, strategy, t_end=0.5, controls={})
+    assert native.native_attempts == 1
+    assert native.accepted_stores() == accepted
+    assert native.events == ["begin", "rollback"]
+    assert any(status in note for note in caught.value.__notes__)
+    report = native._last_step_transaction_report
+    assert report.phase == "stage"
+    assert any("not repaired by shrinking dt" in item for item in report.diagnostics)
+
+
+@pytest.mark.parametrize("budget", [None, -1, float("inf"), True, 1.0])
+def test_retry_extensions_require_an_explicit_finite_integer_budget(budget):
+    from pops.runtime._step_strategy import _PreparedStepAttempts
+
+    with pytest.raises(ValueError, match="explicit finite retry_budget"):
+        _PreparedStepAttempts(
+            engine=_Native(), controller=SimpleNamespace(), attempt=lambda: None,
+            retry=lambda error, count: True, retry_budget=budget,
+        )

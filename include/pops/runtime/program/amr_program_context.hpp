@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <pops/runtime/program/step_transaction.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/identity/sha256.hpp>
 #include <pops/mesh/execution/for_each.hpp>
@@ -78,6 +79,17 @@ struct ProgramSpatialSnapshot {
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 class AmrProgramContext {
  public:
+  void consume_pointwise_evaluation_status(int program_block, int evaluation_id, Real status,
+                                           const char* operation_identity,
+                                           std::uint32_t reason_code = 0) const {
+    consume_native_evaluation_status(prepared_execution_lane(), program_block, evaluation_id,
+                                     static_cast<double>(status), operation_identity, reason_code);
+  }
+
+  void stage_exchange(ExchangeRecord record) const {
+    facade_->stage_program_exchange(std::move(record));
+  }
+
   static_assert(Dim >= 1 && Dim <= 3, "AmrProgramContext only supports dimensions 1, 2, and 3");
   static_assert(std::is_same_v<MemorySpace, typename Kokkos::DefaultExecutionSpace::memory_space>,
                 "AmrProgramContext memory space must match its compiled AmrSystem leaf");

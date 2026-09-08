@@ -746,6 +746,7 @@ struct System<Dim>::Impl {
 
   std::unique_ptr<AcceptedSnapshot> external_step_transaction_;
   bool external_step_transaction_committed_ = false;
+  std::vector<std::unique_ptr<AcceptedSnapshot>> parent_step_transactions_;
 
   explicit Impl(const SystemConfig<Dim>& config)
       : domain_(config),
@@ -849,6 +850,8 @@ struct System<Dim>::Impl {
   template <class Function>
   decltype(auto) execute_step_transaction(Function&& function) {
     AcceptedSnapshot snapshot(*this);
+    if (!external_step_transaction_)
+      program_.accepted_exchanges_.clear();
     try {
       return std::forward<Function>(function)();
     } catch (...) {

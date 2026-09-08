@@ -967,6 +967,27 @@ void bind_amr_stepping(py::class_<AmrSystem>& cls) {
   cls.def("step", &AmrSystem::step, py::arg("dt"))
       .def("advance", &AmrSystem::advance, py::arg("dt"), py::arg("nsteps"))
       .def("_begin_step_transaction", &AmrSystem::begin_step_transaction)
+      .def("_begin_nested_step_transaction", &AmrSystem::begin_nested_step_transaction)
+      .def("_step_transaction_depth", &AmrSystem::step_transaction_depth)
+      .def("_program_exchange_records",
+           [](const AmrSystem& system) {
+             py::list result;
+             for (const auto& record : system.program_exchange_records()) {
+               py::dict row;
+               row["operation_identity"] = record.operation_identity;
+               row["occurrence_identity"] = record.occurrence_identity;
+               row["evaluation_context"] = record.evaluation_context;
+               row["quadrature_identity"] = record.quadrature_identity;
+               row["orientation"] = record.orientation;
+               row["face_measure"] = record.face_measure;
+               row["numerical_flux"] = record.numerical_flux;
+               row["temporal_weight"] = record.temporal_weight;
+               row["multiplicity"] = record.multiplicity;
+               row["integrated_amount"] = record.integrated_amount();
+               result.append(std::move(row));
+             }
+             return result;
+           })
       .def("_commit_step_transaction", &AmrSystem::commit_step_transaction)
       .def("_step_change_l2", &AmrSystem::step_change_l2)
       .def("_finalize_step_transaction", &AmrSystem::finalize_step_transaction)

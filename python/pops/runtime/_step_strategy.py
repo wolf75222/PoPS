@@ -106,6 +106,8 @@ def _phase(error: BaseException) -> str:
             "prepare", "stage", "solve", "synchronize", "guard", "effect", "commit",
         }:
             return value
+        if value == "native_evaluation":
+            return "stage"
         # Native providers may expose a phase more precise than the report vocabulary.  Keep that
         # exact value on the exception, but never infer a different phase from its display string.
         return "solve"
@@ -278,7 +280,7 @@ def _record_failure(engine: Any, error: BaseException, attempts: int) -> None:
         staged_effects=stores,
         rolled_back_effects=stores,
         projections=_projections(engine),
-        diagnostics=(str(error),),
+        diagnostics=(str(error),) + tuple(str(note) for note in getattr(error, "__notes__", ())),
     )
 
 
@@ -373,12 +375,18 @@ class _PreparedStepAttempts:
         controller: StepController[Any],
         attempt: Callable[[], int | None],
         retry: Callable[[BaseException, int], bool] | None = None,
+        retry_budget: int | None = None,
         accept: Callable[[int], None] | None = None,
     ) -> None:
         self.engine = engine
         self.controller = controller
         self._attempt = attempt
         self._retry = retry
+        if retry is not None and (
+            type(retry_budget) is not int or retry_budget < 0
+        ):
+            raise ValueError("retrying step attempts require an explicit finite retry_budget")
+        self._retry_budget = retry_budget
         self._accept = accept
         self.attempts = 0
         self._accepted = False
@@ -400,7 +408,31 @@ class _PreparedStepAttempts:
     def retry(self, error: BaseException) -> bool:
         if self._accepted or self._retry is None:
             return False
-        return bool(self._retry(error, self.attempts))
+        if not isinstance(error, StepAttemptRejected):
+            return False
+        status = getattr(error, "status", None)
+        if callable(status):
+            status = status()
+        status = getattr(status, "value", status)
+        terminal = {
+            "capability_failure", "invalid_input", "incompatible_rhs",
+        }
+        if status in terminal:
+            self._stop_retry(error, "failure category %s is not repaired by shrinking dt" % status)
+            return False
+        if self._retry_budget is None or self.attempts > self._retry_budget:
+            self._stop_retry(
+                error, "finite retry budget exhausted after %d attempt(s), budget=%s"
+                % (self.attempts, self._retry_budget))
+            return False
+        if not bool(self._retry(error, self.attempts)):
+            self._stop_retry(error, "controller cannot make a permitted retry proposal")
+            return False
+        return True
+
+    def _stop_retry(self, error: BaseException, reason: str) -> None:
+        error.add_note("retry stopped: " + reason)
+        _record_failure(self.engine, error, self.attempts)
 
     def accept(self) -> None:
         if self._accepted:
@@ -586,6 +618,7 @@ class ErrorControlledDtController(StepController[ErrorControlledDt]):
             controller=self,
             attempt=attempt,
             retry=retry,
+            retry_budget=self.strategy.max_rejections,
             accept=accept,
         )
 

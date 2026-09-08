@@ -201,7 +201,7 @@ TEST(test_amr_multiblock_implicit_transaction,
   auto inject_retry = std::make_shared<bool>(true);
   context->configure_primary_clock("tests.implicit-transaction.multiblock-clock");
   context->install(
-      [context, inject_retry](double macro_dt) {
+      [context, inject_retry, &system](double macro_dt) {
         context->advance_hierarchy(macro_dt, [context, inject_retry](double level_dt) {
           std::array<pops::MultiFab<Dim>*, 2> accepted{};
           std::array<pops::MultiFab<Dim>*, 2> candidates{};
@@ -232,6 +232,9 @@ TEST(test_amr_multiblock_implicit_transaction,
           }
           context->commit_many({{accepted[0], candidates[0]}, {accepted[1], candidates[1]}});
         });
+        context->stage_exchange({"test.nested.amr", "accepted.source",
+                                 std::to_string(system.macro_step()), "backward_euler", 1, 1.0, 1.0,
+                                 macro_dt, 1});
       },
       context);
   // Installing a whole-system Program resets its unverified binding image.  Bind this Program
@@ -269,6 +272,45 @@ TEST(test_amr_multiblock_implicit_transaction,
   EXPECT_NEAR(slow_after.front(), (0.25 + dt * 8.0 * 2.0) / (1.0 + dt * 8.0), 1.0e-12);
   EXPECT_NEAR(fast_after.front(), (3.0 + dt * 24.0 * -1.0) / (1.0 + dt * 24.0), 1.0e-12);
   EXPECT_NE(slow_after.front(), fast_after.front());
+
+  // Inner successful substeps remain provisional to their outer acceptance boundary.
+  const auto accepted_exchange = system.program_exchange_records();
+  ASSERT_EQ(accepted_exchange.size(), 1u);
+  auto nested_steps = [&] {
+    for (double sub_dt : {0.025, 0.075}) {
+      system.begin_nested_step_transaction();
+      EXPECT_EQ(system.step_transaction_depth(), 2u);
+      system.step(sub_dt);
+      system.commit_step_transaction();
+      system.finalize_step_transaction();
+      EXPECT_EQ(system.step_transaction_depth(), 1u);
+    }
+  };
+  system.begin_step_transaction();
+  nested_steps();
+  const auto attempted_slow = system.block_level_state_global("slow", 0);
+  const auto attempted_fast = system.block_level_state_global("fast", 0);
+  ASSERT_EQ(system.program_exchange_records().size(), 2u);
+  system.rollback_step_transaction();
+  EXPECT_EQ(system.step_transaction_depth(), 0u);
+  EXPECT_EQ(system.macro_step(), 1);
+  EXPECT_DOUBLE_EQ(system.time(), dt);
+  EXPECT_EQ(system.block_level_state_global("slow", 0), slow_after);
+  EXPECT_EQ(system.block_level_state_global("fast", 0), fast_after);
+  ASSERT_EQ(system.program_exchange_records().size(), 1u);
+  EXPECT_EQ(system.program_exchange_records().front().evaluation_context,
+            accepted_exchange.front().evaluation_context);
+
+  system.begin_step_transaction();
+  nested_steps();
+  system.commit_step_transaction();
+  system.finalize_step_transaction();
+  EXPECT_EQ(system.step_transaction_depth(), 0u);
+  EXPECT_EQ(system.macro_step(), 3);
+  EXPECT_NEAR(system.time(), dt + 0.025 + 0.075, 1e-15);
+  EXPECT_EQ(system.block_level_state_global("slow", 0), attempted_slow);
+  EXPECT_EQ(system.block_level_state_global("fast", 0), attempted_fast);
+  ASSERT_EQ(system.program_exchange_records().size(), 2u);
 }
 
 TEST(test_amr_multiblock_implicit_transaction, MetadataNeverCreatesAnImplicitTemporalFallback) {

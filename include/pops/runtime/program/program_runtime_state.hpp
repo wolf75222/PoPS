@@ -56,7 +56,8 @@
 #include <pops/core/foundation/types.hpp>  // Real
 #include <pops/mesh/storage/multifab.hpp>  // MultiFab (history ring element)
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
-#include <pops/runtime/config/runtime_params.hpp>    // RuntimeParams, kMaxRuntimeParams
+#include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams, kMaxRuntimeParams
+#include <pops/runtime/program/accepted_exchange.hpp>
 #include <pops/runtime/program/cache_manager.hpp>    // CacheManager (held-node scheduler cache)
 #include <pops/runtime/program/module_metadata.hpp>  // frozen checkpoint-shape metadata
 #include <pops/runtime/program/profiler.hpp>         // Profiler (per-node / per-brick timing)
@@ -406,6 +407,7 @@ struct ProgramRuntimeState {
   /// consumers read it while the facade's outer transaction still retains U^n, so a missing term
   /// cannot silently reuse the preceding step.
   std::map<std::string, Real> step_balance_terms_;
+  AcceptedExchangeLedger accepted_exchanges_;
   /// Native operator contributions captured only for a due Balance attempt. These values are keyed
   /// by their physical runtime coordinate instead of a user ledger route and are therefore not read
   /// by accepted_balance_terms(). The owning facade snapshots this map with the rest of the attempt,
@@ -505,6 +507,7 @@ struct ProgramRuntimeState {
           last_dt_(accepted.last_dt_),
           diagnostics_(accepted.diagnostics_),
           step_balance_terms_(accepted.step_balance_terms_),
+          accepted_exchanges_(accepted.accepted_exchanges_),
           automatic_balance_terms_(accepted.automatic_balance_terms_),
           automatic_balance_due_(accepted.automatic_balance_due_),
           balance_due_window_active_(accepted.balance_due_window_active_),
@@ -532,6 +535,7 @@ struct ProgramRuntimeState {
     Real last_dt_ = Real(0);
     std::map<std::string, Real> diagnostics_;
     std::map<std::string, Real> step_balance_terms_;
+    AcceptedExchangeLedger accepted_exchanges_;
     std::map<AutomaticBalanceKey, Real> automatic_balance_terms_;
     bool automatic_balance_due_ = false;
     bool balance_due_window_active_ = false;
@@ -575,6 +579,7 @@ struct ProgramRuntimeState {
     last_dt_ = prepared.last_dt_;
     diagnostics_.swap(prepared.diagnostics_);
     step_balance_terms_.swap(prepared.step_balance_terms_);
+    accepted_exchanges_.swap(prepared.accepted_exchanges_);
     automatic_balance_terms_.swap(prepared.automatic_balance_terms_);
     automatic_balance_due_ = prepared.automatic_balance_due_;
     balance_due_window_active_ = prepared.balance_due_window_active_;

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <pops/runtime/program/step_transaction.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
@@ -281,6 +282,17 @@ class ProgramContext {
     return runtime_block;
   }
 
+  void consume_pointwise_evaluation_status(int program_block, int evaluation_id, Real status,
+                                           const char* operation_identity,
+                                           std::uint32_t reason_code = 0) const {
+    consume_native_evaluation_status(prepared_execution_lane(), program_block, evaluation_id,
+                                     static_cast<double>(status), operation_identity, reason_code);
+  }
+
+  void stage_exchange(ExchangeRecord record) const {
+    system_->stage_program_exchange(std::move(record));
+  }
+
   field_type& state(int program_block) const {
     return system_->block_state(sys_block(program_block));
   }
@@ -293,7 +305,8 @@ class ProgramContext {
     if (prepare_provider_values_for_solve(consumer_qid, program_block, stage_state, evaluation_id) ==
         runtime::system::AuxiliaryPublicationStatus::nonfinite_candidate)
       throw std::runtime_error(
-          "System auxiliary publication rejected: candidate valid/ghost image contains non-finite values");
+          "System auxiliary publication rejected: candidate valid/ghost image contains non-finite "
+          "values");
   }
   [[nodiscard]] runtime::system::AuxiliaryPublicationStatus prepare_provider_values_for_solve(
       std::string_view consumer_qid, int program_block,

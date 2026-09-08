@@ -72,18 +72,89 @@ void System<Dim>::advance(double dt, int nsteps) {
 
 template <int Dim>
 void System<Dim>::begin_step_transaction() {
-  if (p_->external_step_transaction_)
-    throw std::runtime_error("System::begin_step_transaction: transaction already active");
-  p_->external_step_transaction_ = std::make_unique<typename Impl::AcceptedSnapshot>(*p_);
+  const auto& lane = prepared_boundary_execution_lane();
+  runtime::program::require_step_transaction_control(
+      lane, 0, static_cast<long>(step_transaction_depth()), !p_->external_step_transaction_,
+      "System::begin_step_transaction");
+  Kokkos::fence();
+  std::unique_ptr<typename Impl::AcceptedSnapshot> candidate;
+  std::exception_ptr error;
+  try {
+    candidate = std::make_unique<typename Impl::AcceptedSnapshot>(*p_);
+  } catch (...) {
+    error = std::current_exception();
+  }
+  if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
+    throw std::runtime_error("System step snapshot preparation failed collectively");
+  }
+  p_->external_step_transaction_ = std::move(candidate);
   p_->external_step_transaction_committed_ = false;
+  p_->program_.accepted_exchanges_.clear();
+}
+
+template <int Dim>
+void System<Dim>::begin_nested_step_transaction() {
+  const auto& lane = prepared_boundary_execution_lane();
+  runtime::program::require_step_transaction_control(
+      lane, 1, static_cast<long>(step_transaction_depth()),
+      p_->external_step_transaction_ && !p_->external_step_transaction_committed_,
+      "System::begin_nested_step_transaction");
+  Kokkos::fence();
+  std::unique_ptr<typename Impl::AcceptedSnapshot> candidate;
+  std::exception_ptr error;
+  try {
+    candidate = std::make_unique<typename Impl::AcceptedSnapshot>(*p_);
+    p_->parent_step_transactions_.reserve(p_->parent_step_transactions_.size() + 1);
+  } catch (...) {
+    error = std::current_exception();
+  }
+  if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
+    throw std::runtime_error("System nested snapshot preparation failed collectively");
+  }
+  p_->parent_step_transactions_.push_back(std::move(p_->external_step_transaction_));
+  p_->external_step_transaction_ = std::move(candidate);
+}
+
+template <int Dim>
+std::size_t System<Dim>::step_transaction_depth() const noexcept {
+  return p_->external_step_transaction_ ? p_->parent_step_transactions_.size() + 1 : 0;
+}
+
+template <int Dim>
+void System<Dim>::stage_program_exchange(runtime::program::ExchangeRecord record) {
+  const auto& lane = prepared_boundary_execution_lane();
+  runtime::program::AcceptedExchangeLedger candidate;
+  std::exception_ptr error;
+  try {
+    candidate = p_->program_.accepted_exchanges_;
+    candidate.stage(std::move(record));
+  } catch (...) {
+    error = std::current_exception();
+  }
+  if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
+    throw std::runtime_error("System exchange staging failed collectively");
+  }
+  p_->program_.accepted_exchanges_.swap(candidate);
+}
+
+template <int Dim>
+std::vector<runtime::program::ExchangeRecord> System<Dim>::program_exchange_records() const {
+  return p_->program_.accepted_exchanges_.records();
 }
 
 template <int Dim>
 void System<Dim>::commit_step_transaction() {
-  if (!p_->external_step_transaction_)
-    throw std::runtime_error("System::commit_step_transaction: no active transaction");
-  if (p_->external_step_transaction_committed_)
-    throw std::runtime_error("System::commit_step_transaction: transaction already committed");
+  runtime::program::require_step_transaction_control(
+      prepared_boundary_execution_lane(), 2, static_cast<long>(step_transaction_depth()),
+      p_->external_step_transaction_ && !p_->external_step_transaction_committed_,
+      "System::commit_step_transaction");
+  Kokkos::fence();
   p_->external_step_transaction_committed_ = true;
 }
 
@@ -110,18 +181,31 @@ std::map<std::string, double> System<Dim>::step_change_l2() const {
 
 template <int Dim>
 void System<Dim>::finalize_step_transaction() {
-  if (!p_->external_step_transaction_ || !p_->external_step_transaction_committed_)
-    throw std::runtime_error("System::finalize_step_transaction: no committed transaction");
+  runtime::program::require_step_transaction_control(
+      prepared_boundary_execution_lane(), 3, static_cast<long>(step_transaction_depth()),
+      p_->external_step_transaction_ && p_->external_step_transaction_committed_,
+      "System::finalize_step_transaction");
+  Kokkos::fence();
   p_->external_step_transaction_.reset();
+  if (!p_->parent_step_transactions_.empty()) {
+    p_->external_step_transaction_ = std::move(p_->parent_step_transactions_.back());
+    p_->parent_step_transactions_.pop_back();
+  }
   p_->external_step_transaction_committed_ = false;
 }
 
 template <int Dim>
 void System<Dim>::rollback_step_transaction() {
-  if (!p_->external_step_transaction_)
-    throw std::runtime_error("System::rollback_step_transaction: no active transaction");
+  runtime::program::require_step_transaction_control(
+      prepared_boundary_execution_lane(), 4, static_cast<long>(step_transaction_depth()),
+      static_cast<bool>(p_->external_step_transaction_), "System::rollback_step_transaction");
+  Kokkos::fence();
   p_->external_step_transaction_->restore(*p_);
   p_->external_step_transaction_.reset();
+  if (!p_->parent_step_transactions_.empty()) {
+    p_->external_step_transaction_ = std::move(p_->parent_step_transactions_.back());
+    p_->parent_step_transactions_.pop_back();
+  }
   p_->external_step_transaction_committed_ = false;
 }
 
@@ -512,6 +596,12 @@ template System<kNativeDimension>& System<kNativeDimension>::operator=(System&&)
 template void System<kNativeDimension>::step(double);
 template void System<kNativeDimension>::advance(double, int);
 template void System<kNativeDimension>::begin_step_transaction();
+template void System<kNativeDimension>::begin_nested_step_transaction();
+template std::size_t System<kNativeDimension>::step_transaction_depth() const noexcept;
+template void System<kNativeDimension>::stage_program_exchange(runtime::program::ExchangeRecord);
+template std::vector<runtime::program::ExchangeRecord>
+System<kNativeDimension>::program_exchange_records() const;
+
 template void System<kNativeDimension>::commit_step_transaction();
 template std::map<std::string, double> System<kNativeDimension>::step_change_l2() const;
 template void System<kNativeDimension>::finalize_step_transaction();

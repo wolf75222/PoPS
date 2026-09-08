@@ -570,7 +570,7 @@ TEST(ProgramContextContract, AuxiliaryNumericalFailurePreservesSolveActionAndHar
   }
 }
 
-TEST(ProgramContextContract, AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch) {
+TEST(ProgramContextContract, AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch) {
 #ifndef POPS_HAS_MPI
   GTEST_SKIP() << "publication divergence requires MPI";
 #else
@@ -601,16 +601,19 @@ TEST(ProgramContextContract, AuxiliaryReadRefusesRankDivergentPublicationBeforeN
   context.begin_step(0.1);
   sim.begin_step_transaction();
   context.prepare_provider_values("read", 0, context.state(0), 31);
-  // Deliberately corrupt the distributed lifecycle using only local transaction boundaries:
-  // rank zero has a pending input again; rank one would otherwise return through no-work.
-  if (my_rank() == 0) {
-    sim.rollback_step_transaction();
-  } else {
-    sim.commit_step_transaction();
-    sim.finalize_step_transaction();
-  }
-  EXPECT_THROW(context.prepare_provider_values("read", 0, context.state(0), 31),
-               std::invalid_argument);
+  // A mismatched acceptance/rollback used to corrupt publication generations so the next
+  // auxiliary read had to refuse. Collective scope control now rejects that earlier mutation.
+  EXPECT_THROW({
+    if (my_rank() == 0)
+      sim.rollback_step_transaction();
+    else
+      sim.commit_step_transaction();
+  }, std::runtime_error);
+  EXPECT_EQ(sim.step_transaction_depth(), 1u);
+  sim.rollback_step_transaction();
+  // Both ranks recover the same pending input and can publish/read it together.
+  EXPECT_NO_THROW(context.prepare_provider_values("read", 0, context.state(0), 31));
+  EXPECT_NO_THROW(context.prepare_provider_values("read", 0, context.state(0), 31));
 #endif
 }
 
@@ -1604,4 +1607,218 @@ TEST(ProgramContextContract, BlockResolutionRequiresACompleteExplicitMap) {
   EXPECT_THROW(sim.set_program_block_map({1}), std::out_of_range)
       << "mapped NativeSystem index outside n_blocks must fail before publication";
   EXPECT_EQ(sim.program_block_map(), (std::vector<int>{0}));
+}
+
+TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges) {
+  ensure_kokkos();
+  comm_init();
+  constexpr int n = 8;
+  NativeSystem sim(native_config(n));
+  install_execution_lane(sim, "pops.test.nested-continuation");
+  add_gas(sim);
+  auto initial = ic(n);
+  const auto cells = uniform_cell_count(n);
+  for (std::size_t cell = 0; cell < cells; ++cell)
+    initial[GasSchema::density * cells + cell] =
+        1.0 +
+        0.1 * std::cos(2.0 * 3.14159265358979323846 * (static_cast<double>(cell % n) + 0.5) / n);
+  sim.set_state("gas", initial);
+  NativeProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.nested");
+  int evaluated_substeps = 0;
+  ctx.install([&](double dt) {
+    ctx.begin_step(dt);
+    ctx.set_stage_time(0, 1);
+    auto& state = ctx.state(0);
+    auto solve = ctx.solve_fields_from_state(0, state);
+    (void)solve.consume(SolveConsumption::kAccept);
+    auto& rate = ctx.rhs_scratch(880, 0, state);
+    ctx.rhs_into(0, state, rate, 880);
+    ctx.store_history("nested.state", state);
+    const double flux = static_cast<double>(ctx.sum_component(rate, GasSchema::density));
+    double measure = 1.0;
+    for (int axis = 0; axis < kTestDimension; ++axis)
+      measure /= n;
+    ctx.stage_exchange({"test.residual", "density.occurrence", std::to_string(sim.macro_step()),
+                        "forward_euler", 1, measure, flux, dt, 1});
+    ctx.axpy(state, Real(dt), rate);
+    ctx.record_scalar("nested.work", Real(++evaluated_substeps));
+  });
+  sim.set_program_block_map({0});
+  ctx.register_history("nested.state", 2);
+  ctx.begin_step(0.1);
+  ctx.store_history("nested.state", ctx.state(0));
+  ctx.record_scalar("nested.work", Real(0));
+  (void)sim.solve_fields().consume(SolveConsumption::kAccept);
+  const auto before_state = sim.get_state("gas");
+  const auto before_field = sim.potential_global();
+  const auto before_diagnostics = sim.program_diagnostics();
+  const auto before_history = sim.history_fill_count("nested.state");
+  const auto initial_mass = ctx.sum_component(ctx.state(0), GasSchema::density);
+
+  auto child_steps = [&] {
+    for (double dt : {0.1, 0.2}) {
+      sim.begin_nested_step_transaction();
+      EXPECT_EQ(sim.step_transaction_depth(), 2u);
+      sim.step(dt);
+      sim.commit_step_transaction();
+      sim.finalize_step_transaction();
+      EXPECT_EQ(sim.step_transaction_depth(), 1u);
+    }
+  };
+  sim.begin_step_transaction();
+  child_steps();
+  ASSERT_EQ(sim.program_exchange_records().size(), 2u);
+  EXPECT_EQ(all_reduce_max(sim.get_state("gas") != before_state ? 1L : 0L), 1L);
+  EXPECT_NE(sim.potential_global(), before_field);
+  // The outer acceptance fails after both nested solves and substep publications succeeded.
+  EXPECT_THROW(ctx.consume_pointwise_evaluation_status(0, 999, Real(2), "outer.guard", 62),
+               runtime::program::StepAttemptRejected);
+  sim.rollback_step_transaction();
+  EXPECT_EQ(sim.step_transaction_depth(), 0u);
+  EXPECT_EQ(sim.get_state("gas"), before_state);
+  EXPECT_EQ(sim.potential_global(), before_field);
+  EXPECT_EQ(sim.program_diagnostics(), before_diagnostics);
+  EXPECT_EQ(sim.history_fill_count("nested.state"), before_history);
+  EXPECT_TRUE(sim.program_exchange_records().empty());
+  EXPECT_EQ(sim.macro_step(), 0);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.0);
+
+  sim.begin_step_transaction();
+  child_steps();
+  sim.commit_step_transaction();
+  sim.finalize_step_transaction();
+  EXPECT_EQ(evaluated_substeps, 4);
+  EXPECT_EQ(sim.step_transaction_depth(), 0u);
+  EXPECT_EQ(sim.macro_step(), 2);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.1 + 0.2);
+  const auto accepted = sim.program_exchange_records();
+  ASSERT_EQ(accepted.size(), 2u);
+  double integrated = 0.0;
+  for (const auto& exchange : accepted)
+    integrated += exchange.integrated_amount();
+  double measure = 1.0;
+  for (int axis = 0; axis < kTestDimension; ++axis)
+    measure /= n;
+  const double mass_change =
+      static_cast<double>(ctx.sum_component(ctx.state(0), GasSchema::density) - initial_mass) *
+      measure;
+  EXPECT_NEAR(integrated, mass_change, 1e-13);
+  const double expected_factor = (1.0 - 0.25 * 0.1) * (1.0 - 0.25 * 0.2);
+  EXPECT_NEAR(static_cast<double>(ctx.sum_component(ctx.state(0), GasSchema::density)),
+              static_cast<double>(initial_mass) * expected_factor, 1e-11);
+}
+
+TEST(ProgramContextContract, NativeEvaluationFailureIsCollectiveAndCannotPublishWork) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(8));
+  install_execution_lane(sim, "pops.test.collective-native-evaluation");
+  add_gas_block(sim, "gas");
+  sim.set_state("gas", ic(8));
+  NativeProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.failure");
+  int category = 1;
+  int dependent_work = 0;
+  ctx.install([&](double dt) {
+    ctx.begin_step(dt);
+    auto& state = ctx.state(0);
+    auto status = native_field_like(state, 1, state.ghosts());
+    status.set_val(Real(0));
+    if (my_rank() == 0 && status.local_size() != 0) {
+      const auto output = status.fab(0).view();
+      const auto first = status.box(0).lo;
+      const auto selected_category = Real(category);
+      for_each_cell(status.box(0), [=] POPS_HD(const Index<kTestDimension>& cell) {
+        bool selected = true;
+        for (int axis = 0; axis < kTestDimension; ++axis)
+          selected = selected && cell[axis] == first[axis];
+        if (selected)
+          output(cell, 0) = selected_category;
+      });
+    }
+    state.set_val(Real(17));
+    const auto& lane = ctx.prepared_execution_lane();
+    const Real combined =
+        ctx.pointwise_status_max(0, status, ctx.pointwise_active_mask(0, status), lane);
+    ctx.consume_pointwise_evaluation_status(0, 321, combined, "imported.closure", 47);
+    ++dependent_work;
+    ctx.stage_exchange(
+        {"imported.closure", "output.occurrence", "stage0", "update", 1, 1.0, 1.0, dt, 1});
+  });
+  sim.set_program_block_map({0});
+  const auto initial = sim.get_state("gas");
+  for (category = 1; category <= 3; ++category) {
+    if (category < 3) {
+      try {
+        sim.step(0.1);
+        FAIL() << "the collective evaluation status was not consumed";
+      } catch (const runtime::program::StepAttemptRejected& error) {
+        EXPECT_EQ(error.reason_code(), 47u);
+        EXPECT_EQ(error.disposition(), category == 1
+                                           ? runtime::program::StepAttemptDisposition::kRetry
+                                           : runtime::program::StepAttemptDisposition::kReject);
+      }
+    } else {
+      EXPECT_THROW(sim.step(0.1), std::runtime_error);
+    }
+    EXPECT_EQ(sim.get_state("gas"), initial);
+    EXPECT_EQ(sim.time(), 0.0);
+    EXPECT_EQ(sim.macro_step(), 0);
+    EXPECT_TRUE(sim.program_exchange_records().empty());
+  }
+  EXPECT_EQ(dependent_work, 0);
+  // Reaching this collective on every rank is part of the failure-ordering witness.
+  EXPECT_EQ(all_reduce_sum(1L, ctx.prepared_execution_lane()), n_ranks());
+}
+
+TEST(ProgramContextContract, AcceptedExchangeIdentityRetainsMathematicalMultiplicity) {
+  runtime::program::AcceptedExchangeLedger ledger;
+  runtime::program::ExchangeRecord record{"joint.native", "balance.a", "stage1", "heun", -1,
+                                          0.25,           8.0,         0.1,      2};
+  ledger.stage(record);
+  EXPECT_DOUBLE_EQ(ledger.records().front().integrated_amount(), -0.4);
+  EXPECT_THROW(ledger.stage(record), std::invalid_argument);
+  record.occurrence_identity = "balance.b";
+  ledger.stage(record);
+  ASSERT_EQ(ledger.records().size(), 2u);
+  for (int bad_orientation : {0, 2}) {
+    record.occurrence_identity = "invalid";
+    record.orientation = bad_orientation;
+    EXPECT_THROW(ledger.stage(record), std::invalid_argument);
+  }
+  record.orientation = 1;
+  record.temporal_weight = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THROW(ledger.stage(record), std::invalid_argument);
+  EXPECT_EQ(ledger.records().size(), 2u);
+}
+
+TEST(ProgramContextContract, TransactionScopeDivergenceRefusesBeforeMutation) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(8));
+  install_execution_lane(sim, "pops.test.transaction-scope");
+  add_gas_block(sim, "gas");
+  sim.set_state("gas", ic(8));
+  const auto initial = sim.get_state("gas");
+  if (n_ranks() > 1) {
+    EXPECT_THROW(
+        {
+          if (my_rank() == 0)
+            sim.begin_step_transaction();
+          else
+            sim.commit_step_transaction();
+        },
+        std::runtime_error);
+    EXPECT_EQ(sim.step_transaction_depth(), 0u);
+  }
+  EXPECT_THROW(sim.begin_nested_step_transaction(), std::runtime_error);
+  sim.begin_step_transaction();
+  EXPECT_THROW(sim.begin_step_transaction(), std::runtime_error);
+  sim.begin_nested_step_transaction();
+  EXPECT_EQ(sim.step_transaction_depth(), 2u);
+  sim.rollback_step_transaction();
+  EXPECT_EQ(sim.step_transaction_depth(), 1u);
+  sim.rollback_step_transaction();
+  EXPECT_EQ(sim.get_state("gas"), initial);
 }

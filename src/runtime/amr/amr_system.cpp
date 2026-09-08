@@ -3792,6 +3792,7 @@ struct AmrSystem<Dim>::Impl {
 
   std::unique_ptr<AcceptedSnapshot> external_step_transaction;
   bool external_step_committed = false;
+  std::vector<std::unique_ptr<AcceptedSnapshot>> parent_step_transactions;
   std::unique_ptr<AcceptedSnapshot> restart_transaction;
   bool restart_transaction_committed = false;
 
@@ -16347,6 +16348,8 @@ void AmrSystem<Dim>::step(double dt) {
   if (p_->bootstrap_transaction)
     throw std::logic_error("AmrSystem cannot step during an active bootstrap transaction");
   p_->execute_transaction([&] {
+    if (!p_->external_step_transaction)
+      p_->program.accepted_exchanges_.clear();
     p_->program.dispatch_cadence_step(p_->accepted_time, p_->macro_step, dt, "AmrSystem");
     p_->program.refresh_hierarchy_state("AmrSystem::step");
     if (!p_->tagging_spec || p_->cfg.regrid_every == 0 ||
@@ -16679,39 +16682,111 @@ double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, d
 template <int Dim>
 void AmrSystem<Dim>::begin_step_transaction() {
   p_->ensure_engine();
-  if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
-    throw std::logic_error("AmrSystem step transaction requires its prepared hierarchy lane");
-  const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
-  const long invalid = p_->external_step_transaction || p_->restart_transaction ? 1L : 0L;
-  if (all_reduce_max(invalid, lane) != 0)
-    throw std::runtime_error(
-        "AmrSystem step transaction cannot overlap another step or restart transaction");
+  const auto& lane = p_->require_prepared_engine_lane("AMR begin step transaction");
+  runtime::program::require_step_transaction_control(
+      lane, 0, static_cast<long>(step_transaction_depth()),
+      !p_->external_step_transaction && !p_->restart_transaction,
+      "AmrSystem::begin_step_transaction");
+  Kokkos::fence();
   p_->external_step_transaction =
       p_->prepare_accepted_snapshot_collectively("external step transaction");
   p_->external_step_committed = false;
+  p_->program.accepted_exchanges_.clear();
+}
+
+template <int Dim>
+void AmrSystem<Dim>::begin_nested_step_transaction() {
+  const auto& lane = p_->require_prepared_engine_lane("AMR nested step transaction");
+  runtime::program::require_step_transaction_control(
+      lane, 1, static_cast<long>(step_transaction_depth()),
+      p_->external_step_transaction && !p_->external_step_committed && !p_->restart_transaction,
+      "AmrSystem::begin_nested_step_transaction");
+  Kokkos::fence();
+  auto candidate = p_->prepare_accepted_snapshot_collectively("nested step transaction");
+  std::exception_ptr error;
+  try {
+    p_->parent_step_transactions.reserve(p_->parent_step_transactions.size() + 1);
+  } catch (...) {
+    error = std::current_exception();
+  }
+  if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
+    throw std::runtime_error("AMR nested transaction preparation failed collectively");
+  }
+  p_->parent_step_transactions.push_back(std::move(p_->external_step_transaction));
+  p_->external_step_transaction = std::move(candidate);
+}
+
+template <int Dim>
+std::size_t AmrSystem<Dim>::step_transaction_depth() const noexcept {
+  return p_->external_step_transaction ? p_->parent_step_transactions.size() + 1 : 0;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::stage_program_exchange(runtime::program::ExchangeRecord record) {
+  const auto& lane = p_->require_prepared_engine_lane("AMR exchange staging");
+  runtime::program::AcceptedExchangeLedger candidate;
+  std::exception_ptr error;
+  try {
+    candidate = p_->program.accepted_exchanges_;
+    candidate.stage(std::move(record));
+  } catch (...) {
+    error = std::current_exception();
+  }
+  if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
+    throw std::runtime_error("AMR exchange staging failed collectively");
+  }
+  p_->program.accepted_exchanges_.swap(candidate);
+}
+
+template <int Dim>
+std::vector<runtime::program::ExchangeRecord> AmrSystem<Dim>::program_exchange_records() const {
+  return p_->program.accepted_exchanges_.records();
 }
 
 template <int Dim>
 void AmrSystem<Dim>::commit_step_transaction() {
-  if (!p_->external_step_transaction || p_->external_step_committed)
-    throw std::runtime_error("AmrSystem has no active uncommitted step transaction");
+  runtime::program::require_step_transaction_control(
+      p_->require_prepared_engine_lane("AMR commit step transaction"), 2,
+      static_cast<long>(step_transaction_depth()),
+      p_->external_step_transaction && !p_->external_step_committed,
+      "AmrSystem::commit_step_transaction");
+  Kokkos::fence();
   p_->external_step_committed = true;
 }
 
 template <int Dim>
 void AmrSystem<Dim>::finalize_step_transaction() {
-  if (!p_->external_step_transaction || !p_->external_step_committed)
-    throw std::runtime_error("AmrSystem has no committed step transaction");
+  runtime::program::require_step_transaction_control(
+      p_->require_prepared_engine_lane("AMR finalize step transaction"), 3,
+      static_cast<long>(step_transaction_depth()),
+      p_->external_step_transaction && p_->external_step_committed,
+      "AmrSystem::finalize_step_transaction");
+  Kokkos::fence();
   p_->external_step_transaction.reset();
+  if (!p_->parent_step_transactions.empty()) {
+    p_->external_step_transaction = std::move(p_->parent_step_transactions.back());
+    p_->parent_step_transactions.pop_back();
+  }
   p_->external_step_committed = false;
 }
 
 template <int Dim>
 void AmrSystem<Dim>::rollback_step_transaction() {
-  if (!p_->external_step_transaction)
-    throw std::runtime_error("AmrSystem has no active step transaction");
+  runtime::program::require_step_transaction_control(
+      p_->require_prepared_engine_lane("AMR rollback step transaction"), 4,
+      static_cast<long>(step_transaction_depth()), static_cast<bool>(p_->external_step_transaction),
+      "AmrSystem::rollback_step_transaction");
+  Kokkos::fence();
   p_->external_step_transaction->restore(*p_);
   p_->external_step_transaction.reset();
+  if (!p_->parent_step_transactions.empty()) {
+    p_->external_step_transaction = std::move(p_->parent_step_transactions.back());
+    p_->parent_step_transactions.pop_back();
+  }
   p_->external_step_committed = false;
 }
 
@@ -20520,6 +20595,12 @@ template void AmrSystem<kNativeDimension>::step(double);
 template void AmrSystem<kNativeDimension>::advance(double, int);
 template double AmrSystem<kNativeDimension>::step_cfl(double, double, double, double);
 template void AmrSystem<kNativeDimension>::begin_step_transaction();
+template void AmrSystem<kNativeDimension>::begin_nested_step_transaction();
+template std::size_t AmrSystem<kNativeDimension>::step_transaction_depth() const noexcept;
+template void AmrSystem<kNativeDimension>::stage_program_exchange(runtime::program::ExchangeRecord);
+template std::vector<runtime::program::ExchangeRecord>
+AmrSystem<kNativeDimension>::program_exchange_records() const;
+
 template void AmrSystem<kNativeDimension>::commit_step_transaction();
 template void AmrSystem<kNativeDimension>::finalize_step_transaction();
 template void AmrSystem<kNativeDimension>::rollback_step_transaction();

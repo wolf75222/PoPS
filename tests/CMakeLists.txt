@@ -660,6 +660,10 @@ pops_add_gtest_suite(NAME test_amr_coupled_source_role_strict SOURCES "${_src}" 
 
 pops_test_source(_src test_amr_multiblock_implicit_transaction)
 pops_add_gtest_suite(NAME test_amr_multiblock_implicit_transaction SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+if(POPS_USE_MPI)
+  pops_add_mpi_rank_test(test_amr_multiblock_implicit_transaction 2
+    GTEST_FILTER "test_amr_multiblock_implicit_transaction.TwoBlockImplicitSourceTransactionRollsBackAndRetriesExactly")
+endif()
 
 pops_test_source(_src test_amr_multiblock_regrid_union)
 pops_add_gtest_suite(NAME test_amr_multiblock_regrid_union SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
@@ -1062,7 +1066,7 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors:ProgramContextContract.AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch:ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection:ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation")
+            "ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors:ProgramContextContract.AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch:ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection:ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation:ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges:ProgramContextContract.NativeEvaluationFailureIsCollectiveAndCannotPublishWork:ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation")
       elseif(_test STREQUAL "test_generated_amr_system_block")
         pops_add_mpi_rank_test(
           ${_test} ${_np}

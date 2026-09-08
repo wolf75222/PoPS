@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pops/runtime/program/accepted_exchange.hpp>
 #include <limits>
 
 #include <pops/core/state/variables.hpp>  // VariableSet (role-bearing descriptor carried by each block)
@@ -816,6 +817,11 @@ class System {
   void advance(double dt, int nsteps);
   /// RuntimeInstance-only outer transaction spanning native advancement and prepared consumers.
   void begin_step_transaction();
+  /// Open an explicit child scope; child publication remains provisional in its parent.
+  POPS_EXPORT void begin_nested_step_transaction();
+  POPS_EXPORT std::size_t step_transaction_depth() const noexcept;
+  POPS_EXPORT void stage_program_exchange(runtime::program::ExchangeRecord record);
+  POPS_EXPORT std::vector<runtime::program::ExchangeRecord> program_exchange_records() const;
   /// Seal the native state while retaining its accepted snapshot until external effects publish.
   void commit_step_transaction();
   /// Release the accepted snapshot after every external effect has published successfully.
