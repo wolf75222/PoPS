@@ -615,6 +615,7 @@ def test_checkpoint_budget_uses_authenticated_artifact_block_metadata():
 def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_authority():
     from pops.runtime._checkpoint_resource_budget import _common_budget
     from pops.runtime._continuation_transitions import ContinuationTransitionPlan
+    from pops._platform_contracts import ExecutionContext, ExecutionResource, proven_serial_manifest
     import json
     continuation = ContinuationTransitionPlan(json.dumps({
         "schema_version": 1, "kind": "pops.continuation-transitions", "target": "system",
@@ -658,6 +659,11 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
         def to_data(self):
             return {"kind": "cache-budget-test"}
 
+        def _serialize(self, *, include_provenance=True):
+            if not isinstance(include_provenance, bool):
+                raise TypeError("Program._serialize include_provenance must be bool")
+            return self.to_data()
+
         def temporal_manifest(self):
             return {
                 "histories": [], "clocks": [],
@@ -675,9 +681,16 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
         bind_identity=SimpleNamespace(token="bind"),
     )
 
+    execution_context = ExecutionContext(
+        backend=proven_serial_manifest(
+            backend="production", target="system", abi="test|c++|c++23", runtime=True),
+        communicator=ExecutionResource("communicator", "serial"),
+        datatype=ExecutionResource("datatype", "float64"),
+        device=ExecutionResource("device", "host"),
+    )
+
     def budget(owner, program):
-        owner._execution_context = SimpleNamespace(
-            communicator=SimpleNamespace(identity="serial", handle=None))
+        owner._execution_context = execution_context
         return _common_budget(
             owner,
             install_plan,

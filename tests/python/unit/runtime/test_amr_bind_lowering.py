@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from types import SimpleNamespace
 
@@ -272,9 +273,17 @@ def test_implicit_pair_envelope_precedes_program_and_interface_install(
     import pops.runtime._install_param_routing as param_routing
     import pops.runtime._lifecycle as lifecycle
     import pops.runtime._runtime_authorities as authorities
+    from pops.runtime._continuation_transitions import ContinuationTransitionPlan
 
     events = []
     bind_schema = object()
+    continuation = ContinuationTransitionPlan(json.dumps({
+        "schema_version": 1,
+        "kind": "pops.continuation-transitions",
+        "target": "amr_system",
+        "evidence_stage": "resolved",
+        "objects": [],
+    }, sort_keys=True, separators=(",", ":")))
     artifact = SimpleNamespace(
         bind_schema=bind_schema,
         so_path="compiled-amr-program.so",
@@ -283,6 +292,8 @@ def test_implicit_pair_envelope_precedes_program_and_interface_install(
             capabilities={
                 "shared_interfaces": {"implicit_jacvec_pair": True},
             },
+            continuation_transitions=continuation,
+            verify=lambda: None,
         ),
     )
     install_plan = SimpleNamespace(
