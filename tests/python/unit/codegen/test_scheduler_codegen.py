@@ -473,9 +473,10 @@ def test_field_hold_requires_an_exact_dynamic_topology_rematerializer():
         _resolve_amr_program("amr", program, context=unsupported)
 
 
-def test_dynamic_field_schedule_authenticates_the_case_transfer_subject():
+@pytest.mark.parametrize("off", (adctime.Hold(), adctime.Skip()), ids=("hold", "skip"))
+def test_dynamic_field_schedule_authenticates_the_case_transfer_subject(off):
     from pops.lib.time import ForwardEuler
-    from pops.time import AcceptedStep, Every, FixedDt, Schedule, Skip
+    from pops.time import AcceptedStep, Every, FixedDt, Schedule
     from tests.python.integration._final_field_program import (
         resolve_periodic_field_program,
         scalar_advection_field_model,
@@ -489,7 +490,7 @@ def test_dynamic_field_schedule_authenticates_the_case_transfer_subject():
             attrs={
                 **field_node.attrs,
                 "schedule": Schedule(
-                    Every(AcceptedStep(program.clock), 5), off=Skip()
+                    Every(AcceptedStep(program.clock), 5), off=off
                 ),
             },
         )
@@ -511,8 +512,13 @@ def test_dynamic_field_schedule_authenticates_the_case_transfer_subject():
     assert {row["name"]: row["status"] for row in resolution["groups"]} == {
         "named_field_solve": "green",
         "schedule_due": "green",
-        "schedule_field_skip": "green",
+        "schedule_field_" + type(off).__name__.lower(): "green",
     }
+    schedules = resolved.time.temporal_manifest()["schedules"]
+    assert schedules and all(not row["cache_required"] for row in schedules)
+    retained = resolved.continuation_transitions.to_data()["objects"]
+    assert {row["kind"] for row in retained} >= {"field_value", "field_observation"}
+    assert not any(row["kind"] == "scheduler_cache" for row in retained)
     from pops.codegen._phases import _field_topology_rematerializer_validated
 
     assert not _field_topology_rematerializer_validated(

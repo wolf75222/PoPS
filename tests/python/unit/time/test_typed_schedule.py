@@ -127,3 +127,15 @@ def test_future_runtime_domains_are_preserved_but_refused_honestly(
     program, _ = _scheduled_rate(off=Zero(), domain_factory=domain_factory)
     with pytest.raises(NotImplementedError, match=domain_name):
         _check_schedules_lowerable(program)
+
+
+def test_retained_field_storage_does_not_hide_scheduler_duration_state():
+    from pops.time import AccumulateDt
+    from pops.time._schedule.api import native_schedule_cache_required
+
+    clock = Clock("retained-output")
+    held = Schedule(Every(AcceptedStep(clock), 4), off=Hold())
+    assert native_schedule_cache_required(held, where="scratch")
+    assert not native_schedule_cache_required(held, where="field", retained_output=True)
+    accumulated = Schedule(Every(AcceptedStep(clock), 4), off=AccumulateDt())
+    assert native_schedule_cache_required(accumulated, where="field", retained_output=True)
