@@ -20,6 +20,8 @@ from __future__ import annotations
 import argparse
 from collections.abc import Iterable
 import json
+import math
+from itertools import combinations
 import os
 import re
 import subprocess
@@ -890,6 +892,64 @@ def validate_cpp_duration_catalogs(targets: Iterable[str]) -> None:
         raise SystemExit("C++ duration catalog inventory mismatch: " + "; ".join(failures))
 
 
+def _refine_cpp_target_shards(
+    shards: list[list[str]], weights: dict[str, float],
+) -> list[list[str]]:
+    """Reduce LPT's critical path using bounded, deterministic target exchanges.
+
+    Cold template builds are indivisible and can dominate a shard containing only
+    three targets. Moving one such target rarely helps, but exchanging it for one
+    or two targets elsewhere can fit the same measured work more evenly. Accept
+    only strictly lower maximum loads, retaining LPT's original upper bound. The
+    number of exchanges is capped by the number of selected targets.
+    """
+    for _ in range(sum(map(len, shards))):
+        loads = [math.fsum(weights[target] for target in shard) for shard in shards]
+        source = max(range(len(shards)), key=lambda index: (loads[index], -index))
+        maximum = loads[source]
+        best = None
+        for destination, shard in enumerate(shards):
+            if destination == source:
+                continue
+            # The empty return bundle also admits a simple move. Preserve the
+            # sorted target order so ties do not depend on manifest input order.
+            bundles = [(), *((target,) for target in shard), *combinations(shard, 2)]
+            bundle_weights = [
+                (bundle, math.fsum(weights[t] for t in bundle)) for bundle in bundles
+            ]
+            for target in shards[source]:
+                for bundle, returned_weight in bundle_weights:
+                    transferred_weight = weights[target] - returned_weight
+                    if transferred_weight <= 0.0:
+                        continue
+                    candidate_loads = list(loads)
+                    candidate_loads[source] -= transferred_weight
+                    candidate_loads[destination] += transferred_weight
+                    candidate_maximum = max(candidate_loads)
+                    # Avoid exchanges caused solely by floating-point summation
+                    # noise; this tolerance never changes a modeled target cost.
+                    if candidate_maximum >= maximum - 1.0e-9:
+                        continue
+                    candidate = (
+                        candidate_maximum,
+                        tuple(sorted(candidate_loads, reverse=True)),
+                        destination, target, bundle,
+                    )
+                    if best is None or candidate < best:
+                        best = candidate
+        if best is None:
+            break
+        _, _, destination, target, bundle = best
+        shards[source].remove(target)
+        shards[destination].append(target)
+        for returned in bundle:
+            shards[destination].remove(returned)
+            shards[source].append(returned)
+        shards[source].sort()
+        shards[destination].sort()
+    return shards
+
+
 def cpp_target_shards(targets: list[str], total: int) -> list[list[str]]:
     """Return a deterministic, build-and-test-balanced exact partition of C++ targets."""
     if total <= 0:
@@ -899,6 +959,7 @@ def cpp_target_shards(targets: list[str], total: int) -> list[list[str]]:
     weights = cpp_target_weights(targets)
     try:
         shards = ci_shard_binpack.assign_shards(targets, total, weights)
+        shards = _refine_cpp_target_shards(shards, weights)
         ci_shard_binpack.verify_partition(targets, shards, excluded=())
     except ci_shard_binpack.PartitionError as exc:
         raise SystemExit(f"C++ shard partition invariant violated: {exc}") from exc

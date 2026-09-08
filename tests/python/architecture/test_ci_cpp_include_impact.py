@@ -432,8 +432,8 @@ def test_cpp_cold_build_catalog_separates_five_minute_template_targets():
     expected_counts += [targets_per_shard + 1] * larger_shards
     assert sorted(map(len, shards)) == expected_counts
 
-    # Sixteen five-minute TUs force exactly one three-target shard across the seven CI workers.
-    # LPT keeps that unavoidable shard at or below 15.1 modeled minutes, leaving at least 2.9
+    # The heavy-template inventory forces three-target shards across the seven CI workers.
+    # LPT plus deterministic exchanges stays below 15.1 modeled minutes, leaving at least 2.9
     # minutes inside the workflow's 18 min build watchdog. CTest alone remains below its 7 min watchdog.
     full_shards = sel.cpp_target_shards(sorted(build), 7)
     weights = sel.cpp_target_weights(sorted(build))
