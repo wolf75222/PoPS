@@ -1271,6 +1271,78 @@ TEST(GeneratedAmrSystemBlock, NamedFieldConsumesExactStageWithoutPublishingState
   EXPECT_EQ(system.field_provider_levels("field/tracer"), 1);
 }
 
+TEST(GeneratedAmrSystemBlock, ExplicitFieldTopologyIsIndependentOfPeriodicTransport) {
+  constexpr int Dim = pops::kNativeDimension;
+  // Exercise both builtin field routes and reject a one-sided periodic declaration.
+  for (const std::string policy : {"pops.field-hierarchy.level-local",
+                                   "pops.field-hierarchy.composite"}) {
+    for (const bool one_sided_periodic : {false, true}) {
+      SCOPED_TRACE(policy);
+      SCOPED_TRACE(one_sided_periodic);
+      pops::AmrSystemConfig<Dim> config;
+      config.level_count = 1;
+      config.transition_ratios.clear();
+      config.transition_buffers.clear();
+      config.transition_lookaheads.clear();
+      for (int axis = 0; axis < Dim; ++axis) {
+        config.shape[axis] = 8;
+        config.periodicity[axis] = true;
+      }
+      pops::AmrSystem<Dim> system(config);
+      pops::test::install_amr_runtime_authority(system, "tests.generated-amr/field-topology");
+      const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
+          policy, 1, {"pops.field-hierarchy.options.empty@1", {}}};
+      system.set_field_solver_plan(
+          "field/tracer", "test.field-topology-plan", "test.field-topology", "test.aux-owner",
+          "tracer", "phi", {{"test.aux-owner", "field", "phi", "potential"}}, 1, {"test.rhs"},
+          {"tracer"}, {"charge"}, {1.0}, "geometric_mg", hierarchy,
+          pops::geometric_mg_amr_field_solver_options(pops::GeometricMgOptions{},
+                                                     pops::CompositeFacOptions{}));
+      std::vector<std::string> kinds(2 * Dim, "dirichlet");
+      if (one_sided_periodic)
+        kinds[pops::Face<Dim>{0, pops::BoundarySide::lower}.ordinal()] = "periodic";
+      system.set_field_boundary_plan("field/tracer", kinds, std::vector<double>(2 * Dim, 1.0),
+                                     std::vector<double>(2 * Dim, 0.0),
+                                     std::vector<double>(2 * Dim, 2.0));
+      system.install_block_state_route("tracer", "state/tracer");
+      pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+      const auto output_key = install_field_output(system, "test.aux-owner", "phi");
+      system.register_elliptic_field("tracer", "phi", {output_key}, 1);
+      system.set_block_elliptic_field(
+          "tracer", "phi", "test.generated-amr.field-topology.rhs.zero@1",
+          [](const pops::MultiFab<Dim>&, pops::MultiFab<Dim>& rhs) { rhs.set_val(pops::Real(0)); });
+      system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+      system.set_program_block_map({0});
+      auto context = pops::runtime::program::make_program_execution_provider(&system);
+      context->configure_primary_clock("test-clock");
+      context->begin_step(0.01);
+      pops::MultiFab<Dim> stage = context->scratch_state_like(context->state(0));
+      stage.set_val(pops::Real(3));
+      if (one_sided_periodic) {
+        try {
+          auto outcome = context->solve_fields_from_state_at(point<Dim>(0), "field/tracer", 0, stage);
+          (void)outcome.consume(pops::SolveConsumption::kFailRun);
+          FAIL() << "one-sided periodic field boundary was accepted";
+        } catch (const std::invalid_argument& error) {
+          EXPECT_NE(std::string(error.what()).find("periodic boundaries must be paired"),
+                    std::string::npos);
+        }
+      } else {
+        auto outcome = context->solve_fields_from_state_at(point<Dim>(0), "field/tracer", 0, stage);
+        ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
+        (void)outcome.consume(pops::SolveConsumption::kAccept);
+        // -Laplacian(phi)=0 with all boundary values 2 has the unique solution phi=2.
+        // A periodic field solve with zero RHS cannot recover this anchored solution.
+        const auto potential = system.auxiliary_component(output_key);
+        ASSERT_EQ(potential.size(), cell_count(config.shape));
+        for (const double value : potential)
+          EXPECT_NEAR(value, 2.0, 1.e-8);
+      }
+      EXPECT_EQ(pops::reduce_max_local(context->state(0), 0), pops::Real(1));
+    }
+  }
+}
+
 TEST(GeneratedAmrSystemBlock,
      DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance) {
   pops::comm_init();

@@ -5058,7 +5058,6 @@ struct AmrSystem<Dim>::Impl {
 
   PhysicalBoundaryConditions<Dim> field_boundary(const FieldPlan& plan,
                                                  const Geometry<Dim>& geometry) const {
-    const BoundaryTopology<Dim> exact_topology = topology();
     std::array<PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
     const std::size_t face_count = static_cast<std::size_t>(2 * Dim);
     if (!plan.boundary_kind.empty() &&
@@ -5067,6 +5066,21 @@ struct AmrSystem<Dim>::Impl {
       throw std::invalid_argument(
           "AMR field boundary plan must cover both faces of every exact axis");
 
+    // A field equation can have physical boundaries on a periodic transport grid.
+    // Only an absent explicit field plan inherits the transport topology.
+    auto field_periodicity = cfg.periodicity;
+    if (!plan.boundary_kind.empty())
+      for (int axis = 0; axis < Dim; ++axis) {
+        const auto lower = static_cast<std::size_t>(Face<Dim>{axis, BoundarySide::lower}.ordinal());
+        const auto upper = static_cast<std::size_t>(Face<Dim>{axis, BoundarySide::upper}.ordinal());
+        const bool lower_periodic = plan.boundary_kind[lower] == "periodic";
+        const bool upper_periodic = plan.boundary_kind[upper] == "periodic";
+        if (lower_periodic != upper_periodic)
+          throw std::invalid_argument("AMR field periodic boundaries must be paired on each axis");
+        field_periodicity[axis] = lower_periodic;
+      }
+    const auto exact_topology = BoundaryTopology<Dim>::axis_periodic(field_periodicity);
+
     for (int axis = 0; axis < Dim; ++axis)
       for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
         const Face<Dim> face{axis, side};
@@ -5074,9 +5088,6 @@ struct AmrSystem<Dim>::Impl {
         const bool periodic = exact_topology.is_periodic(face);
         const std::string kind = plan.boundary_kind.empty() ? (periodic ? "periodic" : "dirichlet")
                                                             : plan.boundary_kind[ordinal];
-        if ((kind == "periodic") != periodic)
-          throw std::invalid_argument(
-              "AMR field boundary periodicity differs from the hierarchy topology");
         if (periodic) {
           faces[ordinal] = {};
           continue;
