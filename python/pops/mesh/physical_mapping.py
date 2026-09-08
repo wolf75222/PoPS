@@ -29,7 +29,9 @@ class VelocityQuadrature:
         return (self.upper - self.lower) / self.cells
 
     def to_data(self) -> dict[str, Any]:
-        pair = lambda value: [value.numerator, value.denominator]
+        def pair(value: Fraction) -> list[int]:
+            return [value.numerator, value.denominator]
+
         return {"rule": "uniform-cell-average-integral@1", "lower": pair(self.lower),
                 "upper": pair(self.upper), "cells": self.cells,
                 "weight": pair(self.weight), "dimension": self.dimension.to_data()}
@@ -63,9 +65,11 @@ class PhysicalSupportMap:
         return 2 if self.quadrature is not None else 3
 
     def validate_ports(self, source: Any, target: Any) -> None:
-        spaces = tuple(getattr(item.subject, "space", None) for item in (source, target))
-        if any(space is None for space in spaces):
+        source_space = getattr(source.subject, "space", None)
+        target_space = getattr(target.subject, "space", None)
+        if source_space is None or target_space is None:
             raise ValueError("physical map ports require typed quantity declarations")
+        spaces = source_space, target_space
         if tuple(space.support for space in spaces) != (self.source_support, self.target_support):
             raise ValueError("physical map source/target quantity support identities disagree")
         if any(space.representation not in ("conservative", "cell_average") or space.sampling != "cell_average"

@@ -148,13 +148,17 @@ def resolve_temporal_problem(request: Any, *, program: Any) -> ResolvedTemporalP
             point = point.time if hasattr(point, "time") else point
             if not window.contains(point):
                 raise SolveRequestError("invalid_window", "component unknown lies outside its declared window")
+    outputs = request.outputs
+    if outputs is None:
+        raise SolveRequestError(
+            "invalid_outputs", "resolved temporal solve requests require normalized output identities")
     contract = {"equations": [[name, region.to_data()] for name, region in problem.equations.items()],
                 "unknowns": [unknown.to_data() for unknown in request.unknowns],
                 "unknown_captures": [[name, ref.to_data()] for name, ref in problem.unknown_captures.items()],
                 "input_captures": [[name, ref.to_data()] for name, ref in problem.input_captures.items()],
                 "equation_inputs": [[name, _equation_value(program, value)]
                                     for name, value in request.equation_inputs.items()],
-                "outputs": list(request.outputs),
+                "outputs": list(outputs),
                 "windows": [[name, value.to_data()] for name, value in problem.windows.items()],
                 "residual_interpretation": request.residual_interpretation,
                 "error_interpretation": request.error_interpretation,

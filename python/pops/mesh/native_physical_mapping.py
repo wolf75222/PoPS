@@ -13,7 +13,7 @@ def native_physical_mapping(requirement: Any, directory: Any) -> Any:
     and pops.resolve respectively. No numerical field data passes through Python.
     """
     from pops import interfaces
-    from pops.external import build_source_package_manifest, load
+    from pops.external import SourceComponentPackage, build_source_package_manifest, load
     from pops.model import ComponentManifest
     from ._layout_plan_contracts import LayoutMappingRequirement
     from .layout_mapping import NativeLayoutMapping
@@ -48,7 +48,10 @@ def native_physical_mapping(requirement: Any, directory: Any) -> Any:
         payloads={filename: ("source", source)})
     path = root / "physical-map.pops.json"
     path.write_text(json.dumps(package), encoding="utf-8")
-    component = load(path).require("map", interface=interface)()
+    loaded_package = load(path)
+    if type(loaded_package) is not SourceComponentPackage:
+        raise TypeError("physical map source manifest did not load as a source component package")
+    component = loaded_package.require("map", interface=interface)()
     return NativeLayoutMapping(component, (requirement,))
 
 
