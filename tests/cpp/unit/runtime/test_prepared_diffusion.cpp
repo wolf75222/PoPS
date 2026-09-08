@@ -16,6 +16,7 @@ struct DiffusionContext {
   auto prepare_mesh_boundary_session(Field& field, const ExecutionLane& execution) {
     return PreparedScalarBoundarySession<2>::prepare(geometry_, topology, field, execution, 1);
   }
+  const Field* pointwise_active_mask(int, const Field&) const { return nullptr; }
   void stage_exchange(ExchangeRecord record) { ledger.stage(std::move(record)); }
 };
 Field field(Box<2> box = Box<2>{Index<2>{0, 0}, Index<2>{3, 3}},
@@ -24,6 +25,13 @@ Field field(Box<2> box = Box<2>{Index<2>{0, 0}, Index<2>{3, 3}},
   auto distribution = mesh::Distribution<2>::replicated(
       layout, mesh::RankSpace<2>{Index<2>{0, 0}, Extent<2>{1, 1}});
   return Field(layout, distribution, Index<2>{0, 0}, 1, ghosts);
+}
+Field split_field() {
+  auto layout =
+      mesh::BoxArray<2>::from_domain(Box<2>{Index<2>{0, 0}, Index<2>{3, 3}}, Extent<2>{2, 4});
+  auto distribution = mesh::Distribution<2>::replicated(
+      layout, mesh::RankSpace<2>{Index<2>{0, 0}, Extent<2>{1, 1}});
+  return Field(layout, distribution, Index<2>{0, 0}, 1, Extent<2>{1, 1});
 }
 auto identity_law(Field& q) {
   return [&q](std::size_t local) {
@@ -76,6 +84,30 @@ TEST(PreparedDiffusion, RejectsNegativeFaceSecantEvenWhenSampleDerivativesArePos
   EXPECT_TRUE(context.ledger.records().empty());
 }
 
+TEST(PreparedDiffusion, RejectsFailedConstitutiveEvaluationInPreparedInternalGhost) {
+  DiffusionContext context;
+  auto q = split_field(), output = split_field();
+  PreparedDiffusion<2> prepared(context, q, {}, true);
+  try {
+    prepared.apply(q, output, [](std::size_t local) {
+      return [=] POPS_HD(const Index<2>& cell) {
+        DiffusiveLawResult<2> result;
+        result.values = {1, .1, .1, 1};
+        if (local == 0 && cell[0] == 2) {
+          result.evaluation_status = 2;
+          result.reason_code = 777;
+        }
+        return result;
+      };
+    });
+    EXPECT_TRUE(false);
+  } catch (const DiffusiveEvaluationError& error) {
+    EXPECT_EQ(error.status(), 2);
+    EXPECT_EQ(error.reason(), 777);
+  }
+  EXPECT_THROW(prepared.explicit_frequency(), std::logic_error);
+}
+
 TEST(PreparedDiffusion, VariableDiagonalStaysInsideDivergenceWithPhysicalValueTrace) {
   DiffusionContext context;
   context.topology = BoundaryTopology<2>::physical();
@@ -102,11 +134,19 @@ TEST(PreparedDiffusion, VariableDiagonalStaysInsideDivergenceWithPhysicalValueTr
                   output.box(0),
                   [=] POPS_HD(const Index<2>& cell) { return Kokkos::abs(result(cell, 0) - .75); }),
               0, 2e-13);
-  prepared.stage_accepted_exchanges(context, "operator", "occurrence", "stage0", .05);
+  prepared.stage_accepted_exchanges(context, 0, "operator", "occurrence", "stage0", .05);
   Real exchange = 0;
   for (const auto& record : context.ledger.records())
     exchange += record.integrated_amount();
   EXPECT_EQ(context.ledger.records().size(), 64);
+  EXPECT_NEAR(exchange, .05 * .75, 2e-13);
+  context.ledger.clear();
+  prepared.stage_accepted_exchanges(context, 0, "operator", "physical-boundary", "stage0", .05,
+                                    true);
+  exchange = 0;
+  for (const auto& record : context.ledger.records())
+    exchange += record.integrated_amount();
+  EXPECT_EQ(context.ledger.records().size(), 16);
   EXPECT_NEAR(exchange, .05 * .75, 2e-13);
 }
 
@@ -122,6 +162,7 @@ struct FittedContext {
   auto prepare_mesh_boundary_session(MultiFab<1>& field, const ExecutionLane& execution) {
     return PreparedScalarBoundarySession<1>::prepare(geometry_, topology, field, execution, 1);
   }
+  const MultiFab<1>* pointwise_active_mask(int, const MultiFab<1>&) const { return nullptr; }
   void stage_exchange(ExchangeRecord record) { ledger.stage(std::move(record)); }
 };
 MultiFab<1> fitted_field() {
@@ -188,7 +229,7 @@ TEST(PreparedDiffusion, FittedExponentialEquilibriumHasZeroOrientedFaceExchange)
                           };
                         },
                         1, {});
-  prepared.stage_accepted_exchanges(context, "fitted", "joint-drift-diffusion", "stage0", .01);
+  prepared.stage_accepted_exchanges(context, 0, "fitted", "joint-drift-diffusion", "stage0", .01);
   EXPECT_EQ(context.ledger.records().size(), 64);
   for (const auto& record : context.ledger.records())
     EXPECT_NEAR(record.numerical_flux, 0, 2e-12);

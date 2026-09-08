@@ -392,6 +392,8 @@ class AMRTransfer:
     def _resolved_spatial_accuracy(
         subject: Handle, numerics: tuple[Any, ...], dimension: int
     ) -> tuple[int, tuple[int, ...]] | None:
+        from pops.numerics.diffusion import Diffusion
+
         methods = []
         for plan in numerics:
             for rate in getattr(plan, "rates", ()):
@@ -399,6 +401,15 @@ class AMRTransfer:
                 variables = getattr(method, "variables", None)
                 state = getattr(variables, "options", {}).get("state") \
                     if variables is not None else None
+                if type(method) is Diffusion:
+                    state = method.law.state
+                    if method.transport is not None:
+                        transport_state = method.transport.variables.options.get("state")
+                        if transport_state != state:
+                            raise ValueError(
+                                "combined diffusion transport must authenticate the exact "
+                                "constitutive state"
+                            )
                 if isinstance(state, Handle) and state.qualified_id == subject.qualified_id:
                     methods.append(method)
         if not methods:

@@ -9,6 +9,7 @@
 #include <pops/numerics/diffusion/bernoulli.hpp>
 #include <array>
 #include <cmath>
+#include <exception>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -106,21 +107,30 @@ class PreparedDiffusion {
         std::rethrow_exception(allocation_error);
       throw std::runtime_error("diffusion preparation allocation failed collectively");
     }
-    state_boundary_ = ctx.prepare_mesh_boundary_session(prototype, ctx.prepared_execution_lane());
-    variable_boundary_ =
-        ctx.prepare_mesh_boundary_session(variable_, ctx.prepared_execution_lane());
-    coefficient_boundary_ =
-        ctx.prepare_mesh_boundary_session(coefficients_, ctx.prepared_execution_lane());
-    for (int axis = 0; axis < Dim; ++axis) {
-      if (geometry_.domain().length(axis) < 2 || prototype.ghosts()[axis] < 1)
-        throw std::invalid_argument("diffusion requires at least two cells and one halo per axis");
-      for (int side = 0; side < 2; ++side) {
-        bool periodic = state_boundary_->topology().is_periodic(
-            Face<Dim>{axis, side == 0 ? BoundarySide::lower : BoundarySide::upper});
-        if (periodic != (physical_[2 * axis + side].kind == DiffusiveBoundaryKind::periodic))
+    std::exception_ptr session_error;
+    try {
+      state_boundary_ = ctx.prepare_mesh_boundary_session(prototype, *lane_);
+      variable_boundary_ = ctx.prepare_mesh_boundary_session(variable_, *lane_);
+      coefficient_boundary_ = ctx.prepare_mesh_boundary_session(coefficients_, *lane_);
+      for (int axis = 0; axis < Dim; ++axis) {
+        if (geometry_.domain().length(axis) < 2 || prototype.ghosts()[axis] < 1)
           throw std::invalid_argument(
-              "physical diffusive boundary differs from bound mesh topology");
+              "diffusion requires at least two cells and one halo per axis");
+        for (int side = 0; side < 2; ++side) {
+          const bool periodic = state_boundary_->topology().is_periodic(
+              Face<Dim>{axis, side == 0 ? BoundarySide::lower : BoundarySide::upper});
+          if (periodic != (physical_[2 * axis + side].kind == DiffusiveBoundaryKind::periodic))
+            throw std::invalid_argument(
+                "physical diffusive boundary differs from bound mesh topology");
+        }
       }
+    } catch (...) {
+      session_error = std::current_exception();
+    }
+    if (all_reduce_max(session_error ? 1L : 0L, *lane_) != 0) {
+      if (lane_->size() == 1 && session_error)
+        std::rethrow_exception(session_error);
+      throw std::runtime_error("diffusion boundary preparation failed collectively");
     }
   }
 
@@ -158,175 +168,261 @@ class PreparedDiffusion {
     if (all_reduce_max(storage_error, *lane_) != 0)
       throw std::invalid_argument(
           "diffusion input/output do not match prepared scalar storage collectively");
-    for (std::size_t local = 0; local < input.local_size(); ++local) {
-      const auto law = factory(local);
-      const auto w = variable_.fab(local).view();
-      const auto a = coefficients_.fab(local).view();
-      const auto status = status_.fab(local).view();
-      const auto reason = reason_.fab(local).view();
-      const Box<Dim> evaluation_box =
-          prepared_amr_ghosts_ ? input.fab(local).grown_box().intersect(geometry_.domain())
-                               : input.box(local);
-      for_each_cell(evaluation_box, [=] POPS_HD(const Index<Dim>& cell) {
-        const auto evaluation = law(cell);
-        std::array<Real, Dim + 2> values;
-        if constexpr (requires {
-                        evaluation.evaluation_status;
-                        evaluation.reason_code;
-                        evaluation.values;
-                      }) {
-          int category = evaluation.evaluation_status;
-          if (category < 0 || category > 3)
-            category = 3;
-          status(cell, 0) = category;
-          reason(cell, 0) = evaluation.reason_code;
-          if (category != 0)
-            return;  // Failed native outputs remain unread.
-          values = evaluation.values;
-        } else {
-          values = evaluation;
-          status(cell, 0) = 0;
-          reason(cell, 0) = 0;
-        }
-        bool valid = Kokkos::isfinite(values[0]) && Kokkos::isfinite(values[Dim + 1]) &&
-                     values[Dim + 1] >= 0;
-        w(cell, 0) = values[0];
-        w(cell, 1) = values[Dim + 1];
-        for (int axis = 0; axis < Dim; ++axis) {
-          a(cell, axis) = values[axis + 1];
-          valid = valid && Kokkos::isfinite(values[axis + 1]) && values[axis + 1] > 0;
-        }
-        if (!valid) {
-          status(cell, 0) = 2;
-          reason(cell, 0) = 501;
-        }
-      });
+    std::exception_ptr preparation_error;
+    try {
+      for (std::size_t local = 0; local < input.local_size(); ++local) {
+        const auto law = factory(local);
+        const auto w = variable_.fab(local).view();
+        const auto a = coefficients_.fab(local).view();
+        const auto status = status_.fab(local).view();
+        const auto reason = reason_.fab(local).view();
+        const Box<Dim> evaluation_box =
+            prepared_amr_ghosts_ ? input.fab(local).grown_box().intersect(geometry_.domain())
+                                 : input.box(local);
+        for_each_cell(evaluation_box, [=] POPS_HD(const Index<Dim>& cell) {
+          const auto evaluation = law(cell);
+          std::array<Real, Dim + 2> values;
+          if constexpr (requires {
+                          evaluation.evaluation_status;
+                          evaluation.reason_code;
+                          evaluation.values;
+                        }) {
+            int category = evaluation.evaluation_status;
+            if (category < 0 || category > 3)
+              category = 3;
+            status(cell, 0) = category;
+            reason(cell, 0) = evaluation.reason_code;
+            if (category != 0)
+              return;  // Failed native outputs remain unread.
+            values = evaluation.values;
+          } else {
+            values = evaluation;
+            status(cell, 0) = 0;
+            reason(cell, 0) = 0;
+          }
+          bool valid = Kokkos::isfinite(values[0]) && Kokkos::isfinite(values[Dim + 1]) &&
+                       values[Dim + 1] >= 0;
+          w(cell, 0) = values[0];
+          w(cell, 1) = values[Dim + 1];
+          for (int axis = 0; axis < Dim; ++axis) {
+            a(cell, axis) = values[axis + 1];
+            valid = valid && Kokkos::isfinite(values[axis + 1]) && values[axis + 1] > 0;
+          }
+          if (!valid) {
+            status(cell, 0) = 2;
+            reason(cell, 0) = 501;
+          }
+        });
+      }
+      device_fence();
+    } catch (...) {
+      preparation_error = std::current_exception();
+      try {
+        device_fence();
+      } catch (...) {
+      }
     }
-    device_fence();
-    const int category = static_cast<int>(all_reduce_max(reduce_max_local(status_), *lane_));
-    if (category != 0) {
-      Real selected_reason = 0;
+    if (all_reduce_max(preparation_error ? 1L : 0L, *lane_) != 0) {
+      if (lane_->size() == 1 && preparation_error)
+        std::rethrow_exception(preparation_error);
+      throw DiffusiveEvaluationError("diffusive constitutive preparation failed collectively", 3,
+                                     501);
+    }
+    Real local_category = 0;
+    std::exception_ptr reduction_error;
+    try {
       for (std::size_t local = 0; local < input.local_size(); ++local) {
         const auto status = std::as_const(status_).fab(local).view();
-        const auto reason = std::as_const(reason_).fab(local).view();
-        selected_reason = std::max(
-            selected_reason,
-            for_each_cell_reduce_max(input.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-              return status(cell, 0) == category ? reason(cell, 0) : Real(0);
-            }));
+        const Box<Dim> evaluation_box =
+            prepared_amr_ghosts_ ? input.fab(local).grown_box().intersect(geometry_.domain())
+                                 : input.box(local);
+        local_category = std::max(
+            local_category,
+            for_each_cell_reduce_max(
+                evaluation_box, [=] POPS_HD(const Index<Dim>& cell) { return status(cell, 0); }));
+      }
+    } catch (...) {
+      reduction_error = std::current_exception();
+    }
+    if (all_reduce_max(reduction_error ? 1L : 0L, *lane_) != 0) {
+      if (lane_->size() == 1 && reduction_error)
+        std::rethrow_exception(reduction_error);
+      throw DiffusiveEvaluationError("diffusive status reduction failed collectively", 3, 501);
+    }
+    const int category = static_cast<int>(all_reduce_max(local_category, *lane_));
+    if (category != 0) {
+      Real selected_reason = 0;
+      reduction_error = nullptr;
+      try {
+        for (std::size_t local = 0; local < input.local_size(); ++local) {
+          const auto status = std::as_const(status_).fab(local).view();
+          const auto reason = std::as_const(reason_).fab(local).view();
+          selected_reason = std::max(
+              selected_reason,
+              for_each_cell_reduce_max(
+                  prepared_amr_ghosts_ ? input.fab(local).grown_box().intersect(geometry_.domain())
+                                       : input.box(local),
+                  [=] POPS_HD(const Index<Dim>& cell) {
+                    return status(cell, 0) == category ? reason(cell, 0) : Real(0);
+                  }));
+        }
+      } catch (...) {
+        reduction_error = std::current_exception();
+      }
+      if (all_reduce_max(reduction_error ? 1L : 0L, *lane_) != 0) {
+        if (lane_->size() == 1 && reduction_error)
+          std::rethrow_exception(reduction_error);
+        throw DiffusiveEvaluationError("diffusive reason reduction failed collectively", 3, 501);
       }
       selected_reason = all_reduce_max(selected_reason, *lane_);
       throw DiffusiveEvaluationError("diffusive constitutive evaluation failed", category,
                                      static_cast<unsigned>(selected_reason));
     }
-    if (!prepared_amr_ghosts_)
-      state_boundary_->fill_halo(input);
-    variable_boundary_->fill_halo(variable_);
-    coefficient_boundary_->fill_halo(coefficients_);
+    std::exception_ptr boundary_error;
+    try {
+      if (!prepared_amr_ghosts_)
+        state_boundary_->fill_halo(input);
+      variable_boundary_->fill_halo(variable_);
+      coefficient_boundary_->fill_halo(coefficients_);
+    } catch (...) {
+      boundary_error = std::current_exception();
+    }
+    if (all_reduce_max(boundary_error ? 1L : 0L, *lane_) != 0) {
+      if (lane_->size() == 1 && boundary_error)
+        std::rethrow_exception(boundary_error);
+      throw DiffusiveEvaluationError("diffusive halo preparation failed collectively", 3, 501);
+    }
     const auto geometry = geometry_;
     const auto physical = physical_;
-    for (std::size_t local = 0; local < input.local_size(); ++local) {
-      const auto q = std::as_const(input).fab(local).view();
-      const auto w = std::as_const(variable_).fab(local).view();
-      const auto a = std::as_const(coefficients_).fab(local).view();
-      const auto faces = faces_[local].view();
-      for (int axis = 0; axis < Dim; ++axis) {
-        const auto face_values = faces.axes[axis];
-        for_each_cell(nd::face_box(input.box(local), axis), [=] POPS_HD(const Index<Dim>& face) {
-          Index<Dim> left = face, right = face;
-          --left[axis];
-          const bool lower = face[axis] == geometry.domain().lo[axis];
-          const bool upper = face[axis] == geometry.domain().hi[axis] + 1;
-          const auto boundary = physical[2 * axis + (upper ? 1 : 0)];
-          const Real h = geometry.spacing(axis);
-          Real flux = Real(0), conductance = Real(0), left_loss = Real(0), right_loss = Real(0);
-          if constexpr (Fitted) {
-            Real left_state, right_state, left_potential, right_potential, coefficient,
-                distance = h;
-            if ((lower || upper) && boundary.kind != DiffusiveBoundaryKind::periodic) {
-              const Index<Dim> center = lower ? right : left;
-              Index<Dim> inside = center;
-              inside[axis] += lower ? 1 : -1;
-              coefficient = Real(1.5) * a(center, axis) - Real(0.5) * a(inside, axis);
-              distance = h / Real(2);
-              const Real density_trace = boundary.trace(geometry, face, axis);
-              const Real potential_trace =
-                  potential_boundaries[2 * axis + (upper ? 1 : 0)].trace(geometry, face, axis);
-              left_state = lower ? density_trace : q(center, 0);
-              right_state = lower ? q(center, 0) : density_trace;
-              left_potential = lower ? potential_trace : w(center, 0);
-              right_potential = lower ? w(center, 0) : potential_trace;
-            } else {
-              coefficient = Real(0.5) * (a(left, axis) + a(right, axis));
-              left_state = q(left, 0);
-              right_state = q(right, 0);
-              left_potential = w(left, 0);
-              right_potential = w(right, 0);
-            }
-            const Real jump = drift_ratio * (right_potential - left_potential);
-            left_loss = coefficient * scharfetter_gummel_bernoulli(jump) / distance;
-            right_loss = coefficient * scharfetter_gummel_bernoulli(-jump) / distance;
-            flux = right_loss * right_state - left_loss * left_state;
-            if (!(coefficient > 0))
-              flux = std::numeric_limits<Real>::quiet_NaN();
-          } else if ((lower || upper) && boundary.kind != DiffusiveBoundaryKind::periodic) {
-            const Index<Dim> center = lower ? right : left;
-            const Real orientation = lower ? Real(-1) : Real(1);
-            if (boundary.kind == DiffusiveBoundaryKind::conormal)
-              flux = orientation * boundary.trace(geometry, face, axis);
-            else {
-              Index<Dim> inside = center;
-              inside[axis] += lower ? 1 : -1;
-              const Real coefficient = Real(1.5) * a(center, axis) - Real(0.5) * a(inside, axis);
-              flux = orientation * coefficient * Real(2) *
-                     (boundary.trace(geometry, face, axis) - w(center, 0)) / h;
-              conductance = Real(2) * coefficient * w(center, 1) / h;
+    std::exception_ptr face_error;
+    try {
+      for (std::size_t local = 0; local < input.local_size(); ++local) {
+        const auto q = std::as_const(input).fab(local).view();
+        const auto w = std::as_const(variable_).fab(local).view();
+        const auto a = std::as_const(coefficients_).fab(local).view();
+        const auto faces = faces_[local].view();
+        for (int axis = 0; axis < Dim; ++axis) {
+          const auto face_values = faces.axes[axis];
+          for_each_cell(nd::face_box(input.box(local), axis), [=] POPS_HD(const Index<Dim>& face) {
+            Index<Dim> left = face, right = face;
+            --left[axis];
+            const bool lower = face[axis] == geometry.domain().lo[axis];
+            const bool upper = face[axis] == geometry.domain().hi[axis] + 1;
+            const auto boundary = physical[2 * axis + (upper ? 1 : 0)];
+            const Real h = geometry.spacing(axis);
+            Real flux = Real(0), conductance = Real(0), left_loss = Real(0), right_loss = Real(0);
+            if constexpr (Fitted) {
+              Real left_state, right_state, left_potential, right_potential, coefficient,
+                  distance = h;
+              if ((lower || upper) && boundary.kind != DiffusiveBoundaryKind::periodic) {
+                const Index<Dim> center = lower ? right : left;
+                Index<Dim> inside = center;
+                inside[axis] += lower ? 1 : -1;
+                coefficient = Real(1.5) * a(center, axis) - Real(0.5) * a(inside, axis);
+                distance = h / Real(2);
+                const Real density_trace = boundary.trace(geometry, face, axis);
+                const Real potential_trace =
+                    potential_boundaries[2 * axis + (upper ? 1 : 0)].trace(geometry, face, axis);
+                left_state = lower ? density_trace : q(center, 0);
+                right_state = lower ? q(center, 0) : density_trace;
+                left_potential = lower ? potential_trace : w(center, 0);
+                right_potential = lower ? w(center, 0) : potential_trace;
+              } else {
+                coefficient = Real(0.5) * (a(left, axis) + a(right, axis));
+                left_state = q(left, 0);
+                right_state = q(right, 0);
+                left_potential = w(left, 0);
+                right_potential = w(right, 0);
+              }
+              const Real jump = drift_ratio * (right_potential - left_potential);
+              left_loss = coefficient * scharfetter_gummel_bernoulli(jump) / distance;
+              right_loss = coefficient * scharfetter_gummel_bernoulli(-jump) / distance;
+              flux = right_loss * right_state - left_loss * left_state;
               if (!(coefficient > 0))
                 flux = std::numeric_limits<Real>::quiet_NaN();
+            } else if ((lower || upper) && boundary.kind != DiffusiveBoundaryKind::periodic) {
+              const Index<Dim> center = lower ? right : left;
+              const Real orientation = lower ? Real(-1) : Real(1);
+              if (boundary.kind == DiffusiveBoundaryKind::conormal)
+                flux = orientation * boundary.trace(geometry, face, axis);
+              else {
+                Index<Dim> inside = center;
+                inside[axis] += lower ? 1 : -1;
+                const Real coefficient = Real(1.5) * a(center, axis) - Real(0.5) * a(inside, axis);
+                flux = orientation * coefficient * Real(2) *
+                       (boundary.trace(geometry, face, axis) - w(center, 0)) / h;
+                conductance = Real(2) * coefficient * w(center, 1) / h;
+                if (!(coefficient > 0))
+                  flux = std::numeric_limits<Real>::quiet_NaN();
+              }
+            } else {
+              const Real coefficient = Real(0.5) * (a(left, axis) + a(right, axis));
+              flux = coefficient * (w(right, 0) - w(left, 0)) / h;
+              const Real difference = q(right, 0) - q(left, 0);
+              const Real secant = difference != 0 ? (w(right, 0) - w(left, 0)) / difference
+                                                  : Real(0.5) * (w(right, 1) + w(left, 1));
+              conductance = coefficient * secant / h;
             }
-          } else {
-            const Real coefficient = Real(0.5) * (a(left, axis) + a(right, axis));
-            flux = coefficient * (w(right, 0) - w(left, 0)) / h;
-            const Real difference = q(right, 0) - q(left, 0);
-            const Real secant = difference != 0 ? (w(right, 0) - w(left, 0)) / difference
-                                                : Real(0.5) * (w(right, 1) + w(left, 1));
-            conductance = coefficient * secant / h;
+            if constexpr (!Fitted)
+              left_loss = right_loss = conductance;
+            face_values(face, 0) = flux;
+            face_values(face, 1) = left_loss;
+            face_values(face, 2) = right_loss;
+          });
+        }
+        const auto result = output.fab(local).view();
+        const auto status = status_.fab(local).view();
+        for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+          Real divergence = 0, frequency = 0;
+          bool valid = true;
+          for (int axis = 0; axis < Dim; ++axis) {
+            Index<Dim> upper = cell;
+            ++upper[axis];
+            for (int side = 0; side < 2; ++side) {
+              const auto face = side == 0 ? cell : upper;
+              valid = valid && Kokkos::isfinite(faces.axes[axis](face, 0)) &&
+                      Kokkos::isfinite(faces.axes[axis](face, 1)) &&
+                      faces.axes[axis](face, 1) >= 0 &&
+                      Kokkos::isfinite(faces.axes[axis](face, 2)) && faces.axes[axis](face, 2) >= 0;
+            }
+            divergence +=
+                (faces.axes[axis](upper, 0) - faces.axes[axis](cell, 0)) / geometry.spacing(axis);
+            frequency +=
+                (faces.axes[axis](upper, 1) + faces.axes[axis](cell, 2)) / geometry.spacing(axis);
           }
-          if constexpr (!Fitted)
-            left_loss = right_loss = conductance;
-          face_values(face, 0) = flux;
-          face_values(face, 1) = left_loss;
-          face_values(face, 2) = right_loss;
+          result(cell, 0) = divergence;
+          status(cell, 0) =
+              valid && Kokkos::isfinite(divergence) && Kokkos::isfinite(frequency) && frequency >= 0
+                  ? frequency
+                  : std::numeric_limits<Real>::infinity();
         });
       }
-      const auto result = output.fab(local).view();
-      const auto status = status_.fab(local).view();
-      for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-        Real divergence = 0, frequency = 0;
-        bool valid = true;
-        for (int axis = 0; axis < Dim; ++axis) {
-          Index<Dim> upper = cell;
-          ++upper[axis];
-          for (int side = 0; side < 2; ++side) {
-            const auto face = side == 0 ? cell : upper;
-            valid = valid && Kokkos::isfinite(faces.axes[axis](face, 0)) &&
-                    Kokkos::isfinite(faces.axes[axis](face, 1)) && faces.axes[axis](face, 1) >= 0 &&
-                    Kokkos::isfinite(faces.axes[axis](face, 2)) && faces.axes[axis](face, 2) >= 0;
-          }
-          divergence +=
-              (faces.axes[axis](upper, 0) - faces.axes[axis](cell, 0)) / geometry.spacing(axis);
-          frequency +=
-              (faces.axes[axis](upper, 1) + faces.axes[axis](cell, 2)) / geometry.spacing(axis);
-        }
-        result(cell, 0) = divergence;
-        status(cell, 0) =
-            valid && Kokkos::isfinite(divergence) && Kokkos::isfinite(frequency) && frequency >= 0
-                ? frequency
-                : std::numeric_limits<Real>::infinity();
-      });
+      device_fence();
+    } catch (...) {
+      face_error = std::current_exception();
+      try {
+        device_fence();
+      } catch (...) {
+      }
     }
-    device_fence();
-    frequency_ = all_reduce_max(reduce_max_local(status_), *lane_);
+    if (all_reduce_max(face_error ? 1L : 0L, *lane_) != 0) {
+      if (lane_->size() == 1 && face_error)
+        std::rethrow_exception(face_error);
+      throw DiffusiveEvaluationError("diffusive face preparation failed collectively", 3, 501);
+    }
+    Real local_frequency = Real(0);
+    reduction_error = nullptr;
+    try {
+      local_frequency = reduce_max_local(status_);
+    } catch (...) {
+      reduction_error = std::current_exception();
+    }
+    if (all_reduce_max(reduction_error ? 1L : 0L, *lane_) != 0) {
+      if (lane_->size() == 1 && reduction_error)
+        std::rethrow_exception(reduction_error);
+      throw DiffusiveEvaluationError("diffusive frequency reduction failed collectively", 3, 501);
+    }
+    frequency_ = all_reduce_max(local_frequency, *lane_);
     if (!std::isfinite(frequency_))
       throw DiffusiveEvaluationError("diffusive face evaluation is invalid");
     evaluated_ = true;
@@ -344,12 +440,24 @@ class PreparedDiffusion {
   template <class Context>
   void stage_accepted_exchanges(Context& ctx, int program_block, const std::string& operation,
                                 const std::string& occurrence, const std::string& evaluation,
-                                Real temporal_weight) const {
+                                Real temporal_weight, bool physical_boundary_only = false) const {
     (void)explicit_frequency();
     sync_host();
     const Field* const active = ctx.pointwise_active_mask(program_block, variable_);
     if (active != nullptr)
       sync_host();
+    long active_layout_error = 0;
+    if (active != nullptr) {
+      if (active->local_size() != variable_.local_size())
+        active_layout_error = 1;
+      else
+        for (std::size_t local = 0; local < variable_.local_size(); ++local)
+          if (active->box(local) != variable_.box(local))
+            active_layout_error = 1;
+    }
+    if (all_reduce_max(active_layout_error, *lane_) != 0)
+      throw std::invalid_argument(
+          "accepted diffusive face mask differs from local patches collectively");
     for (std::size_t local = 0; local < variable_.local_size(); ++local) {
       const auto box = variable_.box(local);
       const auto extent = box.extent();
@@ -373,6 +481,14 @@ class PreparedDiffusion {
           for (int side = 0; side < 2; ++side) {
             Index<Dim> face = cell;
             face[axis] += side;
+            if (physical_boundary_only) {
+              const bool domain_boundary = side == 0
+                                               ? face[axis] == geometry_.domain().lo[axis]
+                                               : face[axis] == geometry_.domain().hi[axis] + 1;
+              if (!domain_boundary ||
+                  physical_[2 * axis + side].kind == DiffusiveBoundaryKind::periodic)
+                continue;
+            }
             std::string identity = "cell";
             for (int d = 0; d < Dim; ++d)
               identity += ":" + std::to_string(cell[d]);
