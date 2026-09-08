@@ -4,7 +4,9 @@
 This is the single-level counterpart of the AMR history replay proof.  A real compiled Program owns
 a five-slot state ring whose ``Interval(2)`` policy persists anchors ``{0, 2, 4}``; restart must
 recompute both missing slots, restore the exact last accepted Program ``dt``, and then produce a
-bit-identical continuation under a non-constant sequence of accepted step sizes.
+bit-identical continuation under a non-constant sequence of accepted step sizes. The same full
+sequence separately checks Dense history with accepted Balance publication. Interval plus Balance
+is explicitly refused until its context has a replay provider.
 
 Missing native prerequisites are explicit skips.  Once they are present, compilation, installation,
 selective checkpointing, replay, and exact continuation are required to succeed.
@@ -15,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from pathlib import Path
 
 from tests.python.support.requirements import (
     default_cxx,
@@ -35,8 +38,8 @@ try:
 
     import pops
     from pops.diagnostics import Balance, BalanceLedger
-    from pops.output import NPZ, ScientificOutput
-    from pops.time._history.persistence import Interval
+    from pops.output import NPZ, ScientificOutput, ParallelMode
+    from pops.time._history.persistence import Dense, Interval
     from tests.python.integration._final_field_program import (
         passive_source_model,
         resolve_periodic_field_program,
@@ -75,11 +78,11 @@ _BALANCE_LEDGER = BalanceLedger("uniform-selective-replay")
 _BALANCE_ROUTE: dict[str, str] = {}
 
 
-def _program(state_instance, _rate, _field):
-    """Five-slot affine Balance Program whose omitted anchors are exactly replayable."""
+def _program(state_instance, _rate, _field, *, policy, with_balance):
+    """Keep the affine replay graph separate from the context-dependent Balance graph."""
     program = pops.Program("uniform_selective_state5")
     state = program.state(state_instance)
-    program.keep_history(state, depth=4, checkpoint_policy=Interval(2))
+    program.keep_history(state, depth=4, checkpoint_policy=policy)
     next_state = program.value(
         "Un",
         state.n
@@ -87,25 +90,26 @@ def _program(state_instance, _rate, _field):
         + 0.0 * state.prev(4),
         at=state.next.point,
     )
-    increment = program.value(
-        "accepted_increment",
-        next_state - state.n,
-        at=state.next.point,
-    )
-    storage_change = program.sum(increment)
-    outward_boundary_flux = -program.sum(increment)
-    sources = program.sum(increment)
-    reflux = program.sum(increment)
-    projection = -2.0 * program.sum(increment)
-    program.record_balance(
-        _BALANCE_LEDGER,
-        storage_change=storage_change,
-        outward_boundary_flux=outward_boundary_flux,
-        sources=sources,
-        reflux=reflux,
-        projection=projection,
-    )
-    _BALANCE_ROUTE["token"] = _BALANCE_LEDGER.route_identity(state.block).token
+    if with_balance:
+        increment = program.value(
+            "accepted_increment",
+            next_state - state.n,
+            at=state.next.point,
+        )
+        storage_change = program.sum(increment)
+        outward_boundary_flux = -program.sum(increment)
+        sources = program.sum(increment)
+        reflux = program.sum(increment)
+        projection = -2.0 * program.sum(increment)
+        program.record_balance(
+            _BALANCE_LEDGER,
+            storage_change=storage_change,
+            outward_boundary_flux=outward_boundary_flux,
+            sources=sources,
+            reflux=reflux,
+            projection=projection,
+        )
+        _BALANCE_ROUTE["token"] = _BALANCE_LEDGER.route_identity(state.block).token
     program.commit(state.next, next_state)
     program.step_strategy(pops.time.ExternalTimeGrid(GRID_ID))
     return program
@@ -115,7 +119,7 @@ def _balance_consumers(_case, block, _state, program):
     schedule = pops.time.every(2, clock=program.clock)
     return (
         ScientificOutput(
-            format=NPZ(),
+            format=NPZ(ParallelMode.ROOT),
             schedule=schedule,
             diagnostics=(
                 Balance(
@@ -136,9 +140,12 @@ def _initial_state():
 
 
 def _build(artifact, initial):
+    from tests.python.support.native_execution_context import artifact_execution_context
+
     return pops.bind(
         artifact,
         initial_state={"blk": np.ascontiguousarray(np.stack([initial]))},
+        resources={"execution_context": artifact_execution_context(artifact)},
     )
 
 
@@ -180,10 +187,27 @@ def _assert_rings_equal(left, right):
             )
 
 
-def _assert_due_balance(sim):
+def _published_balances(output_dir, expected_steps):
+    from pops.output._writers.npz import read_npz
+
+    balances = {}
+    for path in (Path(output_dir) / "balance_due").rglob("*.npz"):
+        reopened = read_npz(path)
+        snapshot = reopened.manifest["snapshot"]
+        step = int(snapshot["clock"]["macro_step"])
+        assert step not in balances, "duplicate Balance publication at one accepted step"
+        (payload,) = snapshot["diagnostics"]
+        assert float.fromhex(payload["value"]) == 0.0
+        terms = {name: float.fromhex(value) for name, value in payload["terms"].items()}
+        _assert_due_balance(terms)
+        balances[step] = terms
+    assert set(balances) == set(expected_steps), "Balance publication lost its every(2) cadence"
+    return balances
+
+
+def _assert_due_balance(terms):
     token = _BALANCE_ROUTE.get("token")
     assert token, "the public Balance consumer lost its exact Program ledger route"
-    terms = dict(sim._executor._s._accepted_balance_terms(token))
     required = {
         "storage_change",
         "outward_boundary_flux",
@@ -211,13 +235,17 @@ def _assert_due_balance(sim):
     assert residual == 0.0
 
 
-def test_uniform_interval_history_variable_dt_restart_is_bit_identical():
+def _resolve_scenario(*, policy, with_balance):
     model = passive_source_model(
         "uniform_selective_history_model", coefficient=COEFFICIENT
     )
-    resolved = resolve_periodic_field_program(
+
+    def author(state_instance, rate, field):
+        return _program(state_instance, rate, field, policy=policy, with_balance=with_balance)
+
+    return resolve_periodic_field_program(
         model,
-        _program,
+        author,
         name="uniform-selective-history",
         block_name="blk",
         target="system",
@@ -226,8 +254,12 @@ def test_uniform_interval_history_variable_dt_restart_is_bit_identical():
         cxx=default_cxx(),
         include=repo_include(),
         strict_restart=True,
-        consumer_factory=_balance_consumers,
+        consumer_factory=_balance_consumers if with_balance else None,
     )
+
+
+def _assert_restart_scenario(*, policy, with_balance, expected_slots):
+    resolved = _resolve_scenario(policy=policy, with_balance=with_balance)
     artifact = pops.compile(resolved)
     artifact.verify()
     initial = _initial_state()
@@ -239,7 +271,8 @@ def test_uniform_interval_history_variable_dt_restart_is_bit_identical():
             DT_SEQUENCE[:2],
             output_dir=os.path.join(tmp, "continuous-due"),
         )
-        _assert_due_balance(continuous)
+        if with_balance:
+            _published_balances(os.path.join(tmp, "continuous-due"), (2,))
         _advance(
             continuous,
             DT_SEQUENCE[2:CHECKPOINT_STEP],
@@ -255,6 +288,10 @@ def test_uniform_interval_history_variable_dt_restart_is_bit_identical():
         )
         expected_state = _state(continuous)
         expected_rings = _rings(continuous)
+        if with_balance:
+            expected_terms = _published_balances(
+                os.path.join(tmp, "continuous-final"), (8, 10),
+            )
 
         interrupted = _build(artifact, initial)
         _advance(
@@ -289,7 +326,7 @@ def test_uniform_interval_history_variable_dt_restart_is_bit_identical():
                 int(slot)
                 for slot in payload["history_stored_slots_" + history_name]
             ]
-            assert requested == [0, 2, 4]
+            assert requested == expected_slots
             assert stored == requested
             assert str(payload["history_storage_mode_" + history_name]) == "policy"
             slot_dts = np.asarray(
@@ -321,15 +358,20 @@ def test_uniform_interval_history_variable_dt_restart_is_bit_identical():
         assert report is not None
         assert len(report.histories) == 1
         assert report.histories[0]["storage_mode"] == "policy"
-        assert report.histories[0]["requested_slots"] == 3
-        assert report.histories[0]["stored_slots"] == 3
-        assert report.histories[0]["recomputed_slots"] == 2
+        assert report.histories[0]["requested_slots"] == len(expected_slots)
+        assert report.histories[0]["stored_slots"] == len(expected_slots)
+        assert report.histories[0]["recomputed_slots"] == 5 - len(expected_slots)
 
         _advance(
             restarted,
             DT_SEQUENCE[CHECKPOINT_STEP:],
             output_dir=os.path.join(tmp, "restarted-final"),
         )
+        if with_balance:
+            resumed_terms = _published_balances(
+                os.path.join(tmp, "restarted-final"), (8, 10),
+            )
+            assert resumed_terms == expected_terms, (resumed_terms, expected_terms)
 
     assert restarted.macro_step() == len(DT_SEQUENCE)
     assert restarted.time() == continuous.time()
@@ -339,11 +381,33 @@ def test_uniform_interval_history_variable_dt_restart_is_bit_identical():
     _assert_rings_equal(expected_rings, _rings(restarted))
 
 
+def test_uniform_interval_history_variable_dt_restart_is_bit_identical():
+    _assert_restart_scenario(policy=Interval(2), with_balance=False, expected_slots=[0, 2, 4])
+
+
+def test_uniform_dense_balance_history_restart_is_bit_identical():
+    _assert_restart_scenario(policy=Dense(), with_balance=True, expected_slots=[0, 1, 2, 3, 4])
+
+
+def test_interval_balance_requires_explicit_replay_context():
+    from pops._report import DiagnosticError
+
+    try:
+        pops.compile(_resolve_scenario(policy=Interval(2), with_balance=True))
+    except DiagnosticError as exc:
+        assert "history_persistence.unrestored_replay_context" in str(exc)
+        assert "reduce" in str(exc)
+    else:
+        raise AssertionError("Interval+Balance was admitted without a replay context provider")
+
+
 def _run():
+    test_interval_balance_requires_explicit_replay_context()
     test_uniform_interval_history_variable_dt_restart_is_bit_identical()
+    test_uniform_dense_balance_history_restart_is_bit_identical()
     print(
         "Uniform selective Interval(2) variable-dt checkpoint/restart: "
-        "bit-identical continuation"
+        "bit-identical continuation; Dense Balance continuation and Interval refusal"
     )
 
 

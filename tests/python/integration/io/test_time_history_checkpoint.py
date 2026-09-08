@@ -671,9 +671,12 @@ def _compile_artifact(
 
 
 def _bind_artifact(pops, np, artifact, initial):
+    from tests.python.support.native_execution_context import artifact_execution_context
+
     return pops.bind(
         artifact,
         initial_state={"blk": np.ascontiguousarray(initial)},
+        resources={"execution_context": artifact_execution_context(artifact)},
     )
 
 
@@ -729,7 +732,7 @@ def _run_section_b(t):
         ckpt = sim1.checkpoint(os.path.join(tmp, "ab2"))
 
         # A correctly authenticated payload may still advertise one extra ring. Clone the complete
-        # real-ring payload, reseal the envelope, and prove the exact-schema rejection happens before
+        # real-ring payload, reseal the envelope, and prove resource and exact-schema rejection happen before
         # any native/Python restart mutation.
         from pops.runtime._checkpoint_manifest import (
             IDENTITY_KEY,
@@ -755,18 +758,38 @@ def _run_section_b(t):
         with open(poisoned_ckpt, "wb") as stream:
             np.savez_compressed(stream, **poisoned_payload)
 
-        poisoned = _bind_artifact(pops, np, artifact, initial)
-        state_before = np.array(poisoned.state_global("blk"), copy=True)
-        time_before = poisoned.time()
-        step_before = poisoned.macro_step()
-        histories_before = list(poisoned.history_names())
-        assert histories_before == [source_history]
-        with pytest.raises(RuntimeError, match="checkpoint Program histories"):
-            poisoned.restart(poisoned_ckpt)
-        assert np.array_equal(poisoned.state_global("blk"), state_before)
-        assert poisoned.time() == time_before
-        assert poisoned.macro_step() == step_before
-        assert list(poisoned.history_names()) == histories_before
+        def assert_rejected_without_mutation(path, error_type, message):
+            poisoned = _bind_artifact(pops, np, artifact, initial)
+            state_before = np.array(poisoned.state_global("blk"), copy=True)
+            time_before = poisoned.time()
+            step_before = poisoned.macro_step()
+            histories_before = list(poisoned.history_names())
+            assert histories_before == [source_history]
+            with pytest.raises(error_type, match=message):
+                poisoned.restart(path)
+            assert np.array_equal(poisoned.state_global("blk"), state_before)
+            assert poisoned.time() == time_before
+            assert poisoned.macro_step() == step_before
+            assert list(poisoned.history_names()) == histories_before
+
+        # The extra ring exceeds the exact live member budget and is refused before schema restore.
+        assert_rejected_without_mutation(
+            poisoned_ckpt, ValueError, "checkpoint NPZ member count exceeds its live resource budget",
+        )
+        # Keep the independent exact-schema oracle load-bearing at the same resource footprint:
+        # rename the one real ring instead of adding one, and authenticate the complete payload.
+        renamed_payload = {
+            key: value for key, value in poisoned_payload.items()
+            if source_history not in key and key not in {MANIFEST_KEY, IDENTITY_KEY}
+        }
+        renamed_payload["history_names"] = np.asarray(["poison"])
+        seal_checkpoint_payload(sim1, renamed_payload, runtime_kind="uniform")
+        renamed_ckpt = os.path.join(tmp, "ab2_renamed_history.npz")
+        with open(renamed_ckpt, "wb") as stream:
+            np.savez_compressed(stream, **renamed_payload)
+        assert_rejected_without_mutation(
+            renamed_ckpt, RuntimeError, "checkpoint Program histories",
+        )
 
         # (3) Fresh public bind of the same artifact, RESTART, then run N/2 more -> B.
         sim2 = _bind_artifact(pops, np, artifact, initial)
@@ -876,18 +899,29 @@ def _run_section_c(t):
         assert report.accepted_steps == 2
         ckpt = sim.checkpoint(os.path.join(tmp, "ab2_for_mismatch"))
 
-        # A fresh public bind of the WRONG Forward-Euler artifact restarts the AB2 checkpoint.
-        sim2 = _bind_artifact(pops, np, fe, initial)
-        try:
-            sim2.restart(ckpt)
-        except ValueError as exc:
-            msg = str(exc)
-            assert "identity" in msg and "bound runtime" in msg, (
-                "the canonical identity mismatch must fail before mutation; got: %s" % msg
-            )
-            print("  hash mismatch raised as expected: %s" % msg.splitlines()[0][:120])
-            return True
-    raise AssertionError("restarting a different compiled Program must raise (spec test 46)")
+        # Forward Euler declares no history capacity, so the exact live resource budget rejects
+        # this larger AB2 archive before decoding its identity. Keep that refusal and rollback.
+        def reject_foreign_artifact(target, expected_message):
+            candidate = _bind_artifact(pops, np, target, initial)
+            before = np.array(candidate.state_global("blk"), copy=True)
+            before_time, before_step = candidate.time(), candidate.macro_step()
+            with pytest.raises(ValueError, match=expected_message):
+                candidate.restart(ckpt)
+            assert np.array_equal(candidate.state_global("blk"), before)
+            assert (candidate.time(), candidate.macro_step()) == (before_time, before_step)
+
+        reject_foreign_artifact(fe, "checkpoint NPZ member count exceeds its live resource budget")
+        # An equally sized AB2 ring reaches the independent canonical identity guard. Its model
+        # and method match, but its explicitly different Program identity must never be accepted.
+        other_ab2 = _compile_artifact(
+            pops, t, lt.AdamsBashforth, {"order": 2},
+            "program_identity_other_c", "program_identity_model_c", n,
+        )
+        assert ab2.blocks[0].model.model_hash == other_ab2.blocks[0].model.model_hash
+        assert ab2.program.program_hash != other_ab2.program.program_hash
+        reject_foreign_artifact(other_ab2, "identity.*bound runtime")
+        print("  foreign FE resource budget and equal-footprint AB2 identity both refused before mutation")
+        return True
 
 
 def test_uniform_ab2_history_checkpoint_restart_is_bit_identical():
