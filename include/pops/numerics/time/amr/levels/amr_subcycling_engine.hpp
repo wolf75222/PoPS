@@ -195,6 +195,15 @@ class PreparedMultiBlockAmrSubcyclingEngine {
     return (*attempt_candidates_)[block][level];
   }
 
+  bool has_synchronized_groups() const noexcept { return synchronized_groups_ != nullptr; }
+
+  LevelAdvanceGroup synchronized_level_group(std::size_t level) const {
+    if (synchronized_groups_ == nullptr)
+      throw std::logic_error(
+          "AMR synchronized level envelope requires an active hierarchy attempt");
+    return LevelAdvanceGroup(synchronized_groups_->at(level));
+  }
+
   /// Four-argument advance keeps a no-op staging path so generic callers retain their
   /// existing collective sequence.
   template <class Advance, class Reflux, class Validate>
@@ -208,7 +217,7 @@ class PreparedMultiBlockAmrSubcyclingEngine {
   /// The callback is generic; embedded-boundary policy belongs to the caller.
   template <class Advance, class Reflux, class Validate, class Stage>
   void advance(const ::pops::amr::ClockWindow& root, Advance&& advance_level, Reflux&& reflux,
-               Validate&& validate, Stage&& stage) {
+               Validate&& validate, Stage&& stage, bool synchronized = false) {
     require_live_();
     if (root.begin.level != 0 || root.end.level != 0 ||
         root.begin.macro_step != root.end.macro_step || !(root.begin.phase < root.end.phase) ||
@@ -262,9 +271,13 @@ class PreparedMultiBlockAmrSubcyclingEngine {
     try {
       std::vector<const field_type*> no_parent;
       std::vector<ledger_type*> no_incoming_flux;
-      advance_level_recursive_(0, root, 0, no_parent, no_incoming_flux, candidates,
-                               candidate_histories, candidate_clocks, candidate_ledgers, attempt,
-                               advance_level, reflux);
+      if (synchronized)
+        advance_synchronized_(root, candidates, candidate_histories, candidate_clocks,
+                              candidate_ledgers, attempt, advance_level, reflux);
+      else
+        advance_level_recursive_(0, root, 0, no_parent, no_incoming_flux, candidates,
+                                 candidate_histories, candidate_clocks, candidate_ledgers, attempt,
+                                 advance_level, reflux);
 
       for (std::size_t block = 0; block < hierarchy_->block_count(); ++block)
         for (std::size_t level = 0; level < hierarchy_->level_count(); ++level)
@@ -562,6 +575,101 @@ class PreparedMultiBlockAmrSubcyclingEngine {
   }
 
   template <class Advance, class Reflux>
+  void advance_synchronized_(const ::pops::amr::ClockWindow& root, CandidateMatrix& candidates,
+                             HistoryMatrix& histories, ClockMatrix& clocks,
+                             LedgerMatrix& candidate_ledgers, std::uint64_t attempt,
+                             Advance& advance_level, Reflux& reflux) {
+    const std::size_t levels = hierarchy_->level_count();
+    const std::size_t blocks = hierarchy_->block_count();
+    std::vector<::pops::amr::ClockWindow> windows;
+    CandidateMatrix older;
+    std::vector<std::vector<ledger_type>> ledgers;
+    std::vector<std::vector<LevelAdvanceContext>> groups;
+    invoke_collectively_(
+        [&] {
+          windows.push_back(root);
+          for (std::size_t level = 0; level < relations_.size(); ++level) {
+            const auto children = relations_[level].partition(windows.back());
+            if (children.size() != 1 ||
+                children.front().window.begin.physical_time != root.begin.physical_time ||
+                children.front().window.end.physical_time != root.end.physical_time)
+              throw std::invalid_argument(
+                  "synchronized composite field stage requires every child state "
+                  "on its parent physical-time window; offending parent level " +
+                  std::to_string(level));
+            windows.push_back(children.front().window);
+          }
+          older = candidates;
+          ledgers.resize(levels - 1);
+          for (auto& level : ledgers) {
+            level.reserve(blocks);
+            for (std::size_t block = 0; block < blocks; ++block) {
+              level.emplace_back(flux_budget_);
+              level.back().begin(attempt);
+            }
+          }
+          groups.resize(levels);
+          for (std::size_t level = 0; level < levels; ++level)
+            for (std::size_t block = 0; block < blocks; ++block)
+              groups[level].push_back(LevelAdvanceContext{
+                  block, hierarchy_->block_identity(block), level, 0, attempt, windows[level],
+                  candidates[block][level], level == 0 ? nullptr : &older[block][level - 1],
+                  level == 0 ? nullptr : &ledgers[level - 1][block],
+                  level + 1 == levels ? nullptr : &ledgers[level][block]});
+          Kokkos::fence();
+        },
+        "AMR synchronized envelope preparation failed collectively");
+    synchronized_groups_ = &groups;
+    try {
+      invoke_collectively_([&] { advance_level(LevelAdvanceGroup(groups.front())); },
+                           "AMR synchronized hierarchy callback failed collectively");
+      synchronized_groups_ = nullptr;
+    } catch (...) {
+      synchronized_groups_ = nullptr;
+      throw;
+    }
+    invoke_collectively_(
+        [&] {
+          for (std::size_t level = 0; level < levels; ++level)
+            for (std::size_t block = 0; block < blocks; ++block) {
+              histories[block][level].emplace(AcceptedHistory{
+                  older[block][level], field_type(candidates[block][level]), windows[level]});
+              clocks[block][level] = windows[level].end;
+            }
+        },
+        "AMR synchronized history preparation failed collectively");
+    for (std::size_t child = levels; child-- > 1;) {
+      const std::size_t parent = child - 1;
+      const auto ratio =
+          hierarchy_->topology_runtime().hierarchy().layout(child).ratio_from_parent();
+      const ::pops::amr::reflux::FaceRefinementMapping<Dim> mapping{
+          hierarchy_->topology_runtime().hierarchy().layout(parent).domain().lo,
+          hierarchy_->topology_runtime().hierarchy().layout(child).domain().lo};
+      for (std::size_t block = 0; block < blocks; ++block) {
+        invoke_collectively_([&] { ledgers[parent][block].commit(); },
+                             "AMR synchronized flux-ledger commit failed collectively");
+        RefluxContext context{block,
+                              hierarchy_->block_identity(block),
+                              parent,
+                              attempt,
+                              windows[parent],
+                              candidates[block][parent],
+                              candidates[block][child],
+                              ledgers[parent][block],
+                              ratio,
+                              mapping};
+        invoke_collectively_([&] { reflux(context); },
+                             "AMR synchronized reflux failed collectively");
+        execute_average_down_collectively(hierarchy_->topology_runtime(), child,
+                                          std::as_const(candidates[block][child]),
+                                          candidates[block][parent], hierarchy_->lane());
+        histories[block][parent]->newer = field_type(candidates[block][parent]);
+        candidate_ledgers[block][parent].push_back(std::move(ledgers[parent][block]));
+      }
+    }
+  }
+
+  template <class Advance, class Reflux>
   void advance_level_recursive_(std::size_t level, const ::pops::amr::ClockWindow& window,
                                 int substep, const std::vector<const field_type*>& staged_parent,
                                 const std::vector<ledger_type*>& incoming_flux,
@@ -670,6 +778,7 @@ class PreparedMultiBlockAmrSubcyclingEngine {
   std::uint64_t next_attempt_ = 0;
   std::uint64_t last_accepted_attempt_ = 0;
   std::vector<std::vector<field_type>>* attempt_candidates_ = nullptr;
+  std::vector<std::vector<LevelAdvanceContext>>* synchronized_groups_ = nullptr;
 };
 
 }  // namespace pops::numerics::time::amr

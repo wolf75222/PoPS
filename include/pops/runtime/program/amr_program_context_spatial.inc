@@ -223,8 +223,10 @@ void advance_hierarchy(double dt, Body&& body) const {
 }
 
 template <class Body>
-void advance_synchronized_hierarchy(double dt, Body&& body) const {
-  advance_prepared_hierarchy_(dt, std::forward<Body>(body), "advance_synchronized_hierarchy");
+void advance_synchronized_hierarchy(double dt, Body&& body, bool composite = false) const {
+  advance_prepared_hierarchy_(
+      dt, std::forward<Body>(body),
+      composite ? "advance_composite_hierarchy" : "advance_synchronized_hierarchy");
 }
 
 void prepare_same_level_cell_temporal_execution(
@@ -287,6 +289,33 @@ decltype(auto) with_program_resource_level(int selected, Function&& function) co
     active_level_ = prior;
     throw;
   }
+}
+
+// Resource selection alone must never impersonate another level's attempt authority.
+template <class Function>
+void with_program_attempt_level(int selected, Function&& function) const {
+  if (!multiblock_subcycling_ || !multiblock_subcycling_->has_synchronized_groups())
+    throw std::logic_error("hierarchy Program stage requires synchronized level attempt envelopes");
+  if (selected < 0 || selected >= nlev())
+    throw std::out_of_range("synchronized Program stage level lies outside its hierarchy");
+  auto& envelope = synchronized_level_envelopes_[selected];
+  LevelAttemptEnvelope prior;
+  swap_level_attempt_envelope_(prior);
+  swap_level_attempt_envelope_(envelope);
+  try {
+    if (active_attempt_states_.empty())
+      activate_multiblock_level_group_(
+          multiblock_subcycling_->synchronized_level_group(static_cast<std::size_t>(selected)),
+          prior.current_dt_);
+    facade_->clear_prepared_amr_level_evaluations();
+    std::forward<Function>(function)();
+  } catch (...) {
+    swap_level_attempt_envelope_(envelope);
+    swap_level_attempt_envelope_(prior);
+    throw;
+  }
+  swap_level_attempt_envelope_(envelope);
+  swap_level_attempt_envelope_(prior);
 }
 
 int n_blocks() const {

@@ -323,6 +323,9 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
     synchronized = amr.index("ctx.advance_synchronized_hierarchy", publish_call)
     assert configure < flat_phase < direct_phase < branch
     assert hierarchy_advance < refresh < branch < gather_call < direct_call < publish_call < synchronized
+    assert "ctx.with_program_resource_level" not in amr[branch:synchronized]
+    assert amr[branch:synchronized].count("ctx.with_program_attempt_level") == 4
+    assert "ctx.advance_synchronized_hierarchy(dt, _advance_hierarchy, true)" in amr
     assert "pops.tensor-elliptic.coefficient.0.0" in source
     assert "pops.tensor-elliptic.coefficients" not in source
 

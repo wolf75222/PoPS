@@ -457,10 +457,89 @@ void prove_multiblock_subcycling() {
   EXPECT_EQ(engine.last_accepted_attempt(), 7U);
 }
 
+template <int Dim>
+void prove_synchronized_envelopes() {
+  auto hierarchy = make_hierarchy<Dim>();
+  const std::vector<pops::amr::ParentChildClockRelation> relations{
+      {0, 1, {1, 1}, pops::amr::RemainderPolicy::IntegralOnly},
+      {1, 2, {1, 1}, pops::amr::RemainderPolicy::IntegralOnly}};
+  auto engine = Engine<Dim>::prepare(hierarchy, relations,
+                                     {{2, {32, 496}}, reflux::FaceFluxLedgerBudget{256, 256, 1}});
+  const pops::amr::ClockWindow window{{0, 0, {0, 1}, 0.0}, {0, 0, {1, 1}, 0.2}};
+  int callbacks = 0;
+  bool inject_failure = true;
+  auto advance = [&](auto root) {
+    ++callbacks;
+    EXPECT_EQ(root.front().level, 0U);
+    for (std::size_t level = 0; level < 3; ++level) {
+      auto group = engine.synchronized_level_group(level);
+      ASSERT_EQ(group.size(), 2U);
+      for (auto& context : group) {
+        EXPECT_EQ(context.level, level);
+        EXPECT_EQ(context.window.begin.level, static_cast<int>(level));
+        EXPECT_EQ(context.window.begin.physical_time, window.begin.physical_time);
+        EXPECT_EQ(context.window.end.physical_time, window.end.physical_time);
+        EXPECT_EQ(context.incoming_flux == nullptr, level == 0);
+        EXPECT_EQ(context.outgoing_flux == nullptr, level == 2);
+        if (level > 0) {
+          ASSERT_NE(context.staged_parent, nullptr);
+          // Parent candidates have already changed. Its staged state remains the old,
+          // block-qualified value at the common physical-time origin.
+          EXPECT_EQ(pops::reduce_min_local(*context.staged_parent),
+                    context.block == 0 ? pops::Real(1) : pops::Real(4));
+          EXPECT_EQ(context.incoming_flux,
+                    engine.synchronized_level_group(level - 1)[context.block].outgoing_flux);
+        }
+        context.candidate.set_val(context.block == 0 ? pops::Real(2) : pops::Real(8));
+      }
+    }
+    if (inject_failure)
+      throw std::runtime_error("injected synchronized solve failure");
+  };
+  std::vector<std::size_t> reflux_order;
+  auto reconcile = [&](auto& context) { reflux_order.push_back(context.parent_level); };
+  auto validate = [](std::size_t, std::size_t, const auto&) {};
+  auto stage = [](std::size_t, auto) {};
+  EXPECT_THROW(engine.advance(window, advance, reconcile, validate, stage, true),
+               std::runtime_error);
+  EXPECT_FALSE(engine.has_synchronized_groups());
+  EXPECT_EQ(engine.last_accepted_attempt(), 0U);
+  for (std::size_t level = 0; level < 3; ++level) {
+    EXPECT_EQ(pops::reduce_min_local(hierarchy.state(0, level)), pops::Real(1));
+    EXPECT_EQ(pops::reduce_min_local(hierarchy.state(1, level)), pops::Real(4));
+  }
+  const std::vector<pops::amr::ParentChildClockRelation> asynchronous_relations{
+      {0, 1, {2, 1}, pops::amr::RemainderPolicy::IntegralOnly}, relations[1]};
+  auto asynchronous = Engine<Dim>::prepare(
+      hierarchy, asynchronous_relations,
+      {{2, {32, 496}}, reflux::FaceFluxLedgerBudget{256, 256, 1}});
+  int unsupported_callbacks = 0;
+  auto unsupported = [&](auto) { ++unsupported_callbacks; };
+  EXPECT_THROW(asynchronous.advance(window, unsupported, reconcile, validate, stage, true),
+               std::exception);
+  EXPECT_EQ(unsupported_callbacks, 0);
+  EXPECT_EQ(asynchronous.last_accepted_attempt(), 0U);
+  inject_failure = false;
+  engine.advance(window, advance, reconcile, validate, stage, true);
+  EXPECT_EQ(callbacks, 2);
+  EXPECT_EQ(reflux_order, (std::vector<std::size_t>{1, 1, 0, 0}));
+  for (std::size_t level = 0; level < 3; ++level) {
+    EXPECT_EQ(pops::reduce_min_local(hierarchy.state(0, level)), pops::Real(2));
+    EXPECT_EQ(pops::reduce_min_local(hierarchy.state(1, level)), pops::Real(8));
+    EXPECT_EQ(engine.accepted_clock(0, level)->physical_time, window.end.physical_time);
+  }
+}
+
 }  // namespace
 
 TEST(test_amr_multiblock_substeps, three_levels_two_blocks_are_atomic_and_conservative) {
   prove_multiblock_subcycling<1>();
   prove_multiblock_subcycling<2>();
   prove_multiblock_subcycling<3>();
+}
+
+TEST(test_amr_multiblock_substeps, synchronized_envelopes_preserve_parent_time_and_rollback) {
+  prove_synchronized_envelopes<1>();
+  prove_synchronized_envelopes<2>();
+  prove_synchronized_envelopes<3>();
 }

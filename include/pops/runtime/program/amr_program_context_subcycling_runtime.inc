@@ -61,7 +61,8 @@ void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operat
         },
         [&](std::size_t level, std::span<field_type*> pack) {
           stage_prepared_publication_candidates_(level, pack);
-        });
+        },
+        operation == "advance_composite_hierarchy");
     std::optional<typename interface_flux_ledger_type::PreparedCommit> prepared_commit;
     ledger_error = nullptr;
     try {
@@ -295,9 +296,7 @@ void prepare_multiblock_subcycling_engine_() const {
   multiblock_subcycling_generation_ = hierarchy.topology_runtime().materialization_generation();
 }
 
-template <class Body>
-void advance_multiblock_level_group_(multiblock_level_group_type group, double macro_dt,
-                                     Body& body) const {
+void activate_multiblock_level_group_(multiblock_level_group_type group, double macro_dt) const {
   const std::size_t blocks = facade_->prepared_amr_multiblock_hierarchy_().block_count();
   if (group.size() != blocks || group.empty())
     throw std::logic_error("AMR Program level group lost its complete block pack");
@@ -344,15 +343,32 @@ void advance_multiblock_level_group_(multiblock_level_group_type group, double m
   current_interval_begin_phase_ = group.front().window.begin.phase;
   current_interval_end_phase_ = group.front().window.end.phase;
   stage_time_ = {0, 1};
+}
+
+template <class Body>
+void advance_multiblock_level_group_(multiblock_level_group_type group, double macro_dt,
+                                     Body& body) const {
+  activate_multiblock_level_group_(group, macro_dt);
+  synchronized_level_envelopes_.clear();
   facade_->clear_prepared_amr_level_evaluations();
   try {
     body(current_dt_);
-    for (std::size_t block = 0; block < blocks; ++block)
-      materialize_active_flux_expression_(block, *active_attempt_states_[block]);
+    if (multiblock_subcycling_->has_synchronized_groups()) {
+      for (int level = 0; level < nlev(); ++level)
+        with_program_attempt_level(level, [&] {
+          for (std::size_t block = 0; block < active_attempt_states_.size(); ++block)
+            materialize_active_flux_expression_(block, *active_attempt_states_[block]);
+        });
+    } else {
+      for (std::size_t block = 0; block < active_attempt_states_.size(); ++block)
+        materialize_active_flux_expression_(block, *active_attempt_states_[block]);
+    }
   } catch (...) {
+    synchronized_level_envelopes_.clear();
     clear_active_multiblock_group_();
     throw;
   }
+  synchronized_level_envelopes_.clear();
   clear_active_multiblock_group_();
 }
 
@@ -707,4 +723,25 @@ static double cell_measure_(const Geometry<Dim>& geometry) {
   for (int axis = 0; axis < Dim; ++axis)
     result *= static_cast<double>(geometry.spacing(axis));
   return result;
+}
+
+void swap_level_attempt_envelope_(LevelAttemptEnvelope& envelope) const noexcept {
+  using std::swap;
+  swap(active_level_, envelope.active_level_);
+  swap(current_dt_, envelope.current_dt_);
+  swap(current_interval_start_time_, envelope.current_interval_start_time_);
+  swap(current_interval_begin_phase_, envelope.current_interval_begin_phase_);
+  swap(current_interval_end_phase_, envelope.current_interval_end_phase_);
+  swap(logical_substep_, envelope.logical_substep_);
+  swap(stage_time_, envelope.stage_time_);
+  swap(active_attempt_states_, envelope.active_attempt_states_);
+  swap(active_staged_parents_, envelope.active_staged_parents_);
+  swap(active_incoming_flux_, envelope.active_incoming_flux_);
+  swap(active_outgoing_flux_, envelope.active_outgoing_flux_);
+  swap(active_block_identities_, envelope.active_block_identities_);
+  swap(active_flux_expressions_, envelope.active_flux_expressions_);
+  swap(active_flux_basis_counts_, envelope.active_flux_basis_counts_);
+  swap(next_active_flux_basis_identity_, envelope.next_active_flux_basis_identity_);
+  swap(active_subcycling_window_, envelope.active_subcycling_window_);
+  swap(active_subcycling_attempt_, envelope.active_subcycling_attempt_);
 }
