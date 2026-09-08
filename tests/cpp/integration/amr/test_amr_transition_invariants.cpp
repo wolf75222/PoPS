@@ -64,6 +64,7 @@ void prove_selected_pair() {
   auto ch = coarse.create_host_mirror();
   auto fh = fine.create_host_mirror();
   auto gh = test_function.create_host_mirror();
+  auto rh = restricted.create_host_mirror();
   visit(coarse_box, [&](const auto& cell) {
     int code = 0;
     for (int axis = 0; axis < Dim; ++axis)
@@ -83,7 +84,11 @@ void prove_selected_pair() {
   coarse.copy_from_host(ch);
   fine.copy_from_host(fh);
   test_function.copy_from_host(gh);
-  restricted.copy_from_host(ch);  // Uncovered coarse values must remain untouched.
+  // Host mirrors carry their owning Fab identity even when two Fab layouts match.
+  // Seed the restricted field through its own mirror so uncovered values stay unchanged.
+  for (std::size_t i = 0; i < ch.size(); ++i)
+    rh(i) = ch(i);
+  restricted.copy_from_host(rh);
   const transfer::ComponentRange components{0, 0, 2};
   const auto restrict = Provider::conservative_restriction().prepare(
       std::as_const(fine).view(), restricted.view(), covered, ratio, mapping, components);
@@ -92,7 +97,6 @@ void prove_selected_pair() {
   pops::for_each_cell(covered, restrict);
   pops::for_each_cell(fine_box, inject);
   Kokkos::fence();
-  auto rh = restricted.create_host_mirror();
   auto ih = injected.create_host_mirror();
   restricted.copy_to_host(rh);
   injected.copy_to_host(ih);

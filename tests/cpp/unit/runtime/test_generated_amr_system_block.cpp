@@ -1292,12 +1292,18 @@ TEST(GeneratedAmrSystemBlock, ExplicitFieldTopologyIsIndependentOfPeriodicTransp
       pops::test::install_amr_runtime_authority(system, "tests.generated-amr/field-topology");
       const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
           policy, 1, {"pops.field-hierarchy.options.empty@1", {}}};
+      // For h=1/8, the zero-iterate Dirichlet forcing is at most 4*Dim/h^2.
+      // The discrete maximum-principle barrier bounds potential error by residual/4;
+      // these solve tolerances therefore imply error < 2e-10 for Dim <= 3.
+      pops::GeometricMgOptions mg_options;
+      mg_options.rel_tol = 1.e-12;
+      pops::CompositeFacOptions fac_options;
+      fac_options.rel_tol = pops::Real(1.e-12);
       system.set_field_solver_plan(
           "field/tracer", "test.field-topology-plan", "test.field-topology", "test.aux-owner",
           "tracer", "phi", {{"test.aux-owner", "field", "phi", "potential"}}, 1, {"test.rhs"},
           {"tracer"}, {"charge"}, {1.0}, "geometric_mg", hierarchy,
-          pops::geometric_mg_amr_field_solver_options(pops::GeometricMgOptions{},
-                                                     pops::CompositeFacOptions{}));
+          pops::geometric_mg_amr_field_solver_options(mg_options, fac_options));
       std::vector<std::string> kinds(2 * Dim, "dirichlet");
       if (one_sided_periodic)
         kinds[pops::Face<Dim>{0, pops::BoundarySide::lower}.ordinal()] = "periodic";
