@@ -14,6 +14,7 @@ from pops.runtime._continuation_transitions import (
 )
 from pops.runtime._checkpoint_exchanges import (
     capture_checkpoint_continuation, prepare_checkpoint_continuation,
+    exchange_checkpoint_byte_capacity,
 )
 from tests.python.unit.codegen.test_layout_plan_pipeline import _case
 from tests.python.support.layout_plan import cartesian_grid
@@ -22,6 +23,27 @@ from tests.python.support.layout_plan import cartesian_grid
 def _plan():
     case, _, _ = _case("continuation-obligations")
     return pops.resolve(case, layout=pops.layouts.Uniform(cartesian_grid(n=8)))
+
+
+@pytest.mark.parametrize("method", ("euler", "ssprk2"))
+def test_exchange_capacity_consumes_the_real_resolved_program(method):
+    from tests.python.integration.runtime.test_public_diffusion_matrix import _build
+
+    case, layout, _ = _build("constant", 16, .001, method=method, transport=(.7, -.4))
+    plan = pops.resolve(pops.validate(case), layout=layout)
+    program = plan.time
+    assert program._values and plan.blocks[0].resolved_operations.evaluations
+    identity = program._ir_hash()
+    capacity = exchange_checkpoint_byte_capacity(
+        program, cells=(16**2,), dimension=2, rank_capacity=2, resolved_plan=plan)
+    assert 16 < capacity < (1 << 63)
+    program.freeze()
+    assert exchange_checkpoint_byte_capacity(
+        program, cells=(16**2,), dimension=2, rank_capacity=2, resolved_plan=plan) == capacity
+    assert program._ir_hash() == identity
+    with pytest.raises(OverflowError, match="exceeds int64"):
+        exchange_checkpoint_byte_capacity(
+            program, cells=(1 << 63,), dimension=2, rank_capacity=2, resolved_plan=plan)
 
 
 def test_resolved_and_detached_continuation_obligations_authenticate_every_event():

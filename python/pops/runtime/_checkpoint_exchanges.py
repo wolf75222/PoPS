@@ -95,7 +95,7 @@ def exchange_checkpoint_byte_capacity(program, *, cells, dimension, rank_capacit
     Runtime frame fields have fixed-width numeric spellings.
     """
     values = tuple(program._values)
-    serial = program.to_data()
+    serial = program._serialize(include_provenance=False)
     strings = []
 
     def visit(value):
