@@ -104,7 +104,12 @@ def derive_continuation_transitions(plan: Any) -> ContinuationTransitionPlan:
                     raise ValueError("retained field consumers have conflicting component contracts")
                 field_references[key] = reference
                 continue  # Repeated consumers share this field's one lifecycle obligation.
-            identity = make_identity("retained-auxiliary-component", component["key"]).token
+            # Ordinary auxiliary storage belongs to the consumer block instance. Two
+            # instances may share a model declaration without sharing their input buffers.
+            identity = make_identity("retained-auxiliary-component", {
+                "consumer_owner_qid": block.instance_owner_qid,
+                "component": component["key"],
+            }).token
             add("auxiliary", identity, block.name,
                 ("transfer" if producer == "runtime_input" else "invalidate",
                  "preserve", "invalidate", "invalidate", "preserve"),

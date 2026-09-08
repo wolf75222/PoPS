@@ -168,7 +168,8 @@ def test_runtime_input_fieldspace_remains_an_auxiliary_obligation(joint_field_pl
     evidence = block.resolved_operations.to_data()
     for component in evidence["provider_evidence"]["auxiliary"]["entries"]:
         component["provider"]["producer"] = "runtime_input"
-    projected_block = SimpleNamespace(name=block.name, state_identities=block.state_identities,
+    projected_block = SimpleNamespace(name=block.name, instance_owner_qid=block.instance_owner_qid,
+                                     state_identities=block.state_identities,
                                      resolved_operations=SimpleNamespace(to_data=lambda: deepcopy(evidence)))
     plan = derive_continuation_transitions(_field_projection(joint_field_plan, {}, blocks=(projected_block,)))
     rows = [row for row in plan.to_data()["objects"] if row["kind"] == "auxiliary"]
@@ -180,6 +181,21 @@ def test_runtime_input_fieldspace_remains_an_auxiliary_obligation(joint_field_pl
     duplicate["objects"].append(deepcopy(rows[0]))
     with pytest.raises(ValueError, match="duplicate retained object"):
         ContinuationTransitionPlan(json.dumps(duplicate))
+
+
+def test_shared_auxiliary_declaration_retains_each_consumer_instances_storage():
+    from tests.python.unit.codegen.test_program_source_kernel_reuse import _resolved
+
+    plan = _resolved(provider=True)
+    rows = [row for row in require_resolved_continuation(plan).to_data()["objects"]
+            if row["kind"] == "auxiliary"]
+    assert len(rows) == 2
+    assert {row["name"] for row in rows} == {"left", "right"}
+    assert rows[0]["validity"] == rows[1]["validity"]
+    assert rows[0]["identity"] != rows[1]["identity"]
+    assert all(row["transitions"]["initialization"]["action"] == "transfer" for row in rows)
+    assert require_resolved_continuation(CompiledPlanRecord.from_resolved(plan)).to_data() == \
+        require_resolved_continuation(plan).to_data()
 
 
 class _NativeMailbox:
