@@ -746,6 +746,7 @@ struct System<Dim>::Impl {
 
   std::unique_ptr<AcceptedSnapshot> external_step_transaction_;
   bool external_step_transaction_committed_ = false;
+  bool external_restart_transaction_ = false;
   std::vector<std::unique_ptr<AcceptedSnapshot>> parent_step_transactions_;
 
   explicit Impl(const SystemConfig<Dim>& config)

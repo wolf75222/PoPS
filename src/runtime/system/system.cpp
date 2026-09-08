@@ -99,7 +99,8 @@ void System<Dim>::begin_nested_step_transaction() {
   const auto& lane = prepared_boundary_execution_lane();
   runtime::program::require_step_transaction_control(
       lane, 1, static_cast<long>(step_transaction_depth()),
-      p_->external_step_transaction_ && !p_->external_step_transaction_committed_,
+      p_->external_step_transaction_ && !p_->external_step_transaction_committed_ &&
+          !p_->external_restart_transaction_,
       "System::begin_nested_step_transaction");
   Kokkos::fence();
   std::unique_ptr<typename Impl::AcceptedSnapshot> candidate;
@@ -192,6 +193,7 @@ void System<Dim>::finalize_step_transaction() {
     p_->parent_step_transactions_.pop_back();
   }
   p_->external_step_transaction_committed_ = false;
+  p_->external_restart_transaction_ = false;
 }
 
 template <int Dim>
@@ -207,26 +209,41 @@ void System<Dim>::rollback_step_transaction() {
     p_->parent_step_transactions_.pop_back();
   }
   p_->external_step_transaction_committed_ = false;
+  p_->external_restart_transaction_ = false;
 }
 
 template <int Dim>
 void System<Dim>::begin_restart_transaction() {
+  runtime::program::require_step_transaction_control(
+      prepared_boundary_execution_lane(), 5, static_cast<long>(step_transaction_depth()),
+      !p_->external_step_transaction_, "System::begin_restart_transaction");
   begin_step_transaction();
+  p_->external_restart_transaction_ = true;
 }
 
 template <int Dim>
 void System<Dim>::commit_restart_transaction() {
+  runtime::program::require_step_transaction_control(
+      prepared_boundary_execution_lane(), 6, static_cast<long>(step_transaction_depth()),
+      p_->external_restart_transaction_, "System::commit_restart_transaction");
   commit_step_transaction();
 }
 
 template <int Dim>
 void System<Dim>::finalize_restart_transaction() noexcept {
+  // Only a committed restart owns this no-throw publication finalizer.
+  if (!p_->external_restart_transaction_ || !p_->external_step_transaction_committed_)
+    return;
   p_->external_step_transaction_.reset();
   p_->external_step_transaction_committed_ = false;
+  p_->external_restart_transaction_ = false;
 }
 
 template <int Dim>
 void System<Dim>::rollback_restart_transaction() {
+  runtime::program::require_step_transaction_control(
+      prepared_boundary_execution_lane(), 7, static_cast<long>(step_transaction_depth()),
+      p_->external_restart_transaction_, "System::rollback_restart_transaction");
   rollback_step_transaction();
 }
 

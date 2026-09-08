@@ -1821,4 +1821,16 @@ TEST(ProgramContextContract, TransactionScopeDivergenceRefusesBeforeMutation) {
   EXPECT_EQ(sim.step_transaction_depth(), 1u);
   sim.rollback_step_transaction();
   EXPECT_EQ(sim.get_state("gas"), initial);
+  sim.begin_restart_transaction();
+  EXPECT_THROW(sim.begin_nested_step_transaction(), std::runtime_error);
+  EXPECT_EQ(sim.step_transaction_depth(), 1u);
+  sim.commit_restart_transaction();
+  sim.finalize_restart_transaction();
+  EXPECT_EQ(sim.step_transaction_depth(), 0u);
+  sim.begin_step_transaction();
+  EXPECT_EQ(sim.step_transaction_depth(), 1u);
+  sim.rollback_step_transaction();
+  sim.begin_restart_transaction();
+  sim.rollback_restart_transaction();
+  EXPECT_EQ(sim.step_transaction_depth(), 0u);
 }
