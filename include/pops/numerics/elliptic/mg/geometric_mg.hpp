@@ -1026,8 +1026,8 @@ class GeometricMG {
     fill_ghosts_(coarse);
     for (std::size_t local = 0; local < level.correction.local_size(); ++local)
       for_each_cell(level.correction.box(local), detail::ProlongCorrectionKernel<Dim>{
-                        std::as_const(coarse.phi).fab(local).view(),
-                        level.correction.fab(local).view()});
+                                                     std::as_const(coarse.phi).fab(local).view(),
+                                                     level.correction.fab(local).view()});
     Kokkos::fence();
     saxpy(level.phi, Real(1), level.correction);
     smooth_(level, options_.post_sweeps);

@@ -558,7 +558,6 @@ TEST(test_geometric_mg_nd, small_forcing_obeys_the_authored_relative_initial_res
   }
 }
 
-
 template <int Dim>
 void expect_tiled_anisotropic_correction_linearity(PhysicalBoundaryKind kind) {
   const auto lane = ExecutionLane::world("tests.geometric-mg.anisotropic-correction");
@@ -570,12 +569,12 @@ void expect_tiled_anisotropic_correction_linearity(PhysicalBoundaryKind kind) {
     upper[axis] = Real(1);
   const auto geometry = Geometry<Dim>::from_bounds(domain, RealVector<Dim>{}, upper);
   auto build = request<Dim>(geometry, BoxArray<Dim>::from_domain(domain, extent<Dim>(4)),
-                             kind == PhysicalBoundaryKind::external);
+                            kind == PhysicalBoundaryKind::external);
   if (kind == PhysicalBoundaryKind::neumann) {
     std::array<PhysicalBoundaryFace, 2 * Dim> faces{};
     faces.fill(PhysicalBoundaryFace{kind, Real(0)});
     build.boundary = PhysicalBoundaryConditions<Dim>{BoundaryTopology<Dim>::physical(), faces,
-                                                       build.boundary.spacing()};
+                                                     build.boundary.spacing()};
   }
   GeometricMultigridOptions options;
   options.reaction = Real(1);
@@ -600,12 +599,11 @@ void expect_tiled_anisotropic_correction_linearity(PhysicalBoundaryKind kind) {
     }
     const auto report = solver.solve();
     ASSERT_TRUE(report.solved()) << "Dim=" << Dim << " mode=" << mode
-                                << " boundary=" << static_cast<int>(kind) << " " << report.reason
-                                << " relative=" << report.rel_residual;
-    EXPECT_LE(report.residual_norm,
-              options.relative_tolerance * report.reference_residual_norm);
+                                 << " boundary=" << static_cast<int>(kind) << " " << report.reason
+                                 << " relative=" << report.rel_residual;
+    EXPECT_LE(report.residual_norm, options.relative_tolerance * report.reference_residual_norm);
     solutions[mode] = std::make_unique<Field>(solver.phi().layout(), solver.phi().distribution(),
-                                                solver.phi().local_rank(), 1, Extent<Dim>{});
+                                              solver.phi().local_rank(), 1, Extent<Dim>{});
     pops::elliptic::mg::copy_scalar_valid(solver.phi(), *solutions[mode]);
   }
   // A linear correction hierarchy must respect superposition and forcing amplitude;
