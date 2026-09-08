@@ -201,13 +201,26 @@ under `tests/python/verification/` are historical orphan records, not an executa
 qualification route. See [migration verification scope](docs/development/migration_verification_scope.md)
 for the decision, missing assets, and replacement gates.
 
-The current source and package gates are executable from the repository root:
+The repository-owned source and package checks are executable from the repository root:
 
 ```bash
 python scripts/check_packaging_manifest.py
-python scripts/run_m3_gate.py --check-only
-python scripts/run_m4_gate.py --check-only
 ```
+
+The names `run_m3_gate.py` and `run_m4_gate.py` refer to historical gates from the older ADC-679-era
+gate family: `run_m3_gate.py` checks the ADC-672--678 AMR/multi-layout matrix, while `run_m4_gate.py`
+checks the ADC-679--687 runtime/I/O matrix. Their `--check-only` modes inspect those historical
+manifests; they do not define the current migration M3 fields or M4 interactions.
+
+The current migration fixtures are organized by contract. M3 field-problem and field-observation
+coverage includes `tests/python/integration/runtime/test_public_field_problem.py`,
+`test_public_field_reuse.py`, and `test_public_field_consumers.py`. M4 interaction and typed-native
+call coverage includes `tests/python/unit/codegen/test_joint_interaction_codegen.py`,
+`test_native_interaction_matrix.py`, `test_native_call_compiled.py`, and
+`tests/python/integration/native_loader/test_external_component_package.py`. The contract and
+acceptance boundaries are recorded in
+[`migration M3-M6 contract`](docs/development/migration_m3_m6_contract.md) and the
+[migration verification scope](docs/development/migration_verification_scope.md).
 
 The C++ native gate uses the checked-in presets and CTest targets:
 
@@ -233,13 +246,15 @@ bash scripts/build_python.sh --dim 2
 # bash scripts/build_python.sh --dim 2 --mpi
 ```
 
-These commands establish source, packaging, compile, bind, and selected runtime evidence.
-They do not substitute for migration qualification. A qualification result requires the
-complete declared M3-M7 matrix from `tests/gates/` and `tests/test_manifest.toml`, run at one
-exact source/native/wheel provenance with its numerical, restart, output, collective, and
-configuration oracles retained. `scripts/run_final_gate.py` is the available release-gate
-entry point for a selected dimension and wheel; a successful source or smoke check alone never
-closes an unrun matrix cell. The separate benchmark protocol is declared in
+These commands establish source/package consistency, compile and artifact health, and selected
+runtime evidence. Build, package, and `doctor()` authentication does not prove that every bind or
+scientific workflow executes. A qualification result requires the complete declared M3-M8
+matrix, including the current migration fixtures, at one exact source/native/wheel provenance
+with its numerical, restart, output, collective, and configuration oracles retained. The
+historical AMR/multi-layout and runtime/I/O scripts are not substitutes for those current M3/M4
+fixtures. `scripts/run_final_gate.py` is the available release-gate entry point for a selected
+dimension and wheel; a successful source or smoke check alone never closes an unrun matrix cell.
+The separate benchmark protocol is declared in
 `benchmarks/manifest.toml`; source, unit, and operation-count checks do not establish a
 performance claim. No local CPU or MPI result establishes GPU or cluster support.
 
