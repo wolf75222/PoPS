@@ -584,7 +584,25 @@ TEST(test_amr_multiblock_implicit_transaction,
   // Equal rank sets and text cannot authenticate another communicator as the retained owner.
   const auto impostor_lane = pops::ExecutionLane::duplicate_collectively(
       context->prepared_execution_lane(), context->prepared_execution_lane().identity());
-  const auto impostor_execution = parent.for_lane(impostor_lane);
+  const auto duplicated_execution = parent.for_lane(impostor_lane);
+  const auto duplicate = duplicated_execution.view();
+  // for_lane keeps the duplicate's qualified identity; explicitly claim the original identity
+  // while retaining the duplicate's exact communicator and datatype handles.
+  const pops::component::PreparedExecutionContextV1 impostor_execution(
+      duplicate.execution_identity, duplicate.context_version, duplicate.memory_space,
+      duplicate.backend_identity, duplicate.device_identity, duplicate.scalar_type,
+      duplicate.storage_precision, duplicate.compute_precision, duplicate.accumulation_precision,
+      duplicate.reduction_precision, duplicate.stream_handle, duplicate.stream_identity,
+      duplicate.communicator_f_handle, duplicate.communicator_datatype_f_handle,
+      execution.view().communicator_identity, duplicate.communicator_datatype_identity);
+  ASSERT_STREQ(impostor_execution.view().communicator_identity,
+               execution.view().communicator_identity);
+  int impostor_relation = MPI_UNEQUAL;
+  ASSERT_EQ(
+      MPI_Comm_compare(impostor_lane.native_handle(),
+                       context->prepared_execution_lane().native_handle(), &impostor_relation),
+      MPI_SUCCESS);
+  ASSERT_EQ(impostor_relation, MPI_CONGRUENT);
   const auto before_install = system.program_accepted_state();
   EXPECT_THROW(install(impostor_execution), std::exception);
   EXPECT_EQ(system.program_accepted_state(), before_install);
