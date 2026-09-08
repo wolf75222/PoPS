@@ -289,6 +289,7 @@ class AmrProgramContext {
 #include <pops/runtime/program/amr_program_context_field_runtime_public.inc>
 #include <pops/runtime/program/amr_program_context_diffusion.inc>
 #include <pops/runtime/program/amr_program_context_spatial_implicit.inc>
+#include <pops/runtime/program/amr_program_context_spatial_imex.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_public.inc>
 #include <pops/runtime/program/amr_program_context_spatial_operations.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_public.inc>
@@ -341,8 +342,14 @@ class AmrProgramContext {
     std::uint64_t epoch, generation;
     int block;
     std::shared_ptr<PreparedAmrSpatialResidual<Dim>> workspace;
+    std::vector<FluxExpression> previous_flux;
   };
   mutable std::map<int, SpatialHierarchyResource> spatial_hierarchy_resources_;
+  struct SpatialConsumedFlux {
+    std::uint64_t attempt;
+    std::vector<std::uint8_t> weighted_fragments;
+  };
+  mutable std::map<std::pair<std::size_t, std::size_t>, SpatialConsumedFlux> spatial_consumed_flux_;
   mutable std::mutex coupled_jacvec_mutex_;
   mutable std::unique_ptr<CoupledJacvecScratch> coupled_jacvec_scratch_;
   mutable std::map<std::int64_t, GeneratedFieldRoute> generated_field_routes_;

@@ -191,6 +191,20 @@ def _check_amr_flux_weights(program: Any) -> None:
                     powers.get(value.attrs[key].id, frozenset())
                     for key in ("true_result", "false_result")
                 ])
+            elif value.op == "solve_spatial_nonlinear":
+                # One direct Q(solved) commit permits the composite adapter to consume
+                # the previous-stage weighted fragments before its implicit inverse.
+                # Its numerical seed and iterative residual carry no accepted quadrature.
+                from pops.time._program.spatial_solve import (
+                    validate_spatial_request, validate_spatial_commit,
+                )
+                validate_spatial_request(program, value)
+                validate_spatial_commit(program, value)
+                current = powers.get(value.inputs[0].id, frozenset())
+            elif (value.op == "solve_outcome_component" and value.inputs
+                  and value.inputs[0].op == "solve_outcome" and value.inputs[0].inputs
+                  and value.inputs[0].inputs[0].op == "solve_spatial_nonlinear"):
+                current = powers.get(value.inputs[0].id, frozenset())
             elif value.op in alias_first_input and value.inputs:
                 current = powers.get(value.inputs[0].id, frozenset())
             else:

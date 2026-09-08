@@ -23,6 +23,8 @@ UNCHANGED_CONSUMERS = (
 CONTEXT_FRAGMENT_PATHS = frozenset(
     {
         "pops/runtime/program/amr_program_context_spatial.inc",
+        "pops/runtime/program/amr_program_context_spatial_implicit.inc",
+        "pops/runtime/program/amr_program_context_spatial_imex.inc",
         "pops/runtime/program/amr_program_context_field_runtime_public.inc",
         "pops/runtime/program/amr_program_context_diffusion.inc",
         "pops/runtime/program/amr_program_context_flux_expression_public.inc",
@@ -50,6 +52,12 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
     }
 )
 PROGRAM_RESPONSIBILITY_AUTHORITIES = {
+    "spatial_implicit": frozenset(
+        {
+            "pops/runtime/program/amr_program_context_spatial_implicit.inc",
+            "pops/runtime/program/amr_program_context_spatial_imex.inc",
+        }
+    ),
     "diffusion": frozenset({"pops/runtime/program/amr_program_context_diffusion.inc"}),
     "spatial_context": frozenset({"pops/runtime/program/amr_program_context_spatial.inc"}),
     "spatial_operations": frozenset(
@@ -103,6 +111,7 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
     ),
 }
 PROGRAM_RESPONSIBILITY_BUDGETS = {
+    "spatial_implicit": 400,
     "diffusion": 180,
     "spatial_context": 350,
     "spatial_operations": 900,
@@ -120,9 +129,12 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
 # explicit contracts to these fixed fragments. Retain a bounded allowance for those foundations.
 # Shared RHS capture, paired signed quadrature, and retained source serialization form a new
 # responsibility (400 lines). Diffusion already has its independent 180-line allowance above.
-PROGRAM_FRAGMENT_BUDGET = 7_730 + 400
+# Composite temporal residual closure and exact predictor reconciliation add one
+# separately bounded responsibility; existing responsibility allowances stay fixed.
+SPATIAL_IMPLICIT_FRAGMENT_BUDGET = 400
+PROGRAM_FRAGMENT_BUDGET = 7_730 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET
 PROGRAM_SCAFFOLDING_BUDGET = 1_850
-PROGRAM_SEMANTIC_CLOSURE_BUDGET = 9_580 + 400
+PROGRAM_SEMANTIC_CLOSURE_BUDGET = 9_580 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET
 SEMANTIC_AUTHORITIES = frozenset(
     {
         "pops/numerics/time/amr/reflux/amr_flux_execution.hpp",
@@ -160,6 +172,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/program/clock_schedule.hpp",
         "pops/runtime/program/source_mask.hpp",
         "pops/runtime/program/prepared_scalar_boundary_session.hpp",
+        "pops/runtime/program/prepared_amr_spatial_residual.hpp",
         "pops/runtime/program/prepared_tensor_boundary_session.hpp",
         "pops/runtime/program/program_runtime_state.hpp",
         "pops/runtime/program/same_level_cell_temporal_provider.hpp",
@@ -411,3 +424,13 @@ def test_typed_rejection_protocol_has_one_bounded_shared_authority() -> None:
         assert "struct StepRejectionEnvelope" not in text
         assert "encode_step_rejection" not in text
         assert "decode_step_rejection" not in text
+
+
+def test_composite_temporal_workspace_has_one_bounded_authority() -> None:
+    authority = "pops/runtime/program/prepared_amr_spatial_residual.hpp"
+    source = (INCLUDE / authority).read_text()
+    assert len(source.splitlines()) <= 230
+    assert "AmrFieldNewtonKrylovWorkspace<Dim>" in source
+    assert "no_gauge" in source
+    assert "stage_accepted_exchanges" not in source
+    assert "FluxBasis" not in source

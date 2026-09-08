@@ -48,7 +48,9 @@ pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 DT = 0.00025
 
 
-def build(n, *, kind="constant", refined=True, boundary=False, invalid=False, subcycled=False):
+def build(
+    n, *, kind="constant", refined=True, boundary=False, invalid=False, subcycled=False, imex=False
+):
     from pops.physics.diffusion import DiffusiveBoundary
 
     frame = Rectangle("composite-implicit-square", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(
@@ -59,6 +61,8 @@ def build(n, *, kind="constant", refined=True, boundary=False, invalid=False, su
     u = state[0]
     variable = (sqrt(1 + 4 * u) - 1) / 2 if kind == "nonlinear_accumulation" else u
     coefficient = 0.1 * (1 + 0.2 * u) if kind == "variable" else 0.1
+    if kind == "diagonal":
+        coefficient = ((0.1 * (1 + 0.2 * u), 0), (0, 0.07 * (1 + 0.1 * u)))
     if invalid:
         coefficient = 0.1 * (1.1 - u)
     physical = (
@@ -73,7 +77,29 @@ def build(n, *, kind="constant", refined=True, boundary=False, invalid=False, su
     flux = model.diffusive_flux(
         "conduction", state=state, value=CoeffGradient(variable, coefficient), boundaries=physical
     )
-    rate = model.rate("heat", equation=ddt(state) == div(flux))
+    transport_rate = None
+    transport_method = None
+    if imex:
+        from pops.numerics import FiniteVolume, reconstruction, riemann, variables
+
+        transport = model.flux(
+            "advection",
+            frame=frame,
+            state=state,
+            components={frame.x: (0.7 * u,), frame.y: (-0.3 * u,)},
+            waves={frame.x: (0.7,), frame.y: (-0.3,)},
+        )
+        balance = model.rate("transport_heat", equation=ddt(state) == -div(transport) + div(flux))
+        transport_rate = balance.select(transport)
+        rate = balance.select(flux)
+        transport_method = FiniteVolume(
+            flux=transport,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+        )
+    if not imex:
+        rate = model.rate("heat", equation=ddt(state) == div(flux))
     accumulation = (
         model.local_transform("temperature_to_energy", (u + u * u,), valid_if=u > -0.5)
         if kind == "nonlinear_accumulation"
@@ -82,16 +108,23 @@ def build(n, *, kind="constant", refined=True, boundary=False, invalid=False, su
     case = pops.Case("composite-implicit-" + kind)
     block = case.block("heat", model)
     numerics = DiscretizationPlan()
-    numerics.rates.add(rate, Diffusion(flux=flux))
+    if imex:
+        numerics.rates.add(balance, Diffusion(flux=flux, transport=transport_method))
+    else:
+        numerics.rates.add(rate, Diffusion(flux=flux))
     case.numerics(numerics, block=block)
     program = pops.Program("composite-implicit-stage")
     temporal = program.state(block[state])
     if invalid:
         program.store_history("prior_energy", temporal.n, depth=1)
     coordinates = program.value("coordinates", temporal.n, at=temporal.next.point)
-    request = ImplicitDiffusionStage(
-        rate, temporal.n, program.dt, accumulation=accumulation
-    ).request(
+    previous = temporal.n
+    if imex:
+        explicit = transport_rate(temporal.n)
+        previous = program.value(
+            "conservative_predictor", temporal.n + program.dt * explicit, at=temporal.next.point
+        )
+    request = ImplicitDiffusionStage(rate, previous, program.dt, accumulation=accumulation).request(
         unknown=SolveUnknown("coordinate", coordinates),
         seed=temporal.n,
         derivative=DerivativeStrategy("finite_difference"),
@@ -176,13 +209,17 @@ def assert_no_second_reflux(runtime):
     )
 
 
-@pytest.mark.parametrize("kind", ["constant", "variable", "nonlinear_accumulation"])
+@pytest.mark.parametrize("imex", [False, True])
+@pytest.mark.parametrize("kind", ["constant", "variable", "diagonal", "nonlinear_accumulation"])
 def test_composite_implicit_matches_conservative_reference_and_converges(
-    kind, isolated_native_cache, native_cxx, kokkos_root, record_property
+    kind, imex, isolated_native_cache, native_cxx, kokkos_root, record_property
 ):
     errors = []
     for n in (16, 32, 64):
-        amr, reference = bind(n, kind=kind), bind(2 * n, kind=kind, refined=False)
+        amr, reference = (
+            bind(n, kind=kind, imex=imex),
+            bind(2 * n, kind=kind, refined=False, imex=imex),
+        )
         assert amr.n_levels() == 2
         mask0 = composite_active_mask(amr, 0, refinement_ratio=2)
         assert mask0.any() and (~mask0).any(), "the matrix requires an actual coarse/fine interface"
@@ -191,7 +228,16 @@ def test_composite_implicit_matches_conservative_reference_and_converges(
             report = pops.run(runtime, t_end=4 * DT, max_steps=4, console=False)
             assert report.accepted_steps == 4 and report.rejected_steps == 0
         assert abs(mass(amr, n) - before) < 5e-11
-        assert_no_second_reflux(amr)
+        if imex:
+            rows = tuple(
+                tuple(map(str, row)) for row in amr._executor.program_flux_ledger_manifest()
+            )
+            assert rows, "explicit predictor must retain its accepted quadrature"
+            assert all("provider/4" not in "/".join(row) for row in rows), (
+                "implicit diffusion must not enter the accepted transport reflux ledger"
+            )
+        else:
+            assert_no_second_reflux(amr)
         fine = np.asarray(reference.state_global("heat")).reshape(2 * n, 2 * n)
         coarse = fine.reshape(n, 2, n, 2).mean(axis=(1, 3))
         squared = 0.0
@@ -201,7 +247,7 @@ def test_composite_implicit_matches_conservative_reference_and_converges(
             squared += float(np.sum((actual[mask] - expected[mask]) ** 2)) / (n * 2**level) ** 2
         errors.append(squared**0.5)
     assert errors[1] < errors[0] / 1.5 and errors[2] < errors[1] / 1.5
-    record_property(kind + "_conservative_reference_l2_errors", errors)
+    record_property(kind + ("_imex" if imex else "") + "_conservative_reference_l2_errors", errors)
 
 
 def test_composite_implicit_physical_boundary_inventory(
@@ -222,10 +268,11 @@ def test_composite_implicit_physical_boundary_inventory(
         assert_no_second_reflux(runtime)
 
 
+@pytest.mark.parametrize("imex", [False, True])
 def test_composite_implicit_failure_restores_every_level_history_and_exchange(
-    isolated_native_cache, native_cxx, kokkos_root
+    imex, isolated_native_cache, native_cxx, kokkos_root
 ):
-    runtime = bind(32, invalid=True)
+    runtime = bind(32, invalid=True, imex=imex)
     native = runtime._executor
 
     def envelope():

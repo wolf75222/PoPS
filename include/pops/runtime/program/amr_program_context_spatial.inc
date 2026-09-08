@@ -224,9 +224,11 @@ void advance_hierarchy(double dt, Body&& body) const {
 
 template <class Body>
 void advance_synchronized_hierarchy(double dt, Body&& body, bool composite = false) const {
-  advance_prepared_hierarchy_(
-      dt, std::forward<Body>(body),
-      composite ? "advance_composite_hierarchy" : "advance_synchronized_hierarchy");
+  with_spatial_reconciliation_attempt([&] {
+    advance_prepared_hierarchy_(
+        dt, std::forward<Body>(body),
+        composite ? "advance_composite_hierarchy" : "advance_synchronized_hierarchy");
+  });
 }
 
 void prepare_same_level_cell_temporal_execution(

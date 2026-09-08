@@ -100,6 +100,7 @@ class PreparedAmrSpatialResidual final {
     return report;
   }
   const field_type& candidate(std::size_t level) const { return candidate_.at(level); }
+  field_type& previous(std::size_t level) { return previous_.at(level); }
   std::size_t levels() const noexcept { return candidate_.size(); }
   int residual_evaluations() const noexcept { return residual_evaluations_; }
   int derivative_evaluations() const noexcept { return derivative_evaluations_; }
@@ -115,8 +116,26 @@ class PreparedAmrSpatialResidual final {
     Index<Dim> coarse_face, coarse_cell;
     std::vector<Index<Dim>> fine_faces;
     Real coarse_area, fine_area, inverse_volume, divergence_sign;
+    std::size_t coarse_sample = 0;
+    std::vector<std::size_t> fine_samples;
   };
   std::vector<Interface> interfaces;
+  struct FaceSample {
+    std::size_t level, local_patch;
+    int axis;
+    Index<Dim> face;
+    bool owned;
+  };
+  struct FaceGatherEntry {
+    FieldView<const Real, Dim> density;
+    Index<Dim> face;
+    bool owned;
+  };
+  std::vector<FaceSample> face_samples;
+  Kokkos::View<FaceGatherEntry*> face_gather;
+  Kokkos::View<FaceGatherEntry*, Kokkos::HostSpace> face_gather_host;
+  Kokkos::View<Real*> face_values;
+  Kokkos::View<Real*, Kokkos::HostSpace> face_values_host;
 
  private:
   static void increment_(int& count) {

@@ -1,4 +1,4 @@
-void reconcile_multiblock_reflux_(multiblock_reflux_context_type& context) const {
+void apply_multiblock_reflux_(multiblock_reflux_context_type& context) const {
   if (context.flux.published_size() == 0)
     return;
   const Geometry<Dim> geometry =

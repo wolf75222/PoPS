@@ -21,10 +21,26 @@ std::shared_ptr<PreparedAmrSpatialResidual<Dim>> prepare_spatial_hierarchy(
   const auto epoch = runtime_->topology_epoch(),
              generation = runtime_->materialization_generation();
   auto found = spatial_hierarchy_resources_.find(identity);
-  if (found != spatial_hierarchy_resources_.end() && found->second.epoch == epoch &&
-      found->second.generation == generation) {
-    if (found->second.block != program_block)
-      throw std::logic_error("composite spatial resource changed its block owner");
+  const bool hit = found != spatial_hierarchy_resources_.end() && found->second.epoch == epoch &&
+                   found->second.generation == generation;
+  std::string cache_contract;
+  prepare_spatial_collectively([&] {
+    ExactContractBuilder exact;
+    exact.scalar(epoch)
+        .scalar(generation)
+        .scalar(std::int32_t{identity})
+        .scalar(std::int32_t{program_block})
+        .scalar(std::uint32_t{hit ? 1u : 0u});
+    cache_contract = std::move(exact).release();
+  });
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"pops.composite-spatial-cache", cache_contract}},
+                                                prepared_execution_lane()))
+    throw std::logic_error("composite spatial cache generations disagree across execution ranks");
+  if (hit) {
+    prepare_spatial_collectively([&] {
+      if (found->second.block != program_block)
+        throw std::logic_error("composite spatial resource changed its block owner");
+    });
     return found->second.workspace;
   }
   std::shared_ptr<PreparedAmrSpatialResidual<Dim>> workspace;
@@ -67,22 +83,65 @@ std::shared_ptr<PreparedAmrSpatialResidual<Dim>> prepare_spatial_hierarchy(
     }
   });
   prepare_spatial_collectively([&] {
-    spatial_hierarchy_resources_.insert_or_assign(
-        identity, SpatialHierarchyResource{epoch, generation, program_block, workspace});
+    using sample_key = std::tuple<std::size_t, int, std::array<int, Dim>>;
+    std::map<sample_key, std::size_t> samples;
+    auto sample = [&](std::size_t level, int axis, const Index<Dim>& face) {
+      const sample_key key{level, axis, index_key_(face)};
+      if (const auto existing = samples.find(key); existing != samples.end())
+        return existing->second;
+      const auto& prototype = workspace->candidate(level);
+      std::size_t selected = prototype.layout().size();
+      for (std::size_t patch = 0; patch < prototype.layout().size(); ++patch)
+        if (nd::face_box(prototype.layout()[patch], axis).contains(face)) {
+          selected = patch;
+          break;
+        }
+      if (selected == prototype.layout().size())
+        throw std::logic_error("composite diffusion interface has no exact face owner");
+      const auto owner = prototype.distribution().replicated()
+                             ? prototype.rank_space().coordinate(0)
+                             : prototype.distribution().owner(selected);
+      const bool owned = owner == prototype.local_rank();
+      const auto local = owned ? prototype.local_index_of(selected) : field_type::not_local;
+      if (owned && local == field_type::not_local)
+        throw std::logic_error("composite diffusion interface lost its canonical local patch");
+      const auto index = workspace->face_samples.size();
+      workspace->face_samples.push_back({level, local, axis, face, owned});
+      samples.emplace(key, index);
+      return index;
+    };
+    for (auto& face : workspace->interfaces) {
+      face.coarse_sample = sample(face.parent, face.axis, face.coarse_face);
+      face.fine_samples.reserve(face.fine_faces.size());
+      for (const auto& coordinate : face.fine_faces)
+        face.fine_samples.push_back(sample(face.parent + 1, face.axis, coordinate));
+    }
+    const auto count = workspace->face_samples.size();
+    workspace->face_gather =
+        decltype(workspace->face_gather)("composite_spatial_face_gather", count);
+    workspace->face_gather_host =
+        decltype(workspace->face_gather_host)("composite_spatial_face_gather_host", count);
+    workspace->face_values =
+        decltype(workspace->face_values)("composite_spatial_face_values", count);
+    workspace->face_values_host =
+        decltype(workspace->face_values_host)("composite_spatial_face_values_host", count);
   });
-  return workspace;
-}
-
-// A deferred explicit face correction must be applied to U_n before the implicit
-// inverse, not dropped or appended to the solved state. An accepted state is already
-// reconciled; only a newly produced, unreconciled stage expression is refused here.
-void require_spatial_previous_reconciled(const field_type& previous) const {
+  // Cache node allocation is provisional. Node publication with the fixed integer
+  // comparator neither allocates nor copies the prepared resource.
+  decltype(spatial_hierarchy_resources_) pending;
   prepare_spatial_collectively([&] {
-    if (!active_flux_expression_(previous).empty())
-      throw std::invalid_argument(
-          "composite implicit previous stage has unreconciled explicit face fluxes; "
-          "a conservative synchronization barrier is required before the implicit solve");
+    pending.emplace(identity,
+                    SpatialHierarchyResource{epoch, generation, program_block, workspace,
+                                             std::vector<FluxExpression>(workspace->levels())});
   });
+  auto node = pending.extract(identity);
+  if (found == spatial_hierarchy_resources_.end())
+    spatial_hierarchy_resources_.insert(std::move(node));
+  else {
+    static_assert(std::is_nothrow_move_assignable_v<SpatialHierarchyResource>);
+    found->second = std::move(node.mapped());
+  }
+  return workspace;
 }
 
 // The exact current conserved parent is an evaluation input. The accepted/old parent envelope
@@ -104,39 +163,43 @@ auto with_spatial_parent(int program_block, const field_type* parent, Evaluate&&
   }
 }
 
-Real spatial_face_density(const typename PreparedAmrSpatialResidual<Dim>::faces_type& faces,
-                          const field_type& prototype, int axis, const Index<Dim>& face) const {
-  Real value = Real(0);
+void prepare_spatial_face_gather(PreparedAmrSpatialResidual<Dim>& workspace) const {
   prepare_spatial_collectively([&] {
-    std::size_t selected = prototype.layout().size();
-    for (std::size_t patch = 0; patch < prototype.layout().size(); ++patch)
-      if (nd::face_box(prototype.layout()[patch], axis).contains(face)) {
-        selected = patch;
-        break;
-      }
-    if (selected == prototype.layout().size())
-      throw std::logic_error("composite diffusion interface has no exact face owner");
-    const auto owner = prototype.distribution().replicated()
-                           ? prototype.rank_space().coordinate(0)
-                           : prototype.distribution().owner(selected);
-    if (owner == prototype.local_rank()) {
-      const auto local = prototype.local_index_of(selected);
-      if (local == field_type::not_local || local >= faces.size())
-        throw std::logic_error("composite diffusion interface lost its field-owned face buffer");
-      const auto view = faces[local].view().axes[axis];
-      Kokkos::parallel_reduce(
-          "pops_composite_diffusion_face", Kokkos::RangePolicy<>(0, 1),
-          [=] POPS_HD(int, Real& sum) { sum += view(face, 0); }, value);
-      device_fence();
-      if (!std::isfinite(value))
-        throw std::runtime_error("composite diffusion face is non-finite");
+    for (std::size_t index = 0; index < workspace.face_samples.size(); ++index) {
+      const auto& sample = workspace.face_samples[index];
+      auto& entry = workspace.face_gather_host(index);
+      entry.face = sample.face;
+      entry.owned = sample.owned;
+      if (!sample.owned)
+        continue;
+      const auto& faces = *workspace.faces.at(sample.level);
+      if (sample.local_patch >= faces.size())
+        throw std::logic_error("composite diffusion lost a prepared field-owned face buffer");
+      entry.density = faces[sample.local_patch].view().axes[sample.axis];
     }
+    Kokkos::deep_copy(workspace.face_gather, workspace.face_gather_host);
   });
-  return all_reduce_sum(value, prepared_execution_lane());
+}
+
+void gather_spatial_face_densities(PreparedAmrSpatialResidual<Dim>& workspace) const {
+  prepare_spatial_collectively([&] {
+    const auto entries = workspace.face_gather;
+    const auto values = workspace.face_values;
+    Kokkos::parallel_for(
+        "pops_composite_diffusion_faces", Kokkos::RangePolicy<>(0, entries.extent(0)),
+        KOKKOS_LAMBDA(const std::size_t index) {
+          const auto entry = entries(index);
+          values(index) = entry.owned ? entry.density(entry.face, 0) : Real(0);
+        });
+    Kokkos::deep_copy(workspace.face_values_host, values);
+  });
+  all_reduce_sum_inplace(workspace.face_values_host.data(), workspace.face_values_host.extent(0),
+                         prepared_execution_lane().communicator());
 }
 
 SolveReport solve_spatial_hierarchy(PreparedAmrSpatialResidual<Dim>& workspace) const {
   using hierarchy_type = typename PreparedAmrSpatialResidual<Dim>::hierarchy_type;
+  prepare_spatial_face_gather(workspace);
   auto evaluate = [&](const hierarchy_type& q, const hierarchy_type& previous,
                       hierarchy_type& result, int) {
     // Map solver coordinates first, then restrict the current conserved fine iterate.
@@ -157,14 +220,13 @@ SolveReport solve_spatial_hierarchy(PreparedAmrSpatialResidual<Dim>& workspace) 
       });
     // R=div(A grad W). Replace its coarse face density by the fine area sum inside F.
     // The generated weight already includes -tau and the occurrence coefficient exactly once.
+    gather_spatial_face_densities(workspace);
     for (const auto& face : workspace.interfaces) {
       const auto level = face.parent;
-      const Real coarse =
-          spatial_face_density(*workspace.faces.at(level), q[level], face.axis, face.coarse_face);
+      const Real coarse = workspace.face_values_host(face.coarse_sample);
       Real fine = Real(0);
-      for (const auto& coordinate : face.fine_faces)
-        fine += spatial_face_density(*workspace.faces.at(level + 1), q[level + 1], face.axis,
-                                     coordinate);
+      for (const auto index : face.fine_samples)
+        fine += workspace.face_values_host(index);
       const Real correction = workspace.residual_face_weight * face.divergence_sign *
                               face.inverse_volume *
                               (face.fine_area * fine - face.coarse_area * coarse);

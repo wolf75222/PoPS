@@ -122,6 +122,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_rank_parity = [1, 2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_amr_spatial_norm"
+sources = ["tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_rank_parity = [2]
+
+[[cpp.suite]]
 name = "test_mpi_amr_distributed_coarse"
 sources = ["tests/cpp/integration/mpi/test_mpi_amr_distributed_coarse.cpp"]
 labels = ["backend", "mpi", "medium"]

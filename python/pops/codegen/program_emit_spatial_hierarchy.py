@@ -109,8 +109,8 @@ def emit_amr_spatial_solve(
     if phase == "gather":
         seed = "nullptr" if len(value.inputs) == 1 else "&(%s)" % variables[value.inputs[1].id]
         lines += [
-            "ctx.require_spatial_previous_reconciled(%s);" % variables[value.inputs[0].id],
-            "%s->stage(ctx.level(),%s,%s);" % (workspace, variables[value.inputs[0].id], seed),
+            "ctx.stage_spatial_hierarchy_previous(%d,%d,%s,%s);"
+            % (value.id, owner, variables[value.inputs[0].id], seed),
             "%s->emplace(ctx,*%s,%s,true);" % (slot, trial, _boundary_cpp(selected["physical"])),
         ]
         # Every scratch allocation happens before peers enter residual/JVP collectives.
@@ -225,6 +225,7 @@ def emit_amr_spatial_solve(
         lines += [
             "pops::SolveReport %s;" % report,
             "try {",
+            "  ctx.reconcile_spatial_hierarchy_previous(%d);" % value.id,
             "  %s = ctx.solve_spatial_hierarchy(*%s);" % (report, workspace),
             "} catch (const pops::runtime::program::StepAttemptRejected& failure) {",
             "  %s.mark_failed(failure.status(),%s,failure.what());" % (report, action),
