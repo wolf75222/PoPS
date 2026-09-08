@@ -35,24 +35,28 @@ def compile_modelspec_package(
             "ModelSpec compilation currently prepares the loaded 2-D native specialization"
         )
 
+    transport = str(spec.transport)
+    source = str(getattr(spec, "source", "") or "")
+    if transport == "exb":
+        raise ValueError(
+            "ModelSpec ExB compilation requires an explicit field-output provider plan; "
+            "the legacy default Poisson RHS does not own gradient outputs. "
+            "Author the field and transport through Case; this adapter does not support "
+            "general AMR field coupling."
+        )
+    if source not in ("", "none"):
+        raise ValueError(
+            "ModelSpec source %r requires explicit field/auxiliary provider bindings; "
+            "this compatibility adapter cannot preserve that source. "
+            "Author its source and providers through Case." % source
+        )
+
     frame = Rectangle("modelspec-domain", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
     x_axis, y_axis = frame.axes
     wrapper = Model("%s_modelspec" % name)
-    transport = str(spec.transport)
     density = None
     momentum_x = momentum_y = energy = None
-    if transport == "exb":
-        (density,) = wrapper.conservative_vars("n", roles=(Density(),))
-        grad_x = wrapper.aux("grad_x")
-        grad_y = wrapper.aux("grad_y")
-        # Cartesian E×B with B=(0,0,1): v = (-d_y phi, d_x phi) / |B|^2.
-        # Eigenvalues stay density-scaled zeros so AMR BoundFluxProviders used by
-        # max_wave_speed do not require aux slots the composite pack does not forward.
-        wrapper.flux(x=[density * (-grad_y)], y=[density * grad_x])
-        wrapper.eigenvalues(x=[0.0 * density], y=[0.0 * density])
-        wrapper.primitive_vars(density)
-        wrapper.conservative_from([density])
-    elif transport == "isothermal":
+    if transport == "isothermal":
         density, momentum_x, momentum_y = wrapper.conservative_vars(
             "rho",
             "mx",
@@ -131,7 +135,7 @@ def compile_modelspec_package(
         )
     else:
         raise ValueError(
-            "ModelSpec transport %r cannot be compiled; expected exb, isothermal, or compressible"
+            "ModelSpec transport %r cannot be compiled; expected isothermal or compressible"
             % transport
         )
 
@@ -149,10 +153,6 @@ def compile_modelspec_package(
             "ModelSpec elliptic %r cannot be compiled; expected charge, background, or gravity"
             % elliptic
         )
-
-    # Authored source(aux) emits provider_value<0> but the AMR generated source
-    # path currently materializes ProviderValues<0>. PotentialForce stays a
-    # native brick concern; the hyperbolic/elliptic package still compiles.
 
     if transport in ("isothermal", "compressible"):
         wrapper.enable_hllc()
