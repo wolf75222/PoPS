@@ -1174,8 +1174,7 @@ class PreparedMultiBlockAmrHierarchy {
     std::string presence_contract;
     try {
       if (interface_reconstruction_active_)
-        throw std::logic_error(
-            "AMR Program execution cannot run during hierarchy reconstruction");
+        throw std::logic_error("AMR Program execution cannot run during hierarchy reconstruction");
       require_map_(map);
       require_level_(level);
       if (require_sealed_couplings && !couplings_sealed_)
