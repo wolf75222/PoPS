@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <pops/core/identity/prepared_provider.hpp>
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 
 #include <functional>
@@ -91,6 +92,25 @@ class SystemBoundaryRegistry {
         face_analytic_clocks));
     install_boundary(std::move(name), std::move(identity), required_depth,
                      std::move(state_identity), std::move(authority));
+  }
+
+  /// Exact shared-face ownership, independent of caller-supplied authority names.
+  /// Facades compare this immutable image at their collective publication boundary.
+  std::string interface_face_omission_contract() const {
+    ExactContractBuilder contract;
+    contract.text("pops.system.interface-face-omission")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .scalar(static_cast<std::uint64_t>(boundaries_.size()));
+    for (const auto& [name, installed] : boundaries_) {
+      contract.text(name)
+          .text(installed.identity)
+          .text(installed.state_identity)
+          .scalar(std::int32_t{installed.required_depth});
+      for (bool omitted : installed.authority->omitted_interface_faces())
+        contract.scalar(omitted);
+    }
+    return std::move(contract).release();
   }
 
   const std::string& state_route(const std::string& name) const {

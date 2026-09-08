@@ -1058,6 +1058,9 @@ void System<Dim>::stage_prepared_boundary_flux_component(
   if (block.empty() || !component || component->spec().region.dimension != Dim ||
       component->spec().state_identity != p_->boundary_registry_.state_route(block))
     throw std::invalid_argument("prepared System BoundaryFlux differs from its exact block route");
+  if (const auto* installed = p_->boundary_registry_.find_boundary(block))
+    installed->authority->require_unreserved_boundary_flux_face(
+        component->spec().region.axes.front(), component->spec().region.sides.front());
   const std::string package_identity =
       prepared_system_boundary_package_identity("flux", block, component->spec());
   const std::string component_contract =
@@ -1089,6 +1092,8 @@ void System<Dim>::stage_prepared_boundary_flux_component(
               if (!selected->boundary || !hook->flux_target)
                 throw std::invalid_argument(
                     "prepared System BoundaryFlux requires its generated post-Riemann hook");
+              selected->boundary->require_unreserved_boundary_flux_face(
+                  component->spec().region.axes.front(), component->spec().region.sides.front());
               geometry.emplace(p_->geom);
               topology.emplace(BoundaryTopology<Dim>::axis_periodic(p_->periodicity));
             });
@@ -2353,6 +2358,7 @@ void System<Dim>::finalize_native_packages() {
       ExactContractBuilder materialized;
       materialized.text("pops.system-native-materialized-candidate")
           .scalar(std::uint32_t{2})
+          .bytes(snapshot->boundary_registry.interface_face_omission_contract())
           .bytes(snapshot->auxiliary_registry.collective_contract())
           .scalar(static_cast<std::uint64_t>(snapshot->blocks.blocks.size()));
       for (std::size_t index = 0; index < snapshot->blocks.blocks.size(); ++index) {
@@ -2375,6 +2381,9 @@ void System<Dim>::finalize_native_packages() {
             .presence(hook.flux_target && static_cast<bool>(*hook.flux_target))
             .presence(hook.residual_target && static_cast<bool>(*hook.residual_target))
             .presence(hook.jvp_target && static_cast<bool>(*hook.jvp_target));
+        if (block.boundary)
+          for (bool omitted : block.boundary->omitted_interface_faces())
+            materialized.scalar(omitted);
       }
       materialized.scalar(
           static_cast<std::uint64_t>(snapshot->prepared_boundary_hook_contracts.size()));

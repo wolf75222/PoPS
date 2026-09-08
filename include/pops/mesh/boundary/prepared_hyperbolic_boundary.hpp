@@ -670,6 +670,12 @@ class PreparedHyperbolicBoundary {
   const std::array<bool, 2 * Dim>& omitted_interface_faces() const noexcept {
     return omitted_interface_faces_;
   }
+  void require_unreserved_boundary_flux_face(int axis, int side) const {
+    (void)face(axis, side);
+    if (omitted_interface_faces_[static_cast<std::size_t>(2 * axis + (side > 0 ? 1 : 0))])
+      throw std::invalid_argument(
+          "BoundaryFlux cannot replace a face reserved for one shared interface scheduler");
+  }
   const Transform& component_transform(int component) const {
     if (component < 0 || component >= ncomp())
       throw std::out_of_range("prepared hyperbolic component is outside the state");

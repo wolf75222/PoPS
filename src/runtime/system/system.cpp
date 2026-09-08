@@ -478,6 +478,25 @@ int System<Dim>::macro_step() const {
 
 template <int Dim>
 void System<Dim>::mark_bound() {
+  // Local boundary assembly does not establish communicator-wide shared-face ownership.
+  // Refuse a divergent mask before sealing auxiliary providers or publishing bound state.
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  std::string boundary_contract;
+  std::exception_ptr boundary_error;
+  try {
+    boundary_contract = p_->boundary_registry_.interface_face_omission_contract();
+  } catch (...) {
+    boundary_error = std::current_exception();
+  }
+  if (all_reduce_max(boundary_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && boundary_error)
+      std::rethrow_exception(boundary_error);
+    throw std::runtime_error("System interface face ownership preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-interface-face-omission", boundary_contract}}, lane))
+    throw std::runtime_error("System interface face ownership differs across MPI ranks");
+
   // The provider graph is the only authority for the compact auxiliary carrier.  Seal it before
   // freezing composition so every rank either agrees on one graph or remains fully mutable after a
   // failed collective preflight.

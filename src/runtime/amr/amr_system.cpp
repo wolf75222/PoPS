@@ -7218,7 +7218,11 @@ struct AmrSystem<Dim>::Impl {
             external_preparations[block_index][level].ghosts.push_back(
                 {provider, std::move(dependencies), std::move(local_session), std::move(session)});
           }
-        for (const auto& provider : components.fluxes)
+        for (const auto& provider : components.fluxes) {
+          if (const auto* installed =
+                  boundary_registry.find_boundary(prepared_blocks[block_index].name))
+            installed->authority->require_unreserved_boundary_flux_face(
+                provider->spec().region.axes.front(), provider->spec().region.sides.front());
           for (std::size_t level = 0; level < level_count; ++level) {
             field_type& state = candidate_multiblock.state(block_index, level);
             const Box<Dim>& domain = candidate_engine.hierarchy().layout(level).domain();
@@ -7236,6 +7240,7 @@ struct AmrSystem<Dim>::Impl {
             external_preparations[block_index][level].fluxes.push_back(
                 {provider, std::move(dependencies), std::move(local_session), std::move(session)});
           }
+        }
         for (const auto& [pair_key, pair] : components.fields) {
           if (!pair.residual || !pair.jvp)
             throw std::logic_error(
@@ -13864,6 +13869,9 @@ void AmrSystem<Dim>::stage_prepared_boundary_flux_component(
   if (block.empty() || !component || component->spec().region.dimension != Dim ||
       component->spec().state_identity != p_->boundary_registry.state_route(block))
     throw std::invalid_argument("AMR BoundaryFlux differs from its exact block/rank route");
+  if (const auto* installed = p_->boundary_registry.find_boundary(block))
+    installed->authority->require_unreserved_boundary_flux_face(
+        component->spec().region.axes.front(), component->spec().region.sides.front());
   auto candidate = p_->prepared_boundary_components;
   auto& providers = candidate[block].fluxes;
   providers.push_back(std::move(component));

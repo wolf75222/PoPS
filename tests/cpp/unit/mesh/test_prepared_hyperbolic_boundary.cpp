@@ -494,3 +494,13 @@ TEST(test_prepared_hyperbolic_boundary, fixed_state_conversion_retains_interface
   EXPECT_EQ(converted.face(0, 1).fixed_state.front(), Real(6));
   EXPECT_EQ(converted.omitted_interface_faces(), boundary.omitted_interface_faces());
 }
+
+TEST(test_prepared_hyperbolic_boundary, boundary_flux_cannot_replace_a_reserved_interface_face) {
+  const auto boundary = prepare_hyperbolic_boundary<1>({"external", "external"}, {0.0, 0.0},
+                                                       identities<1>(), {"Scalar"})
+                            .with_omitted_interface_faces({0});
+  EXPECT_THROW(boundary.require_unreserved_boundary_flux_face(0, -1), std::invalid_argument);
+  EXPECT_NO_THROW(boundary.require_unreserved_boundary_flux_face(0, 1));
+  EXPECT_THROW(boundary.require_unreserved_boundary_flux_face(1, 1), std::out_of_range);
+  EXPECT_THROW(boundary.require_unreserved_boundary_flux_face(0, 0), std::out_of_range);
+}

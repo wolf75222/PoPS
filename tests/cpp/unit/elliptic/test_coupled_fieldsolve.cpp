@@ -572,3 +572,122 @@ TEST(test_coupled_fieldsolve, native_output_bearing_wrong_gradient_rejects_befor
   EXPECT_THROW(system.finalize_native_packages(), std::exception);
   EXPECT_THROW((void)system.block_state(0), std::exception);
 }
+
+namespace {
+
+void install_interface_test_boundary(NativeSystem& system, const std::string& block, int ordinal) {
+  std::vector<std::string> faces(2 * Dim, "external");
+  std::vector<std::string> identities;
+  for (int face = 0; face < 2 * Dim; ++face)
+    identities.push_back("test.interface-mask/face/" + std::to_string(face));
+  auto boundary = pops::prepare_hyperbolic_boundary<Dim>(faces, std::vector<double>(2 * Dim, 0.0),
+                                                         identities, {"Scalar"})
+                      .with_omitted_interface_faces({ordinal});
+  system.install_prepared_hyperbolic_boundary(
+      block, "test.interface-mask/boundary@1", 1, "test.coupled-fieldsolve/" + block + "/state@1",
+      std::make_shared<pops::PreparedHyperbolicBoundary<Dim>>(std::move(boundary)));
+}
+
+pops::SystemConfig<Dim> interface_mask_config() {
+  auto result = config(4);
+  result.periodicity.fill(false);
+  return result;
+}
+
+void check_direct_interface_mask_consensus(bool divergent) {
+  NativeSystem system(interface_mask_config());
+  install_execution_lane(system);
+  system.install_block_state_route("first", "test.coupled-fieldsolve/first/state@1");
+  const int ordinal = divergent && pops::my_rank() != 0 ? 1 : 0;
+  install_interface_test_boundary(system, "first", ordinal);
+  ChargeModel model{};
+  model.hyp = pops::nd::ScalarAdvection<Dim>::prepare(pops::RealVector<Dim>{});
+  model.ell.q = pops::Real(1);
+  pops::add_compiled_model(system, "first", std::move(model), "minmod", "rusanov", "conservative",
+                           "explicit", static_cast<double>(pops::kPhysicalDefaultGamma), 1, true);
+  const std::vector<double> density(cell_count(4), 2.0);
+  system.set_density("first", density);
+  const auto saved_density = system.density("first");
+  if (pops::my_rank() == 0)
+    EXPECT_EQ(saved_density, density);
+  const auto lifecycle = system.lifecycle_state();
+  EXPECT_THROW((void)system.auxiliary_registry_contract(), std::logic_error);
+  if (divergent) {
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      try {
+        system.mark_bound();
+        FAIL() << "rank-divergent interface mask was bound";
+      } catch (const std::runtime_error& error) {
+        EXPECT_NE(std::string(error.what()).find("interface face ownership differs"),
+                  std::string::npos);
+      }
+      EXPECT_EQ(system.lifecycle_state(), lifecycle);
+      EXPECT_EQ(system.n_blocks(), 1);
+      EXPECT_EQ(system.density("first"), saved_density);
+      EXPECT_THROW((void)system.auxiliary_registry_contract(), std::logic_error);
+    }
+    EXPECT_THROW(install_interface_test_boundary(system, "first", ordinal), std::logic_error);
+  } else {
+    ASSERT_NO_THROW(system.mark_bound());
+    EXPECT_EQ(system.lifecycle_state(), "bound");
+    EXPECT_EQ(system.n_blocks(), 1);
+    EXPECT_EQ(system.density("first"), saved_density);
+    EXPECT_NO_THROW((void)system.auxiliary_registry_contract());
+  }
+}
+
+void check_package_interface_mask_consensus(bool divergent) {
+  NativeSystem system(interface_mask_config());
+  install_execution_lane(system);
+  add_charge_block(system, "first");
+  const std::vector<double> density(cell_count(4), 2.0);
+  system.set_density("first", density);
+  const auto saved_density = system.density("first");
+  if (pops::my_rank() == 0)
+    EXPECT_EQ(saved_density, density);
+  stage_charge_package(system, "pending", {}, {});
+  const int ordinal = divergent && pops::my_rank() != 0 ? 1 : 0;
+  install_interface_test_boundary(system, "pending", ordinal);
+  const auto lifecycle = system.lifecycle_state();
+  EXPECT_THROW((void)system.auxiliary_registry_contract(), std::logic_error);
+  if (divergent) {
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      try {
+        system.finalize_native_packages();
+        FAIL() << "rank-divergent package interface mask was published";
+      } catch (const std::runtime_error& error) {
+        EXPECT_NE(
+            std::string(error.what()).find("native package finalization rolled back collectively"),
+            std::string::npos);
+      }
+      EXPECT_EQ(system.lifecycle_state(), lifecycle);
+      EXPECT_EQ(system.n_blocks(), 1);
+      EXPECT_EQ(system.density("first"), saved_density);
+      EXPECT_THROW((void)system.auxiliary_registry_contract(), std::logic_error);
+    }
+    EXPECT_THROW(install_interface_test_boundary(system, "pending", ordinal), std::runtime_error);
+    EXPECT_THROW(system.install_block_state_route("pending", "substituted-state"),
+                 std::runtime_error);
+  } else {
+    ASSERT_NO_THROW(system.finalize_native_packages());
+    EXPECT_EQ(system.n_blocks(), 2);
+    EXPECT_EQ(system.density("first"), saved_density);
+    ASSERT_NO_THROW(system.mark_bound());
+    EXPECT_EQ(system.lifecycle_state(), "bound");
+  }
+}
+
+}  // namespace
+
+TEST(test_coupled_fieldsolve, exact_interface_masks_bind_collectively_without_partial_publication) {
+  check_direct_interface_mask_consensus(false);
+  if (pops::n_ranks() > 1)
+    check_direct_interface_mask_consensus(true);
+}
+
+TEST(test_coupled_fieldsolve,
+     exact_interface_masks_finalize_collectively_without_partial_publication) {
+  check_package_interface_mask_consensus(false);
+  if (pops::n_ranks() > 1)
+    check_package_interface_mask_consensus(true);
+}
