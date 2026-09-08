@@ -5,6 +5,7 @@ from copy import deepcopy
 from dataclasses import replace
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -33,6 +34,7 @@ from pops.time import FailRun, FixedDt, StagePoint, TimePoint, every
 
 
 ROOT = Path(__file__).resolve().parents[4]
+INCLUDE = os.environ.get("POPS_INCLUDE") or str(ROOT / "include")
 EXAMPLE = ROOT / "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
 
 
@@ -150,7 +152,7 @@ extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{ return &ap
 def _flux_component(tmp_path: Path):
     return compile_component(
         _flux_source_component(tmp_path),
-        include=str(ROOT / "include"),
+        include=INCLUDE,
     )
 
 
@@ -183,6 +185,9 @@ def _tagger_source_component(tmp_path: Path):
         signature={"generic": True, "native_interface": interface.signature_declaration()},
         interfaces=interface.manifest_declarations(),
         capabilities=(capability,),
+        # Successful masks use only finite per-cell comparisons and fixed-order boolean OR.
+        # The explicit fail-once status publishes no candidate hierarchy.
+        determinism={"classification": "bitwise", "scope": ["same-input"]},
         target={"variants": [{
             "dimension": 2, "scalar": "float64", "device": "cpu", "features": [],
         }]},
@@ -290,10 +295,6 @@ extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{ return &ap
     package_path = tmp_path / "shared-tagger.pops.json"
     package_path.write_text(json.dumps(package), encoding="utf-8")
     return load(package_path).require("tagger", interface=interface)()
-
-
-def _tagger_component(tmp_path: Path):
-    return compile_component(_tagger_source_component(tmp_path), include=str(ROOT / "include"))
 
 
 def _ghost_source_component(tmp_path: Path):
@@ -609,6 +610,10 @@ def _implicit_pair_program(left_state, right_state, rate, packed_state=None):
             solver=GMRES(max_iter=8, restart=4, rel_tol=1.0e-12),
             name="shared_interface_correction",
         ).consume(action=FailRun())
+        # Keep the auxiliary solve vector as an actual committed runtime state; the
+        # solve exercises the shared Jacobian while this exact identity preserves it.
+        packed_next = program.value("packed_next", packed.n, at=packed.next.point)
+        program.commit(packed.next, packed_next)
     left_next = program.value("left_next", left.n + program.dt * left_r0, at=left.next.point)
     right_next = program.value("right_next", right.n + program.dt * right_r0, at=right.next.point)
     program.commit(left.next, left_next)
@@ -698,7 +703,7 @@ def test_runtime_instance_executes_external_ghost_with_rollback_and_retry(tmp_pa
         validated,
         layout=Uniform(CartesianGrid(frame=core.frame, cells=(8, 8))),
         components=(component,),
-        compile_options={"include": str(ROOT / "include")},
+        compile_options={"include": INCLUDE},
     )
     resolved.verify()
     artifact = pops.compile(resolved)
@@ -706,7 +711,9 @@ def test_runtime_instance_executes_external_ghost_with_rollback_and_retry(tmp_pa
         core.case.resolve(handle, block=core.tracer): value
         for handle, value in (
             (core.velocity_x_param, 1.0),
-            (core.velocity_y_param, 0.0),
+            # The imported tutorial declares Positive velocity parameters. The compared
+            # interior rows have no transverse gradient, so this preserves their exact update.
+            (core.velocity_y_param, 1.0e-12),
             (core.inlet_x_param, 0.0),
             (core.inlet_y_param, 0.0),
         )
@@ -806,7 +813,7 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
         validated,
         layout=Uniform(CartesianGrid(frame=core.frame, cells=(8, 8))),
         components=(component,),
-        compile_options={"include": str(ROOT / "include")},
+        compile_options={"include": INCLUDE},
     )
     endpoint_interfaces = tuple(
         block.numerics.boundaries[0].interfaces[0] for block in resolved.blocks)
@@ -819,11 +826,15 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
     assert interface.left.trace_operation.value == "cell_average"
     assert interface.right.trace_operation.value == "cell_average"
     assert interface.left.required_depth == interface.right.required_depth == 1
-    for resolved_block, authored_block in zip(
-            resolved.blocks, (core.tracer, right), strict=True):
-        expected = core.case.resolve(core.inlet_x_param, block=authored_block)
-        x_min = resolved_block.numerics.boundaries[0].compile_boundary_data()["faces"][0]
-        assert x_min["values"] == [["handle_value", expected.qualified_id]]
+    for resolved_block in resolved.blocks:
+        payload = resolved_block.numerics.boundaries[0].compile_boundary_data()
+        owned_face = 1 if resolved_block.name == "tracer" else 0
+        assert payload["omitted_interface_faces"] == [owned_face]
+        assert payload["faces"][owned_face]["type"] == "external"
+        assert payload["faces"][owned_face]["values"] == []
+        if resolved_block.name == "tracer":
+            expected = core.case.resolve(core.inlet_x_param, block=core.tracer)
+            assert payload["faces"][0]["values"] == [["handle_value", expected.qualified_id]]
     artifact = pops.compile(resolved)
     initial = {
         "tracer": np.ones((1, 8, 8), dtype=np.float64),
@@ -1132,7 +1143,7 @@ def _resolve_shared_interface_amr(
             for component in (authoring.component, authoring.tagger_component)
             if component is not None
         ),
-        compile_options={"include": str(ROOT / "include")},
+        compile_options={"include": INCLUDE},
     )
 
 
@@ -1217,7 +1228,7 @@ def test_frozen_two_level_generated_program_executes_shared_interface_implicit_p
 
 def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     authoring = _shared_interface_amr_authoring(
-        tmp_path, tagger_component=_tagger_component(tmp_path / "tagger")
+        tmp_path, tagger_component=_tagger_source_component(tmp_path / "tagger")
     )
     example = authoring.example
     core = authoring.core
