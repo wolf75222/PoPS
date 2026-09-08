@@ -1599,6 +1599,117 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRefusesHistoryRegridBeforeTopologyMu
   EXPECT_EQ(engine->hierarchy().num_levels(), 1u);
 }
 
+TEST(GeneratedAmrSystemBlock, AlignedFourSlotHistoryProjectsEarnedSamplesAtomically) {
+  constexpr int Dim = pops::kNativeDimension;
+  using Observer = pops::runtime::program::detail::AmrProgramHistoryRemapCollectiveTestAccess<Dim>;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 32;
+    config.transition_buffers.front()[axis] = 0;
+    config.transition_lookaheads.front()[axis] = 0;
+  }
+  config.regrid_every = 0;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/aligned-state-history");
+  system.set_temporal_relations({1}, {1}, {"integral_only"});
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  pops::test::install_prepared_refine_coarsen_threshold(
+      system, {"tracer", "u", 0.5, pops::test::PreparedThresholdRelation::Above},
+      {"tracer", "u", 0.5, pops::test::PreparedThresholdRelation::Below},
+      "tests.generated-amr/aligned-state-history-tagging@1");
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("clock.macro");
+  context->declare_clock_relation("clock.macro", "clock.level.1", 1);
+  context->install([context](double dt) { context->advance_hierarchy(dt, [](double) {}); },
+                   context);
+  system.set_program_block_map({0});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "tests.generated-amr/aligned-state-history@1", std::vector<FluxBudget>(1, FluxBudget{2, 1}),
+      0, 0);
+  context->for_each_program_resource_level([&](int) {
+    context->register_history("tracer.U", 3, 1, 0, "tracer.U", "cell.conservative", "clock.macro",
+                              "none");
+  });
+  // Real stores with distinct values and variable outgoing intervals make copying the current
+  // state, using the wrong lag, or replacing retained child samples immediately observable.
+  int step = 0;
+  for (const double dt : {0.1, 0.2, 0.3, 0.4}) {
+    ++step;
+    context->advance_hierarchy(dt, [&](double) {
+      auto sample = context->rhs_scratch_like(context->state(0));
+      sample.set_val(
+          static_cast<pops::Real>(step * (Observer::active_level(*context) == 0 ? 10 : 100)));
+      context->store_history("tracer.U", sample, 0);
+      context->rotate_histories("clock.macro");
+    });
+  }
+  std::size_t center = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    center += static_cast<std::size_t>(config.shape[axis] / 2) * stride;
+    stride *= static_cast<std::size_t>(config.shape[axis]);
+  }
+  std::vector<double> contracted(cell_count(config.shape), 0.25);
+  contracted[center] = 1.0;
+  system.set_conservative_state("tracer", contracted);
+  system.execute_prepared_tagging(0);
+  ASSERT_TRUE(system.regrid_from_prepared_tagging(0));
+  const auto old_boxes = system.patch_boxes();
+  std::vector<std::vector<double>> old_slots;
+  for (int slot = 0; slot < 4; ++slot)
+    old_slots.push_back(system.history_global("tracer.U", 1, slot));
+  // The retained partial layout and parent must refer to exactly the same sample instants.
+  const double authentic_dt = system.history_slot_dt("tracer.U", 1, 2);
+  system.restore_history_slot_dt("tracer.U", 1, 2, authentic_dt * 2.0);
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  system.execute_prepared_tagging(0);
+  const auto accepted_before_failure = system.program_accepted_state();
+  EXPECT_THROW(system.regrid_from_prepared_tagging(0), std::invalid_argument);
+  EXPECT_EQ(system.patch_boxes(), old_boxes);
+  EXPECT_EQ(system.program_accepted_state(), accepted_before_failure);
+  for (int slot = 0; slot < 4; ++slot)
+    EXPECT_EQ(system.history_global("tracer.U", 1, slot), old_slots[slot]);
+  system.restore_history_slot_dt("tracer.U", 1, 2, authentic_dt);
+  system.execute_prepared_tagging(0);
+  Observer::Observation observation;
+  Observer::install_one_shot_observer(*context, observation);
+  ASSERT_TRUE(system.regrid_from_prepared_tagging(0));
+  ASSERT_TRUE(observation.seen);
+  ASSERT_EQ(observation.descriptor.history_plan.size(), 1u);
+  EXPECT_EQ(observation.descriptor.history_plan.front().source,
+            pops::runtime::program::AmrProgramHistoryRemapSource::ParentAlignedState);
+  EXPECT_FALSE(observation.descriptor.history_plan.front().parent_key.empty());
+  const auto accepted = system.program_accepted_state();
+  EXPECT_TRUE(pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(accepted)
+                  .pending_history_remaps.empty());
+  const std::array<double, 4> parent_values{10.0, 40.0, 30.0, 20.0};
+  for (int slot = 0; slot < 4; ++slot) {
+    const auto projected = system.history_global("tracer.U", 1, slot);
+    ASSERT_EQ(projected.size(), old_slots[slot].size());
+    std::size_t retained = 0;
+    std::size_t newly_covered = 0;
+    for (std::size_t cell = 0; cell < projected.size(); ++cell) {
+      if (old_slots[slot][cell] != 0.0) {
+        EXPECT_EQ(projected[cell], old_slots[slot][cell]);
+        ++retained;
+      } else {
+        EXPECT_EQ(projected[cell], parent_values[slot]);
+        ++newly_covered;
+      }
+    }
+    EXPECT_GT(retained, 0u);
+    EXPECT_GT(newly_covered, 0u);
+    EXPECT_EQ(system.history_slot_dt("tracer.U", 1, slot),
+              system.history_slot_dt("tracer.U", 0, slot));
+  }
+  EXPECT_EQ(system.history_fill_count("tracer.U", 1), 4);
+  EXPECT_NO_THROW(system.restore_checkpoint_accepted_state(accepted));
+  EXPECT_EQ(system.program_accepted_state(), accepted);
+}
+
 TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
   const auto exercise_deferred_ratio = [](std::int64_t temporal_numerator) {
     constexpr int Dim = pops::kNativeDimension;

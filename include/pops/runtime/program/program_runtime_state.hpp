@@ -68,6 +68,8 @@ enum class AmrProgramHistoryRemapSource : std::uint8_t {
   RetainedChild = 1,
   ParentDeferred = 2,
   Removed = 3,
+  /// Spatial projection of authenticated equal-clock state samples, retaining covered cells.
+  ParentAlignedState = 4,
 };
 
 /// One canonical affected-ring decision prepared by the AMR lane before topology publication.

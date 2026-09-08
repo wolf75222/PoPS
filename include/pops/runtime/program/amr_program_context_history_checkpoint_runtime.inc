@@ -817,11 +817,12 @@ void refresh_resources_after_accepted_history_remap_(
         for (const AmrProgramHistoryRemapEntry& entry : descriptor.history_plan) {
           if (entry.key.empty() || !plan.emplace(entry.key, &entry).second)
             throw std::runtime_error("AMR Program history flux remap has a non-canonical plan");
-          if (entry.source == AmrProgramHistoryRemapSource::ParentDeferred &&
-              entry.parent_key.empty())
+          const bool parent_source =
+              entry.source == AmrProgramHistoryRemapSource::ParentDeferred ||
+              entry.source == AmrProgramHistoryRemapSource::ParentAlignedState;
+          if (parent_source && entry.parent_key.empty())
             throw std::runtime_error("AMR Program history flux remap has no parent provenance key");
-          if (entry.source != AmrProgramHistoryRemapSource::ParentDeferred &&
-              !entry.parent_key.empty())
+          if (!parent_source && !entry.parent_key.empty())
             throw std::runtime_error(
                 "AMR Program history flux remap has a non-canonical retained/removal parent key");
         }
@@ -848,7 +849,8 @@ void refresh_resources_after_accepted_history_remap_(
           const auto retained = history_flux_expressions_.find(key);
           const bool source_from_parent =
               planned != plan.end() &&
-              planned->second->source == AmrProgramHistoryRemapSource::ParentDeferred;
+              (planned->second->source == AmrProgramHistoryRemapSource::ParentDeferred ||
+               planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedState);
           if (!source_from_parent && retained != history_flux_expressions_.end() &&
               retained->second.size() == ring.size()) {
             staged.expressions.emplace(key, retained->second);
@@ -860,6 +862,18 @@ void refresh_resources_after_accepted_history_remap_(
             if (parent == history_flux_expressions_.end() || parent->second.size() != ring.size())
               throw std::runtime_error(
                   "AMR Program history flux remap lacks its authenticated parent sample");
+            if (planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedState) {
+              const auto has_flux = [](const auto& slots) {
+                return std::any_of(slots.begin(), slots.end(),
+                                   [](const auto& expression) { return !expression.empty(); });
+              };
+              if (descriptor.temporal_numerator != 1 || descriptor.temporal_denominator != 1 ||
+                  !descriptor.integral_only || has_flux(parent->second) ||
+                  (retained != history_flux_expressions_.end() && has_flux(retained->second)))
+                throw std::runtime_error(
+                    "AMR Program aligned state history projection requires equal-clock state "
+                    "samples without interface-flux provenance");
+            }
             staged.expressions.emplace(key, parent->second);
           }
           const auto& slots = staged.expressions.at(key);

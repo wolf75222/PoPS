@@ -8661,28 +8661,62 @@ struct AmrSystem<Dim>::Impl {
                 "AMR Program unchanged physical child coverage has an incomplete retained history");
           // Coverage is authoritative per ring.  A changed patch decomposition may still be
           // completely covered by retained data; only an incomplete/new coverage projects parent.
-          const auto source = retained_coverage
-                                  ? runtime::program::AmrProgramHistoryRemapSource::RetainedChild
-                                  : runtime::program::AmrProgramHistoryRemapSource::ParentDeferred;
-          const bool deferred_ab2 =
+          auto source = retained_coverage
+                            ? runtime::program::AmrProgramHistoryRemapSource::RetainedChild
+                            : runtime::program::AmrProgramHistoryRemapSource::ParentDeferred;
+          const bool initialized_projection =
               source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred &&
               program.hist_.initialized.at(parent_key);
-          if (deferred_ab2) {
+          if (initialized_projection) {
             if (static_cast<std::size_t>(parent_level) >= temporal_relations.size())
               throw std::logic_error("AMR Program deferred history remap lacks a clock relation");
             const auto& relation = temporal_relations[static_cast<std::size_t>(parent_level)];
             const auto ratio = relation.temporal_ratio();
-            if (parent->second.size() != 2 || program.hist_.depth.at(parent_key) != 2 ||
-                relation.parent_level() != parent_level || relation.child_level() != child_level ||
-                (ratio.numerator != 1 && ratio.numerator != 2) || ratio.denominator != 1 ||
-                relation.remainder_policy() != ::pops::amr::RemainderPolicy::IntegralOnly ||
-                program.hist_.store_pending.at(parent_key) ||
-                program.hist_.slot_dt.at(parent_key).size() != 2 ||
-                !(program.hist_.slot_dt.at(parent_key)[1] > Real(0)))
+            const auto& dts = program.hist_.slot_dt.at(parent_key);
+            const bool exact_direct_clock =
+                relation.parent_level() == parent_level && relation.child_level() == child_level &&
+                ratio.denominator == 1 &&
+                relation.remainder_policy() == ::pops::amr::RemainderPolicy::IntegralOnly &&
+                !program.hist_.store_pending.at(parent_key);
+            if (parent->second.size() > 2 && exact_direct_clock && ratio.numerator == 1) {
+              // Equal clocks authenticate the same past instants slot by slot.  Project those
+              // actual parent samples onto newly covered cells; keep the aligned child samples
+              // wherever they already exist.  This performs no temporal interpolation, replay,
+              // or CopyCurrent initialization of an earned lag.  The artifact callback also
+              // authenticates that this is state data with no lagged interface-flux expression.
+              if (program.hist_.depth.at(parent_key) != descriptor.depth ||
+                  dts.size() != parent->second.size() ||
+                  !std::all_of(dts.begin(), dts.end(),
+                               [](Real dt) { return std::isfinite(dt) && dt > Real(0); }) ||
+                  program.hist_.state_identity.at(parent_key) != descriptor.state_identity ||
+                  program.hist_.space_identity.at(parent_key) != descriptor.space_identity ||
+                  program.hist_.clock_identity.at(parent_key) != descriptor.clock_identity ||
+                  program.hist_.interpolation_identity.at(parent_key) !=
+                      descriptor.interpolation_identity)
+                throw std::invalid_argument(
+                    "AMR Program aligned state history projection lacks exact parent samples");
+              if (previous != nullptr &&
+                  (previous->depth != descriptor.depth || !previous->initialized ||
+                   previous->store_pending || previous->slot_dt != dts ||
+                   previous->fill_count != program.hist_.fill_count.at(parent_key) ||
+                   previous->owner != program.hist_.owner.at(parent_key) ||
+                   previous->state_identity != descriptor.state_identity ||
+                   previous->space_identity != descriptor.space_identity ||
+                   previous->clock_identity != descriptor.clock_identity ||
+                   previous->interpolation_identity != descriptor.interpolation_identity))
+                throw std::invalid_argument(
+                    "AMR Program aligned state history projection has unaligned child samples");
+              source = runtime::program::AmrProgramHistoryRemapSource::ParentAlignedState;
+            } else if (parent->second.size() != 2 || program.hist_.depth.at(parent_key) != 2 ||
+                       !exact_direct_clock || (ratio.numerator != 1 && ratio.numerator != 2) ||
+                       dts.size() != 2 || !(dts[1] > Real(0))) {
               throw std::invalid_argument(
                   "AMR Program deferred history remap supports initialized direct-child AB2 "
-                  "IntegralOnly 1:1 or 2:1 only");
+                  "IntegralOnly 1:1 or 2:1 only; deeper state rings require exact 1:1 samples");
+            }
           }
+          const bool parent_source =
+              source != runtime::program::AmrProgramHistoryRemapSource::RetainedChild;
           const int runtime_owner = program.hist_.owner.at(parent_key);
           if (runtime_owner < 0 || static_cast<std::size_t>(runtime_owner) >= blocks.size())
             throw std::logic_error(
@@ -8693,48 +8727,32 @@ struct AmrSystem<Dim>::Impl {
             throw std::logic_error("AMR Program history regrid retained stale child storage");
           ring->second.reserve(parent->second.size());
           candidate->depth.insert_or_assign(
-              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
-                             ? program.hist_.depth.at(parent_key)
-                             : previous->depth);
+              child_key, parent_source ? program.hist_.depth.at(parent_key) : previous->depth);
           candidate->initialized.insert_or_assign(
-              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
-                             ? program.hist_.initialized.at(parent_key)
-                             : previous->initialized);
+              child_key,
+              parent_source ? program.hist_.initialized.at(parent_key) : previous->initialized);
           candidate->fill_count.insert_or_assign(
-              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
-                             ? program.hist_.fill_count.at(parent_key)
-                             : previous->fill_count);
+              child_key,
+              parent_source ? program.hist_.fill_count.at(parent_key) : previous->fill_count);
           candidate->store_pending.insert_or_assign(
-              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
-                             ? program.hist_.store_pending.at(parent_key)
-                             : previous->store_pending);
+              child_key,
+              parent_source ? program.hist_.store_pending.at(parent_key) : previous->store_pending);
           candidate->owner.insert_or_assign(child_key, runtime_owner);
           candidate->state_identity.insert_or_assign(
-              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
-                             ? program.hist_.state_identity.at(parent_key)
-                             : previous->state_identity);
+              child_key, parent_source ? program.hist_.state_identity.at(parent_key)
+                                       : previous->state_identity);
           candidate->space_identity.insert_or_assign(
-              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
-                             ? program.hist_.space_identity.at(parent_key)
-                             : previous->space_identity);
+              child_key, parent_source ? program.hist_.space_identity.at(parent_key)
+                                       : previous->space_identity);
           candidate->clock_identity.insert_or_assign(
-              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
-                             ? program.hist_.clock_identity.at(parent_key)
-                             : previous->clock_identity);
+              child_key, parent_source ? program.hist_.clock_identity.at(parent_key)
+                                       : previous->clock_identity);
           candidate->interpolation_identity.insert_or_assign(
-              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
-                             ? program.hist_.interpolation_identity.at(parent_key)
-                             : previous->interpolation_identity);
+              child_key, parent_source ? program.hist_.interpolation_identity.at(parent_key)
+                                       : previous->interpolation_identity);
           candidate->slot_dt.insert_or_assign(
-              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
-                             ? program.hist_.slot_dt.at(parent_key)
-                             : previous->slot_dt);
-          remap_plan.push_back(
-              {child_key,
-               source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
-                   ? parent_key
-                   : std::string{},
-               source});
+              child_key, parent_source ? program.hist_.slot_dt.at(parent_key) : previous->slot_dt);
+          remap_plan.push_back({child_key, parent_source ? parent_key : std::string{}, source});
           const amr::transfer::TransferKind transfer_kind =
               regrid_transfer_kind(parent_level, static_cast<std::size_t>(runtime_owner));
           exact.text(parent_key)
@@ -8746,8 +8764,8 @@ struct AmrSystem<Dim>::Impl {
               .scalar(transfer_kind);
           transfers.push_back(
               {&parent->second,
-               source == runtime::program::AmrProgramHistoryRemapSource::RetainedChild ? previous
-                                                                                       : nullptr,
+               source != runtime::program::AmrProgramHistoryRemapSource::ParentDeferred ? previous
+                                                                                        : nullptr,
                &ring->second, transfer_kind});
         }
       }
