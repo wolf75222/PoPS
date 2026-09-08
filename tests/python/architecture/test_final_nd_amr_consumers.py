@@ -122,9 +122,11 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
 # separately bounded, and their aggregate remains independently enforced.
 # M6 solve outcomes, accepted exchange transactions, and authenticated history replay add
 # explicit contracts to these fixed fragments. Retain a bounded allowance for those foundations.
-PROGRAM_FRAGMENT_BUDGET = 7_730
+# Shared RHS capture, paired signed quadrature, and retained source serialization form a new
+# responsibility (400 lines). Diffusion already has its independent 180-line allowance above.
+PROGRAM_FRAGMENT_BUDGET = 7_730 + 400
 PROGRAM_SCAFFOLDING_BUDGET = 1_850
-PROGRAM_SEMANTIC_CLOSURE_BUDGET = 9_580
+PROGRAM_SEMANTIC_CLOSURE_BUDGET = 9_580 + 400
 SEMANTIC_AUTHORITIES = frozenset(
     {
         "pops/numerics/time/amr/reflux/amr_flux_execution.hpp",
@@ -166,6 +168,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/program/program_runtime_state.hpp",
         "pops/runtime/program/same_level_cell_temporal_provider.hpp",
         "pops/runtime/program/step_transaction.hpp",
+        "pops/runtime/program/collective_step_rejection.hpp",
         "pops/runtime/system/provider_storage_binding.hpp",
     }
 )
@@ -406,3 +409,20 @@ def test_direct_native_proof_exercises_one_and_three_dimensional_consumers() -> 
     assert "PatchRange<1>" in source
     assert "PatchRange<3>" in source
     assert "RefinementRatio<3>{2, 3, 1}" in source
+
+
+def test_typed_rejection_protocol_has_one_bounded_shared_authority() -> None:
+    authority = "pops/runtime/program/collective_step_rejection.hpp"
+    # This is a shared upstream runtime protocol, not an AMR context fragment moved out of sight.
+    assert len((INCLUDE / authority).read_text().splitlines()) <= 240
+    for consumer in (
+        "pops/numerics/time/amr/levels/amr_subcycling_engine.hpp",
+        "pops/mesh/boundary/prepared_boundary_component.hpp",
+        "pops/runtime/amr/detail/native_tagger_session.hpp",
+    ):
+        text = (INCLUDE / consumer).read_text()
+        assert authority in _local_includes(text)
+        assert "collective_step_rejection_phase(" in text
+        assert "struct StepRejectionEnvelope" not in text
+        assert "encode_step_rejection" not in text
+        assert "decode_step_rejection" not in text

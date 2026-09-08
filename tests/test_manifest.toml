@@ -1106,6 +1106,12 @@ sources = ["tests/cpp/unit/runtime/test_spatial_discretisation.cpp"]
 labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]
+name = "test_collective_step_rejection"
+sources = ["tests/cpp/unit/runtime/test_collective_step_rejection.cpp"]
+labels = ["unit", "runtime", "fast"]
+mpi_variants = [2]
+
+[[cpp.suite]]
 name = "test_step_attempt_rejected_amr_link"
 sources = ["tests/cpp/unit/runtime/test_step_attempt_rejected_amr_link.cpp"]
 labels = ["unit", "runtime", "amr", "fast"]

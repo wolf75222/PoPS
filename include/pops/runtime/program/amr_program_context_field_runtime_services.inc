@@ -266,8 +266,8 @@ void refresh_resources_() const {
     } catch (...) {
       provisional_error = std::current_exception();
     }
-    rethrow_accepted_history_remap_collective_failure_(provisional_error,
-                                                       prepared_execution_lane());
+    collectively_rethrow_exception(provisional_error, prepared_execution_lane(),
+                                   "AMR Program accepted history remap failed collectively");
     history_flux_expressions_.swap(provisional_flux);
   }
   scratches_.clear();
@@ -280,8 +280,8 @@ void refresh_resources_() const {
   // synchronize_resource_generation_ may allocate a ledger after its own prepared-lane work.
   // Converge that local tail failure before refresh_accepted_hierarchy_state_after_remap_ enters
   // its later temporal/subcycling collectives; the enclosing AcceptedSnapshot owns rollback.
-  rethrow_accepted_history_remap_collective_failure_(synchronization_error,
-                                                     prepared_execution_lane());
+  collectively_rethrow_exception(synchronization_error, prepared_execution_lane(),
+                                 "AMR Program accepted history remap failed collectively");
   if (active_level_ >= nlev())
     active_level_ = 0;
 }

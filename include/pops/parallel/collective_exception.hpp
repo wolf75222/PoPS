@@ -20,16 +20,17 @@ namespace pops {
 /// exception type; a distributed failure selects the lowest failing rank and preserves its reason
 /// on every rank. Callers select which failure class has priority before entering this boundary.
 inline void collectively_rethrow_exception(std::exception_ptr local_error,
-                                           const ExecutionLane& lane, std::string_view message) {
-  const auto communicator = lane.communicator();
+                                           const CommunicatorView& communicator,
+                                           std::string_view message) {
   const long failed = local_error ? 1L : 0L;
   if (all_reduce_max(failed, communicator) == 0)
     return;
-  if (lane.size() == 1 && local_error)
+  if (communicator.size() == 1 && local_error)
     std::rethrow_exception(local_error);
   const long root = all_reduce_min(
-      failed != 0 ? static_cast<long>(lane.rank()) : static_cast<long>(lane.size()), communicator);
-  const bool authoritative = lane.rank() == root;
+      failed != 0 ? static_cast<long>(communicator.rank()) : static_cast<long>(communicator.size()),
+      communicator);
+  const bool authoritative = communicator.rank() == root;
   std::string diagnostic;
   long preparation_failed = 0;
   try {
@@ -64,6 +65,11 @@ inline void collectively_rethrow_exception(std::exception_ptr local_error,
   broadcast_bytes_inplace(diagnostic.data(), diagnostic.size(), static_cast<int>(root),
                           communicator);
   throw std::runtime_error(diagnostic);
+}
+
+inline void collectively_rethrow_exception(std::exception_ptr local_error,
+                                           const ExecutionLane& lane, std::string_view message) {
+  collectively_rethrow_exception(local_error, lane.communicator(), message);
 }
 
 }  // namespace pops

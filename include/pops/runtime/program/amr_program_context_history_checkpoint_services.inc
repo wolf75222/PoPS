@@ -77,9 +77,8 @@ void store_history_(const std::string& name, const field_type& value) const {
       rollback_error = std::current_exception();
     }
     (void)all_reduce_max(rollback_error ? 1L : 0L, lane);
-    if (lane.size() == 1 && copy_error)
-      std::rethrow_exception(copy_error);
-    throw std::runtime_error("AMR Program history store valid-copy failed collectively");
+    collectively_rethrow_exception(copy_error, lane,
+                                   "AMR Program history store valid-copy failed collectively");
   }
   for (std::size_t slot = 0; slot < candidate.dts.size(); ++slot) {
     manager.slot_dt.at(candidate.key)[slot] = candidate.dts[slot];

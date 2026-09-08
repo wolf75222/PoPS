@@ -672,6 +672,9 @@ pops_add_gtest_suite(NAME test_amr_multiblock_regrid_union SOURCES "${_src}" EXT
 pops_test_source(_src test_amr_history_ring)
 pops_add_gtest_suite(NAME test_amr_history_ring SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
+pops_test_source(_src test_collective_step_rejection)
+pops_add_gtest_suite(NAME test_collective_step_rejection SOURCES "${_src}")
+
 # Link-only ABI fence: the source itself references the out-of-line StepAttemptRejected key
 # function/typeinfo, while the target requests only the AMR facade. The link therefore proves that
 # pops_runtime_amr carries the one runtime-core authority transitively (no System dependency).
@@ -839,6 +842,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_coupled_fieldsolve 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_implicit_transaction 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_substeps 2)
+  set(POPS_MPI_RANKS_test_collective_step_rejection 2)
   set(POPS_MPI_RANKS_test_amr_synthetic_program_loader_transaction 2)
   set(POPS_MPI_RANKS_test_amr_program_positivity_floor 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_coupled_source 2)
@@ -1004,6 +1008,7 @@ if(POPS_HAS_MPI)
     test_coupled_fieldsolve
     test_amr_multiblock_implicit_transaction
     test_amr_multiblock_substeps
+    test_collective_step_rejection
     test_amr_synthetic_program_loader_transaction
     test_program_runtime
     test_program_context_contract

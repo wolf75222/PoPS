@@ -786,15 +786,6 @@ void validate_accepted_history_remap_() const {
   }
 }
 
-void rethrow_accepted_history_remap_collective_failure_(std::exception_ptr local_error,
-                                                        const ExecutionLane& lane) const {
-  if (all_reduce_max(local_error ? 1L : 0L, lane) == 0)
-    return;
-  if (lane.size() == 1 && local_error)
-    std::rethrow_exception(local_error);
-  throw std::runtime_error("AMR Program accepted history remap failed collectively");
-}
-
 void refresh_resources_after_accepted_history_remap_(
     const AmrProgramHistoryRemapDescriptor& descriptor) const {
   if (facade_ != nullptr)
@@ -901,14 +892,16 @@ void refresh_resources_after_accepted_history_remap_(
   } catch (...) {
     metadata_error = std::current_exception();
   }
-  rethrow_accepted_history_remap_collective_failure_(metadata_error, lane);
+  collectively_rethrow_exception(metadata_error, lane,
+                                 "AMR Program accepted history remap failed collectively");
   std::exception_ptr validation_error;
   try {
     validate_accepted_history_remap_();
   } catch (...) {
     validation_error = std::current_exception();
   }
-  rethrow_accepted_history_remap_collective_failure_(validation_error, lane);
+  collectively_rethrow_exception(validation_error, lane,
+                                 "AMR Program accepted history remap failed collectively");
   std::exception_ptr synchronization_error;
   try {
     synchronize_resource_generation_();
@@ -918,7 +911,8 @@ void refresh_resources_after_accepted_history_remap_(
   // The resource-generation tail can allocate a replacement ledger after its own prepared-lane
   // work.  Converge that failure before the caller enters temporal/subcycling collectives; the
   // enclosing AcceptedSnapshot remains the rollback authority for any partial resource refresh.
-  rethrow_accepted_history_remap_collective_failure_(synchronization_error, lane);
+  collectively_rethrow_exception(synchronization_error, lane,
+                                 "AMR Program accepted history remap failed collectively");
   if (active_level_ >= nlev())
     active_level_ = 0;
   static_assert(std::is_nothrow_swappable_v<decltype(history_flux_expressions_)>);
