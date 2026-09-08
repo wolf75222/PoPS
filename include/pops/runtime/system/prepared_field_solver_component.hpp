@@ -173,9 +173,9 @@ class PreparedFieldSolverComponent final {
               spec_.topology_recipe_identity != global.topology_recipe_identity)
             throw std::invalid_argument(
                 "external hierarchy binding has changed its exact identity");
+          materialized_layout_identity_ = global.materialized_layout_identity;
         },
         "external hierarchy identity validation failed collectively");
-    materialized_layout_identity_ = global.materialized_layout_identity;
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{"external-system-field-layout", materialized_layout_identity_}}))
       throw std::invalid_argument("external FieldTopology global layout differs between MPI ranks");
