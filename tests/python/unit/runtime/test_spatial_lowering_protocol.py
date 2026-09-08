@@ -57,14 +57,14 @@ def test_lowering_refuses_nondeterministic_or_nonexact_results(lower) -> None:
         def runtime_spatial(self):
             return object()
 
-    with pytest.raises(TypeError, match="exact.*Spatial|exact private Spatial"):
+    with pytest.raises(TypeError, match="exact.*Spatial|exact private spatial adapter"):
         lower(None, Opaque())
 
     class SubclassProvider:
         def runtime_spatial(self):
             return _SpatialSubclass()
 
-    with pytest.raises(TypeError, match="exact.*Spatial|exact private Spatial"):
+    with pytest.raises(TypeError, match="exact.*Spatial|exact private spatial adapter"):
         lower(None, SubclassProvider())
 
 

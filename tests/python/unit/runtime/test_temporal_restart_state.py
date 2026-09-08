@@ -1173,7 +1173,7 @@ def test_uniform_preflight_rejects_noncanonical_scheduled_cache_name():
             "program_hash": np.array("ab" * 32),
             "history_names": np.array([], dtype="U1"),
             "cache_nodes": np.array([7], dtype=np.int64),
-            "cache_names": np.array(["wrong_name"]),
+            "cache_names": np.array(["node_8"]),
             "temporal_restart_state": np.array("{}"),
             "program_cadence_substeps": np.array(1, dtype=np.int64),
             "program_cadence_stride": np.array(1, dtype=np.int64),
@@ -1189,8 +1189,10 @@ def test_uniform_preflight_rejects_noncanonical_scheduled_cache_name():
         }
     )
 
-    with pytest.raises(ValueError, match="node 7 must use canonical cache name 'node_7'"):
+    with pytest.raises(ValueError, match="node 7 must use its live cache name or 'node_7'"):
         preflight_uniform_restart(payload)
+    payload["cache_names"] = np.array(["authored_scheduled_value"])
+    preflight_uniform_restart(payload)
 
 
 class _CadenceEngine:

@@ -267,6 +267,7 @@ def test_implicit_pair_envelope_precedes_program_and_interface_install(
 ) -> None:
     import pops.runtime._amr_system_install as amr_install
     import pops.runtime._bound_snapshot as bound_snapshot
+    import pops.runtime._checkpoint_resource_budget as checkpoint_budget
     import pops.runtime._component_execution_context as component_execution
     import pops.runtime._install_param_routing as param_routing
     import pops.runtime._lifecycle as lifecycle
@@ -353,6 +354,14 @@ def test_implicit_pair_envelope_precedes_program_and_interface_install(
             "interfaces-complete" if complete else "interfaces-incremental"
         ),
     )
+    def record_checkpoint_budget(engine, plan):
+        assert isinstance(engine, Probe)
+        assert plan is install_plan
+        events.append("checkpoint-budget")
+
+    monkeypatch.setattr(
+        checkpoint_budget, "install_amr_checkpoint_resource_budget", record_checkpoint_budget,
+    )
 
     Probe()._install_compiled(
         artifact,
@@ -373,6 +382,7 @@ def test_implicit_pair_envelope_precedes_program_and_interface_install(
         "program",
         "interfaces-incremental",
         "interfaces-complete",
+        "checkpoint-budget",
         "freeze",
     ]
 
