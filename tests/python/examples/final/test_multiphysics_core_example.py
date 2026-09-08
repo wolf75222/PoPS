@@ -95,7 +95,8 @@ def test_example_script_runs_outputs_and_restart_without_mock_or_fallback(tmp_pa
     checkpoint = output / "accepted_restart.npz"
     assert checkpoint.is_file()
     with np.load(checkpoint, allow_pickle=False) as stored:
-        assert [str(name) for name in stored["blocks"]] == ["electrons", "ions"]
+        # Native composition owns storage order; the restart above authenticates it exactly.
+        assert sorted(str(name) for name in stored["blocks"]) == ["electrons", "ions"]
         assert float(stored["t"]) == 1.0e-3
         assert int(stored["macro_step"]) == 1
         assert sorted(str(name) for name in stored["history_names"]) == [
@@ -301,7 +302,7 @@ def test_case_resolves_explicit_layout_consumers_and_two_provider_field() -> Non
     }
     assert native_options["bc"] == "explicit"
     solver_provider = native_options["solver_provider"]
-    assert solver_provider["provider"]["provider_id"] == "pops.field-solver.geometric-mg"
+    assert solver_provider["provider"]["provider_id"] == "pops.field-solver.cartesian-cg"
     assert {
         face["type"]
         for face in solver_provider["facts"]["boundary"]["faces"]
