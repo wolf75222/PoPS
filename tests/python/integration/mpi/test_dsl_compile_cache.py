@@ -25,6 +25,8 @@ from pops.numerics.spatial import FiniteVolume
 from pops.params import ConstParam
 from pops.physics import Model
 from pops.time import FixedDt
+from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.requirements import repo_include
 
 
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
@@ -79,7 +81,7 @@ def _resolved_plan(*, speed: float):
         pops.validate(case),
         layout=layout,
         backend=Production(),
-        compile_options={"include": str(ROOT / "include")},
+        compile_options={"include": repo_include()},
     )
 
 
@@ -138,7 +140,11 @@ def _nonuniform_initial_state() -> np.ndarray:
 
 
 def _run_one_step(artifact, initial: np.ndarray) -> np.ndarray:
-    runtime = pops.bind(artifact, initial_state={"tracer": initial.copy()})
+    runtime = pops.bind(
+        artifact,
+        initial_state={"tracer": initial.copy()},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     report = pops.run(runtime, t_end=1.0e-3, max_steps=1)
     assert report.accepted_steps == 1
     result = np.asarray(runtime.get_state("tracer"), dtype=np.float64).reshape(initial.shape)

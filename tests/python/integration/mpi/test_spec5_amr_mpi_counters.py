@@ -52,7 +52,7 @@ def _comp():
     """A pure compressible-Euler block (4 vars: rho, rho_u, rho_v, E), trivial background elliptic.
 
     alpha=0 -> Poisson RHS is zero (no periodic solvability constraint); the regrid tags on the
-    conservative field. Native bricks only -- no DSL compiler required.
+    conservative field. The ModelSpec adapter compiles this transport into native packages.
     """
     return engine.Model(state=engine.FluidState("compressible", gamma=1.4),
                       transport=engine.CompressibleFlux(), source=engine.NoSource(),
@@ -73,15 +73,23 @@ def _built_multiblock(n=64, regrid_every=1):
     corner and the prepared refinement graph tags exact variable ``E``.
     """
     sim = AmrSystem(_amr_config(n, regrid_every=regrid_every))
+    model = pops.Model("amr-profile-state")
+    state = model.state("U", components=("rho", "mx", "my", "E"))
+    case = pops.Case("amr-profile-composition")
+    blocks = {name: case.block(name, model, states=(state,)) for name in ("gas0", "gas1")}
+    validated = pops.validate(case)
+    for name, block in blocks.items():
+        sim._s._install_block_state_route(name, validated.resolve(block[state]).qualified_id)
     sim.set_temporal_relations([2], [1], ["integral_only"])
+    sim.set_poisson(bc=Periodic())
     sim.add_equation("gas0", _comp(), time=engine.Explicit())
     sim.add_equation("gas1", _comp(), time=engine.Explicit())
-    sim.set_poisson(bc=Periodic())
     install_prepared_threshold_union(
         sim, (("gas0", "E", 6.0), ("gas1", "E", 6.0)))
     sim.set_conservative_state("gas0", _state(n, 1.0, 2.0, bump_comp=3, bump_val=12.0, lo=4, hi=20))
     sim.set_conservative_state("gas1", _state(n, 1.0, 2.0, 0, 1.0, 0, 0))  # uniform background
     install_forward_euler_program(sim)
+    sim.mark_bound()
     return sim
 
 
