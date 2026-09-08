@@ -1654,6 +1654,9 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
   const auto before_field = sim.potential_global();
   const auto before_diagnostics = sim.program_diagnostics();
   const auto before_history = sim.history_fill_count("nested.state");
+  NativeField before_history_value = ctx.scratch_state_like(ctx.history("nested.state", 1));
+  ctx.lincomb(before_history_value, Real(1), ctx.history("nested.state", 1),
+              Real(0), ctx.history("nested.state", 1));
   const auto initial_mass = ctx.sum_component(ctx.state(0), GasSchema::density);
 
   auto child_steps = [&] {
@@ -1669,7 +1672,12 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
   sim.begin_step_transaction();
   child_steps();
   ASSERT_EQ(sim.program_exchange_records().size(), 2u);
-  EXPECT_EQ(all_reduce_max(sim.get_state("gas") != before_state ? 1L : 0L), 1L);
+  const auto attempted_state = sim.get_state("gas");
+  const auto attempted_field = sim.potential_global();
+  NativeField attempted_history_value = ctx.scratch_state_like(ctx.history("nested.state", 1));
+  ctx.lincomb(attempted_history_value, Real(1), ctx.history("nested.state", 1),
+              Real(0), ctx.history("nested.state", 1));
+  EXPECT_EQ(all_reduce_max(attempted_state != before_state ? 1L : 0L), 1L);
   EXPECT_NE(sim.potential_global(), before_field);
   // The outer acceptance fails after both nested solves and substep publications succeeded.
   EXPECT_THROW(ctx.consume_pointwise_evaluation_status(0, 999, Real(2), "outer.guard", 62),
@@ -1680,6 +1688,7 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
   EXPECT_EQ(sim.potential_global(), before_field);
   EXPECT_EQ(sim.program_diagnostics(), before_diagnostics);
   EXPECT_EQ(sim.history_fill_count("nested.state"), before_history);
+  EXPECT_EQ(difference_sum_sq_all(ctx.history("nested.state", 1), before_history_value), Real(0));
   EXPECT_TRUE(sim.program_exchange_records().empty());
   EXPECT_EQ(sim.macro_step(), 0);
   EXPECT_DOUBLE_EQ(sim.time(), 0.0);
@@ -1692,6 +1701,9 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
   EXPECT_EQ(sim.step_transaction_depth(), 0u);
   EXPECT_EQ(sim.macro_step(), 2);
   EXPECT_DOUBLE_EQ(sim.time(), 0.1 + 0.2);
+  EXPECT_EQ(sim.get_state("gas"), attempted_state);
+  EXPECT_EQ(sim.potential_global(), attempted_field);
+  EXPECT_EQ(difference_sum_sq_all(ctx.history("nested.state", 1), attempted_history_value), Real(0));
   const auto accepted = sim.program_exchange_records();
   ASSERT_EQ(accepted.size(), 2u);
   double integrated = 0.0;
