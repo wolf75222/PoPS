@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from pops.identity.scalar import scalar_data
 from pops.model.handles import Handle
+from pops.model.ownership import _definition_fingerprint_scope
 from pops.time.references import handle_data
 from pops.time.values import ProgramValue, _Affine, _affine_ids
 
@@ -200,6 +201,7 @@ class _ProgramSerialization(_ProgramBase):
             node["provenance"] = value.provenance.to_data()
         return node
 
+    @_definition_fingerprint_scope()
     def _serialize(self, *, include_provenance: bool = True) -> dict[str, Any]:
         if not isinstance(include_provenance, bool):
             raise TypeError("Program._serialize include_provenance must be bool")

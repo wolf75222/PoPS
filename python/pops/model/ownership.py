@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
 from itertools import count
@@ -73,6 +74,33 @@ class OwnerSegment:
 
 _AUTHORITY_SEQUENCE = count()
 _FINGERPRINT_RE = re.compile(r"^[a-z][a-z0-9_.-]*:sha256:[0-9a-f]{64}$")
+_FINGERPRINT_SCOPE: ContextVar[dict[Any, str | None] | None] = ContextVar(
+    "pops_definition_fingerprint_scope", default=None)
+
+
+@contextmanager
+def _definition_fingerprint_scope():
+    """Reuse exact definition fingerprints within one synchronous canonical projection.
+
+    This cache is an operation-local read witness, never a mutable builder's persistent identity.
+    Nested projections share it. Every observed authority is recomputed after the outer scope,
+    including exceptional exits, so a descriptor that mutates a source cannot publish a snapshot
+    combining old and new definitions. Reset before checking to retain ordinary recursion guards
+    and to leave no cached identity behind if either projection or verification fails.
+    """
+    if _FINGERPRINT_SCOPE.get() is not None:
+        yield
+        return
+    observed: dict[Any, str | None] = {}
+    token = _FINGERPRINT_SCOPE.set(observed)
+    try:
+        yield
+    finally:
+        _FINGERPRINT_SCOPE.reset(token)
+        for authority, expected in observed.items():
+            if authority.fingerprint() != expected:
+                raise UnresolvedOwnershipError(
+                    "model definition changed during canonical projection")
 
 
 def _validate_definition_fingerprint(value: Any) -> str:
@@ -124,6 +152,9 @@ class _AuthoringAuthority:
             )
         self._resolving.active = True
         try:
+            observed = _FINGERPRINT_SCOPE.get()
+            if observed is not None and self in observed:
+                return observed[self]
             with self._lock:
                 providers = list(self._fingerprint_providers)
                 fallback = self._fingerprint
@@ -142,7 +173,12 @@ class _AuthoringAuthority:
             for _, (_, provider) in ranked:
                 value = provider()
                 if value is not None:
-                    return _validate_definition_fingerprint(value)
+                    result = _validate_definition_fingerprint(value)
+                    if observed is not None:
+                        observed[self] = result
+                    return result
+            if observed is not None:
+                observed[self] = fallback
             return fallback
         finally:
             self._resolving.active = False
