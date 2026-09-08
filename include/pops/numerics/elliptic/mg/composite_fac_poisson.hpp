@@ -637,6 +637,22 @@ class CompositeFacPoisson {
     void gather_parent(const field_type& source) {
       if (!gather)
         return;
+      // The transport plan contains remote owners only. A fine interpolation stencil can
+      // cross the ownership boundary, so seed its same-rank portion on every gather too.
+      // Otherwise those cells retain allocation garbage or a previous operator application.
+      for (ScratchPatch& patch : scratch) {
+        patch.parent_staging.set_val(Real(0));
+        for (std::size_t local = 0; local < source.local_size(); ++local) {
+          const Box<Dim> region = patch.parent_staging.box().intersect(source.box(local));
+          if (region.empty())
+            continue;
+          const auto input = source.fab(local).view();
+          const auto output = patch.parent_staging.view();
+          for_each_cell(
+              region, [=] POPS_HD(const Index<Dim>& index) { output(index, 0) = input(index, 0); });
+        }
+      }
+      Kokkos::fence();
       auto source_view = [&source](const transfer_job& job) -> FieldView<const Real, Dim> {
         return source.fab_global(job.source_patch).view();
       };
@@ -994,17 +1010,28 @@ class CompositeFacPoisson {
         append_flux_mismatches_(parent, child, connection, child_local_index, footprint);
 
       const Box<Dim> grown = fine_valid.grow(1);
-      std::vector<Box<Dim>> pending{grown.intersect(child.geometry.domain())};
-      for (const Box<Dim>& halo : fac_detail::subtract_box(grown, child.geometry.domain())) {
-        bool periodic_image = true;
+      // Partition at every physical-domain face before wrapping. A subtraction slab at an
+      // x face can straddle both y faces; treating that whole slab as one periodic image
+      // leaves its corners outside every refined parent patch.
+      std::vector<Box<Dim>> pending;
+      constexpr int image_count = Dim == 1 ? 3 : Dim == 2 ? 9 : 27;
+      for (int image = 0; image < image_count; ++image) {
+        int ordinal = image;
+        Index<Dim> shift{};
+        bool permitted = true;
         for (int axis = 0; axis < Dim; ++axis) {
-          if (halo.hi[axis] < child.geometry.domain().lo[axis] ||
-              halo.lo[axis] > child.geometry.domain().hi[axis])
-            periodic_image = periodic_image && child.boundary.topology().is_periodic(
-                                                   Face<Dim>{axis, BoundarySide::lower});
+          const int offset = ordinal % 3 - 1;
+          ordinal /= 3;
+          if (offset != 0 &&
+              !child.boundary.topology().is_periodic(Face<Dim>{axis, BoundarySide::lower}))
+            permitted = false;
+          shift[axis] = offset * static_cast<int>(child.geometry.domain().length(axis));
         }
-        if (periodic_image && !halo.empty())
-          pending.push_back(halo);
+        if (!permitted)
+          continue;
+        const Box<Dim> region = grown.intersect(child.geometry.domain().shift(shift));
+        if (!region.empty())
+          pending.push_back(region);
       }
       for (const Box<Dim>& valid : child.phi.layout().boxes())
         fac_detail::subtract_from_regions(pending, valid);

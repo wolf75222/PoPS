@@ -475,3 +475,35 @@ TEST(CompositeFacPoissonTest, nonfinite_composite_residual_fails_closed) {
   EXPECT_EQ(report.status, pops::SolveStatus::kInvalidEvaluation);
   EXPECT_EQ(report.action, pops::SolveAction::kFailRun);
 }
+
+TEST(CompositeFacPoissonTest, periodic_corner_refinement_prepares_complete_ghost_partition) {
+  constexpr int Dim = 2;
+  const auto coarse_geometry = geometry<Dim>(64);
+  const auto fine_geometry = coarse_geometry.refine(pops::Extent<Dim>{2, 2});
+  auto coarse =
+      request(coarse_geometry,
+              pops::mesh::BoxArray<Dim>{std::vector<pops::Box<Dim>>{coarse_geometry.domain()}});
+  auto fine =
+      request(fine_geometry, pops::mesh::BoxArray<Dim>{std::vector<pops::Box<Dim>>{pops::Box<Dim>{
+                                 pops::Index<Dim>{0, 0}, pops::Index<Dim>{47, 47}}}});
+  for (auto* level : {&coarse, &fine}) {
+    pops::RealVector<Dim> spacing{};
+    for (int axis = 0; axis < Dim; ++axis)
+      spacing[axis] = level->geometry.spacing(axis);
+    level->boundary = pops::PhysicalBoundaryConditions<Dim>{
+        pops::BoundaryTopology<Dim>::axis_periodic({true, true}), {}, spacing};
+  }
+  pops::elliptic::mg::CompositeFacBuildRequest<Dim> hierarchy{
+      {std::move(coarse), std::move(fine)}, {pops::amr::RefinementRatio<Dim>{{2, 2}}}};
+  const auto lane = pops::ExecutionLane::world("tests.fac.periodic-corner");
+  pops::elliptic::mg::CompositeFacPoisson<Dim> solver(std::move(hierarchy), lane, {},
+                                                      pops::Real(1));
+  install_nullspace(solver, 2);
+  solver.rhs_level(0).set_val(pops::Real(1));
+  solver.rhs_level(1).set_val(pops::Real(1));
+  solver.phi_level(0).set_val(pops::Real(1));
+  solver.phi_level(1).set_val(pops::Real(1));
+  const auto report = solver.solve();
+  EXPECT_TRUE(report.solved()) << report.reason;
+  EXPECT_LE(report.residual_norm, pops::Real(1e-12));
+}
