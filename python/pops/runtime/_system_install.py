@@ -221,12 +221,15 @@ class _SystemInstall(_System):
 
         backend = compiled.backend
         # Descriptor-owned model predicates are shared verbatim with AMR and availability.
-        _check_riemann_requirement_contract(
-            spatial.riemann_capability_contract,
-            compiled,
-            "add_equation",
-            flux=spatial.flux,
-        )
+        from pops.runtime._state_storage import require_state_storage_model
+
+        if not require_state_storage_model(compiled, spatial, where="add_equation"):
+            _check_riemann_requirement_contract(
+                spatial.riemann_capability_contract,
+                compiled,
+                "add_equation",
+                flux=spatial.flux,
+            )
 
         if backend != "production":
             raise ValueError(

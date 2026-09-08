@@ -503,6 +503,7 @@ class ResolvedSimulationPlan:
     capabilities: Mapping[str, Any]
     lowering_coverage: Any
     native_layouts: Mapping[str, Any] = field(default_factory=dict)
+    program_field_plans: Mapping[str, Any] = field(default_factory=dict)
     consumer_graph: Any = None
     restart_authority: Any = field(default_factory=_builtin_restart_authority)
     component_inputs: tuple[Any, ...] = ()
@@ -601,6 +602,18 @@ class ResolvedSimulationPlan:
                 raise TypeError(
                     "ResolvedSimulationPlan.field_plans[%r] must be a total resolved install plan"
                     % name)
+        object.__setattr__(self, "program_field_plans", _string_mapping(
+            self.program_field_plans, where="ResolvedSimulationPlan.program_field_plans"))
+        from pops.codegen.program_field_plan import ResolvedProgramFieldPlan
+
+        if set(self.field_plans) & set(self.program_field_plans):
+            raise ValueError("a field cannot have competing native-provider and Program authorities")
+        for name, registration in self.program_field_plans.items():
+            if type(registration) is not ResolvedProgramFieldPlan or registration.name != name:
+                raise TypeError("program_field_plans requires exact resolved Program field plans")
+            if registration.storage.layout != self.layout_plan.layout_for(registration.handle):
+                raise ValueError("Program field storage layout differs from the resolved layout plan")
+            registration.validate_program(self.time)
         for name in ("libraries",):
             object.__setattr__(
                 self, name, tuple(_deep_freeze(item) for item in getattr(self, name)))
@@ -720,6 +733,9 @@ class ResolvedSimulationPlan:
                                                   where="plan.block.resolved_operations"),
             } for block in self.blocks],
             "field_plans": _evidence(self.field_plans, where="plan.field_plans"),
+            **({"program_field_plans": _evidence(
+                self.program_field_plans, where="plan.program_field_plans")}
+               if self.program_field_plans else {}),
             "consumer_graph": (
                 None if self.consumer_graph is None else self.consumer_graph.to_data()
             ),

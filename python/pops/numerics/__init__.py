@@ -19,9 +19,10 @@ from __future__ import annotations
 from . import riemann, reconstruction, variables, projections, spatial, terms
 from .reconstruction import limiters
 from .spatial import FiniteVolume
+from .state_storage import StateStorage
 from .indicator_stencils import DiscreteGradientStencil, LinearAxisStencil
 from .plan import DiscretizationPlan
 
 __all__ = ["riemann", "reconstruction", "limiters", "variables", "projections", "terms",
-           "spatial", "FiniteVolume", "DiscreteGradientStencil", "LinearAxisStencil",
+           "spatial", "FiniteVolume", "StateStorage", "DiscreteGradientStencil", "LinearAxisStencil",
            "DiscretizationPlan"]

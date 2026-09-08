@@ -26,12 +26,14 @@ class FieldRegistry(_FreezableRegistry):
 
     family = "field"
 
-    def __init__(self, owner: Any) -> None:
+    def __init__(self, owner: Any, resolver: Any = None) -> None:
         self._owner_path = OwnerPath.coerce(owner).require_authoring_root(
             OwnerKind.CASE, where="FieldRegistry owner"
         )
         self._fields = {}
         self._handles = {}
+        self._unknowns = {}
+        self._resolver = resolver
 
     @property
     def owner_path(self) -> Any:
@@ -44,11 +46,12 @@ class FieldRegistry(_FreezableRegistry):
         """Register one physical operator and one protocol-conforming numerical plan."""
         self._guard_frozen("add a field")
         from pops.fields import FieldOperator
+        from pops.fields.problem import FieldProblem
         from pops.fields.discretization import require_field_discretization
 
-        if not isinstance(operator, FieldOperator):
+        if not isinstance(operator, FieldProblem):
             raise TypeError(
-                "field: operator must be a pops.fields.FieldOperator; got %r"
+                "field: operator must be a pops.fields.FieldProblem; got %r"
                 % type(operator).__name__
             )
         discretization = require_field_discretization(
@@ -56,10 +59,70 @@ class FieldRegistry(_FreezableRegistry):
         key = strict_name(operator.name, "field operator name")
         if key in self._fields:
             raise ValueError("field: a field operator named %r already exists" % key)
+        unknowns = {}
+        if not isinstance(operator, FieldOperator):
+            from pops.model import Handle
+
+            owner = self.owner_path.child(OwnerKind.DESCRIPTOR, "field:" + key)
+            for index, declaration in enumerate(operator.unknowns):
+                if declaration.is_instance or declaration.owner_path.nodes[0].kind is OwnerKind.CASE:
+                    raise MissingOwnershipError(
+                        "a new FieldProblem requires original field declarations, not an existing "
+                        "block or Case storage binding"
+                    )
+                if declaration in self._unknowns:
+                    raise ValueError(
+                        "field unknown %s already belongs to another Case field problem"
+                        % declaration.qualified_id
+                    )
+                unknowns[declaration] = Handle(
+                    declaration.local_id, kind="field",
+                    owner=owner.child(OwnerKind.DESCRIPTOR, "unknown:%d" % index),
+                    schema_version=declaration.schema_version,
+                )
         self._fields[key] = _RegisteredField(operator, discretization)
         handle = FieldHandle(key, owner=self.owner_path, field_registry=self)
         self._handles[key] = handle
+        self._unknowns.update(unknowns)
         return handle
+
+    def unknown(self, field: Any, declaration: Any) -> Any:
+        """Return one exact field-owned storage handle from its original declaration."""
+        canonical = self.canonicalize(field)
+        registration = self._fields[canonical.local_id]
+        originals = getattr(registration.operator, "unknowns", ())
+        if declaration not in originals:
+            raise MissingOwnershipError("field unknown is not declared by this field problem")
+        try:
+            return self._unknowns[declaration]
+        except KeyError:
+            raise TypeError("legacy FieldOperator unknowns retain their block-owned compatibility route") from None
+
+    def resolve_unknown(self, declaration: Any) -> Any:
+        """Resolve a registered original/owned field identity, or return None for another family."""
+        from pops.model import Handle
+
+        if not isinstance(declaration, Handle) or declaration.kind != "field":
+            return None
+        for original, owned in self._unknowns.items():
+            expected = owned._resolved()
+            if declaration == original or declaration == owned:
+                return expected
+            if declaration.is_resolved:
+                if declaration.canonical_identity() == expected.canonical_identity():
+                    return expected
+        if any(node.kind is OwnerKind.DESCRIPTOR and node.name.startswith("field:")
+               for node in declaration.owner_path.nodes):
+            raise MissingOwnershipError(
+                "field unknown %s is not registered by this Case" % declaration.qualified_id
+            )
+        return None
+
+    def resolved_registration(self, field: Any) -> Any:
+        canonical = self.canonicalize(field)
+        if not callable(self._resolver):
+            raise MissingOwnershipError("field registry has no authoritative Case resolver")
+        return self._fields[canonical.local_id].resolve_references(self._resolver)
 
     def handle(self, name: Any) -> FieldHandle:
         key = strict_name(name, "field name")

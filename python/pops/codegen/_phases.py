@@ -301,6 +301,10 @@ def resolve(
     )
     field_plans = capture_field_plans(
         problem, detached_frozen, target=target, layout=detached_layout)
+    from pops.codegen.program_field_plan import capture_program_field_plans
+
+    program_field_plans = capture_program_field_plans(
+        problem, detached_frozen, target=target, layout_plan=layout_plan, program=resolved_time)
     from pops.codegen.program_emit_field_routes import validate_program_field_routes
     validate_program_field_routes(resolved_time, field_plans)
     snapshot = prepare_problem_snapshot(
@@ -352,7 +356,8 @@ def resolve(
     from pops.codegen.lowering_coverage import LoweringCoverageReport
 
     lowering_coverage = LoweringCoverageReport((
-        *lowering_coverage.rows, *operation_coverage(blocks).rows))
+        *lowering_coverage.rows, *operation_coverage(blocks).rows,
+        *(row for plan in program_field_plans.values() for row in plan.coverage.rows)))
     if bootstrap_plan is not None:
         from pops.codegen._amr_lowering_coverage import amr_lowering_coverage
         from pops.codegen.lowering_coverage import LoweringCoverageReport
@@ -377,6 +382,7 @@ def resolve(
         },
         time=resolved_time, blocks=blocks, bind_schema=bind_schema,
         compile_values=compile_values, field_plans=field_plans, consumer_graph=consumer_graph,
+        program_field_plans=program_field_plans,
         restart_authority=restart_authority,
         libraries=(),
         requirements={"tokens": tuple(evidence["requirements"]),

@@ -248,6 +248,12 @@ def capture_field_plans(
     # for field B in the same Problem.
     prepared = []
     for name, field in problem._field_registry.resolved_items(problem.resolve):
+        from pops.fields.operator import FieldOperator
+
+        if not isinstance(field.operator, FieldOperator):
+            # Generic fields have explicit Program scratch/solve authority. They are admitted by
+            # capture_program_field_plans, never by a fabricated legacy provider pack.
+            continue
         providers, provider_route = _field_rhs_providers(problem, field)
         prepared.append((name, field, providers, provider_route))
     for name, field, providers, provider_route in prepared:
