@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
+from decimal import Decimal
+from fractions import Fraction
 from typing import Any
 
 from pops.identity import make_identity
@@ -20,7 +22,8 @@ def _equation_value(program: Any, value: Any) -> Any:
     from pops.time._program.serialization import _json_ready
 
     active: set[int] = set()
-    cache: dict[int, Any] = {}
+    indices: dict[int, int] = {}
+    nodes: list[Any] = []
 
     def walk(item: Any) -> Any:
         if isinstance(item, ProgramValue):
@@ -28,8 +31,11 @@ def _equation_value(program: Any, value: Any) -> Any:
             if node.id in active:
                 raise SolveRequestError(
                     "explicit_dependency_cycle", "equation inputs contain an explicit SSA cycle")
-            if node.id in cache:
-                return cache[node.id]
+            if node.id in indices:
+                return {"value": indices[node.id]}
+            index = len(nodes)
+            indices[node.id] = index
+            nodes.append(None)
             active.add(node.id)
             data = {
                 "name": node.name, "op": node.op, "value_type": node.vtype,
@@ -42,8 +48,8 @@ def _equation_value(program: Any, value: Any) -> Any:
                 },
             }
             active.remove(node.id)
-            cache[node.id] = data
-            return data
+            nodes[index] = data
+            return {"value": index}
         if isinstance(item, _Affine):
             return {"affine": [[walk(node), _json_ready(coefficient.to_polynomial())]
                                for node, coefficient in item.terms]}
@@ -51,9 +57,14 @@ def _equation_value(program: Any, value: Any) -> Any:
             return {key: walk(part) for key, part in item.items()}
         if isinstance(item, (tuple, list)):
             return [walk(part) for part in item]
+        if isinstance(item, (float, Decimal, Fraction)):
+            from pops.identity.scalar import scalar_data
+
+            return scalar_data(item)
         return _json_ready(item)
 
-    return walk(value)
+    root = walk(value)
+    return _json_ready({"root": root, "values": nodes} if nodes else root)
 
 
 def _linear_equation(program: Any, token: Any) -> dict[str, Any]:

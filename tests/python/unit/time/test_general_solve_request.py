@@ -61,6 +61,15 @@ def test_frozen_coefficient_changes_problem_identity():
     assert before["problem_identity"] != after["problem_identity"]
 
 
+def test_affine_seed_is_encoded_exactly_without_joining_the_equation_inputs():
+    program, request = _request()
+    _, before = _solve(program, request)
+    seed = program.value("scaled_seed", 3.0 * request.problem.rhs)
+    _, after = _solve(program, replace(request, seeds={"solution": seed}))
+    assert before["problem_identity"] == after["problem_identity"]
+    assert before["initialization_identity"] != after["initialization_identity"]
+
+
 def test_explicit_tuple_projects_one_consumed_authority_by_index_name_and_unknown():
     program, request = _request(components=2)
     result, contract = _solve(program, request)
@@ -217,6 +226,21 @@ def test_explicit_cycle_is_structurally_refused_not_treated_as_an_implicit_probl
     object.__setattr__(rhs, "inputs", (rhs,))
     with pytest.raises(SolveRequestError, match="explicit_dependency_cycle"):
         _equation_value(program, rhs)
+
+
+def test_equation_closure_retains_ssa_aliases_without_expanding_shared_subgraphs():
+    from pops.time._program.solve_request import _equation_value
+
+    program = Program("shared-closure")
+    value = program.scalar_field("seed")
+    for index in range(20):
+        # Two references to one predecessor must remain two edges to that same
+        # version, rather than recursively duplicating its complete subgraph.
+        value = program._new("scalar_field", "fixture_pair", (value, value), {},
+                             "pair_%d" % index, None)
+    data = _equation_value(program, value)
+    assert len(data["values"]) == 21
+    assert data["values"][0]["inputs"][0] == data["values"][0]["inputs"][1]
 
 
 def test_problem_input_adapter_uses_existing_solve_entry_only():
