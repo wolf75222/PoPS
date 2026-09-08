@@ -1714,6 +1714,32 @@ TEST(GeneratedAmrSystemBlock, AlignedFourSlotHistoryProjectsEarnedSamplesAtomica
   EXPECT_EQ(system.history_fill_count("tracer.U", 1), 4);
   EXPECT_NO_THROW(system.restore_checkpoint_accepted_state(accepted));
   EXPECT_EQ(system.program_accepted_state(), accepted);
+
+  // The aligned route is not a license to transfer a rate's lagged interface-flux authority.
+  // Capture a real RHS on partial coverage, then reject its expansion atomically in the
+  // artifact callback (after numeric candidates have already been prepared).
+  system.set_conservative_state("tracer", contracted);
+  system.execute_prepared_tagging(0);
+  ASSERT_TRUE(system.regrid_from_prepared_tagging(0));
+  context->advance_hierarchy(0.5, [&](double) {
+    auto& stage = context->state(0);
+    auto rate = context->rhs_scratch_like(stage);
+    context->rhs_into(0, stage, rate, 0);
+    context->store_history("tracer.U", rate, 0);
+    context->rotate_histories("clock.macro");
+  });
+  const auto flux_boxes = system.patch_boxes();
+  std::vector<std::vector<double>> flux_slots;
+  for (int slot = 0; slot < 4; ++slot)
+    flux_slots.push_back(system.history_global("tracer.U", 1, slot));
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  system.execute_prepared_tagging(0);
+  const auto flux_accepted = system.program_accepted_state();
+  EXPECT_THROW(system.regrid_from_prepared_tagging(0), std::runtime_error);
+  EXPECT_EQ(system.patch_boxes(), flux_boxes);
+  EXPECT_EQ(system.program_accepted_state(), flux_accepted);
+  for (int slot = 0; slot < 4; ++slot)
+    EXPECT_EQ(system.history_global("tracer.U", 1, slot), flux_slots[slot]);
 }
 
 TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
