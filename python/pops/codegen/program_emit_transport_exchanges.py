@@ -13,16 +13,25 @@ def emit_transport_exchanges(
     local_name = faces + "_local"
     return [
         "{",
-        "pops::sync_host();",
-        "const auto* %s = ctx.pointwise_active_mask(%d, %s);"
-        % (active_name, program_block, active),
+        "const pops::MultiFab<pops::kNativeDimension>* %s = nullptr;" % active_name,
+        "std::exception_ptr accepted_mask_error;",
         "long accepted_mask_layout_error = 0;",
-        "if (%s != nullptr) {" % active_name,
-        "  if (%s->local_size() != %s.size()) accepted_mask_layout_error = 1;"
+        "try {",
+        "  pops::sync_host();",
+        "  %s = ctx.pointwise_active_mask(%d, %s);" % (active_name, program_block, active),
+        "  if (%s != nullptr) {" % active_name,
+        "    pops::sync_host();",
+        "    if (%s->local_size() != %s.size()) accepted_mask_layout_error = 1;"
         % (active_name, faces),
-        "  else for (std::size_t local = 0; local < %s.size(); ++local)" % faces,
-        "    if (%s->box(local) != %s[local].cell_box()) accepted_mask_layout_error = 1;"
+        "    else for (std::size_t local = 0; local < %s.size(); ++local)" % faces,
+        "      if (%s->box(local) != %s[local].cell_box()) accepted_mask_layout_error = 1;"
         % (active_name, faces),
+        "  }",
+        "} catch (...) { accepted_mask_error = std::current_exception(); }",
+        "if (pops::all_reduce_max(accepted_mask_error ? 1L : 0L, ctx.prepared_execution_lane()) != 0) {",
+        "  if (ctx.prepared_execution_lane().size() == 1 && accepted_mask_error)",
+        "    std::rethrow_exception(accepted_mask_error);",
+        '  throw std::invalid_argument("accepted transport face mask preparation failed collectively");',
         "}",
         "if (pops::all_reduce_max(accepted_mask_layout_error, ctx.prepared_execution_lane()) != 0)",
         '  throw std::invalid_argument("accepted transport face mask differs from local patches collectively");',

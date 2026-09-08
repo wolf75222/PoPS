@@ -55,7 +55,7 @@ def test_repeated_same_face_emissions_have_independent_cpp_scopes():
     )
     assert emitted[0] == "{" and emitted[-1] == "}"
     repeated = "\n".join((*emitted, *emitted))
-    assert repeated.count("const auto* retained_faces_active") == 2
+    assert repeated.count("* retained_faces_active = nullptr") == 2
     assert repeated.count("\n}\n{") == 1
 
 

@@ -442,18 +442,28 @@ class PreparedDiffusion {
                                 const std::string& occurrence, const std::string& evaluation,
                                 Real temporal_weight, bool physical_boundary_only = false) const {
     (void)explicit_frequency();
-    sync_host();
-    const Field* const active = ctx.pointwise_active_mask(program_block, variable_);
-    if (active != nullptr)
-      sync_host();
+    const Field* active = nullptr;
+    std::exception_ptr active_error;
     long active_layout_error = 0;
-    if (active != nullptr) {
-      if (active->local_size() != variable_.local_size())
-        active_layout_error = 1;
-      else
-        for (std::size_t local = 0; local < variable_.local_size(); ++local)
-          if (active->box(local) != variable_.box(local))
-            active_layout_error = 1;
+    try {
+      sync_host();
+      active = ctx.pointwise_active_mask(program_block, variable_);
+      if (active != nullptr) {
+        sync_host();
+        if (active->local_size() != variable_.local_size())
+          active_layout_error = 1;
+        else
+          for (std::size_t local = 0; local < variable_.local_size(); ++local)
+            if (active->box(local) != variable_.box(local))
+              active_layout_error = 1;
+      }
+    } catch (...) {
+      active_error = std::current_exception();
+    }
+    if (all_reduce_max(active_error ? 1L : 0L, *lane_) != 0) {
+      if (lane_->size() == 1 && active_error)
+        std::rethrow_exception(active_error);
+      throw std::invalid_argument("accepted diffusive face mask preparation failed collectively");
     }
     if (all_reduce_max(active_layout_error, *lane_) != 0)
       throw std::invalid_argument(

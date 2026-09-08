@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from fractions import Fraction
+import hashlib
+import json
 import math as pmath
+import os
 from pathlib import Path
 
 import numpy as np
@@ -183,6 +187,81 @@ def _collective_path(path):
     return Path(shared)
 
 
+def _evidence(artifact, n, payload, *, record_property, name):
+    from pops import _pops
+
+    platform = artifact.platform_manifest.to_data()
+    row = {
+        "schema": "pops.adc942.amr-transport-diffusion.v1",
+        "grid": {"dimension": 2, "base_cells": [n, n], "levels": 2, "ratio": 2},
+        "mpi_ranks": int(_pops.mpi_world().size),
+        "backend": platform["backend"],
+        "target": platform["target"],
+        "device": platform["device"],
+        **payload,
+    }
+    encoded = json.dumps(row, sort_keys=True)
+    record_property(name, encoded)
+    destination = os.environ.get("POPS_DIFFUSION_QUALIFICATION_EVIDENCE_DIR")
+    if destination and int(_pops.mpi_world().rank) == 0:
+        path = Path(destination)
+        path.mkdir(parents=True, exist_ok=True)
+        (path / (name + ".json")).write_text(json.dumps(row, indent=2, sort_keys=True) + "\n")
+
+
+def _exchange_level(context):
+    prefix = "pops.exchange.frame.v1/"
+    assert context.startswith(prefix)
+    size, encoded = context[len(prefix) :].split(":", 1)
+    clock_size = int(size)
+    assert encoded[clock_size] == "/"
+    fields = encoded[clock_size + 1 :].split("/", 3)
+    return int(fields[1])
+
+
+def _quadrature(record):
+    cell_token, axis_token, side_token = record["quadrature_identity"].split("/")
+    cell = tuple(map(int, cell_token.split(":")[1:]))
+    return cell, int(axis_token.split(":")[1]), int(side_token.split(":")[1])
+
+
+def _coarse_fine_basis_oracle(runtime, providers=("provider/1", "provider/4")):
+    rows = tuple(tuple(map(str, row)) for row in runtime._executor.program_flux_ledger_manifest())
+    result = {}
+    for provider in providers:
+        selected = tuple(row for row in rows if provider in "/".join(row))
+        assert selected
+        provider_result = {}
+        axes = tuple(
+            axis for axis in ("x", "y") if any(row[10].startswith(axis) for row in selected)
+        )
+        assert axes
+        for axis in axes:
+            coarse = tuple(row for row in selected if row[10] == axis + "_coarse")
+            fine = tuple(row for row in selected if row[10] == axis + "_fine")
+            assert coarse and fine
+
+            def weighted_measure(group):
+                return sum(
+                    float(Fraction(int(row[8]), int(row[9]))) * float(row[11]) * float(row[12])
+                    for row in group
+                )
+
+            coarse_measure = weighted_measure(coarse)
+            fine_measure = weighted_measure(fine)
+            defect = abs(coarse_measure - fine_measure)
+            assert defect <= 5.0e-14 * max(1.0, coarse_measure, fine_measure)
+            provider_result[axis] = {
+                "coarse_count": len(coarse),
+                "fine_count": len(fine),
+                "coarse_weighted_measure": coarse_measure,
+                "fine_weighted_measure": fine_measure,
+                "signed_reconciliation_defect": defect,
+            }
+        result[provider] = provider_result
+    return result
+
+
 def _mass(runtime, n):
     return sum(
         float(composite_active_block_state(runtime, "heat", level, refinement_ratio=2).sum())
@@ -220,6 +299,7 @@ def test_periodic_full_refinement_restart_and_face_inventory(
     kokkos_root,
     tmp_path,
     n,
+    record_property,
 ):
     del isolated_native_cache, kokkos_root
     dt = _stable_dt(n)
@@ -231,30 +311,71 @@ def test_periodic_full_refinement_restart_and_face_inventory(
     steps = pmath.ceil(FINAL_TIME / dt)
     half_steps = steps // 2
     half_time = half_steps * dt
-    pops.run(continuous, t_end=FINAL_TIME, max_steps=steps + 1, console=False)
+    before_last_time = (steps - 1) * dt
+    first_report = pops.run(continuous, t_end=before_last_time, max_steps=steps, console=False)
+    mass_before_last = _mass(continuous, n)
+    final_report = pops.run(continuous, t_end=FINAL_TIME, max_steps=2, console=False)
     pops.run(restarted_source, t_end=half_time, max_steps=half_steps, console=False)
     checkpoint = restarted_source.checkpoint(_collective_path(tmp_path / ("diffusion-n%d" % n)))
     restarted = _bind(artifact)
     restarted.restart(checkpoint)
     pops.run(restarted, t_end=FINAL_TIME, max_steps=steps + 1, console=False)
-    assert abs(_mass(continuous, n) - initial_mass) < 8.0e-11
-    assert abs(_mass(restarted, n) - initial_mass) < 8.0e-11
-    assert _periodic_l2(continuous, n, FINAL_TIME) < 0.025 / n
+    final_mass = _mass(continuous, n)
+    restarted_mass = _mass(restarted, n)
+    continuous_mass_drift = final_mass - initial_mass
+    restarted_mass_drift = restarted_mass - initial_mass
+    assert abs(continuous_mass_drift) < 8.0e-11
+    assert abs(restarted_mass_drift) < 8.0e-11
+    l2_error = _periodic_l2(continuous, n, FINAL_TIME)
+    assert l2_error < 0.025 / n
+    restart_hashes = []
     for level in range(continuous.n_levels()):
+        continuous_level = np.ascontiguousarray(continuous.block_level_state_global("heat", level))
+        restarted_level = np.ascontiguousarray(restarted.block_level_state_global("heat", level))
         np.testing.assert_array_equal(
-            continuous.block_level_state_global("heat", level),
-            restarted.block_level_state_global("heat", level),
+            continuous_level,
+            restarted_level,
         )
-    manifest = "\n".join(
-        "/".join(map(str, row)) for row in continuous._executor.program_flux_ledger_manifest()
+        restart_hashes.append(hashlib.sha256(continuous_level.tobytes()).hexdigest())
+    exchanges = continuous._executor._program_exchange_records()
+    assert exchanges and max(abs(row["numerical_flux"]) for row in exchanges) > 0
+    signed_exchange = sum(row["integrated_amount"] for row in exchanges)
+    accepted_mass_change = final_mass - mass_before_last
+    assert abs(signed_exchange - accepted_mass_change) < 8.0e-11
+    basis = _coarse_fine_basis_oracle(continuous)
+    _evidence(
+        artifact,
+        n,
+        {
+            "case": "periodic_fourier",
+            "final_time": FINAL_TIME,
+            "dt": dt,
+            "accepted_steps": continuous.macro_step(),
+            "first_run_accepted": first_report.accepted_steps,
+            "final_run_accepted": final_report.accepted_steps,
+            "rejected_steps": first_report.rejected_steps + final_report.rejected_steps,
+            "l2_error": l2_error,
+            "l2_bound": 0.025 / n,
+            "continuous_mass_drift": continuous_mass_drift,
+            "restarted_mass_drift": restarted_mass_drift,
+            "restart_bit_exact": True,
+            "restart_level_sha256": restart_hashes,
+            "last_step_signed_exchange": signed_exchange,
+            "last_step_mass_change": accepted_mass_change,
+            "last_step_exchange_mass_defect": signed_exchange - accepted_mass_change,
+            "accepted_exchange_count": len(exchanges),
+            "coarse_fine_basis": basis,
+        },
+        record_property=record_property,
+        name="adc942-periodic-n%d" % n,
     )
-    assert "provider/1" in manifest and "provider/4" in manifest
 
 
 def test_physical_diffusion_boundary_is_steady_across_refinement_and_subcycling(
     isolated_native_cache,
     native_cxx,
     kokkos_root,
+    record_property,
 ):
     del isolated_native_cache, kokkos_root
     n = REFINEMENTS[0]
@@ -265,29 +386,81 @@ def test_physical_diffusion_boundary_is_steady_across_refinement_and_subcycling(
         np.asarray(runtime.block_level_state_global("heat", level)).copy()
         for level in range(runtime.n_levels())
     )
-    pops.run(runtime, t_end=FINAL_TIME, max_steps=128, console=False)
+    report = pops.run(runtime, t_end=FINAL_TIME, max_steps=128, console=False)
+    state_error = 0.0
     for level, expected in enumerate(before):
-        np.testing.assert_allclose(
-            runtime.block_level_state_global("heat", level), expected, rtol=0.0, atol=3.0e-12
-        )
+        actual = runtime.block_level_state_global("heat", level)
+        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=3.0e-12)
+        state_error = max(state_error, float(np.max(np.abs(actual - expected))))
+    physical = {(axis, side): [] for axis in range(2) for side in range(2)}
+    for record in runtime._executor._program_exchange_records():
+        cell, axis, side = _quadrature(record)
+        level = _exchange_level(record["evaluation_context"])
+        level_n = n * 2**level
+        if (side == 0 and cell[axis] == 0) or (side == 1 and cell[axis] == level_n - 1):
+            physical[axis, side].append(record)
+    boundary_evidence = {}
+    net_boundary_amount = 0.0
+    last_dt = runtime._executor.program_last_dt()
+    for (axis, side), records in physical.items():
+        assert records
+        expected_flux = DIFFUSIVITY if axis == 0 else 0.0
+        flux_defect = max(abs(row["numerical_flux"] - expected_flux) for row in records)
+        assert flux_defect < 3.0e-13
+        weighted_area = sum(row["face_measure"] * row["temporal_weight"] for row in records)
+        assert abs(weighted_area - last_dt) < 3.0e-13
+        amount = sum(row["integrated_amount"] for row in records)
+        expected_amount = (1 if side else -1) * expected_flux * last_dt
+        assert abs(amount - expected_amount) < 3.0e-13
+        net_boundary_amount += amount
+        boundary_evidence["axis%d_side%d" % (axis, side)] = {
+            "count": len(records),
+            "expected_flux": expected_flux,
+            "max_flux_defect": flux_defect,
+            "weighted_area": weighted_area,
+            "integrated_amount": amount,
+            "expected_integrated_amount": expected_amount,
+        }
+    assert abs(net_boundary_amount) < 3.0e-13
+    _evidence(
+        artifact,
+        n,
+        {
+            "case": "physical_linear_steady",
+            "final_time": FINAL_TIME,
+            "accepted_steps": report.accepted_steps,
+            "rejected_steps": report.rejected_steps,
+            "max_state_error": state_error,
+            "last_dt": last_dt,
+            "physical_boundary": boundary_evidence,
+            "net_weighted_boundary_amount": net_boundary_amount,
+            "coarse_fine_basis": _coarse_fine_basis_oracle(runtime, ("provider/4",)),
+        },
+        record_property=record_property,
+        name="adc942-physical-n%d" % n,
+    )
 
 
 def test_combined_local_bound_rejection_leaks_no_accepted_state_and_retry_succeeds(
     isolated_native_cache,
     native_cxx,
     kokkos_root,
+    record_property,
 ):
     del isolated_native_cache, kokkos_root
     n = REFINEMENTS[0]
     stable = _stable_dt(n)
     unstable = 3.0 * stable
     resolved = _author(n, unstable, cxx=native_cxx)
-    runtime = _bind(_compile(resolved, route="rejection-n%d" % n))
+    artifact = _compile(resolved, route="rejection-n%d" % n)
+    runtime = _bind(artifact)
     before = tuple(
         np.asarray(runtime.block_level_state_global("heat", level)).copy()
         for level in range(runtime.n_levels())
     )
-    with pytest.raises(RuntimeError, match="combined_transport_diffusion_stability|rejected"):
+    with pytest.raises(
+        RuntimeError, match="combined_transport_diffusion_stability|rejected"
+    ) as failure:
         pops.run(runtime, t_end=unstable, max_steps=1, console=False)
     assert runtime.time() == 0 and runtime.macro_step() == 0
     assert not runtime._executor.program_flux_ledger_manifest()
@@ -296,3 +469,19 @@ def test_combined_local_bound_rejection_leaks_no_accepted_state_and_retry_succee
         np.testing.assert_array_equal(runtime.block_level_state_global("heat", level), expected)
     report = pops.run(runtime, t_end=stable, max_steps=1, console=False)
     assert report.accepted_steps == 1 and report.rejected_steps == 0
+    _evidence(
+        artifact,
+        n,
+        {
+            "case": "combined_bound_refusal_retry",
+            "stable_dt": stable,
+            "refused_dt": unstable,
+            "failure": str(failure.value),
+            "refused_state_unchanged": True,
+            "refused_accepted_exchange_count": 0,
+            "retry_accepted_steps": report.accepted_steps,
+            "retry_rejected_steps": report.rejected_steps,
+        },
+        record_property=record_property,
+        name="adc942-refusal-retry-n%d" % n,
+    )
