@@ -621,23 +621,6 @@ def _emit_amr_install(
             "}\n"
         )
 
-    def walk(values: Any) -> Any:
-        for value in values:
-            yield value
-            if value.op == "post_synchronization":
-                continue
-            for key in (
-                "cond_block",
-                "body_block",
-                "apply_block",
-                "residual_block",
-                "true_block",
-                "false_block",
-            ):
-                nested = value.attrs.get(key)
-                if isinstance(nested, (list, tuple)):
-                    yield from walk(nested)
-
     post_sync_src = post_synchronization if post_synchronization else ""
     post_sync_field = (
         "    std::function<void(double)> post_synchronization;\n" if post_sync_src else ""
@@ -667,7 +650,11 @@ def _emit_amr_install(
 
     transform_guard = ""
     transform_refresh_guard = ""
-    if any(value.op == "local_transform" for value in walk(program._values)):
+    # Installation and hierarchy refresh must use the same authenticated phase
+    # classification as resolution, including the composite solve's internal Q maps.
+    from pops.codegen._resolution import _uses_local_transform
+
+    if _uses_local_transform(program):
         transform_guard = (
             "  auto _require_local_transform_level_contract = [ctx_owner]() {\n"
             "    auto& ctx = *ctx_owner;\n"

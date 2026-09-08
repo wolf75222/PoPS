@@ -96,3 +96,25 @@ def test_numerical_rejection_profile_preserves_iteration_limit_action(imex):
     assert source.index("reconcile_spatial_hierarchy_previous") < source.index(
         "solve_spatial_hierarchy"
     )
+
+
+@pytest.mark.parametrize("imex", [False, True])
+def test_nonlinear_coordinate_maps_preserve_bootstrap_and_refresh_phase_contract(imex):
+    import pops
+    from tests.python.integration.runtime.test_amr_implicit_diffusion import build
+
+    case, layout = build(16, kind="nonlinear_accumulation", imex=imex)
+    plan = pops.resolve(pops.validate(case), layout=layout)
+    source = emit_cpp_program(
+        plan.time, model=lower_and_validate(plan.blocks[0].model)[0], target="amr_system"
+    )
+    install = source.split('extern "C" void pops_install_program_amr', 1)[1]
+    # Bootstrap refreshes the installed level closures as the hierarchy grows.
+    # Its phase predicate must recognize the very same Q maps as resolution.
+    assert "_refresh_level_programs" in install
+    assert "ctx_owner, _refresh_level_programs" in install
+    assert "_require_local_transform_level_contract" not in install
+    assert "refusing pre-reflux execution" not in install
+    assert "temperature_to_energy" in source
+    assert source.count("ctx.solve_spatial_hierarchy(") == 1
+    assert "ctx.advance_synchronized_hierarchy" in install
