@@ -505,7 +505,7 @@ class PreparedDiffusion {
                 identity += ":" + std::to_string(cell[d]);
               identity += "/axis:" + std::to_string(axis) + "/side:" + std::to_string(side);
               stage_exchange({operation, occurrence, evaluation, identity, side == 0 ? -1 : 1,
-                                  measure, faces.axes[axis](face, 0), temporal_weight, 1});
+                              measure, faces.axes[axis](face, 0), temporal_weight, 1});
             }
           }
         }

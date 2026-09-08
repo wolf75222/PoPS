@@ -323,10 +323,10 @@ TEST(CompositeFacPoissonTest, partitioned_singular_nullspace_accepts_periodic_me
   });
   const pops::mesh::RankSpace<Dim> rank_space{pops::Index<Dim>{},
                                               ranked<pops::Extent<Dim>, Dim>(std::int64_t{1})};
-  const pops::mesh::Distribution<Dim> coarse_distribution = pops::mesh::Distribution<Dim>::partitioned(
-      coarse_layout, rank_space, {pops::Index<Dim>{}});
-  const pops::mesh::Distribution<Dim> fine_distribution = pops::mesh::Distribution<Dim>::partitioned(
-      fine_layout, rank_space, {pops::Index<Dim>{}});
+  const pops::mesh::Distribution<Dim> coarse_distribution =
+      pops::mesh::Distribution<Dim>::partitioned(coarse_layout, rank_space, {pops::Index<Dim>{}});
+  const pops::mesh::Distribution<Dim> fine_distribution =
+      pops::mesh::Distribution<Dim>::partitioned(fine_layout, rank_space, {pops::Index<Dim>{}});
   std::array<bool, Dim> periodic{};
   periodic.fill(true);
   pops::RealVector<Dim> coarse_spacing{};
@@ -346,9 +346,14 @@ TEST(CompositeFacPoissonTest, partitioned_singular_nullspace_accepts_periodic_me
   preparation.parent_child_patch_pairs = 16;
   preparation.interpolation_regions = 128;
   preparation.local_scratch_cells = 16'384;
-  preparation.same_level_halo = {
-      pops::mesh::BoxArrayValidationBudget{16, 256}, 4096, 4096, 64, 16, 1'000'000, 1'000'000,
-      1'000'000};
+  preparation.same_level_halo = {pops::mesh::BoxArrayValidationBudget{16, 256},
+                                 4096,
+                                 4096,
+                                 64,
+                                 16,
+                                 1'000'000,
+                                 1'000'000,
+                                 1'000'000};
   preparation.parent_gather = {64, 16, 1'000'000, 1'000'000, 1'000'000};
   preparation.fine_restriction = {64, 16, 1'000'000, 1'000'000, 1'000'000};
   pops::elliptic::amr::CompositeFacBuildRequest<Dim> request{
@@ -448,8 +453,7 @@ TEST(CompositeFacPoissonTest, mg_singular_nullspace_uses_composite_active_covera
       for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(fab.box().numPts());
            ++ordinal) {
         const auto index = index_from_ordinal<Dim>(fab.box(), ordinal);
-        host(storage_ordinal(fab.grown_box(), index)) =
-            region.contains(index) ? inside : outside;
+        host(storage_ordinal(fab.grown_box(), index)) = region.contains(index) ? inside : outside;
       }
       fab.copy_from_host(host);
     }

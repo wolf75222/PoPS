@@ -332,15 +332,16 @@ class ProgramContext {
   /// formulas continue to read this SSA value in the generated kernel itself.
   void prepare_provider_values(std::string_view consumer_qid, int program_block,
                                const field_type& stage_state, int evaluation_id) const {
-    if (prepare_provider_values_for_solve(consumer_qid, program_block, stage_state, evaluation_id) ==
+    if (prepare_provider_values_for_solve(consumer_qid, program_block, stage_state,
+                                          evaluation_id) ==
         runtime::system::AuxiliaryPublicationStatus::nonfinite_candidate)
       throw std::runtime_error(
           "System auxiliary publication rejected: candidate valid/ghost image contains non-finite "
           "values");
   }
   [[nodiscard]] runtime::system::AuxiliaryPublicationStatus prepare_provider_values_for_solve(
-      std::string_view consumer_qid, int program_block,
-      const field_type& stage_state, int evaluation_id) const {
+      std::string_view consumer_qid, int program_block, const field_type& stage_state,
+      int evaluation_id) const {
     if (auxiliary_evaluation_sequence_ == std::numeric_limits<int>::max())
       throw std::overflow_error("Program auxiliary evaluation sequence exceeds its exact range");
     return system_->prepare_program_auxiliary_consumer_for_solve(
@@ -477,8 +478,8 @@ class ProgramContext {
   }
 
   void apply_source_mask(field_type& rhs, std::initializer_list<int> keep) const {
-    pops::runtime::program::apply_component_keep_mask(
-        rhs, std::vector<int>(keep.begin(), keep.end()));
+    pops::runtime::program::apply_component_keep_mask(rhs,
+                                                      std::vector<int>(keep.begin(), keep.end()));
     count_kernel_();
   }
 
@@ -1040,7 +1041,8 @@ class ProgramContext {
             ++upper[axis];
             const Real spacing = geom.spacing(axis);
             image += (value(upper, component) - Real(2) * value(cell, component) +
-                      value(lower, component)) / (spacing * spacing);
+                      value(lower, component)) /
+                     (spacing * spacing);
           }
           result(cell, component) = image;
         }
@@ -1814,8 +1816,8 @@ class ProgramContext {
 
   static void require_componentwise_stencil_(const field_type& output, const field_type& input,
                                              const char* operation) {
-    if (input.ncomp() < 1 || output.ncomp() != input.ncomp() ||
-        output.layout() != input.layout() || output.distribution() != input.distribution() ||
+    if (input.ncomp() < 1 || output.ncomp() != input.ncomp() || output.layout() != input.layout() ||
+        output.distribution() != input.distribution() ||
         output.local_rank() != input.local_rank() || output.local_size() != input.local_size())
       throw std::invalid_argument(std::string(operation) +
                                   " fields do not share the exact componentwise stencil layout");

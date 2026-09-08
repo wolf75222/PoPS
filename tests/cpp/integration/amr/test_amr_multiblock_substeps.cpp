@@ -513,9 +513,9 @@ void prove_synchronized_envelopes() {
   }
   const std::vector<pops::amr::ParentChildClockRelation> asynchronous_relations{
       {0, 1, {2, 1}, pops::amr::RemainderPolicy::IntegralOnly}, relations[1]};
-  auto asynchronous = Engine<Dim>::prepare(
-      hierarchy, asynchronous_relations,
-      {{2, {32, 496}}, reflux::FaceFluxLedgerBudget{256, 256, 1}});
+  auto asynchronous =
+      Engine<Dim>::prepare(hierarchy, asynchronous_relations,
+                           {{2, {32, 496}}, reflux::FaceFluxLedgerBudget{256, 256, 1}});
   int unsupported_callbacks = 0;
   auto unsupported = [&](auto) { ++unsupported_callbacks; };
   EXPECT_THROW(asynchronous.advance(window, unsupported, reconcile, validate, stage, true),

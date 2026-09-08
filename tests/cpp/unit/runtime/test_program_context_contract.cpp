@@ -324,12 +324,15 @@ TEST(ProgramContextContract, LocalLinearConsumerPublishesStagedInputAndRejectsNa
   add_gas_block(sim, "gas");
   const AuxiliaryComponentKey key{"test::state::gas", "aux", "rotation", "B_z"};
   const AuxiliaryComponentContract contract{"cell-average", "cell", std::nullopt, "cell",
-                                               std::optional<std::string>{"scalar"}};
+                                            std::optional<std::string>{"scalar"}};
   AuxiliaryStorageShape<kTestDimension> shape;
   const AuxiliaryOutput<kTestDimension> output{key, contract, shape};
   sim.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<kTestDimension>{
-      "rotation-input", AuxiliaryProviderKind::input,
-      {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once}, {output}, {}});
+      "rotation-input",
+      AuxiliaryProviderKind::input,
+      {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
+      {output},
+      {}});
   sim.install_auxiliary_consumer_plan(AuxiliaryConsumerProviderPlan<kTestDimension>{
       "rotation-solve", {{{key, contract, shape}, 0}}});
   sim.seal_auxiliary_providers();
@@ -375,7 +378,8 @@ TEST(ProgramContextContract, LocalLinearConsumerPublishesStagedInputAndRejectsNa
   const auto accepted = sim.auxiliary_component(key);
   const double time = sim.time();
   const int step = sim.macro_step();
-  sim.stage_auxiliary_input(key, std::vector<double>(cells, std::numeric_limits<double>::quiet_NaN()));
+  sim.stage_auxiliary_input(key,
+                            std::vector<double>(cells, std::numeric_limits<double>::quiet_NaN()));
   EXPECT_THROW(sim.step(0.1), std::runtime_error);
   EXPECT_EQ(kernel_calls, 1);
   EXPECT_EQ(sim.get_state("gas"), solved);
@@ -396,7 +400,7 @@ TEST(ProgramContextContract, AuxiliaryReadClosureKeepsUnrelatedDirtyInputsAndDer
   install_execution_lane(sim, "pops.test.program-context.scoped-input");
   add_gas_block(sim, "gas");
   const AuxiliaryComponentContract contract{"cell-average", "cell", std::nullopt, "cell",
-                                               std::optional<std::string>{"scalar"}};
+                                            std::optional<std::string>{"scalar"}};
   AuxiliaryStorageShape<kTestDimension> shape;
   const AuxiliaryComponentKey input{"owner", "aux", "input", "value"};
   const AuxiliaryComponentKey derived{"owner", "aux", "derived", "value"};
@@ -405,19 +409,25 @@ TEST(ProgramContextContract, AuxiliaryReadClosureKeepsUnrelatedDirtyInputsAndDer
   using Provider = PreparedAuxiliaryProvider<kTestDimension>;
   for (const auto& [identity, key] : std::vector<std::pair<std::string, AuxiliaryComponentKey>>{
            {"input", input}, {"unrelated", unrelated}})
-    sim.install_prepared_auxiliary_provider(Provider{
-        identity, AuxiliaryProviderKind::input,
-        {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
-        {{key, contract, shape}}, {}});
-  sim.install_prepared_auxiliary_provider(Provider{
-      "unsolved-field", AuxiliaryProviderKind::field_output,
-      {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
-      {{unpublished_field, contract, shape}}, {}});
+    sim.install_prepared_auxiliary_provider(
+        Provider{identity,
+                 AuxiliaryProviderKind::input,
+                 {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
+                 {{key, contract, shape}},
+                 {}});
+  sim.install_prepared_auxiliary_provider(
+      Provider{"unsolved-field",
+               AuxiliaryProviderKind::field_output,
+               {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
+               {{unpublished_field, contract, shape}},
+               {}});
   std::vector<AuxiliaryEvaluationPoint> launches;
   sim.install_prepared_auxiliary_provider(Provider{
-      "derived", AuxiliaryProviderKind::derived,
+      "derived",
+      AuxiliaryProviderKind::derived,
       {AuxiliaryEvaluationEvent::before_residual, AuxiliaryFreshness::evaluation},
-      {{derived, contract, shape}}, {{input, contract, shape}},
+      {{derived, contract, shape}},
+      {{input, contract, shape}},
       Provider::launcher_type::trusted_extension(
           PreparedProviderIdentity{"test.scoped-derived", 1}, "twice-exact-input",
           [&](const AuxiliaryKernelLaunchContext<kTestDimension>& launch) {
@@ -438,10 +448,12 @@ TEST(ProgramContextContract, AuxiliaryReadClosureKeepsUnrelatedDirtyInputsAndDer
             }
           })});
   for (const auto& [identity, key] : std::vector<std::pair<std::string, AuxiliaryComponentKey>>{
-           {"read-derived", derived}, {"read-input", input}, {"read-unrelated", unrelated},
+           {"read-derived", derived},
+           {"read-input", input},
+           {"read-unrelated", unrelated},
            {"read-field", unpublished_field}})
-    sim.install_auxiliary_consumer_plan(AuxiliaryConsumerProviderPlan<kTestDimension>{
-        identity, {{{key, contract, shape}, 0}}});
+    sim.install_auxiliary_consumer_plan(
+        AuxiliaryConsumerProviderPlan<kTestDimension>{identity, {{{key, contract, shape}, 0}}});
   sim.seal_auxiliary_providers();
   sim.set_state("gas", ic(4));
   sim.set_program_block_map({0});
@@ -450,7 +462,8 @@ TEST(ProgramContextContract, AuxiliaryReadClosureKeepsUnrelatedDirtyInputsAndDer
   context.begin_step(0.1);
   const std::size_t cells = uniform_cell_count(4);
   sim.stage_auxiliary_input(input, std::vector<double>(cells, 3.0));
-  sim.stage_auxiliary_input(unrelated, std::vector<double>(cells, std::numeric_limits<double>::quiet_NaN()));
+  sim.stage_auxiliary_input(unrelated,
+                            std::vector<double>(cells, std::numeric_limits<double>::quiet_NaN()));
   auto stage = context.scratch_state_like(context.state(0));
   stage.set_val(Real(9));
   context.set_stage_time(1, 2);
@@ -469,7 +482,8 @@ TEST(ProgramContextContract, AuxiliaryReadClosureKeepsUnrelatedDirtyInputsAndDer
   EXPECT_EQ(launches.size(), 1U);
   sim.stage_auxiliary_input(input, std::vector<double>(cells, 4.0));
   context.prepare_provider_values("read-input", 0, stage, 26);
-  EXPECT_EQ(launches.size(), 1U);  // The dependent callback is deferred until its own consumer reads.
+  EXPECT_EQ(launches.size(),
+            1U);  // The dependent callback is deferred until its own consumer reads.
   context.set_stage_time(1, 1);
   context.prepare_provider_values("read-derived", 0, stage, 23);
   ASSERT_EQ(launches.size(), 2U);
@@ -492,14 +506,16 @@ TEST(ProgramContextContract, AuxiliaryNumericalFailurePreservesSolveActionAndHar
     add_gas_block(sim, "gas");
     const AuxiliaryComponentKey key{"owner", "aux", "input", "value"};
     const AuxiliaryComponentContract contract{"cell-average", "cell", std::nullopt, "cell",
-                                                 std::optional<std::string>{"scalar"}};
+                                              std::optional<std::string>{"scalar"}};
     AuxiliaryStorageShape<kTestDimension> shape;
     sim.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<kTestDimension>{
-        "input", AuxiliaryProviderKind::input,
+        "input",
+        AuxiliaryProviderKind::input,
         {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
-        {{key, contract, shape}}, {}});
-    sim.install_auxiliary_consumer_plan(AuxiliaryConsumerProviderPlan<kTestDimension>{
-        "read", {{{key, contract, shape}, 0}}});
+        {{key, contract, shape}},
+        {}});
+    sim.install_auxiliary_consumer_plan(
+        AuxiliaryConsumerProviderPlan<kTestDimension>{"read", {{{key, contract, shape}, 0}}});
     sim.seal_auxiliary_providers();
     sim.set_state("gas", ic(4));
     NativeProgramContext context(&sim);
@@ -508,17 +524,20 @@ TEST(ProgramContextContract, AuxiliaryNumericalFailurePreservesSolveActionAndHar
     std::optional<SolveReport> consumed_report;
     context.install([&](double dt) {
       context.begin_step(dt);
-      const auto status = context.prepare_provider_values_for_solve("read", 0, context.state(0), 41);
+      const auto status =
+          context.prepare_provider_values_for_solve("read", 0, context.state(0), 41);
       if (status == AuxiliaryPublicationStatus::nonfinite_candidate) {
         SolveReport report;
-        report.mark_failed(SolveStatus::kInvalidEvaluation, action, "auxiliary_nonfinite_candidate");
-        auto outcome = SolveOutcome::collective_lane(std::move(report), context.prepared_execution_lane());
-        consumed_report = outcome.consume(action == SolveAction::kRejectAttempt
-                                              ? SolveConsumption::kRejectAttempt
-                                              : SolveConsumption::kFailRun);
+        report.mark_failed(SolveStatus::kInvalidEvaluation, action,
+                           "auxiliary_nonfinite_candidate");
+        auto outcome =
+            SolveOutcome::collective_lane(std::move(report), context.prepared_execution_lane());
+        consumed_report =
+            outcome.consume(action == SolveAction::kRejectAttempt ? SolveConsumption::kRejectAttempt
+                                                                  : SolveConsumption::kFailRun);
         if (consumed_report->action == SolveAction::kRejectAttempt)
           throw runtime::program::StepAttemptRejected(consumed_report->status, "local_solve",
-                                                       consumed_report->reason);
+                                                      consumed_report->reason);
         throw std::runtime_error(consumed_report->reason);
       }
       ++kernel_calls;
@@ -532,7 +551,8 @@ TEST(ProgramContextContract, AuxiliaryNumericalFailurePreservesSolveActionAndHar
     const auto accepted_state = sim.get_state("gas");
     const auto accepted_time = sim.time();
     const auto accepted_step = sim.macro_step();
-    sim.stage_auxiliary_input(key, std::vector<double>(cells, std::numeric_limits<double>::quiet_NaN()));
+    sim.stage_auxiliary_input(key,
+                              std::vector<double>(cells, std::numeric_limits<double>::quiet_NaN()));
     if (action == SolveAction::kRejectAttempt) {
       EXPECT_THROW(sim.step(0.1), runtime::program::StepAttemptRejected);
     } else {
@@ -550,14 +570,16 @@ TEST(ProgramContextContract, AuxiliaryNumericalFailurePreservesSolveActionAndHar
     context.begin_step(0.1);
     auto wrong_state = native_field_like(context.state(0), kNcomp + 1, context.state(0).ghosts());
     if (n_ranks() == 1) {
-      EXPECT_THROW((void)context.prepare_provider_values_for_solve("foreign", 0, context.state(0), 41),
-                   std::out_of_range);
+      EXPECT_THROW(
+          (void)context.prepare_provider_values_for_solve("foreign", 0, context.state(0), 41),
+          std::out_of_range);
       EXPECT_THROW((void)context.prepare_provider_values_for_solve("read", 0, wrong_state, 41),
                    std::invalid_argument);
     } else {
       // The existing multi-rank preflight reports one collective contract error on every rank.
-      EXPECT_THROW((void)context.prepare_provider_values_for_solve("foreign", 0, context.state(0), 41),
-                   std::runtime_error);
+      EXPECT_THROW(
+          (void)context.prepare_provider_values_for_solve("foreign", 0, context.state(0), 41),
+          std::runtime_error);
       EXPECT_THROW((void)context.prepare_provider_values_for_solve("read", 0, wrong_state, 41),
                    std::runtime_error);
     }
@@ -585,14 +607,16 @@ TEST(ProgramContextContract,
   add_gas_block(sim, "gas");
   const AuxiliaryComponentKey key{"owner", "aux", "input", "value"};
   const AuxiliaryComponentContract contract{"cell-average", "cell", std::nullopt, "cell",
-                                               std::optional<std::string>{"scalar"}};
+                                            std::optional<std::string>{"scalar"}};
   AuxiliaryStorageShape<kTestDimension> shape;
   sim.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<kTestDimension>{
-      "input", AuxiliaryProviderKind::input,
+      "input",
+      AuxiliaryProviderKind::input,
       {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
-      {{key, contract, shape}}, {}});
-  sim.install_auxiliary_consumer_plan(AuxiliaryConsumerProviderPlan<kTestDimension>{
-      "read", {{{key, contract, shape}, 0}}});
+      {{key, contract, shape}},
+      {}});
+  sim.install_auxiliary_consumer_plan(
+      AuxiliaryConsumerProviderPlan<kTestDimension>{"read", {{{key, contract, shape}, 0}}});
   sim.seal_auxiliary_providers();
   sim.set_state("gas", ic(4));
   sim.set_program_block_map({0});

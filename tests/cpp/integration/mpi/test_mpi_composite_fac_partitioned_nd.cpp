@@ -244,8 +244,8 @@ PhysicalBoundaryConditions<Dim> periodic_boundary(const Geometry<Dim>& geometry)
   RealVector<Dim> spacing{};
   for (int axis = 0; axis < Dim; ++axis)
     spacing[axis] = geometry.spacing(axis);
-  return PhysicalBoundaryConditions<Dim>{BoundaryTopology<Dim>::axis_periodic(periodic), {},
-                                         spacing};
+  return PhysicalBoundaryConditions<Dim>{
+      BoundaryTopology<Dim>::axis_periodic(periodic), {}, spacing};
 }
 
 template <int Dim>
@@ -338,11 +338,10 @@ void expect_mg_distributed_fac() {
   options.coarse_abs_tol = Real(1e-10);
   options.coarse_cycles = 192;
   pops::elliptic::mg::CompositeFacPoisson<Dim> solver(std::move(request), lane, options, Real(1));
-  solver.install_nullspace(
-      pops::FieldNullspacePlan<Dim>{},
-      std::vector<pops::PreparedVectorDistribution<Dim>>(
-          static_cast<std::size_t>(solver.n_levels()),
-          pops::PreparedVectorDistribution<Dim>::distributed()));
+  solver.install_nullspace(pops::FieldNullspacePlan<Dim>{},
+                           std::vector<pops::PreparedVectorDistribution<Dim>>(
+                               static_cast<std::size_t>(solver.n_levels()),
+                               pops::PreparedVectorDistribution<Dim>::distributed()));
   EXPECT_EQ(pops::all_reduce_min(solver.has_remote_same_level_halo() ? 1L : 0L, lane), 1L);
   EXPECT_EQ(pops::all_reduce_min(solver.has_remote_parent_gather() ? 1L : 0L, lane), 1L);
   EXPECT_EQ(pops::all_reduce_min(solver.has_remote_fine_restriction() ? 1L : 0L, lane), 1L);
@@ -451,7 +450,12 @@ void expect_partitioned_fac_embedded_boundary() {
 }
 
 enum class ForcingCase {
-  Gaussian, BoundaryOnly, ZeroWithNonzeroGuess, SmallGaussian, DirichletConstant, NeumannConstant
+  Gaussian,
+  BoundaryOnly,
+  ZeroWithNonzeroGuess,
+  SmallGaussian,
+  DirichletConstant,
+  NeumannConstant
 };
 
 template <bool PartitionedBackend = false>
@@ -487,9 +491,9 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
   const std::vector<Index<Dim>> owners{rank_coordinate<Dim>(0), rank_coordinate<Dim>(1),
                                        rank_coordinate<Dim>(1), rank_coordinate<Dim>(0)};
   auto make = [&](bool replicated) {
-    using Request = std::conditional_t<PartitionedBackend,
-        pops::elliptic::amr::CompositeFacBuildRequest<Dim>,
-        pops::elliptic::mg::CompositeFacBuildRequest<Dim>>;
+    using Request =
+        std::conditional_t<PartitionedBackend, pops::elliptic::amr::CompositeFacBuildRequest<Dim>,
+                           pops::elliptic::mg::CompositeFacBuildRequest<Dim>>;
     Request request;
     if constexpr (PartitionedBackend) {
       request.budget = budget();
@@ -498,8 +502,8 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
     for (int level = 0; level < 2; ++level) {
       const auto& boxes = level == 0 ? coarse_boxes : fine_boxes;
       const auto& geometry = level == 0 ? coarse_geometry : fine_geometry;
-      const bool level_replicated = replicated ||
-          (partition_profile == 1 && level == 0) || (partition_profile == 2 && level == 1);
+      const bool level_replicated = replicated || (partition_profile == 1 && level == 0) ||
+                                    (partition_profile == 2 && level == 1);
       const auto distribution =
           level_replicated
               ? Distribution<Dim>::replicated(boxes, ranks)
@@ -524,8 +528,8 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
                                                    spacing};
       }
       request.levels.push_back(EllipticBuildRequest<Dim>{
-          geometry, boxes, distribution, local_rank, boundary,
-          Extent<Dim>{}, integer_extent<Dim>(1), BoxArrayValidationBudget{4, 6}});
+          geometry, boxes, distribution, local_rank, boundary, Extent<Dim>{},
+          integer_extent<Dim>(1), BoxArrayValidationBudget{4, 6}});
     }
     request.ratios = {RefinementRatio<Dim>{{2, 2}}};
     pops::CompositeFacOptions options;
@@ -538,8 +542,8 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
     options.coarse_cycles = exhaust_coarse ? 1 : 100;
     auto solver = [&] {
       if constexpr (PartitionedBackend)
-        return std::make_unique<pops::elliptic::amr::CompositeFacPoisson<Dim>>(
-            std::move(request), options, Real(1));
+        return std::make_unique<pops::elliptic::amr::CompositeFacPoisson<Dim>>(std::move(request),
+                                                                               options, Real(1));
       else
         return std::make_unique<pops::elliptic::mg::CompositeFacPoisson<Dim>>(
             std::move(request), lane, options, Real(1));
@@ -588,8 +592,9 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
   const auto reference_report = reference->solve();
   const auto partitioned_report = partitioned->solve();
   if (pops::my_rank() == 0)
-    std::cout << std::setprecision(17) << "periodic FAC backend="
-              << (PartitionedBackend ? "amr" : "mg") << " refinement_case=" << refinement_case
+    std::cout << std::setprecision(17)
+              << "periodic FAC backend=" << (PartitionedBackend ? "amr" : "mg")
+              << " refinement_case=" << refinement_case
               << " partition_profile=" << partition_profile << " exhaust_coarse=" << exhaust_coarse
               << " forcing_case=" << static_cast<int>(forcing_case)
               << " replicated_status=" << reference_report.reason
@@ -678,8 +683,10 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
   }
   const double global_difference = pops::all_reduce_max(static_cast<double>(maximum), lane);
   if (pops::my_rank() == 0)
-    std::cout << std::setprecision(17) << "periodic FAC backend=" << (PartitionedBackend ? "amr" : "mg")
-              << " refinement_case=" << refinement_case << " partition_profile=" << partition_profile
+    std::cout << std::setprecision(17)
+              << "periodic FAC backend=" << (PartitionedBackend ? "amr" : "mg")
+              << " refinement_case=" << refinement_case
+              << " partition_profile=" << partition_profile
               << " replicated_residual=" << reference_report.residual_norm
               << " partitioned_residual=" << partitioned_report.residual_norm
               << " max_partition_difference=" << global_difference << '\n';

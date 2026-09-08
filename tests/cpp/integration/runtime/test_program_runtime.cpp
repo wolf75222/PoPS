@@ -366,8 +366,7 @@ static void add_projecting_gas(System<kNativeDimension>& system, double gamma,
 }
 
 static void add_generated_projecting_gas(System<kNativeDimension>& system, double gamma) {
-  system.install_block_state_route("gas",
-                                   "test.program-runtime.generated-projecting-gas.state@1");
+  system.install_block_state_route("gas", "test.program-runtime.generated-projecting-gas.state@1");
   system.seal_auxiliary_providers();
   ProjectingEuler transport;
   transport.gamma = gamma;
@@ -391,7 +390,7 @@ using ConditionalFiniteProjectingGasModel =
     CompositeModel<ConditionalFiniteProjectingEuler, NoSource, NoEll>;
 
 static void add_generated_conditional_projecting_gas(System<kNativeDimension>& system,
-                                                    double gamma) {
+                                                     double gamma) {
   system.install_block_state_route(
       "gas", "test.program-runtime.generated-conditional-projecting-gas.state@1");
   system.seal_auxiliary_providers();
@@ -1659,8 +1658,7 @@ TEST(ProgramRuntime, PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure) {
   runtime::program::ProgramContext cutcell_context(&cutcell);
   MultiFab<kNativeDimension>& cutcell_field = cutcell_context.state(0);
   const int cutcell_inactive = static_cast<int>(cells) - cutcell_active;
-  const Real cutcell_raw_sum =
-      Real(2) * Real(cutcell_active) + Real(1000) * Real(cutcell_inactive);
+  const Real cutcell_raw_sum = Real(2) * Real(cutcell_active) + Real(1000) * Real(cutcell_inactive);
   const Real cutcell_raw_dot =
       Real(4) * Real(cutcell_active) + Real(1000000) * Real(cutcell_inactive);
   const Real cutcell_active_sum = Real(2 * cutcell_active);
@@ -2063,7 +2061,8 @@ TEST(ProgramRuntime, GeneratedUniformBlockSuppliesProjectionRoutesOnlyForCapable
   constexpr double gamma = 1.4;
   System<kNativeDimension> system(unit_domain_config<kNativeDimension>(4));
   install_execution_lane(system, "pops.test.program-runtime.generated-projection-routes");
-  system.install_block_state_route("gas", "test.program-runtime.generated-projection-routes.state@1");
+  system.install_block_state_route("gas",
+                                   "test.program-runtime.generated-projection-routes.state@1");
   system.seal_auxiliary_providers();
 
   ProjectingEuler transport;
@@ -2155,8 +2154,7 @@ TEST(ProgramRuntime, GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTr
   constexpr double gamma = 1.4;
   auto config = distributed_boundary_domain_config<kNativeDimension>(n);
   System<kNativeDimension> system(config);
-  install_execution_lane(system,
-                         "pops.test.program-runtime.generated-projection.nonfinite");
+  install_execution_lane(system, "pops.test.program-runtime.generated-projection.nonfinite");
   add_generated_conditional_projecting_gas(system, gamma);
   std::vector<double> initial;
   fill_ic(initial, n, gamma);

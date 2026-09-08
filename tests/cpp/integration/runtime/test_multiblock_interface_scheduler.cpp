@@ -563,20 +563,25 @@ TEST(test_multiblock_interface_scheduler,
 
 }  // namespace
 
-TEST(test_multiblock_interface_scheduler, DirectCaptureRetainsDensityAndAuthenticatesPhysicalRoute) {
+TEST(test_multiblock_interface_scheduler,
+     DirectCaptureRetainsDensityAndAuthenticatesPhysicalRoute) {
   ensure_runtime();
   const Box<1> left_box(Index<1>(0), Index<1>(3));
   const Box<1> right_box(Index<1>(10), Index<1>(13));
   auto left = make_field<1>(left_box, 1), right = make_field<1>(right_box, 1);
   auto left_rhs = make_field<1>(left_box, 1), right_rhs = make_field<1>(right_box, 1);
-  left.set_val(Real(1e100)); right.set_val(Real(1e100));
-  left_rhs.set_val(Real(0)); right_rhs.set_val(Real(0));
+  left.set_val(Real(1e100));
+  right.set_val(Real(1e100));
+  left_rhs.set_val(Real(0));
+  right_rhs.set_val(Real(0));
   AxisAlignedInterface<1> route;
   route.identity = "retained-density";
   route.sampling_provider_identity = "test.retained-density/flux-artifact-v1/endpoints-v1";
-  route.left_block = 0; route.right_block = 1;
+  route.left_block = 0;
+  route.right_block = 1;
   route.left_axis = route.right_axis = 0;
-  route.left_side = InterfaceSide::High; route.right_side = InterfaceSide::Low;
+  route.left_side = InterfaceSide::High;
+  route.right_side = InterfaceSide::Low;
   route.right_component_for_left = {0};
   authenticate(route);
   InterfaceFluxScheduler<1> scheduler;
@@ -591,8 +596,8 @@ TEST(test_multiblock_interface_scheduler, DirectCaptureRetainsDensityAndAuthenti
   stage.application_identity = "program-rhs-group";
   std::vector<MultiFab<1>*> states{&left, &right}, rhs{&left_rhs, &right_rhs};
   std::vector<InterfaceFluxSample> captured;
-  scheduler.apply(stage, std::span<MultiFab<1>* const>(states),
-                  std::span<MultiFab<1>* const>(rhs), nullptr, &captured);
+  scheduler.apply(stage, std::span<MultiFab<1>* const>(states), std::span<MultiFab<1>* const>(rhs),
+                  nullptr, &captured);
   ASSERT_EQ(captured.size(), 1);
   EXPECT_EQ(captured[0].flux_density, std::vector<Real>{Real(1e-100)});
   EXPECT_EQ(get_cell(left_rhs, Index<1>(3), 0), -Real(4) * Real(1e-100));

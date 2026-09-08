@@ -170,10 +170,9 @@ NativeLoad rhs_only_load(std::string key, pops::Real scale) {
   return result;
 }
 
-void stage_charge_package(
-    NativeSystem& system, const std::string& block,
-    const std::vector<pops::runtime::system::AuxiliaryComponentKey>& outputs,
-    const std::vector<NativeLoad>& loads) {
+void stage_charge_package(NativeSystem& system, const std::string& block,
+                          const std::vector<pops::runtime::system::AuxiliaryComponentKey>& outputs,
+                          const std::vector<NativeLoad>& loads) {
   using namespace pops::runtime::system;
   system.install_block_state_route(block, "test.coupled-fieldsolve/" + block + "/state@1");
   auto capability = std::make_shared<NativePackageCapabilityState<Dim>>();
@@ -196,15 +195,17 @@ void stage_charge_package(
             *installer, block, block, std::move(model), "minmod", "rusanov", "conservative",
             "explicit", static_cast<double>(pops::kPhysicalDefaultGamma), 1, true, 1);
         for (const auto& load : loads) {
-          package.elliptic_attachments.push_back({
-              load.key, "test.native-rhs/" + block + "/" + load.key,
-              load.key == "fields_from_state" ||
-                      (load.role == NativeEllipticAttachmentRole::rhs_only && !load.claim_outputs)
-                  ? std::vector<AuxiliaryComponentKey>{}
-                  : outputs,
-              load.gradient_sign, [scale = load.scale](const NativeField& state, NativeField& rhs) {
-                pops::add_scaled_component(state, scale, 0, rhs);
-              }, load.role, load.field_slot, load.binding_identity});
+          package.elliptic_attachments.push_back(
+              {load.key, "test.native-rhs/" + block + "/" + load.key,
+               load.key == "fields_from_state" ||
+                       (load.role == NativeEllipticAttachmentRole::rhs_only && !load.claim_outputs)
+                   ? std::vector<AuxiliaryComponentKey>{}
+                   : outputs,
+               load.gradient_sign,
+               [scale = load.scale](const NativeField& state, NativeField& rhs) {
+                 pops::add_scaled_component(state, scale, 0, rhs);
+               },
+               load.role, load.field_slot, load.binding_identity});
         }
         installer->commit(std::move(package));
       },
@@ -229,8 +230,8 @@ NativeSystem named_load_system(int cells, const std::vector<std::string>& keys,
     identities.push_back("test.resolved-provider/" + key);
   system.set_field_solver_plan(slot, "test.exact-load.plan@1", "test.exact-load.provider@1",
                                "test.exact-load-output", "first", "potential", identities,
-                               std::vector<std::string>(keys.size(), "first"), keys,
-                               coefficients, slot);
+                               std::vector<std::string>(keys.size(), "first"), keys, coefficients,
+                               slot);
   system.set_field_topology_authority(slot, "builtin_rectangular_cell_graph_v1",
                                       "test.periodic-cartesian", "test.periodic-cartesian.v1");
   system.set_field_boundary_plan(slot, periodic_kinds(), periodic_faces(0.0), periodic_faces(0.0),
@@ -242,8 +243,8 @@ NativeSystem named_load_system(int cells, const std::vector<std::string>& keys,
   return system;
 }
 
-void expect_negative_field_gradient(const NativeSystem& system, const std::vector<double>& potential,
-                                    int cells) {
+void expect_negative_field_gradient(const NativeSystem& system,
+                                    const std::vector<double>& potential, int cells) {
   for (int axis = 0; axis < Dim; ++axis) {
     SCOPED_TRACE(axis);
     const auto gradient = system.auxiliary_component(
@@ -257,7 +258,8 @@ void expect_negative_field_gradient(const NativeSystem& system, const std::vecto
     for (std::size_t cell = 0; cell < potential.size(); ++cell) {
       const int coordinate = static_cast<int>((cell / stride) % static_cast<std::size_t>(cells));
       const std::size_t minus = coordinate == 0 ? cell + stride * (cells - 1) : cell - stride;
-      const std::size_t plus = coordinate == cells - 1 ? cell - stride * (cells - 1) : cell + stride;
+      const std::size_t plus =
+          coordinate == cells - 1 ? cell - stride * (cells - 1) : cell + stride;
       const double expected = -0.5 * cells * (potential[plus] - potential[minus]);
       error = std::max(error, std::abs(gradient[cell] - expected));
       magnitude = std::max(magnitude, std::abs(expected));
@@ -416,8 +418,8 @@ TEST(test_coupled_fieldsolve, native_load_keys_use_the_case_output_and_each_exac
                                   {{"load-a", pops::Real(3)}, {"load-b", pops::Real(5)}});
   ASSERT_NO_THROW(system.finalize_native_packages());
   system.set_density("first", density);
-  auto reference = named_load_system(cells, {"combined-load"}, {1.0},
-                                     {{"combined-load", pops::Real(3.5)}});
+  auto reference =
+      named_load_system(cells, {"combined-load"}, {1.0}, {{"combined-load", pops::Real(3.5)}});
   ASSERT_NO_THROW(reference.finalize_native_packages());
   reference.set_density("first", density);
   const std::string slot = "test.exact-load-plan";
@@ -435,22 +437,20 @@ TEST(test_coupled_fieldsolve, native_load_keys_use_the_case_output_and_each_exac
 }
 
 TEST(test_coupled_fieldsolve, native_output_alias_requires_one_exact_provider_on_its_block) {
-  auto supported = named_load_system(24, {"electron-load"}, {2.0},
-                                     {{"potential", pops::Real(1)}});
+  auto supported = named_load_system(24, {"electron-load"}, {2.0}, {{"potential", pops::Real(1)}});
   EXPECT_NO_THROW(supported.finalize_native_packages());
-  auto ambiguous = named_load_system(24, {"load-a", "load-b"}, {2.0, -0.5},
-                                     {{"potential", pops::Real(1)}});
+  auto ambiguous =
+      named_load_system(24, {"load-a", "load-b"}, {2.0, -0.5}, {{"potential", pops::Real(1)}});
   EXPECT_THROW(ambiguous.finalize_native_packages(), std::exception);
   EXPECT_THROW((void)ambiguous.block_state(0), std::exception);
 }
 
 TEST(test_coupled_fieldsolve, native_missing_and_foreign_loads_reject_before_block_publication) {
-  auto missing = named_load_system(24, {"load-a", "load-b"}, {2.0, -0.5},
-                                   {{"load-a", pops::Real(1)}});
+  auto missing =
+      named_load_system(24, {"load-a", "load-b"}, {2.0, -0.5}, {{"load-a", pops::Real(1)}});
   EXPECT_THROW(missing.finalize_native_packages(), std::exception);
   EXPECT_THROW((void)missing.block_state(0), std::exception);
-  auto foreign = named_load_system(24, {"load-a"}, {2.0},
-                                   {{"foreign-load", pops::Real(1)}});
+  auto foreign = named_load_system(24, {"load-a"}, {2.0}, {{"foreign-load", pops::Real(1)}});
   EXPECT_THROW(foreign.finalize_native_packages(), std::exception);
   EXPECT_THROW((void)foreign.block_state(0), std::exception);
 }
@@ -552,10 +552,18 @@ TEST(test_coupled_fieldsolve, native_rhs_only_forged_authorities_reject_before_b
     SCOPED_TRACE(forgery);
     auto load = rhs_only_load("electron-load", pops::Real(1));
     switch (forgery) {
-      case 0: load.field_slot = "another-field-plan"; break;
-      case 1: load.binding_identity = "test.resolved-provider/foreign-load"; break;
-      case 2: load.claim_outputs = true; break;
-      case 3: load.gradient_sign = -1; break;
+      case 0:
+        load.field_slot = "another-field-plan";
+        break;
+      case 1:
+        load.binding_identity = "test.resolved-provider/foreign-load";
+        break;
+      case 2:
+        load.claim_outputs = true;
+        break;
+      case 3:
+        load.gradient_sign = -1;
+        break;
       case 4:
         load.role = pops::runtime::system::NativeEllipticAttachmentRole::output_and_rhs;
         break;
@@ -566,9 +574,10 @@ TEST(test_coupled_fieldsolve, native_rhs_only_forged_authorities_reject_before_b
   }
 }
 
-TEST(test_coupled_fieldsolve, native_output_bearing_wrong_gradient_rejects_before_block_publication) {
-  auto system = named_load_system(24, {"electron-load"}, {1.0},
-                                  {{"electron-load", pops::Real(1)}}, -1);
+TEST(test_coupled_fieldsolve,
+     native_output_bearing_wrong_gradient_rejects_before_block_publication) {
+  auto system =
+      named_load_system(24, {"electron-load"}, {1.0}, {{"electron-load", pops::Real(1)}}, -1);
   EXPECT_THROW(system.finalize_native_packages(), std::exception);
   EXPECT_THROW((void)system.block_state(0), std::exception);
 }

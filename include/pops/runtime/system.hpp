@@ -1521,8 +1521,8 @@ class System {
   [[nodiscard]] POPS_EXPORT bool field_publication_transaction_active_() const noexcept;
   POPS_EXPORT void begin_field_publication_outcome_();
   POPS_EXPORT SolveOutcome stage_field_publication_outcome_(SolveReport report);
-  POPS_EXPORT SolveOutcome run_field_publication_outcome_(
-      const std::function<SolveReport()>& solve);
+  POPS_EXPORT SolveOutcome
+  run_field_publication_outcome_(const std::function<SolveReport()>& solve);
   enum class NativePackageKind { generic, prepared_boundary };
   void stage_native_package_(
       std::string identity, std::function<void()> route_registrar, std::function<void()> installer,

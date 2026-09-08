@@ -1331,8 +1331,8 @@ TEST(GeneratedAmrSystemBlock, NamedFieldConsumesExactStageWithoutPublishingState
 TEST(GeneratedAmrSystemBlock, ExplicitFieldTopologyIsIndependentOfPeriodicTransport) {
   constexpr int Dim = pops::kNativeDimension;
   // Exercise both builtin field routes and reject a one-sided periodic declaration.
-  for (const std::string policy : {"pops.field-hierarchy.level-local",
-                                   "pops.field-hierarchy.composite"}) {
+  for (const std::string policy :
+       {"pops.field-hierarchy.level-local", "pops.field-hierarchy.composite"}) {
     for (const bool one_sided_periodic : {false, true}) {
       SCOPED_TRACE(policy);
       SCOPED_TRACE(one_sided_periodic);
@@ -1383,7 +1383,8 @@ TEST(GeneratedAmrSystemBlock, ExplicitFieldTopologyIsIndependentOfPeriodicTransp
       stage.set_val(pops::Real(3));
       if (one_sided_periodic) {
         try {
-          auto outcome = context->solve_fields_from_state_at(point<Dim>(0), "field/tracer", 0, stage);
+          auto outcome =
+              context->solve_fields_from_state_at(point<Dim>(0), "field/tracer", 0, stage);
           (void)outcome.consume(pops::SolveConsumption::kFailRun);
           FAIL() << "one-sided periodic field boundary was accepted";
         } catch (const std::invalid_argument& error) {
@@ -1688,8 +1689,8 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRetainsAndInterpolatesExactLevelHist
   EXPECT_EQ(pops::reduce_min_local(interpolated), pops::Real(15));
   EXPECT_EQ(pops::reduce_max_local(interpolated), pops::Real(15));
   // An equally shaped scratch is not authority to reinterpret this ring on a foreign clock.
-  EXPECT_THROW(context->interpolate_history_linear(interpolated, "tracer.rate", 2, 0,
-                                                   "clock.fast", "clock.macro", -1, pops::Real(0)),
+  EXPECT_THROW(context->interpolate_history_linear(interpolated, "tracer.rate", 2, 0, "clock.fast",
+                                                   "clock.macro", -1, pops::Real(0)),
                std::invalid_argument);
   EXPECT_EQ(pops::reduce_min_local(interpolated), pops::Real(15));
   EXPECT_EQ(pops::reduce_max_local(interpolated), pops::Real(15));
@@ -2072,10 +2073,10 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
     context->with_program_resource_level(1, [&]() {
       auto interpolated = context->rhs_scratch_like(context->state(0));
       interpolated.set_val(pops::Real(-17));
-      EXPECT_THROW(context->interpolate_history_linear(interpolated, "tracer.rate", 1, 0,
-                                                       "clock.macro", "clock.macro", 0,
-                                                       pops::Real(0)),
-                   std::runtime_error);
+      EXPECT_THROW(
+          context->interpolate_history_linear(interpolated, "tracer.rate", 1, 0, "clock.macro",
+                                              "clock.macro", 0, pops::Real(0)),
+          std::runtime_error);
       EXPECT_EQ(pops::reduce_min_local(interpolated), pops::Real(-17));
       EXPECT_EQ(pops::reduce_max_local(interpolated), pops::Real(-17));
     });

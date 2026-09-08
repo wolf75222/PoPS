@@ -270,14 +270,13 @@ TEST(test_prepared_hyperbolic_boundary,
   EXPECT_EQ(value_at(state, Index<1>{3}, 0), Real(3));
 }
 
-TEST(test_prepared_hyperbolic_boundary,
-     analytic_tables_install_and_fill_through_ranked_geometry) {
+TEST(test_prepared_hyperbolic_boundary, analytic_tables_install_and_fill_through_ranked_geometry) {
   const Box<1> domain{Index<1>{0}, Index<1>{1}};
   auto state = one_patch_field(domain, 1, Extent<1>{1});
   fill_valid(state, Real(-99), [](const Index<1>& index, int) { return Real(index[0] + 1); });
-  const auto boundary = prepare_hyperbolic_boundary<1>(
-      {"dirichlet", "foextrap"}, {0.0, 0.0}, identities<1>(), {"Scalar"}, false, {}, {},
-      {{"x"}, {}}, {{0.0}, {}}, {"", ""});
+  const auto boundary =
+      prepare_hyperbolic_boundary<1>({"dirichlet", "foextrap"}, {0.0, 0.0}, identities<1>(),
+                                     {"Scalar"}, false, {}, {}, {{"x"}, {}}, {{0.0}, {}}, {"", ""});
   EXPECT_TRUE(boundary.has_analytic_state());
   EXPECT_THROW(boundary.fill_physical(state, domain), std::logic_error);
   EXPECT_EQ(value_at(state, Index<1>{-1}, 0), Real(-99));
@@ -307,14 +306,13 @@ TEST(test_prepared_hyperbolic_boundary, analytic_z_coordinate_fills_three_dimens
   EXPECT_EQ(value_at(state, Index<3>{0, 0, 2}, 0), Real(4));
 }
 
-TEST(test_prepared_hyperbolic_boundary,
-     analytic_domain_only_recovers_prepared_session_geometry) {
+TEST(test_prepared_hyperbolic_boundary, analytic_domain_only_recovers_prepared_session_geometry) {
   const Box<1> domain{Index<1>{0}, Index<1>{1}};
   auto state = one_patch_field(domain, 1, Extent<1>{1});
   fill_valid(state, Real(-99), [](const Index<1>& index, int) { return Real(index[0] + 1); });
-  const auto boundary = prepare_hyperbolic_boundary<1>(
-      {"dirichlet", "foextrap"}, {0.0, 0.0}, identities<1>(), {"Scalar"}, false, {}, {},
-      {{"x"}, {}}, {{0.0}, {}}, {"", ""});
+  const auto boundary =
+      prepare_hyperbolic_boundary<1>({"dirichlet", "foextrap"}, {0.0, 0.0}, identities<1>(),
+                                     {"Scalar"}, false, {}, {}, {{"x"}, {}}, {{0.0}, {}}, {"", ""});
   const auto geometry = Geometry<1>::from_bounds(domain, RealVector<1>{0.0}, RealVector<1>{2.0});
   const auto bound = boundary.with_prepared_geometry(geometry);
   bound.fill_physical(state, domain);
@@ -324,14 +322,15 @@ TEST(test_prepared_hyperbolic_boundary,
 TEST(test_prepared_hyperbolic_boundary, analytic_missing_origin_spacing_refuses_without_zeros) {
   const Box<1> domain{Index<1>{0}, Index<1>{1}};
   auto state = one_patch_field(domain, 1, Extent<1>{1});
-  const auto boundary = prepare_hyperbolic_boundary<1>(
-      {"dirichlet", "foextrap"}, {0.0, 0.0}, identities<1>(), {"Scalar"}, false, {}, {},
-      {{"x"}, {}}, {{0.0}, {}}, {"", ""});
+  const auto boundary =
+      prepare_hyperbolic_boundary<1>({"dirichlet", "foextrap"}, {0.0, 0.0}, identities<1>(),
+                                     {"Scalar"}, false, {}, {}, {{"x"}, {}}, {{0.0}, {}}, {"", ""});
   const RealVector<1> missing{std::numeric_limits<Real>::quiet_NaN()};
   const RealVector<1> spacing{Real(1)};
   EXPECT_THROW(boundary.fill_physical(state, domain, missing, spacing), std::logic_error);
-  EXPECT_THROW(boundary.fill_physical(state, domain, RealVector<1>{Real(0)}, RealVector<1>{Real(0)}),
-               std::logic_error);
+  EXPECT_THROW(
+      boundary.fill_physical(state, domain, RealVector<1>{Real(0)}, RealVector<1>{Real(0)}),
+      std::logic_error);
 }
 
 TEST(test_prepared_hyperbolic_boundary, analytic_z_is_refused_below_rank_three) {
@@ -345,9 +344,9 @@ TEST(test_prepared_hyperbolic_boundary, analytic_z_is_refused_below_rank_three) 
 TEST(test_prepared_hyperbolic_boundary, analytic_ghost_depth_cannot_exceed_normal_extent) {
   const Box<1> domain{Index<1>{0}, Index<1>{0}};
   auto state = one_patch_field(domain, 1, Extent<1>{2});
-  const auto boundary = prepare_hyperbolic_boundary<1>(
-      {"dirichlet", "foextrap"}, {0.0, 0.0}, identities<1>(), {"Scalar"}, false, {}, {},
-      {{"x"}, {}}, {{0.0}, {}}, {"", ""});
+  const auto boundary =
+      prepare_hyperbolic_boundary<1>({"dirichlet", "foextrap"}, {0.0, 0.0}, identities<1>(),
+                                     {"Scalar"}, false, {}, {}, {{"x"}, {}}, {{0.0}, {}}, {"", ""});
   const auto geometry = Geometry<1>::from_bounds(domain, RealVector<1>{0.0}, RealVector<1>{1.0});
   EXPECT_THROW(boundary.fill_physical(state, geometry), std::invalid_argument);
 }

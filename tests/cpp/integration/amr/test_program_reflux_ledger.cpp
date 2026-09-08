@@ -306,12 +306,13 @@ TEST(test_program_reflux_ledger,
 
 TEST(test_program_reflux_ledger, SingleWindowDensityAvoidsAnExtraTemporalRounding) {
   const auto query = coarse_key<1>(0);
-  const pops::Real density = pops::Real(1) + pops::Real(21) * std::numeric_limits<pops::Real>::epsilon();
+  const pops::Real density =
+      pops::Real(1) + pops::Real(21) * std::numeric_limits<pops::Real>::epsilon();
   for (const double dt : {0.001, 0.0005}) {
     const auto integrate = [&](pops::Real coarse_density) {
       reflux::TransactionalFaceFluxLedger<1, program::AmrProgramFacePayload> ledger(kLedgerBudget);
-      auto coarse = fragment(query, query.coarse_face, reflux::FaceLedgerRole::Coarse,
-                             1.0, coarse_density);
+      auto coarse =
+          fragment(query, query.coarse_face, reflux::FaceLedgerRole::Coarse, 1.0, coarse_density);
       auto fine = fragment(query, query.coarse_face, reflux::FaceLedgerRole::Fine, 1.0, density);
       coarse.measure.substep_duration = dt;
       fine.measure.substep_duration = dt;
@@ -320,7 +321,7 @@ TEST(test_program_reflux_ledger, SingleWindowDensityAvoidsAnExtraTemporalRoundin
       ledger.accumulate(std::move(fine.key), fine.measure, std::move(fine.payload));
       ledger.commit();
       return reflux::metric_reflux(ledger, query, ratio_two<1>(),
-                                    reflux::FaceRefinementMapping<1>{}, kMetricBudget, payload_axpy);
+                                   reflux::FaceRefinementMapping<1>{}, kMetricBudget, payload_axpy);
     };
     const auto retained = integrate(density);
     ASSERT_EQ(retained.mismatch.size(), 1U);

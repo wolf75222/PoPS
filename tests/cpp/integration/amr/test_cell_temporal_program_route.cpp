@@ -448,10 +448,10 @@ TEST(test_cell_temporal_program_route, cell_update_matches_generated_euler_axpy_
   // Exercise the actual two axpy kernels emitted by RungeKutta's noncommitted
   // step value, rather than assuming a materialized-product rounding boundary.
   candidate_a.set_val(Real(0));
-  pops::mf_arith_detail::SaxpyKernel<1>{candidate_a.view(), std::as_const(stage).view(), Real(1), 0}(
-      Index<1>{0});
-  pops::mf_arith_detail::SaxpyKernel<1>{candidate_a.view(), std::as_const(residual).view(), dt, 0}(
-      Index<1>{0});
+  pops::mf_arith_detail::SaxpyKernel<1>{candidate_a.view(), std::as_const(stage).view(), Real(1),
+                                        0}(Index<1>{0});
+  pops::mf_arith_detail::SaxpyKernel<1>{candidate_a.view(), std::as_const(residual).view(), dt,
+                                        0}(Index<1>{0});
   EXPECT_EQ(candidate_b.view()(Index<1>{0}, 0), candidate_a.view()(Index<1>{0}, 0));
   EXPECT_EQ(integrated_flux[0], Real(0));
   EXPECT_EQ(integrated_flux[1], Real(0));
