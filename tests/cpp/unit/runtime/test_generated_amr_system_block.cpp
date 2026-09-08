@@ -538,7 +538,7 @@ TEST(GeneratedAmrSystemBlock, ProgramStateRouteDoesNotInstantiateHyperbolicPhysi
   constexpr int Dim = pops::kNativeDimension;
   const auto prepared = pops::prepare_compiled_amr_system_block<Dim>(
       "diffusion-state", ProgramStateModel<Dim>{}, "state_storage", "unavailable", "conservative",
-      "explicit", 1.4, 1, 1, 0.0, static_cast<double>(pops::kWenoEpsilon), false,
+      "imex", 1.4, 1, 1, 0.0, static_cast<double>(pops::kWenoEpsilon), false,
       "test.diffusion-state/native_model");
   EXPECT_EQ(prepared.provider_identity,
             "pops.generated.amr.program-state.nd/" + std::to_string(Dim));
@@ -547,6 +547,7 @@ TEST(GeneratedAmrSystemBlock, ProgramStateRouteDoesNotInstantiateHyperbolicPhysi
   EXPECT_EQ(prepared.cut_cell_provider_identity,
             "pops.generated.amr.program-state.cut-cell-unavailable.nd/" + std::to_string(Dim));
   EXPECT_EQ(prepared.reconstruction_order, 1);
+  EXPECT_EQ(prepared.time_route, "imex");
   EXPECT_TRUE(static_cast<bool>(prepared.materialize_level));
   for (int axis = 0; axis < Dim; ++axis)
     EXPECT_EQ(prepared.ghosts[axis], 1);
@@ -557,6 +558,14 @@ TEST(GeneratedAmrSystemBlock, ProgramStateRouteDoesNotInstantiateHyperbolicPhysi
           "explicit", 1.4, 1, 1, 0.0, static_cast<double>(pops::kWenoEpsilon), false,
           "test.partial-state/native_model"),
       std::invalid_argument);
+  EXPECT_THROW(pops::validate_compiled_amr_system_block_routes(
+                   {"minmod", "unavailable", "conservative", "imex", pops::Real(0),
+                    pops::kWenoEpsilon, false}),
+               std::invalid_argument);
+  EXPECT_THROW(pops::validate_compiled_amr_system_block_routes({"state_storage", "unavailable",
+                                                                "primitive", "imex", pops::Real(0),
+                                                                pops::kWenoEpsilon, false}),
+               std::invalid_argument);
 }
 
 TEST(GeneratedAmrSystemBlock, PackageContractAuthenticatesPhysicalModelParameters) {

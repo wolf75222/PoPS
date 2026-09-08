@@ -11165,21 +11165,9 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
       throw std::invalid_argument(
           "AmrSystem native package requires finite positive gamma, substeps, and stride");
     validate_newton_options(newton, "AmrSystem native package");
-    if (!std::isfinite(positivity_floor) || positivity_floor < 0.0)
-      throw std::invalid_argument(
-          "AmrSystem native package positivity floor must be finite and non-negative");
-    if (!std::isfinite(weno_epsilon) || !(weno_epsilon > 0.0))
-      throw std::invalid_argument(
-          "AmrSystem native package WENO epsilon must be finite and positive");
-    if (limiter != "weno5" && weno_epsilon != static_cast<double>(kWenoEpsilon))
-      throw std::invalid_argument("AmrSystem native package WENO epsilon requires limiter='weno5'");
-    if (wave_speed_cache)
-      throw std::invalid_argument(
-          "AmrSystem native package has no prepared exact-ranked wave-speed cache provider");
-    (void)parse_limiter_route(limiter, "AmrSystem native package");
-    (void)parse_riemann_route(riemann, "AmrSystem native package");
-    (void)parse_recon_route(recon, "AmrSystem native package");
-    (void)parse_time_route(time, "AmrSystem native package");
+    validate_compiled_amr_system_block_routes(CompiledAmrSystemBlockRoutes{
+        limiter, riemann, recon, time, static_cast<Real>(positivity_floor),
+        static_cast<Real>(weno_epsilon), wave_speed_cache});
 
     // Authenticate one pinned image before loading it. The descriptor/handle-backed shadow path
     // remains owned through dlopen/LoadLibrary, so the verified bytes and executable bytes cannot

@@ -1905,9 +1905,10 @@ struct CompiledAmrSystemBlockPreparation {
   bool newton_diagnostics = false;
 };
 
-namespace compiled_amr_detail {
-
-inline void validate_routes(const CompiledAmrSystemBlockRoutes& routes) {
+/// Validate the authored routes shared by the host package preflight and the exact generated
+/// installer. State storage is one complete typed route; it never enters the hyperbolic limiter or
+/// Riemann dispatch, while either half of that route remains an error.
+inline void validate_compiled_amr_system_block_routes(const CompiledAmrSystemBlockRoutes& routes) {
   if (routes.limiter.empty() || routes.riemann.empty())
     throw std::invalid_argument("compiled AMR block requires explicit limiter and Riemann routes");
   const bool storage_only = routes.limiter == "state_storage" && routes.riemann == "unavailable";
@@ -1937,8 +1938,6 @@ inline void validate_routes(const CompiledAmrSystemBlockRoutes& routes) {
     throw std::invalid_argument(
         "compiled exact-ranked AMR blocks have no prepared wave-speed cache provider");
 }
-
-}  // namespace compiled_amr_detail
 
 /// Prepare a complete generated AMR block image without mutating the facade.
 template <int Dim, class Model>
@@ -1980,7 +1979,7 @@ PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
                                       static_cast<Real>(positivity_floor),
                                       static_cast<Real>(weno_epsilon),
                                       wave_speed_cache};
-  compiled_amr_detail::validate_routes(routes);
+  validate_compiled_amr_system_block_routes(routes);
   return prepare_generated_amr_system_block(CompiledAmrSystemBlockPreparation<Dim, Model>{
       name, provider_consumer_qid, std::move(model), std::move(routes), gamma, substeps, stride,
       newton, newton_diagnostics});
