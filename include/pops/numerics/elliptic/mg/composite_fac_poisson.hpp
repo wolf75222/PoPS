@@ -611,8 +611,9 @@ class CompositeFacPoisson {
     std::unique_ptr<transport_type> gather{};
     std::unique_ptr<transport_type> restriction{};
     std::unique_ptr<transport_type> flux{};
-    // Different fine patches can contribute to the same coarse interface cell. Retain
-    // their payloads separately until the additive reduction; transport unpack is a copy.
+    // The first key is a qualified fine face (fine patch * 2*Dim + axis*2 + side),
+    // the second its parent patch. Distinct physical faces may reach one periodic
+    // coarse cell; each face is transported once, then contributions are added.
     std::map<std::pair<std::size_t, std::size_t>, Fab<Dim, MemorySpace>> flux_destinations{};
     static constexpr std::size_t no_scratch = std::numeric_limits<std::size_t>::max();
 
@@ -790,7 +791,9 @@ class CompositeFacPoisson {
       for (auto& [key, destination] : flux_destinations)
         destination.set_val(Real(0));
       auto source_view = [this](const transfer_job& job) -> FieldView<const Real, Dim> {
-        return std::as_const(scratch_for(job.source_patch).flux_increment).view();
+        return std::as_const(
+                   scratch_for(job.source_patch / static_cast<std::size_t>(2 * Dim)).flux_increment)
+            .view();
       };
       auto destination_view = [this](const transfer_job& job) -> FieldView<Real, Dim> {
         return flux_destinations.at({job.source_patch, job.destination_patch}).view();
@@ -1160,12 +1163,49 @@ class CompositeFacPoisson {
 
     if (!gather_jobs.empty() || !restriction_jobs.empty()) {
       std::vector<transfer_job> flux_jobs;
-      flux_jobs.reserve(gather_jobs.size());
-      for (const transfer_job& job : gather_jobs)
-        if (job.source_rank != job.destination_rank)
-          flux_jobs.push_back(transfer_job{job.destination_patch, job.source_patch,
-                                           job.destination_rank, job.source_rank,
-                                           job.destination_region, job.source_region});
+      // Gathering is not the inverse of an additive flux scatter: a gather includes
+      // interpolation halo cells and may contain overlapping periodic images. Restrict
+      // it to physical interface faces and prepare disjoint regions for each face.
+      for (const transfer_job& gather_job : gather_jobs) {
+        if (gather_job.source_rank == gather_job.destination_rank)
+          continue;
+        const std::size_t fine_patch = gather_job.destination_patch;
+        if (fine_patch > (std::numeric_limits<std::size_t>::max() - (2 * Dim - 1)) / (2 * Dim))
+          throw std::overflow_error("composite FAC fine-face transport identity overflow");
+        const Box<Dim> footprint = coarsen(child.phi.layout()[fine_patch], ratio_value);
+        Index<Dim> destination_shift{};
+        for (int axis = 0; axis < Dim; ++axis)
+          destination_shift[axis] =
+              gather_job.source_region.lo[axis] - gather_job.destination_region.lo[axis];
+        for (int axis = 0; axis < Dim; ++axis) {
+          for (int side = 0; side < 2; ++side) {
+            Box<Dim> face = footprint;
+            face.lo[axis] = side == 0 ? footprint.lo[axis] - 1 : footprint.hi[axis] + 1;
+            face.hi[axis] = face.lo[axis];
+            const Box<Dim> matched = face.intersect(gather_job.destination_region);
+            if (matched.empty())
+              continue;
+            const std::size_t face_identity = fine_patch * (2 * Dim) + axis * 2 + side;
+            std::vector<Box<Dim>> pending{matched};
+            for (const transfer_job& previous : flux_jobs) {
+              if (previous.source_patch != face_identity ||
+                  previous.destination_patch != gather_job.source_patch)
+                continue;
+              bool same_image = true;
+              for (int coordinate = 0; coordinate < Dim; ++coordinate)
+                same_image = same_image && previous.destination_region.lo[coordinate] -
+                                                   previous.source_region.lo[coordinate] ==
+                                               destination_shift[coordinate];
+              if (same_image)
+                fac_detail::subtract_from_regions(pending, previous.source_region);
+            }
+            for (const Box<Dim>& region : pending)
+              flux_jobs.push_back(transfer_job{face_identity, gather_job.source_patch,
+                                               gather_job.destination_rank, gather_job.source_rank,
+                                               region, region.shift(destination_shift)});
+          }
+        }
+      }
       std::map<std::pair<std::size_t, std::size_t>, Box<Dim>> flux_destination_boxes;
       for (const transfer_job& job : flux_jobs) {
         if (job.destination_rank != parent.phi.local_rank())

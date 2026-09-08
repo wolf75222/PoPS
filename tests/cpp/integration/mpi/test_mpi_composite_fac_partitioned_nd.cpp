@@ -449,7 +449,9 @@ void expect_partitioned_fac_embedded_boundary() {
   EXPECT_LT(maximum_constant_error(solver.phi_level(1), lane), Real(0.12));
 }
 
-void expect_periodic_partition_independence(bool corner) {
+void expect_periodic_partition_independence(int refinement_case) {
+  const bool corner = refinement_case == 1;
+  const bool strip = refinement_case == 2;
   constexpr int Dim = 2;
   const auto lane = ExecutionLane::world("pops.test.fac.periodic-partition-independence");
   const auto coarse_geometry =
@@ -461,14 +463,16 @@ void expect_periodic_partition_independence(bool corner) {
                                                          {Index<Dim>{0, 8}, Index<Dim>{7, 15}},
                                                          {Index<Dim>{8, 8}, Index<Dim>{15, 15}}});
   const BoxArray<Dim> fine_boxes(
-      corner ? std::vector<Box<Dim>>{{Index<Dim>{0, 0}, Index<Dim>{7, 7}},
-                                     {Index<Dim>{8, 0}, Index<Dim>{11, 7}},
-                                     {Index<Dim>{0, 8}, Index<Dim>{7, 11}},
-                                     {Index<Dim>{8, 8}, Index<Dim>{11, 11}}}
-             : std::vector<Box<Dim>>{{Index<Dim>{2, 10}, Index<Dim>{9, 17}},
-                                     {Index<Dim>{10, 10}, Index<Dim>{13, 17}},
-                                     {Index<Dim>{2, 18}, Index<Dim>{9, 21}},
-                                     {Index<Dim>{10, 18}, Index<Dim>{13, 21}}});
+      strip    ? std::vector<Box<Dim>>{{Index<Dim>{2, 0}, Index<Dim>{7, 31}},
+                                       {Index<Dim>{8, 0}, Index<Dim>{13, 31}}}
+      : corner ? std::vector<Box<Dim>>{{Index<Dim>{0, 0}, Index<Dim>{7, 7}},
+                                       {Index<Dim>{8, 0}, Index<Dim>{11, 7}},
+                                       {Index<Dim>{0, 8}, Index<Dim>{7, 11}},
+                                       {Index<Dim>{8, 8}, Index<Dim>{11, 11}}}
+               : std::vector<Box<Dim>>{{Index<Dim>{2, 10}, Index<Dim>{9, 17}},
+                                       {Index<Dim>{10, 10}, Index<Dim>{13, 17}},
+                                       {Index<Dim>{2, 18}, Index<Dim>{9, 21}},
+                                       {Index<Dim>{10, 18}, Index<Dim>{13, 21}}});
   const RankSpace<Dim> ranks{Index<Dim>{}, Extent<Dim>{2, 1}};
   const auto local_rank = rank_coordinate<Dim>(pops::my_rank());
   const std::vector<Index<Dim>> owners{rank_coordinate<Dim>(0), rank_coordinate<Dim>(1),
@@ -478,8 +482,14 @@ void expect_periodic_partition_independence(bool corner) {
     for (int level = 0; level < 2; ++level) {
       const auto& boxes = level == 0 ? coarse_boxes : fine_boxes;
       const auto& geometry = level == 0 ? coarse_geometry : fine_geometry;
-      const auto distribution = replicated ? Distribution<Dim>::replicated(boxes, ranks)
-                                           : Distribution<Dim>::partitioned(boxes, ranks, owners);
+      const auto distribution =
+          replicated
+              ? Distribution<Dim>::replicated(boxes, ranks)
+              : Distribution<Dim>::partitioned(
+                    boxes, ranks,
+                    (strip && level == 1)
+                        ? std::vector<Index<Dim>>{rank_coordinate<Dim>(1), rank_coordinate<Dim>(0)}
+                        : owners);
       request.levels.push_back(EllipticBuildRequest<Dim>{
           geometry, boxes, distribution, local_rank, periodic_boundary<Dim>(geometry),
           Extent<Dim>{}, integer_extent<Dim>(1), BoxArrayValidationBudget{4, 6}});
@@ -552,7 +562,7 @@ void expect_periodic_partition_independence(bool corner) {
   }
   const double global_difference = pops::all_reduce_max(static_cast<double>(maximum), lane);
   if (pops::my_rank() == 0)
-    std::cout << std::setprecision(17) << "periodic FAC corner=" << corner
+    std::cout << std::setprecision(17) << "periodic FAC refinement_case=" << refinement_case
               << " replicated_residual=" << reference_report.residual_norm
               << " partitioned_residual=" << partitioned_report.residual_norm
               << " max_partition_difference=" << global_difference << '\n';
@@ -582,6 +592,7 @@ int run_partitioned_fac_matrix(int argc, char** argv) {
       expect_collective_budget_failure();
       expect_periodic_partition_independence(false);
       expect_periodic_partition_independence(true);
+      expect_periodic_partition_independence(2);
     }
     result = ::testing::Test::HasFailure() ? 1 : 0;
   }
