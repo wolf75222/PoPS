@@ -500,7 +500,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact. Migration additions use explicit 5/120/300/600 s estimates recorded in migration_estimates.",
-    "estimated_count": 327,
+    "estimated_count": 328,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_scalar_advection_final_example.py",
@@ -552,6 +552,7 @@
       "tests/python/integration/runtime/test_final_strang_order_runtime.py",
       "tests/python/integration/runtime/test_hyqmom15_relaxation_runtime.py",
       "tests/python/integration/runtime/test_implicit_diffusion_lifecycle.py",
+      "tests/python/integration/runtime/test_interface_boundary_flux_ownership.py",
       "tests/python/integration/runtime/test_local_transform_runtime.py",
       "tests/python/integration/runtime/test_multi_layout_runtime.py",
       "tests/python/integration/runtime/test_native_retry_transactions.py",
@@ -830,7 +831,7 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 496,
+    "total_files": 497,
     "migration_estimates": {
       "scope": "M0-M6 migration additions",
       "files": [
@@ -838,6 +839,7 @@
         "tests/python/integration/runtime/test_combined_diffusion_exchange_ledger.py",
         "tests/python/integration/runtime/test_combined_transport_derived_auxiliary.py",
         "tests/python/integration/runtime/test_implicit_diffusion_lifecycle.py",
+        "tests/python/integration/runtime/test_interface_boundary_flux_ownership.py",
         "tests/python/integration/runtime/test_native_retry_transactions.py",
         "tests/python/integration/runtime/test_public_diffusion_matrix.py",
         "tests/python/integration/runtime/test_public_drift_diffusion_matrix.py",
@@ -906,5 +908,6 @@
       "refresh": "Replace each estimated row from complete CI gate-python per-file timing artifacts; never trim test cases to satisfy these estimates.",
       "timing_limit": "The inherited scalar-advection pipeline estimate is not refreshed from the local OMP qualification, where a full run exceeded 4299 s. CI Serial hardware/cache behavior differs; no observed CI fit is claimed. Preserve the indivisible full scientific test and refresh its estimate from the next complete CI artifact."
     }
-  }
+  },
+  "tests/python/integration/runtime/test_interface_boundary_flux_ownership.py": 120.0
 }
