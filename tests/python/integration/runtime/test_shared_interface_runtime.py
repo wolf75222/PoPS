@@ -1369,6 +1369,13 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     initial_right = runtime.integral("right")
     initial_integral = initial_left + initial_right
 
+    def actual_interface_counts():
+        return tuple(
+            runtime._executor._s._interface_evaluation_count(interface.qualified_id, level)
+            for level in range(3)
+        )
+
+    assert actual_interface_counts() == (0, 0, 0)
     rollback_before_tagger_retry = _shared_interface_accepted_image(runtime)
     from pops._bootstrap import StepAttemptRejected
 
@@ -1380,6 +1387,10 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     assert rejected.value.phase == "amr_tagger"
     assert rejected.value.detail == "injected rank-local Tagger failure"
     _assert_same_shared_interface_image(runtime, rollback_before_tagger_retry)
+    # Instrumentation reports real executions, including discarded work. SSPRK2 evaluates twice
+    # per level substep; rollback restores scientific state without erasing those observations.
+    rejected_counts = actual_interface_counts()
+    assert rejected_counts == (2, 4, 8)
 
     retry_report = pops.run(runtime, t_end=1.0e-3, max_steps=1, console=False)
     assert retry_report.accepted_steps == 1
@@ -1387,12 +1398,12 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     refined_authority = runtime._executor._interface_authorities[interface.qualified_id]
     assert refined_authority["levels"] == (0, 1, 2)
     assert len(refined_authority["declaration_identity"]) == 64
-    assert runtime._executor._s._interface_evaluation_count(
-        interface.qualified_id, 0) == 2
-    assert runtime._executor._s._interface_evaluation_count(
-        interface.qualified_id, 1) == 4
-    assert runtime._executor._s._interface_evaluation_count(
-        interface.qualified_id, 2) == 8
+    total_counts = actual_interface_counts()
+    assert total_counts == (4, 8, 16)
+    assert tuple(
+        total - rejected
+        for total, rejected in zip(total_counts, rejected_counts, strict=True)
+    ) == (2, 4, 8)
     final_left = runtime.integral("tracer")
     final_right = runtime.integral("right")
     lost_by_left = initial_left - final_left
