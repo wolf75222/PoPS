@@ -18,6 +18,7 @@ from pops.codegen._compiled_artifact import CompiledSimulationArtifact
 from pops.codegen._plans import BindInputs, InstallPlan
 from pops.identity import make_identity
 from pops.model import Handle, OwnerKind, OwnerPath
+from pops.mesh import LayoutMappingOperation, LayoutRepresentation, LayoutSynchronization
 from pops.output._console_monitor import ConsolePresentation
 from pops.output._consumer_contracts import (
     ConsumerGraph,
@@ -38,6 +39,7 @@ from pops.runtime._runtime_plan_contracts import (
     Collective,
     DeterminismGuarantee,
     Fence,
+    LayoutTransfer,
     RuntimePlanningError,
 )
 from pops.runtime._runtime_planning import build_runtime_plans
@@ -845,9 +847,26 @@ def test_consumer_collective_requires_exact_communicator_before_native_fact_prob
     assert error.value.code == "runtime_collective_without_consumer_owner"
 
 
+def _ordinary_transfer(mapping_id, source_layout, target_layout):
+    """Build the exact typed Transfer record emitted for conservative averaging."""
+    return LayoutTransfer(
+        mapping_id=mapping_id,
+        provider_id="pops://mapping-provider/%s" % mapping_id,
+        component_id="cell_average",
+        source_layout_id=source_layout,
+        target_layout_id=target_layout,
+        source_subject_id="state:%s" % source_layout,
+        target_subject_id="state:%s" % target_layout,
+        source_representation_uri=LayoutRepresentation.CELL_AVERAGE_V1.value,
+        target_representation_uri=LayoutRepresentation.CELL_AVERAGE_V1.value,
+        operation_abi=int(LayoutMappingOperation.CONSERVATIVE_CELL_AVERAGE_V1),
+        synchronization_uri=LayoutSynchronization.BEFORE_STEP_V1.value,
+    )
+
+
 def test_before_step_transfer_cycle_captures_every_native_source_before_any_apply():
-    first = SimpleNamespace(mapping_id="A-to-B", source="A", target="B")
-    second = SimpleNamespace(mapping_id="B-to-A", source="B", target="A")
+    first = _ordinary_transfer("A-to-B", "A", "B")
+    second = _ordinary_transfer("B-to-A", "B", "A")
     states = {"A": 1, "B": 2}
     events = []
 
@@ -858,11 +877,11 @@ def test_before_step_transfer_cycle_captures_every_native_source_before_any_appl
 
         def capture(self, generation, attempt):
             events.append(("capture", self.transfer.mapping_id, generation, attempt))
-            self.snapshot = states[self.transfer.source]
+            self.snapshot = states[self.transfer.source_layout_id]
 
         def apply(self, generation, attempt):
             events.append(("apply", self.transfer.mapping_id, generation, attempt))
-            states[self.transfer.target] = self.snapshot
+            states[self.transfer.target_layout_id] = self.snapshot
             return object()
 
     class NativeEngine:
@@ -881,8 +900,8 @@ def test_before_step_transfer_cycle_captures_every_native_source_before_any_appl
     native._transfer_routes = tuple(
         multi_executor._NativeTransferRoute(
             transfer=row,
-            source_block=row.source,
-            target_block=row.target,
+            source_block=row.source_layout_id,
+            target_block=row.target_layout_id,
             session=Session(row),
             source_element_count=1,
             destination_element_count=1,
@@ -912,8 +931,8 @@ def test_rejected_multi_layout_attempt_restores_every_child_then_recaptures():
 
     states = {"A": 1, "B": 2}
     events = []
-    first = SimpleNamespace(mapping_id="A-to-B", source="A", target="B")
-    second = SimpleNamespace(mapping_id="B-to-A", source="B", target="A")
+    first = _ordinary_transfer("A-to-B", "A", "B")
+    second = _ordinary_transfer("B-to-A", "B", "A")
 
     class Session:
         def __init__(self, transfer):
@@ -925,11 +944,11 @@ def test_rejected_multi_layout_attempt_restores_every_child_then_recaptures():
 
         def capture(self, generation, attempt):
             events.append(("capture", self.transfer.mapping_id, attempt))
-            self.snapshot = states[self.transfer.source]
+            self.snapshot = states[self.transfer.source_layout_id]
 
         def apply(self, generation, attempt):
             events.append(("apply", self.transfer.mapping_id, attempt))
-            states[self.transfer.target] = self.snapshot
+            states[self.transfer.target_layout_id] = self.snapshot
             return object()
 
         def reject_attempt(self, generation, attempt):
@@ -971,8 +990,8 @@ def test_rejected_multi_layout_attempt_restores_every_child_then_recaptures():
     native._transfer_routes = tuple(
         multi_executor._NativeTransferRoute(
             transfer=row,
-            source_block=row.source,
-            target_block=row.target,
+            source_block=row.source_layout_id,
+            target_block=row.target_layout_id,
             session=Session(row),
             source_element_count=1,
             destination_element_count=1,
