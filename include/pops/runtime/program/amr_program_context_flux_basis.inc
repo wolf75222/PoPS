@@ -1,3 +1,81 @@
+void install_flux_temporal_families_(
+    std::initializer_list<std::tuple<int, int, int, std::string_view>> rows) const {
+  std::map<std::tuple<std::size_t, int, FluxBasisProvider>, std::string> candidate;
+  std::string contract;
+  std::exception_ptr local_error;
+  try {
+    ExactContractBuilder exact;
+    exact.text("pops.program-flux-temporal-families")
+        .scalar(std::uint32_t{1})
+        .sequence(rows, [&](ExactContractBuilder& entry, const auto& row) {
+          const auto& [program_block, rhs_identity, raw_provider, family] = row;
+          if (program_block < 0 || rhs_identity < 0 || raw_provider < 0 ||
+              raw_provider > static_cast<int>(FluxBasisProvider::DiffusiveFace) || family.empty())
+            throw std::invalid_argument(
+                "AMR Program flux temporal-family declaration is incomplete");
+          const auto provider = static_cast<FluxBasisProvider>(raw_provider);
+          const int runtime_block = sys_block(program_block);
+          if (!candidate
+                   .emplace(
+                       std::tuple{static_cast<std::size_t>(runtime_block), rhs_identity, provider},
+                       std::string(family))
+                   .second)
+            throw std::invalid_argument(
+                "AMR Program flux temporal-family declaration aliases one producer");
+          entry.scalar(std::int32_t{program_block})
+              .scalar(std::int32_t{runtime_block})
+              .scalar(std::int32_t{rhs_identity})
+              .scalar(static_cast<std::uint8_t>(provider))
+              .text(family);
+        });
+    contract = std::move(exact).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  const ExecutionLane& lane = prepared_execution_lane();
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR Program flux temporal-family declaration failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"amr-program-flux-temporal-families", contract}},
+                                                lane))
+    throw std::invalid_argument(
+        "AMR Program flux temporal-family declarations differ between ranks");
+  if (!declared_flux_temporal_families_.empty() && declared_flux_temporal_families_ != candidate)
+    throw std::logic_error("AMR Program flux temporal-family declarations changed after install");
+  declared_flux_temporal_families_.swap(candidate);
+}
+
+std::string restored_flux_temporal_family_(std::size_t block, int rhs_identity,
+                                           FluxBasisProvider provider, std::string_view encoded,
+                                           bool legacy) const {
+  const auto declared =
+      declared_flux_temporal_families_.find(std::tuple{block, rhs_identity, provider});
+  if (declared != declared_flux_temporal_families_.end()) {
+    if (!legacy && encoded != declared->second)
+      throw std::invalid_argument(
+          "history flux checkpoint differs from its declared producer family");
+    return declared->second;
+  }
+  if (!declared_flux_temporal_families_.empty())
+    throw std::invalid_argument("history flux checkpoint has no declared producer family");
+  if (!legacy && !encoded.empty() && provider != FluxBasisProvider::ExactFace)
+    throw std::invalid_argument("history flux checkpoint has an undeclared producer family");
+  return std::string(encoded);
+}
+
+void restore_flux_temporal_family_(FluxBasis& basis, std::string_view encoded, bool legacy) const {
+  basis.temporal_family = restored_flux_temporal_family_(basis.runtime_block, basis.rhs_identity,
+                                                         basis.provider, encoded, legacy);
+}
+
+static bool same_flux_producer_(const FluxBasis& active, const FluxBasis& retained) noexcept {
+  return active.runtime_block == retained.runtime_block && active.level == retained.level &&
+         active.rhs_identity == retained.rhs_identity && active.provider == retained.provider &&
+         (retained.temporal_family.empty() || active.temporal_family == retained.temporal_family);
+}
+
 void apply_reflux_payload_(field_type& coarse, const Index<Dim>& cell,
                            const std::vector<Real>& correction) const {
   for (std::size_t local = 0; local < coarse.local_size(); ++local) {
@@ -30,8 +108,8 @@ double active_flux_interval_duration_(const ::pops::amr::ClockWindow& interval) 
 }
 
 void attach_active_flux_basis_(int runtime_block, const level_evaluation_type& evaluation,
-                               field_type& rhs, int rhs_identity,
-                               FluxBasisProvider provider) const {
+                               field_type& rhs, int rhs_identity, FluxBasisProvider provider,
+                               std::string_view temporal_family = {}) const {
   const ::pops::amr::ClockWindow interval{
       {active_level_, evaluation.point.tick, current_interval_begin_phase_,
        current_interval_start_time_},
@@ -54,10 +132,10 @@ void attach_active_flux_basis_(int runtime_block, const level_evaluation_type& e
       std::rethrow_exception(candidate_error);
     throw std::runtime_error("AMR Program flux-expression candidate copy failed collectively");
   }
-  prepare_active_flux_basis_impl_(runtime_block, evaluation.point, rhs_identity, provider,
-                                  evaluation.topology_epoch, evaluation.materialization_generation,
-                                  rhs, &evaluation, nullptr, nullptr, interval, candidate_registry,
-                                  candidate_counts, candidate_identity);
+  prepare_active_flux_basis_impl_(
+      runtime_block, evaluation.point, rhs_identity, provider, temporal_family,
+      evaluation.topology_epoch, evaluation.materialization_generation, rhs, &evaluation, nullptr,
+      nullptr, interval, candidate_registry, candidate_counts, candidate_identity);
   static_assert(std::is_nothrow_swappable_v<FluxExpressionRegistry>);
   static_assert(std::is_nothrow_swappable_v<std::vector<std::size_t>>);
   active_flux_expressions_.swap(candidate_registry);
@@ -73,6 +151,7 @@ void prepare_cell_temporal_flux_basis_(int runtime_block, const level_evaluation
                                        std::vector<std::size_t>& candidate_counts,
                                        std::uint64_t& candidate_identity) const {
   std::optional<::pops::amr::ClockWindow> interval;
+  std::string temporal_family;
   std::exception_ptr local_error;
   try {
     const std::int64_t extent =
@@ -92,6 +171,8 @@ void prepare_cell_temporal_flux_basis_(int runtime_block, const level_evaluation
                                  {active_level_, active_subcycling_window_.end.macro_step,
                                   active_subcycling_window_.begin.phase + span * local_end,
                                   current_interval_start_time_ + local_end.value() * current_dt_}});
+    temporal_family = std::string("pops.cell-temporal-flux.v1/") +
+                      active_block_identities_.at(static_cast<std::size_t>(runtime_block));
   } catch (...) {
     local_error = std::current_exception();
   }
@@ -102,15 +183,15 @@ void prepare_cell_temporal_flux_basis_(int runtime_block, const level_evaluation
     throw std::runtime_error("cell-local AMR flux-basis interval preparation failed collectively");
   }
   prepare_active_flux_basis_impl_(runtime_block, evaluation.point, rhs_identity,
-                                  FluxBasisProvider::ExactFace, evaluation.topology_epoch,
-                                  evaluation.materialization_generation, rhs, &evaluation,
-                                  &integrated_face_fluxes, nullptr, *interval, candidate_registry,
-                                  candidate_counts, candidate_identity);
+                                  FluxBasisProvider::ExactFace, temporal_family,
+                                  evaluation.topology_epoch, evaluation.materialization_generation,
+                                  rhs, &evaluation, &integrated_face_fluxes, nullptr, *interval,
+                                  candidate_registry, candidate_counts, candidate_identity);
 }
 
 void prepare_active_flux_basis_impl_(
     int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point, int rhs_identity,
-    FluxBasisProvider provider, std::uint64_t topology_epoch,
+    FluxBasisProvider provider, std::string_view temporal_family, std::uint64_t topology_epoch,
     std::uint64_t materialization_generation, const field_type& rhs,
     const level_evaluation_type* evaluation, const std::array<field_type, Dim>* exact_face_fluxes,
     const std::array<field_type*, Dim>* named_cell_fluxes, const ::pops::amr::ClockWindow& interval,
@@ -136,6 +217,7 @@ void prepare_active_flux_basis_impl_(
 
   std::size_t block = 0;
   std::vector<PendingFace> pending;
+  std::string resolved_temporal_family;
   std::string pending_contract;
   std::exception_ptr preparation_error;
   try {
@@ -148,6 +230,20 @@ void prepare_active_flux_basis_impl_(
         block >= active_incoming_flux_.size() || block >= prepared_rhs_basis_bounds_.size() ||
         block >= prepared_coefficient_term_bounds_.size() || block >= candidate_counts.size())
       throw std::logic_error("AMR Program flux evaluation has an incomplete active block pack");
+    const auto declared =
+        declared_flux_temporal_families_.find(std::tuple{block, rhs_identity, provider});
+    if (declared != declared_flux_temporal_families_.end()) {
+      if (!temporal_family.empty() && temporal_family != declared->second)
+        throw std::invalid_argument(
+            "AMR Program flux producer differs from its declared temporal family");
+      resolved_temporal_family = declared->second;
+    } else if (!declared_flux_temporal_families_.empty()) {
+      throw std::invalid_argument("AMR Program flux producer has no declared temporal family");
+    } else {
+      if (!temporal_family.empty() && provider != FluxBasisProvider::ExactFace)
+        throw std::invalid_argument("AMR Program flux producer family has no declaration");
+      resolved_temporal_family = temporal_family;
+    }
     if (evaluation != nullptr)
       require_same_field_contract_(evaluation->residual, rhs,
                                    "AMR Program flux-expression RHS basis");
@@ -244,6 +340,7 @@ void prepare_active_flux_basis_impl_(
         .scalar(std::int32_t{runtime_block})
         .scalar(std::int32_t{rhs_identity})
         .scalar(static_cast<std::uint8_t>(provider))
+        .text(resolved_temporal_family)
         .text(point.clock)
         .scalar(point.tick)
         .scalar(std::int32_t{point.level})
@@ -332,8 +429,9 @@ void prepare_active_flux_basis_impl_(
   std::optional<FluxExpression> prepared_expression;
   std::exception_ptr expression_error;
   try {
-    auto basis = std::make_shared<const FluxBasis>(FluxBasis{
-        identity, block, active_level_, point, rhs_identity, provider, interval, std::move(faces)});
+    auto basis = std::make_shared<const FluxBasis>(
+        FluxBasis{identity, block, active_level_, point, rhs_identity, provider,
+                  std::move(resolved_temporal_family), interval, std::move(faces)});
     FluxExpression expression;
     expression.emplace(identity, FluxExpressionTerm{std::move(basis), {{0, {1, 1}}}});
     require_flux_expression_budget_(expression);

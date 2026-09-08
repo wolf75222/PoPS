@@ -4,6 +4,7 @@
 #include "explicit_amr_program.hpp"
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/amr/reflux/metric_reflux.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
@@ -18,6 +19,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -106,6 +108,47 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
                                                                int slot) {
     const auto key = context.history_key_(std::string(name), level);
     return context.runtime_state().hist_.histories.at(key).at(static_cast<std::size_t>(slot));
+  }
+
+  static std::vector<std::uint8_t> seed_and_serialize_flux_history(context_type& context,
+                                                                   std::string_view name,
+                                                                   int rhs_identity,
+                                                                   int raw_provider,
+                                                                   std::string temporal_family) {
+    using Provider = typename context_type::FluxBasisProvider;
+    if (raw_provider < 0 || raw_provider > static_cast<int>(Provider::DiffusiveFace))
+      throw std::invalid_argument("test flux provider is invalid");
+    auto basis = std::make_shared<typename context_type::FluxBasis>();
+    basis->identity = 1;
+    basis->runtime_block = 0;
+    basis->rhs_identity = rhs_identity;
+    basis->provider = static_cast<Provider>(raw_provider);
+    basis->temporal_family = std::move(temporal_family);
+    basis->point = {"clock.macro", 0, 0, 0, rhs_identity, {0, 1}, 0.5, 0.0, {}, {}, {}};
+    basis->window = {{0, 0, {0, 1}, 0.0}, {0, 0, {1, 1}, 0.5}};
+    typename context_type::FluxExpression expression;
+    expression.emplace(1,
+                       typename context_type::FluxExpressionTerm{std::move(basis), {{1, {1, 1}}}});
+    const auto key = context.history_key_(std::string(name), 0);
+    auto& slots = context.history_flux_expressions_.at(key);
+    slots.front() = std::move(expression);
+    context.prepared_rhs_basis_bounds_ = {1};
+    context.prepared_coefficient_term_bounds_ = {1};
+    return context.serialize_history_flux_payload_();
+  }
+
+  static std::string restored_flux_family(const context_type& context, std::string_view name,
+                                          std::span<const std::uint8_t> bytes) {
+    const auto restored = context.prepare_history_flux_payload_restore_(bytes);
+    const auto& expression = restored.at(context.history_key_(std::string(name), 0)).front();
+    return expression.begin()->second.basis->temporal_family;
+  }
+
+  static std::string restore_declared_family(const context_type& context, std::size_t runtime_block,
+                                             int rhs_identity, int raw_provider, bool legacy) {
+    return context.restored_flux_temporal_family_(
+        runtime_block, rhs_identity,
+        static_cast<typename context_type::FluxBasisProvider>(raw_provider), {}, legacy);
   }
 };
 
@@ -300,6 +343,70 @@ std::size_t cell_count(const pops::Extent<Dim>& shape) {
   for (int axis = 0; axis < Dim; ++axis)
     result *= static_cast<std::size_t>(shape[axis]);
   return result;
+}
+
+std::vector<std::uint8_t> as_legacy_flux2(std::vector<std::uint8_t> bytes,
+                                          std::string_view temporal_family) {
+  const auto first =
+      std::search(bytes.begin(), bytes.end(), temporal_family.begin(), temporal_family.end());
+  if (first == bytes.end() || std::distance(bytes.begin(), first) < 8)
+    throw std::logic_error("typed history fixture lacks its temporal family");
+  bytes.erase(first - 8, first + static_cast<std::ptrdiff_t>(temporal_family.size()));
+  bytes.at(7) = static_cast<std::uint8_t>('2');
+  return bytes;
+}
+
+void require_two_substep_ab2_reflux(std::string migrated_family, std::string fresh_family) {
+  using namespace pops::amr;
+  using namespace pops::amr::reflux;
+  CoarseFaceRefluxKey<1> query;
+  query.owner = "tests.flux-history/owner";
+  query.state = "tests.flux-history/state";
+  query.levels = {0, 1};
+  query.axis = 0;
+  query.coarse_face[0] = 4;
+  query.attempt = 1;
+  query.macro_step = 1;
+  const RefinementRatio<1> ratio{2};
+  const FaceRefinementMapping<1> mapping{};
+  const MetricRefluxBudget budget{2, 16, 8};
+  const auto fine_faces = fine_faces_for_coarse_face(query, ratio, mapping, budget);
+  if (fine_faces.size() != 1)
+    throw std::logic_error("one-dimensional reflux fixture has an invalid face mapping");
+  TransactionalFaceFluxLedger<1, double> ledger{{16, 16, 1}};
+  ledger.begin(query.attempt);
+  const auto add = [&](FaceLedgerRole role, const pops::Index<1>& face, std::string stage,
+                       Rational weight, Rational begin, Rational end, double duration,
+                       const std::string& family) {
+    FaceFluxFragmentKey<1> key;
+    key.owner = query.owner;
+    key.state = query.state;
+    key.levels = query.levels;
+    key.axis = query.axis;
+    key.face = face;
+    key.coarse_face = query.coarse_face;
+    key.clock = {role == FaceLedgerRole::Coarse ? 0 : 1, 1, begin, begin.value()};
+    key.temporal_family = family;
+    key.stage = std::move(stage);
+    key.attempt = query.attempt;
+    key.role = role;
+    ledger.accumulate(std::move(key), {weight, begin, end, duration, 1.0}, 2.0);
+  };
+  for (const auto& [stage, weight, family] :
+       std::array<std::tuple<std::string, Rational, std::string>, 2>{
+           {{"fresh", {3, 2}, std::move(fresh_family)},
+            {"retained-flx2", {-1, 2}, std::move(migrated_family)}}}) {
+    add(FaceLedgerRole::Coarse, query.coarse_face, stage, weight, {0, 1}, {1, 1}, 1.0, family);
+    for (int substep = 0; substep < 2; ++substep)
+      add(FaceLedgerRole::Fine, fine_faces.front(), stage + "/" + std::to_string(substep), weight,
+          {substep, 2}, {substep + 1, 2}, 0.5, family);
+  }
+  ledger.commit();
+  const auto result =
+      metric_reflux(ledger, query, ratio, mapping, budget,
+                    [](double& out, double scale, const double& value) { out += scale * value; });
+  if (std::abs(result.mismatch) > 1.0e-14)
+    throw std::runtime_error("two-substep AB2 reflux did not conserve its restored history");
 }
 
 template <int Dim>
@@ -1813,6 +1920,57 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRetainsAndInterpolatesExactLevelHist
   EXPECT_EQ(pops::reduce_min_local(retained), pops::Real(10));
   EXPECT_EQ(pops::reduce_max_local(retained), pops::Real(10));
   EXPECT_THROW((void)context->schedule_decision(17, true, true), std::runtime_error);
+}
+
+TEST(GeneratedAmrSystemBlock, FluxHistoryMigratesDeclaredFamiliesAndPreservesNativeEmptyMode) {
+  constexpr int Dim = pops::kNativeDimension;
+  using Access = pops::runtime::program::detail::AmrProgramHistoryRemapCollectiveTestAccess<Dim>;
+  const auto exercise = [&](bool declared) {
+    pops::AmrSystemConfig<Dim> config;
+    for (int axis = 0; axis < Dim; ++axis)
+      config.shape[axis] = 8;
+    pops::AmrSystem<Dim> system(config);
+    pops::test::install_amr_runtime_authority(
+        system, declared ? "tests.generated-amr/typed-flux-history"
+                         : "tests.generated-amr/native-empty-flux-history");
+    system.install_block_state_route("tracer", "state/tracer");
+    pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+    system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+    ASSERT_NE(system.engine(), nullptr);
+    auto context = pops::test::install_forward_euler_program_context(system, false);
+    context->register_history("tracer.rate", 1, 1, 0, "tracer.U", "cell.conservative",
+                              "test.clock.macro", "dense.linear");
+    const std::string family =
+        declared ? "pops.program-flux-family.v1:sha256:"
+                   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                 : "";
+    if (declared)
+      context->install_flux_temporal_families({{0, 3000, 0, family}});
+    const auto current =
+        Access::seed_and_serialize_flux_history(*context, "tracer.rate", 3000, 0, family);
+    EXPECT_EQ(Access::restored_flux_family(*context, "tracer.rate", current), family);
+    if (!declared)
+      return;
+
+    const auto legacy = as_legacy_flux2(current, family);
+    const auto migrated = Access::restored_flux_family(*context, "tracer.rate", legacy);
+    EXPECT_EQ(migrated, family);
+    EXPECT_NO_THROW(require_two_substep_ab2_reflux(migrated, family));
+    EXPECT_THROW((void)Access::restore_declared_family(*context, 0, 3001, 0, true),
+                 std::invalid_argument);
+    EXPECT_THROW((void)Access::restore_declared_family(*context, 0, 3000, 1, false),
+                 std::invalid_argument);
+    EXPECT_THROW((void)Access::restore_declared_family(*context, 1, 3000, 0, true),
+                 std::invalid_argument);
+    auto tampered = current;
+    const auto token = std::search(tampered.begin(), tampered.end(), family.begin(), family.end());
+    ASSERT_NE(token, tampered.end());
+    *token ^= std::uint8_t{1};
+    EXPECT_THROW((void)Access::restored_flux_family(*context, "tracer.rate", tampered),
+                 std::invalid_argument);
+  };
+  exercise(true);
+  exercise(false);
 }
 
 TEST(GeneratedAmrSystemBlock, ProgramContextRefusesHistoryRegridBeforeTopologyMutation) {

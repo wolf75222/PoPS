@@ -3,7 +3,8 @@
 
 void neg_div_flux_default_with_faces_into(int program_block, field_type& stage_state,
                                           field_type& rhs, int rate_id,
-                                          std::vector<nd::FaceField<Dim>>& faces) const {
+                                          std::vector<nd::FaceField<Dim>>& faces,
+                                          std::string_view temporal_family = {}) const {
   const int runtime_block = sys_block(program_block);
   require_rate_identity_(rate_id);
   require_same_field_contract_(stage_state, rhs, "AMR Program default flux residual");
@@ -29,7 +30,7 @@ void neg_div_flux_default_with_faces_into(int program_block, field_type& stage_s
   }
   if (!active_attempt_states_.empty())
     attach_active_flux_basis_(runtime_block, evaluation, rhs, rate_id,
-                              FluxBasisProvider::PreparedDefaultFlux);
+                              FluxBasisProvider::PreparedDefaultFlux, temporal_family);
   count_kernel_();
 }
 
@@ -37,7 +38,7 @@ void neg_div_flux_default_with_faces_into(int program_block, field_type& stage_s
 /// applies its metric face measure once when it materializes the accepted reflux payload.
 void attach_diffusive_flux_basis(int program_block, const field_type& rhs, int rate_id,
                                  const std::vector<nd::FaceField<Dim>>& density_faces,
-                                 Real coefficient) const {
+                                 Real coefficient, std::string_view temporal_family = {}) const {
   if (active_attempt_states_.empty())
     return;
   const int runtime_block = sys_block(program_block);
@@ -105,9 +106,9 @@ void attach_diffusive_flux_basis(int program_block, const field_type& rhs, int r
     throw std::runtime_error("AMR diffusive flux-expression candidate copy failed collectively");
   }
   prepare_active_flux_basis_impl_(
-      runtime_block, point, rate_id, FluxBasisProvider::DiffusiveFace, runtime_->topology_epoch(),
-      runtime_->materialization_generation(), rhs, nullptr, &integrated, nullptr, interval,
-      candidate_registry, candidate_counts, candidate_identity);
+      runtime_block, point, rate_id, FluxBasisProvider::DiffusiveFace, temporal_family,
+      runtime_->topology_epoch(), runtime_->materialization_generation(), rhs, nullptr, &integrated,
+      nullptr, interval, candidate_registry, candidate_counts, candidate_identity);
   static_assert(std::is_nothrow_swappable_v<FluxExpressionRegistry>);
   static_assert(std::is_nothrow_swappable_v<std::vector<std::size_t>>);
   active_flux_expressions_.swap(candidate_registry);

@@ -54,6 +54,20 @@ from pops.codegen.program_emit_solve import (
 )
 from pops.codegen.program_emit_schedule import _emit_schedule_wrap
 from pops.codegen.program_emit_field_routes import field_point_cpp, resolved_field_route
+from pops.identity import make_identity
+
+
+def _rhs_flux_temporal_family(value: Any, named_fluxes: Any = None) -> str:
+    """Identify one resolved spatial flux independently of its temporal evaluation node."""
+    block = value.block
+    if not block.is_resolved:
+        block = block._resolved(block.owner_path.canonical())
+    route = {"kind": "default"} if named_fluxes is None else {
+        "kind": "named", "fluxes": tuple(named_fluxes)
+    }
+    return make_identity("program-flux-family", {
+        "block": block.canonical_identity(), "route": route
+    }).token
 
 
 def _required_block_index(block_idx: Any, block: Any, where: str) -> int:
@@ -818,18 +832,20 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 lines.append("ctx.source_default_into(%d, %s, %s);"
                              % (bidx, var[state_in.id], var[v.id]))
         elif named_fluxes is None:
+            family = _rhs_flux_temporal_family(v)
+            family_suffix = ", " + json.dumps(family) if target == "amr_system" else ""
             if want_default_source:
                 # R <- -div F + default/composite source (ctx.rhs_into) for THIS op's block (ADC-426
                 # bidx), the historical path: sources is None (legacy) or "default" is requested.
-                lines.append("ctx.rhs_into(%d, %s, %s, %d);"
-                             % (bidx, var[state_in.id], var[v.id], int(v.id)))
+                lines.append("ctx.rhs_into(%d, %s, %s, %d%s);"
+                             % (bidx, var[state_in.id], var[v.id], int(v.id), family_suffix))
             else:
                 # FLUX-ONLY (ADC-425): "default" is NOT among the requested sources (the empty list
                 # [] or a named-only list) -> R <- -div F(U) WITHOUT the model's default source
                 # (ctx.neg_div_flux_default_into), for THIS op's block (bidx). The named source_terms
                 # below are then axpy'd on top -- sources=[] is flux only, ["a","b"] is flux + a + b.
-                lines.append("ctx.neg_div_flux_default_into(%d, %s, %s, %d);"
-                             % (bidx, var[state_in.id], var[v.id], int(v.id)))
+                lines.append("ctx.neg_div_flux_default_into(%d, %s, %s, %d%s);"
+                             % (bidx, var[state_in.id], var[v.id], int(v.id), family_suffix))
         else:
             # NAMED fluxes (ADC-419): R <- -div(sum of selected named fluxes). Evaluate the SUM of
             # the flux expressions into one exact-ranked scratch field per authored x[/y[/z] axis.
@@ -872,13 +888,15 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 plan_exprs=plan_exprs,
             )
             lines.append(
-                "ctx.neg_div_named_flux_into(%d, %s, %s, {%s}, %d);"
+                "ctx.neg_div_named_flux_into(%d, %s, %s, {%s}, %d%s);"
                 % (
                     bidx,
                     var[state_in.id],
                     var[v.id],
                     ", ".join("&%s" % flux_vars[axis] for axis in axes),
                     int(v.id),
+                    ", " + json.dumps(_rhs_flux_temporal_family(v, named_fluxes))
+                    if target == "amr_system" else "",
                 )
             )
         for source_subslot, s in enumerate(named, start=named_source_subslot):

@@ -555,6 +555,34 @@ def _emit_amr_program_provider_register(provider_plan_install: str) -> str:
     )
 
 
+def _emit_flux_temporal_family_install(program: Any) -> str:
+    from pops.codegen.program_emit_diffusion import _diffusive_flux_families
+    from pops.codegen.program_emit_kernels import _named_fluxes
+    from pops.codegen.program_emit_ops import _rhs_flux_temporal_family
+    from pops.codegen.program_emit_field_routes import _walk_program_nodes
+
+    blocks = program._block_indices()
+    rows = []
+    for value in _walk_program_nodes(tuple(program._values)):
+        if value.op == "rhs" and value.attrs.get("flux", True):
+            named = _named_fluxes(value)
+            requested = value.attrs.get("sources")
+            provider = 3 if named is not None else (0 if requested is None or "default" in requested else 1)
+            rows.append((blocks[value.block], value.id, provider,
+                         _rhs_flux_temporal_family(value, named)))
+        elif value.op == "diffusive_rhs":
+            constitutive, transport = _diffusive_flux_families(value)
+            rows.append((blocks[value.block], value.id, 4, constitutive))
+            if transport is not None:
+                rows.append((blocks[value.block], value.id, 1, transport))
+    rows.sort(key=lambda row: row[:3])
+    if len({row[:3] for row in rows}) != len(rows):
+        raise ValueError("AMR flux temporal-family table aliases one resolved producer")
+    encoded = ", ".join("{%d, %d, %d, %s}" % (block, rhs, provider, json.dumps(family))
+                        for block, rhs, provider, family in rows)
+    return "  ctx.install_flux_temporal_families({%s});\n" % encoded if rows else ""
+
+
 def _emit_amr_install(
     program: Any,
     target: Any,
@@ -593,6 +621,7 @@ def _emit_amr_install(
     if target != "amr_system":
         return ""
     flux_expression_budget = _emit_flux_expression_budget(program)
+    flux_temporal_families = _emit_flux_temporal_family_install(program)
     provider_register = _emit_amr_program_provider_register(provider_plan_install)
     if cell_local_time is not None:
         cell_local_contract, cell_local_routes = cell_local_time
@@ -806,6 +835,7 @@ def _emit_amr_install(
         "pops::AmrSystem<pops::kNativeDimension>* sys) {\n"
         + "  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n"
         "  auto& ctx = *ctx_owner;\n"
+        + flux_temporal_families
         + transform_guard
         + level_resources
         + "\n  ctx.install([=](double dt) {\n"

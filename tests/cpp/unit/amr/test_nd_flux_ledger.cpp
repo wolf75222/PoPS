@@ -120,7 +120,8 @@ ClockStamp clock_at(int level, std::int64_t macro_step, Rational phase, double p
 template <int Dim>
 FaceFluxFragmentKey<Dim> fragment_key(
     const CoarseFaceRefluxKey<Dim>& query, FaceLedgerRole role, Index<Dim> face, std::string stage,
-    Rational phase, FaceLedgerContribution contribution = FaceLedgerContribution::NumericalFlux) {
+    Rational phase, FaceLedgerContribution contribution = FaceLedgerContribution::NumericalFlux,
+    std::string temporal_family = {}) {
   FaceFluxFragmentKey<Dim> key;
   key.owner = query.owner;
   key.state = query.state;
@@ -132,6 +133,7 @@ FaceFluxFragmentKey<Dim> fragment_key(
   key.clock = clock_at(role == FaceLedgerRole::Coarse ? query.levels.coarse : query.levels.fine,
                        query.macro_step, phase, 1.25 + phase.value());
   key.stage = std::move(stage);
+  key.temporal_family = std::move(temporal_family);
   key.attempt = query.attempt;
   key.role = role;
   key.contribution = contribution;
@@ -145,13 +147,15 @@ void accumulate_stage(TransactionalFaceFluxLedger<Dim, double>& ledger,
                       const std::string& stage, Rational phase, Rational stage_weight,
                       Rational substep_begin, Rational substep_end, double duration,
                       double coarse_face_measure, double fine_face_measure, double coarse_flux,
-                      double fine_flux) {
-  ledger.accumulate(fragment_key(query, FaceLedgerRole::Coarse, query.coarse_face, stage, phase),
+                      double fine_flux, std::string temporal_family = {}) {
+  ledger.accumulate(fragment_key(query, FaceLedgerRole::Coarse, query.coarse_face, stage, phase,
+                                 FaceLedgerContribution::NumericalFlux, temporal_family),
                     FaceFluxFragmentMeasure{stage_weight, substep_begin, substep_end, duration,
                                             coarse_face_measure},
                     coarse_flux);
   for (const auto& fine_face : fine_faces_for_coarse_face(query, ratio, mapping, budget))
-    ledger.accumulate(fragment_key(query, FaceLedgerRole::Fine, fine_face, stage, phase),
+    ledger.accumulate(fragment_key(query, FaceLedgerRole::Fine, fine_face, stage, phase,
+                                   FaceLedgerContribution::NumericalFlux, temporal_family),
                       FaceFluxFragmentMeasure{stage_weight, substep_begin, substep_end, duration,
                                               fine_face_measure},
                       fine_flux);
@@ -354,6 +358,89 @@ TEST(test_nd_flux_ledger, exact_stage_weights_are_applied_before_metric_reflux) 
   EXPECT_NEAR(result.mismatch, 0.0, 1e-14);
   EXPECT_EQ(ledger.published_entries(0).size(), 6u);
   EXPECT_TRUE(ledger.published_entries(1).empty());
+}
+
+TEST(test_nd_flux_ledger, same_provider_occurrences_close_independent_temporal_quadratures) {
+  const RefinementRatio<2> ratio{2, 2};
+  const auto mapping = sample_mapping<2>();
+  const auto query = sample_query<2>(0, 43);
+  const auto budget = reflux_budget();
+  TransactionalFaceFluxLedger<2, double> ledger{ledger_budget()};
+  ledger.begin(query.attempt);
+  accumulate_stage(ledger, query, ratio, mapping, budget, "provider4/a0", Rational{0, 1},
+                   Rational{1, 2}, Rational{0, 1}, Rational{1, 1}, 1.0, 2.0, 1.0, -4.0, -4.0,
+                   "occurrence-a");
+  accumulate_stage(ledger, query, ratio, mapping, budget, "provider4/b0", Rational{0, 1},
+                   Rational{1, 2}, Rational{0, 1}, Rational{1, 1}, 1.0, 2.0, 1.0, 3.0, 3.0,
+                   "occurrence-b");
+  accumulate_stage(ledger, query, ratio, mapping, budget, "provider4/a1", Rational{1, 1},
+                   Rational{1, 2}, Rational{0, 1}, Rational{1, 1}, 1.0, 2.0, 1.0, -4.0, -4.0,
+                   "occurrence-a");
+  accumulate_stage(ledger, query, ratio, mapping, budget, "provider4/b1", Rational{1, 1},
+                   Rational{1, 2}, Rational{0, 1}, Rational{1, 1}, 1.0, 2.0, 1.0, 3.0, 3.0,
+                   "occurrence-b");
+  ledger.commit();
+
+  const auto result = metric_reflux(ledger, query, ratio, mapping, budget, scalar_axpy);
+  EXPECT_NEAR(result.coarse_integrated, -2.0, 1e-14);
+  EXPECT_NEAR(result.fine_integrated, -2.0, 1e-14);
+  EXPECT_NEAR(result.mismatch, 0.0, 1e-14);
+  EXPECT_NEAR(result.coarse_weighted_measure, 4.0, 1e-14);
+  EXPECT_NEAR(result.fine_weighted_measure, 4.0, 1e-14);
+}
+
+TEST(test_nd_flux_ledger, missing_occurrence_stage_cannot_be_hidden_by_duplicate_family) {
+  const RefinementRatio<2> ratio{2, 2};
+  const auto mapping = sample_mapping<2>();
+  const auto query = sample_query<2>(0, 44);
+  const auto budget = reflux_budget();
+  TransactionalFaceFluxLedger<2, double> ledger{ledger_budget()};
+  ledger.begin(query.attempt);
+  accumulate_stage(ledger, query, ratio, mapping, budget, "a0", Rational{0, 1}, Rational{1, 2},
+                   Rational{0, 1}, Rational{1, 1}, 1.0, 2.0, 1.0, 1.0, 1.0, "occurrence-a");
+  accumulate_stage(ledger, query, ratio, mapping, budget, "b0", Rational{0, 1}, Rational{1, 2},
+                   Rational{0, 1}, Rational{1, 1}, 1.0, 2.0, 1.0, 1.0, 1.0, "occurrence-b");
+  accumulate_stage(ledger, query, ratio, mapping, budget, "b1", Rational{1, 1}, Rational{1, 2},
+                   Rational{0, 1}, Rational{1, 1}, 1.0, 2.0, 1.0, 1.0, 1.0, "occurrence-b");
+  accumulate_stage(ledger, query, ratio, mapping, budget, "b1-duplicate", Rational{1, 1},
+                   Rational{1, 2}, Rational{0, 1}, Rational{1, 1}, 1.0, 2.0, 1.0, 1.0, 1.0,
+                   "occurrence-b");
+  ledger.commit();
+  EXPECT_THROW((void)metric_reflux(ledger, query, ratio, mapping, budget, scalar_axpy),
+               std::runtime_error);
+}
+
+TEST(test_nd_flux_ledger, migrated_ab2_family_closes_across_two_fine_substeps) {
+  const RefinementRatio<2> ratio{2, 2};
+  const auto mapping = sample_mapping<2>();
+  const auto query = sample_query<2>(0, 45);
+  const auto budget = reflux_budget();
+  const auto fine_faces = fine_faces_for_coarse_face(query, ratio, mapping, budget);
+  const std::string family = "resolved-operation/occurrence";
+  TransactionalFaceFluxLedger<2, double> ledger{ledger_budget()};
+  ledger.begin(query.attempt);
+  for (const auto& [stage, weight] : std::array<std::pair<std::string, Rational>, 2>{
+           {{"fresh", {3, 2}}, {"retained-flx2", {-1, 2}}}}) {
+    ledger.accumulate(fragment_key(query, FaceLedgerRole::Coarse, query.coarse_face, stage,
+                                   Rational{0, 1}, FaceLedgerContribution::NumericalFlux, family),
+                      FaceFluxFragmentMeasure{weight, Rational{0, 1}, Rational{1, 1}, 1.0, 2.0},
+                      5.0);
+    for (int substep = 0; substep < 2; ++substep)
+      for (const auto& fine_face : fine_faces)
+        ledger.accumulate(
+            fragment_key(query, FaceLedgerRole::Fine, fine_face,
+                         stage + "/fine-" + std::to_string(substep), Rational{substep, 2},
+                         FaceLedgerContribution::NumericalFlux, family),
+            FaceFluxFragmentMeasure{weight, Rational{substep, 2}, Rational{substep + 1, 2}, 0.5,
+                                    1.0},
+            5.0);
+  }
+  ledger.commit();
+
+  const auto result = metric_reflux(ledger, query, ratio, mapping, budget, scalar_axpy);
+  EXPECT_NEAR(result.coarse_integrated, 10.0, 1e-14);
+  EXPECT_NEAR(result.fine_integrated, 10.0, 1e-14);
+  EXPECT_NEAR(result.mismatch, 0.0, 1e-14);
 }
 
 TEST(test_nd_flux_ledger, coarse_window_matches_two_exact_fine_substeps) {

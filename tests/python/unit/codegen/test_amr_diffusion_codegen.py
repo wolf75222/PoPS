@@ -55,6 +55,34 @@ def test_ssprk2_combined_diffusion_budgets_both_face_providers_at_both_stages():
     assert _flux_expression_budgets(resolved.time) == ((4, 1),)
 
 
+def test_ssprk2_flux_families_are_operation_typed_and_installed_before_restore_hooks():
+    from tests.python.unit.codegen.test_diffusion_program import resolved_heat
+
+    resolved, _, model = resolved_heat(method="ssprk2", transport=(0.2, -0.1))
+    source = emit_cpp_program(
+        resolved.time, model=lower_and_validate(model)[0], target="amr_system"
+    )
+    declaration = next(
+        line for line in source.splitlines() if "ctx.install_flux_temporal_families(" in line
+    )
+    rows = re.findall(r'\{0, (\d+), ([14]), "([^"]+)"\}', declaration)
+    assert len(rows) == 4
+    by_provider = {
+        provider: {family for _, candidate, family in rows if candidate == provider}
+        for provider in ("1", "4")
+    }
+    assert all(len(families) == 1 for families in by_provider.values())
+    assert by_provider["1"] != by_provider["4"]
+    assert source.index(declaration) < source.index("auto _make_level_program")
+    assert source.index(declaration) < source.index("ctx.install([=](double dt)")
+    for family in by_provider["1"]:
+        assert source.count(f'neg_div_flux_default_with_faces_into(0,u') == 2
+        assert source.count(f',"{family}");') >= 2
+    for family in by_provider["4"]:
+        assert source.count("ctx.attach_diffusive_flux_basis(") == 2
+        assert source.count(f',"{family}");') >= 2
+
+
 def test_amr_accepted_exchange_inventory_uses_composite_active_cells():
     source = _combined_source()
     assert source.count("ctx.pointwise_active_mask(0,") == 1

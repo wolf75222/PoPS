@@ -248,6 +248,8 @@ std::pair<FluxExpression, std::uint64_t> rehydrated_history_flux_expression_(
     FluxBasis basis = *term.basis;
     basis.identity = ++identity;
     basis.level = active_level_;
+    if (basis.temporal_family.empty())
+      restore_flux_temporal_family_(basis, {}, true);
     basis.point.level = active_level_;
     basis.point.tick = active_subcycling_window_.begin.macro_step;
     basis.point.substep = logical_substep_;
@@ -268,10 +270,7 @@ std::pair<FluxExpression, std::uint64_t> rehydrated_history_flux_expression_(
       (void)field;
       for (const auto& [active_identity, active_term] : expression) {
         (void)active_identity;
-        if (!active_term.basis || active_term.basis->runtime_block != basis.runtime_block ||
-            active_term.basis->level != basis.level ||
-            active_term.basis->rhs_identity != basis.rhs_identity ||
-            active_term.basis->provider != basis.provider)
+        if (!active_term.basis || !same_flux_producer_(*active_term.basis, basis))
           continue;
         current_faces = &active_term.basis->faces;
       }
@@ -330,7 +329,7 @@ std::vector<std::uint8_t> serialize_history_flux_payload_() const {
   if (!any_expression)
     return {};
   checkpoint_detail::Writer out;
-  out.u64(UINT64_C(0x504f5053464c5832));  // POPSFLX2: shared physical samples are explicit.
+  out.u64(UINT64_C(0x504f5053464c5833));  // POPSFLX3: typed temporal families are explicit.
   out.size(history_flux_expressions_.size());
   for (const auto& [key, slots] : history_flux_expressions_) {
     out.string(key);
@@ -352,6 +351,7 @@ std::vector<std::uint8_t> serialize_history_flux_payload_() const {
         out.i32(basis.level);
         out.i32(basis.rhs_identity);
         out.u64(static_cast<std::uint64_t>(basis.provider));
+        out.string(basis.temporal_family);
         const auto write_point = [&](const auto& point) {
           out.string(point.clock);
           out.i64(point.tick);
@@ -414,13 +414,15 @@ std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_
     return empty;
   }
   checkpoint_detail::Reader in(bytes);
-  if (in.u64() != UINT64_C(0x504f5053464c5832))
+  const std::uint64_t version = in.u64();
+  const bool legacy = version == UINT64_C(0x504f5053464c5832);
+  if (!legacy && version != UINT64_C(0x504f5053464c5833))
     throw std::invalid_argument("history flux checkpoint lacks explicit shared-sample format");
   constexpr std::size_t coefficient_record_bytes = 3 * checkpoint_detail::kEncodedScalarBytes;
   constexpr std::size_t face_record_bytes =
       (5 + 2 * static_cast<std::size_t>(Dim)) * checkpoint_detail::kEncodedScalarBytes;
-  constexpr std::size_t basis_term_bytes =
-      (28 + 2 * static_cast<std::size_t>(Dim)) * checkpoint_detail::kEncodedScalarBytes;
+  const std::size_t basis_term_bytes = ((legacy ? 28U : 29U) + 2 * static_cast<std::size_t>(Dim)) *
+                                       checkpoint_detail::kEncodedScalarBytes;
   std::map<std::string, std::vector<FluxExpression>> candidate;
   const std::size_t history_count = in.size(2 * checkpoint_detail::kEncodedScalarBytes);
   for (std::size_t history = 0; history < history_count; ++history) {
@@ -460,6 +462,9 @@ std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_
         if (provider > static_cast<std::uint64_t>(FluxBasisProvider::DiffusiveFace))
           throw std::invalid_argument("AMR Program history flux payload has an invalid provider");
         basis.provider = static_cast<FluxBasisProvider>(provider);
+        if (!legacy)
+          basis.temporal_family = in.string();
+        restore_flux_temporal_family_(basis, basis.temporal_family, legacy);
         auto read_point = [&] {
           runtime::multiblock::BoundaryEvaluationPoint point;
           point.clock = in.string();

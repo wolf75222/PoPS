@@ -163,6 +163,7 @@ void materialize_active_flux_expression_(
         key.coarse_face = face.coarse_face;
         key.clock = {active_level_, basis.window.begin.macro_step, stage_phase,
                      stage_physical_time};
+        key.temporal_family = basis.temporal_family;
         key.stage = stage_identities[stage_index];
         key.attempt = active_subcycling_attempt_;
         key.role = face.role;

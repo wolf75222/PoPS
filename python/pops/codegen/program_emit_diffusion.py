@@ -10,6 +10,31 @@ from pops.codegen.program_emit_kernels import (
 from pops.codegen.program_emit_model_kernels import _provider_binding, _emit_source_kernel
 
 
+def _resolved_diffusive_operation(v):
+    view = v.attrs["physical_balance"]
+    handle = view.balance.handle
+    source = handle if handle.is_resolved else handle._resolved(handle.owner_path.canonical())
+    block = v.block if v.block.is_resolved else v.block._resolved(v.block.owner_path.canonical())
+    return make_identity("diffusive-operation", {
+        "source": source.canonical_identity(), "block": block.canonical_identity()
+    }).token
+
+
+def _diffusive_flux_families(v):
+    """Stable spatial occurrences; physical coefficients remain in the emitted face payload."""
+    operation = _resolved_diffusive_operation(v)
+    rows = v.attrs["physical_balance"].occurrences
+    diffusion = tuple(row.ordinal for row in rows if row.kind in {"diffusion", "drift"})
+    transport = tuple(row.ordinal for row in rows if row.kind == "flux")
+    constitutive = make_identity("program-flux-family", {
+        "operation": operation, "route": "constitutive", "occurrences": diffusion
+    }).token
+    transport_family = None if not transport else make_identity("program-flux-family", {
+        "operation": operation, "route": "transport", "occurrences": transport
+    }).token
+    return constitutive, transport_family
+
+
 def _selected(v, node_model):
     view=v.attrs["physical_balance"]
     rows=tuple(row for row in view.occurrences if row.kind=="diffusion")
@@ -95,6 +120,7 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
     out="diffusive_rhs_%d" % v.id
     var[v.id]=out
     explicit = prepared_var is None
+    constitutive_family, transport_family = _diffusive_flux_families(v)
     if prepared_var is None:
         prepared_var="diffusion_prepared_%d" % v.id
         lines.extend(_emit_diffusive_preparation(v,state_var,prepared_var,node_model,
@@ -150,8 +176,9 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
     if coefficient != 1:
         lines.append("pops::scale(%s,%s);" % (out,scalar_cpp(coefficient)))
     if target == "amr_system" and explicit:
-        lines.append("ctx.attach_diffusive_flux_basis(%d,%s,%d,%s.faces(),%s);" % (
-            bidx,out,v.id,prepared_var,scalar_cpp(coefficient)))
+        suffix = "," + json.dumps(constitutive_family) if target == "amr_system" else ""
+        lines.append("ctx.attach_diffusive_flux_basis(%d,%s,%d,%s.faces(),%s%s);" % (
+            bidx,out,v.id,prepared_var,scalar_cpp(coefficient),suffix))
     transport = tuple(row for row in v.attrs["physical_balance"].occurrences if row.kind=="flux")
     if diffusive_flux_basis_count(v) != 1 + len(transport):
         raise AssertionError("diffusive face-basis count differs from its emitted operators")
@@ -167,8 +194,9 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
         transport_pack = impl._component_operator_provider_packs[transport[0].payload.reg_name]
         transport_binding = provider_plans.bind_pack(transport_pack, qid+"/transport")
         lines.extend(_prepare_provider_values(transport_binding, bidx, state_var))
-        lines.append("ctx.neg_div_flux_default_with_faces_into(%d,%s,%s,%d,%s_transport_faces);" % (
-            bidx,state_var,temporary,v.id,prepared_var))
+        suffix = "," + json.dumps(transport_family) if target == "amr_system" else ""
+        lines.append("ctx.neg_div_flux_default_with_faces_into(%d,%s,%s,%d,%s_transport_faces%s);" % (
+            bidx,state_var,temporary,v.id,prepared_var,suffix))
         # This combines spatial rates. Its unit coefficient has dt power zero; the
         # authored time update supplies the sole dt factor, including in AMR subcycles.
         lines.append("ctx.axpy(%s,1,%s,dt,{{0, 1, 1}});" % (out,temporary))
@@ -191,11 +219,7 @@ def _emit_diffusive_accepted(v, prepared_var, lines, temporal_weight_cpp, evalua
                              program_block=0):
     """Publish only the selected accepted quadrature; no residual or seed contributes."""
     view = v.attrs["physical_balance"]
-    handle = view.balance.handle
-    source = handle if handle.is_resolved else handle._resolved(handle.owner_path.canonical())
-    block = v.block if v.block.is_resolved else v.block._resolved(v.block.owner_path.canonical())
-    operation_data = {"source": source.canonical_identity(), "block": block.canonical_identity()}
-    operation = make_identity("diffusive-operation", operation_data).token
+    operation = _resolved_diffusive_operation(v)
     from pops.codegen.program_emit_transport_exchanges import emit_transport_exchanges
     for row in view.occurrences:
         if row.kind == "flux":

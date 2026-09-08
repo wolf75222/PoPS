@@ -23,6 +23,7 @@ struct FluxBasis {
   runtime::multiblock::BoundaryEvaluationPoint point{};
   int rhs_identity = -1;
   FluxBasisProvider provider = FluxBasisProvider::PreparedResidual;
+  std::string temporal_family;
   ::pops::amr::ClockWindow window{};
   std::vector<FluxBasisFace> faces;
   std::vector<std::shared_ptr<const runtime::multiblock::InterfaceFluxSample>> shared_samples;

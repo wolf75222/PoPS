@@ -60,7 +60,13 @@ field_type alloc_scalar_field(int ncomp = 1, int ghost_depth = 1) const {
   return make_scratch_(prototype, ncomp, uniform_ghosts_(ghost_depth));
 }
 
-void rhs_into(int program_block, field_type& stage_state, field_type& rhs, int rate_id) const {
+void install_flux_temporal_families(
+    std::initializer_list<std::tuple<int, int, int, std::string_view>> rows) const {
+  install_flux_temporal_families_(rows);
+}
+
+void rhs_into(int program_block, field_type& stage_state, field_type& rhs, int rate_id,
+              std::string_view temporal_family = {}) const {
   const int runtime_block = sys_block(program_block);
   require_rate_identity_(rate_id);
   require_same_field_contract_(stage_state, rhs, "AMR Program residual");
@@ -74,7 +80,7 @@ void rhs_into(int program_block, field_type& stage_state, field_type& rhs, int r
   copy_valid_(evaluation.residual, rhs);
   if (!active_attempt_states_.empty())
     attach_active_flux_basis_(runtime_block, evaluation, rhs, rate_id,
-                              FluxBasisProvider::PreparedResidual);
+                              FluxBasisProvider::PreparedResidual, temporal_family);
   count_kernel_();
 }
 
@@ -128,7 +134,8 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
       backups.push_back(rhs_scratch_like(*request.rhs));
       exact.scalar(std::int32_t{runtime_block})
           .scalar(std::int32_t{request.rate_id})
-          .scalar(std::uint32_t{static_cast<unsigned int>(request.flux_only)});
+          .scalar(std::uint32_t{static_cast<unsigned int>(request.flux_only)})
+          .text(request.temporal_family);
     }
     request_contract = std::move(exact).release();
   } catch (...) {
@@ -214,9 +221,9 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
             runtime_blocks[index], points[index], request.rate_id,
             request.flux_only != 0 ? FluxBasisProvider::PreparedDefaultFlux
                                    : FluxBasisProvider::PreparedResidual,
-            evaluations[index]->topology_epoch, evaluations[index]->materialization_generation,
-            *request.rhs, evaluations[index], nullptr, nullptr, interval, candidate_registry,
-            candidate_counts, candidate_identity);
+            request.temporal_family, evaluations[index]->topology_epoch,
+            evaluations[index]->materialization_generation, *request.rhs, evaluations[index],
+            nullptr, nullptr, interval, candidate_registry, candidate_counts, candidate_identity);
       }
       attach_grouped_shared_flux_(ordered, runtime_blocks, shared_samples, candidate_registry);
     } catch (...) {
@@ -310,7 +317,7 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
 }
 
 void neg_div_flux_default_into(int program_block, field_type& stage_state, field_type& rhs,
-                               int rate_id) const {
+                               int rate_id, std::string_view temporal_family = {}) const {
   const int runtime_block = sys_block(program_block);
   require_rate_identity_(rate_id);
   require_same_field_contract_(stage_state, rhs, "AMR Program default flux residual");
@@ -324,7 +331,7 @@ void neg_div_flux_default_into(int program_block, field_type& stage_state, field
   copy_valid_(evaluation.residual, rhs);
   if (!active_attempt_states_.empty())
     attach_active_flux_basis_(runtime_block, evaluation, rhs, rate_id,
-                              FluxBasisProvider::PreparedDefaultFlux);
+                              FluxBasisProvider::PreparedDefaultFlux, temporal_family);
   count_kernel_();
 }
 void source_default_into(int program_block, field_type& stage_state, field_type& rhs) const {

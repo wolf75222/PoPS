@@ -3442,7 +3442,7 @@ struct AmrSystem<Dim>::Impl {
   mutable std::vector<std::uint8_t> program_accepted_bytes;
   mutable std::uint64_t program_accepted_revision = 0;
   mutable bool program_accepted_bytes_runtime_owned = false;
-  /// Frozen, communicator-authenticated POPSAND4/source-authority resource ceiling.  Python reads
+  /// Frozen, communicator-authenticated POPSAND6/source-authority resource ceiling.  Python reads
   /// it while bind is still assembling; mark_bound recomputes the exact contract and refuses any
   /// intervening structural mutation before the lifecycle becomes immutable.
   mutable std::optional<std::pair<std::size_t, std::size_t>>
@@ -19772,13 +19772,20 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
     shape.face_state_characters =
         checked_size_sum(maximum_owner_identity, std::string_view("/state").size(),
                          "AMR face-ledger identity capacity exceeds size_t");
+    const std::size_t hashed_temporal_family_characters =
+        std::string_view("pops.program-flux-family.v1:sha256:").size() + 64;
+    const std::size_t cell_temporal_family_characters = checked_size_sum(
+        std::string_view("pops.cell-temporal-flux.v1/").size(), maximum_owner_identity,
+        "AMR face-ledger temporal-family capacity exceeds size_t");
+    shape.face_temporal_family_characters =
+        std::max(hashed_temporal_family_characters, cell_temporal_family_characters);
     // This is the exact grammar emitted by materialize_active_flux_expression_(). The provider
     // range is closed by FluxBasisProvider; successful active allocations are numbered 1 through
     // the frozen aggregate RHS-basis bound, while an inactive zero-bound image emits no basis.
     const std::size_t maximum_basis_identity = rhs_basis == 0 ? 0 : rhs_basis;
     const std::size_t basis_identity_characters = std::to_string(maximum_basis_identity).size();
-    // FluxBasisProvider is a closed POPSAND4 wire enum with its greatest emitted value NamedCell=3.
-    constexpr std::size_t provider_characters = std::string_view("3").size();
+    // FluxBasisProvider is a closed wire enum with greatest emitted value DiffusiveFace=4.
+    constexpr std::size_t provider_characters = std::string_view("4").size();
     std::size_t face_stage_characters = 0;
     const auto add_face_stage_characters = [&](std::size_t characters) {
       face_stage_characters =
@@ -19807,7 +19814,7 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
         face_fragments, maximum_components, "AMR face-ledger payload capacity exceeds size_t");
 
     // History-flux provenance uses the same frozen basis/face envelope as the accepted ledger.
-    // Count its actual POPSAND4 primitives, including every level-qualified ring key and every
+    // Count its actual POPSAND6 primitives, including every level-qualified ring key and every
     // slot/term count; this is a capacity proof, not an opaque reserve.
     std::size_t maximum_clock_identity = 1;
     for (const std::string& identity : metadata.logical_clock_identities)
@@ -19829,7 +19836,9 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
                          "AMR history-flux point capacity exceeds size_t"),
         "AMR history-flux point capacity exceeds size_t");
     const std::size_t history_flux_fixed_basis = checked_size_sum(
-        checked_size_sum(4 * sizeof(std::uint64_t), history_flux_point,
+        checked_size_sum(checked_size_sum(5 * sizeof(std::uint64_t), history_flux_point,
+                                          "AMR history-flux basis capacity exceeds size_t"),
+                         shape.face_temporal_family_characters,
                          "AMR history-flux basis capacity exceeds size_t"),
         checked_size_sum(2 * runtime::program::checkpoint_detail::kEncodedClockBytes,
                          sizeof(std::uint64_t), "AMR history-flux basis capacity exceeds size_t"),
@@ -19851,7 +19860,7 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
       maximum_shared_samples = std::max(maximum_shared_samples, level.sample_count_per_application);
       maximum_shared_terms = std::max(maximum_shared_terms, level.sample_payload_terms_per_application);
     }
-    // POPSFLX2 sample: 29 scalar/count primitives, 64 canonical route-digest characters,
+    // Shared sample record: 29 scalar/count primitives, 64 canonical route-digest characters,
     // exact source-point strings, endpoint component map, and one physical density per face/component.
     std::size_t shared_sample_fixed = 29 * sizeof(std::uint64_t) + 64;
     for (std::size_t characters : {interface_production.maximum_interface_identity_characters,
@@ -19882,7 +19891,7 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
                              "AMR history-flux basis capacity exceeds size_t"),
             "AMR history-flux basis capacity exceeds size_t"),
         "AMR history-flux basis capacity exceeds size_t");
-    shape.history_flux_payload_bytes = 2 * sizeof(std::uint64_t);  // POPSFLX2 tag and ring count
+    shape.history_flux_payload_bytes = 2 * sizeof(std::uint64_t);  // POPSFLX3 tag and ring count
     constexpr std::string_view history_key_prefix = "pops.amr.level-history.v1/";
     for (const auto& history : shape.histories) {
       const std::string history_length = std::to_string(history.name.size());

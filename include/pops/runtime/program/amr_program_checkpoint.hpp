@@ -143,8 +143,9 @@ struct AmrProgramAcceptedState {
 
 namespace checkpoint_detail {
 
-inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '5'};
-inline constexpr std::array<std::uint8_t, 8> kLegacyMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '4'};
+inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '6'};
+inline constexpr std::array<std::uint8_t, 8> kLegacyMagic5{'P', 'O', 'P', 'S', 'A', 'N', 'D', '5'};
+inline constexpr std::array<std::uint8_t, 8> kLegacyMagic4{'P', 'O', 'P', 'S', 'A', 'N', 'D', '4'};
 
 class Writer {
  public:
@@ -187,7 +188,7 @@ class Writer {
 
 /// Allocation-free twin of Writer used by the artifact checkpoint-capacity preflight.  Keeping the
 /// primitive surface identical lets the binary encoder itself remain the only wire-schema
-/// authority: a field added to POPSAND4 changes both serialization and capacity accounting in the
+/// authority: a field added to POPSAND6 changes both serialization and capacity accounting in the
 /// same function.
 class CountingWriter {
  public:
@@ -334,6 +335,9 @@ inline constexpr std::size_t kMinPendingHistoryRemapBytes = 13 * kEncodedScalarB
 
 template <int Dim>
 inline constexpr std::size_t kMinFaceFragmentBytes =
+    (25 + 2 * static_cast<std::size_t>(Dim)) * kEncodedScalarBytes;
+template <int Dim>
+inline constexpr std::size_t kLegacyMinFaceFragmentBytes =
     (24 + 2 * static_cast<std::size_t>(Dim)) * kEncodedScalarBytes;
 
 template <class Output>
@@ -433,6 +437,7 @@ void write_face_fragment(Output& out,
   write_index(out, fragment.key.face);
   write_index(out, fragment.key.coarse_face);
   write_clock(out, fragment.key.clock);
+  out.string(fragment.key.temporal_family);
   out.string(fragment.key.stage);
   out.u64(fragment.key.attempt);
   out.u64(static_cast<std::uint64_t>(fragment.key.role));
@@ -448,7 +453,8 @@ void write_face_fragment(Output& out,
 }
 
 template <int Dim>
-amr_reflux::FaceFluxFragment<Dim, AmrProgramFacePayload> read_face_fragment(Reader& in) {
+amr_reflux::FaceFluxFragment<Dim, AmrProgramFacePayload> read_face_fragment(Reader& in,
+                                                                            bool has_family) {
   amr_reflux::FaceFluxFragment<Dim, AmrProgramFacePayload> fragment;
   fragment.key.owner = in.string();
   fragment.key.state = in.string();
@@ -462,6 +468,8 @@ amr_reflux::FaceFluxFragment<Dim, AmrProgramFacePayload> read_face_fragment(Read
   fragment.key.face = read_index<Dim>(in);
   fragment.key.coarse_face = read_index<Dim>(in);
   fragment.key.clock = read_clock(in);
+  if (has_family)
+    fragment.key.temporal_family = in.string();
   fragment.key.stage = in.string();
   fragment.key.attempt = in.u64();
   const std::uint64_t role = in.u64();
@@ -910,7 +918,7 @@ std::size_t serialized_amr_program_accepted_state_size(const AmrProgramAcceptedS
   return out.count();
 }
 
-/// Artifact-derived maximum POPSAND4 shape.  It carries character and term counts only: computing a
+/// Artifact-derived maximum POPSAND6 shape.  It carries character and term counts only: computing a
 /// resource ceiling must never first allocate the potentially large scientific vectors it is meant
 /// to bound.
 template <int Dim>
@@ -930,6 +938,7 @@ struct AmrProgramAcceptedStateCapacity {
   std::array<std::size_t, Dim> face_fragment_counts{};
   std::size_t face_owner_characters = 0;
   std::size_t face_state_characters = 0;
+  std::size_t face_temporal_family_characters = 0;
   std::size_t face_stage_characters = 0;
   std::size_t face_payload_terms = 0;
   std::size_t interface_fragment_count = 0;
@@ -1027,6 +1036,10 @@ std::size_t serialized_amr_program_accepted_state_capacity(
   if (capacity.face_state_characters > std::numeric_limits<std::size_t>::max() - face_characters)
     throw std::length_error("AMR Program face identity capacity exceeds size_t");
   face_characters += capacity.face_state_characters;
+  if (capacity.face_temporal_family_characters >
+      std::numeric_limits<std::size_t>::max() - face_characters)
+    throw std::length_error("AMR Program face identity capacity exceeds size_t");
+  face_characters += capacity.face_temporal_family_characters;
   if (capacity.face_stage_characters > std::numeric_limits<std::size_t>::max() - face_characters)
     throw std::length_error("AMR Program face identity capacity exceeds size_t");
   face_characters += capacity.face_stage_characters;
@@ -1064,10 +1077,14 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
     std::span<const std::uint8_t> bytes,
     const ::pops::amr::InterfaceFluxLedgerBudget* interface_budget = nullptr) {
   checkpoint_detail::Reader in(bytes);
-  const bool legacy = bytes.size() >= checkpoint_detail::kLegacyMagic.size() &&
-                      std::equal(checkpoint_detail::kLegacyMagic.begin(),
-                                 checkpoint_detail::kLegacyMagic.end(), bytes.begin());
-  in.expect_raw(legacy ? checkpoint_detail::kLegacyMagic : checkpoint_detail::kMagic);
+  const auto has_magic = [&](const auto& magic) {
+    return bytes.size() >= magic.size() && std::equal(magic.begin(), magic.end(), bytes.begin());
+  };
+  const bool legacy4 = has_magic(checkpoint_detail::kLegacyMagic4);
+  const bool legacy5 = has_magic(checkpoint_detail::kLegacyMagic5);
+  in.expect_raw(legacy4   ? checkpoint_detail::kLegacyMagic4
+                : legacy5 ? checkpoint_detail::kLegacyMagic5
+                          : checkpoint_detail::kMagic);
   if (in.i32() != Dim)
     throw std::runtime_error(
         "invalid exact AMR Program checkpoint: native dimension does not match the artifact");
@@ -1136,9 +1153,12 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
   state.coupling_contract = in.string();
   for (int axis = 0; axis < Dim; ++axis) {
     auto& fragments = state.accepted_face_flux[static_cast<std::size_t>(axis)];
-    fragments.resize(in.size(checkpoint_detail::kMinFaceFragmentBytes<Dim>));
+    const std::size_t minimum = legacy4 || legacy5
+                                    ? checkpoint_detail::kLegacyMinFaceFragmentBytes<Dim>
+                                    : checkpoint_detail::kMinFaceFragmentBytes<Dim>;
+    fragments.resize(in.size(minimum));
     for (auto& fragment : fragments)
-      fragment = checkpoint_detail::read_face_fragment<Dim>(in);
+      fragment = checkpoint_detail::read_face_fragment<Dim>(in, !legacy4 && !legacy5);
   }
   const std::size_t interface_count = in.size(checkpoint_detail::kMinInterfaceFragmentBytes);
   if (interface_budget != nullptr && interface_count > interface_budget->max_fragments_per_window)
@@ -1159,7 +1179,7 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
     event.phase = in.string();
     event.clock = checkpoint_detail::read_clock(in);
   }
-  if (legacy) {
+  if (legacy4) {
     if (!state.synchronization_events.empty() ||
         std::any_of(state.accepted_face_flux.begin(), state.accepted_face_flux.end(),
                     [](const auto& fragments) { return !fragments.empty(); }))

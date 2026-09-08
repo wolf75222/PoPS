@@ -3,7 +3,8 @@
 /// hierarchy's transactional reflux basis, so the conservative correction cannot observe a
 /// reconstructed or differently rounded flux route.
 void neg_div_named_flux_into(int program_block, field_type& stage_state, field_type& rhs,
-                             const std::array<field_type*, Dim>& fluxes, int rate_id) const {
+                             const std::array<field_type*, Dim>& fluxes, int rate_id,
+                             std::string_view temporal_family = {}) const {
   const ExecutionLane& lane = prepared_execution_lane();
   const long active = active_attempt_states_.empty() ? 0L : 1L;
   const long active_minimum = all_reduce_min(active, lane);
@@ -56,9 +57,9 @@ void neg_div_named_flux_into(int program_block, field_type& stage_state, field_t
 
   if (active_maximum != 0)
     prepare_active_flux_basis_impl_(
-        runtime_block, *point, rate_id, FluxBasisProvider::NamedCell, runtime_->topology_epoch(),
-        runtime_->materialization_generation(), rhs, nullptr, nullptr, &fluxes, *interval,
-        candidate_registry, candidate_counts, candidate_identity);
+        runtime_block, *point, rate_id, FluxBasisProvider::NamedCell, temporal_family,
+        runtime_->topology_epoch(), runtime_->materialization_generation(), rhs, nullptr, nullptr,
+        &fluxes, *interval, candidate_registry, candidate_counts, candidate_identity);
 
   std::exception_ptr execution_error;
   try {

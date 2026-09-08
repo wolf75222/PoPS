@@ -138,6 +138,9 @@ reflux::FaceFluxFragment<Dim, program::AmrProgramFacePayload> fragment(
   result.key.clock = {
       role == reflux::FaceLedgerRole::Coarse ? query.levels.coarse : query.levels.fine,
       query.macro_step, pops::amr::Rational(1, 2), 3.5};
+  result.key.temporal_family =
+      "pops.program-flux-family.v1:sha256:"
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
   result.key.stage = "rk.accepted";
   result.key.attempt = query.attempt;
   result.key.role = role;
@@ -231,15 +234,45 @@ void prove_ranked_reflux_and_checkpoint() {
   EXPECT_EQ(decoded.face_evidence_provenance->level_count, 2u);
   EXPECT_NO_THROW(program::require_live_amr_program_checkpoint(decoded, runtime));
 
+  // POPSAND5 had no typed temporal-family string. Remove exactly those framed strings to obtain
+  // the frozen legacy layout, then prove an AND6 rewrite retains the empty legacy family.
+  std::vector<std::uint8_t> legacy5 = bytes;
+  const std::string family = decoded.accepted_face_flux[0].front().key.temporal_family;
+  for (;;) {
+    const auto found = std::search(legacy5.begin(), legacy5.end(), family.begin(), family.end());
+    if (found == legacy5.end())
+      break;
+    ASSERT_GE(std::distance(legacy5.begin(), found), 8);
+    const auto frame = found - 8;
+    std::uint64_t size = 0;
+    for (int byte = 0; byte < 8; ++byte)
+      size |= static_cast<std::uint64_t>(*(frame + byte)) << (8 * byte);
+    ASSERT_EQ(size, family.size());
+    legacy5.erase(frame, found + static_cast<std::ptrdiff_t>(family.size()));
+  }
+  legacy5[7] = '5';
+  const auto decoded5 = program::deserialize_amr_program_accepted_state<Dim>(legacy5);
+  for (const auto& axis : decoded5.accepted_face_flux)
+    for (const auto& entry : axis)
+      EXPECT_TRUE(entry.key.temporal_family.empty());
+  const auto rewritten5 = program::serialize_amr_program_accepted_state(decoded5);
+  const auto roundtrip5 = program::deserialize_amr_program_accepted_state<Dim>(rewritten5);
+  EXPECT_EQ(program::serialize_amr_program_accepted_state(roundtrip5), rewritten5);
+  for (const auto& axis : roundtrip5.accepted_face_flux)
+    for (const auto& entry : axis)
+      EXPECT_TRUE(entry.key.temporal_family.empty());
+
   // V4 ends immediately before the optional V5 origin suffix. Its evidence belonged to the
   // envelope geometry, so upgrade that exact old image without changing the accepted payload.
-  std::vector<std::uint8_t> legacy = bytes;
+  std::vector<std::uint8_t> legacy = legacy5;
   legacy.resize(legacy.size() - (5 * sizeof(std::uint64_t) +
                                  decoded.face_evidence_provenance->spatial_contract.size()));
   legacy[7] = '4';
   const auto upgraded = program::deserialize_amr_program_accepted_state<Dim>(legacy);
   EXPECT_EQ(upgraded.face_evidence_provenance, decoded.face_evidence_provenance);
-  EXPECT_EQ(program::serialize_amr_program_accepted_state(upgraded), bytes);
+  for (const auto& axis : upgraded.accepted_face_flux)
+    for (const auto& entry : axis)
+      EXPECT_TRUE(entry.key.temporal_family.empty());
 
   // Regridding can remove the former child. Historical contributions remain tied to their
   // original two-level geometry, while the new accepted envelope describes one live level.
@@ -272,6 +305,14 @@ void prove_ranked_reflux_and_checkpoint() {
 
   std::vector<std::uint8_t> corrupted = bytes;
   corrupted.front() ^= 0xffU;
+  EXPECT_THROW((void)program::deserialize_amr_program_accepted_state<Dim>(corrupted),
+               std::runtime_error);
+  corrupted = bytes;
+  const auto family_bytes =
+      std::search(corrupted.begin(), corrupted.end(), family.begin(), family.end());
+  ASSERT_NE(family_bytes, corrupted.end());
+  ASSERT_GE(std::distance(corrupted.begin(), family_bytes), 8);
+  std::fill(family_bytes - 8, family_bytes, std::uint8_t{0xff});
   EXPECT_THROW((void)program::deserialize_amr_program_accepted_state<Dim>(corrupted),
                std::runtime_error);
 }

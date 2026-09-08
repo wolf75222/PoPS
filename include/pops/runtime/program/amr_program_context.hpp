@@ -170,18 +170,21 @@ class AmrProgramContext {
 
   struct RhsGroupRequest {
     RhsGroupRequest(int block_value, field_type* state_value, field_type* rhs_value,
-                    int rate_id_value, int flux_only_value)
+                    int rate_id_value, int flux_only_value,
+                    std::string_view temporal_family_value = {})
         : block(block_value),
           state(state_value),
           rhs(rhs_value),
           rate_id(rate_id_value),
-          flux_only(flux_only_value) {}
+          flux_only(flux_only_value),
+          temporal_family(temporal_family_value) {}
 
     int block = -1;
     field_type* state = nullptr;
     field_type* rhs = nullptr;
     int rate_id = -1;
     int flux_only = 0;
+    std::string_view temporal_family;
   };
 
   struct CouplingStateOverride {
@@ -388,6 +391,8 @@ class AmrProgramContext {
   // Bases are immutable samples; a lag read clones and rebases them into the current attempt
   // rather than retaining a pointer to a prior attempt's live registry.
   mutable std::map<std::string, std::vector<FluxExpression>> history_flux_expressions_;
+  mutable std::map<std::tuple<std::size_t, int, FluxBasisProvider>, std::string>
+      declared_flux_temporal_families_;
   mutable std::map<std::string, AmrProgramPendingHistoryRemap> pending_history_remaps_;
   mutable std::map<std::string, field_type> deferred_history_lag_scratches_;
   mutable std::vector<std::size_t> active_flux_basis_counts_;

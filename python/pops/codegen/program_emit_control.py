@@ -245,9 +245,9 @@ def _stage_fraction(value: Any) -> Fraction:
 
 def _emit_contiguous_rhs_group(
         values: Sequence[Any], block_idx: Mapping[Any, int], var: dict[Any, str],
-        lines: list[str], group_identity: int) -> None:
+        lines: list[str], group_identity: int, target: Any = "system") -> None:
     """Emit one complete same-StagePoint residual group before any result is consumable."""
-    from pops.codegen.program_emit_ops import _required_block_index
+    from pops.codegen.program_emit_ops import _required_block_index, _rhs_flux_temporal_family
 
     stage = _stage_fraction(values[0])
     lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
@@ -261,8 +261,13 @@ def _emit_contiguous_rhs_group(
             block_idx, value.block, "emit simultaneous rhs %r" % value.name)
         requested = value.attrs.get("sources")
         default_source = requested is None or "default" in requested
-        requests.append("{%d, &%s, &%s, %d, %d}" % (
-            index, var[state.id], var[value.id], int(value.id), 0 if default_source else 1))
+        family = (
+            ", " + json.dumps(_rhs_flux_temporal_family(value))
+            if target == "amr_system" else ""
+        )
+        requests.append("{%d, &%s, &%s, %d, %d%s}" % (
+            index, var[state.id], var[value.id], int(value.id), 0 if default_source else 1,
+            family))
     lines.append("ctx.rhs_group(%d, {%s});" % (group_identity, ", ".join(requests)))
 
 
@@ -375,7 +380,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                     "RHS coherence barrier lacks materialized state value ids %s"
                     % unavailable)
             _emit_contiguous_rhs_group(
-                group, block_idx, var, lines, next_group_identity)
+                group, block_idx, var, lines, next_group_identity, target)
             next_group_identity += 1
         v = values[index]
         if v.id in rhs_grouped or v.op == "post_synchronization":
