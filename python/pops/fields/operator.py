@@ -15,6 +15,7 @@ from pops.model import Handle
 from ._identity import field_identity, strict_field_data
 from ._references import collect_references, reference_label, resolve_handle, resolve_value
 from .outputs import FieldOutput, GradientOutput, _Output
+from .problem import FieldProblem
 
 
 def _field_targets_unknown(field: Any, unknown: Handle) -> bool:
@@ -125,7 +126,7 @@ class FieldProviderPack:
         }
 
 
-class FieldOperator(Descriptor):
+class FieldOperator(FieldProblem):
     """Physical equation mapping one declared unknown to named field outputs.
 
     The operator deliberately owns only physics: ``unknown``, ``equation`` and ``outputs``.
@@ -169,6 +170,14 @@ class FieldOperator(Descriptor):
         self.equation = equation
         self.providers = providers
         self.outputs = output_tuple
+
+    @property
+    def unknowns(self) -> tuple[Handle, ...]:
+        return (self.unknown,)
+
+    @property
+    def equations(self) -> tuple[Equation, ...]:
+        return (self.equation,)
 
     @property
     def name(self) -> str:
