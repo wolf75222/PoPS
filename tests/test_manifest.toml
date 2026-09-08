@@ -889,6 +889,11 @@ sources = ["tests/cpp/unit/mesh/test_sync_residence.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
+name = "test_prepared_diffusion"
+sources = ["tests/cpp/unit/runtime/test_prepared_diffusion.cpp"]
+labels = ["unit", "numerics", "runtime", "fast"]
+
+[[cpp.suite]]
 name = "test_diffusion"
 sources = ["tests/cpp/unit/numerics/test_diffusion.cpp"]
 labels = ["unit", "numerics", "fast"]
