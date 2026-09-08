@@ -14,7 +14,7 @@ from pops.native_calls import NativeDerivative, NativeFunction, NativeInputDomai
 from pops.native_components import PreparedNativeComponent
 from pops.codegen._orchestration_compile import build_program_model_graph
 from pops.codegen.program_codegen import emit_cpp_program
-from tests.python.support.layout_plan import cartesian_grid
+from interaction_test_layout import interaction_grid as cartesian_grid, require_two_rank_partition
 from tests.python.support.native_execution_context import artifact_execution_context
 from test_interaction_inventory_quadrature import interaction_case
 from test_native_call_compiled import HEADER
@@ -104,6 +104,7 @@ def test_full_interaction_numerical_matrix(compiled_case, record_property):
     initial = _initial(n)
     simulation = pops.bind(artifact, initial_state=initial,
         resources={"execution_context": artifact_execution_context(artifact)})
+    world = require_two_rank_partition(simulation, n=n)
     local_cells = sum(np.prod(np.asarray(upper) - np.asarray(lower))
                       for lower, upper in simulation.local_boxes("left"))
     if native is not None:
@@ -127,6 +128,7 @@ def test_full_interaction_numerical_matrix(compiled_case, record_property):
         assert native.pops_interaction_calls() == int(local_cells) * 2 * 100
         record_property("actual_native_calls_local", native.pops_interaction_calls())
     record_property("n", n)
+    record_property("native_mpi_ranks", int(world.size))
     record_property("realization", kind)
     record_property("local_cells", int(local_cells))
     record_property("accepted_steps", report.accepted_steps)
@@ -168,6 +170,7 @@ def test_full_interaction_timing_matrix(cost_case, record_property):
     for repetition in range(9):  # predeclared two warmups, seven measurements
         simulation = pops.bind(artifact, initial_state=_initial(n),
             resources={"execution_context": artifact_execution_context(artifact)})
+        require_two_rank_partition(simulation, n=n)
         simulation.integral("left", 0)  # native reduction/fence before timing
         native.pops_interaction_reset()
         start = time.perf_counter()

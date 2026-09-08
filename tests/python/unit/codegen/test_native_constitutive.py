@@ -9,9 +9,9 @@ from pops.native_calls import NativeDerivative, NativeFunction, NativeInputDomai
 from pops.native_components import PreparedNativeComponent
 
 
-def constitutive_function(directory):
+def constitutive_function(directory, *, counters=False):
     directory.mkdir()
-    (directory / "constitutive.hpp").write_text(r'''#pragma once
+    header = r'''#pragma once
 #include <pops/core/model/native_call.hpp>
 #include <atomic>
 namespace constitutive {
@@ -31,7 +31,12 @@ inline pops::NativeCallResult<3> jacobian(double q) {
   return result;
 }
 }
-''')
+'''
+    if counters:
+        header += ('extern "C" long constitutive_calls() { return constitutive::calls.load(); }\n'
+                   'extern "C" long constitutive_jacobians() { return constitutive::jacobian_calls.load(); }\n'
+                   'extern "C" void constitutive_reset() { constitutive::calls.store(0); constitutive::jacobian_calls.store(0); }\n')
+    (directory / "constitutive.hpp").write_text(header)
     component = PreparedNativeComponent.header_only("constitutive.joint", include_root=directory,
         entry_headers=("constitutive.hpp",))
     module = Module("constitutive")

@@ -19,7 +19,7 @@ from pops.native_components import PreparedNativeComponent
 from pops.numerics import DiscretizationPlan, JointEvaluation
 from pops.solvers.nonlinear import LocalNewton
 from pops.time import CoupledImplicitEuler, DerivativeStrategy, RejectAttempt
-from tests.python.support.layout_plan import cartesian_grid
+from interaction_test_layout import interaction_grid as cartesian_grid, require_two_rank_partition
 from tests.python.support.native_execution_context import artifact_execution_context
 from test_native_call_compiled import HEADER
 
@@ -172,15 +172,22 @@ def test_native_full_coupled_solve_iterates_and_conserves(compiled, record_prope
 @pytest.mark.compiler
 @pytest.mark.native_loader
 @pytest.mark.integration
-def test_failed_imported_iterate_cannot_publish_any_recipient(compiled):
+def test_failed_imported_iterate_cannot_publish_any_recipient(compiled, record_property):
     _route, artifact, _native, _elapsed = compiled
     state = initial()
     state["right"][2, -1, -1] = -1
     simulation = pops.bind(artifact, initial_state=state,
         resources={"execution_context": artifact_execution_context(artifact)})
+    world = require_two_rank_partition(simulation, n=16)
     from pops._bootstrap import StepAttemptRejected
-    with pytest.raises(StepAttemptRejected, match="[Ee]valuation|invalid|reject"):
+    with pytest.raises(StepAttemptRejected, match="[Ee]valuation|invalid|reject") as failure:
         pops.run(simulation, t_end=.001, max_steps=1)
+    from pops._native_collectives import allgather_value
+    categories = allgather_value(world, type(failure.value).__name__)
+    assert len(set(categories)) == 1
     for name in ("left", "right"):
         np.testing.assert_array_equal(simulation.state_global(name), state[name])
     assert simulation._executor_for_block("left")._program_exchange_records() == []
+    record_property("native_mpi_ranks", int(world.size))
+    record_property("invalid_input_global_cell", [15, 15])
+    record_property("failure_category_all_ranks", categories)

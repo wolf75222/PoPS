@@ -16,7 +16,8 @@ from tests.python.support.layout_plan import cartesian_grid
 
 
 def interaction_case(*, n=16, left_weight=1, right_weight=1, repeated=False,
-                     inventories=True, native_function=None, stages=1, unshared=False, transform_accepted=False):
+                     inventories=True, native_function=None, stages=1, unshared=False,
+                     transform_accepted=False, guarded=False):
     frame = Rectangle("domain", lower=(0, 0), upper=(1, 1)).frame(Cartesian2D())
     model = pops.Model("pair", frame=frame)
     left = model.species("a", state=("p", "E"))
@@ -40,6 +41,8 @@ def interaction_case(*, n=16, left_weight=1, right_weight=1, repeated=False,
     left_rate = model.rate("a_rate", equation=ddt(left) == (
         application[left] + application[left] if repeated else application[left]))
     right_rate = model.rate("b_rate", equation=ddt(right) == right_application[right])
+    if guarded and (inventories or stages != 1):
+        raise ValueError("guard witness declares one-stage execution without inventory claims")
     transform = model.local_transform("square_momentum", (left[0] ** 2, left[1]), on=left) if transform_accepted else None
     case = pops.Case("pair")
     blocks = [case.block("left", model, states=(left,)), case.block("right", model, states=(right,))]
@@ -49,6 +52,20 @@ def interaction_case(*, n=16, left_weight=1, right_weight=1, repeated=False,
         case.numerics(numerics, block=block)
     program = pops.Program("step")._bind_operators(model.module)
     a, b = (program.state(block[state]) for block, state in zip(blocks, (left, right), strict=True))
+    if guarded:
+        an,bn = a.n,b.n
+        condition = program.norm2(an) > 0
+        a_next = program.branch(condition,
+            lambda P: P.value("a_active",an+P.dt*left_rate(an,bn),at=a.next.point),
+            lambda P: P.value("a_inactive",an,at=a.next.point))
+        b_next = program.branch(condition,
+            lambda P: P.value("b_active",bn+P.dt*right_rate(bn,an),at=b.next.point),
+            lambda P: P.value("b_inactive",bn,at=b.next.point))
+        program.commit(a.next,a_next)
+        program.commit(b.next,b_next)
+        program.step_strategy(pops.time.FixedDt(.001))
+        case.program(program)
+        return case,program,model,maps
     ra, rb = left_rate(a.n, b.n), right_rate(b.n, a.n)
     if stages == 2:
         stage = program.stage("predictor", c=1)
