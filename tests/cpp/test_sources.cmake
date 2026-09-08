@@ -227,3 +227,6 @@ set(POPS_CPP_TEST_SOURCE_test_weno_convergence "tests/cpp/unit/numerics/test_wen
 set(POPS_CPP_TEST_SOURCE_test_prepared_diffusion "tests/cpp/unit/runtime/test_prepared_diffusion.cpp")
 
 set(POPS_CPP_TEST_SOURCE_test_prepared_spatial_residual "tests/cpp/unit/runtime/test_prepared_spatial_residual.cpp")
+
+set(POPS_CPP_TEST_SOURCE_test_amr_transition_invariants "tests/cpp/integration/amr/test_amr_transition_invariants.cpp")
+set(POPS_CPP_TEST_SOURCE_test_mpi_transition_invariants "tests/cpp/integration/mpi/test_mpi_transition_invariants.cpp")

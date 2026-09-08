@@ -702,6 +702,9 @@ pops_add_gtest_suite(NAME test_cell_temporal_partition_executor SOURCES "${_src}
 pops_test_source(_src test_cell_temporal_program_route)
 pops_add_gtest_suite(NAME test_cell_temporal_program_route SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
+pops_test_source(_src test_amr_transition_invariants)
+pops_add_gtest_suite(NAME test_amr_transition_invariants SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
 pops_test_source(_src test_amr_transfer_properties)
 pops_add_gtest_suite(NAME test_amr_transfer_properties SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
@@ -816,6 +819,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_system_io_gather 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_layout_transfer 2)
   set(POPS_MPI_RANKS_test_mpi_load_balance_authority 2 4)
+  set(POPS_MPI_RANKS_test_mpi_transition_invariants 2 4)
   set(POPS_MPI_RANKS_test_mpi_array_reduce 4)
   set(POPS_MPI_RANKS_test_mpi_cartesian_poisson_nd 3)
   set(POPS_MPI_RANKS_test_mpi_multiblock_interface_scheduler 2)
@@ -878,6 +882,7 @@ if(POPS_HAS_MPI)
     test_mpi_system_io_gather
     test_mpi_system_layout_transfer
     test_mpi_load_balance_authority
+    test_mpi_transition_invariants
     test_mpi_array_reduce
     test_mpi_cartesian_poisson_nd
     test_mpi_multiblock_interface_scheduler
