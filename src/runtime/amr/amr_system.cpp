@@ -19035,6 +19035,19 @@ int AmrSystem<Dim>::rebuild_history_slots(const std::string& name,
     }
 
   const auto keys = p_->history_level_keys(name);
+  // Logical history slots rotate at each level's own accepted step. Replaying one whole macro
+  // step from equally indexed anchors therefore advances a subcycled child too far. Until replay
+  // has an exact per-level seed/clock contract, refuse before taking or executing a replay image;
+  // the enclosing checkpoint transaction restores the anchors it provisionally installed.
+  for (std::size_t parent = 0; parent + 1 < keys.size(); ++parent) {
+    if (parent >= p_->temporal_relations.size())
+      throw std::logic_error("AMR history selective replay lacks its level-clock authority");
+    const auto ratio = p_->temporal_relations[parent].temporal_ratio();
+    if (ratio.numerator != ratio.denominator)
+      throw std::invalid_argument(
+          "AMR history selective replay requires synchronized 1:1 level clocks; "
+          "multirate history replay has no per-level reconstruction contract");
+  }
   const int runtime_owner = p_->program.hist_.owner.at(keys.front());
   if (runtime_owner < 0 || static_cast<std::size_t>(runtime_owner) >= p_->blocks.size())
     throw std::logic_error("AMR history replay has an invalid runtime block owner");

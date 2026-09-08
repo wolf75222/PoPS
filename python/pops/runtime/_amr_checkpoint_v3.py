@@ -1393,7 +1393,9 @@ def apply_v3(owner, sim, prepared):
             macro_step=macro_step,
             accepted_time=float(d["t"]),
         )
-    report = _restore_histories_v3(sim, d, checkpoint_topology(owner).size)
+    report = _restore_histories_v3(
+        sim, d, checkpoint_topology(owner).size, accepted_state=program_state
+    )
 
     # (7) Replay is allowed to mutate Program clocks/ring publications and regrid counters while it
     # reconstructs policy-omitted dense values. Replace those temporary values with the checkpoint's
@@ -1649,7 +1651,7 @@ def _preflight_histories_v3(sim, d, current_ranks, spatial):
             validate_history_slot_dt_payload(d, name, depth, fill_count, level=level)
 
 
-def _restore_histories_v3(sim, d, cur_ranks):
+def _restore_histories_v3(sim, d, cur_ranks, *, accepted_state):
     """Restore accepted-state v11 rings and replay only policy-omitted slots on a stable hierarchy.
 
     Capture resolves any selective ring whose replay window contains a scheduled regrid, cold slot,
@@ -1687,7 +1689,14 @@ def _restore_histories_v3(sim, d, cur_ranks):
     sim.set_clock(float(d["t"]), m)
 
     fired = {}
-    report = restore_histories(sim, d, fired_out=fired)
+    # Replay takes native accepted snapshots and executes the installed Program. Qualify its
+    # context against the complete restored checkpoint image before that first snapshot, after
+    # every numeric anchor and slot-provenance record has been installed. The native importer
+    # validates the live hierarchy, identities and flux payload; no layout guard is bypassed.
+    report = restore_histories(
+        sim, d, fired_out=fired,
+        before_replay=lambda: sim.restore_checkpoint_accepted_state(accepted_state),
+    )
 
     # A clean-window replay must neither record nor complete a regrid. Preflight already authenticated
     # the schedule; this guards the native execution seam as well.

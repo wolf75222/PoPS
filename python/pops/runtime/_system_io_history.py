@@ -409,7 +409,7 @@ def serialize_histories(system, persistence, out):
     capture_histories(system, plan, out)
 
 
-def restore_histories(system, d, fired_out=None):
+def restore_histories(system, d, fired_out=None, *, before_replay=None):
     """Restore every checkpointed ring, replaying omitted slots only on a stable hierarchy.
 
     The current payload is validated in full before native mutation.  All rings then restore their
@@ -419,11 +419,18 @@ def restore_histories(system, d, fired_out=None):
     only the omitted slots by deterministic replay. Requested/effective storage or policy mismatches
     are refused verbatim. When @p fired_out is a dict it records native replay guard evidence; every
     valid value is empty because regrid-window captures use dense safety storage. Returns the typed
-    :class:`~pops.time._history.report.HistoryReplayReport`."""
+    :class:`~pops.time._history.report.HistoryReplayReport`.
+
+    ``before_replay`` imports an enclosing runtime's authenticated accepted image after all
+    anchors and provenance are installed, but before any omitted slot executes its Program.
+    The enclosing restart transaction remains responsible for rollback if that import fails.
+    """
     import numpy as np
     from pops.time._history.persistence import HistoryPersistence
     from pops.time._history.report import HistoryReplayReport
 
+    if before_replay is not None and not callable(before_replay):
+        raise TypeError("history before_replay must be callable")
     names = tuple(str(h) for h in d["history_names"])
     if len(names) != len(set(names)):
         raise ValueError("restart : checkpoint history names must be unique")
@@ -608,6 +615,10 @@ def restore_histories(system, d, fired_out=None):
             else:
                 system.set_history_initialized(hname, initialized)
                 system.restore_history_fill_count(hname, fill_count)
+
+    if before_replay is not None and any(len(stored) < depth
+                                        for _, depth, _, _, stored, _, _ in prepared):
+        before_replay()
 
     # Phase 2 -- all ring dependencies now expose the checkpoint image.  Native replay restores its
     # own save bracket after each ring and returns one count per Program step, which is also the

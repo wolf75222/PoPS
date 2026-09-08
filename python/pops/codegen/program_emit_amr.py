@@ -75,9 +75,11 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
     blocks = program._block_indices()
     ordered_blocks = sorted(blocks, key=blocks.get)
 
-    def contains_flux(values: Any, block: Any) -> bool:
+    def contains_rhs(values: Any, block: Any, *, flux_only: bool = False) -> bool:
         for value in values:
-            if value.op == "rhs" and value.block == block and value.attrs.get("flux", True):
+            if value.op == "rhs" and value.block == block and (
+                not flux_only or value.attrs.get("flux", True)
+            ):
                 return True
             for key in (
                 "cond_block",
@@ -88,7 +90,9 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                 "false_block",
             ):
                 nested = value.attrs.get(key)
-                if isinstance(nested, (list, tuple)) and contains_flux(nested, block):
+                if isinstance(nested, (list, tuple)) and contains_rhs(
+                    nested, block, flux_only=flux_only
+                ):
                     return True
         return False
 
@@ -160,8 +164,8 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                     if value.op == "while":
                         expression = environment.get(value.inputs[0].id, {})
                         if (
-                            contains_flux(value.attrs["cond_block"], block)
-                            or contains_flux(value.attrs["body_block"], block)
+                            contains_rhs(value.attrs["cond_block"], block, flux_only=True)
+                            or contains_rhs(value.attrs["body_block"], block, flux_only=True)
                             or (value.block == block and expression)
                         ):
                             raise ValueError(
@@ -268,7 +272,11 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
         stored = {name: source for (candidate, name), source in stored_histories.items()
                   if candidate == block}
         read = {name for candidate, name in read_histories if candidate == block}
-        if stored.keys() & read:
+        # Pure state histories have no flux ancestry. Inspect structured regions too: branch and
+        # loop results can carry real RHS values through attrs rather than ordinary input edges.
+        # Keep the existing conservative retained bound whenever any actual RHS exists, including
+        # source-only RHS calls; only a proved RHS-free block can retain its zero analyzed budget.
+        if stored.keys() & read and contains_rhs(program._values, block):
             bases, terms = budgets[index]
             # The current RHS and its retained lag are independently authenticated at the AMR
             # attempt boundary.  A source-only RHS still needs that pair: whether it contributes
