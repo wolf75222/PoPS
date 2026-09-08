@@ -1072,7 +1072,7 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "test_amr_multiblock_implicit_transaction.TwoBlockImplicitSourceTransactionRollsBackAndRetriesExactly:test_amr_multiblock_implicit_transaction.BalanceMailboxResetsOnlyInsideOutermostTransactionSnapshot:test_amr_multiblock_implicit_transaction.InterfaceProviderPublicationRefreshesExactAcceptedProgramContracts:test_amr_multiblock_implicit_transaction.CoupledJacvecPreservesUnrelatedAttemptCarrierWithPermutedProgramPair")
+            "test_amr_multiblock_implicit_transaction.TwoBlockImplicitSourceTransactionRollsBackAndRetriesExactly:test_amr_multiblock_implicit_transaction.BalanceMailboxResetsOnlyInsideOutermostTransactionSnapshot:test_amr_multiblock_implicit_transaction.InterfaceProviderPublicationRefreshesExactAcceptedProgramContracts:test_amr_multiblock_implicit_transaction.CoupledJacvecPreservesUnrelatedAttemptCarrierWithPermutedProgramPair:test_amr_multiblock_implicit_transaction.MultilevelPairBudgetReservesOneEvaluationWithoutAcceptedApplications")
       elseif(_test STREQUAL "test_amr_synthetic_program_loader_transaction")
         pops_add_mpi_rank_test(
           ${_test} ${_np}
