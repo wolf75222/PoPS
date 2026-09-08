@@ -32,9 +32,15 @@ TEST(CollectiveStepRejection, WireRetainsEveryTypedFieldAndCallerDiagnosticRequi
   for (const auto contract : contracts) {
     const auto encoded = wire::encode(control(), contract);
     // Frozen legacy layout: three big-endian integers followed by two length-prefixed texts.
-    const std::string body("\0\0\0\0\0\0\0\4" "\0\0\0\0\0\0\0\0"
-                           "\0\0\0\0\xff\xff\xff\xff" "\0\0\0\0\0\0\0\5" "stage"
-                           "\0\0\0\0\0\0\0\5" "retry", 50);
+    const std::string body(
+        "\0\0\0\0\0\0\0\4"
+        "\0\0\0\0\0\0\0\0"
+        "\0\0\0\0\xff\xff\xff\xff"
+        "\0\0\0\0\0\0\0\5"
+        "stage"
+        "\0\0\0\0\0\0\0\5"
+        "retry",
+        50);
     EXPECT_EQ(encoded, std::string(contract.schema) + body);
     const auto restored = wire::decode(encoded, contract);
     EXPECT_EQ(restored.status, pops::SolveStatus::kInvalidEvaluation);
@@ -68,7 +74,8 @@ TEST(CollectiveStepRejection, WireRetainsEveryTypedFieldAndCallerDiagnosticRequi
 }
 
 TEST(CollectiveStepRejection, SubsetAndAllRankRejectionPreserveControlOnEveryRank) {
-  auto lane = pops::ExecutionLane::duplicate_world_collectively("test.collective-rejection.control");
+  auto lane =
+      pops::ExecutionLane::duplicate_world_collectively("test.collective-rejection.control");
   for (const auto contract : contracts) {
     for (bool all : {false, true}) {
       try {

@@ -75,8 +75,11 @@ inline Envelope decode(std::string_view bytes, StepRejectionContract contract) {
       disposition > static_cast<std::uint64_t>(StepAttemptDisposition::kReject) ||
       reason > std::numeric_limits<std::uint32_t>::max())
     throw std::runtime_error("collective step rejection envelope has invalid typed fields");
-  Envelope result{static_cast<SolveStatus>(status), static_cast<StepAttemptDisposition>(disposition),
-                  static_cast<std::uint32_t>(reason), {}, {}};
+  Envelope result{static_cast<SolveStatus>(status),
+                  static_cast<StepAttemptDisposition>(disposition),
+                  static_cast<std::uint32_t>(reason),
+                  {},
+                  {}};
   for (std::string* text : {&result.phase, &result.detail}) {
     const auto size = read_u64(bytes, cursor);
     if (size > std::numeric_limits<std::size_t>::max())
@@ -93,7 +96,7 @@ inline Envelope decode(std::string_view bytes, StepRejectionContract contract) {
 }
 
 [[noreturn]] inline void rethrow(const CommunicatorView& communicator, std::string payload,
-                                long rejected, StepRejectionContract contract) {
+                                 long rejected, StepRejectionContract contract) {
   std::string selected;
   if (all_reduce_min(rejected, communicator) != 0) {
     if (!all_ranks_agree_exact_ordered_byte_pairs({{contract.agreement, payload}}, communicator))
@@ -102,16 +105,18 @@ inline Envelope decode(std::string_view bytes, StepRejectionContract contract) {
   } else {
     const long root = all_reduce_min(rejected != 0 ? static_cast<long>(communicator.rank())
                                                    : static_cast<long>(communicator.size()),
-                                      communicator);
+                                     communicator);
     if (root < 0 || root >= static_cast<long>(communicator.size()))
       throw std::runtime_error("collective step rejection lost its typed envelope");
     const bool authoritative = communicator.rank() == root;
-    const long invalid_length = authoritative && payload.size() >
-        static_cast<std::size_t>(std::numeric_limits<long>::max()) ? 1L : 0L;
+    const long invalid_length =
+        authoritative && payload.size() > static_cast<std::size_t>(std::numeric_limits<long>::max())
+            ? 1L
+            : 0L;
     if (all_reduce_max(invalid_length, communicator) != 0)
       throw std::length_error("collective step rejection envelope exceeds long capacity");
-    const long length = all_reduce_max(authoritative ? static_cast<long>(payload.size()) : 0L,
-                                       communicator);
+    const long length =
+        all_reduce_max(authoritative ? static_cast<long>(payload.size()) : 0L, communicator);
     if (length <= 0)
       throw std::runtime_error("collective step rejection envelope is empty");
     long allocation_failed = 0;
@@ -119,7 +124,9 @@ inline Envelope decode(std::string_view bytes, StepRejectionContract contract) {
       if (authoritative)
         selected = payload;
       selected.resize(static_cast<std::size_t>(length));
-    } catch (...) { allocation_failed = 1; }
+    } catch (...) {
+      allocation_failed = 1;
+    }
     if (all_reduce_max(allocation_failed, communicator) != 0)
       throw std::bad_alloc();
     broadcast_bytes_inplace(selected.data(), selected.size(), static_cast<int>(root), communicator);
@@ -136,7 +143,9 @@ inline Envelope decode(std::string_view bytes, StepRejectionContract contract) {
                               std::move(envelope.phase), std::move(envelope.detail));
   } catch (const StepAttemptRejected&) {
     typed = std::current_exception();
-  } catch (...) { error = std::current_exception(); }
+  } catch (...) {
+    error = std::current_exception();
+  }
   collectively_rethrow_exception(error, communicator, "collective rejection decoding failed");
   std::rethrow_exception(typed);
 }
@@ -152,8 +161,8 @@ struct NoCompletion {
 /// Success-only fences remain inside the operation supplied by the boundary and Tagger adapters.
 template <class Operation, class Completion = step_rejection_detail::NoCompletion>
 void collective_step_rejection_phase(const CommunicatorView& communicator,
-                                      StepRejectionContract contract, std::string_view failure,
-                                      Operation&& operation, Completion&& completion = {}) {
+                                     StepRejectionContract contract, std::string_view failure,
+                                     Operation&& operation, Completion&& completion = {}) {
   std::exception_ptr error;
   std::string payload;
   long rejected = 0;
@@ -163,11 +172,17 @@ void collective_step_rejection_phase(const CommunicatorView& communicator,
     try {
       payload = step_rejection_detail::encode(control, contract);
       rejected = 1;
-    } catch (...) { error = std::current_exception(); }
-  } catch (...) { error = std::current_exception(); }
+    } catch (...) {
+      error = std::current_exception();
+    }
+  } catch (...) {
+    error = std::current_exception();
+  }
   try {
     std::forward<Completion>(completion)();
-  } catch (...) { error = std::current_exception(); }
+  } catch (...) {
+    error = std::current_exception();
+  }
   collectively_rethrow_exception(error, communicator, failure);
   if (all_reduce_max(rejected, communicator) != 0)
     step_rejection_detail::rethrow(communicator, std::move(payload), rejected, contract);

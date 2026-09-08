@@ -50,12 +50,8 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
     }
 )
 PROGRAM_RESPONSIBILITY_AUTHORITIES = {
-    "diffusion": frozenset(
-        {"pops/runtime/program/amr_program_context_diffusion.inc"}
-    ),
-    "spatial_context": frozenset(
-        {"pops/runtime/program/amr_program_context_spatial.inc"}
-    ),
+    "diffusion": frozenset({"pops/runtime/program/amr_program_context_diffusion.inc"}),
+    "spatial_context": frozenset({"pops/runtime/program/amr_program_context_spatial.inc"}),
     "spatial_operations": frozenset(
         {
             "pops/runtime/program/amr_program_context_spatial_operations.inc",
@@ -172,9 +168,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/system/provider_storage_binding.hpp",
     }
 )
-INCLUDE_RE = re.compile(
-    r'^\s*#include\s*(?:<(pops/[^>]+)>|"(pops/[^"]+)")', re.MULTILINE
-)
+INCLUDE_RE = re.compile(r'^\s*#include\s*(?:<(pops/[^>]+)>|"(pops/[^"]+)")', re.MULTILINE)
 FIXED_RANK_PATTERNS = (
     re.compile(r"\bMultiFab\s*<\s*2(?:\s*,[^>]*)?\s*>"),
     re.compile(r"\bBox\s*<\s*2\s*>"),
@@ -212,9 +206,7 @@ def _semantic_closure(root: str) -> tuple[str, ...]:
         visited.add(path)
         ordered.append(path)
         for include in _direct_local_includes(path):
-            _require_classified_local_include(
-                path, include, known, PERMITTED_UPSTREAM_BOUNDARIES
-            )
+            _require_classified_local_include(path, include, known, PERMITTED_UPSTREAM_BOUNDARIES)
             if include in known:
                 visit(include)
         visiting.remove(path)
@@ -237,9 +229,7 @@ def _without_tuple_value_indices(source: str) -> str:
 
 def _fixed_rank_authorities(source: str) -> tuple[str, ...]:
     return tuple(
-        match.group(0)
-        for pattern in FIXED_RANK_PATTERNS
-        for match in pattern.finditer(source)
+        match.group(0) for pattern in FIXED_RANK_PATTERNS for match in pattern.finditer(source)
     )
 
 
@@ -267,9 +257,7 @@ def test_amr_consumer_closures_are_explicit_bounded_and_acyclic() -> None:
     assert responsibility_union == CONTEXT_FRAGMENT_PATHS
     assert sum(map(len, responsibility_groups)) == len(responsibility_union)
     for responsibility, paths in PROGRAM_RESPONSIBILITY_AUTHORITIES.items():
-        lines = sum(
-            (INCLUDE / path).read_text(encoding="utf-8").count("\n") + 1 for path in paths
-        )
+        lines = sum((INCLUDE / path).read_text(encoding="utf-8").count("\n") + 1 for path in paths)
         assert lines <= PROGRAM_RESPONSIBILITY_BUDGETS[responsibility], (
             responsibility,
             lines,
@@ -286,10 +274,7 @@ def test_amr_consumer_closures_are_explicit_bounded_and_acyclic() -> None:
     )
     assert len(_source(program_fragments).splitlines()) <= PROGRAM_FRAGMENT_BUDGET
     assert len(_source(program_scaffolding).splitlines()) <= PROGRAM_SCAFFOLDING_BUDGET
-    assert (
-        len(_source(closures["program"]).splitlines())
-        <= PROGRAM_SEMANTIC_CLOSURE_BUDGET
-    )
+    assert len(_source(closures["program"]).splitlines()) <= PROGRAM_SEMANTIC_CLOSURE_BUDGET
     shallow_roots = (*UNCHANGED_CONSUMERS, *ROOTS.values())
     assert len(_source(shallow_roots).splitlines()) < 1_000
 

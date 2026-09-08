@@ -36,8 +36,8 @@ void collective_boundary_provider_phase(const ExecutionLane& lane, std::string_v
                                         Operation&& operation) {
   collective_step_rejection_phase(
       lane.communicator(),
-      {"pops.boundary-step-rejection.v1", "boundary-step-rejection", true, false},
-      failure_message, [&] {
+      {"pops.boundary-step-rejection.v1", "boundary-step-rejection", true, false}, failure_message,
+      [&] {
         std::forward<Operation>(operation)();
         Kokkos::fence();
       });
