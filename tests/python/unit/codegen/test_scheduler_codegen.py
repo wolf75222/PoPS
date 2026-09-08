@@ -11,9 +11,10 @@ named MultiFab):
   - `when(cond)` -> reuses the Program Bool predicate token as the due test
   - `ClockTick` / `AMRLevel` -> qualified logical-clock / hierarchy-level runtime domains
   - `recompute`  -> the body runs only when due, no else
-  - `hold`       -> store/restore the cached value on Uniform; refused for AMR before emission
-  - `skip`       -> retained fields on frozen hierarchies only; scratch refuses until its stale
-                    value is prepared transactional state
+  - `hold`       -> store/restore the cached value on Uniform; AMR retains the ProviderPack and
+                    rematerializes it after a dynamic topology publication
+  - `skip`       -> retains an initially prepared field; dynamic AMR requires the same exact
+                    topology rematerializer, while scratch still requires prepared state
   - `zero`       -> a `set_val(0)` else-branch
   - `accumulate_dt` -> `ctx.cache_accumulate_dt` off-cadence + `ctx.cache_effective_dt` on the due step
   - `error`      -> a `ctx.scheduler_error(...)` else-branch
@@ -446,6 +447,82 @@ def test_field_skip_requires_an_exact_dynamic_topology_rematerializer():
     }
     with pytest.raises(CapabilityResolutionError, match="dynamic_hierarchy_provider_pack"):
         _resolve_amr_program("amr", program, context=unsupported)
+
+
+def test_field_hold_requires_an_exact_dynamic_topology_rematerializer():
+    # The public field operator correctly refuses a raw Hold cache. The native integration route
+    # replaces the already authenticated Program node so the retained ProviderPack owns freshness.
+    program = _field_program(lambda clock: _every(clock, 5, adctime.Skip()))
+    field_node = next(value for value in program._values if value.op == "solve_fields")
+    program._replace_value(
+        field_node,
+        attrs={**field_node.attrs, "schedule": _every(program.clock, 5, adctime.Hold())},
+    )
+    assert amr_program_op_support(program, context=_amr_context(frozen=False)) == {
+        "named_field_solve": "green",
+        "schedule_due": "green",
+        "schedule_field_hold": "green",
+    }
+    unsupported = _amr_context(frozen=False, rematerializer=False)
+    assert amr_program_op_support(program, context=unsupported) == {
+        "named_field_solve": "green",
+        "schedule_due": "green",
+        "schedule_field_hold": "pending:dynamic_hierarchy_provider_pack",
+    }
+    with pytest.raises(CapabilityResolutionError, match="dynamic_hierarchy_provider_pack"):
+        _resolve_amr_program("amr", program, context=unsupported)
+
+
+def test_dynamic_field_schedule_authenticates_the_case_transfer_subject():
+    from pops.lib.time import ForwardEuler
+    from pops.time import AcceptedStep, Every, FixedDt, Schedule, Skip
+    from tests.python.integration._final_field_program import (
+        resolve_periodic_field_program,
+        scalar_advection_field_model,
+    )
+
+    def factory(state, rate, field):
+        program = ForwardEuler(state, rate=rate, fields=field)
+        field_node = next(value for value in program._values if value.op == "solve_fields")
+        program._replace_value(
+            field_node,
+            attrs={
+                **field_node.attrs,
+                "schedule": Schedule(
+                    Every(AcceptedStep(program.clock), 5), off=Skip()
+                ),
+            },
+        )
+        program.step_strategy(FixedDt(8.0e-2))
+        return program
+
+    resolved = resolve_periodic_field_program(
+        scalar_advection_field_model("dynamic-field-schedule"),
+        factory,
+        name="dynamic-field-schedule",
+        block_name="material",
+        target="amr_system",
+        n=8,
+        anchored_field=True,
+    )
+
+    resolution = resolved.capabilities["resolution"]["amr_program"]
+    assert resolution["status"] == "proven"
+    assert {row["name"]: row["status"] for row in resolution["groups"]} == {
+        "named_field_solve": "green",
+        "schedule_due": "green",
+        "schedule_field_skip": "green",
+    }
+    from pops.codegen._phases import _field_topology_rematerializer_validated
+
+    assert not _field_topology_rematerializer_validated(
+        resolved.field_plans,
+        resolved.amr_transfer,
+        {
+            name: plan.operator.unknown
+            for name, plan in resolved.field_plans.items()
+        },
+    )
 
 
 def test_field_skip_when_requires_an_initial_provider_pack():

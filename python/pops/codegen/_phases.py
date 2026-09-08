@@ -7,8 +7,18 @@ from typing import Any
 from pops.model.ownership import _definition_fingerprint_scope
 
 
-def _field_topology_rematerializer_validated(field_plans: Any, amr_transfer: Any) -> bool:
-    """Authenticate exact EllipticRecompute authority for every resolved field plan."""
+def _field_topology_rematerializer_validated(
+    field_plans: Any,
+    amr_transfer: Any,
+    field_subjects: Mapping[str, Any],
+) -> bool:
+    """Authenticate exact EllipticRecompute authority for every resolved field plan.
+
+    ``AMRTransfer.field`` is registered against the Case field handle returned by ``Case.field``.
+    The install plan's operator unknown remains the block-qualified model field storage that the
+    elliptic equation solves.  Those are intentionally different authorities, so the transfer
+    lookup must use the Case registration paired with the plan name.
+    """
     if not field_plans:
         return True
     if amr_transfer is None:
@@ -20,8 +30,12 @@ def _field_topology_rematerializer_validated(field_plans: Any, amr_transfer: Any
         NativeAMRMaterializationKind,
     )
 
-    for plan in field_plans.values():
-        subject = plan.operator.unknown
+    if not isinstance(field_subjects, Mapping):
+        raise TypeError("field topology rematerializer subjects must be a mapping")
+    for name, plan in field_plans.items():
+        subject = field_subjects.get(name)
+        if subject is None:
+            return False
         try:
             entry = amr_transfer.for_subject(subject, COARSE_FINE_FILL)
         except KeyError:
@@ -345,7 +359,14 @@ def resolve(
             shared_block_interfaces=has_shared_interfaces,
             field_routes_validated=True,
             topology_rematerializer_validated=
-                _field_topology_rematerializer_validated(field_plans, amr_transfer),
+                _field_topology_rematerializer_validated(
+                    field_plans,
+                    amr_transfer,
+                    {
+                        name: problem.resolve(handle)
+                        for name, handle in problem.fields().items()
+                    },
+                ),
         )
 
     evidence = resolve_capability_evidence(
