@@ -12,6 +12,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -406,6 +407,54 @@ void prove_multiblock_subcycling() {
 
   engine.advance(typed_window, advance, reconcile, validate);
   EXPECT_EQ(engine.last_accepted_attempt(), 5U);
+
+  std::vector<std::vector<pops::MultiFab<Dim>>> before_fatal(2);
+  for (std::size_t block = 0; block < 2; ++block)
+    for (std::size_t level = 0; level < 3; ++level)
+      before_fatal[block].emplace_back(hierarchy.state(block, level));
+  const auto revision_before_fatal = hierarchy.accepted_revision();
+  const auto clock_before_fatal = engine.accepted_clock(1, 2);
+  const auto history_before_fatal = engine.accepted_history(1, 2)->window;
+  const auto ledgers_before_fatal = engine.ledgers(1, 1).size();
+  constexpr std::string_view fatal_cause =
+      "local_nonlinear failed: iteration_limit action=fail_run";
+  auto fail_fatally = [&](std::span<typename Engine<Dim>::LevelAdvanceContext> group) {
+    advance(group);
+    if (group[0].level != 2 || group[0].substep != 1)
+      return;
+    // The last rank owns the fatal cause; even an earlier rank's typed retry cannot override it.
+    if (hierarchy.lane().rank() == hierarchy.lane().size() - 1)
+      throw std::runtime_error(std::string(fatal_cause));
+    throw pops::runtime::program::StepAttemptRejected(
+        pops::SolveStatus::kIterationLimit, pops::runtime::program::StepAttemptDisposition::kRetry,
+        0x53554243u, "explicit-subcycle", "a peer requested a retry");
+  };
+  const pops::amr::ClockWindow fatal_window{{0, 3, {0, 1}, 0.6}, {0, 3, {1, 1}, 0.8}};
+  std::string fatal_diagnostic;
+  try {
+    engine.advance(fatal_window, fail_fatally, reconcile, validate);
+    ADD_FAILURE() << "a fatal level-group callback must leave the attempt";
+  } catch (const pops::runtime::program::StepAttemptRejected&) {
+    ADD_FAILURE() << "a peer's typed retry must not override a fatal callback";
+  } catch (const std::runtime_error& error) {
+    fatal_diagnostic = error.what();
+  }
+  EXPECT_NE(fatal_diagnostic.find(fatal_cause), std::string::npos);
+  EXPECT_TRUE(pops::all_ranks_agree_exact_ordered_byte_pairs({{"fatal-cause", fatal_diagnostic}},
+                                                             hierarchy.lane()));
+  EXPECT_EQ(engine.last_accepted_attempt(), 5U);
+  EXPECT_EQ(hierarchy.accepted_revision(), revision_before_fatal);
+  EXPECT_EQ(engine.accepted_clock(1, 2), clock_before_fatal);
+  EXPECT_EQ(engine.accepted_history(1, 2)->window.begin, history_before_fatal.begin);
+  EXPECT_EQ(engine.accepted_history(1, 2)->window.end, history_before_fatal.end);
+  EXPECT_EQ(engine.ledgers(1, 1).size(), ledgers_before_fatal);
+  for (std::size_t block = 0; block < 2; ++block)
+    for (std::size_t level = 0; level < 3; ++level)
+      EXPECT_EQ(
+          pops::difference_sum_sq_all(hierarchy.state(block, level), before_fatal[block][level]),
+          pops::Real(0));
+  engine.advance(fatal_window, advance, reconcile, validate);
+  EXPECT_EQ(engine.last_accepted_attempt(), 7U);
 }
 
 }  // namespace
