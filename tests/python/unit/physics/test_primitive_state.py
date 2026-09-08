@@ -207,14 +207,20 @@ def test_isothermal_primitive_roundtrip_and_step():
 
 
 def test_scalar_conversion_is_identity():
+    from pops.physics._facade import Model as NativeModel
+
     rho, _, _, _ = _fields()
+    model = NativeModel("scalar_conversion_identity")
+    (density,) = model.conservative_vars("rho", roles=(Density(),))
+    model.flux(x=[0.3 * density], y=[0.2 * density])
+    model.eigenvalues(x=[0.3 + 0.0 * density], y=[0.2 + 0.0 * density])
+    model.primitive_vars(density)
+    model.conservative_from([density])
     runtime = _runtime(
         "tracer",
-        engine.Model(
-            state=engine.Scalar(),
-            transport=engine.ExB(),
-            source=engine.NoSource(),
-            elliptic=engine.ChargeDensity(charge=1.0),
+        model.compile(
+            backend="production", target="system", name="scalar_conversion_identity",
+            consumer_owner_qid="tests.primitive-state.scalar",
         ),
     )
     primitive, = runtime.variable_names("tracer", "primitive")
