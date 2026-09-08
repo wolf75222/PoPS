@@ -289,7 +289,40 @@ class ProgramContext {
                                      static_cast<double>(status), operation_identity, reason_code);
   }
 
+  using ProgramFieldComponent = typename runtime_type::ProgramFieldComponent;
+  void publish_field_components(int evaluation_id, const std::string& publication_identity,
+                                std::initializer_list<ProgramFieldComponent> components) const {
+    const auto& lane = prepared_execution_lane();
+    runtime::multiblock::BoundaryEvaluationPoint point;
+    std::vector<ProgramFieldComponent> prepared;
+    std::exception_ptr error;
+    try {
+      point = boundary_evaluation_point(evaluation_id);
+      prepared.assign(components.begin(), components.end());
+    } catch (...) {
+      error = std::current_exception();
+    }
+    if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && error)
+        std::rethrow_exception(error);
+      throw std::runtime_error("Program field publication preparation failed collectively");
+    }
+    system_->publish_program_field_components(point, publication_identity, prepared);
+  }
+
   void stage_exchange(ExchangeRecord record) const {
+    const auto& lane = prepared_execution_lane();
+    std::exception_ptr error;
+    try {
+      record.qualify_runtime_point(boundary_evaluation_point(0));
+    } catch (...) {
+      error = std::current_exception();
+    }
+    if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && error)
+        std::rethrow_exception(error);
+      throw std::runtime_error("Program exchange runtime qualification failed collectively");
+    }
     system_->stage_program_exchange(std::move(record));
   }
 

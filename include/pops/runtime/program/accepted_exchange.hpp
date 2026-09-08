@@ -1,6 +1,10 @@
 #pragma once
 
+#include <pops/runtime/multiblock/evaluation_point.hpp>
+
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -39,6 +43,24 @@ struct ExchangeRecord {
         !std::isfinite(temporal_weight) || !std::isfinite(integrated_amount()))
       throw std::invalid_argument(
           "exchange record has invalid orientation, measure, weight or multiplicity");
+  }
+
+  /// Static IR identities repeat on each invocation. Qualify them with the exact runtime
+  /// interval so several accepted substeps can share an enclosing provisional ledger.
+  void qualify_runtime_point(const runtime::multiblock::BoundaryEvaluationPoint& point) {
+    if (point.clock.empty() || point.tick < 0 || point.level < 0 || point.substep < 0 ||
+        point.stage < 0 || point.stage_fraction < amr::Rational(0, 1) ||
+        amr::Rational(1, 1) < point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0 || !std::isfinite(point.physical_time))
+      throw std::invalid_argument("accepted exchange requires a complete runtime evaluation point");
+    evaluation_context = "pops.exchange.frame.v1/" + std::to_string(point.clock.size()) + ":" +
+                         point.clock + "/" + std::to_string(point.tick) + "/" +
+                         std::to_string(point.level) + "/" + std::to_string(point.substep) + "/" +
+                         std::to_string(point.stage) + "/" +
+                         std::to_string(point.stage_fraction.numerator) + "/" +
+                         std::to_string(point.stage_fraction.denominator) + "/" +
+                         std::to_string(std::bit_cast<std::uint64_t>(point.dt)) + "/" +
+                         std::to_string(std::bit_cast<std::uint64_t>(point.physical_time)) + "/" +
+                         std::to_string(evaluation_context.size()) + ":" + evaluation_context;
   }
 
   auto key() const {

@@ -1068,7 +1068,7 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors:ProgramContextContract.AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch:ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection:ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation:ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges:ProgramContextContract.NativeEvaluationFailureIsCollectiveAndCannotPublishWork:ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation")
+            "ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors:ProgramContextContract.AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch:ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection:ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation:ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges:ProgramContextContract.NativeEvaluationFailureIsCollectiveAndCannotPublishWork:ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation:ProgramContextContract.ConsumedFieldPublicationIsExactCollectiveAndTransactional")
       elseif(_test STREQUAL "test_generated_amr_system_block")
         pops_add_mpi_rank_test(
           ${_test} ${_np}

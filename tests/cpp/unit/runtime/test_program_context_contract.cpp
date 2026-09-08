@@ -1639,7 +1639,7 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
     double measure = 1.0;
     for (int axis = 0; axis < kTestDimension; ++axis)
       measure /= n;
-    ctx.stage_exchange({"test.residual", "density.occurrence", std::to_string(sim.macro_step()),
+    ctx.stage_exchange({"test.residual", "density.occurrence", "same-static-evaluation",
                         "forward_euler", 1, measure, flux, dt, 1});
     ctx.axpy(state, Real(dt), rate);
     ctx.record_scalar("nested.work", Real(++evaluated_substeps));
@@ -1877,4 +1877,95 @@ TEST(ProgramContextContract, TransactionScopeDivergenceRefusesBeforeMutation) {
   sim.begin_restart_transaction();
   sim.rollback_restart_transaction();
   EXPECT_EQ(sim.step_transaction_depth(), 0u);
+}
+
+TEST(ProgramContextContract, ConsumedFieldPublicationIsExactCollectiveAndTransactional) {
+  using namespace runtime::system;
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.consumed-field-publication");
+  add_gas_block(sim, "gas");
+  const AuxiliaryComponentContract contract{"cell-average", "cell", std::nullopt, "cell",
+                                            std::optional<std::string>{"scalar"}};
+  AuxiliaryStorageShape<kTestDimension> shape;
+  const AuxiliaryComponentKey phi_key{"model:gas", "field", "electric", "potential"};
+  const AuxiliaryComponentKey force_key{"model:gas", "field", "electric", "force"};
+  for (const auto& [identity, key] : std::vector<std::pair<std::string, AuxiliaryComponentKey>>{
+           {"program.phi", phi_key}, {"program.force", force_key}})
+    sim.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<kTestDimension>{
+        identity,
+        AuxiliaryProviderKind::field_output,
+        {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
+        {{key, contract, shape}},
+        identity == "program.force"
+            ? std::vector<AuxiliaryDependency<kTestDimension>>{{phi_key, contract, shape}}
+            : std::vector<AuxiliaryDependency<kTestDimension>>{}});
+  sim.install_auxiliary_consumer_plan(AuxiliaryConsumerProviderPlan<kTestDimension>{
+      "read-electric", {{{phi_key, contract, shape}, 0}, {{force_key, contract, shape}, 1}}});
+  sim.seal_auxiliary_providers();
+  sim.set_state("gas", ic(4));
+  sim.set_program_block_map({0});
+  NativeProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.fields");
+  ctx.begin_step(0.1);
+  auto phi = ctx.alloc_scalar_field(1, 0);
+  auto force = ctx.alloc_scalar_field(1, 0);
+  phi.set_val(Real(2));
+  force.set_val(Real(-3));
+  const auto publish = [&] {
+    ctx.publish_field_components(
+        7, "physical-field:poisson",
+        {{force_key, "program.force", &force, 0}, {phi_key, "program.phi", &phi, 0}});
+  };
+  EXPECT_NO_THROW(publish());
+  EXPECT_NO_THROW(ctx.prepare_provider_values("read-electric", 0, ctx.state(0), 8));
+  const auto initial_phi = sim.auxiliary_component(phi_key);
+  const auto initial_force = sim.auxiliary_component(force_key);
+  for (double value : initial_phi)
+    EXPECT_EQ(value, 2.0);
+  for (double value : initial_force)
+    EXPECT_EQ(value, -3.0);
+  const auto initial_metadata = sim.capture_auxiliary_checkpoint_accepted_state();
+  EXPECT_ANY_THROW(ctx.publish_field_components(
+      my_rank() == 0 ? -1 : 7, "physical-field:poisson",
+      {{phi_key, "program.phi", &phi, 0}, {force_key, "program.force", &force, 0}}));
+  EXPECT_EQ(sim.auxiliary_component(phi_key), initial_phi);
+  EXPECT_EQ(sim.auxiliary_component(force_key), initial_force);
+  EXPECT_EQ(sim.capture_auxiliary_checkpoint_accepted_state(), initial_metadata);
+  sim.begin_step_transaction();
+  sim.begin_nested_step_transaction();
+  phi.set_val(Real(5));
+  force.set_val(Real(-7));
+  EXPECT_NO_THROW(publish());
+  sim.commit_step_transaction();
+  sim.finalize_step_transaction();
+  EXPECT_NE(sim.auxiliary_component(phi_key), initial_phi);
+  sim.rollback_step_transaction();
+  EXPECT_EQ(sim.auxiliary_component(phi_key), initial_phi);
+  EXPECT_EQ(sim.auxiliary_component(force_key), initial_force);
+  EXPECT_EQ(sim.capture_auxiliary_checkpoint_accepted_state(), initial_metadata);
+
+  if (my_rank() == 0)
+    force.set_val(std::numeric_limits<Real>::quiet_NaN());
+  EXPECT_ANY_THROW(publish());
+  EXPECT_EQ(sim.auxiliary_component(phi_key), initial_phi);
+  EXPECT_EQ(sim.auxiliary_component(force_key), initial_force);
+  EXPECT_EQ(sim.capture_auxiliary_checkpoint_accepted_state(), initial_metadata);
+  force.set_val(Real(-7));
+  EXPECT_ANY_THROW(ctx.publish_field_components(
+      7, "physical-field:poisson",
+      {{phi_key, "program.phi", &phi, 0}, {force_key, "forged-provider", &force, 0}}));
+  EXPECT_ANY_THROW(ctx.publish_field_components(
+      7, "physical-field:poisson",
+      {{phi_key, "program.phi", &phi, 0}, {phi_key, "program.phi", &force, 0}}));
+  EXPECT_EQ(sim.auxiliary_component(phi_key), initial_phi);
+  sim.begin_step_transaction();
+  EXPECT_NO_THROW(publish());
+  sim.commit_step_transaction();
+  sim.finalize_step_transaction();
+  for (double value : sim.auxiliary_component(phi_key))
+    EXPECT_EQ(value, 5.0);
+  EXPECT_NO_THROW(ctx.prepare_provider_values("read-electric", 0, ctx.state(0), 9));
+  EXPECT_EQ(all_reduce_sum(1L, ctx.prepared_execution_lane()), n_ranks());
 }

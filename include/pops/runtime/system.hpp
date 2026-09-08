@@ -237,6 +237,14 @@ class System {
   static constexpr int dimension = Dim;
   using HyperbolicBoundary = PreparedHyperbolicBoundary<Dim>;
 
+  /// One explicitly consumed Program observation and its sealed field-output destination.
+  struct ProgramFieldComponent {
+    runtime::system::AuxiliaryComponentKey key;
+    std::string expected_provider_identity;
+    const MultiFab<Dim>* values = nullptr;
+    int component = 0;
+  };
+
   explicit System(const SystemConfig<Dim>& cfg);
   ~System();
   System(System&&) noexcept;
@@ -489,6 +497,13 @@ class System {
   prepare_program_auxiliary_consumer_for_solve(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
       int block, const MultiFab<Dim>& stage_state, int evaluation_sequence);
+
+  /// Publish a complete tuple of consumed field observations into existing provider storage.
+  /// Every destination must already be an exact sealed field-output provider; this never solves
+  /// or registers a field, and publication remains provisional inside the current step scope.
+  POPS_EXPORT void publish_program_field_components(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      const std::string& publication_identity, const std::vector<ProgramFieldComponent>& components);
 
   /// Compact slot of a sealed component key and the corresponding accepted scalar field.  The key,
   /// rather than a legacy physical label or a raw component number, is the public authority.
