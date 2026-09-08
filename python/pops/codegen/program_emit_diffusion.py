@@ -93,8 +93,17 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
     lines.append("  return [=] POPS_HD(const pops::Index<pops::kNativeDimension>& index) {")
     lines.extend("    "+line for line in _cell_locals(impl,exprs,state_var,with_cons=True,
                  with_prim=True,provider_binding=binding))
-    lines.append("    return std::array<pops::Real,pops::kNativeDimension+2>{%s};" %
-                 ", ".join(expr.to_cpp() for expr in exprs))
+    from pops.codegen.native_constitutive import emit_native_constitutive
+    endpoint = emit_native_constitutive(exprs)
+    captured = tuple(v.attrs.get("native_functions", ()))
+    if any(function not in captured for function in endpoint.functions):
+        raise ValueError("diffusive endpoint native functions differ from the captured physical law")
+    lines.extend(endpoint.lines)
+    lines.append("    pops::runtime::program::DiffusiveLawResult<pops::kNativeDimension> result;")
+    lines.append("    result.evaluation_status = %s; result.reason_code = %s;" % (
+        endpoint.status, endpoint.reason))
+    lines.append("    if (result.evaluation_status == 0) result.values = {%s};" % ", ".join(endpoint.values))
+    lines.append("    return result;")
     lines.append("  };")
     if "fitted" in selected:
         ratio="(%s)/(%s)" % (selected["fitted"]["mobility"].to_cpp(),selected["diagonal"][0].to_cpp())

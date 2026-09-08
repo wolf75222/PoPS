@@ -55,5 +55,25 @@ def lower_diffusive_rate(program, op, args, name):
     state = args[0]
     fields = args[1] if len(args)>1 else None
     field_context = None if fields is None else require_field_read(fields,state,"diffusive_rhs")
-    return program._new("rhs", "diffusive_rhs", tuple(args), {"physical_balance": view,"fitted":fitted}, name,
+    # Capture the exact native closures needed by the selected physical endpoint and its
+    # derivative before detaching the Program. Preparation/build staging uses this same set.
+    from pops._ir.native_call import native_functions
+    from pops._ir.lowering import diff
+    from pops._ir.quantity import QuantityRef
+    block_model = state.block._instance_registry.spec(state.block.local_id)["model"]
+    module = getattr(block_model, "module", block_model)
+    roots = []
+    for row in view.occurrences:
+        if row.kind in {"diffusion", "drift"}:
+            roots.extend(row.payload.law.expressions)
+            if row.kind == "diffusion" and not fitted:
+                target = QuantityRef(view.target, state.space.components[0], space=state.space)
+                roots.append(diff(row.payload.law.variable, target, module.primitive_recipes()))
+        elif row.kind == "source":
+            roots.append(module.operator_registry().get(row.payload.reg_name).body)
+    attrs = {"physical_balance": view, "fitted": fitted}
+    functions = native_functions(roots)
+    if functions:
+        attrs["native_functions"] = functions
+    return program._new("rhs", "diffusive_rhs", tuple(args), attrs, name,
                         state.block, space=rate_space_for(state.space), field_context=field_context)
