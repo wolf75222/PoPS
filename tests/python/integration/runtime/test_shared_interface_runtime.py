@@ -1145,7 +1145,13 @@ def _shared_interface_amr_authoring(
 
 
 def _resolve_shared_interface_amr(
-    authoring, *, max_levels, patch_layout=None, frozen=False, regrid_interval=100
+    authoring,
+    *,
+    max_levels,
+    patch_layout=None,
+    clustering=None,
+    frozen=False,
+    regrid_interval=100,
 ):
     from pops.amr import (
         AMRClockRelation,
@@ -1184,6 +1190,7 @@ def _resolve_shared_interface_amr(
                 )
             ),
             patch_layout=patch_layout,
+            clustering=clustering,
         ),
         components=tuple(
             component
@@ -1427,9 +1434,10 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
 
     # Keep the original independent two-level checkpoint/restart coverage alongside the full
     # three-level dynamic replacement and post-publication Tagger rollback/retry above.
-    # This independent authoring owns the original checkpoint consumer. Each runtime
-    # opens its output invocation once; post-restart continuation starts at a later
-    # accepted time and has a distinct run identity, so no closed output session reopens.
+    # This independent authoring owns the original checkpoint consumer. Its fast moving profile
+    # advances far enough to make the recorded boxes stale while the ordinary regrid cadence stays
+    # dormant. Each runtime opens its output invocation once; post-restart continuation starts at a
+    # later accepted time and has a distinct run identity, so no closed output session reopens.
     restart_authoring = _shared_interface_amr_authoring(
         tmp_path / "restart-authoring",
         component=authoring.component,
@@ -1442,29 +1450,50 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
         restart_authoring.core.tracer_state: restart_authoring.left_initial,
         restart_authoring.right_state: restart_authoring.right_initial,
     }
-    restart_resolved = _resolve_shared_interface_amr(restart_authoring, max_levels=2)
+    restart_dt = 1.0e-3
+    restart_source_steps = 2
+    # dx_fine=1/16 and the 2:1 subcycle give CFL_fine=0.16. Four fine substeps
+    # move the profile by 0.64 cell: enough to change the thresholded hierarchy.
+    restart_velocity_x = 20.0
+    restart_params = dict(restart_authoring.params)
+    for block in (restart_authoring.core.tracer, restart_authoring.right):
+        restart_params[
+            restart_authoring.core.case.resolve(
+                restart_authoring.core.velocity_x_param,
+                block=block,
+            )
+        ] = restart_velocity_x
+    from pops.amr import PatchLayout
+    from pops.lib.amr import BergerRigoutsos
+
+    restart_resolved = _resolve_shared_interface_amr(
+        restart_authoring,
+        max_levels=2,
+        patch_layout=PatchLayout(distribute_coarse=True, coarse_max_grid=4),
+        clustering=BergerRigoutsos(maximum_box_size=4),
+    )
     restart_artifact = pops.compile(restart_resolved)
     restart_interface = restart_resolved.blocks[0].numerics.boundaries[0].interfaces[0]
     restart_source = restart_authoring.example._bind_artifact(
         restart_artifact,
         initial_values=restart_initial_values,
-        params=restart_authoring.params,
+        params=restart_params,
     )
     assert restart_source.n_levels() == 2
     assert len(restart_source.consumer_graph.nodes) == 1
     restart_initial_integral = restart_source.integral("tracer") + restart_source.integral("right")
     source_report = pops.run(
         restart_source,
-        t_end=1.0e-3,
-        max_steps=1,
+        t_end=restart_source_steps * restart_dt,
+        max_steps=restart_source_steps,
         console=False,
         output_dir=tmp_path / "restart-source-output",
     )
-    assert source_report.accepted_steps == 1
+    assert source_report.accepted_steps == restart_source_steps
     assert restart_source._executor._s._interface_evaluation_count(
-        restart_interface.qualified_id, 0) == 2
+        restart_interface.qualified_id, 0) == 4
     assert restart_source._executor._s._interface_evaluation_count(
-        restart_interface.qualified_id, 1) == 4
+        restart_interface.qualified_id, 1) == 8
     checkpoint_time = float(restart_source.time())
     checkpoint_step = int(restart_source.macro_step())
     checkpoint_integral = (
@@ -1477,6 +1506,7 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
         atol=2.0e-13,
     )
     checkpoint = restart_source.checkpoint(tmp_path / "accepted-shared-interface")
+    checkpoint_boxes = tuple(restart_source.patch_boxes())
 
     # RegridOnRestart enters the native tag/cluster/regrid boundary. A deliberately rejected
     # post-transform validation must restore the fresh runtime exactly before the same restart is
@@ -1484,17 +1514,18 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     restarted = restart_authoring.example._bind_artifact(
         restart_artifact,
         initial_values=restart_initial_values,
-        params=restart_authoring.params,
+        params=restart_params,
     )
     priming_report = pops.run(
         restarted,
-        t_end=1.0e-3,
+        t_end=restart_dt,
         max_steps=1,
         console=False,
         output_dir=tmp_path / "restart-candidate-output",
     )
     assert priming_report.accepted_steps == 1
     rollback_image = _shared_interface_accepted_image(restarted)
+    assert rollback_image["boxes"] == checkpoint_boxes
     from pops.runtime import _amr_checkpoint_v3 as checkpoint_codec
 
     original_conservation_check = checkpoint_codec._require_restart_conservation
@@ -1511,6 +1542,7 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
             restarted.restart(checkpoint)
         assert transformed_images
         assert transformed_images[0]["boxes"] != rollback_image["boxes"]
+        assert transformed_images[0]["boxes"] != checkpoint_boxes
         _assert_same_shared_interface_image(restarted, rollback_image)
 
         checkpoint_codec._require_restart_conservation = original_conservation_check
@@ -1518,9 +1550,11 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
         receipt = restarted._executor.last_restart_regrid_receipt()
         assert receipt is not None
         assert receipt["changed"] is True
+        assert receipt["before"]["topology_identity"] != receipt["after"]["topology_identity"]
         assert float(restarted.time()) == checkpoint_time
         assert int(restarted.macro_step()) == checkpoint_step
         assert tuple(restarted.patch_boxes()) == tuple(transformed_images[0]["boxes"])
+        assert tuple(restarted.patch_boxes()) != checkpoint_boxes
         np.testing.assert_allclose(
             [row["value"] for row in receipt["composite_integrals_after"]],
             [row["value"] for row in receipt["composite_integrals_before"]],
@@ -1539,7 +1573,12 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
             restarted._executor._s._interface_evaluation_count(restart_interface.qualified_id, level)
             for level in range(2)
         )
-        continuation_report = pops.run(restarted, t_end=2.0e-3, max_steps=1, console=False)
+        continuation_report = pops.run(
+            restarted,
+            t_end=float(restarted.time()) + restart_dt,
+            max_steps=1,
+            console=False,
+        )
         assert continuation_report.run_identity != priming_report.run_identity
         counts_after_continuation = tuple(
             restarted._executor._s._interface_evaluation_count(restart_interface.qualified_id, level)
