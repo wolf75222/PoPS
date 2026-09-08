@@ -785,8 +785,8 @@ void System<Dim>::block_neg_div_flux_into_at_prepared(
           selected.boundary_flux_full_at_point_prepared(point, scratch.detached_state, candidate,
                                                         *selected.boundary, lane, transport);
         else
-          selected.periodic_flux_at_point_prepared(point, scratch.detached_state, candidate,
-                                                   lane, transport);
+          selected.periodic_flux_at_point_prepared(point, scratch.detached_state, candidate, lane,
+                                                   transport);
       });
 }
 
