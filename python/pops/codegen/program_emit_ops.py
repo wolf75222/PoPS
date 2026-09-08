@@ -676,12 +676,30 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         state_resource = "transform_state_resource_%d" % v.id
         status_resource = "transform_status_resource_%d" % v.id
         active_mask = "transform_active_mask_%d" % v.id
-        prelude.append(
-            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.scratch_state_like(ctx.state(%d)));"
-            % (state_resource, bidx))
-        prelude.append(
-            "auto* %s = &ctx.scalar_scratch(%d, 0, ctx.state(%d), 1, 0);"
-            % (status_resource, int(v.id), bidx))
+        from pops.codegen._resolution import _spatial_coordinate_transforms
+
+        spatial_map = target == "amr_system" and id(v) in _spatial_coordinate_transforms(program)
+        if not spatial_map:
+            prelude.append(
+                "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.scratch_state_like(ctx.state(%d)));"
+                % (state_resource, bidx))
+        if target == "amr_system":
+            # Rollback retires context scratches without necessarily replacing level closures.
+            # Reacquire the exact node/level/block resources before each invocation.
+            if spatial_map:
+                lines.append("pops::MultiFab<pops::kNativeDimension>* %s = nullptr;" % state_resource)
+            lines.append("pops::MultiFab<pops::kNativeDimension>* %s = nullptr;" % status_resource)
+            lines.append("ctx.prepare_spatial_collectively([&] {")
+            if spatial_map:
+                lines.append("  %s = &ctx.scratch_state(%d, 0, ctx.state(%d));"
+                             % (state_resource, int(v.id), bidx))
+            lines.append("  %s = &ctx.scalar_scratch(%d, 0, ctx.state(%d), 1, 0);"
+                         % (status_resource, int(v.id), bidx))
+            lines.append("});")
+        else:
+            prelude.append(
+                "auto* %s = &ctx.scalar_scratch(%d, 0, ctx.state(%d), 1, 0);"
+                % (status_resource, int(v.id), bidx))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (var[v.id], state_resource))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (status, status_resource))
         lines.append(

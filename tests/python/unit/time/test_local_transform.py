@@ -128,6 +128,12 @@ def test_local_transform_program_emits_one_collective_fail_closed_kernel() -> No
     assert "ctx.pointwise_active_mask(0," in amr_source
     assert "ctx.pointwise_status_max(0," in amr_source
     assert "inherit_state_metadata" not in amr_source
+    amr_install = amr_source.split('extern "C" void pops_install_program_amr', 1)[1]
+    resources, callbacks = amr_install.split("return _PopsAmrLevelProgram{", 1)
+    assert "transform_status_resource_" not in resources
+    assert "transform_status_resource_" in callbacks
+    assert "ctx.prepare_spatial_collectively([&] {" in callbacks
+    assert "= &ctx.scalar_scratch(" in callbacks
 
 
 def test_generated_operator_preflight_keeps_only_unqualified_cartesian_kernels() -> None:

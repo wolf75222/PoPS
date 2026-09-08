@@ -73,12 +73,9 @@ def emit_amr_spatial_solve(
                 controls,
                 scalar_cpp(spatial_scalar(value.attrs["finite_difference_step"])),
             ),
-            "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> %s;" % trial,
             "std::shared_ptr<std::optional<pops::runtime::program::PreparedDiffusion<pops::kNativeDimension>>> %s;"
             % slot,
             "ctx.prepare_spatial_collectively([&] {",
-            "  %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.scratch_state_like(ctx.state(%d)));"
-            % (trial, owner),
             "  %s = std::make_shared<std::optional<pops::runtime::program::PreparedDiffusion<pops::kNativeDimension>>>();"
             % slot,
             "});",
@@ -109,6 +106,12 @@ def emit_amr_spatial_solve(
     if phase == "gather":
         seed = "nullptr" if len(value.inputs) == 1 else "&(%s)" % variables[value.inputs[1].id]
         lines += [
+            # Reacquire after rollback; no install-time pointer outlives the scratch registry.
+            "pops::MultiFab<pops::kNativeDimension>* %s = nullptr;" % trial,
+            "ctx.prepare_spatial_collectively([&] {",
+            # Slot 0 is the solved result; slot 1 owns the reusable coordinate iterate.
+            "  %s = &ctx.scratch_state(%d,1,ctx.state(%d));" % (trial, value.id, owner),
+            "});",
             "ctx.stage_spatial_hierarchy_previous(%d,%d,%s,%s);"
             % (value.id, owner, variables[value.inputs[0].id], seed),
             "%s->emplace(ctx,*%s,%s,true);" % (slot, trial, _boundary_cpp(selected["physical"])),

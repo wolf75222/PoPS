@@ -81,6 +81,52 @@ namespace pops::runtime::program {
 struct AmrSpatialReconciliationTestAccess {
   using Context = AmrProgramContext<2>;
   using Ledger = Context::multiblock_flux_ledger_type;
+  static void verify_scratch_ownership(Context& ctx) {
+    auto checkpoint = ctx.capture_accepted_context_snapshot_();
+    const auto& accepted = ctx.state(0);
+    const int owner = ctx.scratch_prototype_owner_(accepted);
+    auto& trial = ctx.scratch_state(900, 1, accepted);
+    auto& solved = ctx.scratch_state(900, 0, accepted);
+    auto& mapped = ctx.scratch_state(901, 0, accepted);
+    auto& status = ctx.scalar_scratch(901, 0, accepted, 1, 0);
+    EXPECT_NE(&trial, &solved);
+    EXPECT_NE(&trial, &mapped);
+    trial.set_val(Real(7));
+    solved.set_val(Real(11));
+    mapped.set_val(Real(3));
+    auto& rhs = ctx.rhs_scratch(902, 0, mapped);
+    EXPECT_EQ(ctx.scratch_prototype_owner_(trial), owner);
+    EXPECT_EQ(ctx.scratch_prototype_owner_(mapped), owner);
+    EXPECT_EQ(ctx.scratch_prototype_owner_(rhs), owner);
+    EXPECT_EQ(&ctx.rhs_scratch(902, 0, mapped), &rhs);
+    EXPECT_EQ(norm_inf(trial), trial.local_size() ? Real(7) : Real(0));
+    EXPECT_EQ(norm_inf(solved), solved.local_size() ? Real(11) : Real(0));
+    EXPECT_EQ(norm_inf(mapped), mapped.local_size() ? Real(3) : Real(0));
+    auto detached = ctx.scratch_state_like(mapped);
+    EXPECT_THROW(ctx.rhs_scratch(903, 0, detached), std::invalid_argument);
+    // Identical shape and a real block owner cannot authorize another level's object.
+    const Context::ScratchKey foreign_key{Context::ScratchKind::State, ctx.active_level_ + 1,
+                                          owner, 904, 0};
+    auto& foreign = ctx.scratches_.emplace(foreign_key, std::move(detached)).first->second;
+    EXPECT_THROW(ctx.rhs_scratch(903, 0, foreign), std::invalid_argument);
+    ctx.scratches_.erase(foreign_key);
+    // Exercise the actual accepted-context rollback protocol. It retains the epoch
+    // while retiring scratch objects, so callbacks must reacquire rather than borrow
+    // pointers captured before the rejected attempt.
+    auto restored = checkpoint->prepare_restore();
+    restored->publish_restore();
+    EXPECT_THROW(ctx.rhs_scratch(903, 0, trial), std::invalid_argument);
+    auto& next_trial = ctx.scratch_state(900, 1, ctx.state(0));
+    auto& next_mapped = ctx.scratch_state(901, 0, ctx.state(0));
+    auto& next_status = ctx.scalar_scratch(901, 0, ctx.state(0), 1, 0);
+    EXPECT_NE(&next_trial, &trial);
+    EXPECT_NE(&next_mapped, &mapped);
+    EXPECT_NE(&next_status, &status);
+    EXPECT_EQ(ctx.scratch_prototype_owner_(next_trial), owner);
+    EXPECT_EQ(ctx.scratch_prototype_owner_(next_mapped), owner);
+    EXPECT_EQ(ctx.scratch_prototype_owner_(next_status), owner);
+    EXPECT_NO_THROW(ctx.rhs_scratch(902, 0, next_mapped));
+  }
   static void prepare(Context& ctx, MultiFab<2>& coarse, MultiFab<2>& middle, MultiFab<2>& fine,
                       Ledger& incoming, Ledger& outgoing) {
     ctx.active_level_ = 1;
@@ -190,6 +236,7 @@ TEST(AmrSpatialMaterialization, PendingProofSurvivesPublicationAndRejectsRankLoc
   system.set_program_block_map({0});
   (void)system.mass("tracer");
   SpatialAccess::Context context(system.engine(), &system);
+  SpatialAccess::verify_scratch_ownership(context);
   auto coarse = field(false, false), middle = field(false, false), fine = field(true, false);
   auto unrelated = field(false, false);
   coarse.set_val(1);

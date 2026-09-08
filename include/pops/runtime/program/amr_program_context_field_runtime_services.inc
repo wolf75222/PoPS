@@ -444,7 +444,7 @@ int scratch_prototype_owner_(const field_type& prototype) const {
       record(runtime_block);
   }
   for (const auto& [key, scratch] : scratches_)
-    if (&prototype == &scratch)
+    if (&prototype == &scratch && std::get<1>(key) == active_level_)
       record(std::get<2>(key));
   const auto& manager = runtime_state().hist_;
   for (const auto& [key, ring] : manager.histories) {

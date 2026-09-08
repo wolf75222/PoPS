@@ -25,7 +25,7 @@ def test_one_composite_temporal_solve_preserves_current_parent_and_consumed_publ
     assert "residual_face_weight = -(" in source
     assert "PreparedSpatialResidual<pops::kNativeDimension>" not in source
     if nonlinear:
-        assert "auto transform_state_resource_" in source
+        assert "transform_state_resource_" in source
         assert "coordinate_to_energy" in source
 
 
@@ -118,3 +118,37 @@ def test_nonlinear_coordinate_maps_preserve_bootstrap_and_refresh_phase_contract
     assert "temperature_to_energy" in source
     assert source.count("ctx.solve_spatial_hierarchy(") == 1
     assert "ctx.advance_synchronized_hierarchy" in install
+
+
+@pytest.mark.parametrize("imex", [False, True])
+@pytest.mark.parametrize("kind", ["constant", "nonlinear_accumulation"])
+def test_spatial_scratch_producers_retain_exact_block_level_and_node_ownership(kind, imex):
+    import pops
+    from tests.python.integration.runtime.test_amr_implicit_diffusion import build
+
+    case, layout = build(16, kind=kind, imex=imex)
+    plan = pops.resolve(pops.validate(case), layout=layout)
+    token = next(node for node in plan.time._values if node.op == "solve_spatial_nonlinear")
+    source = emit_cpp_program(
+        plan.time, model=lower_and_validate(plan.blocks[0].model)[0], target="amr_system"
+    )
+    assert "spatial_%d_trial = &ctx.scratch_state(%d,1,ctx.state(0));" % (token.id, token.id) in source
+    assert "ctx.scratch_state(%d,0,ctx.state(0))" % token.id in source
+    assert "ctx.scratch_state_like(" not in source
+    transforms = [node for node in (*plan.time._values, *token.attrs["residual_block"])
+                  if node.op == "local_transform"]
+    if kind == "nonlinear_accumulation":
+        assert transforms
+    for node in transforms:
+        assert "transform_state_resource_%d = &ctx.scratch_state(%d, 0, ctx.state(0));" % (
+            node.id, node.id) in source
+        assert "transform_status_resource_%d = &ctx.scalar_scratch(%d, 0, ctx.state(0), 1, 0);" % (
+            node.id, node.id) in source
+    install = source.split('extern "C" void pops_install_program_amr', 1)[1]
+    resources = install.split("return _PopsAmrLevelProgram{", 1)[0]
+    assert "_trial" not in resources
+    assert "transform_state_resource_" not in resources
+    assert "transform_status_resource_" not in resources
+    assert "pops::PureFieldAlgebra::copy(*spatial_%d_trial,q);" % token.id in source
+    assert "frozen_previous" in source
+    assert source.count("ctx.solve_spatial_hierarchy(") == 1

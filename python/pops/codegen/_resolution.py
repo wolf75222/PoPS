@@ -231,17 +231,8 @@ def _resolve_amr_program(
     }
 
 
-def _uses_local_transform(program: Any) -> bool:
-    """Return whether the resolved Program reaches a pointwise local transform.
-
-    A flat AMR level can run the prepared pointwise transform directly.  On a refined hierarchy,
-    however, executing it before the reflux/synchronization boundary would give the transform a
-    different semantic position than the uniform route.  Transforms authored inside
-    ``after_synchronization`` run after reflux and are therefore legal.  The resolved hierarchy
-    context is the authority for that distinction, so reject before artifact creation rather than
-    advertising a late runtime guard as support.
-    """
-
+def _spatial_coordinate_transforms(program: Any) -> set[int]:
+    """Return exact validated coordinate maps owned by the composite temporal stage."""
     # A composite temporal stage has an explicit coordinate map Q and an exact
     # direct conservative commit. These maps are internal to its one synchronized
     # solve, not physical transformations postponed across a reflux correction.
@@ -283,6 +274,22 @@ def _uses_local_transform(program: Any) -> bool:
             if endpoint.op == "local_transform":
                 # validate_spatial_commit authenticated this exact Q(candidate).
                 coordinate_transforms.add(id(endpoint))
+
+    return coordinate_transforms
+
+
+def _uses_local_transform(program: Any) -> bool:
+    """Return whether the resolved Program reaches a pointwise local transform.
+
+    A flat AMR level can run the prepared pointwise transform directly.  On a refined hierarchy,
+    however, executing it before the reflux/synchronization boundary would give the transform a
+    different semantic position than the uniform route.  Transforms authored inside
+    ``after_synchronization`` run after reflux and are therefore legal.  The resolved hierarchy
+    context is the authority for that distinction, so reject before artifact creation rather than
+    advertising a late runtime guard as support.
+    """
+
+    coordinate_transforms = _spatial_coordinate_transforms(program)
 
     def walk(values: Any) -> bool:
         for value in values:
