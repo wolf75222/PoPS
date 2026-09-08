@@ -451,6 +451,9 @@ def _checkpoint_member_names(
         "program_last_dt",
     )
     runtime = (
+        "program_exchange_state",
+        "program_exchange_offsets",
+        "continuation_transition_plan",
         "runtime_consumer_graph",
         "runtime_consumer_cursors",
         "runtime_consumer_diagnostics",
@@ -591,6 +594,17 @@ def _common_budget(
         _mul(len(cells), auxiliary_metadata_bytes, where="auxiliary metadata budget"),
         where="auxiliary checkpoint payload budget",
     )
+    from pops.runtime._checkpoint_exchanges import exchange_checkpoint_byte_capacity
+    from pops.runtime._continuation_transitions import prepare_bind_continuation
+    prepare_bind_continuation(
+        owner, install_plan, program=program, block_names=tuple(block_nvars_by_name),
+        field_names=field_names)
+    from pops.output._checkpoint_collective import checkpoint_topology
+    exchange_bytes = exchange_checkpoint_byte_capacity(
+        program, cells=cells, dimension=len(shape),
+        rank_capacity=max(rank_capacity, checkpoint_topology(owner).size),
+        resolved_plan=install_plan.artifact.plan)
+    owner._checkpoint_exchange_byte_capacity = exchange_bytes
     program_bytes = _mul(
         accepted_program_bytes,
         1,
@@ -612,6 +626,7 @@ def _common_budget(
         cache_bytes,
         auxiliary_bytes,
         program_bytes,
+        exchange_bytes,
         source_authority_bytes,
         structural_bytes,
         migration_bytes,
@@ -643,6 +658,8 @@ def _common_budget(
         "history_storage": [list(row) for row in history_evidence],
         "cache": cache_evidence,
         "temporal": temporal_manifest,
+        "continuation": owner._continuation_transition_plan.to_data(),
+        "accepted_exchange_bytes": exchange_bytes,
         "consumer_graph": consumer_data,
         "consumer_identity": consumer_identity,
         "consumer_count": consumer_count,

@@ -370,6 +370,8 @@ class _SystemUnifiedInstall(_System):
             install_plan = _require_exact_install_inputs(
                 self, compiled, instances, field_plans, aux, params, install_plan
             )
+            from pops.runtime._continuation_transitions import prepare_bind_continuation
+            prepare_bind_continuation(self, install_plan)
             compiled = install_plan.artifact
             instances = install_plan.instances
             params = install_plan.params

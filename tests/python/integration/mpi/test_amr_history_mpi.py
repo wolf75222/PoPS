@@ -330,6 +330,7 @@ def _run_restart_case(
     continuous = _bind(artifact)
     _advance(continuous, half)
     continuous_rings_at_half = _rings(continuous)
+    continuous_exchanges_at_half = continuous._executor._checkpoint_program_exchanges()
     continuous_regrid_at_half = continuous.amr.explain_regrid()
     _advance(continuous, nsteps - half)
     # AMR exposes level-qualified global state; the unqualified state_global route is intentionally
@@ -338,6 +339,7 @@ def _run_restart_case(
     reference = np.asarray(continuous.block_level_state_global("blk", 0), dtype=np.float64).copy()
     continuous_regrid = continuous.amr.explain_regrid()
     continuous_final_rings = _rings(continuous)
+    continuous_final_exchanges = continuous._executor._checkpoint_program_exchanges()
 
     interrupted = _bind(artifact)
     _advance(interrupted, half)
@@ -374,14 +376,20 @@ def _run_restart_case(
         restored = _bind(artifact)
         restored.restart(checkpoint)
         restored_rings = _rings(restored)
+        restored_exchanges = restored._executor._checkpoint_program_exchanges()
         restored_regrid_at_half = restored.amr.explain_regrid()
         _advance(restored, nsteps - half)
         result = np.asarray(restored.block_level_state_global("blk", 0), dtype=np.float64).copy()
         restored_regrid = restored.amr.explain_regrid()
         restored_final_rings = _rings(restored)
+        restored_final_exchanges = restored._executor._checkpoint_program_exchanges()
 
     return {
         "reference": reference,
+        "continuous_exchanges_at_half": continuous_exchanges_at_half,
+        "restored_exchanges": restored_exchanges,
+        "continuous_final_exchanges": continuous_final_exchanges,
+        "restored_final_exchanges": restored_final_exchanges,
         "continuous_final_rings": continuous_final_rings,
         "restored_final_rings": restored_final_rings,
         "result": result,
@@ -400,6 +408,10 @@ def _run_restart_case(
 
 
 def _assert_public_restart(out: dict[str, Any], *, label: str) -> None:
+    chk(out["continuous_exchanges_at_half"] == out["restored_exchanges"],
+        "%s immediate restart preserves accepted exchange mailbox bytes" % label)
+    chk(out["continuous_final_exchanges"] == out["restored_final_exchanges"],
+        "%s continued accepted exchange mailbox bytes agree" % label)
     chk(
         bool(out["continuous_rings_at_half"]),
         "%s exposes at least one public temporal history ring" % label,

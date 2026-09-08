@@ -830,6 +830,10 @@ class _MultiLayoutUniformExecutor:
             rows.append((layout_program, engine_blocks, report))
         return tuple(rows)
 
+    def continuation_transition_report(self) -> dict[str, Any]:
+        return {"schema_version": 1, "layouts": {str(layout): engine.continuation_transition_report()
+                for layout, engine in self._engines.items()}}
+
     def program_report(self) -> Any:
         """Aggregate every real child Program without inventing a single native engine."""
         from pops.identity import make_identity

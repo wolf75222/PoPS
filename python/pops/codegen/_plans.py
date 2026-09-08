@@ -514,6 +514,7 @@ class ResolvedSimulationPlan:
     bootstrap_plan: Any = None
     amr_execution: Any = None
     amr_providers: Mapping[str, Any] = field(default_factory=dict)
+    continuation_transitions: Any = field(init=False)
     resolved_dimension: int = field(init=False)
     plan_identity: Identity = field(init=False)
 
@@ -682,6 +683,8 @@ class ResolvedSimulationPlan:
         object.__setattr__(self, "amr_providers", _string_mapping(
             self.amr_providers, where="ResolvedSimulationPlan.amr_providers"))
         self._validate_amr_authorities()
+        from pops.runtime._continuation_transitions import derive_continuation_transitions
+        object.__setattr__(self, "continuation_transitions", derive_continuation_transitions(self))
         object.__setattr__(self, "plan_identity", make_identity("resolved-plan", self._payload()))
 
     def _validate_amr_authorities(self) -> None:
@@ -707,6 +710,7 @@ class ResolvedSimulationPlan:
         return {
             "schema_version": 1,
             "snapshot_artifact_hash": self.snapshot.artifact_hash,
+            "continuation_transitions": self.continuation_transitions.to_data(),
             "target": self.target,
             "backend": self.backend,
             "bind_schema_artifact_hash": self.bind_schema.artifact_hash,
@@ -768,6 +772,8 @@ class ResolvedSimulationPlan:
         }
 
     def verify(self) -> None:
+        from pops.runtime._continuation_transitions import require_resolved_continuation
+        require_resolved_continuation(self)
         expected = make_identity("resolved-plan", self._payload())
         if self.plan_identity != expected:
             raise ValueError("ResolvedSimulationPlan identity verification failed")

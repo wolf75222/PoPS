@@ -88,6 +88,9 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
   }
 
   static int active_level(const context_type& context) noexcept { return context.active_level_; }
+  static int lane_size(const context_type& context) {
+    return context.prepared_execution_lane().size();
+  }
 
   static bool has_pending_history(const context_type& context, std::string_view name, int level) {
     return context.pending_history_remaps_.contains(context.history_key_(std::string(name), level));
@@ -1605,6 +1608,34 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRefusesHistoryRegridBeforeTopologyMu
   EXPECT_EQ(engine->hierarchy().num_levels(), 1u);
 }
 
+TEST(GeneratedAmrSystemBlock, AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords) {
+  using Ledger = pops::runtime::program::AcceptedExchangeLedger;
+  Ledger ledger;
+  ledger.stage({"operation:1", "occurrence:1", "qualified-frame:1", "quadrature:1", -1, 0.25, -3.5,
+                -0.0, 2});
+  const auto exact = ledger.checkpoint();
+  EXPECT_EQ(Ledger::from_checkpoint(exact).checkpoint(), exact);
+  EXPECT_TRUE(std::signbit(Ledger::from_checkpoint(exact).records().front().temporal_weight));
+  auto invalid = exact;
+  std::fill(invalid.end() - 8, invalid.end(), std::uint8_t{0});
+  EXPECT_THROW((void)Ledger::from_checkpoint(invalid), std::invalid_argument);
+  invalid = exact;
+  const auto nan_bits = std::bit_cast<std::uint64_t>(std::numeric_limits<double>::quiet_NaN());
+  for (int byte = 0; byte < 8; ++byte)
+    invalid[invalid.size() - 24 + byte] = static_cast<std::uint8_t>(nan_bits >> (8 * byte));
+  EXPECT_THROW((void)Ledger::from_checkpoint(invalid), std::invalid_argument);
+  invalid = exact;
+  invalid.insert(invalid.end(), exact.begin() + 16, exact.end());
+  invalid[8] = 2;
+  EXPECT_THROW((void)Ledger::from_checkpoint(invalid), std::invalid_argument);
+  invalid = exact;
+  invalid.push_back(0);
+  EXPECT_THROW((void)Ledger::from_checkpoint(invalid), std::invalid_argument);
+  invalid = exact;
+  std::fill(invalid.begin() + 8, invalid.begin() + 16, std::uint8_t{255});
+  EXPECT_THROW((void)Ledger::from_checkpoint(invalid), std::invalid_argument);
+}
+
 TEST(GeneratedAmrSystemBlock, AlignedFourSlotHistoryProjectsEarnedSamplesAtomically) {
   constexpr int Dim = pops::kNativeDimension;
   using Observer = pops::runtime::program::detail::AmrProgramHistoryRemapCollectiveTestAccess<Dim>;
@@ -1673,7 +1704,10 @@ TEST(GeneratedAmrSystemBlock, AlignedFourSlotHistoryProjectsEarnedSamplesAtomica
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   system.execute_prepared_tagging(0);
   const auto accepted_before_failure = system.program_accepted_state();
-  EXPECT_THROW(system.regrid_from_prepared_tagging(0), std::invalid_argument);
+  if (Observer::lane_size(*context) == 1)
+    EXPECT_THROW(system.regrid_from_prepared_tagging(0), std::invalid_argument);
+  else
+    EXPECT_THROW(system.regrid_from_prepared_tagging(0), std::runtime_error);
   EXPECT_EQ(system.patch_boxes(), old_boxes);
   EXPECT_EQ(system.program_accepted_state(), accepted_before_failure);
   for (int slot = 0; slot < 4; ++slot)
@@ -1735,11 +1769,39 @@ TEST(GeneratedAmrSystemBlock, AlignedFourSlotHistoryProjectsEarnedSamplesAtomica
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   system.execute_prepared_tagging(0);
   const auto flux_accepted = system.program_accepted_state();
+  const auto flux_continuation = system.continuation_transition_rows();
   EXPECT_THROW(system.regrid_from_prepared_tagging(0), std::runtime_error);
   EXPECT_EQ(system.patch_boxes(), flux_boxes);
   EXPECT_EQ(system.program_accepted_state(), flux_accepted);
+  EXPECT_EQ(system.continuation_transition_rows(), flux_continuation);
   for (int slot = 0; slot < 4; ++slot)
     EXPECT_EQ(system.history_global("tracer.U", 1, slot), flux_slots[slot]);
+  pops::runtime::program::AcceptedExchangeLedger mailbox;
+  mailbox.stage({"operation", "occurrence", "frame", "quadrature", 1, 0.5, 3.0, 0.125, 1});
+  const auto mailbox_bytes = mailbox.checkpoint();
+  const auto before_mailbox = system.checkpoint_program_exchanges();
+  system.begin_restart_transaction();
+  system.restore_checkpoint_program_exchanges(mailbox_bytes);
+  EXPECT_EQ(system.checkpoint_program_exchanges(), mailbox_bytes);
+  auto invalid_mailbox = mailbox_bytes;
+  std::fill(invalid_mailbox.end() - 8, invalid_mailbox.end(), std::uint8_t{0});
+  if (Observer::lane_size(*context) == 1)
+    EXPECT_THROW(system.restore_checkpoint_program_exchanges(invalid_mailbox),
+                 std::invalid_argument);
+  else
+    EXPECT_THROW(system.restore_checkpoint_program_exchanges(invalid_mailbox), std::runtime_error);
+  EXPECT_EQ(system.checkpoint_program_exchanges(), mailbox_bytes);
+  system.rollback_restart_transaction();
+  EXPECT_EQ(system.checkpoint_program_exchanges(), before_mailbox);
+  system.begin_restart_transaction();
+  system.restore_checkpoint_program_exchanges(mailbox_bytes);
+  system.commit_restart_transaction();
+  system.finalize_restart_transaction();
+  EXPECT_EQ(system.checkpoint_program_exchanges(), mailbox_bytes);
+  system.begin_step_transaction();
+  EXPECT_TRUE(system.program_exchange_records().empty());
+  system.rollback_step_transaction();
+  EXPECT_EQ(system.checkpoint_program_exchanges(), mailbox_bytes);
 }
 
 TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {

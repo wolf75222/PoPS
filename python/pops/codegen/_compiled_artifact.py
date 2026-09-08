@@ -103,6 +103,7 @@ class CompiledPlanRecord:
     lowering_coverage: Any
     blocks: tuple[CompiledPlanBlock, ...]
     time_identity: Any
+    continuation_transitions: Any = None
     consumer_graph: Any = None
     restart_authority: Any = None
     component_contracts: tuple[Any, ...] = ()
@@ -155,6 +156,7 @@ class CompiledPlanRecord:
                 for block in plan.blocks
             ),
             time_identity=_evidence(plan.time, where="resolved time"),
+            continuation_transitions=plan.continuation_transitions,
             resolved_hierarchy=plan.resolved_hierarchy,
             amr_transfer=plan.amr_transfer,
             initial_condition_plan=plan.initial_condition_plan,
@@ -199,6 +201,10 @@ class CompiledPlanRecord:
         if type(self.lowering_coverage) is not LoweringCoverageReport:
             raise TypeError(
                 "CompiledPlanRecord.lowering_coverage must be a LoweringCoverageReport")
+        from pops.runtime._continuation_transitions import ContinuationTransitionPlan
+        if type(self.continuation_transitions) is not ContinuationTransitionPlan:
+            raise ValueError("CompiledPlanRecord omits required continuation transition policies")
+        self.continuation_transitions.require("initialization")
         if self.time_identity is None:
             raise ValueError("CompiledPlanRecord lost its authenticated whole-system Program")
         object.__setattr__(self, "time_identity", _deep_freeze(self.time_identity))
@@ -334,6 +340,7 @@ class CompiledPlanRecord:
                 }
                 for block in self.blocks
             ],
+            "continuation_transitions": self.continuation_transitions.to_data(),
             "time_identity": _evidence(
                 self.time_identity, where="compiled plan time identity"),
             "resolved_hierarchy": _evidence(

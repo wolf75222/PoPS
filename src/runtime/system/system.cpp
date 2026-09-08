@@ -151,6 +151,31 @@ std::vector<runtime::program::ExchangeRecord> System<Dim>::program_exchange_reco
 }
 
 template <int Dim>
+std::vector<std::uint8_t> System<Dim>::checkpoint_program_exchanges() const {
+  return p_->program_.accepted_exchanges_.checkpoint();
+}
+
+template <int Dim>
+void System<Dim>::restore_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes) {
+  const auto& lane = prepared_boundary_execution_lane();
+  std::optional<runtime::program::AcceptedExchangeLedger> candidate;
+  std::exception_ptr error;
+  try {
+    if (!p_->external_restart_transaction_)
+      throw std::logic_error("accepted exchange restore requires the native restart transaction");
+    candidate.emplace(runtime::program::AcceptedExchangeLedger::from_checkpoint(bytes));
+  } catch (...) {
+    error = std::current_exception();
+  }
+  if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
+    throw std::runtime_error("accepted exchange restore preparation failed collectively");
+  }
+  p_->program_.accepted_exchanges_.swap(*candidate);
+}
+
+template <int Dim>
 void System<Dim>::commit_step_transaction() {
   runtime::program::require_step_transaction_control(
       prepared_boundary_execution_lane(), 2, static_cast<long>(step_transaction_depth()),
@@ -639,6 +664,9 @@ template std::size_t System<kNativeDimension>::step_transaction_depth() const no
 template void System<kNativeDimension>::stage_program_exchange(runtime::program::ExchangeRecord);
 template std::vector<runtime::program::ExchangeRecord>
 System<kNativeDimension>::program_exchange_records() const;
+template std::vector<std::uint8_t> System<kNativeDimension>::checkpoint_program_exchanges() const;
+template void System<kNativeDimension>::restore_checkpoint_program_exchanges(
+    std::span<const std::uint8_t>);
 
 template void System<kNativeDimension>::commit_step_transaction();
 template std::map<std::string, double> System<kNativeDimension>::step_change_l2() const;

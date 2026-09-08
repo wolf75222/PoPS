@@ -39,6 +39,7 @@ class _PreparedAMRRestart:
     multi: bool
     state_payload: tuple[Any, ...]
     auxiliary_checkpoint_payload: tuple[bytes, ...]
+    exchange_checkpoint: bytes
     potential_payload: tuple[Any, ...]
     field_payload: tuple[Any, ...]
     hierarchy_mode: str
@@ -702,6 +703,8 @@ def _capture_v3(owner, sim, prepared):
             )
         out["auxiliary_checkpoint_%d" % level] = np.frombuffer(payload, dtype=np.uint8).copy()
     capture_histories(sim, prepared.history_plan, out)
+    from pops.runtime._checkpoint_exchanges import capture_checkpoint_continuation
+    capture_checkpoint_continuation(owner, out)
     identity = seal_checkpoint_payload(owner, out, runtime_kind="amr")
     return out, identity.token
 
@@ -1087,6 +1090,7 @@ def prepare_v3(
 
     _preflight_histories_v3(sim, d, current_ranks, spatial)
 
+    from pops.runtime._checkpoint_exchanges import prepare_checkpoint_continuation
     return _PreparedAMRRestart(
         payload=d,
         temporal_state=restored_temporal,
@@ -1105,6 +1109,7 @@ def prepare_v3(
         multi=bool(multi),
         state_payload=tuple((block, tuple(levels)) for block, levels in state_payload),
         auxiliary_checkpoint_payload=tuple(auxiliary_checkpoint_payload),
+        exchange_checkpoint=prepare_checkpoint_continuation(owner, d),
         potential_payload=tuple(phi_payload),
         field_payload=tuple((slot, tuple(levels)) for slot, levels in field_payload),
         hierarchy_mode=hierarchy_mode,
@@ -1401,6 +1406,7 @@ def apply_v3(owner, sim, prepared):
     # reconstructs policy-omitted dense values. Replace those temporary values with the checkpoint's
     # exact accepted semantic state before exposing the runtime again.
     sim.restore_checkpoint_accepted_state(program_state)
+    sim._restore_checkpoint_program_exchanges(prepared.exchange_checkpoint)
     from pops.runtime._amr_checkpoint_contract import validate_restored_contract
 
     # (8) Clock last: the next cadence decision is identical to the uninterrupted run.

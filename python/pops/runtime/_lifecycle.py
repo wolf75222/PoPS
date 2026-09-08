@@ -138,11 +138,22 @@ class _LifecycleMixin(_System):
         hasattr-gated so an old ``.so`` overlay still binds). After this, every structural setter --
         Python-layer AND the native ``__getattr__`` passthrough -- refuses with the bind-vocabulary
         error."""
+        receipt = None
+        if getattr(self, "_continuation_transition_plan", None) is not None:
+            from pops.runtime._continuation_transitions import completed_initialization_receipt
+            receipt = completed_initialization_receipt(self, snapshot)
         self._bound_snapshot = snapshot
         self._lifecycle = "bound"
         native = getattr(self._s, "mark_bound", None)
         if callable(native):
             native()
+        if receipt is not None:
+            self._last_continuation_transition_report = receipt
+
+    def continuation_transition_report(self) -> Any:
+        """Return the last committed continuation receipt, detached from runtime storage."""
+        from pops.runtime._continuation_transitions import committed_continuation_report
+        return committed_continuation_report(self)
 
     def lifecycle_state(self) -> Any:
         """The runtime lifecycle state: ``assembling`` / ``bound`` / ``running`` (ADC-592).

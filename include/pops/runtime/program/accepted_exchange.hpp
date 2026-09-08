@@ -3,9 +3,13 @@
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 
 #include <bit>
+#include <algorithm>
+#include <string_view>
 #include <cmath>
 #include <cstdint>
 #include <set>
+#include <span>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -109,6 +113,84 @@ class AcceptedExchangeLedger {
   void swap(AcceptedExchangeLedger& other) noexcept {
     records_.swap(other.records_);
     keys_.swap(other.keys_);
+  }
+
+  /// Canonical accepted mailbox image. It is independent of diagnostic projections and retains
+  /// binary64 weights/fluxes exactly; the enclosing restart transaction remains the sole publisher.
+  std::vector<std::uint8_t> checkpoint() const {
+    std::vector<std::uint8_t> bytes{'P', 'O', 'P', 'S', 'E', 'X', '0', '1'};
+    const auto word = [&](std::uint64_t value) {
+      for (unsigned byte = 0; byte < 8; ++byte)
+        bytes.push_back(static_cast<std::uint8_t>(value >> (8 * byte)));
+    };
+    const auto text = [&](const std::string& value) {
+      word(value.size());
+      bytes.insert(bytes.end(), value.begin(), value.end());
+    };
+    word(records_.size());
+    for (const auto& record : records_) {
+      record.validate();
+      text(record.operation_identity);
+      text(record.occurrence_identity);
+      text(record.evaluation_context);
+      text(record.quadrature_identity);
+      word(std::bit_cast<std::uint64_t>(static_cast<std::int64_t>(record.orientation)));
+      word(std::bit_cast<std::uint64_t>(record.face_measure));
+      word(std::bit_cast<std::uint64_t>(record.numerical_flux));
+      word(std::bit_cast<std::uint64_t>(record.temporal_weight));
+      word(static_cast<std::uint64_t>(record.multiplicity));
+    }
+    return bytes;
+  }
+
+  static AcceptedExchangeLedger from_checkpoint(std::span<const std::uint8_t> bytes) {
+    constexpr std::string_view magic = "POPSEX01";
+    if (bytes.size() < 16 || !std::equal(magic.begin(), magic.end(), bytes.begin()))
+      throw std::invalid_argument("accepted exchange checkpoint has an invalid header");
+    std::size_t cursor = magic.size();
+    const auto word = [&]() {
+      if (bytes.size() - cursor < 8)
+        throw std::invalid_argument("accepted exchange checkpoint is truncated");
+      std::uint64_t value = 0;
+      for (unsigned byte = 0; byte < 8; ++byte)
+        value |= static_cast<std::uint64_t>(bytes[cursor++]) << (8 * byte);
+      return value;
+    };
+    const auto text = [&]() {
+      const auto size = word();
+      if (size > bytes.size() - cursor)
+        throw std::invalid_argument("accepted exchange checkpoint text exceeds its byte image");
+      std::string value(reinterpret_cast<const char*>(bytes.data() + cursor), size);
+      cursor += static_cast<std::size_t>(size);
+      return value;
+    };
+    const auto count = word();
+    if (count > (bytes.size() - cursor) / 72)
+      throw std::invalid_argument("accepted exchange checkpoint count exceeds its byte image");
+    AcceptedExchangeLedger candidate;
+    for (std::uint64_t index = 0; index < count; ++index) {
+      ExchangeRecord record;
+      record.operation_identity = text();
+      record.occurrence_identity = text();
+      record.evaluation_context = text();
+      record.quadrature_identity = text();
+      const auto orientation = std::bit_cast<std::int64_t>(word());
+      if (orientation != -1 && orientation != 1)
+        throw std::invalid_argument("accepted exchange checkpoint has an invalid orientation");
+      record.orientation = static_cast<int>(orientation);
+      record.face_measure = std::bit_cast<double>(word());
+      record.numerical_flux = std::bit_cast<double>(word());
+      record.temporal_weight = std::bit_cast<double>(word());
+      const auto multiplicity = word();
+      if (multiplicity == 0 ||
+          multiplicity > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
+        throw std::invalid_argument("accepted exchange checkpoint has an invalid multiplicity");
+      record.multiplicity = static_cast<int>(multiplicity);
+      candidate.stage(std::move(record));
+    }
+    if (cursor != bytes.size())
+      throw std::invalid_argument("accepted exchange checkpoint has trailing bytes");
+    return candidate;
   }
 
  private:

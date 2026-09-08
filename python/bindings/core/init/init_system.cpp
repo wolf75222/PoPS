@@ -1114,6 +1114,24 @@ void bind_system_stepping(py::class_<System>& cls) {
       .def("_begin_step_transaction", &System::begin_step_transaction)
       .def("_begin_nested_step_transaction", &System::begin_nested_step_transaction)
       .def("_step_transaction_depth", &System::step_transaction_depth)
+      .def("_checkpoint_program_exchanges",
+           [](const System& system) {
+             const auto bytes = system.checkpoint_program_exchanges();
+             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+           })
+      .def("_validate_checkpoint_program_exchanges",
+           [](const System&, py::bytes payload) {
+             const std::string bytes = payload;
+             (void)pops::runtime::program::AcceptedExchangeLedger::from_checkpoint(
+                 std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(bytes.data()),
+                                               bytes.size()));
+           })
+      .def("_restore_checkpoint_program_exchanges",
+           [](System& system, py::bytes payload) {
+             const std::string bytes = payload;
+             system.restore_checkpoint_program_exchanges(std::span<const std::uint8_t>(
+                 reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()));
+           })
       .def("_program_exchange_records",
            [](const System& system) {
              py::list result;

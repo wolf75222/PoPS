@@ -283,6 +283,8 @@ class _AmrSystemInstall(_AmrSystem):
                 raise ValueError("AMR bootstrap plan must be the exact value from the InstallPlan")
             if amr_transfer is not install_plan.amr_transfer:
                 raise ValueError("AMR transfer must be the exact value from the InstallPlan")
+            from pops.runtime._continuation_transitions import prepare_bind_continuation
+            prepare_bind_continuation(self, install_plan)
             compiled = install_plan.artifact
             instances = install_plan.instances
             params = install_plan.params

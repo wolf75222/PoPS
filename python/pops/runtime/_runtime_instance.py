@@ -849,6 +849,10 @@ class RuntimeInstance:
     def program_report(self) -> Any:
         return self._executor.program_report()
 
+    def continuation_transition_report(self) -> Any:
+        """Return the committed retained-object lifecycle outcomes."""
+        return self._executor.continuation_transition_report()
+
     def program_accepted_state(self) -> bytes:
         """Return the exact accepted AMR Program state owned by the native executor."""
         provider = getattr(self._executor, "program_accepted_state", None)

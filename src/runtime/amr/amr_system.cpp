@@ -3413,6 +3413,7 @@ struct AmrSystem<Dim>::Impl {
   std::uint64_t last_topology_rematerialization_generation =
       std::numeric_limits<std::uint64_t>::max();
   std::vector<std::vector<std::string>> last_topology_rematerialization_witness;
+  std::vector<std::vector<std::string>> last_continuation_transition_rows;
   AmrSystem<Dim>* facade = nullptr;
   bool auxiliary_registry_consensus_verified = false;
   enum class NativePackagePhase {
@@ -3478,6 +3479,7 @@ struct AmrSystem<Dim>::Impl {
     std::uint64_t last_topology_rematerialization_generation =
         std::numeric_limits<std::uint64_t>::max();
     std::vector<std::vector<std::string>> last_topology_rematerialization_witness;
+    std::vector<std::vector<std::string>> last_continuation_transition_rows;
     runtime::amr::PersistentTaggingState<Dim> tagging_state;
     std::set<std::pair<std::string, int>> bootstrap_materialized_actions;
     bool automatic_bootstrap_complete = false;
@@ -3508,6 +3510,7 @@ struct AmrSystem<Dim>::Impl {
           last_topology_rematerialization_generation(
               owner.last_topology_rematerialization_generation),
           last_topology_rematerialization_witness(owner.last_topology_rematerialization_witness),
+          last_continuation_transition_rows(owner.last_continuation_transition_rows),
           tagging_state(owner.tagging_state),
           bootstrap_materialized_actions(owner.bootstrap_materialized_actions),
           automatic_bootstrap_complete(owner.automatic_bootstrap_complete) {
@@ -3556,6 +3559,7 @@ struct AmrSystem<Dim>::Impl {
       std::uint64_t last_topology_rematerialization_generation =
           std::numeric_limits<std::uint64_t>::max();
       std::vector<std::vector<std::string>> last_topology_rematerialization_witness;
+      std::vector<std::vector<std::string>> last_continuation_transition_rows;
       runtime::amr::PersistentTaggingState<Dim> tagging_state;
       std::set<std::pair<std::string, int>> bootstrap_materialized_actions;
       bool automatic_bootstrap_complete = false;
@@ -3584,6 +3588,7 @@ struct AmrSystem<Dim>::Impl {
                 snapshot.last_topology_rematerialization_generation),
             last_topology_rematerialization_witness(
                 snapshot.last_topology_rematerialization_witness),
+            last_continuation_transition_rows(snapshot.last_continuation_transition_rows),
             tagging_state(snapshot.tagging_state),
             bootstrap_materialized_actions(snapshot.bootstrap_materialized_actions),
             automatic_bootstrap_complete(snapshot.automatic_bootstrap_complete),
@@ -3711,6 +3716,7 @@ struct AmrSystem<Dim>::Impl {
           prepared.last_topology_rematerialization_generation;
       owner.last_topology_rematerialization_witness.swap(
           prepared.last_topology_rematerialization_witness);
+      owner.last_continuation_transition_rows.swap(prepared.last_continuation_transition_rows);
       std::swap(owner.tagging_state, prepared.tagging_state);
       owner.bootstrap_materialized_actions.swap(prepared.bootstrap_materialized_actions);
       owner.automatic_bootstrap_complete = prepared.automatic_bootstrap_complete;
@@ -9604,6 +9610,68 @@ struct AmrSystem<Dim>::Impl {
         "AMR Program hierarchy-state publication failed collectively");
     if (hierarchy_cycle_state == nullptr)
       publish_tagging_checkpoint();
+    if (topology_changed) {
+      std::vector<std::vector<std::string>> receipt;
+      std::exception_ptr receipt_error;
+      try {
+        const auto append = [&](std::string kind, std::string name, std::string action,
+                                std::string validity, std::string authority) {
+          receipt.push_back({std::move(kind), std::move(name), std::move(action),
+                             std::move(validity), std::move(authority),
+                             std::to_string(engine->topology_epoch()),
+                             std::to_string(engine->materialization_generation())});
+        };
+        for (const auto& block : blocks) {
+          append("state", block.name, "transfer", "accepted", "resolved.amr_transfer");
+          append("auxiliary", block.name, "invalidate",
+                 "invalidated before declared provider evaluation",
+                 "native.invalidate_auxiliary_after_topology_regrid");
+        }
+        for (const auto& entry : history_remap_plan) {
+          const auto decoded = decode_exact_amr_history_key(entry.key);
+          if (!decoded)
+            throw std::logic_error("continuation receipt lost its qualified history key");
+          const bool pending =
+              entry.source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred;
+          const bool removed =
+              entry.source == runtime::program::AmrProgramHistoryRemapSource::Removed;
+          append("history", decoded->second,
+                 removed   ? "invalidate"
+                 : pending ? "reconstruct"
+                 : entry.source == runtime::program::AmrProgramHistoryRemapSource::RetainedChild
+                     ? "preserve"
+                     : "transfer",
+                 removed   ? "removed level"
+                 : pending ? "deferred child-clock reconstruction"
+                           : "accepted samples",
+                 entry.key + " <- " + entry.parent_key);
+        }
+        for (const auto& [slot, field] : field_plans) {
+          (void)field;
+          const bool solved =
+              last_topology_rematerialization_epoch == engine->topology_epoch() &&
+              last_topology_rematerialization_generation == engine->materialization_generation();
+          append("field_value", slot, solved ? "solve" : "invalidate",
+                 solved ? "solved on published topology" : "awaiting declared bootstrap solve",
+                 "native.rematerialize_fields_after_topology_change");
+          append("field_observation", slot, solved ? "solve" : "invalidate",
+                 solved ? "derived from qualified solved field" : "invalid",
+                 "native.rematerialize_fields_after_topology_change");
+          append("solver_cache", slot, "invalidate", "new topology operator identity",
+                 "native.field_solver");
+        }
+        append("controller", "accepted controller and queued events", "preserve",
+               "accepted clock/controller snapshot preserved", "native.accepted_snapshot");
+        append("accepted_exchanges", "accepted Program exchange mailbox", "preserve",
+               "last accepted window", "native.accepted_snapshot");
+      } catch (...) {
+        receipt_error = std::current_exception();
+      }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          receipt_error, &published_lane,
+          "AMR continuation receipt preparation failed collectively");
+      last_continuation_transition_rows.swap(receipt);
+    }
     return static_cast<std::size_t>(parent_level + 1) < engine->hierarchy().num_levels();
   }
 
@@ -16941,6 +17009,36 @@ std::vector<runtime::program::ExchangeRecord> AmrSystem<Dim>::program_exchange_r
 }
 
 template <int Dim>
+std::vector<std::vector<std::string>> AmrSystem<Dim>::continuation_transition_rows() const {
+  return p_->last_continuation_transition_rows;
+}
+
+template <int Dim>
+std::vector<std::uint8_t> AmrSystem<Dim>::checkpoint_program_exchanges() const {
+  return p_->program.accepted_exchanges_.checkpoint();
+}
+
+template <int Dim>
+void AmrSystem<Dim>::restore_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes) {
+  const auto& lane = p_->require_prepared_engine_lane("AMR exchange checkpoint restore");
+  std::optional<runtime::program::AcceptedExchangeLedger> candidate;
+  std::exception_ptr error;
+  try {
+    if (!p_->restart_transaction)
+      throw std::logic_error("accepted exchange restore requires the native restart transaction");
+    candidate.emplace(runtime::program::AcceptedExchangeLedger::from_checkpoint(bytes));
+  } catch (...) {
+    error = std::current_exception();
+  }
+  if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
+    throw std::runtime_error("accepted exchange restore preparation failed collectively");
+  }
+  p_->program.accepted_exchanges_.swap(*candidate);
+}
+
+template <int Dim>
 void AmrSystem<Dim>::commit_step_transaction() {
   runtime::program::require_step_transaction_control(
       p_->require_prepared_engine_lane("AMR commit step transaction"), 2,
@@ -20861,6 +20959,12 @@ template std::size_t AmrSystem<kNativeDimension>::step_transaction_depth() const
 template void AmrSystem<kNativeDimension>::stage_program_exchange(runtime::program::ExchangeRecord);
 template std::vector<runtime::program::ExchangeRecord>
 AmrSystem<kNativeDimension>::program_exchange_records() const;
+template std::vector<std::vector<std::string>>
+AmrSystem<kNativeDimension>::continuation_transition_rows() const;
+template std::vector<std::uint8_t> AmrSystem<kNativeDimension>::checkpoint_program_exchanges()
+    const;
+template void AmrSystem<kNativeDimension>::restore_checkpoint_program_exchanges(
+    std::span<const std::uint8_t>);
 
 template void AmrSystem<kNativeDimension>::commit_step_transaction();
 template void AmrSystem<kNativeDimension>::finalize_step_transaction();

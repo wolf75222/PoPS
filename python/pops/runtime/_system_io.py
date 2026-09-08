@@ -26,6 +26,7 @@ class _PreparedUniformRestart:
     temporal_state: Any
     cadence_state: Any
     auxiliary_checkpoint: bytes
+    exchange_checkpoint: bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,6 +363,8 @@ class _SystemIO(_System):
             spatial_shape=prepared.spatial_shape,
             field_slots=prepared.field_slots,
         )
+        from pops.runtime._checkpoint_exchanges import capture_checkpoint_continuation
+        capture_checkpoint_continuation(self, out)
         identity = seal_checkpoint_payload(self, out, runtime_kind="uniform")
         return out, identity.token
 
@@ -662,11 +665,16 @@ class _SystemIO(_System):
                 raise ValueError(
                     "restart : scheduled cache node %d has the wrong value size" % node
                 )
-        return _PreparedUniformRestart(d, identity, temporal, cadence, auxiliary_checkpoint_bytes)
+        from pops.runtime._checkpoint_exchanges import prepare_checkpoint_continuation
+        exchanges = prepare_checkpoint_continuation(self, d)
+        return _PreparedUniformRestart(d, identity, temporal, cadence, auxiliary_checkpoint_bytes, exchanges)
 
     def _begin_checkpoint_restart(self) -> None:
         if "_checkpoint_restart_python_snapshot" in self.__dict__:
             raise RuntimeError("Uniform checkpoint restart transaction is already active")
+        from pops.runtime._continuation_transitions import prepare_receipt
+        prepare_receipt(self, "restart")
+        self._continuation_receipt_before_restart = getattr(self, "_last_continuation_transition_report", None)
         self._checkpoint_restart_python_snapshot = (
             getattr(self, "_last_restart_identity", None),
             getattr(self, "_last_restart_report", None),
@@ -677,6 +685,7 @@ class _SystemIO(_System):
             self._s._begin_restart_transaction()
         except BaseException:
             del self._checkpoint_restart_python_snapshot
+            del self._continuation_receipt_before_restart
             raise
 
     def _apply_checkpoint_restart(self, prepared: _PreparedUniformRestart) -> Any:
@@ -723,9 +732,12 @@ class _SystemIO(_System):
                 cache_names[index],
                 np.asarray(d["cache_value_%d" % node], dtype=np.float64),
             )
+        self._s._restore_checkpoint_program_exchanges(prepared.exchange_checkpoint)
         self._temporal_restart_state = prepared.temporal_state
         self._step_controller = None
         self._last_restart_identity = prepared.restart_identity
+        from pops.runtime._continuation_transitions import completed_restart_receipt
+        self._prepared_continuation_restart_receipt = completed_restart_receipt(self)
         return prepared.restart_identity
 
     def _commit_checkpoint_restart(self) -> None:
@@ -736,6 +748,9 @@ class _SystemIO(_System):
         # Native finalization is noexcept and only releases the already-committed snapshot.
         self._s._finalize_restart_transaction()
         del self._checkpoint_restart_python_snapshot
+        self._last_continuation_transition_report = self._prepared_continuation_restart_receipt
+        del self._prepared_continuation_restart_receipt
+        del self._continuation_receipt_before_restart
 
     def _rollback_checkpoint_restart(self) -> None:
         snapshot = self._checkpoint_restart_python_snapshot
@@ -749,6 +764,9 @@ class _SystemIO(_System):
                 self._step_controller,
             ) = snapshot
             del self._checkpoint_restart_python_snapshot
+            self._last_continuation_transition_report = self._continuation_receipt_before_restart
+            del self._continuation_receipt_before_restart
+            self.__dict__.pop("_prepared_continuation_restart_receipt", None)
 
     def restart(self, path: Any, *, bit_identical: bool = False) -> Any:
         """Restore the direct engine through the native collective transaction protocol."""

@@ -965,6 +965,25 @@ void bind_amr_stepping(py::class_<AmrSystem>& cls) {
       .def("_begin_step_transaction", &AmrSystem::begin_step_transaction)
       .def("_begin_nested_step_transaction", &AmrSystem::begin_nested_step_transaction)
       .def("_step_transaction_depth", &AmrSystem::step_transaction_depth)
+      .def("_continuation_transition_rows", &AmrSystem::continuation_transition_rows)
+      .def("_checkpoint_program_exchanges",
+           [](const AmrSystem& system) {
+             const auto bytes = system.checkpoint_program_exchanges();
+             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+           })
+      .def("_validate_checkpoint_program_exchanges",
+           [](const AmrSystem&, py::bytes payload) {
+             const std::string bytes = payload;
+             (void)pops::runtime::program::AcceptedExchangeLedger::from_checkpoint(
+                 std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(bytes.data()),
+                                               bytes.size()));
+           })
+      .def("_restore_checkpoint_program_exchanges",
+           [](AmrSystem& system, py::bytes payload) {
+             const std::string bytes = payload;
+             system.restore_checkpoint_program_exchanges(std::span<const std::uint8_t>(
+                 reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()));
+           })
       .def("_program_exchange_records",
            [](const AmrSystem& system) {
              py::list result;

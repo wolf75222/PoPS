@@ -614,6 +614,11 @@ def test_checkpoint_budget_uses_authenticated_artifact_block_metadata():
 
 def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_authority():
     from pops.runtime._checkpoint_resource_budget import _common_budget
+    from pops.runtime._continuation_transitions import ContinuationTransitionPlan
+    import json
+    continuation = ContinuationTransitionPlan(json.dumps({
+        "schema_version": 1, "kind": "pops.continuation-transitions", "target": "system",
+        "evidence_stage": "resolved", "objects": []}))
 
     class Native:
         def __init__(self, live_nodes=(), name="node_17"):
@@ -648,9 +653,14 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
             self._histories = {}
             self._histories_ncomp = {}
             self._history_blocks = {}
+            self._values = ()
+
+        def to_data(self):
+            return {"kind": "cache-budget-test"}
 
         def temporal_manifest(self):
             return {
+                "histories": [], "clocks": [],
                 "schedules": [
                     {"node_id": 17, "schedule": {"kind": "hold"}, "cache_required": self.cache_required}
                 ]
@@ -659,12 +669,15 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
     install_plan = SimpleNamespace(
         artifact=SimpleNamespace(
             artifact_identity=SimpleNamespace(token="artifact"),
-            plan=SimpleNamespace(consumer_graph=None),
+            plan=SimpleNamespace(consumer_graph=None, continuation_transitions=continuation,
+                                 field_plans={}, blocks=(), verify=lambda: None),
         ),
         bind_identity=SimpleNamespace(token="bind"),
     )
 
     def budget(owner, program):
+        owner._execution_context = SimpleNamespace(
+            communicator=SimpleNamespace(identity="serial", handle=None))
         return _common_budget(
             owner,
             install_plan,
