@@ -64,20 +64,43 @@ def test_rank_local_native_failure_in_selected_arm_rolls_back(compiled,record_pr
     initial["right"][2,-1,-1] = 0
     simulation = pops.bind(artifact,initial_state=initial,
         resources={"execution_context":artifact_execution_context(artifact)})
-    world = require_two_rank_partition(simulation,n=16)
-    cells = sum(int(np.prod(np.asarray(hi)-lo)) for lo,hi in simulation.local_boxes("left"))
-    owns_bad = any(all(int(lo[d])<=15<int(hi[d]) for d in (0,1))
-                   for lo,hi in simulation.local_boxes("left"))
+    from pops import _pops
+    from pops._native_collectives import allgather_value, require_world
+
+    world = require_world(_pops.mpi_world())
+    ranks = int(world.size)
+    assert ranks in (1, 2), "selected-arm rollback qualification declares one or two ranks"
+    if ranks == 2:
+        require_two_rank_partition(simulation, n=16)
+    boxes = simulation.local_boxes("left")
+    cells = sum(int(np.prod(np.asarray(hi) - lo)) for lo, hi in boxes)
+    owns_bad = any(all(int(lo[d]) <= 15 < int(hi[d]) for d in (0, 1))
+                   for lo, hi in boxes)
+    # A serial run owns both declared bands; a two-rank run places the sole
+    # invalid last cell on rank one. Verify the actual native ownership in both modes.
+    expected_cells = (256,) if ranks == 1 else (128, 128)
+    expected_owners = (True,) if ranks == 1 else (False, True)
+    cells_by_rank = allgather_value(world, cells)
+    owners_by_rank = allgather_value(world, owns_bad)
+    assert cells_by_rank == expected_cells
+    assert owners_by_rank == expected_owners
     native.pops_interaction_reset()
     from pops._bootstrap import StepAttemptRejected
-    from pops._native_collectives import allgather_value
     with pytest.raises(StepAttemptRejected) as failure:
         pops.run(simulation,t_end=.001,max_steps=1)
     assert allgather_value(world,type(failure.value).__name__) == ("StepAttemptRejected",)*int(world.size)
     for name in ("left","right"):
         np.testing.assert_array_equal(simulation.state_global(name),initial[name])
     assert simulation._executor_for_block("left")._program_exchange_records() == []
-    assert native.pops_interaction_calls() == cells-int(owns_bad)
-    record_property("native_mpi_ranks",int(world.size))
-    record_property("actual_rejected_attempt_calls_local",native.pops_interaction_calls())
+    calls = native.pops_interaction_calls()
+    expected_calls = tuple(count - int(owner)
+                           for count, owner in zip(expected_cells, expected_owners, strict=True))
+    assert calls == cells - int(owns_bad)
+    calls_by_rank = allgather_value(world, calls)
+    assert calls_by_rank == expected_calls
+    record_property("native_mpi_ranks", ranks)
+    record_property("owned_cells_by_rank", cells_by_rank)
+    record_property("invalid_last_cell_owner_by_rank", owners_by_rank)
+    record_property("actual_rejected_attempt_calls_local", calls)
+    record_property("actual_rejected_attempt_calls_by_rank", calls_by_rank)
     record_property("later_selected_recipient_calls",0)
