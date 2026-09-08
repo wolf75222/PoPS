@@ -83,6 +83,15 @@ def _built_amr(regrid_every=2, n=32):
     """A small shared-hierarchy AmrSystem with one refined patch and live regrid counters."""
     sim = AmrSystem(_amr_config(
         n, regrid_every=regrid_every, coarse_max_grid=16))
+    # Native package installation seals the complete state-route set. Register
+    # both authenticated Case instances before attaching either block package.
+    model = pops.Model("amr-runtime-inspect-state")
+    state = model.state("U", components=("n",))
+    case = pops.Case("amr-runtime-inspect")
+    blocks = {name: case.block(name, model, states=(state,)) for name in ("ne", "ni")}
+    validated = pops.validate(case)
+    for name, block in blocks.items():
+        sim._s._install_block_state_route(name, validated.resolve(block[state]).qualified_id)
     sim.add_equation(
         "ne", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit()
     )
@@ -96,6 +105,7 @@ def _built_amr(regrid_every=2, n=32):
     sim.set_density("ne", ne)
     sim.set_density("ni", np.ones((n, n)))
     install_forward_euler_program(sim)
+    sim.mark_bound()  # seals the installed Program's accepted-state checkpoint capacity
     for _ in range(3):
         sim.step_cfl(0.4)
     return sim
@@ -192,10 +202,11 @@ def test_hierarchy_snapshot_composes_config_envelope_and_live_patches():
     sim = _built_amr(regrid_every=2)
     snap = sim.amr.hierarchy_snapshot()
     assert isinstance(snap, HierarchySnapshot)
-    # Config envelope comes from the native descriptor-free capability facts.
-    assert snap.max_levels == "resource_policy" and snap.ratio == 2
+    # Descriptor-free capabilities cannot claim one hierarchy's authored ratio.
+    assert snap.max_levels == "resource_policy" and snap.ratio is None
     assert snap.config_available == "yes"
     assert any("resource-policy" in note for note in snap.limitations)
+    assert any("selected by the hierarchy" in note for note in snap.limitations)
     # Live parts: the block registry + the patch table.
     assert snap.blocks == ["ne", "ni"]
     assert snap.frozen is False and snap.regrid_every == 2
