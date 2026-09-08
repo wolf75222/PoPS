@@ -550,12 +550,15 @@ TEST(test_amr_synthetic_program_loader_transaction,
       prepared_execution()->for_lane(*lane));
   system.install_prepared_boundary_execution_context(lane, execution);
   const std::vector<std::string> blocks{kBlock, "tracer2"};
+  for (const auto& block : blocks)
+    system.install_block_state_route(block, "state/" + block);
   for (const auto& block : blocks) {
-    const std::string route = "state/" + block;
-    system.install_block_state_route(block, route);
     system.add_native_block(
         block, shared_object, "2222222222222222222222222222222222222222222222222222222222222222",
         authenticated->binary_identity(), "minmod", "rusanov", "conservative", "explicit", 1.4, 1);
+  }
+  for (const auto& block : blocks) {
+    const std::string route = "state/" + block;
     system.bind_bootstrap_subject(route, block, "bound_level_zero");
     system.stage_bootstrap_array(route, block, "cell", "cell", 1, system.spatial_shape(), initial);
   }
