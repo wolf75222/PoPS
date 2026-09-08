@@ -73,3 +73,24 @@ def test_no_token_or_legacy_finite_volume_engine_constructor_remains() -> None:
 
     assert not hasattr(Spatial, "_from_tokens")
     assert not hasattr(engine, "FiniteVolume")
+
+
+@pytest.mark.parametrize("lower", _LOWERERS)
+def test_program_storage_lowering_preserves_exact_adapter_and_rejects_family_changes(lower):
+    from pops.numerics.state_storage import StateStorage
+    from pops.runtime._state_storage import StateStorageSpatial
+
+    descriptor = StateStorageSpatial()
+    assert lower(None, descriptor) is descriptor
+    assert type(lower(None, StateStorage())) is StateStorageSpatial
+
+    class ChangingFamily:
+        def __init__(self):
+            self.calls = 0
+
+        def runtime_spatial(self):
+            self.calls += 1
+            return StateStorageSpatial() if self.calls == 1 else Spatial()
+
+    with pytest.raises(TypeError, match="exact private spatial adapter"):
+        lower(None, ChangingFamily())
