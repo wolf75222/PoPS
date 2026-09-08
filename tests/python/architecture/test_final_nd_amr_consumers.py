@@ -143,6 +143,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/numerics/elliptic/linear/solve_outcome.hpp",
         "pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp",
         "pops/numerics/time/amr/levels/amr_patch_range.hpp",
+        "pops/parallel/collective_exception.hpp",
         "pops/parallel/execution_lane.hpp",
         "pops/runtime/amr/amr_runtime.hpp",
         "pops/runtime/amr/prepared_multiblock_hierarchy.hpp",
