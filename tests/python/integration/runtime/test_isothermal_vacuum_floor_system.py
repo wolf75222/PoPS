@@ -28,6 +28,10 @@ try:
 except ImportError as e:
     require_native_or_skip('module pops absent (PYTHONPATH ?) : %s' % e)
 
+# Five ModelSpec/Program builds share this process; cold native compilation under parallel
+# test load can exceed the default 300-second process budget.
+POPS_PROCESS_TIMEOUT = 900
+
 
 def chk(cond, label):
     print("  [%s] %s" % ("OK " if cond else "XX ", label))

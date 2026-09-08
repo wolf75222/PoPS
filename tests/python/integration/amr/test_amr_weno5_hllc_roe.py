@@ -32,6 +32,10 @@ from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 from tests.python.integration._final_field_program import compile_block_model, scalar_advection_model
 from tests.python.support.explicit_program import install_forward_euler_program
 
+# Several ModelSpec/Program builds share this process; cold native compilation under parallel
+# test load can exceed the default 300-second process budget.
+POPS_PROCESS_TIMEOUT = 900
+
 GAMMA = 1.4
 fails = 0
 
