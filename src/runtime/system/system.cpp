@@ -541,6 +541,7 @@ void System<Dim>::mark_bound() {
                                  name + "'");
     p_->publish_boundary_to_block(name);
   }
+  prepare_bound_physical_group_();
   p_->lifecycle_.to_bound();
 }
 

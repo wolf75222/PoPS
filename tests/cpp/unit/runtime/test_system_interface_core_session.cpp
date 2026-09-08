@@ -7,13 +7,38 @@
 #include <pops/mesh/boundary/prepared_boundary_component.hpp>
 
 #include <stdexcept>
+#include <set>
 #include <thread>
+
+namespace {
+struct NativeFactoryProbe {
+  pops::SystemBlockClosures<pops::kNativeDimension>::ExternalGhostBoundary ghost;
+  std::function<void(const void*)> observe_transport;
+};
+thread_local NativeFactoryProbe* native_factory_probe = nullptr;
+}  // namespace
 
 namespace pops {
 template <int Dim, class Model>
 PreparedSystemBlock<Dim> prepare_exact_system_block(
     CompiledSystemBlockPreparation<Dim, Model> request) {
-  return prepare_generated_system_block(std::move(request));
+  auto prepared = prepare_generated_system_block(std::move(request));
+  if constexpr (Dim == kNativeDimension) {
+    if (native_factory_probe) {
+      // Instrument the real generated hook and transport. The System issuer and all of its
+      // collective ownership checks remain production code; external ABI is covered in Python.
+      *prepared.closures.external_ghost_boundary = native_factory_probe->ghost;
+      auto physical = prepared.closures.boundary_flux_full_at_point_prepared;
+      auto observe = native_factory_probe->observe_transport;
+      prepared.closures.boundary_flux_full_at_point_prepared =
+          [physical, observe](const auto& point, auto& state, auto& output, const auto& boundary,
+                              const auto& lane, const auto& transport) {
+            observe(&transport);
+            physical(point, state, output, boundary, lane, transport);
+          };
+    }
+  }
+  return prepared;
 }
 }  // namespace pops
 
@@ -230,13 +255,14 @@ struct NativeFixture {
   std::function<void()> before_core;
   int completed = 0;
 
-  explicit NativeFixture(const std::string& identity) {
+  explicit NativeFixture(const std::string& identity, bool interfaces = true,
+                         NativeFactoryProbe* probe = nullptr) {
     pops::SystemConfig<kDim> config;
     for (int axis = 0; axis < kDim; ++axis) {
       config.shape[axis] = 8;
       config.lower[axis] = 0;
       config.upper[axis] = 1;
-      config.periodicity[axis] = true;
+      config.periodicity[axis] = probe == nullptr;
     }
     config.boxes = {pops::Box<kDim>::from_extents(config.shape)};
     system = std::make_unique<NativeSystem>(config);
@@ -247,9 +273,26 @@ struct NativeFixture {
     system->seal_auxiliary_providers();
     pops::RealVector<kDim> velocity{};
     velocity[0] = pops::Real(0.25);
-    for (const auto* name : {"left", "right"})
+    struct ProbeScope {
+      explicit ProbeScope(NativeFactoryProbe* selected) { native_factory_probe = selected; }
+      ~ProbeScope() { native_factory_probe = nullptr; }
+    } probe_scope(probe);
+    for (const auto* name : {"left", "right"}) {
       pops::add_compiled_model(*system, name, pops::nd::ScalarAdvection<kDim>::prepare(velocity),
                                "none", "rusanov", "conservative", "explicit");
+      if (probe) {
+        std::array<pops::PreparedHyperbolicFace, 2 * kDim> faces{};
+        for (int face = 0; face < 2 * kDim; ++face) {
+          faces[face].law = pops::HyperbolicBoundaryLaw::Extrapolate;
+          faces[face].identity = identity + "/" + name + "/face/" + std::to_string(face);
+        }
+        auto boundary = std::make_shared<const pops::PreparedHyperbolicBoundary<kDim>>(
+            std::move(faces), std::vector<pops::HyperbolicComponentTransform<kDim>>{
+                                  pops::HyperbolicComponentTransform<kDim>::scalar()});
+        system->install_prepared_hyperbolic_boundary(name, identity + "/" + name + "/boundary", 1,
+                                                     identity + "/" + name + "/state", boundary);
+      }
+    }
     auto allocate = [&](int block) {
       auto& state = system->block_state(block);
       state.set_val(pops::Real(block + 1));
@@ -272,7 +315,8 @@ struct NativeFixture {
       core->evaluate();  // Intentionally no provider preflight: the real System owns it.
       ++completed;
     };
-    system->install_interface_provider(std::move(provider));
+    if (interfaces)
+      system->install_interface_provider(std::move(provider));
     // The installed issuer must follow the stable Impl, not the moved facade address.
     system = std::make_unique<NativeSystem>(std::move(*system));
   }
@@ -405,4 +449,40 @@ TEST(SystemInterfaceCoreSession, real_system_cannot_consume_another_system_activ
   inner.expect_outputs(pops::Real(0));
   EXPECT_THROW(outer.retained->evaluate(), std::logic_error);
   EXPECT_THROW(inner.retained->evaluate(), std::logic_error);
+}
+
+TEST(SystemInterfaceCoreSession,
+     real_physical_group_without_interfaces_retains_transport_and_ghost_hook) {
+  int evaluations = 0;
+  bool fail_once = true;
+  std::set<const void*> transports;
+  NativeFactoryProbe probe;
+  probe.observe_transport = [&](const void* address) { transports.insert(address); };
+  probe.ghost = [&](const auto&, auto&, const auto&, const auto& lane) {
+    ++evaluations;
+    const bool fail = std::exchange(fail_once, false);
+    pops::runtime::program::collective_boundary_provider_phase(lane, "native ghost test", [&] {
+      if (fail && lane.rank() == lane.size() - 1)
+        throw std::runtime_error("injected external ghost failure");
+    });
+  };
+  NativeFixture fixture("physical-group-without-interface", false, &probe);
+  fixture.reset_outputs();
+  EXPECT_THROW(fixture.evaluate(fixture.point()), std::runtime_error);
+  EXPECT_EQ(evaluations, 0);
+  fixture.expect_outputs(pops::Real(-17));
+  fixture.system->mark_bound();
+  EXPECT_THROW(fixture.evaluate(fixture.point()), std::runtime_error);
+  EXPECT_EQ(evaluations, 1);
+  fixture.expect_outputs(pops::Real(-17));
+  fixture.evaluate(fixture.point());
+  EXPECT_EQ(evaluations, 3);
+  fixture.expect_outputs(pops::Real(0));
+  ASSERT_EQ(transports.size(), 2);
+  const auto prepared = transports;
+  fixture.reset_outputs();
+  fixture.evaluate(fixture.point());
+  EXPECT_EQ(evaluations, 5);
+  fixture.expect_outputs(pops::Real(0));
+  EXPECT_EQ(transports, prepared);
 }

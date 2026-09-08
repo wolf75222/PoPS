@@ -151,6 +151,7 @@ struct System<Dim>::Impl {
   std::optional<runtime::system::PreparedAuxiliaryGhostTransport<Dim>> auxiliary_ghost_transport_;
 
   block_store_type blocks_;
+  typename SystemInterfaceProvider<Dim>::CoreEvaluator prepared_boundary_group_core_;
   std::vector<Species>& sp = blocks_.blocks;
   std::vector<PreparedBoundaryHookContract> prepared_boundary_hook_contracts_;
   boundary_registry_type boundary_registry_;
