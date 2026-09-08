@@ -17,7 +17,11 @@ struct DiffusionContext {
     return PreparedScalarBoundarySession<2>::prepare(geometry_, topology, field, execution, 1);
   }
   const Field* pointwise_active_mask(int, const Field&) const { return nullptr; }
-  void stage_exchange(ExchangeRecord record) { ledger.stage(std::move(record)); }
+  template <class Producer>
+  void stage_exchange_batch(Producer&& producer) {
+    auto records = prepare_exchange_batch(std::forward<Producer>(producer), [](auto&) {}, lane);
+    stage_exchange_batch_collectively(ledger, records, lane);
+  }
 };
 Field field(Box<2> box = Box<2>{Index<2>{0, 0}, Index<2>{3, 3}},
             Extent<2> ghosts = Extent<2>{1, 1}) {
@@ -163,7 +167,11 @@ struct FittedContext {
     return PreparedScalarBoundarySession<1>::prepare(geometry_, topology, field, execution, 1);
   }
   const MultiFab<1>* pointwise_active_mask(int, const MultiFab<1>&) const { return nullptr; }
-  void stage_exchange(ExchangeRecord record) { ledger.stage(std::move(record)); }
+  template <class Producer>
+  void stage_exchange_batch(Producer&& producer) {
+    auto records = prepare_exchange_batch(std::forward<Producer>(producer), [](auto&) {}, lane);
+    stage_exchange_batch_collectively(ledger, records, lane);
+  }
 };
 MultiFab<1> fitted_field() {
   auto layout = mesh::BoxArray<1>::from_domain(Box<1>{Index<1>{0}, Index<1>{31}}, Extent<1>{32});

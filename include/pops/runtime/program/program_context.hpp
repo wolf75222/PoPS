@@ -311,19 +311,16 @@ class ProgramContext {
   }
 
   void stage_exchange(ExchangeRecord record) const {
-    const auto& lane = prepared_execution_lane();
-    std::exception_ptr error;
-    try {
-      record.qualify_runtime_point(boundary_evaluation_point(0));
-    } catch (...) {
-      error = std::current_exception();
-    }
-    if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && error)
-        std::rethrow_exception(error);
-      throw std::runtime_error("Program exchange runtime qualification failed collectively");
-    }
-    system_->stage_program_exchange(std::move(record));
+    stage_exchange_batch([&](auto&& stage) { stage(std::move(record)); });
+  }
+
+  template <class Producer>
+  void stage_exchange_batch(Producer&& producer) const {
+    auto records = prepare_exchange_batch(
+        std::forward<Producer>(producer),
+        [&](ExchangeRecord& record) { record.qualify_runtime_point(boundary_evaluation_point(0)); },
+        prepared_execution_lane());
+    system_->stage_program_exchanges(records);
   }
 
   field_type& state(int program_block) const {

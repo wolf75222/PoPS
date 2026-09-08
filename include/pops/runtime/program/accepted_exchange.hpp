@@ -1,6 +1,10 @@
 #pragma once
 
 #include <pops/runtime/multiblock/evaluation_point.hpp>
+#include <pops/parallel/execution_lane.hpp>
+
+#include <exception>
+#include <optional>
 
 #include <bit>
 #include <algorithm>
@@ -198,5 +202,50 @@ class AcceptedExchangeLedger {
   std::vector<ExchangeRecord> records_;
   std::set<Key, std::less<>> keys_;
 };
+
+/// The producer is rank-local and must not enter collectives. Its record count may be zero
+/// or differ from peers. Qualify every local record before one provider-boundary fence.
+template <class Producer, class Qualify>
+std::vector<ExchangeRecord> prepare_exchange_batch(Producer&& producer, Qualify&& qualify,
+                                                   const ExecutionLane& lane) {
+  std::vector<ExchangeRecord> records;
+  std::exception_ptr error;
+  try {
+    std::forward<Producer>(producer)([&](ExchangeRecord record) {
+      qualify(record);
+      records.push_back(std::move(record));
+    });
+  } catch (...) {
+    error = std::current_exception();
+  }
+  if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
+    throw std::runtime_error("Program exchange batch preparation failed collectively");
+  }
+  return records;
+}
+
+/// The existing ledger remains the sole mailbox and the enclosing native transaction remains
+/// the sole acceptance authority. A detached batch candidate changes no transaction depth.
+inline void stage_exchange_batch_collectively(AcceptedExchangeLedger& ledger,
+                                              std::span<ExchangeRecord> records,
+                                              const ExecutionLane& lane) {
+  std::optional<AcceptedExchangeLedger> candidate;
+  std::exception_ptr error;
+  try {
+    candidate.emplace(ledger);
+    for (auto& record : records)
+      candidate->stage(std::move(record));
+  } catch (...) {
+    error = std::current_exception();
+  }
+  if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
+    throw std::runtime_error("Program exchange batch staging failed collectively");
+  }
+  ledger.swap(*candidate);
+}
 
 }  // namespace pops::runtime::program

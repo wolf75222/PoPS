@@ -468,47 +468,49 @@ class PreparedDiffusion {
     if (all_reduce_max(active_layout_error, *lane_) != 0)
       throw std::invalid_argument(
           "accepted diffusive face mask differs from local patches collectively");
-    for (std::size_t local = 0; local < variable_.local_size(); ++local) {
-      const auto box = variable_.box(local);
-      const auto extent = box.extent();
-      const auto faces = faces_[local].view();
-      const auto active_values = active == nullptr ? FieldView<const Real, Dim>{}
-                                                   : std::as_const(*active).fab(local).view();
-      for (std::int64_t ordinal = 0; ordinal < box.numPts(); ++ordinal) {
-        auto remainder = ordinal;
-        Index<Dim> cell = box.lo;
-        for (int axis = 0; axis < Dim; ++axis) {
-          cell[axis] += static_cast<int>(remainder % extent[axis]);
-          remainder /= extent[axis];
-        }
-        if (active != nullptr && active_values(cell, 0) < Real(0.5))
-          continue;
-        for (int axis = 0; axis < Dim; ++axis) {
-          Real measure = 1;
-          for (int tangent = 0; tangent < Dim; ++tangent)
-            if (tangent != axis)
-              measure *= geometry_.spacing(tangent);
-          for (int side = 0; side < 2; ++side) {
-            Index<Dim> face = cell;
-            face[axis] += side;
-            if (physical_boundary_only) {
-              const bool domain_boundary = side == 0
-                                               ? face[axis] == geometry_.domain().lo[axis]
-                                               : face[axis] == geometry_.domain().hi[axis] + 1;
-              if (!domain_boundary ||
-                  physical_[2 * axis + side].kind == DiffusiveBoundaryKind::periodic)
-                continue;
+    ctx.stage_exchange_batch([&](auto&& stage_exchange) {
+      for (std::size_t local = 0; local < variable_.local_size(); ++local) {
+        const auto box = variable_.box(local);
+        const auto extent = box.extent();
+        const auto faces = faces_[local].view();
+        const auto active_values = active == nullptr ? FieldView<const Real, Dim>{}
+                                                     : std::as_const(*active).fab(local).view();
+        for (std::int64_t ordinal = 0; ordinal < box.numPts(); ++ordinal) {
+          auto remainder = ordinal;
+          Index<Dim> cell = box.lo;
+          for (int axis = 0; axis < Dim; ++axis) {
+            cell[axis] += static_cast<int>(remainder % extent[axis]);
+            remainder /= extent[axis];
+          }
+          if (active != nullptr && active_values(cell, 0) < Real(0.5))
+            continue;
+          for (int axis = 0; axis < Dim; ++axis) {
+            Real measure = 1;
+            for (int tangent = 0; tangent < Dim; ++tangent)
+              if (tangent != axis)
+                measure *= geometry_.spacing(tangent);
+            for (int side = 0; side < 2; ++side) {
+              Index<Dim> face = cell;
+              face[axis] += side;
+              if (physical_boundary_only) {
+                const bool domain_boundary = side == 0
+                                                 ? face[axis] == geometry_.domain().lo[axis]
+                                                 : face[axis] == geometry_.domain().hi[axis] + 1;
+                if (!domain_boundary ||
+                    physical_[2 * axis + side].kind == DiffusiveBoundaryKind::periodic)
+                  continue;
+              }
+              std::string identity = "cell";
+              for (int d = 0; d < Dim; ++d)
+                identity += ":" + std::to_string(cell[d]);
+              identity += "/axis:" + std::to_string(axis) + "/side:" + std::to_string(side);
+              stage_exchange({operation, occurrence, evaluation, identity, side == 0 ? -1 : 1,
+                                  measure, faces.axes[axis](face, 0), temporal_weight, 1});
             }
-            std::string identity = "cell";
-            for (int d = 0; d < Dim; ++d)
-              identity += ":" + std::to_string(cell[d]);
-            identity += "/axis:" + std::to_string(axis) + "/side:" + std::to_string(side);
-            ctx.stage_exchange({operation, occurrence, evaluation, identity, side == 0 ? -1 : 1,
-                                measure, faces.axes[axis](face, 0), temporal_weight, 1});
           }
         }
       }
-    }
+    });
   }
   const auto& faces() const { return faces_; }
   const Field& prototype() const { return variable_; }

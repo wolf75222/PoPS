@@ -966,6 +966,7 @@ class AmrSystem {
   POPS_EXPORT void begin_nested_step_transaction();
   POPS_EXPORT std::size_t step_transaction_depth() const noexcept;
   POPS_EXPORT void stage_program_exchange(runtime::program::ExchangeRecord record);
+  POPS_EXPORT void stage_program_exchanges(std::span<runtime::program::ExchangeRecord> records);
   POPS_EXPORT std::vector<runtime::program::ExchangeRecord> program_exchange_records() const;
   POPS_EXPORT std::vector<std::vector<std::string>> continuation_transition_rows() const;
   POPS_EXPORT std::vector<std::uint8_t> checkpoint_program_exchanges() const;

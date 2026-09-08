@@ -35,6 +35,7 @@ def emit_transport_exchanges(
         "}",
         "if (pops::all_reduce_max(accepted_mask_layout_error, ctx.prepared_execution_lane()) != 0)",
         '  throw std::invalid_argument("accepted transport face mask differs from local patches collectively");',
+        "ctx.stage_exchange_batch([&](auto&& stage_exchange) {",
         "for (std::size_t %s = 0; %s < %s.size(); ++%s) {"
         % (local_name, local_name, faces, local_name),
         "  const auto& accepted_faces = %s[%s];" % (faces, local_name),
@@ -62,7 +63,7 @@ def emit_transport_exchanges(
         "        for (int dimension = 0; dimension < pops::kNativeDimension; ++dimension)",
         '          quadrature += ":" + std::to_string(cell[dimension]);',
         '        quadrature += "/axis:" + std::to_string(axis) + "/side:" + std::to_string(side);',
-        "        ctx.stage_exchange(pops::runtime::program::ExchangeRecord{%s, %s, %s, quadrature,"
+        "        stage_exchange(pops::runtime::program::ExchangeRecord{%s, %s, %s, quadrature,"
         % (json.dumps(operation), json.dumps(occurrence), json.dumps(evaluation)),
         "            side == 0 ? 1 : -1, measure, face_values.axes[axis](face, 0)/measure, %s, 1});"
         % weight,
@@ -70,5 +71,6 @@ def emit_transport_exchanges(
         "    }",
         "  }",
         "}",
+        "});",
         "}",
     ]

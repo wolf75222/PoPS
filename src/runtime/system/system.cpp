@@ -146,6 +146,12 @@ void System<Dim>::stage_program_exchange(runtime::program::ExchangeRecord record
 }
 
 template <int Dim>
+void System<Dim>::stage_program_exchanges(std::span<runtime::program::ExchangeRecord> records) {
+  runtime::program::stage_exchange_batch_collectively(
+      p_->program_.accepted_exchanges_, records, prepared_boundary_execution_lane());
+}
+
+template <int Dim>
 std::vector<runtime::program::ExchangeRecord> System<Dim>::program_exchange_records() const {
   return p_->program_.accepted_exchanges_.records();
 }
@@ -662,6 +668,8 @@ template void System<kNativeDimension>::begin_step_transaction();
 template void System<kNativeDimension>::begin_nested_step_transaction();
 template std::size_t System<kNativeDimension>::step_transaction_depth() const noexcept;
 template void System<kNativeDimension>::stage_program_exchange(runtime::program::ExchangeRecord);
+template void System<kNativeDimension>::stage_program_exchanges(
+    std::span<runtime::program::ExchangeRecord>);
 template std::vector<runtime::program::ExchangeRecord>
 System<kNativeDimension>::program_exchange_records() const;
 template std::vector<std::uint8_t> System<kNativeDimension>::checkpoint_program_exchanges() const;

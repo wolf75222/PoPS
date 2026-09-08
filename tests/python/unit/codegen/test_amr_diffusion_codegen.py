@@ -74,6 +74,12 @@ def test_repeated_same_face_emissions_have_independent_cpp_scopes():
     repeated = "\n".join((*emitted, *emitted))
     assert repeated.count("* retained_faces_active = nullptr") == 2
     assert repeated.count("\n}\n{") == 1
+    # The producer can visit different active face counts on different execution ranks.
+    source = "\n".join(emitted)
+    assert source.count("ctx.stage_exchange_batch(") == 1
+    assert source.index("ctx.stage_exchange_batch(") < source.index("for (std::size_t retained_faces_local")
+    assert "ctx.stage_exchange(" not in source
+    assert "stage_exchange(pops::runtime::program::ExchangeRecord{" in source
 
 
 @pytest.mark.parametrize("physical", (False, True))

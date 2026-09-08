@@ -17045,6 +17045,12 @@ void AmrSystem<Dim>::stage_program_exchange(runtime::program::ExchangeRecord rec
 }
 
 template <int Dim>
+void AmrSystem<Dim>::stage_program_exchanges(std::span<runtime::program::ExchangeRecord> records) {
+  runtime::program::stage_exchange_batch_collectively(
+      p_->program.accepted_exchanges_, records, p_->require_prepared_engine_lane("AMR exchange batch staging"));
+}
+
+template <int Dim>
 std::vector<runtime::program::ExchangeRecord> AmrSystem<Dim>::program_exchange_records() const {
   return p_->program.accepted_exchanges_.records();
 }
@@ -21033,6 +21039,8 @@ template void AmrSystem<kNativeDimension>::begin_step_transaction();
 template void AmrSystem<kNativeDimension>::begin_nested_step_transaction();
 template std::size_t AmrSystem<kNativeDimension>::step_transaction_depth() const noexcept;
 template void AmrSystem<kNativeDimension>::stage_program_exchange(runtime::program::ExchangeRecord);
+template void AmrSystem<kNativeDimension>::stage_program_exchanges(
+    std::span<runtime::program::ExchangeRecord>);
 template std::vector<runtime::program::ExchangeRecord>
 AmrSystem<kNativeDimension>::program_exchange_records() const;
 template std::vector<std::vector<std::string>>
