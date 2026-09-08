@@ -303,6 +303,7 @@ class AmrProgramContext {
 #include <pops/runtime/program/amr_program_context_subcycling_runtime.inc>
 #include <pops/runtime/program/amr_program_context_flux_basis.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_runtime.inc>
+#include <pops/runtime/program/amr_program_context_shared_flux.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_runtime.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_services.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_services.inc>

@@ -638,6 +638,38 @@ class PreparedMultiBlockAmrHierarchy {
     throw std::runtime_error("prepared AMR coupling failed and rolled back collectively");
   }
 
+  // Grouped residuals already own detached scratch outputs. Capture exact density directly;
+  // do not recover it through a state update followed by cancellation and division by dt.
+  std::vector<runtime::multiblock::InterfaceFluxSample> capture_interface_residual(
+      const ProgramBlockMap& map, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      std::span<field_type* const> program_states, std::span<field_type* const> program_rhs) {
+    std::vector<field_type*> states, rhs;
+    std::vector<runtime::multiblock::InterfaceFluxSample> samples;
+    std::exception_ptr error;
+    try {
+      require_map_(map);
+      if (program_states.size() != block_count() || program_rhs.size() != block_count())
+        throw std::invalid_argument("shared RHS capture requires a complete Program pointer pack");
+      states.assign(block_count(), nullptr);
+      rhs.assign(block_count(), nullptr);
+      for (std::size_t block = 0; block < block_count(); ++block) {
+        states[map.canonical_indices[block]] = program_states[block];
+        rhs[map.canonical_indices[block]] = program_rhs[block];
+      }
+    } catch (...) { error = std::current_exception(); }
+    collectively_rethrow_(error, "shared RHS capture pack failed collectively");
+    if (interface_scheduler_)
+      interface_scheduler_->apply(point, std::span<field_type* const>(states),
+                                  std::span<field_type* const>(rhs), nullptr, &samples);
+    return samples;
+  }
+
+  std::string_view authenticate_interface_sample(const runtime::multiblock::InterfaceFluxSample& sample) const {
+    if (!interface_scheduler_)
+      throw std::invalid_argument("retained shared flux has no live interface provider");
+    return interface_scheduler_->authenticate_sample(sample);
+  }
+
   /// Canonical-order convenience used by a provider that already owns the Program map.
   std::size_t apply_coupling_operators_at_level(std::size_t level, Real dt,
                                                 std::span<field_type* const> candidates) {

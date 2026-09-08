@@ -190,6 +190,10 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
     }
   }
 
+  // Endpoint states are the exact requested stage values. Shared interfaces scatter directly
+  // into these detached residual candidates once, then retain their physical sample separately.
+  auto shared_samples = capture_grouped_shared_flux_(group_id, ordered, points, candidates);
+
   FluxExpressionRegistry candidate_registry;
   std::vector<std::size_t> candidate_counts;
   std::uint64_t candidate_identity = 0;
@@ -214,6 +218,7 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
             *request.rhs, evaluations[index], nullptr, nullptr, interval, candidate_registry,
             candidate_counts, candidate_identity);
       }
+      attach_grouped_shared_flux_(ordered, runtime_blocks, shared_samples, candidate_registry);
     } catch (...) {
       flux_preparation_error = std::current_exception();
     }

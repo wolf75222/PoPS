@@ -1559,3 +1559,109 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
         )
     finally:
         checkpoint_codec._require_restart_conservation = original_conservation_check
+
+
+def _shared_copied_rate_program(left_state, right_state, rate, *, asymmetric=False):
+    program = pops.Program("shared_copied_rate_asymmetric" if asymmetric else "shared_copied_rate")
+    left, right = program.state(left_state), program.state(right_state)
+    stage = StagePoint("copied_rate", {"main": TimePoint(program.clock, 0)})
+    left_rate = program.value("left_rate", rate(left.n), at=stage)
+    right_rate = program.value("right_rate", rate(right.n), at=stage)
+    # Distinct value aliases and signed affine paths must retain one physical source identity.
+    left_copy = program.value("left_copy", left_rate, at=stage)
+    left_next = program.value(
+        "left_next", left.n + 2 * program.dt * left_rate - program.dt * left_copy,
+        at=left.next.point)
+    right_next = program.value(
+        "right_next", right.n + (0.5 if asymmetric else 1) * program.dt * right_rate,
+        at=right.next.point)
+    program.commit(left.next, left_next)
+    program.commit(right.next, right_next)
+    program.step_strategy(FixedDt(1.0e-3))
+    return program
+
+
+@pytest.mark.parametrize("asymmetric", [False, True])
+def test_shared_rhs_copies_publish_once_and_asymmetric_weights_roll_back(tmp_path, asymmetric):
+    def factory(left, right, rate):
+        return _shared_copied_rate_program(left, right, rate, asymmetric=asymmetric)
+
+    authoring = _shared_interface_amr_authoring(
+        tmp_path, program_factory=factory, with_checkpoint=False)
+    resolved = _resolve_shared_interface_amr(authoring, max_levels=2, frozen=True)
+    artifact = pops.compile(resolved)
+    runtime = authoring.example._bind_artifact(
+        artifact,
+        initial_values={authoring.core.tracer_state: authoring.left_initial,
+                        authoring.right_state: authoring.right_initial},
+        params=authoring.params)
+    before = _shared_interface_accepted_image(runtime)
+    interface = resolved.blocks[0].numerics.boundaries[0].interfaces[0]
+    initial_integral = runtime.integral("tracer") + runtime.integral("right")
+    if asymmetric:
+        with pytest.raises((ValueError, RuntimeError), match="endpoint quadrature coefficients disagree"):
+            pops.run(runtime, t_end=1.0e-3, max_steps=1, console=False)
+        _assert_same_shared_interface_image(runtime, before)
+        assert runtime._executor._s._interface_evaluation_count(interface.qualified_id, 0) == 1
+    else:
+        pops.run(runtime, t_end=1.0e-3, max_steps=1, console=False)
+        assert tuple(runtime._executor._s._interface_evaluation_count(interface.qualified_id, level)
+                     for level in range(2)) == (1, 2)
+        np.testing.assert_allclose(
+            runtime.integral("tracer") + runtime.integral("right"), initial_integral,
+            rtol=0.0, atol=2.0e-13)
+        rows = runtime._executor._s.program_interface_flux_ledger_manifest()
+        assert len(rows) == 3  # one coarse and two fine substep samples, never one per alias
+
+
+def _shared_ab2_program(left_state, right_state, rate):
+    from fractions import Fraction
+    from pops.time import Dense
+
+    program = pops.Program("shared_interface_ab2")
+    stage = StagePoint("shared_ab2_current", {"main": TimePoint(program.clock, 0)})
+    endpoints = [(name, program.state(state))
+                 for name, state in (("left", left_state), ("right", right_state))]
+    rates = [program.value(name + "_rate", rate(temporal.n), at=stage)
+             for name, temporal in endpoints]
+    # Materialize the coherent pair before either endpoint's history publication barrier.
+    for (name, temporal), current in zip(endpoints, rates, strict=True):
+        history_name = name + ".rate"
+        program.store_history(history_name, current, depth=1, checkpoint_policy=Dense())
+        previous = program.history(history_name, lag=1, space=current.space,
+                                   block=temporal.block, state_ref=temporal.state)
+        next_value = program.value(
+            name + "_next", temporal.n + program.dt * (
+                Fraction(3, 2) * current - Fraction(1, 2) * previous),
+            at=temporal.next.point)
+        program.commit(temporal.next, next_value)
+    program.step_strategy(FixedDt(1.0e-3))
+    return program
+
+
+def test_shared_rhs_signed_history_restart_preserves_earned_samples(tmp_path):
+    authoring = _shared_interface_amr_authoring(
+        tmp_path, program_factory=_shared_ab2_program, with_checkpoint=False)
+    authoring.core.case.consumers(ConsumerGraph.from_consumers((Checkpoint(
+        schedule=every(10_000, clock=authoring.program.clock), target="unused/shared-ab2"),)))
+    resolved = _resolve_shared_interface_amr(authoring, max_levels=2, frozen=True)
+    artifact = pops.compile(resolved)
+    initial = {authoring.core.tracer_state: authoring.left_initial,
+               authoring.right_state: authoring.right_initial}
+
+    def bind():
+        return authoring.example._bind_artifact(artifact, initial_values=initial,
+                                               params=authoring.params)
+
+    source = bind()
+    pops.run(source, t_end=2.0e-3, max_steps=2, console=False,
+             output_dir=tmp_path / "source-output")
+    checkpoint = source.checkpoint(tmp_path / "shared-ab2")
+    image = _shared_interface_accepted_image(source)
+    restarted = bind()
+    restarted.restart(checkpoint)
+    _assert_same_shared_interface_image(restarted, image)
+    for name, runtime in (("source", source), ("restart", restarted)):
+        pops.run(runtime, t_end=4.0e-3, max_steps=2, console=False,
+                 output_dir=tmp_path / (name + "-continuation"))
+    _assert_same_shared_interface_image(restarted, _shared_interface_accepted_image(source))

@@ -24,4 +24,5 @@ struct FluxBasis {
   FluxBasisProvider provider = FluxBasisProvider::PreparedResidual;
   ::pops::amr::ClockWindow window{};
   std::vector<FluxBasisFace> faces;
+  std::vector<std::shared_ptr<const runtime::multiblock::InterfaceFluxSample>> shared_samples;
 };

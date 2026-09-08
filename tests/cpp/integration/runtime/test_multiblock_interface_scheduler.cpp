@@ -562,3 +562,53 @@ TEST(test_multiblock_interface_scheduler,
 }
 
 }  // namespace
+
+TEST(test_multiblock_interface_scheduler, DirectCaptureRetainsDensityAndAuthenticatesPhysicalRoute) {
+  ensure_runtime();
+  const Box<1> left_box(Index<1>(0), Index<1>(3));
+  const Box<1> right_box(Index<1>(10), Index<1>(13));
+  auto left = make_field<1>(left_box, 1), right = make_field<1>(right_box, 1);
+  auto left_rhs = make_field<1>(left_box, 1), right_rhs = make_field<1>(right_box, 1);
+  left.set_val(Real(1e100)); right.set_val(Real(1e100));
+  left_rhs.set_val(Real(0)); right_rhs.set_val(Real(0));
+  AxisAlignedInterface<1> route;
+  route.identity = "retained-density";
+  route.left_block = 0; route.right_block = 1;
+  route.left_axis = route.right_axis = 0;
+  route.left_side = InterfaceSide::High; route.right_side = InterfaceSide::Low;
+  route.right_component_for_left = {0};
+  authenticate(route);
+  InterfaceFluxScheduler<1> scheduler;
+  scheduler.install(route, left, geometry<1>(left_box, {Real(0)}, {Real(1)}), right,
+                    geometry<1>(right_box, {Real(1)}, {Real(2)}), serial_execution(),
+                    [](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+                      batch.shared_flux[0] = Real(1e-100);
+                    });
+  auto stage = point();
+  stage.graph_identity = "capture-program";
+  stage.rate_identity = "shared-rhs/1";
+  stage.application_identity = "program-rhs-group";
+  std::vector<MultiFab<1>*> states{&left, &right}, rhs{&left_rhs, &right_rhs};
+  std::vector<InterfaceFluxSample> captured;
+  scheduler.apply(stage, std::span<MultiFab<1>* const>(states),
+                  std::span<MultiFab<1>* const>(rhs), nullptr, &captured);
+  ASSERT_EQ(captured.size(), 1);
+  EXPECT_EQ(captured[0].flux_density, std::vector<Real>{Real(1e-100)});
+  EXPECT_EQ(get_cell(left_rhs, Index<1>(3), 0), -Real(4) * Real(1e-100));
+  EXPECT_EQ(get_cell(right_rhs, Index<1>(10), 0), Real(4) * Real(1e-100));
+  EXPECT_EQ(scheduler.evaluation_count(route.identity, 0), 1);
+  EXPECT_FALSE(scheduler.authenticate_sample(captured[0]).empty());
+  auto malformed = captured[0];
+  malformed.right_side = InterfaceSide::High;
+  EXPECT_THROW(scheduler.authenticate_sample(malformed), std::invalid_argument);
+  malformed = captured[0];
+  malformed.right_normal_spacing *= 2;
+  EXPECT_THROW(scheduler.authenticate_sample(malformed), std::invalid_argument);
+  malformed = captured[0];
+  malformed.route_contract[0] = malformed.route_contract[0] == '0' ? '1' : '0';
+  EXPECT_THROW(scheduler.authenticate_sample(malformed), std::invalid_argument);
+  malformed = captured[0];
+  malformed.flux_density[0] = std::numeric_limits<Real>::quiet_NaN();
+  EXPECT_THROW(scheduler.authenticate_sample(malformed), std::invalid_argument);
+  EXPECT_EQ(scheduler.evaluation_count(route.identity, 0), 1);
+}

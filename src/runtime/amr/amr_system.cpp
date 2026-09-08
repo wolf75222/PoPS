@@ -12529,6 +12529,28 @@ std::size_t AmrSystem<Dim>::apply_prepared_amr_program_candidates(
 }
 
 template <int Dim>
+std::vector<runtime::multiblock::InterfaceFluxSample>
+AmrSystem<Dim>::capture_prepared_amr_interface_residual(
+    const runtime::multiblock::BoundaryEvaluationPoint& point,
+    std::span<MultiFab<Dim>* const> program_states, std::span<MultiFab<Dim>* const> program_rhs) {
+  p_->ensure_engine();
+  auto samples = p_->multiblock_hierarchy->capture_interface_residual(
+      prepared_amr_program_block_map(), point, program_states, program_rhs);
+  for (auto& sample : samples)
+    sample.source_topology_epoch = p_->engine->topology_epoch();
+  return samples;
+}
+
+template <int Dim>
+std::string AmrSystem<Dim>::authenticate_prepared_amr_interface_sample(
+    const runtime::multiblock::InterfaceFluxSample& sample) const {
+  p_->ensure_engine();
+  if (sample.source_topology_epoch > p_->engine->topology_epoch())
+    throw std::invalid_argument("retained shared flux sample names an unearned topology epoch");
+  return std::string(p_->multiblock_hierarchy->authenticate_interface_sample(sample));
+}
+
+template <int Dim>
 void AmrSystem<Dim>::publish_prepared_amr_program_candidates(
     int level, std::span<MultiFab<Dim>* const> program_candidates) {
   p_->ensure_engine();
@@ -19806,8 +19828,34 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
                                  "AMR history-flux payload capacity exceeds size_t"),
             "AMR history-flux face capacity exceeds size_t"),
         "AMR history-flux face capacity exceeds size_t");
+    std::size_t maximum_shared_samples = 0, maximum_shared_terms = 0;
+    for (const auto& level : interface_production.levels) {
+      maximum_shared_samples = std::max(maximum_shared_samples, level.sample_count_per_application);
+      maximum_shared_terms = std::max(maximum_shared_terms, level.sample_payload_terms_per_application);
+    }
+    // POPSFLX2 sample: 29 scalar/count primitives, 64 canonical route-digest characters,
+    // exact source-point strings, endpoint component map, and one physical density per face/component.
+    std::size_t shared_sample_fixed = 29 * sizeof(std::uint64_t) + 64;
+    for (std::size_t characters : {interface_production.maximum_interface_identity_characters,
+                                  maximum_clock_identity,
+                                  expression.interface_coupling_identity_character_bound})
+      shared_sample_fixed = checked_size_sum(shared_sample_fixed, characters,
+                                             "AMR shared history identity capacity exceeds size_t");
+    shared_sample_fixed = checked_size_sum(
+        shared_sample_fixed, checked_size_product(maximum_components, sizeof(std::uint64_t),
+                                                  "AMR shared component map exceeds size_t"),
+        "AMR shared sample capacity exceeds size_t");
+    const std::size_t shared_samples_bytes = checked_size_sum(
+        sizeof(std::uint64_t),
+        checked_size_sum(checked_size_product(maximum_shared_samples, shared_sample_fixed,
+                                               "AMR shared samples capacity exceeds size_t"),
+                         checked_size_product(maximum_shared_terms, sizeof(double),
+                                               "AMR shared density capacity exceeds size_t"),
+                         "AMR shared history capacity exceeds size_t"),
+        "AMR shared history capacity exceeds size_t");
     const std::size_t history_flux_basis = checked_size_sum(
-        2 * sizeof(std::uint64_t),  // basis identity and coefficient count
+        checked_size_sum(2 * sizeof(std::uint64_t), shared_samples_bytes,
+                         "AMR history shared basis capacity exceeds size_t"),
         checked_size_sum(
             history_flux_fixed_basis,
             checked_size_sum(history_flux_coefficient,
@@ -19816,7 +19864,7 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
                              "AMR history-flux basis capacity exceeds size_t"),
             "AMR history-flux basis capacity exceeds size_t"),
         "AMR history-flux basis capacity exceeds size_t");
-    shape.history_flux_payload_bytes = sizeof(std::uint64_t);  // history-ring count
+    shape.history_flux_payload_bytes = 2 * sizeof(std::uint64_t);  // POPSFLX2 tag and ring count
     constexpr std::string_view history_key_prefix = "pops.amr.level-history.v1/";
     for (const auto& history : shape.histories) {
       const std::string history_length = std::to_string(history.name.size());
@@ -19866,8 +19914,10 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
         interface_production.maximum_interface_identity_characters;
     shape.interface_program_identity_characters =
         expression.interface_coupling_identity_character_bound;
-    shape.interface_stage_characters =
-        std::string_view("program-stage:").size() + 2 * signed_decimal_characters + 1;
+    shape.interface_stage_characters = std::max(
+        std::string_view("program-stage:").size() + 2 * signed_decimal_characters + 1,
+        std::string_view("shared-source////weight//").size() +
+            3 * signed_decimal_characters + 2 * nonnegative_int_decimal_characters);
     shape.interface_payload_terms = interface.max_payload_terms_per_window;
     shape.synchronization_event_count = checked_size_product(
         checked_size_product(p_->blocks.size(), configured_levels - 1,
@@ -20647,6 +20697,12 @@ template std::size_t AmrSystem<kNativeDimension>::apply_prepared_amr_program_can
     int, Real, std::span<MultiFab<kNativeDimension>* const>,
     const runtime::multiblock::BoundaryEvaluationPoint&,
     runtime::multiblock::InterfaceFluxFragmentPublication*);
+template std::vector<runtime::multiblock::InterfaceFluxSample>
+AmrSystem<kNativeDimension>::capture_prepared_amr_interface_residual(
+    const runtime::multiblock::BoundaryEvaluationPoint&, std::span<MultiFab<kNativeDimension>* const>,
+    std::span<MultiFab<kNativeDimension>* const>);
+template std::string AmrSystem<kNativeDimension>::authenticate_prepared_amr_interface_sample(
+    const runtime::multiblock::InterfaceFluxSample&) const;
 template void AmrSystem<kNativeDimension>::publish_prepared_amr_program_candidates(
     int, std::span<MultiFab<kNativeDimension>* const>);
 template bool AmrSystem<kNativeDimension>::has_package_assembly_lane() const;

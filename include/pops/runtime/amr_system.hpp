@@ -136,6 +136,7 @@ struct AxisAlignedInterface;
 template <int Dim>
 struct PreparedInterfaceFluxSpec;
 struct BoundaryEvaluationPoint;
+struct InterfaceFluxSample;
 }  // namespace multiblock
 }  // namespace runtime
 
@@ -402,6 +403,11 @@ class AmrSystem {
       int level, Real dt, std::span<MultiFab<Dim>* const> program_candidates,
       const runtime::multiblock::BoundaryEvaluationPoint& point,
       runtime::multiblock::InterfaceFluxFragmentPublication* interface_publication);
+  POPS_EXPORT std::vector<runtime::multiblock::InterfaceFluxSample> capture_prepared_amr_interface_residual(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      std::span<MultiFab<Dim>* const> program_states, std::span<MultiFab<Dim>* const> program_rhs);
+  POPS_EXPORT std::string authenticate_prepared_amr_interface_sample(
+      const runtime::multiblock::InterfaceFluxSample& sample) const;
   POPS_EXPORT void publish_prepared_amr_program_candidates(
       int level, std::span<MultiFab<Dim>* const> program_candidates);
 

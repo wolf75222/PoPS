@@ -380,10 +380,12 @@ void advance_multiblock_level_group_(multiblock_level_group_type group, double m
     if (multiblock_subcycling_->has_synchronized_groups()) {
       for (int level = 0; level < nlev(); ++level)
         with_program_attempt_level(level, [&] {
+          materialize_active_shared_flux_();
           for (std::size_t block = 0; block < active_attempt_states_.size(); ++block)
             materialize_active_flux_expression_(block, *active_attempt_states_[block]);
         });
     } else {
+      materialize_active_shared_flux_();
       for (std::size_t block = 0; block < active_attempt_states_.size(); ++block)
         materialize_active_flux_expression_(block, *active_attempt_states_[block]);
     }

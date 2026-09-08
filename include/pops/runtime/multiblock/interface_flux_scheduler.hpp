@@ -4,6 +4,7 @@
 #pragma once
 
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/identity/sha256.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
@@ -140,10 +141,32 @@ struct InterfaceFluxFragmentPublication {
   bool stage_weight_resolved = true;
 };
 
+// One evaluated physical face batch. Both endpoint-owned temporal bases reference the same
+// immutable sample; only the Program's final affine expression can assign its time weight.
+struct InterfaceFluxSample {
+  std::string interface_identity;
+  std::string route_contract;
+  std::size_t left_block = 0;
+  std::size_t right_block = 0;
+  int level = 0;
+  std::uint64_t source_topology_epoch = 0;
+  double face_measure = 0.0;
+  int left_axis = 0, right_axis = 0;
+  InterfaceSide left_side = InterfaceSide::Low, right_side = InterfaceSide::High;
+  double left_normal_spacing = 0.0, right_normal_spacing = 0.0;
+  std::size_t face_count = 0;
+  int component_count = 0;
+  std::vector<int> right_component_for_left;
+  BoundaryEvaluationPoint source_point;
+  std::vector<Real> flux_density;
+};
+
 struct InterfaceFluxProductionBudget {
   struct Level {
     std::size_t fragment_count_per_application = 0;
     std::size_t payload_terms_per_application = 0;
+    std::size_t sample_count_per_application = 0;
+    std::size_t sample_payload_terms_per_application = 0;
   };
 
   std::vector<Level> levels;
@@ -374,7 +397,8 @@ class InterfaceFluxScheduler {
 
   void apply(const BoundaryEvaluationPoint& point, std::span<field_type* const> states,
              std::span<field_type* const> rhs,
-             InterfaceFluxFragmentPublication* publication = nullptr) {
+             InterfaceFluxFragmentPublication* publication = nullptr,
+             std::vector<InterfaceFluxSample>* captured = nullptr) {
     if (interfaces_.empty()) {
       validate_point_(point);
       if (publication != nullptr)
@@ -391,6 +415,11 @@ class InterfaceFluxScheduler {
       validate_point_(point);
       if (publication != nullptr)
         validate_fragment_publication_(point, *publication);
+      if (captured != nullptr) {
+        if (publication != nullptr || !captured->empty())
+          throw std::invalid_argument("interface sample capture requires an empty unpublished target");
+        captured->reserve(interfaces_.size());
+      }
     } catch (...) {
       point_failure = std::current_exception();
     }
@@ -401,6 +430,9 @@ class InterfaceFluxScheduler {
       if (minimum != maximum)
         throw std::runtime_error(
             "multi-block interface fragment publication presence differs across MPI ranks");
+      if (all_reduce_min(captured != nullptr ? 1L : 0L, communicator) !=
+          all_reduce_max(captured != nullptr ? 1L : 0L, communicator))
+        throw std::runtime_error("interface sample capture presence differs across MPI ranks");
       if (!registry_agrees_across_ranks_(communicator))
         throw std::runtime_error(
             "multi-block interface prepared registry differs across MPI ranks");
@@ -447,15 +479,40 @@ class InterfaceFluxScheduler {
         active_failure = std::current_exception();
       }
       finish_collective_preflight_(prepared.communicator, active_failure, "active-mask preflight");
-      if (prepared.distributed) {
+      if (prepared.distributed || (captured != nullptr && collective)) {
         const long minimum = all_reduce_min(active ? 1L : 0L, prepared.communicator);
         const long maximum = all_reduce_max(active ? 1L : 0L, prepared.communicator);
         if (minimum != maximum)
           throw std::runtime_error("multi-block interface active mask differs across MPI ranks");
       }
       if (active)
-        apply_one_(prepared, point, *left_state, *right_state, *left_rhs, *right_rhs, publication);
+        apply_one_(prepared, point, *left_state, *right_state, *left_rhs, *right_rhs, publication, captured);
     }
+  }
+
+  std::string_view authenticate_sample(const InterfaceFluxSample& sample) const {
+    const auto found = std::find_if(interfaces_.begin(), interfaces_.end(), [&](const auto& route) {
+      return route.route.identity == sample.interface_identity && route.route.level == sample.level;
+    });
+    if (found == interfaces_.end() || route_digest_(found->collective_identity) != sample.route_contract ||
+        found->route.left_block != sample.left_block || found->route.right_block != sample.right_block ||
+        found->face_measure != sample.face_measure ||
+        found->route.left_axis != sample.left_axis || found->route.right_axis != sample.right_axis ||
+        found->route.left_side != sample.left_side || found->route.right_side != sample.right_side ||
+        found->left_normal_spacing != sample.left_normal_spacing ||
+        found->right_normal_spacing != sample.right_normal_spacing ||
+        found->face_count != sample.face_count || found->component_count != sample.component_count ||
+        found->route.right_component_for_left != sample.right_component_for_left ||
+        sample.flux_density.size() != found->face_count * static_cast<std::size_t>(found->component_count) ||
+        sample.source_point.level != sample.level)
+      throw std::invalid_argument("retained shared flux sample differs from its authenticated route");
+    validate_point_(sample.source_point);
+    if (sample.source_point.graph_identity.empty() || sample.source_point.rate_identity.empty() ||
+        sample.source_point.application_identity.empty() ||
+        !std::all_of(sample.flux_density.begin(), sample.flux_density.end(),
+                     [](Real value) { return std::isfinite(static_cast<double>(value)); }))
+      throw std::invalid_argument("retained shared flux sample has invalid source provenance");
+    return found->collective_identity;
   }
 
   std::size_t size() const noexcept { return interfaces_.size(); }
@@ -494,6 +551,10 @@ class InterfaceFluxScheduler {
           row.payload_terms_per_application >
               std::numeric_limits<std::size_t>::max() - orientations * payload)
         throw std::length_error("multi-block interface production budget exceeds size_t");
+      ++row.sample_count_per_application;
+      if (payload > std::numeric_limits<std::size_t>::max() - row.sample_payload_terms_per_application)
+        throw std::length_error("interface retained sample budget exceeds size_t");
+      row.sample_payload_terms_per_application += payload;
       row.fragment_count_per_application += orientations;
       row.payload_terms_per_application += orientations * payload;
       budget.maximum_interface_identity_characters =
@@ -630,6 +691,8 @@ class InterfaceFluxScheduler {
       if (orientations != 0 && terms > std::numeric_limits<std::size_t>::max() / orientations)
         throw std::length_error(
             "multi-block interface configured oriented payload budget exceeds size_t");
+      row.sample_count_per_application = logical.size();
+      row.sample_payload_terms_per_application = terms;
       row.payload_terms_per_application = orientations * terms;
       exact.scalar(static_cast<std::uint64_t>(level))
           .scalar(static_cast<std::uint64_t>(
@@ -1387,7 +1450,10 @@ class InterfaceFluxScheduler {
 
   static void apply_one_(PreparedInterface& prepared, const BoundaryEvaluationPoint& point,
                          field_type& left_state, field_type& right_state, field_type& left_rhs,
-                         field_type& right_rhs, InterfaceFluxFragmentPublication* publication) {
+                         field_type& right_rhs, InterfaceFluxFragmentPublication* publication,
+                         std::vector<InterfaceFluxSample>* captured = nullptr) {
+    const bool collective_capture = captured != nullptr && prepared.communicator.active() &&
+                                    prepared.communicator.size() > 1;
     const bool layouts_match =
         runtime_field_matches_(left_state, prepared.left_layout, prepared.left_distribution,
                                prepared.left_rank, prepared.left_ghosts,
@@ -1401,7 +1467,7 @@ class InterfaceFluxScheduler {
         runtime_field_matches_(right_rhs, prepared.right_layout, prepared.right_distribution,
                                prepared.right_rank, prepared.right_ghosts,
                                prepared.component_count);
-    if (prepared.distributed) {
+    if (prepared.distributed || collective_capture) {
       if (all_reduce_sum(layouts_match ? 0L : 1L, prepared.communicator) != 0)
         throw std::runtime_error(
             "multi-block interface runtime fields differ from prepared layouts on one rank");
@@ -1454,7 +1520,7 @@ class InterfaceFluxScheduler {
     } catch (...) {
       evaluator_failure = std::current_exception();
     }
-    if (prepared.distributed) {
+    if (prepared.distributed || collective_capture) {
       if (all_reduce_sum(evaluator_failure ? 1L : 0L, prepared.communicator) != 0)
         throw std::runtime_error("multi-block interface evaluator failed on one or more ranks");
     } else if (evaluator_failure) {
@@ -1465,7 +1531,7 @@ class InterfaceFluxScheduler {
     bool finite = true;
     for (std::size_t value = 0; value < packed; ++value)
       finite = finite && std::isfinite(static_cast<double>(prepared.host_flux(value)));
-    if (prepared.distributed) {
+    if (prepared.distributed || collective_capture) {
       if (all_reduce_sum(finite ? 0L : 1L, prepared.communicator) != 0)
         throw std::runtime_error(
             "multi-block interface evaluator returned a non-finite flux on one rank");
@@ -1473,6 +1539,33 @@ class InterfaceFluxScheduler {
     } else if (!finite) {
       throw std::runtime_error("multi-block interface evaluator returned a non-finite flux");
     }
+    std::optional<InterfaceFluxSample> sample;
+    std::exception_ptr capture_failure;
+    try {
+      if (captured != nullptr) {
+        sample.emplace();
+        sample->interface_identity = prepared.route.identity;
+        sample->route_contract = route_digest_(prepared.collective_identity);
+        sample->left_block = prepared.route.left_block;
+        sample->right_block = prepared.route.right_block;
+        sample->level = point.level;
+        sample->face_measure = prepared.face_measure;
+        sample->left_axis = prepared.route.left_axis;
+        sample->right_axis = prepared.route.right_axis;
+        sample->left_side = prepared.route.left_side;
+        sample->right_side = prepared.route.right_side;
+        sample->left_normal_spacing = prepared.left_normal_spacing;
+        sample->right_normal_spacing = prepared.right_normal_spacing;
+        sample->face_count = prepared.face_count;
+        sample->component_count = prepared.component_count;
+        sample->right_component_for_left = prepared.route.right_component_for_left;
+        sample->source_point = point;
+        sample->flux_density.assign(prepared.host_flux.data(), prepared.host_flux.data() + packed);
+      }
+    } catch (...) {
+      capture_failure = std::current_exception();
+    }
+    finish_collective_preflight_(prepared.communicator, capture_failure, "physical flux capture");
     if (publication != nullptr) {
       std::optional<typename InterfaceFluxFragmentLedger::PreparedAccumulation>
           prepared_publication;
@@ -1500,6 +1593,9 @@ class InterfaceFluxScheduler {
       throw;
     }
     ++*prepared.evaluation_count;
+    static_assert(std::is_nothrow_move_constructible_v<InterfaceFluxSample>);
+    if (sample)
+      captured->push_back(std::move(*sample));
   }
 
   static void require_distributed_flux_consensus_(PreparedInterface& prepared, std::size_t packed) {
@@ -1761,6 +1857,10 @@ class InterfaceFluxScheduler {
     }
     finish_collective_preflight_(communicator, allocation_failure, "registry identity allocation");
     return all_ranks_agree_exact_ordered_byte_pairs(identities, communicator);
+  }
+
+  static std::string route_digest_(std::string_view bytes) {
+    return ::pops::identity::sha256_hex(std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
   }
 
   static void validate_point_(const BoundaryEvaluationPoint& point) {

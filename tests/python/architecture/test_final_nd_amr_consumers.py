@@ -41,6 +41,7 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/amr_program_context_subcycling_runtime.inc",
         "pops/runtime/program/amr_program_context_flux_basis.inc",
         "pops/runtime/program/amr_program_context_flux_expression_runtime.inc",
+        "pops/runtime/program/amr_program_context_shared_flux.inc",
         "pops/runtime/program/amr_program_context_history_checkpoint_runtime.inc",
         "pops/runtime/program/amr_program_context_field_runtime_services.inc",
         "pops/runtime/program/amr_program_context_history_checkpoint_services.inc",
@@ -83,6 +84,7 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
             "pops/runtime/program/amr_program_context_flux_expression_runtime.inc",
         }
     ),
+    "shared_flux": frozenset({"pops/runtime/program/amr_program_context_shared_flux.inc"}),
     "flux_basis": frozenset(
         {
             "pops/runtime/program/amr_program_context_flux_basis.inc",
@@ -106,6 +108,7 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     "field_runtime": 1_800,
     "history_checkpoint": 1_800,
     "flux_expression": 1_200,
+    "shared_flux": 400,
     "flux_basis": 500,
     "subcycling_runtime": 800,
     "cell_temporal_runtime": 800,

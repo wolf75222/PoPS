@@ -321,6 +321,14 @@ def _emit_flux_expression_budget(program: Any) -> str:
         )
 
     has_flux = any(rhs > 0 for rhs, _ in budgets)
+    # One retained basis can carry at most one sample of each installed physical interface.
+    # Summing endpoint bounds is conservative (a paired sample is counted twice), and includes
+    # every declared readable history lag. The scheduler supplies the independent route ceiling.
+    interface_samples = sum(rhs for rhs, _ in budgets)
+    interface_identity_characters = (
+        len(program._ir_hash()) + len("shared-rhs/") + len(str(2**31 - 1))
+        + len("program-rhs-group") if interface_samples else 0
+    )
     return (
         "// Frozen-IR FluxExpression budgets in exact pops_program_block_name order.\n"
         f'extern "C" bool pops_program_has_flux_expression() {{ return '
@@ -328,13 +336,10 @@ def _emit_flux_expression_budget(program: Any) -> str:
         f'extern "C" int pops_program_flux_expression_budget_count() {{ return {count}; }}\n'
         + lookup("pops_program_flux_rhs_basis_bound", rhs_bounds)
         + lookup("pops_program_flux_coefficient_term_bound", coefficient_bounds)
-        # Generated Program IR currently has no interface-coupling node.  The explicit zero is an
-        # authenticated finite authority, not absence of metadata; hand-authored Program DSOs must
-        # export their own exact non-zero bound when they call apply_coupling_operators().
         + 'extern "C" std::uint64_t '
-        "pops_program_interface_coupling_application_bound() { return UINT64_C(0); }\n"
+        f"pops_program_interface_coupling_application_bound() {{ return UINT64_C({interface_samples}); }}\n"
         + 'extern "C" std::uint64_t '
-        "pops_program_interface_coupling_identity_character_bound() { return UINT64_C(0); }\n"
+        f"pops_program_interface_coupling_identity_character_bound() {{ return UINT64_C({interface_identity_characters}); }}\n"
         + _emit_checkpoint_shape_metadata(program)
     )
 

@@ -255,6 +255,11 @@ std::pair<FluxExpression, std::uint64_t> rehydrated_history_flux_expression_(
     basis.window = active_subcycling_window_;
     basis.point.physical_time =
         basis.window.begin.physical_time + basis.point.stage_fraction.value() * current_dt_;
+    for (const auto& sample : basis.shared_samples) {
+      if (!sample || sample->level != active_level_)
+        throw std::invalid_argument("retained shared flux sample cannot be projected across levels");
+      facade_->authenticate_prepared_amr_interface_sample(*sample);
+    }
     // A retained sample can outlive an accepted regrid.  Its numerical history is prolonged by
     // the native rematerialization transaction, while a new or moved interface receives an exact
     // zero-mismatch stage.  Unchanged faces retain their authenticated density byte-for-byte.
@@ -325,6 +330,7 @@ std::vector<std::uint8_t> serialize_history_flux_payload_() const {
   if (!any_expression)
     return {};
   checkpoint_detail::Writer out;
+  out.u64(UINT64_C(0x504f5053464c5832));  // POPSFLX2: shared physical samples are explicit.
   out.size(history_flux_expressions_.size());
   for (const auto& [key, slots] : history_flux_expressions_) {
     out.string(key);
@@ -376,6 +382,12 @@ std::vector<std::uint8_t> serialize_history_flux_payload_() const {
           for (const Real value : face.flux_density)
             out.real(static_cast<double>(value));
         }
+        out.size(basis.shared_samples.size());
+        for (const auto& sample : basis.shared_samples) {
+          if (!sample)
+            throw std::logic_error("history shared flux sample is absent");
+          write_shared_flux_sample_(out, *sample);
+        }
       }
     }
   }
@@ -402,6 +414,8 @@ std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_
     return empty;
   }
   checkpoint_detail::Reader in(bytes);
+  if (in.u64() != UINT64_C(0x504f5053464c5832))
+    throw std::invalid_argument("history flux checkpoint lacks explicit shared-sample format");
   constexpr std::size_t coefficient_record_bytes = 3 * checkpoint_detail::kEncodedScalarBytes;
   constexpr std::size_t face_record_bytes =
       (5 + 2 * static_cast<std::size_t>(Dim)) * checkpoint_detail::kEncodedScalarBytes;
@@ -501,6 +515,16 @@ std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_
                   "AMR Program history flux payload has a non-finite density");
           }
           basis.faces.push_back(std::move(face));
+        }
+        const std::size_t shared_count = in.size(29 * checkpoint_detail::kEncodedScalarBytes);
+        basis.shared_samples.reserve(shared_count);
+        std::set<std::string> shared_identities;
+        for (std::size_t shared = 0; shared < shared_count; ++shared) {
+          auto sample = read_shared_flux_sample_(in, basis.runtime_block);
+          if (sample->level != basis.level ||
+              !shared_identities.insert(shared_flux_source_identity_(*sample)).second)
+            throw std::invalid_argument("history basis repeats or misplaces a shared source sample");
+          basis.shared_samples.push_back(std::move(sample));
         }
         // A completely covered level legitimately has no coarse--fine faces.  Archive bytes alone
         // cannot establish that an empty vector is meaningful, so admit it only when the rebuilt,
