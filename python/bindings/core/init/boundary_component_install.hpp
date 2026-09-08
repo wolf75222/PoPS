@@ -230,9 +230,9 @@ inline runtime::multiblock::AxisAlignedInterface<Dim> interface_route_from_pytho
     route.tangential_transform.right_tangent_for_left[tangent] =
         tangent_permutation[static_cast<std::size_t>(tangent)];
     route.tangential_transform.sign[tangent] = tangent_sign[static_cast<std::size_t>(tangent)];
-    route.tangential_transform.offset[tangent] = static_cast<Real>(binary64_from_identity(
-        tangent_offset[static_cast<py::ssize_t>(tangent)],
-        "native shared interface right_tangent_offset"));
+    route.tangential_transform.offset[tangent] =
+        static_cast<Real>(binary64_from_identity(tangent_offset[static_cast<py::ssize_t>(tangent)],
+                                                 "native shared interface right_tangent_offset"));
   }
   route.right_component_for_left =
       py::cast<std::vector<int>>(permutation["right_component_for_left"]);

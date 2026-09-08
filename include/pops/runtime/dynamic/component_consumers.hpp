@@ -793,8 +793,7 @@ inline int apply_transfer(const PopsTransferApiV1& api, void* state,
     const auto fine = pullback ? destination_interior : source_interior;
     const auto coarse = pullback ? source_interior : destination_interior;
     if (ratio <= 0 ||
-        coarse >
-            std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(ratio) ||
+        coarse > std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(ratio) ||
         fine != coarse * static_cast<std::size_t>(ratio))
       throw std::invalid_argument("transfer refinement ratio must be positive");
   }

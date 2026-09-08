@@ -339,7 +339,8 @@ class CoarseFineGhostSchedule {
             fine_domain_,
             mesh::BoxArrayValidationBudget{fine.layout().size(), budget.parent_child_patch_pairs}))
       throw std::invalid_argument(
-          "coarse/fine ghost schedule requires disjoint parent and child patches within their domains");
+          "coarse/fine ghost schedule requires disjoint parent and child patches within their "
+          "domains");
     if (fine.layout().size() > budget.fine_patches)
       throw std::length_error("coarse/fine ghost schedule fine-patch budget exceeded");
   }

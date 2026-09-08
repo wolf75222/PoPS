@@ -269,13 +269,11 @@ struct AuxiliaryConsumerProviderPlan {
 
   void serialize_exact(ExactContractBuilder& exact) const {
     validate();
-    exact.text("pops.auxiliary-consumer-provider-plan")
-        .scalar(std::uint32_t{1})
-        .text(consumer_qid);
-    exact.sequence(values, [](ExactContractBuilder& item,
-                              const AuxiliaryConsumerValue<Dim>& value) {
-      value.serialize_exact(item);
-    });
+    exact.text("pops.auxiliary-consumer-provider-plan").scalar(std::uint32_t{1}).text(consumer_qid);
+    exact.sequence(values,
+                   [](ExactContractBuilder& item, const AuxiliaryConsumerValue<Dim>& value) {
+                     value.serialize_exact(item);
+                   });
   }
 };
 
@@ -303,7 +301,8 @@ struct AuxiliaryEvaluationPoint {
   void validate() const {
     if (clock.empty() || level < 0 || substep < 0 || stage < 0 || nonlinear_iteration < 0)
       throw std::invalid_argument(
-          "auxiliary evaluation point requires a clock and non-negative level/substep/stage/iteration");
+          "auxiliary evaluation point requires a clock and non-negative "
+          "level/substep/stage/iteration");
   }
 
   void serialize_exact(ExactContractBuilder& exact) const {
@@ -343,7 +342,8 @@ struct AuxiliaryEvaluationPolicy {
           event != AuxiliaryEvaluationEvent::before_residual &&
           event != AuxiliaryEvaluationEvent::before_field_solve &&
           event != AuxiliaryEvaluationEvent::nonlinear_iteration &&
-          event != AuxiliaryEvaluationEvent::after_regrid && event != AuxiliaryEvaluationEvent::output)
+          event != AuxiliaryEvaluationEvent::after_regrid &&
+          event != AuxiliaryEvaluationEvent::output)
         throw std::invalid_argument("auxiliary evaluation policy has an invalid event");
   }
 
@@ -397,7 +397,8 @@ struct AuxiliaryStorageGroupKey {
 
   void validate() const {
     if (representation.empty() || centering.empty() || layout.empty())
-      throw std::invalid_argument("auxiliary storage group requires storage representation/centering/layout");
+      throw std::invalid_argument(
+          "auxiliary storage group requires storage representation/centering/layout");
     shape.validate();
   }
   [[nodiscard]] std::string exact_key() const {

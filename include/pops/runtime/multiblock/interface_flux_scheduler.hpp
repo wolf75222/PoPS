@@ -425,7 +425,8 @@ class InterfaceFluxScheduler {
         validate_fragment_publication_(point, *publication);
       if (captured != nullptr) {
         if (publication != nullptr || !captured->empty())
-          throw std::invalid_argument("interface sample capture requires an empty unpublished target");
+          throw std::invalid_argument(
+              "interface sample capture requires an empty unpublished target");
         captured->reserve(interfaces_.size());
       }
     } catch (...) {
@@ -480,7 +481,8 @@ class InterfaceFluxScheduler {
         const bool right_active = right_state != nullptr || right_rhs != nullptr;
         active = left_active || right_active;
         if (active && captured != nullptr && prepared.route_certificate.empty())
-          throw std::invalid_argument("interface sample capture has no exact sampling provider authority");
+          throw std::invalid_argument(
+              "interface sample capture has no exact sampling provider authority");
         if (active && (!left_active || !right_active || left_state == nullptr ||
                        right_state == nullptr || left_rhs == nullptr || right_rhs == nullptr))
           throw std::runtime_error(
@@ -496,7 +498,8 @@ class InterfaceFluxScheduler {
           throw std::runtime_error("multi-block interface active mask differs across MPI ranks");
       }
       if (active)
-        apply_one_(prepared, point, *left_state, *right_state, *left_rhs, *right_rhs, publication, captured);
+        apply_one_(prepared, point, *left_state, *right_state, *left_rhs, *right_rhs, publication,
+                   captured);
     }
   }
 
@@ -506,17 +509,22 @@ class InterfaceFluxScheduler {
     });
     if (found == interfaces_.end() || found->route_certificate.empty() ||
         found->route_certificate != sample.route_contract ||
-        found->route.left_block != sample.left_block || found->route.right_block != sample.right_block ||
-        found->face_measure != sample.face_measure ||
-        found->route.left_axis != sample.left_axis || found->route.right_axis != sample.right_axis ||
-        found->route.left_side != sample.left_side || found->route.right_side != sample.right_side ||
+        found->route.left_block != sample.left_block ||
+        found->route.right_block != sample.right_block ||
+        found->face_measure != sample.face_measure || found->route.left_axis != sample.left_axis ||
+        found->route.right_axis != sample.right_axis ||
+        found->route.left_side != sample.left_side ||
+        found->route.right_side != sample.right_side ||
         found->left_normal_spacing != sample.left_normal_spacing ||
         found->right_normal_spacing != sample.right_normal_spacing ||
-        found->face_count != sample.face_count || found->component_count != sample.component_count ||
+        found->face_count != sample.face_count ||
+        found->component_count != sample.component_count ||
         found->route.right_component_for_left != sample.right_component_for_left ||
-        sample.flux_density.size() != found->face_count * static_cast<std::size_t>(found->component_count) ||
+        sample.flux_density.size() !=
+            found->face_count * static_cast<std::size_t>(found->component_count) ||
         sample.source_point.level != sample.level)
-      throw std::invalid_argument("retained shared flux sample differs from its authenticated route");
+      throw std::invalid_argument(
+          "retained shared flux sample differs from its authenticated route");
     validate_point_(sample.source_point);
     if (sample.source_point.graph_identity.empty() || sample.source_point.rate_identity.empty() ||
         sample.source_point.application_identity.empty() ||
@@ -563,7 +571,8 @@ class InterfaceFluxScheduler {
               std::numeric_limits<std::size_t>::max() - orientations * payload)
         throw std::length_error("multi-block interface production budget exceeds size_t");
       ++row.sample_count_per_application;
-      if (payload > std::numeric_limits<std::size_t>::max() - row.sample_payload_terms_per_application)
+      if (payload >
+          std::numeric_limits<std::size_t>::max() - row.sample_payload_terms_per_application)
         throw std::length_error("interface retained sample budget exceeds size_t");
       row.sample_payload_terms_per_application += payload;
       row.fragment_count_per_application += orientations;
@@ -1472,8 +1481,8 @@ class InterfaceFluxScheduler {
                          field_type& left_state, field_type& right_state, field_type& left_rhs,
                          field_type& right_rhs, InterfaceFluxFragmentPublication* publication,
                          std::vector<InterfaceFluxSample>* captured = nullptr) {
-    const bool collective_capture = captured != nullptr && prepared.communicator.active() &&
-                                    prepared.communicator.size() > 1;
+    const bool collective_capture =
+        captured != nullptr && prepared.communicator.active() && prepared.communicator.size() > 1;
     const bool layouts_match =
         runtime_field_matches_(left_state, prepared.left_layout, prepared.left_distribution,
                                prepared.left_rank, prepared.left_ghosts,
@@ -1702,10 +1711,9 @@ class InterfaceFluxScheduler {
     rhs.level = 0;
     return lhs.identity == rhs.identity &&
            lhs.sampling_provider_identity == rhs.sampling_provider_identity &&
-           lhs.left_block == rhs.left_block &&
-           lhs.right_block == rhs.right_block && lhs.left_axis == rhs.left_axis &&
-           lhs.right_axis == rhs.right_axis && lhs.left_side == rhs.left_side &&
-           lhs.right_side == rhs.right_side &&
+           lhs.left_block == rhs.left_block && lhs.right_block == rhs.right_block &&
+           lhs.left_axis == rhs.left_axis && lhs.right_axis == rhs.right_axis &&
+           lhs.left_side == rhs.left_side && lhs.right_side == rhs.right_side &&
            lhs.tangential_transform == rhs.tangential_transform &&
            lhs.right_component_for_left == rhs.right_component_for_left &&
            lhs.left_trace_projection_identity == rhs.left_trace_projection_identity &&

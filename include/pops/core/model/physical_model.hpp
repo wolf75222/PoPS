@@ -157,26 +157,23 @@ concept PhysicalModel = PhysicalModelFor<M, kNativeDimension>;
 
 /// OPTIONAL trait: stability speed lambda* replacing max_wave_speed in the block CFL.
 template <class M>
-concept HasStabilitySpeed =
-    requires(const M m, const typename M::State u,
-             const ProviderValues<provider_count<M>()> providers, int dir) {
-      { m.stability_speed(u, providers, dir) } -> std::convertible_to<Real>;
+concept HasStabilitySpeed = requires(const M m, const typename M::State u,
+                                     const ProviderValues<provider_count<M>()> providers, int dir) {
+  { m.stability_speed(u, providers, dir) } -> std::convertible_to<Real>;
 };
 
 /// OPTIONAL trait: local source frequency mu [1/s] (bound dt <= cfl / max mu, without h).
 template <class M>
-concept HasSourceFrequency =
-    requires(const M m, const typename M::State u,
-             const ProviderValues<provider_count<M>()> providers) {
-      { m.source_frequency(u, providers) } -> std::convertible_to<Real>;
+concept HasSourceFrequency = requires(const M m, const typename M::State u,
+                                      const ProviderValues<provider_count<M>()> providers) {
+  { m.source_frequency(u, providers) } -> std::convertible_to<Real>;
 };
 
 /// OPTIONAL trait: direct admissible step per cell (bound dt <= min stability_dt, without cfl).
 template <class M>
-concept HasStabilityDt =
-    requires(const M m, const typename M::State u,
-             const ProviderValues<provider_count<M>()> providers) {
-      { m.stability_dt(u, providers) } -> std::convertible_to<Real>;
+concept HasStabilityDt = requires(const M m, const typename M::State u,
+                                  const ProviderValues<provider_count<M>()> providers) {
+  { m.stability_dt(u, providers) } -> std::convertible_to<Real>;
 };
 
 /// Trait OPTIONNEL : PROJECTION PONCTUELLE post-pas U -> project(U, aux) (ADC-177). Le stepper
@@ -186,10 +183,9 @@ concept HasStabilityDt =
 /// de voisin) ; les formules elles-memes (realisabilite, clamps -- ecrits en max/min via abs/sign)
 /// restent cote cas, seul le hook est coeur. POPS_HD obligatoire (evaluee dans un kernel).
 template <class M>
-concept HasPointwiseProjection =
-    requires(const M m, const typename M::State u,
-             const ProviderValues<provider_count<M>()> providers) {
-      { m.project(u, providers) } -> std::same_as<typename M::State>;
+concept HasPointwiseProjection = requires(const M m, const typename M::State u,
+                                          const ProviderValues<provider_count<M>()> providers) {
+  { m.project(u, providers) } -> std::same_as<typename M::State>;
 };
 
 /// OPTIONAL state conversion contract: primitive variables + cons<->prim conversions.

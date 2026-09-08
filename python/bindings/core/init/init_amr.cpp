@@ -532,13 +532,13 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       .def(
           "_install_native_block",
           [](AmrSystem& system, const std::string& name, const std::string& so_path,
-             const std::string& expected_model_identity, const std::string& expected_binary_identity,
-             const std::string& limiter, const std::string& riemann, const std::string& recon,
-             const std::string& time, double gamma, int substeps, int stride,
-             const std::vector<double>& params, double positivity_floor, double weno_epsilon,
-             bool wave_speed_cache, int newton_max_iters, double newton_rel_tol,
-             double newton_abs_tol, double newton_fd_eps, double newton_damping,
-             bool newton_diagnostics) {
+             const std::string& expected_model_identity,
+             const std::string& expected_binary_identity, const std::string& limiter,
+             const std::string& riemann, const std::string& recon, const std::string& time,
+             double gamma, int substeps, int stride, const std::vector<double>& params,
+             double positivity_floor, double weno_epsilon, bool wave_speed_cache,
+             int newton_max_iters, double newton_rel_tol, double newton_abs_tol,
+             double newton_fd_eps, double newton_damping, bool newton_diagnostics) {
             NewtonOptions newton = newton_options_from_abi(
                 newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);
             system.add_native_block(name, so_path, expected_model_identity,
@@ -554,8 +554,7 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("stride") = 1, py::arg("params") = std::vector<double>{},
           py::arg("positivity_floor") = 0.0,
           py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon),
-          py::arg("wave_speed_cache") = false,
-          py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
+          py::arg("wave_speed_cache") = false, py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
           py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
           py::arg("newton_fd_eps") = static_cast<double>(kNewtonDefaultFdEps),
@@ -973,16 +972,18 @@ void bind_amr_stepping(py::class_<AmrSystem>& cls) {
            })
       .def("_validate_checkpoint_program_exchanges",
            [](const AmrSystem&, py::bytes payload) {
-             const std::string_view bytes(PyBytes_AS_STRING(payload.ptr()),
-                                          static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
+             const std::string_view bytes(
+                 PyBytes_AS_STRING(payload.ptr()),
+                 static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
              (void)pops::runtime::program::AcceptedExchangeLedger::from_checkpoint(
                  std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(bytes.data()),
                                                bytes.size()));
            })
       .def("_restore_checkpoint_program_exchanges",
            [](AmrSystem& system, py::bytes payload) {
-             const std::string_view bytes(PyBytes_AS_STRING(payload.ptr()),
-                                          static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
+             const std::string_view bytes(
+                 PyBytes_AS_STRING(payload.ptr()),
+                 static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
              system.restore_checkpoint_program_exchanges(std::span<const std::uint8_t>(
                  reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()));
            })

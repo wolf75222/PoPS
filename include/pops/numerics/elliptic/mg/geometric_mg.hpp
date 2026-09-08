@@ -430,9 +430,8 @@ class GeometricMG {
       if (!coarse.coefficient)
         coarse.coefficient.emplace(coarse.phi.layout(), coarse.phi.distribution(),
                                    coarse.phi.local_rank(), 1, detail::unit_ghosts<Dim>());
-      const CopyScheduleBudget budget =
-          detail::exact_copy_budget(coarse.coefficient->layout(),
-                                    coarsen(levels_[level - 1]->coefficient->layout(), 2));
+      const CopyScheduleBudget budget = detail::exact_copy_budget(
+          coarse.coefficient->layout(), coarsen(levels_[level - 1]->coefficient->layout(), 2));
       average_down(*levels_[level - 1]->coefficient, *coarse.coefficient, 2, budget);
     }
     for (auto& level : levels_)

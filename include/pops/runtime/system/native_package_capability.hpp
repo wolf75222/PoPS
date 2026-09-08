@@ -332,7 +332,8 @@ class PreparedNativeBlockInstaller final {
       for (std::size_t previous = 0; previous < index; ++previous)
         if (package.elliptic_attachments[previous].field == attachment.field &&
             (attachment.role != NativeEllipticAttachmentRole::rhs_only ||
-             package.elliptic_attachments[previous].role != NativeEllipticAttachmentRole::rhs_only ||
+             package.elliptic_attachments[previous].role !=
+                 NativeEllipticAttachmentRole::rhs_only ||
              package.elliptic_attachments[previous].field_slot == attachment.field_slot))
           throw std::invalid_argument(
               "native package committed one elliptic attachment more than once");

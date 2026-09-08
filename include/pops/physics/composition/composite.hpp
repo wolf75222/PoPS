@@ -212,9 +212,9 @@ template <class Hyperbolic, class = void>
 struct FluxProviderRequirementAlias {};
 
 template <class Hyperbolic>
-struct FluxProviderRequirementAlias<
-    Hyperbolic, std::void_t<decltype(Hyperbolic::n_flux_providers),
-                            decltype(Hyperbolic::flux_provider_requirements)>> {
+struct FluxProviderRequirementAlias<Hyperbolic,
+                                    std::void_t<decltype(Hyperbolic::n_flux_providers),
+                                                decltype(Hyperbolic::flux_provider_requirements)>> {
   static constexpr int n_flux_providers = Hyperbolic::n_flux_providers;
   static constexpr auto flux_provider_requirements = Hyperbolic::flux_provider_requirements;
 };
@@ -576,8 +576,9 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic>,
 
   POPS_HD bool characteristic_no_inflow(const State& interior, const State& reference,
                                         const Real* normal, State& ghost) const
-    requires requires(const Hyperbolic h, const State a, const State b, const Real* n,
-                      State& out) { h.characteristic_no_inflow(a, b, n, out); }
+    requires requires(const Hyperbolic h, const State a, const State b, const Real* n, State& out) {
+      h.characteristic_no_inflow(a, b, n, out);
+    }
   {
     return hyp.characteristic_no_inflow(interior, reference, normal, ghost);
   }

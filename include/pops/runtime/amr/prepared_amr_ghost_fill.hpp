@@ -355,8 +355,7 @@ class PreparedAmrGhostFill {
               ::pops::amr::transfer::TransferKind::CoarseFineGhostInterpolation &&
           preparation.interpolation_kind !=
               ::pops::amr::transfer::TransferKind::FifthOrderCoarseFineGhostInterpolation &&
-          preparation.interpolation_kind !=
-              ::pops::amr::transfer::TransferKind::ConstantInjection)
+          preparation.interpolation_kind != ::pops::amr::transfer::TransferKind::ConstantInjection)
         throw std::invalid_argument(
             "prepared AMR ghost fill requires an authenticated coarse/fine interpolation kind");
       coarse_fine.emplace(coarse_field, fine_field, preparation.coarse_domain,
@@ -642,10 +641,10 @@ class PreparedAmrGhostFill {
       for (PeerStorage& peer : peers)
         if (peer.receive != nullptr) {
           if (post_code == MPI_SUCCESS)
-            post_code =
-                MPI_Irecv(peer.host_receive.data(), static_cast<int>(peer.receive->elements),
-                          pops::mpi_real_datatype(), peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
-                          lane->native_handle(), &receive_requests[receive_index]);
+            post_code = MPI_Irecv(
+                peer.host_receive.data(), static_cast<int>(peer.receive->elements),
+                pops::mpi_real_datatype(), peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
+                lane->native_handle(), &receive_requests[receive_index]);
           ++receive_index;
         }
       if (!gate(post_code == MPI_SUCCESS ? 0L : 1L))
@@ -656,10 +655,10 @@ class PreparedAmrGhostFill {
       for (PeerStorage& peer : peers)
         if (peer.send != nullptr) {
           if (post_code == MPI_SUCCESS)
-            post_code =
-                MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send->elements), pops::mpi_real_datatype(),
-                          peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
-                          lane->native_handle(), &send_requests[send_index]);
+            post_code = MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send->elements),
+                                  pops::mpi_real_datatype(), peer.mpi_rank,
+                                  ExecutionLane::parallel_copy_message_tag, lane->native_handle(),
+                                  &send_requests[send_index]);
           ++send_index;
         }
       if (!gate(post_code == MPI_SUCCESS ? 0L : 1L))

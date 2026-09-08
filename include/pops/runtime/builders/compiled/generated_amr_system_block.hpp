@@ -1011,14 +1011,15 @@ void materialize_cut_cell_patch(
 
 /// Generated AMR seam for the one uniform-ratio CutCellFractions restrict/prolong/reflux path.
 template <int Dim>
-void apply_generated_amr_cut_cell_fraction_transfer(
-    FieldView<const Real, Dim> fine_phi, FieldView<Real, Dim> coarse_volume,
-    FieldView<Real, Dim> fine_volume, FieldView<Real, Dim> coarse_aperture_residual,
-    const Box<Dim>& coarse_region, const amr::RefinementRatio<Dim>& ratio,
-    amr::transfer::IndexMapping<Dim> mapping = {}) {
+void apply_generated_amr_cut_cell_fraction_transfer(FieldView<const Real, Dim> fine_phi,
+                                                    FieldView<Real, Dim> coarse_volume,
+                                                    FieldView<Real, Dim> fine_volume,
+                                                    FieldView<Real, Dim> coarse_aperture_residual,
+                                                    const Box<Dim>& coarse_region,
+                                                    const amr::RefinementRatio<Dim>& ratio,
+                                                    amr::transfer::IndexMapping<Dim> mapping = {}) {
   nd::apply_cut_cell_fraction_amr_transfer(fine_phi, coarse_volume, fine_volume,
-                                           coarse_aperture_residual, coarse_region, ratio,
-                                           mapping);
+                                           coarse_aperture_residual, coarse_region, ratio, mapping);
 }
 
 template <int Dim, class Model, class Reconstruction, class Numerical,

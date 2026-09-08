@@ -693,7 +693,9 @@ class PreparedMultiBlockAmrHierarchy {
         states[map.canonical_indices[block]] = program_states[block];
         rhs[map.canonical_indices[block]] = program_rhs[block];
       }
-    } catch (...) { error = std::current_exception(); }
+    } catch (...) {
+      error = std::current_exception();
+    }
     collectively_rethrow_(error, "shared RHS capture pack failed collectively");
     if (interface_scheduler_)
       interface_scheduler_->apply(point, std::span<field_type* const>(states),
@@ -701,7 +703,8 @@ class PreparedMultiBlockAmrHierarchy {
     return samples;
   }
 
-  std::string_view authenticate_interface_sample(const runtime::multiblock::InterfaceFluxSample& sample) const {
+  std::string_view authenticate_interface_sample(
+      const runtime::multiblock::InterfaceFluxSample& sample) const {
     if (!interface_scheduler_)
       throw std::invalid_argument("retained shared flux has no live interface provider");
     return interface_scheduler_->authenticate_sample(sample);
