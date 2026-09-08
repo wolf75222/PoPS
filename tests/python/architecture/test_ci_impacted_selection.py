@@ -299,6 +299,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_amr_multiblock_coupled_source": (2,),
         "test_amr_multiblock_implicit_transaction": (2,),
         "test_amr_program_positivity_floor": (2,),
+        "test_amr_synthetic_program_loader_transaction": (2,),
         "test_copy_schedule_cache": (1, 2, 4),
         "test_coupled_fieldsolve": (2,),
         "test_fill_boundary_cache": (1, 2, 4),
