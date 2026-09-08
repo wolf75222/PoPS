@@ -35,6 +35,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -937,6 +938,19 @@ void verify_stride_window_contract() {
   EXPECT_EQ(system.program_cadence_window_steps(), 1);
   EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
 
+  const auto accepted_image = [&]() {
+    const auto& state = context->runtime_state();
+    return std::tuple{system.time(),
+                      system.macro_step(),
+                      system.program_cadence_window_dt(),
+                      system.program_cadence_window_steps(),
+                      system.program_cadence_window_start_time(),
+                      state.step_balance_terms_,
+                      state.balance_step_completed_,
+                      state.balance_program_was_due_};
+  };
+  const auto held_image = accepted_image();
+
   system.begin_step_transaction();
   system.step(0.2);
   const auto rejected_due_balance = system.accepted_balance_terms(balance_route);
@@ -946,10 +960,19 @@ void verify_stride_window_contract() {
   EXPECT_EQ(system.macro_step(), 1);
   EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.1);
   EXPECT_EQ(system.program_cadence_window_steps(), 1);
+  EXPECT_EQ(accepted_image(), held_image);
   system.begin_step_transaction();
-  const auto restored_held_balance = system.accepted_balance_terms(balance_route);
-  expect_balance(restored_held_balance, 0.0);
+  // The restored accepted image belongs to the preceding step, never to this fresh attempt.
+  try {
+    (void)system.accepted_balance_terms(balance_route);
+    FAIL() << "A fresh attempt reused the preceding held-step balance";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(
+        std::string(error.what()).find("current native attempt omitted term 'storage_change'"),
+        std::string::npos);
+  }
   system.rollback_step_transaction();
+  EXPECT_EQ(accepted_image(), held_image);
 
   times.clear();
   steps.clear();

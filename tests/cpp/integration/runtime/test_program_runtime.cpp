@@ -30,6 +30,7 @@
 #include <functional>
 #include <limits>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -759,17 +760,38 @@ TEST(ProgramRuntime, StrideHeldStepsPublishTheExactZeroBalance) {
       EXPECT_DOUBLE_EQ(balance.at(name), 0.0);
   }
 
+  const auto accepted_image = [&]() {
+    const auto& state = context.runtime_state();
+    return std::tuple{system.time(),
+                      system.macro_step(),
+                      system.program_cadence_window_dt(),
+                      system.program_cadence_window_steps(),
+                      system.program_cadence_window_start_time(),
+                      state.step_balance_terms_,
+                      state.balance_step_completed_,
+                      state.balance_program_was_due_};
+  };
+  const auto held_image = accepted_image();
+
   system.begin_step_transaction();
   system.step(0.1);
   const auto rejected_due = system.accepted_balance_terms(route);
   for (const auto& [name, value] : records)
     EXPECT_DOUBLE_EQ(rejected_due.at(name), value);
   system.rollback_step_transaction();
+  EXPECT_EQ(accepted_image(), held_image);
   system.begin_step_transaction();
-  const auto restored_held = system.accepted_balance_terms(route);
-  for (const auto& [name, _value] : records)
-    EXPECT_DOUBLE_EQ(restored_held.at(name), 0.0);
+  // Rollback restores the held image; a new attempt must still start with an empty mailbox.
+  try {
+    (void)system.accepted_balance_terms(route);
+    FAIL() << "A fresh attempt reused the preceding held-step balance";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(
+        std::string(error.what()).find("current native attempt omitted term 'storage_change'"),
+        std::string::npos);
+  }
   system.rollback_step_transaction();
+  EXPECT_EQ(accepted_image(), held_image);
 
   const auto due = step_and_read();
   ASSERT_EQ(due.size(), records.size());
