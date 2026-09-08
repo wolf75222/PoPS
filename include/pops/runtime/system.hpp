@@ -1018,6 +1018,12 @@ class System {
       MultiFab<Dim>& R, const System* prepared_system, int prepared_block,
       const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
       const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
+  /// Flux-only twin retaining the actual boundary-qualified faces in the supplied session.
+  POPS_EXPORT void block_neg_div_flux_into_at_prepared(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
+      MultiFab<Dim>& R, const System* prepared_system, int prepared_block,
+      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
+      const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
   /// Whether ordinary Program RHS evaluation must use a standalone prepared boundary session.
   /// This reports retained boundary state rather than closure completeness so an incomplete
   /// boundary authority fails loudly instead of falling back to the legacy no-lane route.

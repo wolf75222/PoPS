@@ -588,6 +588,55 @@ void System<Dim>::block_rhs_into_at_prepared(
 }
 
 template <int Dim>
+void System<Dim>::block_neg_div_flux_into_at_prepared(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, int block, MultiFab<Dim>& state,
+    MultiFab<Dim>& residual, const System* prepared_system, int prepared_block,
+    const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
+    const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+  const bool valid_block = block >= 0 && block < p_->blocks_.size();
+  collective_boundary_preflight<Dim>(
+      point, block, prepared_system, prepared_block, prepared_point, lane,
+      "System::block_neg_div_flux_into_at_prepared", [&] {
+        if (prepared_system != this)
+          throw std::invalid_argument("prepared boundary RHS session belongs to another System");
+        if (!valid_block)
+          throw std::out_of_range("System prepared boundary RHS block index is out of range");
+        if (prepared_block != block || prepared_point != point)
+          throw std::invalid_argument(
+              "prepared boundary RHS session does not match its block or evaluation point");
+        if (&transport.lane() != &lane)
+          throw std::invalid_argument(
+              "prepared boundary RHS session carries a different execution lane");
+      });
+  typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  collective_boundary_preflight<Dim>(
+      point, block, prepared_system, prepared_block, prepared_point, lane,
+      "System::block_neg_div_flux_into_at_prepared", [&] {
+        if (&state == &residual)
+          throw std::invalid_argument("prepared boundary RHS cannot alias state and result");
+        require_same_block_field(state, selected.U, "prepared boundary RHS state");
+        require_same_block_field(residual, selected.U, "prepared boundary RHS result");
+        if (!selected.boundary || !selected.boundary_flux_full_at_point_prepared)
+          throw std::runtime_error(
+              "System prepared boundary RHS requires one complete generated authority");
+        if (p_->blocks_.has_interfaces(block))
+          throw std::runtime_error(
+              "System prepared boundary RHS has no split shared-interface authority");
+        if (p_->embedded_boundary_ && p_->embedded_boundary_->mode() !=
+                                          runtime::system::PreparedEmbeddedBoundaryMode::inactive)
+          throw std::runtime_error(
+              "System prepared boundary RHS is unavailable with an active embedded boundary");
+      });
+  invoke_prepared_boundary_transaction<Dim>(
+      state, residual, lane, "System::block_neg_div_flux_into_at_prepared", transport,
+      [&](MultiFab<Dim>& candidate, auto& scratch) {
+        materialize_detached_valid_field(state, scratch.detached_state);
+        selected.boundary_flux_full_at_point_prepared(point, scratch.detached_state, candidate,
+                                                 *selected.boundary, lane, transport);
+      });
+}
+
+template <int Dim>
 const ExecutionLane& System<Dim>::prepared_boundary_execution_lane() const {
   if (!prepared_boundary_execution_lane_)
     throw std::logic_error("System has no RuntimeInstance-prepared boundary execution lane");
@@ -1079,6 +1128,11 @@ template void System<kNativeDimension>::block_rhs_core_into_at(
     const runtime::multiblock::BoundaryEvaluationPoint&, const ExecutionLane&,
     const runtime::program::PreparedScalarBoundarySession<kNativeDimension>&);
 template void System<kNativeDimension>::block_rhs_into_at_prepared(
+    const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
+    MultiFab<kNativeDimension>&, const System<kNativeDimension>*, int,
+    const runtime::multiblock::BoundaryEvaluationPoint&, const ExecutionLane&,
+    const runtime::program::PreparedScalarBoundarySession<kNativeDimension>&);
+template void System<kNativeDimension>::block_neg_div_flux_into_at_prepared(
     const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
     MultiFab<kNativeDimension>&, const System<kNativeDimension>*, int,
     const runtime::multiblock::BoundaryEvaluationPoint&, const ExecutionLane&,

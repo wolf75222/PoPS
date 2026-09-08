@@ -52,8 +52,11 @@ def _emit_diffusive_preparation(v, state_var, prepared_var, node_model,
     if target != "system":
         raise ValueError("AMR diffusion execution is unavailable before composite face/exchange integration")
     _,selected,_=_selected(v,node_model)
-    return ["pops::runtime::program::PreparedDiffusion<pops::kNativeDimension> %s(ctx, %s, %s);" % (
+    lines = ["pops::runtime::program::PreparedDiffusion<pops::kNativeDimension> %s(ctx, %s, %s);" % (
         prepared_var,state_var,_boundary_cpp(selected["physical"]))]
+    if any(row.kind == "flux" for row in v.attrs["physical_balance"].occurrences):
+        lines.append("std::vector<pops::nd::FaceField<pops::kNativeDimension>> %s_transport_faces;" % prepared_var)
+    return lines
 
 
 def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
@@ -124,7 +127,8 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
             raise ValueError("diffusive lowering requires one exact default -div transport occurrence")
         temporary="diffusive_transport_%d" % v.id
         lines.append("auto& %s=ctx.rhs_scratch(%d,%d,%s);" % (temporary,v.id,len(sources)+1,state_var))
-        lines.append("ctx.neg_div_flux_default_into(%d,%s,%s,%d);" % (bidx,state_var,temporary,v.id))
+        lines.append("ctx.neg_div_flux_default_with_faces_into(%d,%s,%s,%d,%s_transport_faces);" % (
+            bidx,state_var,temporary,v.id,prepared_var))
         lines.append("ctx.axpy(%s,1,%s);" % (out,temporary))
         inverse_spacing=" + ".join("1/ctx.geometry().spacing(%d)" % axis for axis in range(selected["physical"].dimension))
         frequency+=" + ctx.max_wave_speed(%d,%s)*(%s)" % (bidx,state_var,inverse_spacing)
@@ -149,6 +153,13 @@ def _emit_diffusive_accepted(v, prepared_var, lines, temporal_weight_cpp, evalua
     block = v.block if v.block.is_resolved else v.block._resolved(v.block.owner_path.canonical())
     operation_data = {"source": source.canonical_identity(), "block": block.canonical_identity()}
     operation = make_identity("diffusive-operation", operation_data).token
+    from pops.codegen.program_emit_transport_exchanges import emit_transport_exchanges
+    for row in view.occurrences:
+        if row.kind == "flux":
+            occurrence = operation+"/occurrence:"+str(row.identity[1])
+            lines.extend(emit_transport_exchanges(
+                prepared_var+"_transport_faces", operation, occurrence, evaluation_context,
+                temporal_weight_cpp))
     if v.attrs.get("fitted",False):
         ordinals=tuple(row.ordinal for row in view.occurrences if row.kind in {"drift","diffusion"})
         occurrence=operation+"/joint-occurrences:"+",".join(map(str,ordinals))

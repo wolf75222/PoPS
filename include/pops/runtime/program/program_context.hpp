@@ -432,6 +432,26 @@ class ProgramContext {
                                         sys_block(program_block), state_value, rhs);
   }
 
+  /// Retain the exact native faces used by one flux-only residual. These are provisional
+  /// numerical observations; only the accepted Program quadrature may stage exchanges.
+  void neg_div_flux_default_with_faces_into(int program_block, field_type& state_value,
+                                            field_type& rhs, int rate_id,
+                                            std::vector<nd::FaceField<Dim>>& faces) const {
+    require_rate_identity_(rate_id);
+    count_kernel_();
+    const auto point = boundary_evaluation_point(rate_id);
+    const auto& lane = prepared_execution_lane();
+    auto boundary = prepare_block_boundary_session(program_block, state_value, point, lane);
+    system_->block_neg_div_flux_into_at_prepared(
+        point, sys_block(program_block), state_value, rhs, boundary->system(),
+        boundary->runtime_block(), boundary->point(), boundary->lane(), boundary->transport());
+    // FaceField owns Fab values with deep-copy semantics: subsequent residual evaluations
+    // cannot overwrite a prior stage's accepted quadrature data.
+    boundary->transport().with_boundary_scratch(state_value, [&](auto& scratch) {
+      faces = scratch.generated_faces;
+    });
+  }
+
   void source_default_into(int program_block, field_type& state_value, field_type& rhs) const {
     count_kernel_();
     system_->block_source_into(sys_block(program_block), state_value, rhs);
