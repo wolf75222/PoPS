@@ -171,6 +171,7 @@ api pops/numerics/time/integrators/time_integrator.hpp
 api pops/numerics/time/integrators/time_steppers.hpp
 test-only pops/numerics/time/schemes/imex.hpp
 test-only pops/numerics/time/schemes/splitting.hpp
+sdk-support pops/parallel/collective_exception.hpp
 api pops/parallel/comm.hpp
 api pops/parallel/execution_lane.hpp
 sdk-support pops/parallel/field_distribution_reduction.hpp
