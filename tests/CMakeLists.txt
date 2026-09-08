@@ -430,6 +430,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_step_attempt_rejected_header_only
   test_world_communicator
   test_residual_operator
+  test_prepared_spatial_residual
   test_capability_report
   test_canonical_identity
   test_box

@@ -1091,6 +1091,17 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         raise NotImplementedError(
             "emit_cpp_program: op '%s' (value '%s') is only lowerable inside a matrix_free_operator "
             "apply sub-block" % (v.op, v.name))
+    elif v.op == "solve_spatial_nonlinear":
+        from pops.codegen.program_emit_spatial_solve import emit_spatial_solve
+
+        def emit_residual(node: Any, residual_base: Any, residual_vars: Any,
+                          residual_lines: Any, residual_prelude: Any) -> None:
+            _emit_op(program, node, residual_base, set(), residual_vars, model,
+                     residual_lines, residual_prelude, block_idx, target, field_plans,
+                     has_shared_interface_implicit_jacvec)
+
+        emit_spatial_solve(program, v, base, var, model, lines, prelude, block_idx,
+                           field_plans, target, emit_residual)
     elif v.op == "solve_linear":
         _emit_solve_linear(program, v, base, var, prelude, lines, target=target)
     elif v.op in ("solve_outcome", "solve_outcome_component"):

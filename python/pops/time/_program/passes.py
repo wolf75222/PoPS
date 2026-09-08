@@ -335,6 +335,8 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
                 # The apply sub-block is self-contained (its in/out placeholders + scratch are defined
                 # inside it); it reads nothing from the enclosing scope.
                 self._validate_block(v.attrs["apply_block"], seen)
+            elif v.op == "solve_spatial_nonlinear":
+                self._validate_block(v.attrs["residual_block"], seen.copy())
             elif v.op == "solve_local_nonlinear":
                 # The residual sub-block is self-contained: the iterate / guess State placeholders are
                 # defined inside it (first ops) and every op reads only the placeholders or earlier

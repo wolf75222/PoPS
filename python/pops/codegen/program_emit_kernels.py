@@ -37,6 +37,7 @@ _MODEL_OPS = (
     "local_transform",
     "solve_local_linear",
     "solve_local_nonlinear",
+    "solve_spatial_nonlinear",
 )
 
 _ALLOWED_OPS = frozenset(
@@ -389,7 +390,10 @@ def _block_inverse_include(program: Any) -> str:
     """The closed-form block-inverse #include for @p program's generated .so, or "" when it carries no
     condensed-implicit op (ADC-637): only a Program using condensed_* emits pops::detail::block_inverse.
     (block_inverse.hpp itself includes dense_eig.hpp, already pulled in by the template.)"""
-    return _BLOCK_INVERSE_INCLUDE if any(v.op in _CONDENSED_OPS for v in program._values) else ""
+    result = _BLOCK_INVERSE_INCLUDE if any(v.op in _CONDENSED_OPS for v in program._values) else ""
+    if any(v.op == "solve_spatial_nonlinear" for v in program._values):
+        result += "#include <pops/runtime/program/prepared_spatial_residual.hpp>\n"
+    return result
 
 
 # --- module-level emission helpers (per-cell kernels, coeff rendering, the .so template) ---

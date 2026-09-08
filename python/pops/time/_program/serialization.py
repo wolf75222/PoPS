@@ -176,12 +176,13 @@ class _ProgramSerialization(_ProgramBase):
                 ref = attrs.get(key)
                 attrs[key] = (_affine_ids(ref) if isinstance(ref, _Affine)
                               else (ref.id if isinstance(ref, ProgramValue) else None))
-        elif value.op == "solve_local_nonlinear":
+        elif value.op in ("solve_local_nonlinear", "solve_spatial_nonlinear"):
             attrs["residual_block"] = [
                 _ProgramSerialization._serialize_node(
                     node, include_provenance=include_provenance) for node in attrs["residual_block"]]
             for key in ("residual", "iterate", "guess"):
-                attrs[key] = attrs[key].id
+                if key in attrs:
+                    attrs[key] = attrs[key].id
         node = {"id": value.id, "name": value.name, "vtype": value.vtype, "op": value.op,
                 "block": handle_data(value.block) if value.block is not None else None,
                 "state": handle_data(value.state_ref) if value.state_ref is not None else None,

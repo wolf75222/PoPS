@@ -58,7 +58,7 @@ class _ProgramConstants:
     # the allow-list above (hence live); listed here only to drive the sub-block reference walk.
     _SUBBLOCK_OPS = frozenset({
         "while", "branch", "range", "subcycle", "matrix_free_operator", "solve_local_nonlinear",
-        "post_synchronization",
+        "post_synchronization", "solve_spatial_nonlinear",
     })
 
     # Ops PROVEN PURE for common-subexpression elimination (Spec 3 s28, ADC-465): each allocates a
@@ -92,7 +92,7 @@ class _ProgramConstants:
     _STATE_BARRIER_OPS = frozenset({
         "project", "fill_boundary", "store_history",
         "solve_fields", "solve_fields_from_blocks", "solve_coupled_implicit",
-        "solve_implicit_source",
+        "solve_implicit_source", "solve_spatial_nonlinear",
     })
 
     _OPTIMIZE_PASSES = (
@@ -104,7 +104,7 @@ class _ProgramConstants:
     _SCRATCH_OPS = frozenset({
         "rhs", "diffusive_rhs", "source", "implicit_source", "apply", "local_transform", "linear_combine",
         "linear_source", "solve_local_linear",
-        "solve_local_nonlinear", "solve_coupled_implicit", "solve_implicit_source",
+        "solve_local_nonlinear", "solve_coupled_implicit", "solve_implicit_source", "solve_spatial_nonlinear",
         "cell_compare", "where", "coupled_rate",
     })
 
@@ -116,7 +116,7 @@ class _ProgramConstants:
     })
     _HEAVY_KERNEL_OPS = frozenset({
         "solve_fields", "solve_fields_from_blocks", "solve_linear", "solve_coupled_implicit",
-        "solve_implicit_source",
+        "solve_implicit_source", "solve_spatial_nonlinear",
     })
 
     # GPU heuristic thresholds (Spec 3 s28 detectors, ADC-465). A warning report, never a hard error:

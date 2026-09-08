@@ -15,6 +15,7 @@ _MODEL_OWNER_SENSITIVE_OPS = frozenset(
         "local_transform",
         "solve_local_linear",
         "solve_local_nonlinear",
+        "solve_spatial_nonlinear",
         "coupled_rate",
         "solve_coupled_implicit",
         "condensed_coeffs",

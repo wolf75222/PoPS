@@ -90,10 +90,10 @@ def validate_program_regions(program: Any) -> None:
             result = attrs.get("apply_result")
             if result is not None:
                 require_affine_region(program, result, regions["apply_block"], "set_apply")
-        elif value.op == "solve_local_nonlinear":
+        elif value.op in ("solve_local_nonlinear", "solve_spatial_nonlinear"):
             require_region(
                 program, attrs["residual"], regions["residual_block"],
-                "solve_local_nonlinear residual")
+                "%s residual" % value.op)
         elif value.op == "post_synchronization":
             post_sync_region = regions["body_block"]
             for state in getattr(program, "_post_sync_commits", {}).values():

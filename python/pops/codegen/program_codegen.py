@@ -602,7 +602,7 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
                 "that declares its named source / linear source; pass model= "
                 "(compile_problem threads it through)" % (v.op, v.name)
             )
-        if v.op == "solve_local_nonlinear":  # recurse: the residual sub-block ops must lower too
+        if v.op in ("solve_local_nonlinear", "solve_spatial_nonlinear"):
             for w in v.attrs["residual_block"]:
                 _check_op_lowerable(program, w, model, field_plans)
         return  # _emit_op lowers it from the model's symbolic coefficients

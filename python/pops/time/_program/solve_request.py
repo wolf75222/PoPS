@@ -113,6 +113,11 @@ def validate_solve_request_node(program: Any, token: Any) -> None:
     request = token.attrs.get("solve_request")
     if request is None:
         return
+    if token.op == "solve_spatial_nonlinear":
+        from pops.time._program.spatial_solve import validate_spatial_request
+
+        validate_spatial_request(program, token)
+        return
     if token.op != "solve_linear" or not isinstance(request, Mapping):
         raise SolveRequestError("unsupported_lowering", "request has no authenticated native adapter")
     from pops.time._program.serialization import _json_ready
@@ -158,6 +163,12 @@ def build_solve_request(program: Any, request: Any, prepared: Any, *, name: Any)
     from pops.linalg import LinearProblem
     from pops.time._program.value_validation import require_owned, validate_input_regions
     from pops.time.solve_outcome import ResidualSolution, SolveOutcome
+    from pops.time.implicit_diffusion import ImplicitDiffusionStage
+
+    if type(request.problem) is ImplicitDiffusionStage:
+        from pops.time._program.spatial_solve import build_spatial_request
+
+        return build_spatial_request(program, request, prepared, name=name)
 
     # Problem families can lower to this adapter, but an arbitrary descriptor never
     # becomes native merely by declaring the same strings as a supported problem.
