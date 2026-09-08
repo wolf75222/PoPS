@@ -227,6 +227,14 @@ def _quadrature(record):
 
 def _coarse_fine_basis_oracle(runtime, providers=("provider/1", "provider/4")):
     rows = tuple(tuple(map(str, row)) for row in runtime._executor.program_flux_ledger_manifest())
+    assert runtime.n_levels() == 2
+    coarse_active = composite_active_mask(runtime, 0, refinement_ratio=2)
+    if not coarse_active.any():
+        # A fully covered coarse level has no coarse/fine interface to reconcile.
+        # Authenticate that geometry and require the corresponding empty ledger.
+        assert composite_active_mask(runtime, 1, refinement_ratio=2).all()
+        assert not rows
+        return {"no_coarse_fine_faces": "full_fine_cover", "ledger_count": 0}
     result = {}
     for provider in providers:
         selected = tuple(row for row in rows if provider in "/".join(row))
@@ -310,8 +318,13 @@ def test_periodic_full_refinement_restart_and_face_inventory(
     initial_mass = _mass(continuous, n)
     steps = pmath.ceil(FINAL_TIME / dt)
     half_steps = steps // 2
-    half_time = half_steps * dt
-    before_last_time = (steps - 1) * dt
+    # Match the native binary64 clock's additions so intermediate run boundaries
+    # preserve the exact accepted dt sequence on both sides of the restart.
+    step_times = [0.0]
+    for _ in range(steps - 1):
+        step_times.append(step_times[-1] + dt)
+    half_time = step_times[half_steps]
+    before_last_time = step_times[-1]
     first_report = pops.run(continuous, t_end=before_last_time, max_steps=steps, console=False)
     mass_before_last = _mass(continuous, n)
     final_report = pops.run(continuous, t_end=FINAL_TIME, max_steps=2, console=False)
@@ -450,7 +463,17 @@ def test_combined_local_bound_rejection_leaks_no_accepted_state_and_retry_succee
     del isolated_native_cache, kokkos_root
     n = REFINEMENTS[0]
     stable = _stable_dt(n)
-    unstable = 3.0 * stable
+    fine_n = 2 * n
+    fine_diffusion_frequency = 4 * DIFFUSIVITY * fine_n**2
+    fine_transport_frequency = 2 * max(map(abs, VELOCITY)) * fine_n
+    fine_combined_frequency = fine_diffusion_frequency + fine_transport_frequency
+    fine_unstable_dt = 0.5 * (1 / fine_combined_frequency + 1 / fine_diffusion_frequency)
+    unstable = 2 * fine_unstable_dt  # The fine level takes two substeps per macro step.
+    coarse_frequency = 4 * DIFFUSIVITY * n**2 + 2 * max(map(abs, VELOCITY)) * n
+    assert unstable * coarse_frequency < 1
+    assert fine_unstable_dt * fine_diffusion_frequency < 1
+    assert fine_unstable_dt * fine_transport_frequency < 1
+    assert fine_unstable_dt * fine_combined_frequency > 1
     resolved = _author(n, unstable, cxx=native_cxx)
     artifact = _compile(resolved, route="rejection-n%d" % n)
     runtime = _bind(artifact)
@@ -476,6 +499,11 @@ def test_combined_local_bound_rejection_leaks_no_accepted_state_and_retry_succee
             "case": "combined_bound_refusal_retry",
             "stable_dt": stable,
             "refused_dt": unstable,
+            "fine_dt": fine_unstable_dt,
+            "coarse_combined_bound": unstable * coarse_frequency,
+            "fine_diffusion_bound": fine_unstable_dt * fine_diffusion_frequency,
+            "fine_transport_bound": fine_unstable_dt * fine_transport_frequency,
+            "fine_combined_bound": fine_unstable_dt * fine_combined_frequency,
             "failure": str(failure.value),
             "refused_state_unchanged": True,
             "refused_accepted_exchange_count": 0,
