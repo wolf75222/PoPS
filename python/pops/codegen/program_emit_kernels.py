@@ -64,6 +64,10 @@ _ALLOWED_OPS = frozenset(
         "acceptance_guard",
         "matrix_free_operator",
         "scalar_field",
+        "field_problem_load",
+        "field_problem_coefficients",
+        "field_problem_apply",
+        "field_component",
         "vector_field",
         "laplacian",
         "gradient",
@@ -322,6 +326,16 @@ def _prepared_native_components(program: Any) -> tuple[Any, ...]:
             if component.manifest_sha256 not in seen:
                 seen.add(component.manifest_sha256)
                 components.append(component)
+        if value.op == "field_problem_apply":
+            from pops.fields._program_problem import native_field_component, validate_field_apply
+
+            validate_field_apply(value)
+            component = native_field_component()
+            identity = component.manifest_sha256
+            if identity not in seen:
+                seen.add(identity)
+                components.append(component)
+            continue
         if value.op != "solve_linear":
             continue
         providers = [

@@ -138,6 +138,14 @@ class FieldHandle(Handle):
             self._field_registry.resolved_registration(self), values=values, at=at,
         )
 
+    def observe(self, solution: Any, unknown: Any = None) -> Any:
+        """Read one typed unknown from this field's explicitly consumed solve result."""
+        if self._field_registry is None:
+            raise MissingOwnershipError("detached field handle has no Case observation authority")
+        from pops.fields._program_problem import observe_field_solution
+
+        return observe_field_solution(self, solution, unknown=unknown)
+
     def __call__(
         self,
         *states: Any,

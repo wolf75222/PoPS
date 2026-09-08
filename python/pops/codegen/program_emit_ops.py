@@ -966,6 +966,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         outcome = _append_local_nonlinear_report(program, v, status, report, lines)
         _append_solve_report_guard(
             program, v, outcome, lines, label="local_nonlinear")
+    elif v.op in ("field_problem_load", "field_problem_coefficients", "field_component"):
+        from pops.codegen.program_emit_field_problem import emit_field_problem_value
+
+        emit_field_problem_value(v, var, lines, prelude, target=target)
     elif v.op == "scalar_field":
         # A step-body scratch scalar field (e.g. the explicit-flux buffer the RHS assembly fills):
         # a persistent shared_ptr (prelude, alloc-once) reused every step. Inside an apply sub-block
