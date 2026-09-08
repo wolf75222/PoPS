@@ -135,10 +135,10 @@ def test_static_metadata_inspection_surfaces_the_carried_refine_regrid_tags():
 def _built_amr(n=32):
     sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=2, coarse_max_grid=16)
     sim.set_temporal_relations([2], [1], ["integral_only"])
+    sim.set_poisson(bc=Periodic())
     sim.add_equation("ne", engine.Model(engine.Scalar(), engine.ExB(), engine.NoSource(),
                                    engine.BackgroundDensity(alpha=1.0, n0=1.0)),
                   spatial=engine.Spatial(minmod=True), time=engine.Explicit())
-    sim.set_poisson(bc=Periodic())
     install_prepared_threshold_union(sim, (("ne", "n", 1.05),))
     xs = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(xs, xs)

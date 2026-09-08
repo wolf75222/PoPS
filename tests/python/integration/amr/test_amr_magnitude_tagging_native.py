@@ -122,6 +122,7 @@ def _native_hierarchy(node_type):
     # owner-qualified identity before declaring the native block, just as pops.bind does.
     simulation._s._install_block_state_route("tracer", subject)
     simulation.set_temporal_relations([2], [1], ["integral_only"])
+    simulation.set_poisson(bc=Periodic())
     simulation.add_equation(
         "tracer",
         engine.Model(
@@ -133,7 +134,6 @@ def _native_hierarchy(node_type):
         spatial=engine.Spatial(),
         time=engine.Explicit(),
     )
-    simulation.set_poisson(bc=Periodic())
     flow_bootstrap_tagging(
         simulation,
         SimpleNamespace(tagging=graph),

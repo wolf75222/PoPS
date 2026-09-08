@@ -17770,6 +17770,12 @@ EffectiveOptionsReport AmrSystem<Dim>::effective_options_report() const {
   EffectiveOptionsReport report;
   report.runtime = "amr_system";
   report.has_amr = true;
+  if (p_->cfg.cluster_min_efficiency > 0.0)
+    report.amr_refinement.cluster_min_efficiency = p_->cfg.cluster_min_efficiency;
+  if (p_->cfg.cluster_min_box_size > 0)
+    report.amr_refinement.cluster_min_box_size = p_->cfg.cluster_min_box_size;
+  if (p_->cfg.cluster_max_box_size > 0)
+    report.amr_refinement.cluster_max_box_size = p_->cfg.cluster_max_box_size;
   report.topology.dimension = Dim;
   report.topology.periodicity.reserve(Dim);
   for (int axis = 0; axis < Dim; ++axis)

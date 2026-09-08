@@ -24,6 +24,7 @@ from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
 import numpy as np
+import pops
 
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
@@ -57,13 +58,22 @@ def _build_stride(n=32):
     """AMR multi-blocs : un bloc a stride=2 (cadence hold-then-catch-up) -> la cadence depend du
     compteur de macro-pas, ce que macro_step()/set_clock() exposent et restaurent."""
     sim = AmrSystem(_amr_config(n, regrid_every=0))
+    # Native package installation seals the complete state-route set. Resolve
+    # both actual Case identities before attaching either block package.
+    model = pops.Model("amr-clock-state")
+    state = model.state("U", components=("n",))
+    case = pops.Case("amr-clock")
+    blocks = {name: case.block(name, model, states=(state,)) for name in ("ions", "slow")}
+    validated = pops.validate(case)
+    for name, block in blocks.items():
+        sim._s._install_block_state_route(name, validated.resolve(block[state]).qualified_id)
     sim.set_temporal_relations([2], [1], ["integral_only"])
+    sim.set_poisson(bc=Periodic())
     sim.add_equation("ions", _scalar_charge(+1.0),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()))
     sim.add_equation("slow", _scalar_charge(-1.0),
                   spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()),
                   time=engine.Explicit(stride=2))  # bloc lent : cadence stride=2
-    sim.set_poisson(bc=Periodic())
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("slow", _bump(n, 0.20))
     install_forward_euler_program(sim)
