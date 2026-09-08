@@ -5,6 +5,8 @@ from collections.abc import Mapping
 from fractions import Fraction
 from typing import Any
 
+from pops.model.ownership import _definition_fingerprint_scope
+
 from pops.identity.digest import make_identity
 
 from ._resolved_operation_records import (
@@ -487,6 +489,7 @@ def _derive_effects(module: Any, operator: Any, boundary_data: Any) -> tuple[str
     return tuple(effects)
 
 
+@_definition_fingerprint_scope()
 def derive_module_operations(module: Any, packs: Any, *, boundary_data: Any = ()) \
         -> tuple[tuple[EvaluationRequest, ...], tuple[NumericalConstruction, ...]]:
     requests, operations = [], []

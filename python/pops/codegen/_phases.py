@@ -4,6 +4,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from pops.model.ownership import _definition_fingerprint_scope
+
 
 def _field_topology_rematerializer_validated(field_plans: Any, amr_transfer: Any) -> bool:
     """Authenticate exact EllipticRecompute authority for every resolved field plan."""
@@ -51,6 +53,7 @@ def validate(problem: Any) -> Any:
     return problem
 
 
+@_definition_fingerprint_scope()
 def resolve(
     problem: Any,
     *,

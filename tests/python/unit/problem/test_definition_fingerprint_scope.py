@@ -1,7 +1,10 @@
 """Canonical projections reuse identities without pinning mutable scientific sources."""
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
+
 import pytest
 
-from pops.model import DeclarationIndex, Module, OwnerKind
+from pops.model import DeclarationIndex, Module, OwnerKind, Rate
 from pops.model.handles import Handle, OwnerPath
 from pops.model.ownership import UnresolvedOwnershipError, _definition_fingerprint_scope
 from pops.problem import Case
@@ -94,7 +97,46 @@ def test_real_mutable_module_changes_are_visible_after_scope():
     assert "V" in module.state_spaces()
 
 
-def test_program_serialization_has_identical_bytes_with_bounded_hash_calls(monkeypatch):
+def test_scope_does_not_lend_cached_identity_to_an_independent_thread():
+    owner, state = _owner()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with pytest.raises(UnresolvedOwnershipError, match="changed during canonical projection"):
+            with _definition_fingerprint_scope():
+                before = owner.canonical()
+                copied = copy_context()
+                state["value"] = "b"
+                current = pool.submit(copied.run, owner.canonical).result()
+                assert current != before
+    assert owner.canonical() == current
+
+
+@pytest.mark.parametrize("exceptional", [False, True])
+def test_copied_context_cannot_reuse_closed_projection_after_success_or_exception(exceptional):
+    owner, state = _owner()
+    try:
+        with _definition_fingerprint_scope():
+            previous = owner.canonical()
+            copied = copy_context()
+            if exceptional:
+                raise RuntimeError("projection failed")
+    except RuntimeError:
+        assert exceptional
+    state["value"] = "b"
+    assert copied.run(owner.canonical) != previous
+
+    @_definition_fingerprint_scope()
+    def project():
+        first = owner.canonical()
+        assert first == owner.canonical()
+        return first
+
+    before_calls = state["calls"]
+    assert copied.run(project) == owner.canonical()
+    assert state["calls"] - before_calls == 3  # New capture, exit check, uncached comparison.
+
+
+@pytest.mark.parametrize("projection", ["_serialize", "ir_nodes"])
+def test_program_projection_has_identical_bytes_with_bounded_hash_calls(monkeypatch, projection):
     program = Program("fingerprint-reuse")
     module = Module("fluid")
     space = module.state_space("U", ("u",))
@@ -113,11 +155,38 @@ def test_program_serialization_has_identical_bytes_with_bounded_hash_calls(monke
         return original(module)
 
     monkeypatch.setattr(Module, "module_hash", counted)
-    expected = program._serialize.__wrapped__(program)
+    method = getattr(program, projection)
+    expected = method.__wrapped__(program)
     unscoped_calls = len(calls)
     calls.clear()
-    actual = program._serialize()
+    actual = method()
     assert actual == expected
     assert len(calls) == 2  # One captured identity, one fresh exit authentication.
     assert unscoped_calls > len(calls)
-    assert program._serialize() == expected
+    assert method() == expected
+
+
+def test_operation_projection_preserves_exact_reads_and_fallible_effects(monkeypatch):
+    from pops.codegen._resolved_operation_inputs import derive_module_operations
+    from pops.codegen.component_provider_packs import resolve_component_provider_packs
+
+    module = Module("fallible-definition")
+    space = module.state_space("U", ("rho", "unused"))
+    rho, _ = module.state_symbols(space)
+    module.operator("inverse", (space,) >> Rate(space), "local_source", expr=(1 / rho, 0))
+    packs = resolve_component_provider_packs(module)
+    expected = derive_module_operations.__wrapped__(module, packs)
+    calls = []
+    original = Module.module_hash
+
+    def counted(value):
+        calls.append(value)
+        return original(value)
+
+    monkeypatch.setattr(Module, "module_hash", counted)
+    actual = derive_module_operations(module, packs)
+    assert actual == expected
+    assert len(calls) == 2
+    operation = actual[1][0]
+    assert "fallible" in operation.effects
+    assert [read.components for read in operation.inputs if read.kind == "state"] == [("rho",)]

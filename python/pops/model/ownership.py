@@ -74,7 +74,19 @@ class OwnerSegment:
 
 _AUTHORITY_SEQUENCE = count()
 _FINGERPRINT_RE = re.compile(r"^[a-z][a-z0-9_.-]*:sha256:[0-9a-f]{64}$")
-_FINGERPRINT_SCOPE: ContextVar[dict[Any, str | None] | None] = ContextVar(
+class _FingerprintProjection:
+    __slots__ = ("observed", "thread", "active")
+
+    def __init__(self):
+        self.observed: dict[Any, str | None] = {}
+        self.thread = threading.get_ident()
+        self.active = True
+
+    def applies(self):
+        return self.active and self.thread == threading.get_ident()
+
+
+_FINGERPRINT_SCOPE: ContextVar[_FingerprintProjection | None] = ContextVar(
     "pops_definition_fingerprint_scope", default=None)
 
 
@@ -88,16 +100,22 @@ def _definition_fingerprint_scope():
     combining old and new definitions. Reset before checking to retain ordinary recursion guards
     and to leave no cached identity behind if either projection or verification fails.
     """
-    if _FINGERPRINT_SCOPE.get() is not None:
+    inherited = _FINGERPRINT_SCOPE.get()
+    if inherited is not None and inherited.applies():
         yield
         return
-    observed: dict[Any, str | None] = {}
-    token = _FINGERPRINT_SCOPE.set(observed)
+    projection = _FingerprintProjection()
+    token = _FINGERPRINT_SCOPE.set(projection)
     try:
         yield
     finally:
+        # copy_context() can outlive this operation or propagate it to another thread. Closing
+        # and clearing the shared state prevents those contexts from retaining a usable witness.
+        projection.active = False
+        observed = tuple(projection.observed.items())
+        projection.observed.clear()
         _FINGERPRINT_SCOPE.reset(token)
-        for authority, expected in observed.items():
+        for authority, expected in observed:
             if authority.fingerprint() != expected:
                 raise UnresolvedOwnershipError(
                     "model definition changed during canonical projection")
@@ -152,7 +170,9 @@ class _AuthoringAuthority:
             )
         self._resolving.active = True
         try:
-            observed = _FINGERPRINT_SCOPE.get()
+            projection = _FINGERPRINT_SCOPE.get()
+            observed = (projection.observed
+                        if projection is not None and projection.applies() else None)
             if observed is not None and self in observed:
                 return observed[self]
             with self._lock:
