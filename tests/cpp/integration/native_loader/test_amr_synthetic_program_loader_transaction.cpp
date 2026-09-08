@@ -29,6 +29,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <set>
@@ -477,32 +478,66 @@ TEST(test_amr_synthetic_program_loader_transaction,
                            std::to_string(static_cast<long>(std::clock()));
   const std::string source_path = stem + ".cpp";
   const std::string shared_object = stem + ".so";
-  {
-    std::ofstream source(source_path);
-    source << loader_source(true);
+  auto lane = std::make_shared<pops::ExecutionLane>(
+      pops::ExecutionLane::duplicate_world_collectively("test.interface-publication.package"));
+  std::string image;
+  std::string preparation_error;
+  if (lane->rank() == 0) {
+    try {
+      {
+        std::ofstream source(source_path);
+        source.exceptions(std::ios::badbit | std::ios::failbit);
+        source << loader_source(true);
+      }
+      const auto package = pops::test::native_dso::compile_shared(
+          source_path, shared_object, "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");
+      if (!package.ok) {
+        pops::test::native_dso::report_compile_failure("test_amr_interface_publication", package);
+        throw std::runtime_error(
+            "authenticated two-block AMR publication artifact did not compile");
+      }
+      std::ifstream binary(shared_object, std::ios::binary);
+      binary.exceptions(std::ios::badbit);
+      if (!binary)
+        throw std::runtime_error("cannot read the compiled AMR publication artifact");
+      image.assign(std::istreambuf_iterator<char>(binary), std::istreambuf_iterator<char>());
+    } catch (const std::exception& error) {
+      preparation_error = error.what();
+    }
   }
-  const auto package = pops::test::native_dso::compile_shared(
-      source_path, shared_object, "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");
-  if (!package.ok) {
-    pops::test::native_dso::report_compile_failure("test_amr_interface_publication", package);
-    FAIL() << "authenticated two-block AMR publication artifact did not compile";
+  preparation_error = lane->broadcast_bytes(std::move(preparation_error));
+  ASSERT_TRUE(preparation_error.empty()) << preparation_error;
+  // Independent links can carry different UUIDs. Every rank authenticates and loads the exact
+  // rank-zero binary image, even when its local artifact path differs.
+  image = lane->broadcast_bytes(std::move(image));
+  std::unique_ptr<pops::dynlib::AuthenticatedNativeFile> authenticated;
+  try {
+    if (lane->rank() != 0) {
+      std::ofstream binary(shared_object, std::ios::binary);
+      binary.exceptions(std::ios::badbit | std::ios::failbit);
+      binary.write(image.data(), static_cast<std::streamsize>(image.size()));
+    }
+    authenticated = std::make_unique<pops::dynlib::AuthenticatedNativeFile>(shared_object);
+  } catch (const std::exception& error) {
+    preparation_error = error.what();
   }
+  ASSERT_EQ(pops::all_reduce_max(preparation_error.empty() ? 0L : 1L, *lane), 0L)
+      << preparation_error;
+  ASSERT_TRUE(pops::all_ranks_agree_exact_ordered_byte_pairs(
+      {{"AMR publication artifact", authenticated->content_sha256()}}, *lane));
   const auto system_config = config();
   const auto initial = initial_state(system_config.shape);
   pops::AmrSystem<Dim> system(system_config);
-  auto lane = std::make_shared<pops::ExecutionLane>(
-      pops::ExecutionLane::duplicate_world_collectively("test.interface-publication.package"));
   auto execution = std::make_shared<const pops::component::PreparedExecutionContextV1>(
       prepared_execution()->for_lane(*lane));
   system.install_prepared_boundary_execution_context(lane, execution);
-  const pops::dynlib::AuthenticatedNativeFile authenticated(shared_object);
   const std::vector<std::string> blocks{kBlock, "tracer2"};
   for (const auto& block : blocks) {
     const std::string route = "state/" + block;
     system.install_block_state_route(block, route);
     system.add_native_block(
         block, shared_object, "2222222222222222222222222222222222222222222222222222222222222222",
-        authenticated.binary_identity(), "minmod", "rusanov", "conservative", "explicit", 1.4, 1);
+        authenticated->binary_identity(), "minmod", "rusanov", "conservative", "explicit", 1.4, 1);
     system.bind_bootstrap_subject(route, block, "bound_level_zero");
     system.stage_bootstrap_array(route, block, "cell", "cell", 1, system.spatial_shape(), initial);
   }
