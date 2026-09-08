@@ -1151,8 +1151,12 @@ class Provider final : public TensorProvider {
       const TensorRequest& request, const pops::ExecutionLane& lane) const override {
     if (!supports(request).accepted())
       throw std::invalid_argument("header-only hierarchy provider rejected the request");
-    const BuiltinTensorProvider delegate;
-    auto prepared_delegate = delegate.prepare(delegate_request(request), lane);
+    pops::runtime::program::HierarchyTensorSolverProviderRegistry<kDim> delegates;
+    auto delegate = std::make_shared<BuiltinTensorProvider>();
+    delegates.add(delegate, lane);
+    auto prepared_delegate =
+        pops::runtime::program::prepare_hierarchy_tensor_solver_collectively(
+            delegates, delegate->identity(), delegate_request(request), lane);
     std::vector<bool> level_populated;
     level_populated.reserve(request.levels.size());
     for (const auto& level : request.levels)
