@@ -127,6 +127,7 @@ def test_native_temporal_order_matrix(method, order, evaluations, solves,
     case, layout, program = author_case(method)
     assert program.validate()
     operations = [value.op for value in program._values]
+    assert operations.count("rhs") + operations.count("apply") == evaluations
     assert operations.count("solve_local_linear") == solves
     assert operations.count("solve_outcome") == solves
     assert len(program.commits()) == 1
