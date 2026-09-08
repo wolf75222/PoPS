@@ -2109,9 +2109,9 @@ class CompositeFacPoisson {
       report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun, error.what());
     }
     if (report.solved_value_available()) {
-      average_solution_down_();
       if (nullspace_workspace_)
         nullspace_workspace_->apply_gauge(nullspace_candidates_);
+      average_solution_down_();
       for (std::size_t level = 0; level < levels_.size(); ++level) {
         fill_dynamic_residual_ghosts_(level, report.iters);
         copy_valid_(levels_[level]->residual_operator_view, levels_[level]->phi);
