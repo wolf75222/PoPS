@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -53,19 +54,44 @@ class AcceptedExchangeLedger {
  public:
   void stage(ExchangeRecord record) {
     record.validate();
-    for (const auto& existing : records_)
-      if (existing.key() == record.key())
-        throw std::invalid_argument(
-            "duplicate accepted exchange occurrence/quadrature contribution");
-    records_.push_back(std::move(record));
+    const auto [entry, inserted] =
+        keys_.emplace(record.operation_identity, record.occurrence_identity,
+                      record.evaluation_context, record.quadrature_identity);
+    if (!inserted)
+      throw std::invalid_argument("duplicate accepted exchange occurrence/quadrature contribution");
+    try {
+      records_.push_back(std::move(record));
+    } catch (...) {
+      keys_.erase(entry);
+      throw;
+    }
   }
 
   const std::vector<ExchangeRecord>& records() const noexcept { return records_; }
-  void clear() noexcept { records_.clear(); }
-  void swap(AcceptedExchangeLedger& other) noexcept { records_.swap(other.records_); }
+
+  /// Restore a staging checkpoint when a peer cannot append its own contribution. No allocation
+  /// occurs here, so collective failure recovery does not copy the accumulated face records.
+  void restore_size(std::size_t size) noexcept {
+    while (records_.size() > size) {
+      const auto entry = keys_.find(records_.back().key());
+      if (entry != keys_.end())
+        keys_.erase(entry);
+      records_.pop_back();
+    }
+  }
+  void clear() noexcept {
+    records_.clear();
+    keys_.clear();
+  }
+  void swap(AcceptedExchangeLedger& other) noexcept {
+    records_.swap(other.records_);
+    keys_.swap(other.keys_);
+  }
 
  private:
+  using Key = std::tuple<std::string, std::string, std::string, std::string>;
   std::vector<ExchangeRecord> records_;
+  std::set<Key, std::less<>> keys_;
 };
 
 }  // namespace pops::runtime::program

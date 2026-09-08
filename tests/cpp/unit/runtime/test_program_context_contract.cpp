@@ -1780,6 +1780,21 @@ TEST(ProgramContextContract, NativeEvaluationFailureIsCollectiveAndCannotPublish
     EXPECT_TRUE(sim.program_exchange_records().empty());
   }
   EXPECT_EQ(dependent_work, 0);
+  runtime::program::ExchangeRecord exchange{
+      "diffusion.face", "face.0", "stage.0", "euler", 1, 1.0, 2.0, 0.1, 1};
+  sim.begin_step_transaction();
+  auto invalid = exchange;
+  if (my_rank() == 0)
+    invalid.face_measure = -1.0;
+  EXPECT_ANY_THROW(sim.stage_program_exchange(invalid));
+  EXPECT_TRUE(sim.program_exchange_records().empty());
+  // Successful peer appends must release their indexed key when another rank refuses the record.
+  EXPECT_NO_THROW(sim.stage_program_exchange(exchange));
+  ASSERT_EQ(sim.program_exchange_records().size(), 1u);
+  EXPECT_ANY_THROW(sim.stage_program_exchange(exchange));
+  EXPECT_EQ(sim.program_exchange_records().size(), 1u);
+  sim.rollback_step_transaction();
+  EXPECT_TRUE(sim.program_exchange_records().empty());
   // Reaching this collective on every rank is part of the failure-ordering witness.
   EXPECT_EQ(all_reduce_sum(1L, ctx.prepared_execution_lane()), n_ranks());
 }
@@ -1803,6 +1818,23 @@ TEST(ProgramContextContract, AcceptedExchangeIdentityRetainsMathematicalMultipli
   record.temporal_weight = std::numeric_limits<double>::quiet_NaN();
   EXPECT_THROW(ledger.stage(record), std::invalid_argument);
   EXPECT_EQ(ledger.records().size(), 2u);
+
+  // Snapshot copies and swaps retain the index. Rollback must release only appended identities,
+  // allowing the identical face contribution to be staged on a later retry.
+  auto snapshot = ledger;
+  ledger.restore_size(1);
+  record = snapshot.records().back();
+  ledger.stage(record);
+  EXPECT_THROW(ledger.stage(record), std::invalid_argument);
+  ledger.clear();
+  ledger.stage(record);
+  ledger.swap(snapshot);
+  EXPECT_EQ(ledger.records().size(), 2u);
+  EXPECT_EQ(snapshot.records().size(), 1u);
+  EXPECT_THROW(ledger.stage(record), std::invalid_argument);
+  snapshot.restore_size(0);
+  snapshot.stage(record);
+  EXPECT_EQ(snapshot.records().size(), 1u);
 }
 
 TEST(ProgramContextContract, TransactionScopeDivergenceRefusesBeforeMutation) {

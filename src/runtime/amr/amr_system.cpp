@@ -16726,20 +16726,20 @@ std::size_t AmrSystem<Dim>::step_transaction_depth() const noexcept {
 template <int Dim>
 void AmrSystem<Dim>::stage_program_exchange(runtime::program::ExchangeRecord record) {
   const auto& lane = p_->require_prepared_engine_lane("AMR exchange staging");
-  runtime::program::AcceptedExchangeLedger candidate;
+  auto& ledger = p_->program.accepted_exchanges_;
+  const auto prior_size = ledger.records().size();
   std::exception_ptr error;
   try {
-    candidate = p_->program.accepted_exchanges_;
-    candidate.stage(std::move(record));
+    ledger.stage(std::move(record));
   } catch (...) {
     error = std::current_exception();
   }
   if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+    ledger.restore_size(prior_size);
     if (lane.size() == 1 && error)
       std::rethrow_exception(error);
     throw std::runtime_error("AMR exchange staging failed collectively");
   }
-  p_->program.accepted_exchanges_.swap(candidate);
 }
 
 template <int Dim>
