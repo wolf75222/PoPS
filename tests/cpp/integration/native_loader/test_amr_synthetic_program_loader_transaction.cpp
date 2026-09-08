@@ -16,7 +16,9 @@
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/dynamic/authenticated_native_file.hpp>
+#include <pops/runtime/dynamic/dynlib.hpp>
 #include <pops/runtime/dynamic/prepared_execution_context.hpp>
+#include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 
@@ -108,9 +110,10 @@ std::vector<double> initial_state(const pops::Extent<Dim>& shape) {
   return result;
 }
 
-std::string loader_source() {
+std::string loader_source(bool interface_blocks = false) {
   // clang-format off
-  return R"CPP(
+  return std::string("#define POPS_TEST_INTERFACE_BLOCKS ") +
+      (interface_blocks ? "1\n" : "0\n") + R"CPP(
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
@@ -225,21 +228,23 @@ extern "C" const char* pops_program_abi_key() { return POPS_ABI_KEY_LITERAL; }
 extern "C" const char* pops_program_route_manifest() { return pops::kRouteRegistrySignature; }
 extern "C" const char* pops_program_name() { return "source-built-synthetic-loader-transaction"; }
 extern "C" const char* pops_program_hash() {
-  return "tests.synthetic-loader/program/loader-transaction-v1";
+  return POPS_TEST_INTERFACE_BLOCKS
+      ? "tests.synthetic-loader/program/interface-publication-v1"
+      : "tests.synthetic-loader/program/loader-transaction-v1";
 }
 extern "C" int pops_program_operator_authority_count() { return 0; }
 extern "C" std::uint64_t pops_program_operator_authority_word(int, int) { return 0; }
-extern "C" int pops_program_block_count() { return 1; }
+extern "C" int pops_program_block_count() { return POPS_TEST_INTERFACE_BLOCKS ? 2 : 1; }
 extern "C" const char* pops_program_block_name(int block) {
-  return block == 0 ? "tracer" : "";
+  return block == 0 ? "tracer" : (POPS_TEST_INTERFACE_BLOCKS && block == 1 ? "tracer2" : "");
 }
 extern "C" bool pops_program_has_flux_expression() { return true; }
-extern "C" int pops_program_flux_expression_budget_count() { return 1; }
+extern "C" int pops_program_flux_expression_budget_count() { return pops_program_block_count(); }
 extern "C" std::uint64_t pops_program_interface_coupling_application_bound() {
-  return UINT64_C(0);
+  return POPS_TEST_INTERFACE_BLOCKS ? UINT64_C(1) : UINT64_C(0);
 }
 extern "C" std::uint64_t pops_program_interface_coupling_identity_character_bound() {
-  return UINT64_C(0);
+  return POPS_TEST_INTERFACE_BLOCKS ? UINT64_C(128) : UINT64_C(0);
 }
 extern "C" std::uint64_t pops_program_flux_rhs_basis_bound(int block) {
   return block == 0 ? UINT64_C(10) : UINT64_C(0);
@@ -275,17 +280,21 @@ extern "C" const char* pops_module_operator_name(int) { return ""; }
 extern "C" const char* pops_module_operator_kind(int) { return ""; }
 extern "C" const char* pops_module_operator_signature(int) { return ""; }
 extern "C" const char* pops_module_operator_requirements(int) { return ""; }
-extern "C" int pops_module_state_space_count() { return 1; }
+extern "C" int pops_module_state_space_count() { return pops_program_block_count(); }
 extern "C" const char* pops_module_state_space_name(int space) {
-  return space == 0 ? "U" : "";
+  return space >= 0 && space < pops_program_block_count() ? "U" : "";
 }
 extern "C" const char* pops_module_state_space_owner(int space) {
-  return space == 0 ? "tracer" : "";
+  return pops_program_block_name(space);
 }
 extern "C" int pops_module_field_space_count() { return 0; }
 extern "C" const char* pops_module_field_space_name(int) { return ""; }
 extern "C" const char* pops_module_field_space_owner(int) { return ""; }
 
+static bool reject_interface_refresh = false;
+extern "C" void pops_test_reject_interface_refresh(bool reject) {
+  reject_interface_refresh = reject;
+}
 extern "C" void pops_install_program_amr(
     pops::AmrSystem<pops::kNativeDimension>* system) {
   auto context = pops::runtime::program::make_program_execution_provider(system);
@@ -329,7 +338,11 @@ extern "C" void pops_install_program_amr(
           context->commit_many({{&accepted, &candidate}});
         });
       },
-      context, [] {});
+      context, [context] {
+        if (reject_interface_refresh)
+          context->declare_clock_relation("tests.synthetic-loader.clock",
+                                          "tests.synthetic-loader.undeclared-clock", 1);
+      });
   system->install_program_restart_hooks(
       [] {}, [] {}, [] {},
       [context] { return context->accepted_context_snapshot(); });
@@ -451,6 +464,149 @@ std::vector<double> select_indices(const std::vector<double>& values,
 }
 
 }  // namespace
+
+TEST(test_amr_synthetic_program_loader_transaction,
+     InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh) {
+#if defined(POPS_HAS_KOKKOS)
+  int argc = 0;
+  char** argv = nullptr;
+  Kokkos::ScopeGuard guard(argc, argv);
+#endif
+  const std::string stem = std::string(POPS_TEST_TMPDIR) + "/amr_interface_publication_" +
+                           std::to_string(pops::my_rank()) + "_" +
+                           std::to_string(static_cast<long>(std::clock()));
+  const std::string source_path = stem + ".cpp";
+  const std::string shared_object = stem + ".so";
+  {
+    std::ofstream source(source_path);
+    source << loader_source(true);
+  }
+  const auto package = pops::test::native_dso::compile_shared(
+      source_path, shared_object, "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");
+  if (!package.ok) {
+    pops::test::native_dso::report_compile_failure("test_amr_interface_publication", package);
+    FAIL() << "authenticated two-block AMR publication artifact did not compile";
+  }
+  const auto system_config = config();
+  const auto initial = initial_state(system_config.shape);
+  pops::AmrSystem<Dim> system(system_config);
+  auto lane = std::make_shared<pops::ExecutionLane>(
+      pops::ExecutionLane::duplicate_world_collectively("test.interface-publication.package"));
+  auto execution = std::make_shared<const pops::component::PreparedExecutionContextV1>(
+      prepared_execution()->for_lane(*lane));
+  system.install_prepared_boundary_execution_context(lane, execution);
+  const pops::dynlib::AuthenticatedNativeFile authenticated(shared_object);
+  const std::vector<std::string> blocks{kBlock, "tracer2"};
+  for (const auto& block : blocks) {
+    const std::string route = "state/" + block;
+    system.install_block_state_route(block, route);
+    system.add_native_block(
+        block, shared_object, "2222222222222222222222222222222222222222222222222222222222222222",
+        authenticated.binary_identity(), "minmod", "rusanov", "conservative", "explicit", 1.4, 1);
+    system.bind_bootstrap_subject(route, block, "bound_level_zero");
+    system.stage_bootstrap_array(route, block, "cell", "cell", 1, system.spatial_shape(), initial);
+  }
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
+  pops::test::install_prepared_threshold_union(system, {{kBlock, "u", 1.03}},
+                                               "tests.interface-publication.tagging@1");
+  system.install_program(shared_object);
+  ASSERT_EQ(system.prepared_amr_program_flux_expression_budget().blocks.size(), 2u);
+  ASSERT_EQ(
+      system.prepared_amr_program_flux_expression_budget().interface_coupling_application_bound,
+      1u);
+  const auto before = system.program_accepted_state();
+  const auto before_revision = system.program_accepted_state_revision();
+  const auto before_budget = system.prepared_amr_interface_flux_ledger_budget().exact_contract;
+  const auto before_state = system.block_level_state_global(kBlock, 0);
+  // This is the real artifact-backed window after install_program and before the first capacity
+  // producer/bootstrap. Ordinary public restoration must still refuse the missing byte ceiling.
+  EXPECT_THROW(system.restore_program_accepted_state(before), std::exception);
+  const auto handle = pops::dynlib::open(shared_object);
+  ASSERT_NE(handle, nullptr);
+  const auto reject_refresh = reinterpret_cast<void (*)(bool)>(
+      pops::dynlib::sym(handle, "pops_test_reject_interface_refresh"));
+  ASSERT_NE(reject_refresh, nullptr);
+  using namespace pops::runtime::multiblock;
+  auto install = [&](const std::string& identity, bool high) {
+    system.install_prepared_amr_interface_flux_provider(identity, [&](auto& scheduler) {
+      AxisAlignedInterface<Dim> route;
+      route.identity = identity;
+      route.left_block = 0;
+      route.right_block = 1;
+      route.left_axis = route.right_axis = 0;
+      route.left_side = high ? InterfaceSide::High : InterfaceSide::Low;
+      route.right_side = high ? InterfaceSide::Low : InterfaceSide::High;
+      route.right_component_for_left = {0};
+      route.affine_mapping_identity = identity + ".translation";
+      route.right_normal_translation = high ? pops::Real(1) : pops::Real(-1);
+      route.left_trace_projection_identity = identity + ".left.trace";
+      route.right_trace_projection_identity = identity + ".right.trace";
+      route.left_trace_provider_identity = "test.cell-average.left";
+      route.right_trace_provider_identity = "test.cell-average.right";
+      route.left_trace_operation = route.right_trace_operation =
+          InterfaceTraceOperation::CellAverage;
+      route.left_trace_required_depth = route.right_trace_required_depth = 1;
+      const auto geometry = system.prepared_amr_level_geometry(0);
+      scheduler.install(
+          route, system.prepared_amr_block_state(0, 0), geometry,
+          system.prepared_amr_block_state(1, 0), geometry, execution->view(),
+          InterfaceFluxEvaluatorFactory([]() {
+            return InterfaceFluxEvaluator(
+                [](const BoundaryEvaluationPoint&, const InterfaceFluxBatch&) {
+                  throw std::logic_error("publication fixture cannot evaluate numerical flux");
+                });
+          }));
+    });
+  };
+  // A valid local context mutation produces a rank-divergent checkpoint on MPI2, or a checkpoint
+  // outside the frozen logical-clock metadata on rank1. Both fail after scheduler publication.
+  reject_refresh(pops::my_rank() == 0);
+  EXPECT_THROW(install("tests.interface.first", true), std::exception);
+  reject_refresh(false);
+  EXPECT_EQ(system.program_accepted_state(), before);
+  EXPECT_EQ(system.program_accepted_state_revision(), before_revision);
+  EXPECT_EQ(system.prepared_amr_interface_flux_ledger_budget().exact_contract, before_budget);
+  EXPECT_THROW(system.restore_program_accepted_state(before), std::exception);
+  install("tests.interface.first", true);
+  const auto first_bytes = system.program_accepted_state();
+  const auto first_revision = system.program_accepted_state_revision();
+  const auto first_capacity = system.checkpoint_program_state_capacity();
+  const auto first_budget = system.prepared_amr_interface_flux_ledger_budget();
+  EXPECT_GT(first_budget.max_fragments_per_window, 0u);
+  EXPECT_LE(first_bytes.size(), first_capacity.first);
+
+  reject_refresh(pops::my_rank() == 0);
+  EXPECT_THROW(install("tests.interface.second", false), std::exception);
+  reject_refresh(false);
+  EXPECT_EQ(system.program_accepted_state(), first_bytes);
+  EXPECT_EQ(system.program_accepted_state_revision(), first_revision);
+  EXPECT_EQ(system.checkpoint_program_state_capacity(), first_capacity);
+  EXPECT_EQ(system.prepared_amr_interface_flux_ledger_budget().exact_contract,
+            first_budget.exact_contract);
+  install("tests.interface.second", false);
+  const auto complete_capacity = system.checkpoint_program_state_capacity();
+  EXPECT_GT(complete_capacity.first, first_capacity.first);
+  EXPECT_EQ(system.block_level_state_global(kBlock, 0), before_state);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_DOUBLE_EQ(system.time(), 0.0);
+
+  system.begin_bootstrap_plan();
+  for (const auto& block : blocks)
+    (void)system.materialize_bootstrap_action("state/" + block, "initialize_level_zero",
+                                              "bound_level_zero", 0);
+  system.install_prepared_amr_interface_flux_provider("tests.interface.bootstrap-prefix",
+                                                      [](auto&) {});
+  system.commit_bootstrap_level();
+  system.mark_bound();
+  EXPECT_EQ(system.checkpoint_program_state_capacity(), complete_capacity);
+  for (const auto& block : blocks)
+    EXPECT_TRUE(byte_exact_equal(system.block_level_state_global(block, 0), initial));
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_DOUBLE_EQ(system.time(), 0.0);
+  pops::dynlib::close(handle);
+  std::remove(source_path.c_str());
+  std::remove(shared_object.c_str());
+}
 
 TEST(test_amr_synthetic_program_loader_transaction,
      SourceBuiltArtifactLoadsBudgetRollsBackAndRetries) {
