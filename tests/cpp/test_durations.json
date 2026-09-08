@@ -15,6 +15,7 @@
       "test_composite_fac_variable_k",
       "test_float32_poisson_residual",
       "test_generated_amr_system_block",
+      "test_generated_stability_speed",
       "test_generic_inversion_admissibility",
       "test_geometric_mg_nd",
       "test_implicit_source_nd",
@@ -231,5 +232,6 @@
   "test_variable_user_role": 0.01,
   "test_weno5_compiled_model": 0.78,
   "test_weno_convergence": 0.01,
-  "test_world_communicator": 0.01
+  "test_world_communicator": 0.01,
+  "test_generated_stability_speed": 0.1
 }

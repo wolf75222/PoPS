@@ -542,6 +542,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_newton_robustness
   test_variable_recovery_chain
   test_generated_amr_system_block
+  test_generated_stability_speed
   test_prepared_cartesian_nd
   test_prepared_field_solver_nd
   test_prepared_diffusion
@@ -839,6 +840,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_program_context_contract 2)
   set(POPS_MPI_RANKS_test_program_runtime 2)
   set(POPS_MPI_RANKS_test_generated_amr_system_block 2)
+  set(POPS_MPI_RANKS_test_generated_stability_speed 2)
   set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
   set(POPS_MPI_RANKS_test_copy_schedule_cache 1 2 4)
   set(POPS_MPI_RANKS_test_world_communicator 1 2)
@@ -996,6 +998,7 @@ if(POPS_HAS_MPI)
     test_program_runtime
     test_program_context_contract
     test_generated_amr_system_block
+    test_generated_stability_speed
     test_fill_boundary_cache
     test_copy_schedule_cache
     test_world_communicator

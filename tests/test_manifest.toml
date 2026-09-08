@@ -1041,6 +1041,12 @@ labels = ["unit", "runtime", "fast"]
 mpi_variants = [2]
 
 [[cpp.suite]]
+name = "test_generated_stability_speed"
+sources = ["tests/cpp/unit/runtime/test_generated_stability_speed.cpp"]
+labels = ["unit", "runtime", "fast"]
+mpi_variants = [2]
+
+[[cpp.suite]]
 name = "test_coupled_source"
 sources = ["tests/cpp/unit/runtime/test_coupled_source.cpp"]
 labels = ["unit", "runtime", "fast"]

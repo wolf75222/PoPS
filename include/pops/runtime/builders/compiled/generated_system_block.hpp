@@ -605,15 +605,15 @@ void apply_pointwise_projection(
                           state.ghosts());
         status.emplace(state.layout(), state.distribution(), state.local_rank(), 1, state.ghosts());
         for (std::size_t local = 0; local < state.local_size(); ++local)
-          for_each_cell(state.box(local),
-                        MaterializePointwiseProjection<Dim, Model>{
-                            model, std::as_const(state).fab(local).view(),
-                            candidate->fab(local).view(),
-                            runtime::system::bind_provider_storage_view<Dim, provider_count>(
-                                plan, provider_storage, local),
-                            active_cells == nullptr ? FieldView<const Real, Dim>{}
-                                                    : active_cells->fab(local).view(),
-                            status->fab(local).view(), active_cells != nullptr});
+          for_each_cell(
+              state.box(local),
+              MaterializePointwiseProjection<Dim, Model>{
+                  model, std::as_const(state).fab(local).view(), candidate->fab(local).view(),
+                  runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                      plan, provider_storage, local),
+                  active_cells == nullptr ? FieldView<const Real, Dim>{}
+                                          : active_cells->fab(local).view(),
+                  status->fab(local).view(), active_cells != nullptr});
         device_fence();
         if (state.local_size() != 0)
           local_status = reduce_max_local(*status);
@@ -1143,11 +1143,12 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
   const auto geometry = request.geometry;
   const auto topology = request.topology;
   Extent<Dim> ghosts{};
-  for (int axis = 0; axis < Dim; ++axis) ghosts[axis] = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    ghosts[axis] = 1;
   auto prepare = [geometry, topology, ghosts](MultiFab<Dim>& state) {
-    const HaloSchedule<Dim> schedule(
-        state.layout(), state.distribution(), state.local_rank(), geometry.domain(), ghosts,
-        topology, state.ncomp(), halo_budget(state, geometry.domain(), topology, ghosts));
+    const HaloSchedule<Dim> schedule(state.layout(), state.distribution(), state.local_rank(),
+                                     geometry.domain(), ghosts, topology, state.ncomp(),
+                                     halo_budget(state, geometry.domain(), topology, ghosts));
     fill_boundary(state, schedule);
   };
   PreparedSystemBlock<Dim> result;
@@ -1169,8 +1170,9 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
   result.closures.rhs_flux_only_without_prepared_interfaces = unavailable;
   result.closures.rhs_core_at_point_prepared = unavailable;
   result.closures.rhs_flux_only_core_at_point_prepared = unavailable;
-  result.closures.prepare_generated_state_at_point =
-      [prepare](const auto&, MultiFab<Dim>& state) { prepare(state); };
+  result.closures.prepare_generated_state_at_point = [prepare](const auto&, MultiFab<Dim>& state) {
+    prepare(state);
+  };
   result.closures.prepare_generated_state_at_point_prepared =
       [](const auto&, MultiFab<Dim>&, const PreparedHyperbolicBoundary<Dim>&) {
         throw std::logic_error("state storage cannot consume a hyperbolic boundary law");
