@@ -14,6 +14,7 @@ import numpy as np
 _EXCHANGES = "program_exchange_state"
 _OFFSETS = "program_exchange_offsets"
 _TRANSITIONS = "continuation_transition_plan"
+CONTINUATION_CHECKPOINT_KEYS = frozenset((_EXCHANGES, _OFFSETS, _TRANSITIONS))
 
 
 def capture_checkpoint_continuation(owner, payload):
@@ -54,6 +55,26 @@ def capture_checkpoint_continuation(owner, payload):
     consensus(topology, "accepted exchange checkpoint serialization", error=error)
 
 
+def validate_checkpoint_continuation_arrays(payload):
+    """Validate the exact archive members without inventing an owner's continuation authority.
+
+    The owner-dependent reader still authenticates the resolved plan, capacity, rank mapping and
+    native record bytes before restart begins. Missing historical images are never inferred empty.
+    """
+    if any(key not in payload for key in CONTINUATION_CHECKPOINT_KEYS):
+        raise ValueError("restart omits required continuation/exchange policy or accepted state")
+    contract = np.asarray(payload[_TRANSITIONS])
+    if contract.ndim != 0 or contract.dtype.kind != "U" or not str(contract):
+        raise ValueError("restart continuation policy must be a non-empty Unicode scalar")
+    raw = np.asarray(payload[_EXCHANGES])
+    offsets = np.asarray(payload[_OFFSETS])
+    if raw.dtype != np.dtype(np.uint8) or raw.ndim != 1 or offsets.dtype != np.dtype(np.int64) \
+            or offsets.ndim != 1 or len(offsets) < 2 or offsets[0] != 0 \
+            or offsets[-1] != len(raw) or np.any(offsets[1:] <= offsets[:-1]):
+        raise ValueError("restart accepted exchange image has invalid ranked byte offsets")
+    return contract, raw, offsets
+
+
 def prepare_checkpoint_continuation(owner, payload):
     from pops.output._checkpoint_collective import checkpoint_topology
     from pops.runtime._continuation_transitions import ContinuationTransitionPlan
@@ -61,18 +82,10 @@ def prepare_checkpoint_continuation(owner, payload):
     plan = getattr(owner, "_continuation_transition_plan", None)
     if type(plan) is not ContinuationTransitionPlan:
         raise RuntimeError("restart lacks resolved continuation obligations")
-    if any(key not in payload for key in (_EXCHANGES, _OFFSETS, _TRANSITIONS)):
-        raise ValueError("restart omits required continuation/exchange policy or accepted state")
-    contract = np.asarray(payload[_TRANSITIONS])
-    if contract.ndim != 0 or contract.dtype.kind != "U" or str(contract) != plan._json:
+    contract, raw, offsets = validate_checkpoint_continuation_arrays(payload)
+    if str(contract) != plan._json:
         raise ValueError("restart continuation policies differ from the resolved retained objects")
     plan.require("restart")
-    raw = np.asarray(payload[_EXCHANGES])
-    offsets = np.asarray(payload[_OFFSETS])
-    if raw.dtype != np.dtype(np.uint8) or raw.ndim != 1 or offsets.dtype != np.dtype(np.int64) \
-            or offsets.ndim != 1 or len(offsets) < 2 or offsets[0] != 0 \
-            or offsets[-1] != len(raw) or np.any(offsets[1:] <= offsets[:-1]):
-        raise ValueError("restart accepted exchange image has invalid ranked byte offsets")
     bound = getattr(owner, "_checkpoint_exchange_byte_capacity", None)
     if type(bound) is not int or len(raw) > bound:
         raise ValueError("restart accepted exchange image exceeds its resolved byte capacity")
