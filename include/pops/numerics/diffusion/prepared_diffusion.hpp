@@ -269,13 +269,12 @@ class PreparedDiffusion {
         for (std::size_t local = 0; local < input.local_size(); ++local) {
           const auto status = std::as_const(status_).fab(local).view();
           const auto reason = std::as_const(reason_).fab(local).view();
-          selected_reason = std::max(
-              selected_reason,
-              for_each_cell_reduce_max(
-                  evaluation_box_(input, local),
-                  [=] POPS_HD(const Index<Dim>& cell) {
-                    return status(cell, 0) == category ? reason(cell, 0) : Real(0);
-                  }));
+          selected_reason =
+              std::max(selected_reason,
+                       for_each_cell_reduce_max(
+                           evaluation_box_(input, local), [=] POPS_HD(const Index<Dim>& cell) {
+                             return status(cell, 0) == category ? reason(cell, 0) : Real(0);
+                           }));
         }
       } catch (...) {
         reduction_error = std::current_exception();
