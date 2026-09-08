@@ -448,7 +448,9 @@ TEST(test_nd_cluster, unbuffered_global_clustering_does_not_refine_parent_covera
   const mesh::BoxArray<1> patches(
       std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{2}}, Box<1>{Index<1>{5}, Index<1>{7}}});
   const mesh::RankSpace<1> ranks{Index<1>{0}, Extent<1>{1}};
-  const auto level = replicated_level(domain, patches, ranks);
+  const hierarchy::LevelLayout<1> level(1, domain, patches,
+                                        mesh::Distribution<1>::replicated(patches, ranks),
+                                        pops::amr::RefinementRatio<1>{2}, kLayoutBudget);
   tagging::TagMask<1> mask(level, Index<1>{0}, tag_budget(2, 2, 3, 6));
   for (int cell : {0, 1, 2, 5, 6, 7})
     mask.set(Index<1>{cell});
@@ -463,7 +465,9 @@ TEST(test_nd_cluster, sparse_wide_domains_do_not_require_wide_signatures) {
   const mesh::BoxArray<1> patches(std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{0}},
                                                       Box<1>{Index<1>{last}, Index<1>{last}}});
   const mesh::RankSpace<1> ranks{Index<1>{0}, Extent<1>{1}};
-  const auto level = replicated_level(domain, patches, ranks);
+  const hierarchy::LevelLayout<1> level(1, domain, patches,
+                                        mesh::Distribution<1>::replicated(patches, ranks),
+                                        pops::amr::RefinementRatio<1>{2}, kLayoutBudget);
   tagging::TagMask<1> mask(level, Index<1>{0}, tag_budget(2, 2, 1, 2));
   mask.set(Index<1>{0});
   mask.set(Index<1>{last});
