@@ -55,9 +55,9 @@ struct SystemBlockClosures {
   using PreparedPointBoundaryResidual = std::function<void(
       const point_type&, field_type&, field_type&, const boundary_type&, const ExecutionLane&,
       const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
-  using PreparedPointPeriodicResidual = std::function<void(
-      const point_type&, field_type&, field_type&, const ExecutionLane&,
-      const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
+  using PreparedPointPeriodicResidual =
+      std::function<void(const point_type&, field_type&, field_type&, const ExecutionLane&,
+                         const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
   using PreparedPointJvp = std::function<void(
       const point_type&, field_type&, const field_type&, field_type&, const boundary_type&,
       const ExecutionLane&, const runtime::program::PreparedScalarBoundarySession<Dim>&)>;

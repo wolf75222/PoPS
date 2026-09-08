@@ -1312,7 +1312,8 @@ TEST(test_krylov_workspace_reentrancy,
     } catch (const std::logic_error& error) {
       prepare_rejection = error.what();
     }
-    EXPECT_EQ(prepare_rejection, "prepared resource freeze failed on at least one communicator rank");
+    EXPECT_EQ(prepare_rejection,
+              "prepared resource freeze failed on at least one communicator rank");
   }
 
   const TestKrylovMethod method = cg_krylov_method<kDim>();

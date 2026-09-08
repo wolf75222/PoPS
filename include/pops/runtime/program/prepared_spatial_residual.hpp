@@ -23,7 +23,8 @@ class PreparedSpatialResidual final {
                    Extent<Dim>{}),
         perturbed_(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
                    Extent<Dim>{}),
-        plus_(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1, Extent<Dim>{}),
+        plus_(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
+              Extent<Dim>{}),
         minus_(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
                Extent<Dim>{}),
         difference_step_(difference_step) {
@@ -89,7 +90,8 @@ class PreparedSpatialResidual final {
     ++count;
   }
   void authenticate_(const field_type& value) const {
-    if (value.layout() != candidate_.layout() || value.distribution() != candidate_.distribution() ||
+    if (value.layout() != candidate_.layout() ||
+        value.distribution() != candidate_.distribution() ||
         value.local_rank() != candidate_.local_rank() || value.ncomp() != 1)
       throw std::invalid_argument("spatial residual seed differs from its prepared scalar layout");
   }

@@ -503,7 +503,8 @@ class System {
   /// or registers a field, and publication remains provisional inside the current step scope.
   POPS_EXPORT void publish_program_field_components(
       const runtime::multiblock::BoundaryEvaluationPoint& point,
-      const std::string& publication_identity, const std::vector<ProgramFieldComponent>& components);
+      const std::string& publication_identity,
+      const std::vector<ProgramFieldComponent>& components);
 
   /// Compact slot of a sealed component key and the corresponding accepted scalar field.  The key,
   /// rather than a legacy physical label or a raw component number, is the public authority.

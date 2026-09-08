@@ -12,7 +12,8 @@ namespace pops {
 template <bool Host, bool Device>
 inline constexpr bool native_call_execution_supported =
     std::is_same_v<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>
-        ? Host : Device;
+        ? Host
+        : Device;
 
 /// Device-copyable result for a statically compiled model-library function.
 /// EvaluationStatus is the existing PoPS status contract, not another failure authority.
@@ -32,7 +33,8 @@ struct NativeCallResult {
 
   POPS_HD Real read(int component) const {
     return status == EvaluationStatus::kOk && component >= 0 && component < N
-        ? values[component] : std::numeric_limits<Real>::quiet_NaN();
+               ? values[component]
+               : std::numeric_limits<Real>::quiet_NaN();
   }
 };
 

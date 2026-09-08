@@ -447,9 +447,8 @@ class ProgramContext {
         boundary->runtime_block(), boundary->point(), boundary->lane(), boundary->transport());
     // FaceField owns Fab values with deep-copy semantics: subsequent residual evaluations
     // cannot overwrite a prior stage's accepted quadrature data.
-    boundary->transport().with_boundary_scratch(state_value, [&](auto& scratch) {
-      faces = scratch.generated_faces;
-    });
+    boundary->transport().with_boundary_scratch(
+        state_value, [&](auto& scratch) { faces = scratch.generated_faces; });
   }
 
   void source_default_into(int program_block, field_type& state_value, field_type& rhs) const {

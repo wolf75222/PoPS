@@ -368,8 +368,11 @@ TEST(test_amr_multiblock_implicit_transaction,
   context->configure_primary_clock("clock.amr-balance-mailbox");
   const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '3');
   const std::array<std::pair<const char*, pops::Real>, 5> terms{{
-      {"storage_change", 11}, {"outward_boundary_flux", 2}, {"sources", 5},
-      {"reflux", 3}, {"projection", 1},
+      {"storage_change", 11},
+      {"outward_boundary_flux", 2},
+      {"sources", 5},
+      {"reflux", 3},
+      {"projection", 1},
   }};
   auto record = [&](pops::Real weight) {
     for (const auto& [name, value] : terms)
@@ -382,13 +385,15 @@ TEST(test_amr_multiblock_implicit_transaction,
     for (const auto& [name, value] : terms)
       EXPECT_EQ(actual.at(name), weight * value) << name;
   };
-  context->install([&](double macro_dt) {
-    context->advance_hierarchy(macro_dt, [&](double) { record(pops::Real(1)); });
-  }, context);
+  context->install(
+      [&](double macro_dt) {
+        context->advance_hierarchy(macro_dt, [&](double) { record(pops::Real(1)); });
+      },
+      context);
   system.set_program_block_map({0});
   using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
-  system.install_prepared_amr_program_flux_expression_budget(
-      "tests.balance-mailbox.amr-program@1", std::vector<FluxBudget>{{1, 1}}, 0, 0);
+  system.install_prepared_amr_program_flux_expression_budget("tests.balance-mailbox.amr-program@1",
+                                                             std::vector<FluxBudget>{{1, 1}}, 0, 0);
   const auto initial = system.block_level_state_global("tracer", 0);
 
   for (int step = 0; step < 2; ++step) {

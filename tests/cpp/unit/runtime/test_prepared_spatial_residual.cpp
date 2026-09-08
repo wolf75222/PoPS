@@ -9,8 +9,8 @@ namespace {
 MultiFab<2> scalar_field() {
   const Box<2> domain{Index<2>{0, 0}, Index<2>{15, 15}};
   const auto layout = mesh::BoxArray<2>::from_domain(domain, Extent<2>{16, 16});
-  const auto distribution = mesh::Distribution<2>::replicated(
-      layout, mesh::RankSpace<2>{Index<2>{}, Extent<2>{1, 1}});
+  const auto distribution =
+      mesh::Distribution<2>::replicated(layout, mesh::RankSpace<2>{Index<2>{}, Extent<2>{1, 1}});
   return MultiFab<2>(layout, distribution, Index<2>{}, 1, Extent<2>{});
 }
 
@@ -28,8 +28,8 @@ struct AccumulationResidual {
 auto residual(Real power, bool quadratic) {
   return [=](const MultiFab<2>& q, MultiFab<2>& result, int) {
     for (std::size_t local = 0; local < q.local_size(); ++local)
-      for_each_cell(q.box(local), AccumulationResidual{
-          q.fab(local).view(), result.fab(local).view(), power, quadratic});
+      for_each_cell(q.box(local), AccumulationResidual{q.fab(local).view(),
+                                                       result.fab(local).view(), power, quadratic});
   };
 }
 
@@ -49,7 +49,7 @@ struct ShiftedPeriodicResidual {
   POPS_HD void operator()(const Index<2>& cell) const {
     constexpr Real pi = Real(3.14159265358979323846);
     const Real forcing = Real(1) + std::sin(Real(2) * pi * (cell[0] + Real(0.5)) / Real(16)) *
-                                      std::sin(Real(2) * pi * (cell[1] + Real(0.5)) / Real(16));
+                                       std::sin(Real(2) * pi * (cell[1] + Real(0.5)) / Real(16));
     Real laplacian = -Real(4) * q(cell, 0);
     for (int axis = 0; axis < 2; ++axis) {
       auto lower = cell, upper = cell;
@@ -85,8 +85,8 @@ TEST(PreparedSpatialResidual, IdentityDeterminesNonzeroConstantWithoutGauge) {
   auto seed = scalar_field();
   seed.set_val(Real(0));
   runtime::program::PreparedSpatialResidual<2> solve(seed, options(), Real(6e-6));
-  const auto report = solve.solve(&seed, residual(Real(2.5), false),
-                                   ExecutionLane::world("test.spatial-constant"));
+  const auto report =
+      solve.solve(&seed, residual(Real(2.5), false), ExecutionLane::world("test.spatial-constant"));
   ASSERT_TRUE(report.solved_value_available()) << report.reason;
   EXPECT_NEAR(reduce_min(solve.candidate()), 2.5, 1e-11);
   EXPECT_NEAR(reduce_max(solve.candidate()), 2.5, 1e-11);
@@ -100,16 +100,19 @@ TEST(PreparedSpatialResidual, LastResidualEvaluationBelongsToSolvedCandidate) {
     seed.set_val(initial);
     runtime::program::PreparedSpatialResidual<2> solve(seed, options(), Real(6e-6));
     auto equation = residual(Real(1), true);
-    const auto report = solve.solve(&seed,
+    const auto report = solve.solve(
+        &seed,
         [&](const MultiFab<2>& q, MultiFab<2>& output, int evaluation) {
           lincomb(last_evaluation, Real(1), q, Real(0), q);
           equation(q, output, evaluation);
-        }, ExecutionLane::world("test.spatial-final-evaluation"));
+        },
+        ExecutionLane::world("test.spatial-final-evaluation"));
     ASSERT_TRUE(report.solved_value_available()) << report.reason;
     saxpy(last_evaluation, Real(-1), solve.candidate());
     EXPECT_EQ(reduce_min(last_evaluation), Real(0));
     EXPECT_EQ(reduce_max(last_evaluation), Real(0));
-    if (initial != root) EXPECT_GT(solve.derivative_evaluations(), 0);
+    if (initial != root)
+      EXPECT_GT(solve.derivative_evaluations(), 0);
   }
 }
 
@@ -117,10 +120,12 @@ TEST(PreparedSpatialResidual, InvalidResidualCannotBecomeReadableOrMutateSeed) {
   auto seed = scalar_field();
   seed.set_val(Real(0.2));
   runtime::program::PreparedSpatialResidual<2> solve(seed, options(), Real(6e-6));
-  const auto report = solve.solve(&seed,
+  const auto report = solve.solve(
+      &seed,
       [](const MultiFab<2>&, MultiFab<2>& output, int) {
         output.set_val(std::numeric_limits<Real>::quiet_NaN());
-      }, ExecutionLane::world("test.spatial-invalid"));
+      },
+      ExecutionLane::world("test.spatial-invalid"));
   EXPECT_FALSE(report.solved_value_available());
   EXPECT_EQ(report.status, SolveStatus::kInvalidEvaluation);
   EXPECT_NEAR(reduce_min(seed), 0.2, 1e-15);
@@ -131,12 +136,14 @@ TEST(PreparedSpatialResidual, NewtonCorrectionCouplesPeriodicNeighborDegreesOfFr
   auto seed = scalar_field();
   seed.set_val(Real(0));
   runtime::program::PreparedSpatialResidual<2> solve(seed, options(), Real(6e-6));
-  const auto report = solve.solve(&seed,
+  const auto report = solve.solve(
+      &seed,
       [](const MultiFab<2>& q, MultiFab<2>& result, int) {
         for (std::size_t local = 0; local < q.local_size(); ++local)
-          for_each_cell(q.box(local), ShiftedPeriodicResidual{
-              q.fab(local).view(), result.fab(local).view()});
-      }, ExecutionLane::world("test.spatial-periodic"));
+          for_each_cell(q.box(local),
+                        ShiftedPeriodicResidual{q.fab(local).view(), result.fab(local).view()});
+      },
+      ExecutionLane::world("test.spatial-periodic"));
   ASSERT_TRUE(report.solved_value_available()) << report.reason;
   EXPECT_LT(report.residual_norm, Real(1e-10));
   const Real sine = std::sin(std::acos(Real(-1)) / Real(16));

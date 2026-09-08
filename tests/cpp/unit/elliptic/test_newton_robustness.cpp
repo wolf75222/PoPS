@@ -1106,8 +1106,8 @@ TEST(LocalNonlinearCollective, SignedLargeIndicesPreservePriorityAndLexicographi
     pops::for_each_cell(statistics.box(local), FillFailureStatistics{statistics.fab(local).view(),
                                                                      recoverable, fatal, false});
 
-  auto location = pops::collective_first_local_nonlinear_failure(statistics, fatal, 10, 8,
-                                                                 execution_lane);
+  auto location =
+      pops::collective_first_local_nonlinear_failure(statistics, fatal, 10, 8, execution_lane);
   ASSERT_TRUE(location.found);
   EXPECT_EQ(location.priority, fatal);
   EXPECT_EQ(location.index, positive);
@@ -1116,8 +1116,8 @@ TEST(LocalNonlinearCollective, SignedLargeIndicesPreservePriorityAndLexicographi
   for (std::size_t local = 0; local < statistics.local_size(); ++local)
     pops::for_each_cell(statistics.box(local), FillFailureStatistics{statistics.fab(local).view(),
                                                                      recoverable, fatal, true});
-  location = pops::collective_first_local_nonlinear_failure(statistics, fatal, 10, 8,
-                                                            execution_lane);
+  location =
+      pops::collective_first_local_nonlinear_failure(statistics, fatal, 10, 8, execution_lane);
   ASSERT_TRUE(location.found);
   EXPECT_EQ(location.index, negative);
   EXPECT_EQ(location.component, 7);

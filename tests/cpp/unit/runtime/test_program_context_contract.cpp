@@ -570,7 +570,8 @@ TEST(ProgramContextContract, AuxiliaryNumericalFailurePreservesSolveActionAndHar
   }
 }
 
-TEST(ProgramContextContract, AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch) {
+TEST(ProgramContextContract,
+     AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch) {
 #ifndef POPS_HAS_MPI
   GTEST_SKIP() << "publication divergence requires MPI";
 #else
@@ -603,12 +604,14 @@ TEST(ProgramContextContract, AuxiliaryPublicationRefusesRankDivergentTransaction
   context.prepare_provider_values("read", 0, context.state(0), 31);
   // A mismatched acceptance/rollback used to corrupt publication generations so the next
   // auxiliary read had to refuse. Collective scope control now rejects that earlier mutation.
-  EXPECT_THROW({
-    if (my_rank() == 0)
-      sim.rollback_step_transaction();
-    else
-      sim.commit_step_transaction();
-  }, std::runtime_error);
+  EXPECT_THROW(
+      {
+        if (my_rank() == 0)
+          sim.rollback_step_transaction();
+        else
+          sim.commit_step_transaction();
+      },
+      std::runtime_error);
   EXPECT_EQ(sim.step_transaction_depth(), 1u);
   sim.rollback_step_transaction();
   // Both ranks recover the same pending input and can publish/read it together.
@@ -885,8 +888,11 @@ TEST(ProgramContextContract, BalanceMailboxResetsOnlyInsideOutermostTransactionS
   context.configure_primary_clock("clock.balance-mailbox");
   const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '2');
   const std::array<std::pair<const char*, Real>, 5> terms{{
-      {"storage_change", 11}, {"outward_boundary_flux", 2}, {"sources", 5},
-      {"reflux", 3}, {"projection", 1},
+      {"storage_change", 11},
+      {"outward_boundary_flux", 2},
+      {"sources", 5},
+      {"reflux", 3},
+      {"projection", 1},
   }};
   auto record = [&](Real weight) {
     for (const auto& [name, value] : terms)
@@ -1737,8 +1743,8 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
   const auto before_diagnostics = sim.program_diagnostics();
   const auto before_history = sim.history_fill_count("nested.state");
   NativeField before_history_value = ctx.scratch_state_like(ctx.history("nested.state", 1));
-  ctx.lincomb(before_history_value, Real(1), ctx.history("nested.state", 1),
-              Real(0), ctx.history("nested.state", 1));
+  ctx.lincomb(before_history_value, Real(1), ctx.history("nested.state", 1), Real(0),
+              ctx.history("nested.state", 1));
   const auto initial_mass = ctx.sum_component(ctx.state(0), GasSchema::density);
 
   auto child_steps = [&] {
@@ -1757,8 +1763,8 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
   const auto attempted_state = sim.get_state("gas");
   const auto attempted_field = sim.potential_global();
   NativeField attempted_history_value = ctx.scratch_state_like(ctx.history("nested.state", 1));
-  ctx.lincomb(attempted_history_value, Real(1), ctx.history("nested.state", 1),
-              Real(0), ctx.history("nested.state", 1));
+  ctx.lincomb(attempted_history_value, Real(1), ctx.history("nested.state", 1), Real(0),
+              ctx.history("nested.state", 1));
   EXPECT_EQ(all_reduce_max(attempted_state != before_state ? 1L : 0L), 1L);
   EXPECT_NE(sim.potential_global(), before_field);
   // The outer acceptance fails after both nested solves and substep publications succeeded.
@@ -1785,7 +1791,8 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
   EXPECT_DOUBLE_EQ(sim.time(), 0.1 + 0.2);
   EXPECT_EQ(sim.get_state("gas"), attempted_state);
   EXPECT_EQ(sim.potential_global(), attempted_field);
-  EXPECT_EQ(difference_sum_sq_all(ctx.history("nested.state", 1), attempted_history_value), Real(0));
+  EXPECT_EQ(difference_sum_sq_all(ctx.history("nested.state", 1), attempted_history_value),
+            Real(0));
   const auto accepted = sim.program_exchange_records();
   ASSERT_EQ(accepted.size(), 2u);
   double integrated = 0.0;
