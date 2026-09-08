@@ -616,9 +616,14 @@ void System<Dim>::block_neg_div_flux_into_at_prepared(
           throw std::invalid_argument("prepared boundary RHS cannot alias state and result");
         require_same_block_field(state, selected.U, "prepared boundary RHS state");
         require_same_block_field(residual, selected.U, "prepared boundary RHS result");
-        if (!selected.boundary || !selected.boundary_flux_full_at_point_prepared)
+        if (selected.boundary ? !selected.boundary_flux_full_at_point_prepared
+                              : !selected.periodic_flux_at_point_prepared)
           throw std::runtime_error(
               "System prepared boundary RHS requires one complete generated authority");
+        if (!selected.boundary && !std::all_of(p_->periodicity.begin(), p_->periodicity.end(),
+                                               [](bool periodic) { return periodic; }))
+          throw std::runtime_error(
+              "prepared transport faces without a physical boundary require periodic topology");
         if (p_->blocks_.has_interfaces(block))
           throw std::runtime_error(
               "System prepared boundary RHS has no split shared-interface authority");
@@ -631,8 +636,12 @@ void System<Dim>::block_neg_div_flux_into_at_prepared(
       state, residual, lane, "System::block_neg_div_flux_into_at_prepared", transport,
       [&](MultiFab<Dim>& candidate, auto& scratch) {
         materialize_detached_valid_field(state, scratch.detached_state);
-        selected.boundary_flux_full_at_point_prepared(point, scratch.detached_state, candidate,
-                                                 *selected.boundary, lane, transport);
+        if (selected.boundary)
+          selected.boundary_flux_full_at_point_prepared(point, scratch.detached_state, candidate,
+                                                        *selected.boundary, lane, transport);
+        else
+          selected.periodic_flux_at_point_prepared(point, scratch.detached_state, candidate,
+                                                   lane, transport);
       });
 }
 

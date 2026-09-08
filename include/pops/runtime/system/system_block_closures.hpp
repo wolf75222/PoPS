@@ -55,6 +55,9 @@ struct SystemBlockClosures {
   using PreparedPointBoundaryResidual = std::function<void(
       const point_type&, field_type&, field_type&, const boundary_type&, const ExecutionLane&,
       const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
+  using PreparedPointPeriodicResidual = std::function<void(
+      const point_type&, field_type&, field_type&, const ExecutionLane&,
+      const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
   using PreparedPointJvp = std::function<void(
       const point_type&, field_type&, const field_type&, field_type&, const boundary_type&,
       const ExecutionLane&, const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
@@ -103,6 +106,8 @@ struct SystemBlockClosures {
   PreparedPointBoundaryResidual boundary_core_at_point_prepared;
   PreparedPointBoundaryResidual boundary_flux_full_at_point_prepared;
   PreparedPointBoundaryResidual boundary_flux_core_at_point_prepared;
+  /// The topology-only periodic route retains native faces without a physical boundary object.
+  PreparedPointPeriodicResidual periodic_flux_at_point_prepared;
   PreparedPointBoundaryResidual boundary_residual_at_point_prepared;
   PreparedPointJvp boundary_jvp_at_point_prepared;
   std::shared_ptr<BoundaryFluxTransform> external_boundary_flux;

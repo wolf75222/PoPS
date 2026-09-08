@@ -977,6 +977,12 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
                             const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
         flux_with_transport(point, state, residual, nullptr, lane, transport);
       };
+  result.closures.periodic_flux_at_point_prepared =
+      [flux_with_transport](const auto& point, MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                            const ExecutionLane& lane,
+                            const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        flux_with_transport(point, state, residual, nullptr, lane, transport);
+      };
   auto compiled_boundary_residual =
       make_prepared_boundary_residual<Dim>(result.closures.boundary_full_at_point_prepared,
                                            result.closures.boundary_core_at_point_prepared);
