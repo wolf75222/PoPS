@@ -450,11 +450,11 @@ field_type& assembly_source(field_type& field, std::string_view identity) const 
 std::shared_ptr<scalar_boundary_session_type> prepare_mesh_boundary_session(
     field_type& prototype, const ExecutionLane& lane) const {
   require_prepared_lane_(lane, "AMR scalar boundary preparation");
-  return scalar_boundary_session_type::prepare(geometry(),
-                                               facade_->prepared_amr_boundary_topology(), prototype,
-                                               lane, next_boundary_generation_());
+  return scalar_boundary_session_type::prepare(
+      geometry(), facade_->prepared_amr_boundary_topology(), prototype, lane,
+      next_boundary_generation_(),
+      active_level_ == 0 ? HaloLayoutCoverage::full_domain : HaloLayoutCoverage::sparse_level);
 }
-
 std::shared_ptr<block_boundary_session_type> prepare_block_boundary_session(
     int program_block, field_type& prototype,
     const runtime::multiblock::BoundaryEvaluationPoint& point, const ExecutionLane& lane) const {

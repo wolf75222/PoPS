@@ -9,12 +9,14 @@ struct DiffusionContext {
   Geometry<2> geometry_ = Geometry<2>::from_bounds(Box<2>{Index<2>{0, 0}, Index<2>{3, 3}},
                                                    RealVector<2>{0, 0}, RealVector<2>{1, 1});
   BoundaryTopology<2> topology = BoundaryTopology<2>::axis_periodic({true, true});
+  HaloLayoutCoverage coverage = HaloLayoutCoverage::full_domain;
   ExecutionLane lane = ExecutionLane::world("prepared-diffusion-test");
   AcceptedExchangeLedger ledger;
   const auto& geometry() const { return geometry_; }
   const auto& prepared_execution_lane() const { return lane; }
   auto prepare_mesh_boundary_session(Field& field, const ExecutionLane& execution) {
-    return PreparedScalarBoundarySession<2>::prepare(geometry_, topology, field, execution, 1);
+    return PreparedScalarBoundarySession<2>::prepare(geometry_, topology, field, execution, 1,
+                                                     coverage);
   }
   const Field* pointwise_active_mask(int, const Field&) const { return nullptr; }
   template <class Producer>
@@ -110,6 +112,20 @@ TEST(PreparedDiffusion, RejectsFailedConstitutiveEvaluationInPreparedInternalGho
     EXPECT_EQ(error.reason(), 777);
   }
   EXPECT_THROW(prepared.explicit_frequency(), std::logic_error);
+}
+
+TEST(PreparedDiffusion, SparseAmrLevelPreservesFullDomainRefusalAndUsesPreparedGhosts) {
+  DiffusionContext context;
+  context.coverage = HaloLayoutCoverage::sparse_level;
+  const Box<2> active{Index<2>{1, 1}, Index<2>{2, 2}};
+  auto q = field(active), output = field(active);
+  q.set_val(1);
+  EXPECT_THROW((void)PreparedScalarBoundarySession<2>::prepare(context.geometry(), context.topology,
+                                                               q, context.lane, 1),
+               std::invalid_argument);
+  PreparedDiffusion<2> prepared(context, q, {}, true);
+  prepared.apply(q, output, identity_law(q));
+  EXPECT_NEAR(reduce_max_local(output), 0, 2e-13);
 }
 
 TEST(PreparedDiffusion, VariableDiagonalStaysInsideDivergenceWithPhysicalValueTrace) {
