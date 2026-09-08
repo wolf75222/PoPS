@@ -1549,6 +1549,12 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRetainsAndInterpolatesExactLevelHist
 
   EXPECT_EQ(pops::reduce_min_local(interpolated), pops::Real(15));
   EXPECT_EQ(pops::reduce_max_local(interpolated), pops::Real(15));
+  // An equally shaped scratch is not authority to reinterpret this ring on a foreign clock.
+  EXPECT_THROW(context->interpolate_history_linear(interpolated, "tracer.rate", 2, 0,
+                                                   "clock.fast", "clock.macro", -1, pops::Real(0)),
+               std::invalid_argument);
+  EXPECT_EQ(pops::reduce_min_local(interpolated), pops::Real(15));
+  EXPECT_EQ(pops::reduce_max_local(interpolated), pops::Real(15));
   // history() exposes a public ring element, so replacing slot zero must not invalidate a
   // reference to lag one.  The retained object is used after the later store rather than merely
   // comparing an address captured before it.
@@ -1840,6 +1846,16 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
     EXPECT_EQ(pending_after_regrid.pending_history_remaps.front().target_dt,
               pending_after_regrid.pending_history_remaps.front().source_dt /
                   static_cast<double>(temporal_numerator));
+    context->with_program_resource_level(1, [&]() {
+      auto interpolated = context->rhs_scratch_like(context->state(0));
+      interpolated.set_val(pops::Real(-17));
+      EXPECT_THROW(context->interpolate_history_linear(interpolated, "tracer.rate", 1, 0,
+                                                       "clock.macro", "clock.macro", 0,
+                                                       pops::Real(0)),
+                   std::runtime_error);
+      EXPECT_EQ(pops::reduce_min_local(interpolated), pops::Real(-17));
+      EXPECT_EQ(pops::reduce_max_local(interpolated), pops::Real(-17));
+    });
     const auto pending_bytes = system.program_accepted_state();
     EXPECT_NO_THROW(system.restore_checkpoint_accepted_state(pending_bytes));
     EXPECT_EQ(system.program_accepted_state(), pending_bytes);

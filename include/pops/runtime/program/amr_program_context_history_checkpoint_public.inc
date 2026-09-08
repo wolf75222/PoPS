@@ -179,6 +179,16 @@ void interpolate_history_linear(field_type& output, const std::string& name, int
       !manager.initialized.at(key))
     throw std::runtime_error(
         "AMR linear history interpolation requires an initialized retained ring");
+  if (manager.owner.at(key) != sys_block(program_owner) ||
+      manager.clock_identity.at(key) != source_clock)
+    throw std::invalid_argument(
+        "AMR linear history interpolation has a foreign owner or source clock");
+  // Parent-projected AB2 samples remain invalid on the child clock until the declared
+  // deferred reconstruction is consumed.  Reading raw slots here must not bypass the
+  // authority enforced by history_slot_, including when the query requests slot zero.
+  if (pending_history_remaps_.contains(key))
+    throw std::runtime_error(
+        "AMR linear history interpolation requires completed history reconstruction after regrid");
   require_same_field_contract_(output, found->second.front(), "AMR linear history interpolation");
 
   const double source_ticks = static_cast<double>(clock_schedule_.ticks_per_macro(source_clock));
