@@ -55,8 +55,10 @@ def _run_set_threads(monkeypatch, *args):
         def kokkos_is_initialized():
             return False
 
-    import pops
-    monkeypatch.setattr(pops, "_pops", _FakePops, raising=False)
+    # ``set_threads`` consults the selected-native-module authority directly.  Patch that
+    # selector seam in this pure fixture instead of replacing the package's private module,
+    # which is no longer the runtime source of truth after native selection.
+    monkeypatch.setattr(th, "_selected_native_module", lambda: _FakePops)
     monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
