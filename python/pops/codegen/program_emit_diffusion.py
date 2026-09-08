@@ -52,7 +52,8 @@ def _emit_diffusive_preparation(v, state_var, prepared_var, node_model,
     if target != "system":
         raise ValueError("AMR diffusion execution is unavailable before composite face/exchange integration")
     _,selected,_=_selected(v,node_model)
-    lines = ["pops::runtime::program::PreparedDiffusion<pops::kNativeDimension> %s(ctx, %s, %s);" % (
+    lines = ["ctx.require_cartesian_generated_operator(%d, \"diffusive_face_evaluation\");" % bidx,
+        "pops::runtime::program::PreparedDiffusion<pops::kNativeDimension> %s(ctx, %s, %s);" % (
         prepared_var,state_var,_boundary_cpp(selected["physical"]))]
     if any(row.kind == "flux" for row in v.attrs["physical_balance"].occurrences):
         lines.append("std::vector<pops::nd::FaceField<pops::kNativeDimension>> %s_transport_faces;" % prepared_var)

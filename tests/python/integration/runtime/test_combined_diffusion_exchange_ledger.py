@@ -94,3 +94,27 @@ def test_full_combined_accepted_face_quadrature(isolated_native_cache, native_cx
                      "cell_change_defect": float(np.max(np.abs((actual-previous)/n**2-delta))),
                      "artifact": artifact.artifact_identity.token})
     _record("combined-accepted-exchanges-"+method, rows)
+
+
+@pytest.mark.parametrize("mask", ("staircase", "cutcell"))
+def test_explicit_diffusion_refuses_active_embedded_geometry(
+        isolated_native_cache, native_cxx, kokkos_root, mask):
+    del isolated_native_cache, native_cxx, kokkos_root
+    from pops.layouts import Uniform
+    from pops.mesh.geometry import Disc, EmbeddedBoundary
+    from pops.mesh.masks import CutCell, Staircase
+    from pops.boundary import ZeroFlux
+
+    n, dt = 16, 1e-4
+    case, layout, _ = _build("constant", n, dt)
+    layout = Uniform(layout.mesh, embedded_boundary=EmbeddedBoundary(
+        Disc(center=(.5, .5), radius=.36),
+        Staircase() if mask == "staircase" else CutCell(), ZeroFlux()))
+    initial = np.full((n, n), 2.)
+    runtime, _ = _bind(case, layout, initial, {})
+    before = np.asarray(runtime.state_global("heat")).copy()
+    with pytest.raises(RuntimeError, match="diffusive_face_evaluation.*mask-qualified"):
+        pops.run(runtime, t_end=dt, max_steps=1, console=False)
+    np.testing.assert_array_equal(np.asarray(runtime.state_global("heat")), before)
+    assert runtime.time() == 0 and runtime.macro_step() == 0
+    assert not runtime._executor._program_exchange_records()

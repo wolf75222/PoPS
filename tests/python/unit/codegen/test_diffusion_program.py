@@ -60,6 +60,7 @@ def test_scalar_diffusion_public_case_resolves_and_emits_native_faces(method):
     emitter,_=lower_and_validate(model)
     code=emit_cpp_program(resolved.time,model=emitter)
     assert "PreparedDiffusion<pops::kNativeDimension>" in code
+    assert code.index('ctx.require_cartesian_generated_operator(0, "diffusive_face_evaluation")') < code.index("PreparedDiffusion<pops::kNativeDimension>")
     assert ".apply(" in code
     assert "ctx.rhs_into(" not in code
     assert not model._dsl._m._flux
