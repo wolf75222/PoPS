@@ -193,6 +193,19 @@ def _authenticate_expression(model: Any, expression: Expr, state: Any) -> None:
             raise ValueError("diffusive law reads a foreign declaration")
 
 
+def _law_inputs(model,state,expressions):
+    inputs=[state.space]
+    if model._dsl._m._aux_requirements(expressions):
+        inputs.append(model._dsl._m.field_space())
+    pending=list(expressions)
+    while pending:
+        node=pending.pop()
+        if isinstance(node,QuantityRef) and node.handle.kind=="field" and node.space not in inputs:
+            inputs.append(node.space)
+        pending.extend(_children(node))
+    return tuple(inputs)
+
+
 def declare_diffusive_flux(model: Any, name: Any, *, state: Any, value: Any,
                            boundaries: Any = None) -> DiffusiveFluxHandle:
     from ._board_contract import require_name
@@ -220,13 +233,7 @@ def declare_diffusive_flux(model: Any, name: Any, *, state: Any, value: Any,
     expressions = (variable, *(item for row in coefficients for item in row))
     for expression in expressions:
         _authenticate_expression(model, expression, state)
-    inputs = [state.space]
-    if model._dsl._m._aux_requirements(expressions):
-        inputs.append(model._dsl._m.field_space())
-    for expression in expressions:
-        for reference in expression.declaration_references():
-            if reference.kind == "field" and reference.space not in inputs:
-                inputs.append(reference.space)
+    inputs = _law_inputs(model,state,expressions)
     existing = getattr(model, "_diffusive_fluxes", {})
     if name in existing or name in model._fluxes:
         raise ValueError("physical flux %r is already declared" % name)

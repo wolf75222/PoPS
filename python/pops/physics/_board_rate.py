@@ -22,6 +22,11 @@ class _RateAuthoringMixin(_BoardModel):
         from .diffusion import declare_diffusive_flux
         return declare_diffusive_flux(self, name, state=state, value=value, boundaries=boundaries)
 
+    def drift_flux(self,name: Any,*,state: Any,mobility: Any,potential: Any,boundaries: Any=None) -> Any:
+        """Declare the physical drift -mobility*n*grad(potential), without fitting a stencil."""
+        from .drift_diffusion import declare_drift_flux
+        return declare_drift_flux(self,name,state=state,mobility=mobility,potential=potential,boundaries=boundaries)
+
     def rate(self, name: Any, *, equation: Any) -> Any:
         reg = _safe_name(name)
         if not isinstance(equation, _bm.Equation):
@@ -55,7 +60,7 @@ class _RateAuthoringMixin(_BoardModel):
                     else self._dsl._m.operator_registry())
         inputs = [state.space]
         for kind, payload, _coefficient in terms:
-            if kind == "diffusion":
+            if kind in {"diffusion", "drift"}:
                 for space in payload.law.inputs:
                     if space not in inputs:
                         inputs.append(space)
@@ -173,6 +178,8 @@ class _RateAuthoringMixin(_BoardModel):
         registry = module.operator_registry()
         from .diffusion import install_diffusive_fluxes
         install_diffusive_fluxes(self, module)
+        from .drift_diffusion import install_drift_fluxes
+        install_drift_fluxes(self,module)
         for handle, view in getattr(self, "_retained_rates", {}).items():
             reason = view.legacy_incompatibility()
             if handle.registered_operator_name in registry.names():
@@ -376,7 +383,12 @@ class _RateAuthoringMixin(_BoardModel):
         """Authenticate each occurrence without destructuring away its scientific meaning."""
         terms = _bm._as_rate(rhs)._rate_terms()
         for kind, payload, _coefficient in terms:
-            if kind == "diffusion":
+            if kind == "drift":
+                from .drift_diffusion import DriftFluxHandle
+                if (not isinstance(payload,DriftFluxHandle) or payload.owner_path!=self.owner_path
+                        or getattr(self,"_drift_fluxes",{}).get(payload.name)!=payload or payload.state!=target):
+                    raise ValueError("drift term must name this state's exact physical drift flux")
+            elif kind == "diffusion":
                 from .diffusion import DiffusiveFluxHandle
                 if (not isinstance(payload, DiffusiveFluxHandle)
                         or payload.owner_path != self.owner_path

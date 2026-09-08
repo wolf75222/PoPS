@@ -359,11 +359,12 @@ def _module_to_model(module: Any, state_space: Any = None,
             continue
         refusal = op.lowering.get("native_unsupported")
         from pops.numerics.diffusion import diffusion_balance_supported
+        from pops.numerics.scharfetter_gummel import fitted_balance_supported
         diffusion_view = op.lowering.get("physical_balance")
-        if diffusion_balance_supported(diffusion_view):
+        if diffusion_balance_supported(diffusion_view) or fitted_balance_supported(diffusion_view):
             coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:diffusive_rhs",)))
             continue
-        if op.lowering.get("diffusive_law") is not None:
+        if op.lowering.get("diffusive_law") is not None or op.lowering.get("drift_law") is not None:
             coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:constitutive_flux",)))
             continue
         if refusal:

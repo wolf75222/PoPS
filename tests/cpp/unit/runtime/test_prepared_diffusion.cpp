@@ -95,3 +95,100 @@ TEST(PreparedDiffusion, VariableDiagonalStaysInsideDivergenceWithPhysicalValueTr
   EXPECT_EQ(context.ledger.records().size(),64);
   EXPECT_NEAR(exchange,.05*.75,2e-13);
 }
+
+namespace {
+struct FittedContext {
+  Geometry<1> geometry_=Geometry<1>::from_bounds(Box<1>{Index<1>{0},Index<1>{31}},RealVector<1>{0},RealVector<1>{1});
+  BoundaryTopology<1> topology=BoundaryTopology<1>::axis_periodic({true});
+  ExecutionLane lane=ExecutionLane::world("fitted-diffusion-test");
+  AcceptedExchangeLedger ledger;
+  const auto& geometry() const {return geometry_;}
+  const auto& prepared_execution_lane() const {return lane;}
+  auto prepare_mesh_boundary_session(MultiFab<1>& field,const ExecutionLane& execution) {
+    return PreparedScalarBoundarySession<1>::prepare(geometry_,topology,field,execution,1);
+  }
+  void stage_exchange(ExchangeRecord record) {ledger.stage(std::move(record));}
+};
+MultiFab<1> fitted_field() {
+  auto layout=mesh::BoxArray<1>::from_domain(Box<1>{Index<1>{0},Index<1>{31}},Extent<1>{32});
+  auto distribution=mesh::Distribution<1>::replicated(layout,mesh::RankSpace<1>{Index<1>{0},Extent<1>{1}});
+  return MultiFab<1>(layout,distribution,Index<1>{0},1,Extent<1>{1});
+}
+}
+
+TEST(PreparedDiffusion, BernoulliRetainsZeroJumpAndLargeDriftLimits) {
+  EXPECT_DOUBLE_EQ(scharfetter_gummel_bernoulli(0),1);
+  EXPECT_NEAR(scharfetter_gummel_bernoulli(1),.58197670686932642439,2e-15);
+  for(Real z:std::array<Real,5>{1e-12,1e-6,1,100,1000}) {
+    EXPECT_NEAR(scharfetter_gummel_bernoulli(-z)-scharfetter_gummel_bernoulli(z),z,2e-13);
+    EXPECT_TRUE(std::isfinite(scharfetter_gummel_bernoulli(z)));
+    EXPECT_TRUE(scharfetter_gummel_bernoulli(z)>=0);
+  }
+  EXPECT_NEAR(scharfetter_gummel_bernoulli(100),3.72007597602083596296e-42,1e-55);
+}
+
+TEST(PreparedDiffusion, FittedZeroPotentialIsTheSameConservativeDiffusion) {
+  FittedContext context;
+  auto q=fitted_field(),out=fitted_field();
+  const auto values=q.fab(0).view();
+  for_each_cell(q.box(0),[=] POPS_HD(const Index<1>& cell) {
+    values(cell,0)=2+Kokkos::cos(2*Real(3.14159265358979323846)*(cell[0]+Real(.5))/32);
+  });
+  PreparedDiffusion<1> prepared(context,q,{});
+  prepared.apply_fitted(q,out,[](std::size_t) {
+    return [] POPS_HD(const Index<1>&){return std::array<Real,3>{0,.1,0};};
+  },1,{});
+  const auto result=std::as_const(out).fab(0).view();
+  EXPECT_NEAR(for_each_cell_reduce_max(out.box(0),[=] POPS_HD(const Index<1>& cell){
+    const Index<1> left{(cell[0]+31)%32},right{(cell[0]+1)%32};
+    const Real expected=.1*32*32*(values(right,0)-2*values(cell,0)+values(left,0));
+    return Kokkos::abs(result(cell,0)-expected);
+  }),0,2e-13);
+  EXPECT_NEAR(prepared.explicit_frequency(),2*.1*32*32,2e-13);
+}
+
+TEST(PreparedDiffusion, FittedExponentialEquilibriumHasZeroOrientedFaceExchange) {
+  FittedContext context;
+  auto q=fitted_field(),out=fitted_field();
+  const auto values=q.fab(0).view();
+  for_each_cell(q.box(0),[=] POPS_HD(const Index<1>& cell) {
+    const Real phi=.4*Kokkos::cos(2*Real(3.14159265358979323846)*(cell[0]+Real(.5))/32);
+    values(cell,0)=Kokkos::exp(-phi);
+  });
+  PreparedDiffusion<1> prepared(context,q,{});
+  prepared.apply_fitted(q,out,[](std::size_t) {
+    return [] POPS_HD(const Index<1>& cell) {
+      const Real phi=.4*Kokkos::cos(2*Real(3.14159265358979323846)*(cell[0]+Real(.5))/32);
+      return std::array<Real,3>{phi,.1,0};
+    };
+  },1,{});
+  prepared.stage_accepted_exchanges(context,"fitted","joint-drift-diffusion","stage0",.01);
+  EXPECT_EQ(context.ledger.records().size(),64);
+  for(const auto& record:context.ledger.records()) EXPECT_NEAR(record.numerical_flux,0,2e-12);
+  EXPECT_NEAR(reduce_max_local(out),0,2e-11);
+}
+
+TEST(PreparedDiffusion, FailedConstitutiveOutputsStayUnreadAndPreserveExactWorstReason) {
+  FittedContext context;
+  auto q=fitted_field(),out=fitted_field();
+  out.set_val(17);
+  PreparedDiffusion<1> prepared(context,q,{});
+  try {
+    prepared.apply(q,out,[](std::size_t) {
+      return [] POPS_HD(const Index<1>& cell) {
+        DiffusiveLawResult<1> result;
+        result.values.fill(std::numeric_limits<Real>::quiet_NaN());
+        result.evaluation_status=cell[0]%2 ? 1 : 2;
+        result.reason_code=cell[0]%2 ? 900 : 23;
+        return result;
+      };
+    });
+    EXPECT_TRUE(false);
+  } catch(const DiffusiveEvaluationError& error) {
+    EXPECT_EQ(error.status(),2);
+    EXPECT_EQ(error.reason(),23);
+  }
+  EXPECT_DOUBLE_EQ(reduce_max_local(out),17);
+  EXPECT_TRUE(context.ledger.records().empty());
+  EXPECT_THROW(prepared.explicit_frequency(),std::logic_error);
+}

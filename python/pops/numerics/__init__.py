@@ -22,9 +22,10 @@ from .spatial import FiniteVolume
 from .state_storage import StateStorage
 from .interactions import JointEvaluation
 from .diffusion import Diffusion
+from .scharfetter_gummel import ScharfetterGummel
 from .indicator_stencils import DiscreteGradientStencil, LinearAxisStencil
 from .plan import DiscretizationPlan
 
 __all__ = ["riemann", "reconstruction", "limiters", "variables", "projections", "terms",
-           "spatial", "FiniteVolume", "StateStorage", "Diffusion", "DiscreteGradientStencil", "LinearAxisStencil",
-           "DiscretizationPlan", "JointEvaluation"]
+           "spatial", "FiniteVolume", "StateStorage", "Diffusion", "ScharfetterGummel",
+           "DiscreteGradientStencil", "LinearAxisStencil", "DiscretizationPlan", "JointEvaluation"]

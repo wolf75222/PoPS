@@ -24,9 +24,10 @@ _LEGACY_ROUTES = {
 def native_route(module: Any, operator: Any) -> tuple[str | None, str | None]:
     """Current checked adapter vocabulary; no capability follows from a type name alone."""
     from pops.numerics.diffusion import diffusion_balance_supported
-    if diffusion_balance_supported(operator.lowering.get("physical_balance")):
+    from pops.numerics.scharfetter_gummel import fitted_balance_supported
+    if diffusion_balance_supported(operator.lowering.get("physical_balance")) or fitted_balance_supported(operator.lowering.get("physical_balance")):
         return "program:diffusive_rhs", None
-    if operator.lowering.get("diffusive_law") is not None:
+    if operator.lowering.get("diffusive_law") is not None or operator.lowering.get("drift_law") is not None:
         return "program:constitutive_flux", None
     if operator.lowering.get("native_unsupported"):
         return None, "unsupported_physical_balance"
@@ -348,7 +349,8 @@ def _occurrences(module: Any, operator: Any, identity: str) -> tuple[TermOccurre
     target_space = getattr(operator.signature.output, "base", operator.signature.output)
     from pops.model.spaces import FieldSpace
 
-    if ((operator.kind == "field_operator" or operator.lowering.get("diffusive_law") is not None)
+    if ((operator.kind == "field_operator" or operator.lowering.get("diffusive_law") is not None
+         or operator.lowering.get("drift_law") is not None)
             and isinstance(target_space, FieldSpace)
             and target_space.name not in module.field_spaces()):
         # A field provider may project one result from a shared registered
@@ -496,7 +498,7 @@ def derive_module_operations(module: Any, packs: Any, *, boundary_data: Any = ()
         route, refusal = native_route(module, operator)
         effects = _derive_effects(module, operator, boundary_data)
         exchanges = tuple(ExchangeRecord(term.identity, term.target)
-                          for term in occurrences if term.kind in {"flux", "transport", "diffusion", "grid_operator"})
+                          for term in occurrences if term.kind in {"flux", "transport", "diffusion", "drift", "grid_operator"})
         operations.append(NumericalConstruction(
             identity, evaluation, tuple(term.identity for term in occurrences),
             inputs=derive_inputs(module, operator, packs, boundary_data=boundary_data),

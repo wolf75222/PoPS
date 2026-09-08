@@ -20,7 +20,22 @@ def _selected(v, node_model):
         selected=impl._diffusive_laws[rows[0].payload.reg_name]
     except (AttributeError,KeyError):
         raise ValueError("diffusive Program has no authenticated native constitutive law") from None
+    if v.attrs.get("fitted",False):
+        drift=tuple(row for row in view.occurrences if row.kind=="drift")
+        if len(drift)!=1 or drift[0].coefficient!=-1 or len(rows)!=1 or rows[0].coefficient!=1:
+            raise ValueError("fitted flux must cover exactly one signed drift/diffusion occurrence pair")
+        try:
+            selected={**selected,"fitted":impl._drift_laws[drift[0].payload.reg_name]}
+        except (AttributeError,KeyError):
+            raise ValueError("fitted Program has no exact physical drift authority") from None
     return impl,selected,rows
+
+
+def _law_expressions(selected):
+    if "fitted" in selected:
+        from pops._ir.expr import Const
+        return selected["fitted"]["potential"],*selected["diagonal"],Const(0)
+    return selected["variable"],*selected["diagonal"],selected["derivative"]
 
 
 def _boundary_cpp(law):
@@ -56,7 +71,7 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
                                                  provider_plans,bidx,target))
     lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);" % (
         out,v.id,state_var))
-    exprs=(selected["variable"],*selected["diagonal"],selected["derivative"])
+    exprs=_law_expressions(selected)
     sources=tuple(row for row in v.attrs["physical_balance"].occurrences if row.kind=="source")
     roots=list(exprs)
     for row in sources:
@@ -67,7 +82,8 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
     lines.extend(_prepare_provider_values(binding,bidx,state_var))
     if explicit:
         lines.append("try {")
-    lines.append("%s.apply(%s, %s, [&](std::size_t li) {" % (prepared_var,state_var,out))
+    method="apply_fitted" if "fitted" in selected else "apply"
+    lines.append("%s.%s(%s, %s, [&](std::size_t li) {" % (prepared_var,method,state_var,out))
     lines.append("  const auto %sA=std::as_const(%s).fab(li).view();" % (state_var,state_var))
     if binding["count"]:
         lines.append("  const auto providers=ctx.template provider_values_view<%d>(%s,%d,li);" % (
@@ -79,10 +95,15 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
                  with_prim=True,provider_binding=binding))
     lines.append("    return std::array<pops::Real,pops::kNativeDimension+2>{%s};" %
                  ", ".join(expr.to_cpp() for expr in exprs))
-    lines.extend(("  };", "});"))
+    lines.append("  };")
+    if "fitted" in selected:
+        ratio="(%s)/(%s)" % (selected["fitted"]["mobility"].to_cpp(),selected["diagonal"][0].to_cpp())
+        lines.append("}, %s, %s);" % (ratio,_boundary_cpp(selected["fitted"]["physical"])))
+    else:
+        lines.append("});")
     if explicit:
-        lines.extend(("} catch (const pops::runtime::program::DiffusiveEvaluationError&) {",
-            '  ctx.consume_pointwise_evaluation_status(%d,%d,2,"diffusive_face_evaluation",501);' % (bidx,v.id),
+        lines.extend(("} catch (const pops::runtime::program::DiffusiveEvaluationError& error) {",
+            '  ctx.consume_pointwise_evaluation_status(%d,%d,error.status(),"diffusive_face_evaluation",error.reason());' % (bidx,v.id),
             "}"))
     coefficient=sum(row.coefficient for row in rows)
     if coefficient != 1:
@@ -119,6 +140,12 @@ def _emit_diffusive_accepted(v, prepared_var, lines, temporal_weight_cpp, evalua
     block = v.block if v.block.is_resolved else v.block._resolved(v.block.owner_path.canonical())
     operation_data = {"source": source.canonical_identity(), "block": block.canonical_identity()}
     operation = make_identity("diffusive-operation", operation_data).token
+    if v.attrs.get("fitted",False):
+        ordinals=tuple(row.ordinal for row in view.occurrences if row.kind in {"drift","diffusion"})
+        occurrence=operation+"/joint-occurrences:"+",".join(map(str,ordinals))
+        lines.append("%s.stage_accepted_exchanges(ctx,%s,%s,%s,%s);" % (
+            prepared_var,json.dumps(operation),json.dumps(occurrence),json.dumps(evaluation_context),temporal_weight_cpp))
+        return
     for row in view.occurrences:
         if row.kind != "diffusion":
             continue

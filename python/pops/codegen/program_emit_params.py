@@ -66,9 +66,9 @@ def _op_model_exprs(impl: Any, v: Any) -> list:
     flux = getattr(impl, "_flux_terms", {}) or {}
     transforms = getattr(impl, "_local_transforms", {}) or {}
     if v.op == "diffusive_rhs":
-        from pops.codegen.program_emit_diffusion import _selected
+        from pops.codegen.program_emit_diffusion import _selected, _law_expressions
         _, selected, _ = _selected(v, impl)
-        out.extend((selected["variable"], *selected["diagonal"], selected["derivative"]))
+        out.extend(_law_expressions(selected))
         for row in v.attrs["physical_balance"].occurrences:
             if row.kind == "source":
                 out.extend(src[row.payload.reg_name])
