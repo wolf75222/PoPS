@@ -659,7 +659,7 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
               << " partitioned_residual=" << partitioned_report.residual_norm
               << " max_partition_difference=" << global_difference << '\n';
   EXPECT_LT(global_difference, 1e-8 * forcing_scale);
-  if constexpr (PartitionedBackend) {
+  {
     // Re-evaluating the same equation with its accepted candidate must preserve the
     // declared forcing scale, rather than demand another relative reduction of roundoff.
     for (auto* solver : {reference.get(), partitioned.get()}) {
@@ -674,6 +674,19 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
       EXPECT_EQ(warm.reference_residual_norm, cold.reference_residual_norm);
       EXPECT_LE(warm.residual_norm, Real(1e-9) * cold.reference_residual_norm);
       EXPECT_EQ(warm.iters, 0);
+      if (forcing_case == ForcingCase::Gaussian && refinement_case == 0 && partition_profile == 0) {
+        for (int level = 0; level < 2; ++level)
+          solver->phi_level(level).set_val(Real(1e6));
+        const auto huge_guess = solver->solve();
+        EXPECT_EQ(huge_guess.reference_residual_norm, cold.reference_residual_norm);
+        EXPECT_TRUE(pops::solve_report_is_publishable(huge_guess, 30));
+        if (huge_guess.solved())
+          EXPECT_LE(huge_guess.residual_norm, Real(1e-9) * cold.reference_residual_norm);
+        else {
+          EXPECT_EQ(huge_guess.status, pops::SolveStatus::kIterationLimit);
+          EXPECT_EQ(huge_guess.action, pops::SolveAction::kFailRun);
+        }
+      }
     }
   }
 }
@@ -702,6 +715,9 @@ int run_partitioned_fac_matrix(int argc, char** argv) {
       expect_periodic_partition_independence(false);
       expect_periodic_partition_independence(true);
       expect_periodic_partition_independence(2);
+      expect_periodic_partition_independence(0, 0, false, ForcingCase::BoundaryOnly);
+      expect_periodic_partition_independence(0, 0, false, ForcingCase::ZeroWithNonzeroGuess);
+      expect_periodic_partition_independence(0, 0, false, ForcingCase::SmallGaussian);
       expect_periodic_partition_independence<true>(0);
       expect_periodic_partition_independence<true>(1);
       expect_periodic_partition_independence<true>(2);
