@@ -76,11 +76,13 @@ def test_solve_typed_solver_retains_exact_native_method_identity():
 
 
 def test_solve_requires_an_explicit_solver_descriptor():
-    """The final contract has no hidden default solver selection."""
-    import inspect
-    import pops.time as t
+    """A plain LinearProblem has no hidden default solver selection.
 
-    assert inspect.signature(t.Program.solve).parameters["solver"].default is inspect.Parameter.empty
+    A bound problem may explicitly own default_program_solver; an omitted descriptor on this
+    ordinary matrix-free problem must still fail instead of selecting an algorithm.
+    """
+    with pytest.raises(TypeError, match="explicit solver or default_program_solver"):
+        _solve_program(None)
     from pops.solvers import krylov
     assert _solve_program(krylov.CG(max_iter=200)).validate() is True
 

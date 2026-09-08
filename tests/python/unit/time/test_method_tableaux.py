@@ -1,6 +1,7 @@
 """ADC-663: exact RK/ARK authorities and proof-carrying method properties."""
 from fractions import Fraction
 
+from pops.lib.time.euler import FORWARD_EULER_TABLEAU
 from pops.lib.time.rk import RK4_TABLEAU, SSPRK2_TABLEAU
 from pops.lib.time.ssprk import SSPRK3_TABLEAU
 from pops.time._methods.tableau import AdditiveRungeKuttaTableau, RungeKuttaTableau
@@ -25,7 +26,13 @@ def test_classical_tableaux_have_exact_certified_properties():
     impostor = RungeKuttaTableau(A=[[]], b=[1], c=[0], name="ssprk2")
     assert renamed.properties == SSPRK2_TABLEAU.properties
     assert renamed.certificate == SSPRK2_TABLEAU.certificate
-    assert impostor.properties.ssp is None
+    # Its spelling cannot confer the two-stage Heun proof. These exact coefficients are forward
+    # Euler, which has its own legitimate first-order SSP certificate.
+    assert impostor.properties == FORWARD_EULER_TABLEAU.properties
+    assert impostor.certificate == FORWARD_EULER_TABLEAU.certificate
+    assert impostor.properties.order == 1
+    assert impostor.properties.stability_polynomial == (1, 1)
+    assert impostor.properties != SSPRK2_TABLEAU.properties
 
 
 def test_lower_order_is_proved_from_exact_conditions():
