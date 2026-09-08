@@ -1044,11 +1044,19 @@ class _MultiLayoutUniformExecutor:
                     % (name, transfer.mapping_id)
                 )
 
-    def _restore_rejected_native_attempt(self, generation: int, attempt: int) -> None:
+    def _restore_rejected_native_attempt(
+        self, generation: int, attempt: int, captured_routes: list[_NativeTransferRoute]
+    ) -> None:
         """Restore every child to the outer accepted snapshot before a controller retries."""
-        for route in self._transfer_routes:
-            route.session.reject_attempt(generation, attempt)
         rollback_errors = []
+        # An ordered field solve can reject before the pullback is captured. Native
+        # sessions intentionally reject attempts they never captured; reset only the
+        # routes owned by this attempt, and still restore every child if reset fails.
+        for route in reversed(captured_routes):
+            try:
+                route.session.reject_attempt(generation, attempt)
+            except BaseException as error:
+                rollback_errors.append(error)
         for engine in reversed(tuple(self._engines.values())):
             try:
                 engine._rollback_step_transaction()
@@ -1086,11 +1094,13 @@ class _MultiLayoutUniformExecutor:
         from pops.runtime._physical_mapping import physical_mapping_order
         order = physical_mapping_order(route.transfer for route in self._transfer_routes)
         receipts = []
+        captured_routes = []
         try:
             if order is None:
                 # Ordinary mappings retain simultaneous pre-step snapshot semantics.
                 for route in self._transfer_routes:
                     route.session.capture(generation, attempt)
+                    captured_routes.append(route)
                 for route in self._transfer_routes:
                     receipt = route.session.apply(generation, attempt)
                     self._authenticate_mapping_receipt(
@@ -1103,13 +1113,14 @@ class _MultiLayoutUniformExecutor:
                     route = next(row for row in self._transfer_routes
                                  if row.transfer.operation_abi == operation)
                     route.session.capture(generation, attempt)
+                    captured_routes.append(route)
                     receipt = route.session.apply(generation, attempt)
                     self._authenticate_mapping_receipt(
                         route, receipt, generation=generation, attempt=attempt)
                     receipts.append(receipt)
                     native_step_target(self._engines[layout_id]).step(dt)
         except StepAttemptRejected:
-            self._restore_rejected_native_attempt(generation, attempt)
+            self._restore_rejected_native_attempt(generation, attempt, captured_routes)
             raise
         for route in self._transfer_routes:
             self._mapping_evaluations[route.transfer.mapping_id] += 1
