@@ -125,9 +125,12 @@ class NativeProjection(Expr):
         return self.call.deps()
 
     def __pops_ir_diff__(self, *, recurse, target, definitions):
+        return self.differentiate(recurse=recurse, route="exact")
+
+    def differentiate(self, *, recurse, route):
         from .expr import Const
         from .lowering import _s_add, _s_mul
-        jacobian = self.call.jacobian(route="exact").value
+        jacobian = self.call.jacobian(route=route).value
         inputs = tuple(value for values in self.call.inputs for value in values)
         result = Const(0)
         for column, value in enumerate(inputs):

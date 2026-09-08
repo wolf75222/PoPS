@@ -14,7 +14,6 @@ from pops.time._program.value_validation import (
     require_owned, require_top_level,
 )
 from pops.time.operator_resolution import resolve_operator_handle
-from pops.time.references import block_name
 from pops.time.stencil import StencilAccess
 from pops.time.value_metadata import positive_scalar_literal
 from pops.time.values import (
@@ -184,7 +183,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
 
     def _solve_coupled_implicit(self, operator: Any, states: Any, *, prepared: Any,
                                 name: Any = None, at: Any = None, coefficient: Any,
-                                ) -> Any:
+                                derivative: Any = None) -> Any:
         """Solve ``U - U0 - dt * operator(U) = 0`` over owner-qualified blocks.
 
         The typed ``coupled_rate`` signature is the join contract for every input and output.  The
@@ -221,13 +220,15 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         controls = _prepared_local_nonlinear_controls(
             prepared, where="solve: solver")
         bundle = op.signature.output
-        by_name = {block_name(value.block): value for value in values}
-        missing = tuple(output for output in bundle.keys() if output not in by_name)
-        if missing:
-            raise ValueError(
-                "solve operator outputs %s without matching input block names"
-                % (missing,))
+        by_name = {}
+        for output, rate in bundle.items():
+            matches = [value for value in values if value.space == rate.base_space]
+            if len(matches) != 1:
+                raise ValueError("solve coupled output requires one exact typed input state")
+            by_name[output] = matches[0]
         blocks = tuple(by_name[output].block for output in bundle.keys())
+        from .native_derivatives import coupled_derivative_contract
+        derivative_contract, functions = coupled_derivative_contract(op.body, derivative)
         token_name = name or operator.name
         if at is None:
             from pops.time.points import TimePoint
@@ -247,6 +248,8 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             {"operator": op.name, "operator_handle": operator, "blocks": blocks,
              "method": "newton", "solver_identity": prepared.identity.token,
              "problem_kind": "coupled_implicit_euler",
+             "output_bindings": {output: value.block for output, value in by_name.items()},
+             "derivative_contract": derivative_contract, "native_functions": functions,
              "coefficient": coefficient,
              **controls, "output_count": len(blocks)},
             token_name, blocks[0], point=result_points[0])

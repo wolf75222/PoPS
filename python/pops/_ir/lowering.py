@@ -209,7 +209,7 @@ def _s_pow(a: Any, b: Any) -> Any:
     return Pow(a, b)
 
 
-def diff(expr: Any, var: Any, defs: Any = None) -> Any:
+def diff(expr: Any, var: Any, defs: Any = None, *, native_derivative_route: str = "exact") -> Any:
     """Symbolic derivative with respect to a name, Var, or qualified declaration coordinate.
 
     @p defs (optional): dictionary {primitive name: definition Expr}. When the differentiation
@@ -222,6 +222,9 @@ def diff(expr: Any, var: Any, defs: Any = None) -> Any:
     Raises NotImplementedError on a non differentiable node (naming its type) or a power whose
     exponent depends on @p var (would need a logarithm, a node absent from the DSL)."""
     from .quantity import QuantityRef
+    from .native_call import NativeProjection
+    if native_derivative_route not in ("exact", "approximate"):
+        raise ValueError("symbolic native derivative requires exact or approximate provider")
 
     target = var.name if isinstance(var, Var) else var
     if not isinstance(target, str) or not target:
@@ -233,6 +236,8 @@ def diff(expr: Any, var: Any, defs: Any = None) -> Any:
     d = defs or {}
 
     def go(e: Any) -> Any:
+        if isinstance(e, NativeProjection):
+            return e.differentiate(recurse=go, route=native_derivative_route)
         protocol = getattr(e, "__pops_ir_diff__", None)
         if callable(protocol):
             derivative = protocol(recurse=go, target=var, definitions=d)

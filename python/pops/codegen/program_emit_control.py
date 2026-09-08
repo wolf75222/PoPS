@@ -92,6 +92,17 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
         raise ValueError(
             "coupled_rate codegen: node %r lacks its owner-qualified OperatorHandle" % v.name)
     expr = op.body
+    if v.op == "solve_coupled_implicit":
+        from pops.time._program.native_derivatives import coupled_derivative_contract
+        from pops.time.solve_request import DerivativeStrategy
+        from pops.time._program.serialization import _json_ready
+        recorded = v.attrs.get("derivative_contract")
+        strategy = None if recorded is None else DerivativeStrategy(recorded["route"])
+        actual, functions = coupled_derivative_contract(expr, strategy)
+        if recorded is not None and _json_ready(recorded) != _json_ready(actual):
+            raise ValueError("coupled implicit derivative differs from authenticated residual providers")
+        if functions and tuple(v.attrs.get("native_functions", ())) != functions:
+            raise ValueError("coupled implicit native providers differ from authenticated residual")
     application = v.attrs.get("joint_application")
     if application is not None:
         from ._joint_cpp import instantiated_body

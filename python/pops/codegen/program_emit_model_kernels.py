@@ -386,27 +386,48 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
     lines.append(
         "    auto residual_eval = [&](const pops::Real (&Ueval)[%d], pops::Real (&rout)[%d]) {"
         % (total, total))
+    binding_lines = []
     for component in sorted(referenced):
         source = sources[component]
         if source[0] == "unknown":
-            lines.append("      const pops::Real %s = Ueval[%d];" % (component, source[1]))
+            binding_lines.append("      const pops::Real %s = Ueval[%d];" % (component, source[1]))
         else:
-            lines.append("      const pops::Real %s = %sA(index, %d);"
-                         % (component, source[1], source[2]))
-    for block in blocks:
-        for index, expr in enumerate(components[block]):
-            slot = offsets[block] + index
-            lines.append(
-                "      rout[%d] = Ueval[%d] - G_[%d] - "
-                "static_cast<pops::Real>(%s) * dt * (%s);"
-                % (slot, slot, slot, coefficient_cpp, expr.to_cpp()))
+            binding_lines.append("      const pops::Real %s = %sA(index, %d);"
+                                 % (component, source[1], source[2]))
+    lines += binding_lines
+    from ._native_solve_cpp import evaluate_residual_expressions, coupled_jacobian_expressions
+    expressions = [expr for rows in components.values() for expr in rows]
+    residual_lines, residual_values = evaluate_residual_expressions(expressions)
+    lines += residual_lines
+    for slot, value in enumerate(residual_values):
+        lines.append(
+            "      rout[%d] = Ueval[%d] - G_[%d] - "
+            "static_cast<pops::Real>(%s) * dt * (%s);"
+            % (slot, slot, slot, coefficient_cpp, value))
+    lines.append("      return pops::LocalNonlinearEvaluationResult::ok();")
     lines.append("    };")
     lines += _prepared_local_control_lines(controls)
+    route = controls.get("derivative_contract", {}).get("route", "finite_difference")
+    jacobian = "pops::FiniteDifferenceLocalJacobian<%d>{}" % total
+    if route in ("exact", "approximate"):
+        derivatives = coupled_jacobian_expressions(components, sources, total, route=route)
+        lines.append("    auto jacobian_eval = [&](const pops::Real (&Ueval)[%d], pops::Real (&Jout)[%d][%d]) {" % (total, total, total))
+        lines += binding_lines
+        derivative_lines, derivative_values = evaluate_residual_expressions(derivatives)
+        lines += derivative_lines
+        for slot, value in enumerate(derivative_values):
+            row, column = divmod(slot, total)
+            lines.append("      Jout[%d][%d] = pops::Real(%d) - static_cast<pops::Real>(%s) * dt * (%s);" %
+                (row, column, int(row == column), coefficient_cpp, value))
+        lines += ["      return pops::LocalNonlinearEvaluationResult::ok();", "    };"]
+        jacobian = "pops::AnalyticLocalJacobian<%d, decltype(jacobian_eval)>{jacobian_eval}" % total
+    elif route != "finite_difference":
+        raise ValueError("coupled implicit selected derivative has no native realization")
     lines.append(
         "    const auto prepared_ = pops::prepare_local_nonlinear_problem<%d>("
-        "residual_eval, pops::FiniteDifferenceLocalJacobian<%d>{}, "
+        "residual_eval, %s, "
         "pops::AcceptAllLocalCandidates<%d>{}, controls_);"
-        % (total, total, total))
+        % (total, jacobian, total))
     lines.append(
         "    const pops::LocalNonlinearCellResult<%d> solved_ = "
         "pops::solve_prepared_local_nonlinear(prepared_, G_);" % total)
