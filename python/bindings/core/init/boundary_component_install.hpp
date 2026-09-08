@@ -329,7 +329,30 @@ inline std::string prepare_interface_flux_jobs(const py::list& rows,
       throw py::value_error("shared-interface provider jobs must have unique sorted identities");
     previous_identity = ordered_identity;
     const PopsExecutionContextV1 context = spec.execution->view();
+    ExactContractBuilder sampling;
+    sampling.text("pops.interface-flux.sampling-provider.v1")
+        .text(spec.component_id)
+        .text(spec.manifest_identity)
+        .scalar(spec.interface_version)
+        .text(spec.canonical_layout_identity)
+        .text(spec.parameters_json)
+        .text(spec.target_json);
+    // These are symbolic endpoint/discretization handles, not native patch ownership/layouts.
+    for (const char* side_name : {"left", "right"}) {
+      const py::dict side = py::cast<py::dict>(interface[side_name]);
+      for (const char* field : {"boundary", "layout", "discretization", "projection"}) {
+        const py::dict handle = py::cast<py::dict>(side[field]);
+        sampling.text(py::cast<std::string>(handle["qualified_id"]));
+      }
+    }
+    sampling.scalar(static_cast<std::int32_t>(context.scalar_type))
+        .scalar(static_cast<std::int32_t>(context.storage_precision))
+        .scalar(static_cast<std::int32_t>(context.compute_precision))
+        .scalar(static_cast<std::int32_t>(context.accumulation_precision))
+        .scalar(static_cast<std::int32_t>(context.reduction_precision));
+    route.sampling_provider_identity = std::move(sampling).release();
     contract.text(route.identity)
+        .bytes(route.sampling_provider_identity)
         .scalar(static_cast<std::uint64_t>(route.left_block))
         .scalar(static_cast<std::uint64_t>(route.right_block))
         .scalar(static_cast<std::int32_t>(route.level))

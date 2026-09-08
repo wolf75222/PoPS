@@ -83,6 +83,9 @@ struct AxisAlignedInterface {
   static constexpr int dimension = Dim;
 
   std::string identity;
+  // Exact evaluator artifact/parameters and qualified endpoint authority for retained samples.
+  // Legacy direct callbacks may leave this empty only when they do not capture samples.
+  std::string sampling_provider_identity;
   std::size_t left_block = 0;
   std::size_t right_block = 0;
   int level = 0;
@@ -356,7 +359,11 @@ class InterfaceFluxScheduler {
       prepared.execution_memory_space = execution.memory_space;
       prepared.device_identity = execution.device_identity;
       prepared.collective_identity = collective_identity;
-      prepared.route_certificate = route_digest_(collective_identity);
+      if (!prepared.route.sampling_provider_identity.empty())
+        prepared.route_certificate = route_digest_(collective_plan_identity_(
+            prepared.route, left_state, left_geometry, right_state, right_geometry, left_normal,
+            right_normal, face_count, component_count, prepared.communicator_identity,
+            communicator_size, true));
       prepared.evaluation_count = std::make_shared<std::size_t>(0);
       materialize_storage_(prepared);
     } catch (...) {
@@ -472,6 +479,8 @@ class InterfaceFluxScheduler {
         const bool left_active = left_state != nullptr || left_rhs != nullptr;
         const bool right_active = right_state != nullptr || right_rhs != nullptr;
         active = left_active || right_active;
+        if (active && captured != nullptr && prepared.route_certificate.empty())
+          throw std::invalid_argument("interface sample capture has no exact sampling provider authority");
         if (active && (!left_active || !right_active || left_state == nullptr ||
                        right_state == nullptr || left_rhs == nullptr || right_rhs == nullptr))
           throw std::runtime_error(
@@ -495,7 +504,8 @@ class InterfaceFluxScheduler {
     const auto found = std::find_if(interfaces_.begin(), interfaces_.end(), [&](const auto& route) {
       return route.route.identity == sample.interface_identity && route.route.level == sample.level;
     });
-    if (found == interfaces_.end() || found->route_certificate != sample.route_contract ||
+    if (found == interfaces_.end() || found->route_certificate.empty() ||
+        found->route_certificate != sample.route_contract ||
         found->route.left_block != sample.left_block || found->route.right_block != sample.right_block ||
         found->face_measure != sample.face_measure ||
         found->route.left_axis != sample.left_axis || found->route.right_axis != sample.right_axis ||
@@ -948,7 +958,8 @@ class InterfaceFluxScheduler {
     PopsMemorySpaceV1 execution_memory_space = POPS_MEMORY_SPACE_HOST_V1;
     std::string device_identity;
     std::string collective_identity;
-    // Derived once per immutable route/layout, outside stage evaluation and history reads.
+    // Physical sampling certificate excludes patch slots/owners. Full live storage authority
+    // remains in collective_identity and is checked independently at consumption.
     std::string route_certificate;
     InterfaceFluxEvaluator evaluator;
     // Execution observations belong to the installed route's lifetime. Transaction snapshots
@@ -1394,7 +1405,12 @@ class InterfaceFluxScheduler {
         prepared.route, left_state, left_geometry, right_state, right_geometry,
         replacement.left_normal_spacing, replacement.right_normal_spacing, faces,
         prepared.component_count, prepared.communicator_identity, prepared.communicator_size);
-    replacement.route_certificate = route_digest_(replacement.collective_identity);
+    if (!prepared.route.sampling_provider_identity.empty())
+      replacement.route_certificate = route_digest_(collective_plan_identity_(
+          prepared.route, left_state, left_geometry, right_state, right_geometry,
+          replacement.left_normal_spacing, replacement.right_normal_spacing, faces,
+          prepared.component_count, prepared.communicator_identity, prepared.communicator_size,
+          true));
     materialize_storage_(replacement);
     return replacement;
   }
@@ -1569,7 +1585,8 @@ class InterfaceFluxScheduler {
     } catch (...) {
       capture_failure = std::current_exception();
     }
-    finish_collective_preflight_(prepared.communicator, capture_failure, "physical flux capture");
+    if (captured != nullptr)
+      finish_collective_preflight_(prepared.communicator, capture_failure, "physical flux capture");
     if (publication != nullptr) {
       std::optional<typename InterfaceFluxFragmentLedger::PreparedAccumulation>
           prepared_publication;
@@ -1683,7 +1700,9 @@ class InterfaceFluxScheduler {
     route_type rhs = right;
     lhs.level = 0;
     rhs.level = 0;
-    return lhs.identity == rhs.identity && lhs.left_block == rhs.left_block &&
+    return lhs.identity == rhs.identity &&
+           lhs.sampling_provider_identity == rhs.sampling_provider_identity &&
+           lhs.left_block == rhs.left_block &&
            lhs.right_block == rhs.right_block && lhs.left_axis == rhs.left_axis &&
            lhs.right_axis == rhs.right_axis && lhs.left_side == rhs.left_side &&
            lhs.right_side == rhs.right_side &&
@@ -1761,11 +1780,13 @@ class InterfaceFluxScheduler {
       const route_type& route, const field_type& left_state, const geometry_type& left_geometry,
       const field_type& right_state, const geometry_type& right_geometry, Real left_normal,
       Real right_normal, std::size_t face_count, int component_count,
-      std::string_view communicator_identity, int communicator_size) {
+      std::string_view communicator_identity, int communicator_size, bool physical_sample = false) {
     std::string bytes;
-    append_text_(bytes, "pops.multiblock.interface-plan.nd.v1");
+    append_text_(bytes, physical_sample ? "pops.multiblock.physical-sampling.nd.v1"
+                                        : "pops.multiblock.interface-plan.nd.v1");
     append_scalar_(bytes, Dim);
     append_text_(bytes, route.identity);
+    append_text_(bytes, route.sampling_provider_identity);
     append_scalar_(bytes, static_cast<std::uint64_t>(route.left_block));
     append_scalar_(bytes, static_cast<std::uint64_t>(route.right_block));
     append_scalar_(bytes, route.level);
@@ -1790,16 +1811,31 @@ class InterfaceFluxScheduler {
     append_scalar_(bytes, route.right_trace_required_depth);
     append_text_(bytes, route.affine_mapping_identity);
     append_scalar_(bytes, route.right_normal_translation);
-    append_layout_(bytes, left_state);
-    append_layout_(bytes, right_state);
+    if (!physical_sample) {
+      append_layout_(bytes, left_state);
+      append_layout_(bytes, right_state);
+    } else {
+      append_scalar_(bytes, left_state.ncomp());
+      append_scalar_(bytes, right_state.ncomp());
+      append_scalar_(bytes, static_cast<std::uint64_t>(sizeof(Real)));
+      // Canonical physical face enumeration, never a local patch slot or owning rank.
+      const auto left_domain = left_state.layout().bounding_box();
+      const auto right_domain = right_state.layout().bounding_box();
+      for (std::size_t face = 0; face < face_count; ++face) {
+        append_index_(bytes, left_face_index_(route, left_domain, face));
+        append_index_(bytes, right_face_index_(route, left_domain, right_domain, face));
+      }
+    }
     append_geometry_(bytes, left_geometry);
     append_geometry_(bytes, right_geometry);
     append_scalar_(bytes, left_normal);
     append_scalar_(bytes, right_normal);
     append_scalar_(bytes, static_cast<std::uint64_t>(face_count));
     append_scalar_(bytes, component_count);
-    append_text_(bytes, communicator_identity);
-    append_scalar_(bytes, communicator_size);
+    if (!physical_sample) {
+      append_text_(bytes, communicator_identity);
+      append_scalar_(bytes, communicator_size);
+    }
     return bytes;
   }
 
