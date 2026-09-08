@@ -1257,7 +1257,10 @@ def test_frozen_two_level_generated_program_executes_shared_interface_implicit_p
     )
 
     assert runtime.n_levels() == 2
-    initial_packed = np.asarray(runtime.get_state("implicit_vector")).copy()
+    initial_packed = tuple(
+        np.asarray(runtime.block_level_state_global("implicit_vector", level)).copy()
+        for level in range(runtime.n_levels())
+    )
     report = pops.run(runtime, t_end=1.0e-3, max_steps=1, console=False)
 
     assert report.accepted_steps == 1
@@ -1265,9 +1268,10 @@ def test_frozen_two_level_generated_program_executes_shared_interface_implicit_p
         assert runtime._executor._s._interface_evaluation_count(
             interface.qualified_id, level
         ) > 1
-    solved_packed = np.asarray(runtime.get_state("implicit_vector"))
-    assert np.isfinite(solved_packed).all()
-    np.testing.assert_array_equal(solved_packed, initial_packed)
+    for level, initial in enumerate(initial_packed):
+        solved_packed = np.asarray(runtime.block_level_state_global("implicit_vector", level))
+        assert np.isfinite(solved_packed).all()
+        np.testing.assert_array_equal(solved_packed, initial)
 
 
 def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
@@ -1321,21 +1325,38 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     )
 
     assert runtime.n_levels() == 3
+    # The required two-cell nesting buffer can merge the coarse tagged bands at L1.
+    # Sparsity belongs to the finest interface level; patch_boxes uses inclusive indices
+    # in that level's coordinates, so derive its extents from the actual authored ratios.
+    fine_level = runtime.n_levels() - 1
+    fine_shape = list(runtime.spatial_shape())
+    for transition in resolved.resolved_hierarchy.plan.transitions[:fine_level]:
+        fine_shape = [
+            extent * ratio
+            for extent, ratio in zip(fine_shape, transition.ratio, strict=True)
+        ]
     fine_boxes = tuple(
         (lower, upper)
         for box_level, lower, upper in runtime.patch_boxes()
-        if int(box_level) == 1
+        if int(box_level) == fine_level
     )
     assert fine_boxes
     assert any(
-        int(lower[0]) == 0 and int(lower[1]) == 0 and int(upper[1]) == 15
+        int(lower[0]) == 0 and int(lower[1]) == 0 and int(upper[1]) == fine_shape[1] - 1
         for lower, upper in fine_boxes
     )
     assert any(
-        int(upper[0]) == 15 and int(lower[1]) == 0 and int(upper[1]) == 15
+        int(upper[0]) == fine_shape[0] - 1
+        and int(lower[1]) == 0
+        and int(upper[1]) == fine_shape[1] - 1
         for lower, upper in fine_boxes
     )
-    assert not any(int(lower[0]) <= 7 <= int(upper[0]) for lower, upper in fine_boxes)
+    central_indices = (fine_shape[0] // 2 - 1, fine_shape[0] // 2)
+    assert not any(
+        int(lower[0]) <= center <= int(upper[0])
+        for lower, upper in fine_boxes
+        for center in central_indices
+    )
     initial_left = runtime.integral("tracer")
     initial_right = runtime.integral("right")
     initial_integral = initial_left + initial_right
