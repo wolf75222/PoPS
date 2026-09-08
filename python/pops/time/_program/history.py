@@ -269,6 +269,13 @@ class _ProgramHistory(_ProgramBase):
             if self._histories_ncomp.get(name, 1) != 1:
                 raise ValueError("store_history: solved field history component width changed")
             self._histories_ncomp[name] = 1
+        elif value.op == "field_gradient":
+            from pops.fields._observation_contract import validate_field_gradient
+
+            width, _solve = validate_field_gradient(value)
+            if self._histories_ncomp.get(name, width) != width:
+                raise ValueError("store_history: solved field gradient history width changed")
+            self._histories_ncomp[name] = width
         node = self._new(
             "state", "store_history", (value,),
             {"history": name, "state": value.state_ref}, name, value.block,

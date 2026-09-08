@@ -197,8 +197,12 @@ class FieldSolution:
         if type(dimension) is not int or dimension not in (1, 2, 3):
             raise TypeError("field gradient requires an explicit physical dimension")
         value = self[unknown]
-        out = value.prog.scalar_field(unknown.local_id + "_gradient", ncomp=dimension)
-        return value.prog.gradient(out, value)
+        return value.prog._new("scalar_field", "field_gradient", (value,),
+            {"ncomp": dimension, "spatial_dimension": dimension,
+             "differentiation": "cell_centered_second_order",
+             "sampling": "cell", "field_problem_identity": self.problem_identity,
+             "stencil_access": StencilAccess.nearest_neighbour()},
+            unknown.local_id + "_gradient", None, point=value.point, inherit_state_ref=False)
 
 
 def observe_field_solution(field: Handle, solution: Any, *, unknown: Handle | None = None) -> Any:

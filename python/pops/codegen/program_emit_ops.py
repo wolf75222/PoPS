@@ -339,7 +339,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         v.block is not None or v.attrs.get("operator_handle") is not None) else model
     provider_plans = var.get(("program_provider_plans",))
     from pops.codegen.program_field_reuse import observe_operation
-    observe_operation(v, var)
+    observe_operation(v, var, model=node_model)
     # PER-NODE PROFILING (ADC-459): bracket this op's emitted C++ with a steady_clock pair
     # recorded under "node:<v.name>" (shown by sim.profile_report next to the coarse phases). A
     # now() + ctx.profile_record pair (NOT a RAII ProfileScope { }) keeps the emitted declarations
@@ -985,6 +985,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         outcome = _append_local_nonlinear_report(program, v, status, report, lines)
         _append_solve_report_guard(
             program, v, outcome, lines, label="local_nonlinear")
+    elif v.op == "field_gradient":
+        from pops.codegen.program_emit_field_gradient import emit_field_gradient
+        emit_field_gradient(v, var, lines, prelude, target=target)
     elif v.op in ("field_problem_load", "field_problem_coefficients", "field_component"):
         from pops.codegen.program_emit_field_problem import emit_field_problem_value
 

@@ -15,7 +15,8 @@ from tests.python.unit.fields.test_program_field_problem import field_case
 
 
 def _emit_variant(variant):
-    case, field, _problem, program, values, point = field_case()
+    component_transform = variant in ("momentum_update", "density_update", "coefficient_update")
+    case, field, _problem, program, values, point = field_case(component_transforms=component_transform)
     program.solve(field, values=values, at=point).consume(action=FailRun())
     solver = None
     if variant == "fresh_stage":
@@ -27,6 +28,11 @@ def _emit_variant(variant):
         program.fill_boundary(next(iter(values.values())))
     elif variant == "solver":
         solver = CG(max_iter=5000, rel_tol=1e-12, abs_tol=1e-13)
+    elif component_transform:
+        key = next(iter(values))
+        block = case._block_registry.handles()["first"]
+        model = case._block_registry.spec("first")["model"]
+        values[key] = program.transform(values[key], transform=block[model.operators[variant]])
     second = program.solve(field, values=values, at=point, solver=solver).consume(action=FailRun())
     assert second.problem_identity is not None
     for handle in values:
@@ -51,9 +57,17 @@ def test_exact_repeated_stage_reuses_only_one_successful_native_solve():
     assert "pops::Real field_solve_count_0 = pops::Real(0)" in code
 
 
-@pytest.mark.parametrize("variant", ("fresh_stage", "changed_state", "effect_barrier", "solver"))
+@pytest.mark.parametrize("variant", ("fresh_stage", "changed_state", "effect_barrier", "solver",
+                                    "density_update", "coefficient_update"))
 def test_new_context_state_effect_or_solver_invalidates_field_reuse(variant):
     code = _emit_variant(variant)
     assert code.count("ctx.solve_prepared_linear(") == 2
     assert code.count("++field_solve_count_0;") == 2
     assert "++field_reuse_count_0;" not in code
+
+
+def test_proven_momentum_only_transform_reuses_density_and_coefficient_inputs():
+    code = _emit_variant("momentum_update")
+    assert "transformed_2_" in code
+    assert code.count("ctx.solve_prepared_linear(") == 1
+    assert code.count("++field_reuse_count_0;") == 1

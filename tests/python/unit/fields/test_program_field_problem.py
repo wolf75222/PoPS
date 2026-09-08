@@ -13,7 +13,7 @@ from pops.solvers import CG
 from pops.time import FailRun
 
 
-def field_case(*, joint=False, duplicate_input=False):
+def field_case(*, joint=False, duplicate_input=False, component_transforms=False):
     case = pops.Case("general fields")
     from pops.domain import Rectangle
     from pops.frames import Cartesian2D
@@ -22,8 +22,14 @@ def field_case(*, joint=False, duplicate_input=False):
     from pops.numerics.spatial import FiniteVolume
     frame = Rectangle("field domain", lower=(0, 0), upper=(1, 1)).frame(Cartesian2D())
     first_model, second_model = pops.Model("first", frame=frame), pops.Model("second", frame=frame)
-    first_state = first_model.state("U", components=("rho", "a"))
-    second_state = second_model.state("U", components=("rho", "a"))
+    components = ("rho", "a", "mx") if component_transforms else ("rho", "a")
+    first_state = first_model.state("U", components=components)
+    second_state = second_model.state("U", components=components)
+    if component_transforms:
+        rho, coefficient, momentum = first_state
+        first_model.local_transform("momentum_update", (rho, coefficient, momentum + 1))
+        first_model.local_transform("density_update", (2 * rho, coefficient, momentum))
+        first_model.local_transform("coefficient_update", (rho, 2 * coefficient, momentum))
     selected_numerics = []
     for model, state in ((first_model, first_state), (second_model, second_state)):
         flux = model.flux("static flux", frame=frame, state=state,
@@ -125,6 +131,9 @@ def test_public_case_resolves_and_emits_the_actual_field_native_path(joint):
     case, field, problem, program, values, point = field_case(joint=joint)
     solved = program.solve(field, values=values, at=point).consume(action=FailRun())
     phi = field.observe(solved, field[problem.unknowns[0]])
+    gradient = field.observe(solved).gradient(field[problem.unknowns[0]], dimension=2)
+    assert gradient.point == point and gradient.state_ref is gradient.block is None
+    program.store_history("gradient", gradient)
     program.record_scalar("phi sum", program.sum_component(phi, 0))
     for handle in values:
         current = program.state(handle)
@@ -140,3 +149,8 @@ def test_public_case_resolves_and_emits_the_actual_field_native_path(joint):
     assert "apply_general_field<pops::kNativeDimension" in code
     assert "prepare_general_field_coefficients" in code
     assert "general_field_operator.hpp" in code
+    assert "ctx.gradient(*field_gradient_" in code
+    assert "field gradient physical boundary refused collectively" in code
+    import re
+    assert re.search(r"prepare_mesh_boundary_session\(\*session_field_input_A\d+_\d+, "
+                     r"ctx_owner->prepared_execution_lane\(\)\)", code)

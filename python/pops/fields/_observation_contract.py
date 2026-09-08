@@ -45,3 +45,22 @@ def validate_field_observation(value: Any) -> tuple[int, int, Any]:
                                  for node in native_sources):
         raise ValueError("field observation belongs to a different native field problem")
     return width, selected, solve
+
+
+def validate_field_gradient(value: Any) -> tuple[int, Any]:
+    """Authenticate differentiation separately from the consumed potential identity."""
+    if value.op != "field_gradient" or value.vtype != "scalar_field" or len(value.inputs) != 1:
+        raise ValueError("field gradient requires one consumed scalar observation")
+    source = value.inputs[0]
+    _width, _selected, solve = validate_field_observation(source)
+    dimension = value.attrs.get("spatial_dimension")
+    if type(dimension) is not int or dimension not in (1, 2, 3) \
+            or value.attrs.get("ncomp") != dimension:
+        raise ValueError("field gradient must preserve its exact physical dimension")
+    if value.point != source.point or value.region != source.region \
+            or value.attrs.get("field_problem_identity") != source.attrs["field_problem_identity"]:
+        raise ValueError("field gradient changes its consumed stage or physical problem")
+    if value.attrs.get("differentiation") != "cell_centered_second_order" \
+            or value.attrs.get("sampling") != "cell":
+        raise ValueError("field gradient has no realized differentiation and sampling rule")
+    return dimension, solve

@@ -760,7 +760,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         session_fields.append(unknown)
         boundary = "field_boundary_A%d_%d" % (apply_id, w.id)
         session_dynamic.append((boundary, "ctx_owner->prepare_mesh_boundary_session("
-            "*session_%s, lane)" % unknown))
+            "*session_%s, ctx_owner->prepared_execution_lane())" % unknown))
         general_fields[w.id] = (frozen, unknown, boundary)
     var[("operator_prepare_refresh", apply_id)] = tuple(prepare_refresh)
     # 2) The lambda body: the laplacian / gradient ops + the result write into `out`.

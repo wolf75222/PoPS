@@ -116,7 +116,7 @@ def test_component_emission_requires_its_consumed_exact_unknown_and_native_probl
     packed = SimpleNamespace(id=3, op="solve_outcome_component", inputs=(outcome,),
                              attrs={"ncomp": 1})
     program = SimpleNamespace(_values=(load, solve, outcome, packed))
-    observed = SimpleNamespace(id=4, op="field_component", inputs=(packed,), prog=program, attrs={
+    observed = SimpleNamespace(id=4, vtype="scalar_field", op="field_component", inputs=(packed,), prog=program, attrs={
         "ncomp": 1, "component": 0, "field_problem_identity": identity,
         "field_unknown": unknown.canonical_identity()})
     var, lines = {3: "packed"}, []
