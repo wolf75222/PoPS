@@ -20,6 +20,7 @@ from pops._geometry_contracts import (
 from pops._native_collectives import (
     allgather_value,
     rank as native_rank,
+    require_communicator,
     require_world,
     size as native_size,
 )
@@ -1291,7 +1292,7 @@ class _PreparedRootExternalWriter(PreparedPublication):
         if preparation.request.parallel_mode is not ParallelMode.ROOT:
             raise ValueError("ROOT native Writer coordinator requires a ROOT request")
         self._effect = effect
-        self._communicator = require_world(preparation.communicator)
+        self._communicator = require_communicator(preparation.communicator)
         self._rank = native_rank(self._communicator)
         self._size = native_size(self._communicator)
         if (self._rank, self._size) != (preparation.request.rank, preparation.request.size):

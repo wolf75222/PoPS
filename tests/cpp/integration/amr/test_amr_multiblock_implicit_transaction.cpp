@@ -499,6 +499,8 @@ TEST(test_amr_multiblock_implicit_transaction,
   config.transition_buffers = {uniform_extent<Dim>(1)};
   config.transition_lookaheads = {uniform_extent<Dim>(1)};
   config.shape = uniform_extent<Dim>(8);
+  // The interface requires unique ownership even when a peer owns no face cells.
+  config.distribute_coarse = true;
   pops::AmrSystem<Dim> system(config);
   pops::test::install_amr_runtime_authority(system, "tests.pair-budget/multilevel-runtime@1");
   const std::array<std::string, 2> names{"left", "right"};
