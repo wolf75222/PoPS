@@ -4,6 +4,7 @@
 #pragma once
 
 #include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 
@@ -389,6 +390,11 @@ class AmrFieldNewtonKrylovWorkspace final {
       throw std::invalid_argument("AMR field Newton dot hierarchy size differs");
     Real local_result = Real(0);
     for (std::size_t level = 0; level < left.size(); ++level) {
+      // A replicated level has one physical owner. Counting every replica weights
+      // mixed replicated/distributed hierarchies differently across MPI sizes.
+      if (left[level].distribution().replicated() &&
+          left[level].local_rank() != left[level].rank_space().coordinate(0))
+        continue;
       for (std::size_t local = 0; local < left[level].local_size(); ++local)
         local_result += cell_measures_[level] *
                         for_each_cell_reduce_sum(left[level].box(local),

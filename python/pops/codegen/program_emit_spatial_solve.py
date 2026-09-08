@@ -25,6 +25,10 @@ def emit_spatial_solve(program: Any, value: Any, base: Any, variables: Any, mode
 
     validate_spatial_commit(program, value)
     validate_spatial_request(program, value)
+    if target == "amr_system":
+        from pops.codegen.program_emit_spatial_hierarchy import emit_amr_spatial_solve
+        return emit_amr_spatial_solve(program, value, base, variables, model, lines, prelude,
+                                      block_indices, field_plans, emit_node)
     if target != "system" or prelude is None:
         raise NotImplementedError("spatial residual currently requires a Uniform native install scope")
     owner = block_indices[value.block]

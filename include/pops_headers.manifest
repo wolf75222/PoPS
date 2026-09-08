@@ -335,3 +335,6 @@ sdk-support pops/runtime/system/system_diagnostics_registry.hpp
 sdk-support pops/runtime/system/system_domain.hpp
 sdk-support pops/runtime/system/system_lifecycle.hpp
 sdk-support pops/runtime/system/system_poisson_options.hpp
+
+sdk-support pops/runtime/program/prepared_amr_spatial_residual.hpp
+sdk-support pops/runtime/program/amr_program_context_spatial_implicit.inc

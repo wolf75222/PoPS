@@ -716,8 +716,9 @@ def _emit_amr_install(
             "      // Gather/solve/publish run once through the root callback.\n"
             "      if (ctx.level() != 0)\n"
             "        return;\n"
-            "      const int _nlev = ctx.program_resource_topology().levels;\n"
-            "      if (ctx.uses_prepared_krylov_fallback()) {\n"
+            "      const int _nlev = ctx.program_resource_topology().levels;\n" +
+            ("      if (false) {\n" if any(value.op == "solve_spatial_nonlinear" for value in program._values)
+             else "      if (ctx.uses_prepared_krylov_fallback()) {\n") +
             "        for (int _k = 0; _k < _nlev; ++_k) {\n"
             "          ctx.with_program_attempt_level(_k, [&]() {\n"
             "            _level_programs->at(static_cast<std::size_t>(_k)).step(hierarchy_dt);\n"

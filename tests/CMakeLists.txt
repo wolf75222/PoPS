@@ -799,6 +799,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_amr_rebalance_migration 2 4)
   set(POPS_MPI_RANKS_test_mpi_composite_fac 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_composite_fac_partitioned_nd 2)
+  set(POPS_MPI_RANKS_test_mpi_amr_spatial_norm 2)
   set(POPS_MPI_RANKS_test_mpi_composite_fac_fft_coarse 2)
   set(POPS_MPI_RANKS_test_mpi_composite_fac_replicated_coarse 2)
   set(POPS_MPI_RANKS_test_mpi_tensor_fac_provider_nd 2)
@@ -864,6 +865,7 @@ if(POPS_HAS_MPI)
     test_mpi_amr_rebalance_migration
     test_mpi_composite_fac
     test_mpi_composite_fac_partitioned_nd
+    test_mpi_amr_spatial_norm
     test_mpi_composite_fac_fft_coarse
     test_mpi_composite_fac_replicated_coarse
     test_mpi_tensor_fac_provider_nd

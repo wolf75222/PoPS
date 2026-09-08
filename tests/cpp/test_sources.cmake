@@ -231,3 +231,4 @@ set(POPS_CPP_TEST_SOURCE_test_prepared_spatial_residual "tests/cpp/unit/runtime/
 set(POPS_CPP_TEST_SOURCE_test_amr_transition_invariants "tests/cpp/integration/amr/test_amr_transition_invariants.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_transition_invariants "tests/cpp/integration/mpi/test_mpi_transition_invariants.cpp")
 set(POPS_CPP_TEST_SOURCE_test_collective_step_rejection "tests/cpp/unit/runtime/test_collective_step_rejection.cpp")
+set(POPS_CPP_TEST_SOURCE_test_mpi_amr_spatial_norm "tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp")
