@@ -270,6 +270,11 @@ class _ProgramCore(
                 token, attrs={**token.attrs, "schedule": schedule})
         return self._field_solve_outcome(token)
 
+    def input_fields(self, state: Any, *, for_rate: Any, name: Any = None) -> Any:
+        """Observe the rate's exact runtime inputs for this state and temporal stage."""
+        from pops.time.input_fields import input_fields
+        return input_fields(self, state, for_rate=for_rate, name=name)
+
     def _solve_fields(
         self, name: Any, state: Any, *, field: Any,
         field_space: Any, outputs: Any,

@@ -421,6 +421,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             raise NotImplementedError(
                 "synchronization provider %r has no native lowering; supported provider: "
                 "SampleAndHold() or LinearInterpolation()" % relation)
+    elif v.op == "input_fields":
+        from pops.codegen.program_emit_input_fields import emit_input_fields
+        emit_input_fields(v, var, lines, node_model, provider_plans, bidx, target)
     elif v.op == "solve_fields":
         # Per-stage field solve: the callable Case field operator re-solves phi from THIS
         # stage's explicit state (the shared aux is re-filled before the stage's RHS reads it; the

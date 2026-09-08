@@ -32,7 +32,7 @@ from pops.time.values import ProgramValue, _to_affine  # noqa: F401
 # Ops the Phase-4b codegen lowers ONLY when a physical model is supplied (they read the model's
 # symbolic source_term / linear_source coefficients). Without a model they raise NotImplementedError.
 _MODEL_OPS = (
-    "diffusive_rhs", "source",
+    "diffusive_rhs", "input_fields", "source",
     "apply",
     "local_transform",
     "solve_local_linear",

@@ -90,7 +90,7 @@ class _ProgramConstants:
     # same state input -- conservatively, ANY commit, in-place state mutation (project), boundary fill,
     # history store, or a second field solve into the shared aux counts as a state/aux barrier.
     _STATE_BARRIER_OPS = frozenset({
-        "project", "fill_boundary", "store_history",
+        "project", "fill_boundary", "store_history", "input_fields",
         "solve_fields", "solve_fields_from_blocks", "solve_coupled_implicit",
         "solve_implicit_source", "solve_spatial_nonlinear",
     })
