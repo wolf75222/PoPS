@@ -305,8 +305,9 @@ static field_type make_scratch_(const field_type& prototype, int ncomp, Extent<D
 }
 
 struct CoupledJacvecLevelScratch {
-  std::array<std::unique_ptr<field_type>, 2> residual;
-  std::array<std::unique_ptr<field_type>, 2> coupled;
+  std::vector<std::unique_ptr<field_type>> residual;
+  std::vector<std::unique_ptr<field_type>> coupled;
+  std::vector<field_type*> program_candidates;
 };
 
 struct CoupledJacvecScratch {
@@ -328,13 +329,18 @@ void prepare_coupled_jacvec_scratch_() const {
   std::unique_ptr<CoupledJacvecScratch> candidate;
   std::exception_ptr preparation_error;
   try {
-    if (facade_->n_blocks() == 2) {
+    if (facade_->n_blocks() >= 2) {
       candidate = std::make_unique<CoupledJacvecScratch>();
       candidate->topology_epoch = topology_epoch;
       candidate->materialization_generation = materialization_generation;
       candidate->levels.resize(runtime_->hierarchy().num_levels());
-      for (std::size_t level = 0; level < candidate->levels.size(); ++level)
-        for (int runtime_block = 0; runtime_block < 2; ++runtime_block) {
+      for (std::size_t level = 0; level < candidate->levels.size(); ++level) {
+        auto& workspace = candidate->levels[level];
+        const auto blocks = static_cast<std::size_t>(facade_->n_blocks());
+        workspace.residual.resize(blocks);
+        workspace.coupled.resize(blocks);
+        workspace.program_candidates.resize(blocks);
+        for (int runtime_block = 0; runtime_block < facade_->n_blocks(); ++runtime_block) {
           const field_type& prototype =
               facade_->prepared_amr_block_state(runtime_block, static_cast<int>(level));
           auto residual = std::make_unique<field_type>(prototype.layout(), prototype.distribution(),
@@ -345,11 +351,10 @@ void prepare_coupled_jacvec_scratch_() const {
                                                       prototype.ghosts());
           residual->set_val(Real(0));
           coupled->set_val(Real(0));
-          candidate->levels[level].residual[static_cast<std::size_t>(runtime_block)] =
-              std::move(residual);
-          candidate->levels[level].coupled[static_cast<std::size_t>(runtime_block)] =
-              std::move(coupled);
+          workspace.residual[static_cast<std::size_t>(runtime_block)] = std::move(residual);
+          workspace.coupled[static_cast<std::size_t>(runtime_block)] = std::move(coupled);
         }
+      }
     }
   } catch (...) {
     preparation_error = std::current_exception();
@@ -375,10 +380,17 @@ CoupledJacvecLevelScratch& require_coupled_jacvec_scratch_(
   const int first_runtime = sys_block(first_block);
   const int second_runtime = sys_block(second_block);
   auto& level = coupled_jacvec_scratch_->levels[static_cast<std::size_t>(active_level_)];
+  const auto blocks = static_cast<std::size_t>(n_blocks());
+  if (first_runtime == second_runtime || level.residual.size() != blocks ||
+      level.coupled.size() != blocks || level.program_candidates.size() != blocks)
+    throw std::logic_error("AMR coupled Jacobian scratch differs from its complete carrier");
+  for (std::size_t block = 0; block < blocks; ++block)
+    if (!level.residual[block] || !level.coupled[block])
+      throw std::logic_error("AMR coupled Jacobian complete carrier scratch is incomplete");
   const auto require_block = [&](int runtime_block, const field_type& state,
                                  const field_type& result) {
     const std::size_t index = static_cast<std::size_t>(runtime_block);
-    if (runtime_block < 0 || runtime_block >= 2 || !level.residual[index] || !level.coupled[index])
+    if (runtime_block < 0 || index >= blocks || !level.residual[index] || !level.coupled[index])
       throw std::logic_error("AMR coupled Jacobian block scratch is incomplete");
     const field_type& prepared_state = *level.coupled[index];
     const field_type& prepared_result = *level.residual[index];

@@ -315,6 +315,148 @@ TEST(test_amr_multiblock_implicit_transaction,
   ASSERT_EQ(system.program_exchange_records().size(), 2u);
 }
 
+TEST(test_amr_multiblock_implicit_transaction,
+     CoupledJacvecPreservesUnrelatedAttemptCarrierWithPermutedProgramPair) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 1;
+  config.transition_ratios.clear();
+  config.transition_buffers.clear();
+  config.transition_lookaheads.clear();
+  config.shape = uniform_extent<Dim>(8);
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.coupled-jacvec/complete-carrier@1");
+  const std::array<std::string, 3> names{"aux", "left", "right"};
+  for (const auto& name : names)
+    system.install_block_state_route(name, "state/" + name);
+  for (const auto& name : names)
+    pops::add_compiled_model<Dim>(system, name, relaxing_model<Dim>(pops::Real(0), pops::Real(0)),
+                                  "minmod", "rusanov", "conservative", "explicit",
+                                  static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {},
+                                  0.0, static_cast<double>(pops::kWenoEpsilon), false,
+                                  "tests.coupled-jacvec/" + name + "/physical-flux");
+  const std::array<double, 3> initial{7.0, 2.0, 3.0};
+  for (std::size_t block = 0; block < names.size(); ++block)
+    system.set_conservative_state(names[block],
+                                  std::vector<double>(cell_count(config.shape), initial[block]));
+
+  auto inject_failure = std::make_shared<bool>(true);
+  system.install_prepared_amr_coupling_operator(
+      "tests.coupled-jacvec/aux-qualified-exchange@1",
+      pops::CouplingOperatorView{"aux-qualified-exchange"},
+      [inject_failure](pops::Real dt, const std::vector<pops::MultiFab<Dim>*>& states) {
+        if (states.size() != 3)
+          throw std::runtime_error("paired Jacobian lost its complete canonical carrier");
+        for (std::size_t local = 0; local < states[0]->local_size(); ++local) {
+          const auto aux = states[0]->fab(local).view();
+          const auto left = states[1]->fab(local).view();
+          const auto right = states[2]->fab(local).view();
+          pops::for_each_cell(
+              states[0]->box(local), KOKKOS_LAMBDA(const pops::Index<Dim>& cell) {
+                const pops::Real amount = dt * aux(cell) * (right(cell) - left(cell));
+                left(cell) -= amount;
+                right(cell) += amount;
+                // Even an unrelated output is detached from the live attempt carrier.
+                aux(cell) += dt;
+              });
+        }
+        Kokkos::fence();
+        if (*inject_failure && pops::my_rank() == 0)
+          throw std::runtime_error("injected rank-local paired coupling failure");
+      });
+
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("tests.coupled-jacvec.complete-carrier-clock");
+  context->install(
+      [context, inject_failure, &system](double macro_dt) {
+        context->advance_hierarchy(macro_dt, [context, inject_failure, &system](double) {
+          context->set_stage_time(0, 1);
+          auto& right = context->state(0);
+          auto& aux = context->state(1);
+          auto& left = context->state(2);
+          auto& first = context->scratch_state(1100, 0, right);
+          auto& second = context->scratch_state(1101, 0, left);
+          auto& first_result = context->rhs_scratch(1102, 0, right);
+          auto& second_result = context->rhs_scratch(1103, 0, left);
+          context->lincomb(first, pops::Real(1), right, pops::Real(0), right);
+          context->lincomb(second, pops::Real(1), left, pops::Real(0), left);
+          const pops::MultiFab<Dim> right_before(right);
+          const pops::MultiFab<Dim> left_before(left);
+          const pops::MultiFab<Dim> original_aux(aux);
+          const auto point = context->boundary_evaluation_point(0);
+          EXPECT_THROW(context->rhs_jacvec_pair_into_at(point, 0, first, first_result, true, 0,
+                                                        second, second_result, true),
+                       std::invalid_argument);
+          EXPECT_THROW(context->rhs_jacvec_pair_into_at(point, 0, first, first_result, true, 3,
+                                                        second, second_result, true),
+                       std::out_of_range);
+          auto foreign_point = point;
+          ++foreign_point.level;
+          EXPECT_THROW(context->rhs_jacvec_pair_into_at(foreign_point, 0, first, first_result, true,
+                                                        2, second, second_result, true),
+                       std::invalid_argument);
+          const auto apply_pair = [&] {
+            context->rhs_jacvec_pair_into_at(point, 0, first, first_result, true, 2, second,
+                                             second_result, true);
+          };
+          for (pops::Real value : {pops::Real(7), pops::Real(11)}) {
+            aux.set_val(value);
+            const pops::MultiFab<Dim> aux_before(aux);
+            first.set_val(pops::Real(3));
+            second.set_val(pops::Real(2));
+            first_result.set_val(pops::Real(-99));
+            second_result.set_val(pops::Real(-99));
+            if (*inject_failure) {
+              EXPECT_ANY_THROW(apply_pair());
+              *inject_failure = false;
+              EXPECT_TRUE(byte_exact_equal(aux_before, aux));
+              EXPECT_EQ(pops::reduce_min_local(first_result), pops::Real(-99));
+              EXPECT_EQ(pops::reduce_max_local(second_result), pops::Real(-99));
+            }
+            ASSERT_NO_THROW(apply_pair());
+            EXPECT_EQ(pops::reduce_min_local(first_result), value);
+            EXPECT_EQ(pops::reduce_max_local(first_result), value);
+            EXPECT_EQ(pops::reduce_min_local(second_result), -value);
+            EXPECT_EQ(pops::reduce_max_local(second_result), -value);
+            const pops::MultiFab<Dim> base_first(first_result);
+            const pops::MultiFab<Dim> base_second(second_result);
+            // The zero perturbation has exactly zero residual difference, including the lift
+            // from the unrelated current attempt input. Reusing scratch does not accumulate it.
+            ASSERT_NO_THROW(apply_pair());
+            EXPECT_TRUE(byte_exact_equal(base_first, first_result));
+            EXPECT_TRUE(byte_exact_equal(base_second, second_result));
+            first.set_val(pops::Real(4));
+            ASSERT_NO_THROW(apply_pair());
+            EXPECT_EQ(pops::reduce_min_local(first_result), pops::Real(2) * value);
+            EXPECT_EQ(pops::reduce_max_local(second_result), pops::Real(-2) * value);
+            EXPECT_TRUE(byte_exact_equal(aux_before, aux));
+            EXPECT_TRUE(byte_exact_equal(right_before, right));
+            EXPECT_TRUE(byte_exact_equal(left_before, left));
+            EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_block_state(0, 0)), pops::Real(7));
+          }
+          for (std::size_t local = 0; local < aux.local_size(); ++local)
+            Kokkos::deep_copy(aux.fab(local).storage(), original_aux.fab(local).storage());
+          Kokkos::fence();
+        });
+      },
+      context);
+  // Program pair {0,2} is non-prefix and maps to runtime {right,left}; aux sits between it.
+  system.set_program_block_map({2, 0, 1});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "tests.coupled-jacvec.complete-carrier-program-v1",
+      std::vector<FluxBudget>{{1, 1}, {1, 1}, {1, 1}}, 0, 0);
+  const pops::MultiFab<Dim> aux_before(system.prepared_amr_block_state(0, 0));
+  const pops::MultiFab<Dim> left_before(system.prepared_amr_block_state(1, 0));
+  const pops::MultiFab<Dim> right_before(system.prepared_amr_block_state(2, 0));
+  ASSERT_NO_THROW(system.step(0.125));
+  EXPECT_EQ(system.macro_step(), 1);
+  EXPECT_DOUBLE_EQ(system.time(), 0.125);
+  EXPECT_TRUE(byte_exact_equal(aux_before, system.prepared_amr_block_state(0, 0)));
+  EXPECT_TRUE(byte_exact_equal(left_before, system.prepared_amr_block_state(1, 0)));
+  EXPECT_TRUE(byte_exact_equal(right_before, system.prepared_amr_block_state(2, 0)));
+}
+
 TEST(test_amr_multiblock_implicit_transaction, MetadataNeverCreatesAnImplicitTemporalFallback) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;
