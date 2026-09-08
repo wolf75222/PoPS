@@ -144,6 +144,22 @@ def _append_solve_report_guard(
         "(void)%s.consume(pops::SolveConsumption::kAccept);" % outcome)
 
 
+def _krylov_failure_actions_cpp(program: Any, solve: Any) -> str:
+    """Propagate the authored status filter before native numerical report construction.
+
+    Only recurrence failures have a caller-selected disposition. Native evaluation,
+    authentication, and report-validity failures retain their own terminal authority.
+    """
+    kind, statuses = _consumed_solve_action(program, solve)
+    actions = (
+        "pops::SolveAction::kRejectAttempt"
+        if kind == "reject_attempt" and status in statuses
+        else "pops::SolveAction::kFailRun"
+        for status in ("singular", "breakdown", "iteration_limit")
+    )
+    return "pops::KrylovFailureActions{%s}" % ", ".join(actions)
+
+
 def _validate_matrix_free_contract(v: Any, model: Any) -> None:
     """Validate matrix-free facts that need either the final node or physical model metadata."""
     if v.op == "rhs_jacvec":
@@ -1425,8 +1441,9 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
            vector_distribution_arg))
     controls_name = "krylov_controls%d" % v.id
     prelude.append(
-        "const pops::KrylovControls<pops::kNativeDimension> %s{%s, %s, %s, %d};"
-        % (controls_name, method_expr, tol, abs_tol, max_iter))
+        "const pops::KrylovControls<pops::kNativeDimension> %s{%s, %s, %s, %d, %s};"
+        % (controls_name, method_expr, tol, abs_tol, max_iter,
+           _krylov_failure_actions_cpp(program, v)))
 
     prepare_refresh = var.get(("operator_prepare_refresh", op_value.id))
     dt_captures = var.get(("operator_dt_captures", op_value.id))

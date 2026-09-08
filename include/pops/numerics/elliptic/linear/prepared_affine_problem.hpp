@@ -1459,7 +1459,7 @@ struct KrylovCollectivePayload {
       4u * kFingerprintBytes + sizeof(int) + kMaximumGhostBytes + 3u * sizeof(std::uint8_t) +
       8u * sizeof(std::uint64_t) + kSnapshotBytes;
   static constexpr std::size_t kControlsBytes =
-      kFingerprintBytes + 2u * sizeof(std::uint64_t) + sizeof(int);
+      kFingerprintBytes + 2u * sizeof(std::uint64_t) + sizeof(int) + 3u * sizeof(std::uint8_t);
   static constexpr std::size_t kFieldContractBytes = sizeof(int) + kMaximumGhostBytes;
   static constexpr std::size_t kMaximumKnownPayloadBytes =
       kPreparedProblemAccessBytes + kWorkspaceStateBytes + kControlsBytes +

@@ -76,6 +76,54 @@ def test_actual_field_and_coupling_partitions_emit_natively(physical_resolved):
     assert len(plan.program_field_plans) == 1
 
 
+@pytest.mark.parametrize("reject_field", [False, True])
+def test_detached_physical_field_preserves_consumed_krylov_failure_actions(tmp_path, reject_field):
+    from pops.codegen.program_slicing import slice_program
+    from pops.codegen.program_models import ProgramModelGraph
+    from pops.codegen.program_graph_lowering import emit_program_graph
+    from pops.codegen.program_emit_solve import _consumed_solve_action
+    from pops.time._program.detach import detach_compiled_program
+
+    _, plan = resolve_physical_case(tmp_path, reject_field=reject_field)
+    assignments = {row.subject.local_id: row.layout for row in plan.layout_plan.assignments
+                   if row.subject_kind == "block"}
+    selected = tuple(row for row in plan.blocks
+                     if assignments[row.name] == assignments["density"])
+    sliced = detach_compiled_program(slice_program(plan.time, tuple(row.name for row in selected)))
+    solve, = (node for node in sliced._values if node.op == "solve_linear")
+    kind, statuses = _consumed_solve_action(sliced, solve)
+    assert kind == ("reject_attempt" if reject_field else "fail_run")
+    assert "iteration_limit" in statuses
+    assert solve.attrs["max_iter"] == (1 if reject_field else 4000)
+    source = emit_program_graph(sliced.to_graph(), lowering_program=sliced,
+        model_graph=ProgramModelGraph.from_resolved_blocks(selected), target="system", field_plans={})
+    action = "kRejectAttempt" if reject_field else "kFailRun"
+    assert "pops::KrylovFailureActions{%s}" % ", ".join(
+        ["pops::SolveAction::" + action] * 3) in source
+    assert source.count("ctx.solve_prepared_linear(") == 1
+    guard = f"if (kr{solve.id}_report.action == pops::SolveAction::kRejectAttempt)"
+    assert (guard in source) == reject_field
+
+
+@pytest.mark.parametrize("statuses,expected", [
+    (("iteration_limit",), (False, False, True)),
+    (("singular", "breakdown"), (True, True, False)),
+    (("invalid_input", "invalid_evaluation"), (False, False, False)),
+])
+def test_krylov_numerical_failure_emission_preserves_exact_status_filter(statuses, expected):
+    from types import SimpleNamespace
+    from pops.codegen.program_emit_solve import _krylov_failure_actions_cpp
+    from pops.time import RejectAttempt
+
+    solve = SimpleNamespace(name="filtered solve")
+    consumer = SimpleNamespace(op="solve_outcome", inputs=(solve,),
+                               attrs={"action": RejectAttempt(statuses=statuses)})
+    program = SimpleNamespace(_values=(consumer,))
+    assert _krylov_failure_actions_cpp(program, solve) == "pops::KrylovFailureActions{%s}" % ", ".join(
+        "pops::SolveAction::kRejectAttempt" if reject else "pops::SolveAction::kFailRun"
+        for reject in expected)
+
+
 def test_detached_physical_child_bind_uses_consumed_field_provider(physical_resolved):
     """Exercise the child argument/bind seam with the real detached plan and sliced Program.
 
@@ -116,7 +164,7 @@ def test_detached_physical_child_bind_uses_consumed_field_provider(physical_reso
                 provider_components=tuple(adapter._m._provider_components), model=adapter))
         arguments = _build_arguments(compiled, sliced, tuple(rows))
         assert arguments.aux == {}
-        child_view = SimpleNamespace(arguments=lambda: arguments)
+        child_view = SimpleNamespace(arguments=lambda arguments=arguments: arguments)
         validate_install_arguments(SimpleNamespace(block_names=lambda: ()), child_view,
                                    {row.name: {} for row in selected}, {}, {}, field_plans={})
         publications = [value for value in sliced._values if value.op == "field_publication"]
