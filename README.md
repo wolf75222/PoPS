@@ -33,8 +33,10 @@ loop.
 Named applications such as diocotron, Euler-Poisson, two-fluid, and validation setups live
 in [`adc_cases`](https://github.com/wolf75222/adc_cases). This repository owns the reusable
 solver core, the Python DSL that builds compiled artifacts, and the C++ runtime that
-executes them. The repo-local scientific campaign lives under
-[`verification/`](verification/README.md).
+executes them. Source and native test selection is declared by
+[`tests/test_manifest.toml`](tests/test_manifest.toml); the qualification boundary and
+current unavailable cells are recorded in
+[`docs/development/migration_verification_scope.md`](docs/development/migration_verification_scope.md).
 
 At the mathematical level, a case usually couples conservative states `U` to one or more
 elliptic fields through an owner-qualified provider pack `P`:
@@ -193,28 +195,53 @@ Shorter introductions live in [`docs/tuto`](docs/tuto/README.md).
 
 ## Verification
 
-[`verification/`](verification/README.md) is the repo-local scientific campaign. It is not
-installed in the `pops` wheel. It is distinct from the fast-test catalogue
-(`tests/test_manifest.toml`) and the performance harness (`benchmarks/manifest.toml`).
+The former `verification/` campaign contract is absent from this checkout: its manifest,
+runner, checker, case package, and JSON schemas are not shipped. The seven files retained
+under `tests/python/verification/` are historical orphan records, not an executable
+qualification route. See [migration verification scope](docs/development/migration_verification_scope.md)
+for the decision, missing assets, and replacement gates.
 
-`verification/manifest.toml` is the source of truth (schema `pops.verification.manifest.v1`).
-Catalogued families include infrastructure (`PH`), transport (`TR`), Euler (`EU`), Poisson
-(`PO`), time (`TM`), Euler-Poisson (`CP`), AMR (`AM`), and robustness (`RB`). One native
-artifact compiles exactly one spatial dimension (`POPS_NATIVE_DIM` is `1`, `2`, or `3`).
-
-Validate the manifest and plan a suite without executing cases:
+The current source and package gates are executable from the repository root:
 
 ```bash
-python scripts/check_verification_manifest.py
-python scripts/run_verification.py \
-  --suite pr \
-  --dimensions 1 \
-  --max-nodes 2 \
-  --output build/verification/plan
+python scripts/check_packaging_manifest.py
+python scripts/run_m3_gate.py --check-only
+python scripts/run_m4_gate.py --check-only
 ```
 
-`--suite` is one of `pr`, `nightly`, `weekly`, `release`, `two_node`. `--max-nodes > 2` is
-refused. The planner writes `plan.json`; it does not compile, bind, or launch jobs.
+The C++ native gate uses the checked-in presets and CTest targets:
+
+```bash
+cmake --preset serial
+cmake --build --preset serial
+ctest --preset serial --output-on-failure
+```
+
+Use the `mpi` preset only when MPI and parallel HDF5 are part of the declared matrix:
+
+```bash
+cmake --preset mpi
+cmake --build --preset mpi
+ctest --preset mpi --output-on-failure
+```
+
+For an installed Python artifact, build exactly one dimension and add `--mpi` only for a
+declared MPI cell:
+
+```bash
+bash scripts/build_python.sh --dim 2
+# bash scripts/build_python.sh --dim 2 --mpi
+```
+
+These commands establish source, packaging, compile, bind, and selected runtime evidence.
+They do not substitute for migration qualification. A qualification result requires the
+complete declared M3-M7 matrix from `tests/gates/` and `tests/test_manifest.toml`, run at one
+exact source/native/wheel provenance with its numerical, restart, output, collective, and
+configuration oracles retained. `scripts/run_final_gate.py` is the available release-gate
+entry point for a selected dimension and wheel; a successful source or smoke check alone never
+closes an unrun matrix cell. The separate benchmark protocol is declared in
+`benchmarks/manifest.toml`; source, unit, and operation-count checks do not establish a
+performance claim. No local CPU or MPI result establishes GPU or cluster support.
 
 ## Documentation
 
@@ -223,7 +250,8 @@ refused. The planner writes `plan.json`; it does not compile, bind, or launch jo
   normative Python/C++ contract and acceptance matrix.
 - [Algorithms](docs/ALGORITHMS.md): numerical methods and implementation notes.
 - [Tutorials](docs/tuto/README.md): linear introductions built with the public API.
-- [Verification](verification/README.md): scientific campaign layout, manifest, and case contract.
+- [Migration verification scope](docs/development/migration_verification_scope.md): current
+  executable gates, unavailable campaign assets, and M8 retirement boundary.
 - [Versioning](docs/VERSIONING.md): public API scope and release process.
 - [Documentation quality](docs/DOC_QUALITY.md): maintained corpus and conformance rules.
 - [Contributing](CONTRIBUTING.md): build, test, review, and PR workflow.
