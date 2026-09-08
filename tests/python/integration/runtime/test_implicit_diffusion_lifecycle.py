@@ -26,7 +26,8 @@ pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 
 
 def make_case(n, *, method="backward_euler", dt=0.0001, nonlinear=False, invalid=False,
-              tau_scale=1, derivative_route="finite_difference", commit_mode="solved"):
+              tau_scale=1, derivative_route="finite_difference", commit_mode="solved",
+              failure_action=None):
     from pops.numerics import Diffusion
 
     frame = Rectangle("implicit_heat_square", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
@@ -69,7 +70,8 @@ def make_case(n, *, method="backward_euler", dt=0.0001, nonlinear=False, invalid
                                 seed=seed, derivative=DerivativeStrategy(derivative_route))
         solved = program.solve(request, solver=Newton(
             tolerance=1e-12, max_iterations=20, linear_tolerance=1e-8,
-            linear_max_iterations=100, restart=30)).consume(action=FailRun())[0]
+            linear_max_iterations=100, restart=30)).consume(
+                action=FailRun() if failure_action is None else failure_action)[0]
         conserved = solved if accumulation is None else program.transform(solved, transform=accumulation)
         candidate = program.value("updated", conserved, at=temporal.next.point)
     if commit_mode == "history_only":

@@ -94,6 +94,20 @@ def test_accepted_flux_weight_is_the_actual_residual_coefficient():
     assert "stage_accepted_exchanges" in code
 
 
+def test_fatal_native_diffusion_preserves_fail_run_under_authored_rejection():
+    from pops.time import RejectAttempt
+
+    plan = resolve_case(failure_action=RejectAttempt(statuses=("invalid_evaluation",)))
+    code = emit_cpp_program(plan.time, model=lower_and_validate(plan.blocks[0].model)[0])
+    catch = code.split("catch (const pops::runtime::program::DiffusiveEvaluationError& failure) {")[1]
+    catch = catch.split("}", 1)[0]
+    assert "failure.status() == 3 ? pops::SolveAction::kFailRun : pops::SolveAction::kRejectAttempt" in catch
+    assert '" native_status=" + std::to_string(failure.status())' in catch
+    assert '" native_reason=" + std::to_string(failure.reason())' in catch
+    # The standard consumer also authenticates the report action before it may retry.
+    assert ".report().action == pops::SolveAction::kRejectAttempt && (" in code
+
+
 def test_spatial_adapter_requires_explicit_supported_derivative():
     with pytest.raises(SolveRequestError, match="unsupported_derivative"):
         resolve_case(derivative_route="exact")

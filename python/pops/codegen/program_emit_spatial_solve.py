@@ -98,7 +98,10 @@ def emit_spatial_solve(program: Any, value: Any, base: Any, variables: Any, mode
         "  %s.mark_failed(failure.status(), %s, failure.what());" % (report, action),
         "  %s.evaluations = %s->residual_evaluations();" % (report, workspace),
         "} catch (const pops::runtime::program::DiffusiveEvaluationError& failure) {",
-        "  %s.mark_failed(pops::SolveStatus::kInvalidEvaluation, %s, failure.what());" % (report, action),
+        "  %s.mark_failed(pops::SolveStatus::kInvalidEvaluation, "
+        "failure.status() == 3 ? pops::SolveAction::kFailRun : %s, "
+        "std::string(failure.what()) + \" native_status=\" + std::to_string(failure.status()) + "
+        "\" native_reason=\" + std::to_string(failure.reason()));" % (report, action),
         "  %s.evaluations = %s->residual_evaluations();" % (report, workspace),
         "}",
         "pops::SolveOutcome %s = pops::SolveOutcome::collective_lane("
