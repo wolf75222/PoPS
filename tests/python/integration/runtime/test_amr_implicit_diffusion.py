@@ -278,6 +278,29 @@ def test_composite_implicit_physical_boundary_inventory(
         assert_no_second_reflux(runtime)
 
 
+def accepted_histories(runtime):
+    native = runtime._executor
+    histories = []
+    for name in native.history_names():
+        levels = tuple(native.history_levels(name))
+        assert levels == tuple(range(runtime.n_levels()))
+        histories.append((
+            name,
+            native.history_ncomp(name),
+            native.history_depth(name),
+            tuple((
+                level,
+                native.history_initialized(name, level),
+                native.history_fill_count(name, level),
+                tuple((
+                    np.asarray(native.history_slot_dt(name, level, slot), dtype=np.float64).tobytes(),
+                    np.asarray(native.history_global(name, level, slot)).tobytes(),
+                ) for slot in range(native.history_depth(name))),
+            ) for level in levels),
+        ))
+    return tuple(histories)
+
+
 def accepted_envelope(runtime):
     native = runtime._executor
     return (
@@ -290,18 +313,7 @@ def accepted_envelope(runtime):
         ),
         native._program_exchange_records(),
         tuple(tuple(map(str, row)) for row in native.program_flux_ledger_manifest()),
-        tuple(
-            (
-                name,
-                native.history_initialized(name),
-                native.history_fill_count(name),
-                tuple(
-                    np.asarray(native.history_global(name, slot)).tobytes()
-                    for slot in range(native.history_depth(name))
-                ),
-            )
-            for name in native.history_names()
-        ),
+        accepted_histories(runtime),
     )
 
 
@@ -325,7 +337,7 @@ def test_composite_implicit_refuses_true_subcycling_before_publication(
         np.asarray(runtime.block_level_state_global("heat", level)).tobytes()
         for level in range(runtime.n_levels())
     )
-    with pytest.raises(RuntimeError, match="(?i)(synchron|subcycl|ratio)"):
+    with pytest.raises(ValueError, match="synchronized composite field stage requires every child state"):
         pops.run(runtime, t_end=DT, max_steps=1, console=False)
     assert runtime.time() == 0 and runtime.macro_step() == 0
     assert before == tuple(
@@ -391,12 +403,4 @@ def test_composite_implicit_manual_resumption_after_numerical_rejection(
         runtime._executor._program_exchange_records()
         == reference._executor._program_exchange_records()
     )
-    for name in runtime._executor.history_names():
-        assert runtime._executor.history_fill_count(name) == reference._executor.history_fill_count(
-            name
-        )
-        for slot in range(runtime._executor.history_depth(name)):
-            np.testing.assert_array_equal(
-                runtime._executor.history_global(name, slot),
-                reference._executor.history_global(name, slot),
-            )
+    assert accepted_histories(runtime) == accepted_histories(reference)
