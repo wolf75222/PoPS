@@ -125,7 +125,7 @@ class BalanceOccurrence:
             raise TypeError("balance occurrence requires a local_rate Handle")
         if isinstance(self.ordinal, bool) or not isinstance(self.ordinal, int) or self.ordinal < 0:
             raise ValueError("balance occurrence ordinal must be a nonnegative integer")
-        if self.kind not in ("flux", "source", "projection"):
+        if self.kind not in ("flux", "diffusion", "source", "projection"):
             raise ValueError("unknown physical balance term kind %r" % self.kind)
         if not isinstance(self.target, Handle) or self.target.kind != "state":
             raise TypeError("balance occurrence target must be a state Handle")

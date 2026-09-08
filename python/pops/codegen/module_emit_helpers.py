@@ -56,6 +56,13 @@ def _roles_for(names: Any, override: Any = None) -> list:
 
 def _ranked_axes(model: Any) -> tuple[str, ...]:
     """Return the model's one canonical x[/y[/z]] rank authority."""
+    storage_axes = getattr(model, "_program_only_storage_axes", ())
+    if storage_axes:
+        if model._flux:
+            raise ValueError("state-only storage cannot shadow an authored physical flux")
+        if tuple(storage_axes) not in (("x",), ("x", "y"), ("x", "y", "z")):
+            raise ValueError("state-only storage requires an exact Cartesian frame")
+        return tuple(storage_axes)
     return tuple(canonical_axis_mapping(model._flux, where="emit_cpp_brick flux").keys())
 
 

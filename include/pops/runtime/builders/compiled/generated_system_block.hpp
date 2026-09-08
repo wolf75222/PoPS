@@ -1097,6 +1097,87 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   return result;
 }
 
+/// Storage and conversion support for a Program-owned spatial operator. No transport law
+/// is installed by this adapter: selecting a legacy residual is a capability error.
+template <int Dim, class Request>
+PreparedSystemBlock<Dim> materialize_state_block(Request request) {
+  using Model = std::remove_cvref_t<decltype(request.model)>;
+  static_assert(PhysicalStateFor<Model, Dim>);
+  if (request.routes.limiter != "state_storage" || request.routes.riemann != "unavailable" ||
+      request.routes.reconstruction != "conservative")
+    throw std::invalid_argument("Program-only model requires the exact state-storage route");
+  constexpr int provider_count = provider_count_for<Model, Dim>();
+  if constexpr (provider_count > 0) {
+    if (!request.provider_plan || !request.provider_storage ||
+        request.provider_plan->value_count() != static_cast<std::size_t>(provider_count))
+      throw std::invalid_argument("state-storage model requires its exact provider plan");
+  } else if (request.provider_plan || request.provider_storage) {
+    throw std::invalid_argument("provider-free state storage cannot retain provider state");
+  }
+  const auto model = request.model;
+  const auto geometry = request.geometry;
+  const auto topology = request.topology;
+  Extent<Dim> ghosts{};
+  for (int axis = 0; axis < Dim; ++axis) ghosts[axis] = 1;
+  auto prepare = [geometry, topology, ghosts](MultiFab<Dim>& state) {
+    const HaloSchedule<Dim> schedule(
+        state.layout(), state.distribution(), state.local_rank(), geometry.domain(), ghosts,
+        topology, state.ncomp(), halo_budget(state, geometry.domain(), topology, ghosts));
+    fill_boundary(state, schedule);
+  };
+  PreparedSystemBlock<Dim> result;
+  result.provider_identity = "pops.generated.program-state.nd/" + std::to_string(Dim);
+  result.provider_components = provider_count;
+  result.ghosts = ghosts;
+  auto unavailable = [](auto&&...) -> void {
+    throw std::logic_error("state-storage block has no selected legacy spatial residual");
+  };
+  result.closures.rhs_into = unavailable;
+  result.closures.rhs_flux_only = unavailable;
+  result.closures.source_only = unavailable;
+  result.closures.source_only_masked = unavailable;
+  result.closures.rhs_at_point = unavailable;
+  result.closures.rhs_flux_only_at_point = unavailable;
+  result.closures.rhs_core_at_point = unavailable;
+  result.closures.rhs_flux_only_core_at_point = unavailable;
+  result.closures.rhs_without_prepared_interfaces = unavailable;
+  result.closures.rhs_flux_only_without_prepared_interfaces = unavailable;
+  result.closures.rhs_core_at_point_prepared = unavailable;
+  result.closures.rhs_flux_only_core_at_point_prepared = unavailable;
+  result.closures.prepare_generated_state_at_point =
+      [prepare](const auto&, MultiFab<Dim>& state) { prepare(state); };
+  result.closures.prepare_generated_state_at_point_prepared =
+      [](const auto&, MultiFab<Dim>&, const PreparedHyperbolicBoundary<Dim>&) {
+        throw std::logic_error("state storage cannot consume a hyperbolic boundary law");
+      };
+  result.closures.prepare_generated_state_with_transport_prepared = unavailable;
+  result.closures.external_ghost_boundary =
+      std::make_shared<typename SystemBlockClosures<Dim>::ExternalGhostBoundary>();
+  result.maximum_speed = [](const MultiFab<Dim>&, const ExecutionLane&) -> Real {
+    throw std::logic_error("state storage has no hyperbolic wave-speed provider");
+  };
+  result.poisson_rhs = [](const MultiFab<Dim>&, MultiFab<Dim>&) {
+    throw std::logic_error("state storage has no implicit default Poisson source");
+  };
+  result.primitive_to_conservative = [model](const double* primitive, double* conservative) {
+    publish_conservative_state(model, primitive, conservative);
+  };
+  auto recovery = std::make_shared<PreparedModelVariableInversionRecovery<Model>>(model);
+  result.conservative_to_primitive = [recovery](const double* conservative, double* primitive) {
+    Real input[Model::n_vars]{};
+    for (int component = 0; component < Model::n_vars; ++component)
+      input[component] = static_cast<Real>(conservative[component]);
+    const auto prepared = recovery->recover(input);
+    const RecoveryOutcome<Model::n_vars>& outcome = prepared.outcome;
+    if (outcome.publication_permitted())
+      for (int component = 0; component < Model::n_vars; ++component)
+        primitive[component] = static_cast<double>(outcome.value[component]);
+    return recovery_report(outcome);
+  };
+  result.batch_conservative_to_primitive = make_uniform_variable_inversion_consumer(recovery);
+  return result;
+}
+
 template <int Dim, nd::ReconstructionVariables Variables, class Request, class Reconstruction>
 PreparedSystemBlock<Dim> select_riemann(Request request, Reconstruction reconstruction) {
   using Model = std::remove_cvref_t<decltype(request.model)>;
@@ -1168,16 +1249,24 @@ auto prepare_generated_system_block(Request request) -> PreparedSystemBlock<Requ
   using Model = std::remove_cvref_t<decltype(request.model)>;
   static_assert(Model::dimension == Dim,
                 "generated System request and physical model have different ranks");
-  switch (parse_recon_route(request.routes.reconstruction, "generated System block")) {
-    case ReconRouteId::kConservative:
-      return generated_system_detail::select_reconstruction<
-          Dim, nd::ReconstructionVariables::Conservative>(std::move(request));
-    case ReconRouteId::kPrimitive:
-      return generated_system_detail::select_reconstruction<Dim,
-                                                            nd::ReconstructionVariables::Primitive>(
-          std::move(request));
+  constexpr bool storage_only = [] {
+    if constexpr (requires { Model::program_only_storage; })
+      return static_cast<bool>(Model::program_only_storage);
+    return false;
+  }();
+  if constexpr (storage_only) {
+    return generated_system_detail::materialize_state_block<Dim>(std::move(request));
+  } else {
+    switch (parse_recon_route(request.routes.reconstruction, "generated System block")) {
+      case ReconRouteId::kConservative:
+        return generated_system_detail::select_reconstruction<
+            Dim, nd::ReconstructionVariables::Conservative>(std::move(request));
+      case ReconRouteId::kPrimitive:
+        return generated_system_detail::select_reconstruction<
+            Dim, nd::ReconstructionVariables::Primitive>(std::move(request));
+    }
+    throw std::logic_error("generated reconstruction route escaped its exhaustive selector");
   }
-  throw std::logic_error("generated reconstruction route escaped its exhaustive selector");
 }
 
 }  // namespace pops

@@ -428,6 +428,15 @@ class Partial(_BoardNode):
         self.axis = axis
         self.scale = exact_numeric_scalar(scale, where="Partial scale")
 
+    def __pops_ir_children__(self) -> tuple[Expr, ...]:
+        return (self.field,) if isinstance(self.field, Expr) else ()
+
+    def __pops_ir_key__(self, recurse: Any) -> Any:
+        from .quantity import expression_handle_key
+        field = (recurse(self.field) if isinstance(self.field, Expr)
+                 else expression_handle_key(self.field))
+        return ("partial", field, self.axis, repr(self.scale))
+
     def __neg__(self) -> Any:
         return Partial(self.field, self.axis, -self.scale)
 
@@ -467,6 +476,15 @@ class Gradient(_BoardNode):
         """Select a component with a typed Cartesian axis or its exact ordinal."""
         ordinal = getattr(axis, "index", axis)
         return Partial(self.field, ordinal, self.scale)
+
+    def __pops_ir_children__(self) -> tuple[Expr, ...]:
+        return (self.field,) if isinstance(self.field, Expr) else ()
+
+    def __pops_ir_key__(self, recurse: Any) -> Any:
+        from .quantity import expression_handle_key
+        field = (recurse(self.field) if isinstance(self.field, Expr)
+                 else expression_handle_key(self.field))
+        return ("gradient", field, repr(self.scale))
 
     def __neg__(self) -> Any:
         return Gradient(self.field, -self.scale)
@@ -615,13 +633,13 @@ class RateExpr(RateTerm):
             if not isinstance(term, (tuple, list)) or len(term) != 3:
                 raise TypeError("a rate term must be a (kind, payload, sign) triple")
             kind, payload, sign = term
-            if kind not in ("flux", "source", "projection"):
+            if kind not in ("flux", "diffusion", "source", "projection"):
                 raise ValueError("unknown rate term kind %r" % (kind,))
             if kind == "projection":
                 from .application import RateApplicationProjection
                 if not isinstance(payload, RateApplicationProjection):
                     raise TypeError("a projection rate term requires a whole typed RateSpace projection")
-            elif getattr(payload, "kind", None) != kind:
+            elif getattr(payload, "kind", None) != ("diffusive_flux" if kind == "diffusion" else kind):
                 raise TypeError("rate term %s payload must be a matching declaration Handle" % kind)
             sign = exact_numeric_scalar(sign, where="rate term sign")
             normalized.append((kind, payload, sign))
@@ -642,7 +660,8 @@ class Divergence(RateTerm):
         self.scale = exact_numeric_scalar(scale, where="Divergence scale")
 
     def _rate_terms(self) -> Any:
-        return [("flux", self.flux, self.scale)]
+        kind = "diffusion" if getattr(self.flux, "kind", None) == "diffusive_flux" else "flux"
+        return [(kind, self.flux, self.scale)]
 
     def __repr__(self) -> str:
         return "Divergence(%s%r)" % (exact_scale_prefix(self.scale), self.flux)

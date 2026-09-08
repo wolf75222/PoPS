@@ -227,7 +227,13 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic>,
   static constexpr int dimension = composite_detail::hyperbolic_dimension<Hyperbolic>();
   static_assert(dimension >= 1 && dimension <= 3,
                 "CompositeModel hyperbolic rank must be 1, 2, or 3");
-  static_assert(composite_detail::hyperbolic_contract<Hyperbolic, dimension>(),
+  static constexpr bool program_only_storage = [] {
+    if constexpr (requires { Hyperbolic::program_only_storage; })
+      return static_cast<bool>(Hyperbolic::program_only_storage);
+    return false;
+  }();
+  static_assert(composite_detail::hyperbolic_contract<Hyperbolic, dimension>() ||
+                    (program_only_storage && PhysicalStateFor<Hyperbolic, dimension>),
                 "CompositeModel requires an exact-ranked hyperbolic brick");
   static_assert(composite_detail::dimension_matches<Source, dimension>(),
                 "CompositeModel source rank differs from its hyperbolic rank");

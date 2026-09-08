@@ -17,6 +17,11 @@ else:
 class _RateAuthoringMixin(_BoardModel):
     """Retain physical equations and derive checked finite-volume adapters."""
 
+    def diffusive_flux(self, name: Any, *, state: Any, value: Any) -> Any:
+        """Declare a constitutive A*grad(W) flux without choosing its discrete gradient."""
+        from .diffusion import declare_diffusive_flux
+        return declare_diffusive_flux(self, name, state=state, value=value)
+
     def rate(self, name: Any, *, equation: Any) -> Any:
         reg = _safe_name(name)
         if not isinstance(equation, _bm.Equation):
@@ -50,6 +55,11 @@ class _RateAuthoringMixin(_BoardModel):
                     else self._dsl._m.operator_registry())
         inputs = [state.space]
         for kind, payload, _coefficient in terms:
+            if kind == "diffusion":
+                for space in payload.law.inputs:
+                    if space not in inputs:
+                        inputs.append(space)
+                continue
             if kind == "projection":
                 for space in payload.application.operator.signature.inputs:
                     if space not in inputs:
@@ -160,6 +170,8 @@ class _RateAuthoringMixin(_BoardModel):
         from pops.model.operators import Operator
         from pops.provenance import ProvenanceRecord, source_span
         registry = module.operator_registry()
+        from .diffusion import install_diffusive_fluxes
+        install_diffusive_fluxes(self, module)
         for handle, view in getattr(self, "_retained_rates", {}).items():
             reason = view.legacy_incompatibility()
             if handle.registered_operator_name in registry.names():
@@ -361,7 +373,14 @@ class _RateAuthoringMixin(_BoardModel):
         """Authenticate each occurrence without destructuring away its scientific meaning."""
         terms = _bm._as_rate(rhs)._rate_terms()
         for kind, payload, _coefficient in terms:
-            if kind == "flux":
+            if kind == "diffusion":
+                from .diffusion import DiffusiveFluxHandle
+                if (not isinstance(payload, DiffusiveFluxHandle)
+                        or payload.owner_path != self.owner_path
+                        or getattr(self, "_diffusive_fluxes", {}).get(payload.name) != payload
+                        or payload.state != target):
+                    raise ValueError("a diffusive rate term must name this state's exact constitutive flux")
+            elif kind == "flux":
                 if (not isinstance(payload, FluxHandle)
                         or payload.owner_path != self.owner_path
                         or self._fluxes.get(payload.name) != payload):

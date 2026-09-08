@@ -208,7 +208,8 @@ class _FacadeCompileMixin(_FacadeModel):
         from pops.codegen.component_provider_packs import resolve_emitter_provider_packs
 
         self.__pops_bind_component_provider_packs__(resolve_emitter_provider_packs(self, self.module))
-        model_dimension = len(m._flux)
+        from pops.codegen.module_emit_helpers import _ranked_axes
+        model_dimension = len(_ranked_axes(m))
         if model_dimension not in (1, 2, 3):
             raise ValueError("compile: model has no exact 1D/2D/3D physical flux rank")
         native_dimension = loader_native_dimension()
@@ -329,7 +330,9 @@ class _FacadeCompileMixin(_FacadeModel):
             gamma=m.gamma,
             n_aux=m._total_n_aux(),
             params=self.params,
-            caps=compiled_capability_flags(backend),
+            caps={**compiled_capability_flags(backend), **(
+                {"program_only_storage": True}
+                if getattr(m, "_program_only_storage_axes", ()) else {})},
             abi_key=abi_key,
             model_hash=model_hash,
             definition_identity=model_compile_identity(self),
