@@ -103,6 +103,7 @@ api pops/numerics/elliptic/linear/generic_krylov.hpp
 api pops/numerics/elliptic/linear/krylov_method_provider.hpp
 api pops/numerics/elliptic/linear/krylov_workspace.hpp
 api pops/numerics/elliptic/linear/prepared_affine_problem.hpp
+sdk-root pops/numerics/elliptic/nd/general_field_operator.hpp
 api pops/numerics/elliptic/linear/prepared_vector_metric.hpp
 api pops/numerics/elliptic/linear/pure_field_algebra.hpp
 sdk-support pops/numerics/elliptic/linear/scaled_field_algebra.hpp
@@ -299,6 +300,7 @@ sdk-support pops/runtime/program/same_level_cell_temporal_provider.hpp
 sdk-support pops/runtime/program/program_runtime_state.hpp
 sdk-support pops/runtime/program/residual_operator.hpp
 sdk-support pops/runtime/program/source_mask.hpp
+sdk-root pops/runtime/program/accepted_exchange.hpp
 sdk-root pops/runtime/program/step_transaction.hpp
 abi pops/runtime/program/wire_ids.hpp
 api pops/runtime/runtime_environment.hpp
