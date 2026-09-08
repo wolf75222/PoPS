@@ -131,6 +131,10 @@ static int pops_run_test_mpi_system_solve_fields(int argc, char** argv) {
                      "explicit", gamma);
   using namespace runtime::system;
   AuxiliaryStorageShape<kTestDimension> temperature_shape;
+  // CompositeModel binds the same provider slot for source and face evaluation. The face
+  // adapter loads both adjacent cells even when the selected advection velocity is zero.
+  for (int axis = 0; axis < kTestDimension; ++axis)
+    temperature_shape.halo[axis] = 1;
   AuxiliaryComponentKey temperature_key{"test.mpi-system-solve-fields", "derived", "gas", "T_e"};
   AuxiliaryComponentContract temperature_contract{"cell-average", "cell", "unitless",
                                                   "test-constant-temperature", "scalar"};
@@ -209,6 +213,10 @@ static int pops_run_test_mpi_system_solve_fields(int argc, char** argv) {
     for (double r : R)
       rfin = rfin && std::isfinite(r);
     chk(rfin, "rhs_finite");
+    bool source_matches = R.size() == q.size();
+    for (std::size_t k = 0; source_matches && k < R.size(); ++k)
+      source_matches = std::fabs(R[k] - Te * q[k]) < 1e-12;
+    chk(source_matches, "rhs_matches_Te_times_charge");
 
     std::printf("[rank %d/%d] np=%d  |phi|max=%.3e  sum(phi)=%.3e\n", me, np, np, maxabs, sumphi);
   }
