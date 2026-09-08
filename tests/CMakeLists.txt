@@ -834,6 +834,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_geometric_mg 2)
   set(POPS_MPI_RANKS_test_coupled_fieldsolve 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_implicit_transaction 2)
+  set(POPS_MPI_RANKS_test_amr_synthetic_program_loader_transaction 2)
   set(POPS_MPI_RANKS_test_amr_program_positivity_floor 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_coupled_source 2)
   set(POPS_MPI_RANKS_test_program_context_contract 2)
@@ -996,6 +997,7 @@ if(POPS_HAS_MPI)
     test_geometric_mg
     test_coupled_fieldsolve
     test_amr_multiblock_implicit_transaction
+    test_amr_synthetic_program_loader_transaction
     test_program_runtime
     test_program_context_contract
     test_generated_amr_system_block
@@ -1069,6 +1071,11 @@ if(POPS_HAS_MPI)
           ${_test} ${_np}
           GTEST_FILTER
             "test_amr_multiblock_implicit_transaction.TwoBlockImplicitSourceTransactionRollsBackAndRetriesExactly:test_amr_multiblock_implicit_transaction.BalanceMailboxResetsOnlyInsideOutermostTransactionSnapshot:test_amr_multiblock_implicit_transaction.InterfaceProviderPublicationRefreshesExactAcceptedProgramContracts")
+      elseif(_test STREQUAL "test_amr_synthetic_program_loader_transaction")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh")
       elseif(_test STREQUAL "test_program_runtime")
         pops_add_mpi_rank_test(
           ${_test} ${_np}

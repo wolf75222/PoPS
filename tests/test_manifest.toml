@@ -357,6 +357,7 @@ labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
 name = "test_amr_synthetic_program_loader_transaction"
 sources = ["tests/cpp/integration/native_loader/test_amr_synthetic_program_loader_transaction.cpp"]
 labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_amr_native_loader"
