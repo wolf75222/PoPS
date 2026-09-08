@@ -19,7 +19,7 @@ scoped to ADC-922 equivalence, ADC-923 deletion prerequisites, and ADC-924 compl
 | --- | --- |
 | Detached campaign | The former `verification/` manifest, runner, checker, case package, and JSON schemas are absent. The README no longer presents that campaign as an active route. |
 | Seven orphan tests | Retain all seven `tests/python/verification/test_*.py` files for now. Do not register them in a new suite, delete them, or add fake assets. A later cleanup may archive or remove them only after the replacement matrix and ADC-922/923 evidence qualify. |
-| Numerical qualification | Unavailable until the root integration run completes the full declared M3-M8 matrices at one exact source, native artifact, wheel, and configuration provenance. A source check, unit result, smoke run, targeted diagnostic, or failed attempt does not close a cell. |
+| Numerical qualification | The complete migration remains unqualified until its declared matrices and replacement-specific equivalence checks pass at an exact source, native artifact, wheel, and configuration provenance. Successful individual workflow slices are recorded below. A source check, unit result, smoke run, targeted diagnostic, or failed attempt does not close an unexecuted cell. |
 | Supported configurations | This decision changes documentation scope only. Existing dimension, backend, MPI-rank, level, block, restart, output, and refusal envelopes remain unchanged until each replacement route has its own evidence. |
 | GPU and cluster claims | No local CPU or MPI result establishes GPU, multi-node, or cluster support. Such cells remain unavailable unless their own environment and receipt are present. |
 
@@ -130,9 +130,10 @@ replace the full migration matrix.
 The seven historical tests become removable only when all of the following are recorded in the
 replacement evidence set:
 
-1. The full declared M3-M8 feature/configuration matrix has run at one current exact source and
-   native/wheel provenance, including numerical, restart, output, collective, and refusal
-   oracles.
+1. The M3-M7 and R1 prerequisite matrices and M8.1 replacement-specific equivalence checks have
+   run at one current exact source and native/wheel provenance, including numerical, restart,
+   output, collective, and refusal oracles. M8.2 deletion follows this evidence; it is not its own
+   prerequisite.
 2. Every promised capability that the former campaign covered has a current owner in
    `tests/test_manifest.toml`, a gate manifest, or an explicitly documented unavailable/refused
    cell. No smoke or reduced case fills a missing cell.
