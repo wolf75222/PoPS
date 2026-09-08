@@ -103,8 +103,6 @@ def _require_unique_transfer_targets(transfers: Any) -> None:
     """Defend install against order-dependent overwrite transfers in a forged runtime plan."""
     writers: dict[tuple[str, str, str], str] = {}
     for transfer in transfers:
-        if transfer.operation_abi != 1:
-            continue
         key = (transfer.target_layout_id, transfer.target_subject_id, transfer.synchronization_uri)
         previous = writers.get(key)
         if previous is not None:
@@ -323,15 +321,13 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
         raise ValueError("layout transfer names an unknown layout") from None
     source_shape = tuple(int(value) for value in source_engine.spatial_shape())
     target_shape = tuple(int(value) for value in target_engine.spatial_shape())
-    if len(source_shape) != len(target_shape) or any(
-        source_extent < target_extent or source_extent % target_extent
-        for source_extent, target_extent in zip(source_shape, target_shape, strict=True)
+    fine, coarse = ((target_shape, source_shape) if transfer.operation_abi == 3 else
+                    (source_shape, target_shape))
+    if len(fine) != len(coarse) or any(
+        a < b or a % b for a, b in zip(fine, coarse, strict=True)
     ):
-        raise ValueError("CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts")
-    ratio = tuple(
-        source_extent // target_extent
-        for source_extent, target_extent in zip(source_shape, target_shape, strict=True)
-    )
+        raise ValueError("native layout Transfer requires exactly aligned integer extents")
+    ratio = tuple(a // b for a, b in zip(fine, coarse, strict=True))
     component = plan.components.get(transfer.component_id)
     if getattr(component, "native_handle", None) is None:
         raise TypeError("mapping Transfer component has no authenticated native handle")
@@ -1087,20 +1083,31 @@ class _MultiLayoutUniformExecutor:
             raise RuntimeError("multi-layout native step requires an active transfer transaction")
         self._transfer_attempt += 1
         attempt = self._transfer_attempt
-        # Snapshot every source before any destination changes.  Cycles therefore observe one
-        # common pre-transfer state and never depend on mapping declaration order.
-        for route in self._transfer_routes:
-            route.session.capture(generation, attempt)
+        from pops.runtime._physical_mapping import physical_mapping_order
+        order = physical_mapping_order(route.transfer for route in self._transfer_routes)
         receipts = []
         try:
-            for route in self._transfer_routes:
-                receipt = route.session.apply(generation, attempt)
-                self._authenticate_mapping_receipt(
-                    route, receipt, generation=generation, attempt=attempt
-                )
-                receipts.append(receipt)
-            for engine in self._engines.values():
-                native_step_target(engine).step(dt)
+            if order is None:
+                # Ordinary mappings retain simultaneous pre-step snapshot semantics.
+                for route in self._transfer_routes:
+                    route.session.capture(generation, attempt)
+                for route in self._transfer_routes:
+                    receipt = route.session.apply(generation, attempt)
+                    self._authenticate_mapping_receipt(
+                        route, receipt, generation=generation, attempt=attempt)
+                    receipts.append(receipt)
+                for engine in self._engines.values():
+                    native_step_target(engine).step(dt)
+            else:
+                for operation, layout_id in zip((2, 3), order, strict=True):
+                    route = next(row for row in self._transfer_routes
+                                 if row.transfer.operation_abi == operation)
+                    route.session.capture(generation, attempt)
+                    receipt = route.session.apply(generation, attempt)
+                    self._authenticate_mapping_receipt(
+                        route, receipt, generation=generation, attempt=attempt)
+                    receipts.append(receipt)
+                    native_step_target(self._engines[layout_id]).step(dt)
         except StepAttemptRejected:
             self._restore_rejected_native_attempt(generation, attempt)
             raise
@@ -1628,25 +1635,28 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
         row.requirement.qualified_id for row in plan.artifact.layout_plan.mappings
     }:
         raise ValueError("runtime transfer plan differs from the resolved LayoutPlan")
+    from pops.runtime._physical_mapping import physical_mapping_order, validate_physical_geometry
+    physical_order = physical_mapping_order(transfer_rows.values())
+    if physical_order is not None and set(physical_order) != set(configs):
+        raise NotImplementedError("physical coupling requires exactly its two declared layouts")
+    requirements = {row.requirement.qualified_id: row.requirement
+                    for row in plan.artifact.layout_plan.mappings}
     for transfer in transfer_rows.values():
-        if (
-            transfer.operation_abi != 1
-            or transfer.synchronization_uri != "pops://synchronization/before-step@1"
-        ):
+        if transfer.operation_abi not in (1, 2, 3):
             raise NotImplementedError("native multi-layout transfer operation is unsupported")
         component = plan.components.get(transfer.component_id)
         if getattr(component, "native_handle", None) is None:
             raise TypeError("mapping Transfer component has no authenticated native handle")
         source = configs[transfer.source_layout_id]
         target = configs[transfer.target_layout_id]
-        _require_conservative_cell_average_geometry(source, target)
-        source_shape = tuple(source.shape)
-        target_shape = tuple(target.shape)
-        if any(
-            source_extent < target_extent or source_extent % target_extent
-            for source_extent, target_extent in zip(source_shape, target_shape, strict=True)
-        ):
-            raise ValueError("CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts")
+        if transfer.operation_abi in (2, 3):
+            validate_physical_geometry(requirements[transfer.mapping_id], source, target)
+        else:
+            if transfer.synchronization_uri != "pops://synchronization/before-step@1":
+                raise NotImplementedError("native conservative transfer timing is unsupported")
+            _require_conservative_cell_average_geometry(source, target)
+            if any(a < b or a % b for a, b in zip(source.shape, target.shape, strict=True)):
+                raise ValueError("CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts")
 
     from pops.runtime._runtime_authorities import install_runtime_authorities
     from pops.runtime._runtime_executor import _uniform_initial_sources

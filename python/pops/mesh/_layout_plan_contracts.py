@@ -39,6 +39,8 @@ class LayoutMappingOperation(IntEnum):
     """Generated Transfer ABI-v1 operation value, never a free selector string."""
 
     CONSERVATIVE_CELL_AVERAGE_V1 = 1
+    VELOCITY_MOMENT_V1 = 2
+    PHYSICAL_PULLBACK_V1 = 3
 
     def to_data(self) -> dict[str, Any]:
         return {
@@ -52,6 +54,7 @@ class LayoutSynchronization(Enum):
     """Qualified point at which a directional mapping is part of the step transaction."""
 
     BEFORE_STEP_V1 = "pops://synchronization/before-step@1"
+    AFTER_SOURCE_STEP_V1 = "pops://synchronization/after-source-step@1"
 
     def to_data(self) -> dict[str, Any]:
         return {"uri": self.value}
@@ -759,6 +762,7 @@ class LayoutMappingRequirement:
     operation: LayoutMappingOperation
     synchronization: LayoutSynchronization
     reverse_of: str | None = None
+    physical_map: Any = None
 
     def __post_init__(self) -> None:
         for endpoint in (self.source_layout, self.target_layout):
@@ -776,6 +780,20 @@ class LayoutMappingRequirement:
         if type(self.synchronization) is not LayoutSynchronization:
             raise TypeError(
                 "layout mapping synchronization must be an exact LayoutSynchronization")
+        from .physical_mapping import PhysicalSupportMap
+        if self.operation in (LayoutMappingOperation.VELOCITY_MOMENT_V1,
+                              LayoutMappingOperation.PHYSICAL_PULLBACK_V1):
+            if type(self.physical_map) is not PhysicalSupportMap:
+                raise ValueError("physical mapping operation requires an explicit physical_map")
+            if self.physical_map.operation_abi != int(self.operation):
+                raise ValueError("physical mapping direction disagrees with operation")
+            self.physical_map.validate_ports(self.source_port, self.target_port)
+            expected = (LayoutSynchronization.BEFORE_STEP_V1 if int(self.operation) == 2 else
+                        LayoutSynchronization.AFTER_SOURCE_STEP_V1)
+            if self.synchronization is not expected or self.reverse_of is not None:
+                raise ValueError("physical maps require explicit ordered timing and no inverse closure")
+        elif self.physical_map is not None:
+            raise ValueError("conservative averaging cannot carry a physical map")
         if self.reverse_of is not None and (
                 not isinstance(self.reverse_of, str) or not self.reverse_of):
             raise TypeError("reverse mapping identity must be a non-empty string")
@@ -790,6 +808,7 @@ class LayoutMappingRequirement:
             "operation": self.operation.to_data(),
             "synchronization": self.synchronization.to_data(),
             "reverse_of": self.reverse_of,
+            **({"physical_map": self.physical_map.to_data()} if self.physical_map else {}),
         })
         return "pops.layout-mapping.v2::" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -803,6 +822,7 @@ class LayoutMappingRequirement:
             "operation": self.operation.to_data(),
             "synchronization": self.synchronization.to_data(),
             "reverse_of": self.reverse_of,
+            **({"physical_map": self.physical_map.to_data()} if self.physical_map else {}),
         }
 
 
@@ -829,9 +849,6 @@ def reject_concurrent_overwrite_mappings(requirements: Any) -> None:
     """Require one writer per target storage/synchronization for overwrite operations."""
     writers: dict[tuple[str, str, str], str] = {}
     for requirement in requirements:
-        if requirement.operation is not \
-                LayoutMappingOperation.CONSERVATIVE_CELL_AVERAGE_V1:
-            continue
         key = (
             requirement.target_layout.qualified_id,
             requirement.target_port.subject.qualified_id,

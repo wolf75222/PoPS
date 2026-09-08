@@ -36,7 +36,7 @@ class _MultiSpeciesMixin(_BoardModel):
         if self._multi_module is not None:
             if extra is None:
                 return None
-            return self._add_species(extra[0], components=extra[1], roles=extra[2])
+            return self._add_species(extra[0], components=extra[1], roles=extra[2], template=extra[3])
         from .. import model as _model
         candidate = _model.Module(self.name, owner=self.owner_path)
         # Promotion changes the state-space view, not parameter ownership.
@@ -47,8 +47,8 @@ class _MultiSpeciesMixin(_BoardModel):
                 candidate, nm, h.components, dict(h.roles), template=h.space)
         result = None
         if extra is not None:
-            name, components, roles = extra
-            result = self._declare_species_on(candidate, name, components, roles)
+            name, components, roles, template = extra
+            result = self._declare_species_on(candidate, name, components, roles, template=template)
             promoted[name] = result
         self._migrate_first_species_local_transforms(candidate, promoted)
         self._multi_module = candidate
@@ -56,7 +56,8 @@ class _MultiSpeciesMixin(_BoardModel):
         self._states.update(promoted)
         return result
 
-    def _add_species(self, name: Any, components: Any = (), roles: Any = None) -> Any:
+    def _add_species(self, name: Any, components: Any = (), roles: Any = None, *,
+                     template: Any = None) -> Any:
         """Add one typed StateSpace to the multi-block Module atomically."""
         name = require_name(name, "species name")
         comps = normalize_components(components, "species %s state" % name)
@@ -65,7 +66,7 @@ class _MultiSpeciesMixin(_BoardModel):
             raise ValueError("species %r is already declared" % name)
         module = self._multi_module
         with atomic_attrs((module, "_state_spaces"), (self, "_species"), (self, "_states")):
-            handle = self._declare_species_on(module, name, comps, role_map)
+            handle = self._declare_species_on(module, name, comps, role_map, template=template)
             self._species[handle.name] = handle
             self._states[handle.name] = handle
         return handle

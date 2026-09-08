@@ -303,12 +303,12 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
 
     # --- state / species ---
     def state(self, name: Any = "U", components: Any = (), roles: Any = None, *,
-              representation: Any = None, space: Any = None, units: Any = None) -> Any:
+              representation: Any = None, space: Any = None, units: Any = None,
+              support: Any = None, sampling: str = "unspecified") -> Any:
         """Declare the conservative state and return an unpackable :class:`StateHandle`.
 
-        The final public surface has no partially implemented unit algebra.  Opaque unit strings or
-        arbitrary metadata are therefore rejected here until a typed unit protocol can participate in
-        validation, semantic identity, lowering and runtime reports end to end.
+        PhysicalDimension units and PhysicalSupport metadata remain typed through
+        validation, semantic identity and physical-map lowering; no unit conversion is inferred.
         """
         name = require_name(name, "state name")
         components = normalize_components(components, "state")
@@ -332,10 +332,6 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         if placement is not None and self._frame is not None \
                 and placement.frame_id != self._frame.canonical_id:
             raise ValueError("state space frame differs from its Model frame")
-        if units is not None:
-            raise TypeError(
-                "Model.state units are unsupported on the final public route; "
-                "opaque unit metadata cannot be validated or lowered")
         metadata = {
             "representation": selected_representation.name,
             "centering": "cell" if placement is None else placement.centering,
@@ -344,6 +340,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             "frame": "model" if placement is None else placement.frame_id,
             "clock": "simulation" if placement is None else placement.clock,
             "units": units,
+            "support": support,
+            "sampling": sampling,
         }
         # Preserve the typed descriptors through authoring.  ``roles_for`` owns
         # the single lowering to exact ``family[:axis]`` native tokens.
@@ -379,6 +377,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 representation=metadata["representation"],
                 centering=metadata["centering"],
                 units=metadata["units"],
+                support=metadata["support"],
+                sampling=metadata["sampling"],
                 frame=metadata["frame"],
                 clock=metadata["clock"],
             )
@@ -394,7 +394,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             self._primitive_state_values = qualified
         return handle
 
-    def species(self, name: Any, state: Any = (), roles: Any = None) -> Any:
+    def species(self, name: Any, state: Any = (), roles: Any = None, *,
+                support: Any = None, units: Any = None, sampling: str = "unspecified") -> Any:
         """Declare a named species: a named block instance of its own StateSpace. Each species lowers
         to one :class:`pops.model.StateSpace` and a named block (Spec 3 sections 12, 16). The returned
         :class:`StateHandle` unpacks into its component vars and indexes them by name (``e["ne"]``) for
@@ -417,15 +418,23 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         if not self._species and self._multi_module is None:
             # First species: retain the single-state dsl-backed execution path.
             handle = self.state(
-                name, components=components, roles=None if roles is None else role_map)
+                name, components=components, roles=None if roles is None else role_map,
+                support=support, units=units, sampling=sampling)
             # state() already retains qualified quantity leaves. Promotion keeps
             # their exact declaration identity even when components are homonymous.
             self._species[handle.name] = handle
             return handle
+        from .board_handles import _canon_role
+        template = None
+        if support is not None or units is not None or sampling != "unspecified":
+            from pops.model import StateSpace
+            template = StateSpace(name, components,
+                roles={component: _canon_role(role) for component, role in role_map.items()},
+                frame="model" if self._frame is None else self._frame.canonical_id,
+                support=support, units=units, sampling=sampling, representation="conservative")
         if self._multi_module is None:
-            return self._promote_to_multispecies(
-                extra=(name, components, role_map))
-        return self._add_species(name, components=components, roles=role_map)
+            return self._promote_to_multispecies(extra=(name, components, role_map, template))
+        return self._add_species(name, components=components, roles=role_map, template=template)
 
     def primitive(self, name: Any, expr: Any) -> Any:
         """Define a primitive quantity by its formula; returns a usable expression."""

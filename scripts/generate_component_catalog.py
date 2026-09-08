@@ -1140,7 +1140,9 @@ typedef struct PopsClusteringApiV1 {{
 }} PopsClusteringApiV1;
 
 typedef enum PopsTransferOperationV1 {{
-  POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1 = 1
+  POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1 = 1,
+  POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1 = 2,
+  POPS_TRANSFER_OPERATION_PHYSICAL_PULLBACK_V1 = 3
 }} PopsTransferOperationV1;
 typedef struct PopsTransferRequestV1 {{
   uint32_t struct_size;

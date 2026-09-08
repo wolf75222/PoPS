@@ -774,7 +774,9 @@ inline int apply_transfer(const PopsTransferApiV1& api, void* state,
   validate_execution_field(request.execution, request.destination, "transfer destination");
   if (request.dimension != request.source.dimension ||
       request.dimension != request.destination.dimension || request.refinement_ratio == nullptr ||
-      request.operation != POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1 ||
+      (request.operation != POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1 &&
+       request.operation != POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1 &&
+       request.operation != POPS_TRANSFER_OPERATION_PHYSICAL_PULLBACK_V1) ||
       request.source.component_count != request.destination.component_count ||
       request.source.centering != request.destination.centering ||
       request.source.centering_axes != request.destination.centering_axes ||
@@ -787,10 +789,13 @@ inline int apply_transfer(const PopsTransferApiV1& api, void* state,
     const auto destination_interior = request.destination.extents[axis] -
                                       request.destination.ghost_lower[axis] -
                                       request.destination.ghost_upper[axis];
+    const bool pullback = request.operation == POPS_TRANSFER_OPERATION_PHYSICAL_PULLBACK_V1;
+    const auto fine = pullback ? destination_interior : source_interior;
+    const auto coarse = pullback ? source_interior : destination_interior;
     if (ratio <= 0 ||
-        destination_interior >
+        coarse >
             std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(ratio) ||
-        source_interior != destination_interior * static_cast<std::size_t>(ratio))
+        fine != coarse * static_cast<std::size_t>(ratio))
       throw std::invalid_argument("transfer refinement ratio must be positive");
   }
   return api.apply(state, &request, &status);

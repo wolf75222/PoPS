@@ -35,6 +35,11 @@ class NativeLayoutMapping:
                                    for row in requirements):
             raise TypeError(
                 "NativeLayoutMapping.requirements must contain exact mapping requirements")
+        for requirement in requirements:
+            if requirement.physical_map is not None:
+                claimed = self.component.component_manifest.to_data()["signature"].get("physical_map")
+                if canonical_bytes(claimed) != canonical_bytes(requirement.physical_map.to_data()):
+                    raise ValueError("native component does not authenticate the exact physical map")
         ids = tuple(row.qualified_id for row in requirements)
         if len(ids) != len(set(ids)):
             raise ValueError("NativeLayoutMapping requirements cannot contain duplicates")

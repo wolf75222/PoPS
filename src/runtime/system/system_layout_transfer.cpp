@@ -321,7 +321,9 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
     target_block_index = target->blocks_.index(spec.target_block);
     components = source->sp[static_cast<std::size_t>(source_block_index)].ncomp;
     const mesh::BoxArray<Dim> carrier =
-        source_carrier_boxes<Dim>(target->ba, source->dom, target->dom, spec.refinement_ratio);
+        spec.operation == POPS_TRANSFER_OPERATION_PHYSICAL_PULLBACK_V1
+            ? source->ba
+            : source_carrier_boxes<Dim>(target->ba, source->dom, target->dom, spec.refinement_ratio);
     source_snapshot = field_type(carrier, rebind_distribution(carrier, target->dm),
                                  target->local_rank, components, Extent<Dim>{});
     source_copy_schedule.emplace(prepare_exact_copy_schedule(source_snapshot, source_state()));
@@ -356,22 +358,41 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
         spec.target_representation != kCellAverageRepresentation)
       throw std::invalid_argument(
           "prepared conservative transfer requires exact cell-average representations");
-    if (spec.synchronization_identity != kBeforeStepSynchronization)
-      throw std::invalid_argument(
-          "prepared System transfer requires exact before-step synchronization");
-    if (spec.operation != POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1)
+    const bool moment = spec.operation == POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1;
+    const bool pullback = spec.operation == POPS_TRANSFER_OPERATION_PHYSICAL_PULLBACK_V1;
+    const bool physical = moment || pullback;
+    const std::string_view synchronization = pullback
+        ? "pops://synchronization/after-source-step@1" : kBeforeStepSynchronization;
+    if (spec.synchronization_identity != synchronization)
+      throw std::invalid_argument("prepared System transfer synchronization is unsupported");
+    if (!physical && spec.operation != POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1)
       throw std::invalid_argument("prepared System transfer operation is unsupported");
+    if (physical) {
+      if (Dim != 2 || communicator.size() != 1 || source->ba.size() != 1 ||
+          target->ba.size() != 1 || execution.memory_space != POPS_MEMORY_SPACE_HOST_V1)
+        throw std::invalid_argument(
+            "physical maps require Dim=2, host memory, one rank and one patch per layout");
+      const auto* field = moment ? target : source;
+      if (field->dom.length(1) != 1 || field->cfg.lower[1] != 0.0 ||
+          field->cfg.upper[1] != 1.0 || !field->periodicity[1] ||
+          spec.refinement_ratio[0] != 1)
+        throw std::invalid_argument(
+            "physical field requires a periodic unit-measure singleton hidden storage axis");
+    }
     for (int axis = 0; axis < Dim; ++axis) {
       const auto position = static_cast<std::size_t>(axis);
       if (spec.refinement_ratio[position] <= 0)
         throw std::invalid_argument("prepared System transfer ratios must be positive");
-      if (source->cfg.lower[axis] != target->cfg.lower[axis] ||
-          source->cfg.upper[axis] != target->cfg.upper[axis] ||
-          source->periodicity[position] != target->periodicity[position])
+      if ((!physical || axis == 0) &&
+          (source->cfg.lower[axis] != target->cfg.lower[axis] ||
+           source->cfg.upper[axis] != target->cfg.upper[axis] ||
+           source->periodicity[position] != target->periodicity[position]))
         throw std::invalid_argument(
-            "prepared System conservative transfer requires one exact physical domain/topology");
-      const std::int64_t expected = target->dom.length(axis) * spec.refinement_ratio[position];
-      if (source->dom.length(axis) != expected)
+            "prepared System transfer requires exact shared physical domain/topology");
+      const auto* fine = pullback ? target : source;
+      const auto* coarse = pullback ? source : target;
+      const std::int64_t expected = coarse->dom.length(axis) * spec.refinement_ratio[position];
+      if (fine->dom.length(axis) != expected)
         throw std::invalid_argument(
             "prepared System transfer ratio does not authenticate the source/target extents");
     }

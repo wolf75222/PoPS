@@ -50,3 +50,8 @@ __all__ = [
     "normalize_layout_plan",
     "geometry", "masks", "boundaries",
 ]
+
+from .physical_mapping import PhysicalSupportMap, VelocityQuadrature
+__all__ += ["PhysicalSupportMap", "VelocityQuadrature"]
+from .native_physical_mapping import native_physical_mapping
+__all__ += ["native_physical_mapping"]

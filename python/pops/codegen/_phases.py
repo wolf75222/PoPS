@@ -120,7 +120,7 @@ def resolve(
     validate_program_layout_reads(problem, layout_plan, time=resolved_time)
     if len(layout_plan.layouts) > 1:
         co_layout_ops = {
-            "coupled_rate", "solve_coupled_implicit", "solve_fields_from_blocks",
+            "solve_coupled_implicit", "solve_fields_from_blocks",
             "field_solve_from_blocks",
         }
         present = sorted({
@@ -145,13 +145,27 @@ def resolve(
 
     validate_program_spatial_dimension(resolved_time, resolved_dimension(native_layouts))
     validate_layout_mapping_components(layout_plan, components)
-    if len(layout_plan.layouts) > 1 and tuple(problem.layout_subjects().fields):
+    from pops.codegen._physical_mapping_resolution import validate_physical_mapping_geometry
+    validate_physical_mapping_geometry(layout_plan)
+    from pops.fields.operator import FieldOperator
+    legacy_fields = any(isinstance(row.operator, FieldOperator)
+                        for _name, row in problem._field_registry.resolved_items(problem.resolve))
+    has_physical_maps = any(row.requirement.physical_map is not None for row in layout_plan.mappings)
+    if len(layout_plan.layouts) > 1 and (legacy_fields or (
+            tuple(problem.layout_subjects().fields) and not has_physical_maps)):
         _refuse_runtime(
             layout_plan,
             gate="multi_layout_field_operator_unavailable",
             message=("FieldOperator storage/solve has no per-layout compiled partition yet; "
                      "refusing before artifact creation"),
         )
+    if len(layout_plan.layouts) > 1 and any(
+            value.op in ("coupled_rate", "matrix_free_operator") for value in resolved_time._values):
+        from pops.codegen.program_slicing import slice_program
+        for layout_row in layout_plan.layouts:
+            selected_names = tuple(row.subject.local_id for row in layout_plan.assignments
+                if row.subject_kind == "block" and row.layout == layout_row.handle)
+            slice_program(resolved_time, selected_names)
     resolved_layout = resolved_layouts.single() if len(resolved_layouts.rows) == 1 \
         else resolved_layouts
 
@@ -308,6 +322,9 @@ def resolve(
 
     program_field_plans = capture_program_field_plans(
         problem, detached_frozen, target=target, layout_plan=layout_plan, program=resolved_time)
+    from pops.codegen._physical_mapping_resolution import validate_physical_mapping_program
+    validate_physical_mapping_program(layout_plan, resolved_time, program_field_plans,
+                                      resolve=problem.resolve)
     from pops.codegen.program_emit_field_routes import validate_program_field_routes
     validate_program_field_routes(resolved_time, field_plans)
     snapshot = prepare_problem_snapshot(

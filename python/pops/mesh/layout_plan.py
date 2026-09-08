@@ -258,6 +258,7 @@ class LayoutPlanBuilder:
         source_representation: LayoutRepresentation,
         target_representation: LayoutRepresentation,
         reverse_of: LayoutMappingRequirement | None = None,
+        physical_map: Any = None,
     ) -> tuple[LayoutMappingRequirement, ...]:
         """Require a qualified directional data transfer between two materialized layouts."""
         for handle in (source_layout, target_layout):
@@ -285,7 +286,7 @@ class LayoutPlanBuilder:
             reverse_identity = reverse_of.qualified_id
         forward = LayoutMappingRequirement(
             source_layout, target_layout, source_port, target_port,
-            operation, synchronization, reverse_identity,
+            operation, synchronization, reverse_identity, physical_map,
         )
         if reverse_of is not None:
             validate_reverse_mapping(forward, reverse_of)
