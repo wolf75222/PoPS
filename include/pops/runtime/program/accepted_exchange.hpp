@@ -49,8 +49,8 @@ struct ExchangeRecord {
   /// interval so several accepted substeps can share an enclosing provisional ledger.
   void qualify_runtime_point(const runtime::multiblock::BoundaryEvaluationPoint& point) {
     if (point.clock.empty() || point.tick < 0 || point.level < 0 || point.substep < 0 ||
-        point.stage < 0 || point.stage_fraction < amr::Rational(0, 1) ||
-        amr::Rational(1, 1) < point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0 || !std::isfinite(point.physical_time))
+        point.stage < 0 || point.stage_fraction < ::pops::amr::Rational(0, 1) ||
+        ::pops::amr::Rational(1, 1) < point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0 || !std::isfinite(point.physical_time))
       throw std::invalid_argument("accepted exchange requires a complete runtime evaluation point");
     evaluation_context = "pops.exchange.frame.v1/" + std::to_string(point.clock.size()) + ":" +
                          point.clock + "/" + std::to_string(point.tick) + "/" +

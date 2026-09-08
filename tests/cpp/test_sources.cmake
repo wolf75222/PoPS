@@ -221,3 +221,7 @@ set(POPS_CPP_TEST_SOURCE_test_variable_role "tests/cpp/unit/runtime/test_variabl
 set(POPS_CPP_TEST_SOURCE_test_variable_user_role "tests/cpp/unit/runtime/test_variable_user_role.cpp")
 set(POPS_CPP_TEST_SOURCE_test_weno5_compiled_model "tests/cpp/integration/native_loader/test_weno5_compiled_model.cpp")
 set(POPS_CPP_TEST_SOURCE_test_weno_convergence "tests/cpp/unit/numerics/test_weno_convergence.cpp")
+
+set(POPS_CPP_TEST_SOURCE_test_prepared_diffusion "tests/cpp/unit/runtime/test_prepared_diffusion.cpp")
+
+set(POPS_CPP_TEST_SOURCE_test_prepared_spatial_residual "tests/cpp/unit/runtime/test_prepared_spatial_residual.cpp")
