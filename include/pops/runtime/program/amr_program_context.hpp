@@ -286,6 +286,7 @@ class AmrProgramContext {
   // layout of AmrProgramContext while making each semantic authority independently auditable.
 #include <pops/runtime/program/amr_program_context_spatial.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_public.inc>
+#include <pops/runtime/program/amr_program_context_diffusion.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_public.inc>
 #include <pops/runtime/program/amr_program_context_spatial_operations.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_public.inc>

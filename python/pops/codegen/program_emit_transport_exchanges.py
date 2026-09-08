@@ -2,11 +2,16 @@
 import json
 
 
-def emit_transport_exchanges(faces, operation, occurrence, evaluation, weight):
+def emit_transport_exchanges(faces, operation, occurrence, evaluation, weight, *,
+                             program_block=0, active_field=None):
     # Native hyperbolic FaceField contains the physical face integral already. Preserve
     # its actual measure in the ledger; -div(F) reverses the diffusive incidence sign.
+    active = active_field or "ctx.state(%d)" % program_block
+    active_name = faces + "_active"
     return [
         "pops::sync_host();",
+        "const auto* %s = ctx.pointwise_active_mask(%d, %s);" % (
+            active_name, program_block, active),
         "for (const auto& accepted_faces : %s) {" % faces,
         "  const auto cells = accepted_faces.cell_box();",
         "  const auto extent = cells.extent();",
@@ -18,6 +23,12 @@ def emit_transport_exchanges(faces, operation, occurrence, evaluation, weight):
         "      cell[axis] += static_cast<int>(remainder % extent[axis]);",
         "      remainder /= extent[axis];",
         "    }",
+        "    bool covered = false;",
+        "    if (%s != nullptr)" % active_name,
+        "      for (std::size_t local = 0; local < %s->local_size(); ++local)" % active_name,
+        "        if (%s->box(local).contains(cell))" % active_name,
+        "          covered = std::as_const(*%s).fab(local).view()(cell,0) < 0.5;" % active_name,
+        "    if (covered) continue;",
         "    for (int axis = 0; axis < pops::kNativeDimension; ++axis) {",
         "      pops::Real measure = 1;",
         "      for (int tangent = 0; tangent < pops::kNativeDimension; ++tangent)",

@@ -49,12 +49,13 @@ def _boundary_cpp(law):
 
 def _emit_diffusive_preparation(v, state_var, prepared_var, node_model,
                                 provider_plans=None, bidx=0, target="system"):
-    if target != "system":
-        raise ValueError("AMR diffusion execution is unavailable before composite face/exchange integration")
+    if target not in {"system", "amr_system"}:
+        raise ValueError("diffusion execution requires a Uniform or AMR native install scope")
     _,selected,_=_selected(v,node_model)
     lines = ["ctx.require_cartesian_generated_operator(%d, \"diffusive_face_evaluation\");" % bidx,
-        "pops::runtime::program::PreparedDiffusion<pops::kNativeDimension> %s(ctx, %s, %s);" % (
-        prepared_var,state_var,_boundary_cpp(selected["physical"]))]
+        "pops::runtime::program::PreparedDiffusion<pops::kNativeDimension> %s(ctx, %s, %s, %s);" % (
+        prepared_var,state_var,_boundary_cpp(selected["physical"]),
+        "true" if target == "amr_system" else "false")]
     if any(row.kind == "flux" for row in v.attrs["physical_balance"].occurrences):
         lines.append("std::vector<pops::nd::FaceField<pops::kNativeDimension>> %s_transport_faces;" % prepared_var)
     return lines
@@ -62,8 +63,8 @@ def _emit_diffusive_preparation(v, state_var, prepared_var, node_model,
 
 def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
                         prepared_var=None):
-    if target != "system":
-        raise ValueError("AMR diffusion execution is unavailable before composite face/exchange integration")
+    if target not in {"system", "amr_system"}:
+        raise ValueError("diffusion execution requires a Uniform or AMR native install scope")
     impl,selected,rows=_selected(v,node_model)
     state_var=var[v.inputs[0].id]
     out="diffusive_rhs_%d" % v.id
@@ -83,6 +84,8 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
     qid=program_provider_consumer_qid(node_model,v.id,v.block)
     binding=_provider_binding(impl,roots,provider_plans,qid)
     impl.assign_runtime_indices()
+    if target == "amr_system":
+        lines.append("ctx.prepare_generated_state(%d,%s,%d);" % (bidx,state_var,v.id))
     lines.extend(_prepare_provider_values(binding,bidx,state_var))
     if explicit:
         lines.append("try {")
@@ -121,6 +124,9 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
     coefficient=sum(row.coefficient for row in rows)
     if coefficient != 1:
         lines.append("pops::scale(%s,%s);" % (out,scalar_cpp(coefficient)))
+    if target == "amr_system" and explicit:
+        lines.append("ctx.attach_diffusive_flux_basis(%d,%s,%d,%s.faces(),%s);" % (
+            bidx,out,v.id,prepared_var,scalar_cpp(coefficient)))
     transport = tuple(row for row in v.attrs["physical_balance"].occurrences if row.kind=="flux")
     frequency = "%s*%s.explicit_frequency()" % (scalar_cpp(coefficient),prepared_var)
     if transport:
@@ -152,7 +158,8 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
     return prepared_var
 
 
-def _emit_diffusive_accepted(v, prepared_var, lines, temporal_weight_cpp, evaluation_context):
+def _emit_diffusive_accepted(v, prepared_var, lines, temporal_weight_cpp, evaluation_context,
+                             program_block=0):
     """Publish only the selected accepted quadrature; no residual or seed contributes."""
     view = v.attrs["physical_balance"]
     handle = view.balance.handle
@@ -166,17 +173,18 @@ def _emit_diffusive_accepted(v, prepared_var, lines, temporal_weight_cpp, evalua
             occurrence = operation+"/occurrence:"+str(row.identity[1])
             lines.extend(emit_transport_exchanges(
                 prepared_var+"_transport_faces", operation, occurrence, evaluation_context,
-                temporal_weight_cpp))
+                temporal_weight_cpp, program_block=program_block,
+                active_field=prepared_var+".prototype()"))
     if v.attrs.get("fitted",False):
         ordinals=tuple(row.ordinal for row in view.occurrences if row.kind in {"drift","diffusion"})
         occurrence=operation+"/joint-occurrences:"+",".join(map(str,ordinals))
-        lines.append("%s.stage_accepted_exchanges(ctx,%s,%s,%s,%s);" % (
-            prepared_var,json.dumps(operation),json.dumps(occurrence),json.dumps(evaluation_context),temporal_weight_cpp))
+        lines.append("%s.stage_accepted_exchanges(ctx,%d,%s,%s,%s,%s);" % (
+            prepared_var,program_block,json.dumps(operation),json.dumps(occurrence),json.dumps(evaluation_context),temporal_weight_cpp))
         return
     for row in view.occurrences:
         if row.kind != "diffusion":
             continue
         occurrence = operation+"/occurrence:"+str(row.identity[1])
-        lines.append("%s.stage_accepted_exchanges(ctx,%s,%s,%s,(%s)*%s);" % (
-            prepared_var,json.dumps(operation),json.dumps(occurrence),
+        lines.append("%s.stage_accepted_exchanges(ctx,%d,%s,%s,%s,(%s)*%s);" % (
+            prepared_var,program_block,json.dumps(operation),json.dumps(occurrence),
             json.dumps(evaluation_context),temporal_weight_cpp,scalar_cpp(row.coefficient)))

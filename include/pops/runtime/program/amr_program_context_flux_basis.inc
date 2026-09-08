@@ -157,24 +157,27 @@ void prepare_active_flux_basis_impl_(
     const bool prepared_evaluation = provider == FluxBasisProvider::PreparedResidual ||
                                      provider == FluxBasisProvider::PreparedDefaultFlux;
     if ((!prepared_evaluation && provider != FluxBasisProvider::ExactFace &&
-         provider != FluxBasisProvider::NamedCell) ||
+         provider != FluxBasisProvider::NamedCell &&
+         provider != FluxBasisProvider::DiffusiveFace) ||
         (prepared_evaluation &&
          (evaluation == nullptr || exact_face_fluxes != nullptr || named_cell_fluxes != nullptr)) ||
         (provider == FluxBasisProvider::ExactFace &&
          (evaluation == nullptr || exact_face_fluxes == nullptr || named_cell_fluxes != nullptr)) ||
+        (provider == FluxBasisProvider::DiffusiveFace &&
+         (evaluation != nullptr || exact_face_fluxes == nullptr || named_cell_fluxes != nullptr)) ||
         (provider == FluxBasisProvider::NamedCell &&
          (evaluation != nullptr || exact_face_fluxes != nullptr || named_cell_fluxes == nullptr)))
       throw std::logic_error(
           "AMR Program flux basis provider differs from its frozen operator route");
     const double interval_dt = active_flux_interval_duration_(interval);
     const auto expected_stage =
-        exact_face_fluxes == nullptr ? stage_time_ : ::pops::amr::Rational{0, 1};
+        provider == FluxBasisProvider::ExactFace ? ::pops::amr::Rational{0, 1} : stage_time_;
     if (rhs_identity < 0 || point.clock.empty() || point.stage < 0 ||
         point.level != active_level_ || point.substep != logical_substep_ ||
         point.stage_fraction != expected_stage ||
         (provider != FluxBasisProvider::ExactFace && point.stage != rhs_identity) ||
         !std::isfinite(point.dt) || !(point.dt > 0.0) || !std::isfinite(point.physical_time) ||
-        (exact_face_fluxes == nullptr && point.dt != interval_dt) ||
+        (provider != FluxBasisProvider::ExactFace && point.dt != interval_dt) ||
         topology_epoch != runtime_->topology_epoch() ||
         materialization_generation != runtime_->materialization_generation() ||
         (evaluation != nullptr && exact_face_fluxes == nullptr && named_cell_fluxes == nullptr &&
@@ -306,10 +309,10 @@ void prepare_active_flux_basis_impl_(
       for (Real& component : payload) {
         if (!std::isfinite(static_cast<double>(component)))
           throw std::invalid_argument("AMR Program flux basis contains a non-finite payload");
-        // Native finite-volume providers retain face-integrated fluxes, while the named
-        // cell-centered provider above derives the authenticated face density directly.  The
-        // metric ledger always receives a density and multiplies its face measure exactly once.
-        if (named_cell_fluxes == nullptr)
+        // Native finite-volume providers retain face-integrated fluxes. Named cell-centered and
+        // constitutive diffusion providers supply density directly. The metric ledger always
+        // receives a density and multiplies its face measure exactly once.
+        if (named_cell_fluxes == nullptr && provider != FluxBasisProvider::DiffusiveFace)
           component /= static_cast<Real>(face.measure);
       }
       prepared_face.emplace(FluxBasisFace{face.role, face.axis, face.face, face.coarse_face,

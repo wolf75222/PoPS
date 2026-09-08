@@ -267,6 +267,7 @@ sdk-support pops/runtime/program/amr_program_checkpoint.hpp
 sdk-support pops/runtime/program/amr_program_context_cell_temporal_runtime.inc
 sdk-support pops/runtime/program/amr_program_context_cell_temporal_configuration.inc
 sdk-support pops/runtime/program/amr_program_context_cell_temporal_level_runtime.inc
+sdk-support pops/runtime/program/amr_program_context_diffusion.inc
 sdk-support pops/runtime/program/amr_program_context_field_runtime_definitions.inc
 sdk-support pops/runtime/program/amr_program_context_field_runtime_private.inc
 sdk-support pops/runtime/program/amr_program_context_field_runtime_public.inc

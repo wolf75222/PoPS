@@ -60,6 +60,8 @@ class PreparedDiffusion {
   Field variable_, coefficients_, status_, reason_;
   std::shared_ptr<Boundary> state_boundary_, variable_boundary_, coefficient_boundary_;
   std::vector<nd::FaceField<Dim>> faces_;
+  const ExecutionLane* lane_ = nullptr;
+  bool prepared_amr_ghosts_ = false;
   Real frequency_ = Real(0);
   bool evaluated_ = false;
   bool matches_storage_(const Field& field) const {
@@ -73,25 +75,37 @@ class PreparedDiffusion {
  public:
   template <class Context>
   PreparedDiffusion(Context& ctx, Field& prototype,
-                    std::array<DiffusiveBoundary<Dim>, 2 * Dim> physical)
-      : geometry_(ctx.geometry()),
-        physical_(physical),
-        variable_(prototype.layout(), prototype.distribution(), prototype.local_rank(), 2,
-                  prototype.ghosts()),
-        coefficients_(prototype.layout(), prototype.distribution(), prototype.local_rank(), Dim,
-                      prototype.ghosts()),
-        status_(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
-                prototype.ghosts()),
-        reason_(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
-                prototype.ghosts()) {
+                    std::array<DiffusiveBoundary<Dim>, 2 * Dim> physical,
+                    bool prepared_amr_ghosts = false)
+      : geometry_(ctx.geometry()), physical_(physical), prepared_amr_ghosts_(prepared_amr_ghosts) {
     if constexpr (!Kokkos::SpaceAccessibility<Kokkos::HostSpace,
                                               typename Field::memory_space>::accessible)
       throw std::invalid_argument(
           "selected diffusion face ledger requires host-accessible native storage");
-    if (ctx.prepared_execution_lane().size() != 1)
-      throw std::invalid_argument("diffusion currently qualifies one MPI rank only");
-    if (prototype.ncomp() != 1)
-      throw std::invalid_argument("diffusion requires one scalar evolved component");
+    lane_ = &ctx.prepared_execution_lane();
+    if (all_reduce_max(prototype.ncomp() == 1 ? 0L : 1L, *lane_) != 0)
+      throw std::invalid_argument("diffusion requires one scalar evolved component collectively");
+    std::exception_ptr allocation_error;
+    try {
+      variable_ = Field(prototype.layout(), prototype.distribution(), prototype.local_rank(), 2,
+                        prototype.ghosts());
+      coefficients_ = Field(prototype.layout(), prototype.distribution(), prototype.local_rank(),
+                            Dim, prototype.ghosts());
+      status_ = Field(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
+                      prototype.ghosts());
+      reason_ = Field(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
+                      prototype.ghosts());
+      faces_.reserve(prototype.local_size());
+      for (std::size_t local = 0; local < prototype.local_size(); ++local)
+        faces_.emplace_back(prototype.box(local), 3);
+    } catch (...) {
+      allocation_error = std::current_exception();
+    }
+    if (all_reduce_max(allocation_error ? 1L : 0L, *lane_) != 0) {
+      if (lane_->size() == 1 && allocation_error)
+        std::rethrow_exception(allocation_error);
+      throw std::runtime_error("diffusion preparation allocation failed collectively");
+    }
     state_boundary_ = ctx.prepare_mesh_boundary_session(prototype, ctx.prepared_execution_lane());
     variable_boundary_ =
         ctx.prepare_mesh_boundary_session(variable_, ctx.prepared_execution_lane());
@@ -108,8 +122,6 @@ class PreparedDiffusion {
               "physical diffusive boundary differs from bound mesh topology");
       }
     }
-    for (std::size_t local = 0; local < prototype.local_size(); ++local)
-      faces_.emplace_back(prototype.box(local), 3);
   }
 
   template <class LawFactory>
@@ -139,15 +151,23 @@ class PreparedDiffusion {
   void apply_impl_(Field& input, Field& output, LawFactory factory, Real drift_ratio,
                    std::array<DiffusiveBoundary<Dim>, 2 * Dim> potential_boundaries) {
     evaluated_ = false;
-    if (input.shares_storage_with(output) || !matches_storage_(input) || !matches_storage_(output))
-      throw std::invalid_argument("diffusion input/output do not match prepared scalar storage");
+    const long storage_error =
+        input.shares_storage_with(output) || !matches_storage_(input) || !matches_storage_(output)
+            ? 1L
+            : 0L;
+    if (all_reduce_max(storage_error, *lane_) != 0)
+      throw std::invalid_argument(
+          "diffusion input/output do not match prepared scalar storage collectively");
     for (std::size_t local = 0; local < input.local_size(); ++local) {
       const auto law = factory(local);
       const auto w = variable_.fab(local).view();
       const auto a = coefficients_.fab(local).view();
       const auto status = status_.fab(local).view();
       const auto reason = reason_.fab(local).view();
-      for_each_cell(input.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+      const Box<Dim> evaluation_box =
+          prepared_amr_ghosts_ ? input.fab(local).grown_box().intersect(geometry_.domain())
+                               : input.box(local);
+      for_each_cell(evaluation_box, [=] POPS_HD(const Index<Dim>& cell) {
         const auto evaluation = law(cell);
         std::array<Real, Dim + 2> values;
         if constexpr (requires {
@@ -183,7 +203,7 @@ class PreparedDiffusion {
       });
     }
     device_fence();
-    const int category = static_cast<int>(reduce_max_local(status_));
+    const int category = static_cast<int>(all_reduce_max(reduce_max_local(status_), *lane_));
     if (category != 0) {
       Real selected_reason = 0;
       for (std::size_t local = 0; local < input.local_size(); ++local) {
@@ -195,10 +215,12 @@ class PreparedDiffusion {
               return status(cell, 0) == category ? reason(cell, 0) : Real(0);
             }));
       }
+      selected_reason = all_reduce_max(selected_reason, *lane_);
       throw DiffusiveEvaluationError("diffusive constitutive evaluation failed", category,
                                      static_cast<unsigned>(selected_reason));
     }
-    state_boundary_->fill_halo(input);
+    if (!prepared_amr_ghosts_)
+      state_boundary_->fill_halo(input);
     variable_boundary_->fill_halo(variable_);
     coefficient_boundary_->fill_halo(coefficients_);
     const auto geometry = geometry_;
@@ -304,7 +326,7 @@ class PreparedDiffusion {
       });
     }
     device_fence();
-    frequency_ = reduce_max_local(status_);
+    frequency_ = all_reduce_max(reduce_max_local(status_), *lane_);
     if (!std::isfinite(frequency_))
       throw DiffusiveEvaluationError("diffusive face evaluation is invalid");
     evaluated_ = true;
@@ -320,15 +342,20 @@ class PreparedDiffusion {
   /// Two cell incidences of an interior face have opposite orientation. They are retained as
   /// distinct quadrature records, so cancellation and each boundary exchange remain auditable.
   template <class Context>
-  void stage_accepted_exchanges(Context& ctx, const std::string& operation,
+  void stage_accepted_exchanges(Context& ctx, int program_block, const std::string& operation,
                                 const std::string& occurrence, const std::string& evaluation,
                                 Real temporal_weight) const {
     (void)explicit_frequency();
     sync_host();
+    const Field* const active = ctx.pointwise_active_mask(program_block, variable_);
+    if (active != nullptr)
+      sync_host();
     for (std::size_t local = 0; local < variable_.local_size(); ++local) {
       const auto box = variable_.box(local);
       const auto extent = box.extent();
       const auto faces = faces_[local].view();
+      const auto active_values = active == nullptr ? FieldView<const Real, Dim>{}
+                                                   : std::as_const(*active).fab(local).view();
       for (std::int64_t ordinal = 0; ordinal < box.numPts(); ++ordinal) {
         auto remainder = ordinal;
         Index<Dim> cell = box.lo;
@@ -336,6 +363,8 @@ class PreparedDiffusion {
           cell[axis] += static_cast<int>(remainder % extent[axis]);
           remainder /= extent[axis];
         }
+        if (active != nullptr && active_values(cell, 0) < Real(0.5))
+          continue;
         for (int axis = 0; axis < Dim; ++axis) {
           Real measure = 1;
           for (int tangent = 0; tangent < Dim; ++tangent)
@@ -356,6 +385,7 @@ class PreparedDiffusion {
     }
   }
   const auto& faces() const { return faces_; }
+  const Field& prototype() const { return variable_; }
   const auto& geometry() const { return geometry_; }
 };
 }  // namespace pops::runtime::program

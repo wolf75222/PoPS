@@ -457,7 +457,7 @@ std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_
         basis.level = in.i32();
         basis.rhs_identity = in.i32();
         const std::uint64_t provider = in.u64();
-        if (provider > static_cast<std::uint64_t>(FluxBasisProvider::NamedCell))
+        if (provider > static_cast<std::uint64_t>(FluxBasisProvider::DiffusiveFace))
           throw std::invalid_argument("AMR Program history flux payload has an invalid provider");
         basis.provider = static_cast<FluxBasisProvider>(provider);
         auto read_point = [&] {

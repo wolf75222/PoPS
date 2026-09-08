@@ -97,12 +97,13 @@ def accepted_diffusive_quadrature(program):
     return rows
 
 
-def emit_accepted_diffusive_exchanges(program, *, target="system"):
+def emit_accepted_diffusive_exchanges(program, *, target="system", block_indices=None):
     rows = accepted_diffusive_quadrature(program)
-    if rows and target != "system":
-        raise ValueError("AMR diffusive accepted exchanges require the M7 composite face route")
+    if rows and target not in {"system", "amr_system"}:
+        raise ValueError("diffusive accepted exchanges require a native install scope")
     lines = []
     for value, weight in rows:
+        block = 0 if block_indices is None else block_indices[value.block]
         _emit_diffusive_accepted(value, "diffusion_prepared_%d" % value.id, lines,
-            _coeff_cpp(weight), "stage:"+str(value.point)+"/evaluation:"+str(value.id))
+            _coeff_cpp(weight), "stage:"+str(value.point)+"/evaluation:"+str(value.id), block)
     return lines

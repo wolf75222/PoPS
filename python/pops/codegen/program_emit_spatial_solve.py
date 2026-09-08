@@ -114,7 +114,7 @@ def emit_spatial_solve(program: Any, value: Any, base: Any, variables: Any, mode
         if node.op == "diffusive_rhs":
             _emit_diffusive_accepted(
                 node, preparations[node.id], lines, _coeff_cpp(spatial_rate_weight(value, node)),
-                "implicit-stage:" + str(value.point) + "/solve:" + str(value.id))
+                "implicit-stage:" + str(value.point) + "/solve:" + str(value.id), owner)
     result = stem + "_result"
     lines += [
         "auto& %s = ctx.scratch_state(%d, 0, ctx.state(%d));" % (result, value.id, owner),

@@ -28,15 +28,18 @@ namespace {
 template <int Dim>
 class DiffusiveScalar : public pops::nd::ScalarAdvection<Dim> {
  public:
+  using Base = pops::nd::ScalarAdvection<Dim>;
   using State = typename pops::nd::ScalarAdvection<Dim>::State;
 
-  explicit DiffusiveScalar(pops::Real diffusivity) : diffusivity_(diffusivity) {}
+  DiffusiveScalar(pops::Real diffusivity, pops::RealVector<Dim> velocity)
+      : Base(Base::prepare(velocity)), diffusivity_(diffusivity) {}
 
   [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
-    return {"tests.amr.program-diffusion.scalar", 2};
+    return {"tests.amr.program-diffusion.scalar", 3};
   }
 
   void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    Base::serialize_exact_parameters(contract);
     contract.scalar(diffusivity_);
   }
 
@@ -160,6 +163,27 @@ std::vector<double> periodic_mode(const pops::Extent<Dim>& shape) {
 }
 
 template <int Dim>
+double transported_sine_projection(const std::vector<double>& values,
+                                   const pops::Extent<Dim>& shape) {
+  constexpr double two_pi = 6.283185307179586476925286766559;
+  double projection = 0.0;
+  for (std::size_t linear = 0; linear < values.size(); ++linear) {
+    std::size_t remaining = linear;
+    double basis = 1.0;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto width = static_cast<std::size_t>(shape[axis]);
+      const int coordinate = static_cast<int>(remaining % width);
+      remaining /= width;
+      const double x = (static_cast<double>(coordinate) + 0.5) / shape[axis];
+      const double phase = two_pi * (x - 0.17 * static_cast<double>(axis + 1));
+      basis *= axis == 0 ? std::sin(phase) : std::cos(phase);
+    }
+    projection += values[linear] * basis;
+  }
+  return projection / static_cast<double>(values.size());
+}
+
+template <int Dim>
 void materialize_conservative_bootstrap(pops::AmrSystem<Dim>& system,
                                         const pops::AmrSystemConfig<Dim>& config,
                                         const std::vector<double>& initial) {
@@ -194,10 +218,14 @@ void verify_refined_program_diffusion() {
   pops::test::install_amr_runtime_authority(system, "tests.amr.program-diffusion/runtime@1");
   system.set_temporal_relations({2}, {1}, {"integral_only"});
   system.install_block_state_route("heat", "tests.amr.program-diffusion/state/heat");
-  pops::add_compiled_model<Dim>(
-      system, "heat", DiffusiveScalar<Dim>{pops::Real(0.05)}, "none", "rusanov", "conservative",
-      "explicit", static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
-      static_cast<double>(pops::kWenoEpsilon), false, "tests.amr.program-diffusion/physical-flux");
+  pops::RealVector<Dim> velocity{};
+  for (int axis = 0; axis < Dim; ++axis)
+    velocity[axis] = axis == 0 ? pops::Real(0.35) : pops::Real(-0.2);
+  pops::add_compiled_model<Dim>(system, "heat", DiffusiveScalar<Dim>{pops::Real(0.05), velocity},
+                                "none", "rusanov", "conservative", "explicit",
+                                static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+                                static_cast<double>(pops::kWenoEpsilon), false,
+                                "tests.amr.program-diffusion/physical-flux");
   pops::test::install_prepared_threshold_union(
       system,
       {{"heat", "scalar", 1.15, pops::test::PreparedThresholdRelation::Above,
@@ -228,6 +256,8 @@ void verify_refined_program_diffusion() {
   pops::MultiFab<Dim> coarse_before(coarse);
   pops::MultiFab<Dim> fine_before(fine);
   const double mass_before = system.composite_reduce("heat", "sum", 0);
+  const double transport_projection_before = transported_sine_projection(initial, config.shape);
+  EXPECT_NEAR(transport_projection_before, 0.0, 2.0e-14);
   const pops::Real peak_before = pops::reduce_max(fine_before);
   constexpr double dt = 2.0e-4;
 
@@ -264,13 +294,15 @@ void verify_refined_program_diffusion() {
   EXPECT_NEAR(system.composite_reduce("heat", "sum", 0), mass_before, 2.0e-12);
   EXPECT_DOUBLE_EQ(system.composite_reduce("heat", "sum", 0), mass_trial);
   EXPECT_EQ(system.program_flux_ledger_manifest(), trial_flux);
+  const auto accepted_coarse = system.block_level_state_global("heat", 0);
+  EXPECT_GT(transported_sine_projection(accepted_coarse, config.shape), 1.0e-6);
   expect_covered_coarse_equals_fine_restriction(system, config.transition_ratios.front());
   EXPECT_LT(pops::reduce_max(system.prepared_amr_block_state(0, 1)),
             peak_before - pops::Real(1e-7));
 }
 
 TEST(test_amr_program_diffusion,
-     RefinedFickianFacesAreRefluxedAveragedDownAndTransactionallyPublished) {
+     RefinedTransportDiffusionFacesAreRefluxedAveragedDownAndTransactionallyPublished) {
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard;
 #endif

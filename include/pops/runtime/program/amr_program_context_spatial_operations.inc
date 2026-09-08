@@ -450,9 +450,9 @@ field_type& assembly_source(field_type& field, std::string_view identity) const 
 std::shared_ptr<scalar_boundary_session_type> prepare_mesh_boundary_session(
     field_type& prototype, const ExecutionLane& lane) const {
   require_prepared_lane_(lane, "AMR scalar boundary preparation");
-  return std::make_shared<scalar_boundary_session_type>(
-      geometry(), facade_->prepared_amr_boundary_topology(), prototype, lane,
-      next_boundary_generation_());
+  return scalar_boundary_session_type::prepare(geometry(),
+                                               facade_->prepared_amr_boundary_topology(), prototype,
+                                               lane, next_boundary_generation_());
 }
 
 std::shared_ptr<block_boundary_session_type> prepare_block_boundary_session(

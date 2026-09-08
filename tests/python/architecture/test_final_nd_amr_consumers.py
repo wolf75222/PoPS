@@ -24,6 +24,7 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
     {
         "pops/runtime/program/amr_program_context_spatial.inc",
         "pops/runtime/program/amr_program_context_field_runtime_public.inc",
+        "pops/runtime/program/amr_program_context_diffusion.inc",
         "pops/runtime/program/amr_program_context_flux_expression_public.inc",
         "pops/runtime/program/amr_program_context_spatial_operations.inc",
         "pops/runtime/program/amr_program_context_history_checkpoint_public.inc",
@@ -49,6 +50,9 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
     }
 )
 PROGRAM_RESPONSIBILITY_AUTHORITIES = {
+    "diffusion": frozenset(
+        {"pops/runtime/program/amr_program_context_diffusion.inc"}
+    ),
     "spatial_context": frozenset(
         {"pops/runtime/program/amr_program_context_spatial.inc"}
     ),
@@ -103,6 +107,7 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
     ),
 }
 PROGRAM_RESPONSIBILITY_BUDGETS = {
+    "diffusion": 180,
     "spatial_context": 350,
     "spatial_operations": 900,
     "field_runtime": 1_800,
@@ -117,9 +122,9 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
 # separately bounded, and their aggregate remains independently enforced.
 # M6 solve outcomes, accepted exchange transactions, and authenticated history replay add
 # explicit contracts to these fixed fragments. Retain a bounded allowance for those foundations.
-PROGRAM_FRAGMENT_BUDGET = 7_550
+PROGRAM_FRAGMENT_BUDGET = 7_730
 PROGRAM_SCAFFOLDING_BUDGET = 1_850
-PROGRAM_SEMANTIC_CLOSURE_BUDGET = 9_400
+PROGRAM_SEMANTIC_CLOSURE_BUDGET = 9_580
 SEMANTIC_AUTHORITIES = frozenset(
     {
         "pops/numerics/time/amr/reflux/amr_flux_execution.hpp",

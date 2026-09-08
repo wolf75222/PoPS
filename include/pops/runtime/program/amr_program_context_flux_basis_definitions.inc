@@ -13,6 +13,7 @@ enum class FluxBasisProvider : std::uint8_t {
   PreparedDefaultFlux = 1,
   ExactFace = 2,
   NamedCell = 3,
+  DiffusiveFace = 4,
 };
 
 struct FluxBasis {

@@ -34,7 +34,8 @@ void materialize_active_flux_expression_(std::size_t runtime_block,
         (basis.provider != FluxBasisProvider::PreparedResidual &&
          basis.provider != FluxBasisProvider::PreparedDefaultFlux &&
          basis.provider != FluxBasisProvider::ExactFace &&
-         basis.provider != FluxBasisProvider::NamedCell) ||
+         basis.provider != FluxBasisProvider::NamedCell &&
+         basis.provider != FluxBasisProvider::DiffusiveFace) ||
         (basis.provider != FluxBasisProvider::ExactFace &&
          basis.point.stage != basis.rhs_identity) ||
         basis.window.begin.macro_step != active_subcycling_window_.begin.macro_step ||
