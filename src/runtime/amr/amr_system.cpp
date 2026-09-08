@@ -18767,6 +18767,7 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
       multiblock_staged->install_prepared_coupling_operator(coupling.provider_contract,
                                                             coupling.view, coupling.operation);
     multiblock_staged->seal_couplings();
+    multiblock_staged->rematerialize_interface_flux_provider_from_(*p_->multiblock_hierarchy);
     std::optional<typename Impl::multiblock_type::ProgramBlockMap> block_map_candidate =
         p_->prepare_program_block_map_candidate(*multiblock_staged);
     std::optional<typename Impl::flux_expression_budget_type> flux_budget_candidate;

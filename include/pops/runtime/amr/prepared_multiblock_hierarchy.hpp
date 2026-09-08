@@ -69,6 +69,43 @@ class PreparedMultiBlockAmrHierarchy {
 
   friend class ::pops::AmrSystem<Dim>;
 
+  // A full restart rebuild constructs a new carrier instead of replacing a child in place.
+  // Carry its installed interface authority through the same strict runtime rematerialization
+  // used by regrid, before the owning System derives the candidate graph and ledger budget.
+  void rematerialize_interface_flux_provider_from_(const PreparedMultiBlockAmrHierarchy& source) {
+    std::shared_ptr<interface_scheduler_type> scheduler;
+    std::string contract;
+    std::exception_ptr failure;
+    try {
+      if (interface_scheduler_ || !interface_provider_contract_.empty() ||
+          source.interface_reconstruction_active_)
+        throw std::logic_error(
+            "AMR interface restart reconstruction requires an empty candidate and complete source");
+      if (source.interface_scheduler_)
+        scheduler = std::make_shared<interface_scheduler_type>();
+      contract = source.interface_provider_contract_;
+    } catch (...) {
+      failure = std::current_exception();
+    }
+    collectively_rethrow_(failure, "AMR restart interface authority allocation failed");
+    if (scheduler) {
+      const auto state_provider = [&](std::size_t block, int level) -> field_type& {
+        return state(block, static_cast<std::size_t>(level));
+      };
+      const auto geometry_provider = [&](int level) {
+        return Geometry<Dim>::from_bounds(primary_->hierarchy().layout(level).domain(),
+                                          source.interface_lower_, source.interface_upper_);
+      };
+      auto rematerialized = source.interface_scheduler_->rematerialized(
+          static_cast<int>(level_count()), state_provider, geometry_provider);
+      scheduler->swap(rematerialized);
+    }
+    interface_scheduler_.swap(scheduler);
+    interface_provider_contract_.swap(contract);
+    interface_lower_ = source.interface_lower_;
+    interface_upper_ = source.interface_upper_;
+  }
+
   // This is a private preparation scope inside the existing owning System transaction. It cannot
   // accept state: every temporary prefix is non-executable, and only the original complete route
   // recipe can qualify the final hierarchy. In particular BindBootstrap is not a runtime bypass.

@@ -614,6 +614,42 @@ TEST(test_amr_multiblock_implicit_transaction,
   EXPECT_THROW(ledger.accumulate(probe, measure, payload), std::length_error);
   ledger.rollback();
   EXPECT_EQ(system.program_accepted_state(), before);
+
+  // The same full-carrier rebuild used by restart must retain the installed interface recipe.
+  // Give this Program an exact accepted-application bound so a lost provider cannot silently
+  // change an authenticated nonzero checkpoint fragment capacity into an inactive zero budget.
+  system.install_prepared_amr_program_flux_expression_budget(
+      "tests.pair-budget/multilevel-program@1", std::vector<FluxBudget>{{1, 1}, {1, 1}}, 2, 128);
+  const auto before_rebuild = system.prepared_amr_interface_flux_ledger_budget();
+  ASSERT_EQ(before_rebuild.max_fragments_per_window, 6u);
+  ASSERT_GT(before_rebuild.max_payload_terms_per_window, 0u);
+  ASSERT_NO_THROW(system.rebuild_hierarchy(
+      {pops::AmrPatch<Dim>{1, pops::Box<Dim>::from_extents(fine_shape)}}, {0}));
+  const auto after_rebuild = system.prepared_amr_interface_flux_ledger_budget();
+  EXPECT_EQ(after_rebuild.max_fragments_per_window, before_rebuild.max_fragments_per_window);
+  EXPECT_EQ(after_rebuild.max_payload_terms_per_window,
+            before_rebuild.max_payload_terms_per_window);
+  EXPECT_EQ(after_rebuild.max_transaction_depth, before_rebuild.max_transaction_depth);
+  EXPECT_EQ(after_rebuild.max_evaluation_fragments, before_rebuild.max_evaluation_fragments);
+  EXPECT_EQ(after_rebuild.max_evaluation_payload_terms,
+            before_rebuild.max_evaluation_payload_terms);
+  for (int level = 0; level < 2; ++level)
+    EXPECT_EQ(system.interface_evaluation_count("tests.pair-budget/interface", level), 0u);
+
+  // A candidate that drops the declared high face must fail before replacing the live provider.
+  const auto rebuilt_image = system.program_accepted_state();
+  const auto rebuilt_fine = system.block_level_state_global("left", 1);
+  auto incomplete_shape = fine_shape;
+  incomplete_shape[0] /= 2;
+  EXPECT_THROW(system.rebuild_hierarchy(
+                   {pops::AmrPatch<Dim>{1, pops::Box<Dim>::from_extents(incomplete_shape)}}, {0}),
+               std::exception);
+  EXPECT_EQ(system.prepared_amr_interface_flux_ledger_budget().exact_contract,
+            after_rebuild.exact_contract);
+  EXPECT_EQ(system.program_accepted_state(), rebuilt_image);
+  EXPECT_EQ(system.block_level_state_global("left", 1), rebuilt_fine);
+  for (int level = 0; level < 2; ++level)
+    EXPECT_EQ(system.interface_evaluation_count("tests.pair-budget/interface", level), 0u);
 }
 
 TEST(test_amr_multiblock_implicit_transaction, MetadataNeverCreatesAnImplicitTemporalFallback) {
