@@ -34,6 +34,14 @@ def declare_interaction(model, name, *, outputs, preserves=None, dissipates=None
             if state not in inputs:
                 inputs.append(state)
         stack.extend(_children(value))
+    if preserves is not None:
+        from .interaction_inventories import PhysicalInventoryMap
+        preserves = (preserves,) if type(preserves) is PhysicalInventoryMap else tuple(preserves)
+        if any(type(item) is not PhysicalInventoryMap for item in preserves):
+            raise TypeError("interaction preservation requires explicit PhysicalInventoryMap records")
+        for inventory in preserves:
+            if any(projection.state not in normalized for projection in inventory.projections):
+                raise ValueError("inventory target is not an exact interaction recipient")
     operator = model.coupled_rate(name, inputs=inputs, outputs=normalized,
                                   preserves=preserves, dissipates=dissipates)
     return model.module.apply(operator, *inputs)

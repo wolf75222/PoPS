@@ -95,6 +95,11 @@ def _json_ready(value: Any) -> Any:
         from pops._ir.visitors import _dag_key_data
         from pops.time.references import canonical_handle
         return _json_ready(_dag_key_data((value.resolve_references(canonical_handle),)))
+    references = getattr(value, "declaration_references", None)
+    resolve = getattr(value, "resolve_references", None)
+    if callable(references) and references() and callable(resolve):
+        from pops.time.references import canonical_handle
+        value = resolve(canonical_handle)
     hook = getattr(value, "to_data", None)
     if callable(hook):
         return _json_ready(hook())

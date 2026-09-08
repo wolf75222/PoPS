@@ -7,7 +7,7 @@ from .visitors import _dependencies
 
 
 class NativeCall(Expr):
-    def __init__(self, function, inputs, *, context=None):
+    def __init__(self, function, inputs, *, context=None, occurrence=None):
         from pops.native_calls import NativeFunction
         from .quantity import QuantityRef
         if type(function) is not NativeFunction:
@@ -29,6 +29,11 @@ class NativeCall(Expr):
         if type(self.context) is not ApplicationContext:
             raise TypeError("native call context must be ApplicationContext")
         self.effects = function.effects
+        if occurrence is not None and (type(occurrence) is not str or not occurrence):
+            raise TypeError("native call occurrence must be nonempty immutable text")
+        if "diagnostic_counter" in self.effects and occurrence is None:
+            raise ValueError("diagnostic native calls require an explicit logical occurrence")
+        self.occurrence = occurrence
 
     def __getitem__(self, output):
         entries = dict(self.function.output_entries)
@@ -53,7 +58,7 @@ class NativeCall(Expr):
 
     def __pops_ir_key__(self, recurse):
         from pops.model.spaces import _metadata_key
-        return ("native_call", self.function.identity,
+        return ("native_call", self.function.identity, self.occurrence,
                 tuple(tuple(recurse(v) for v in values) for values in self.inputs),
                 _metadata_key((self.context.stage, self.context.iterate,
                                self.context.location, self.context.sampling)))
@@ -79,7 +84,7 @@ class NativeCall(Expr):
             Signature(self.function.signature.inputs, output),
             execution_domains=self.function.execution_domains, reads=self.function.reads,
             domains=self.function.domains, effects=self.effects)
-        return NativeCall(function, self.inputs, context=self.context)
+        return NativeCall(function, self.inputs, context=self.context, occurrence=self.occurrence)
 
     def eval(self, env):
         raise TypeError("native calls execute only in compiled native kernels; no Python callback")

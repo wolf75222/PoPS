@@ -372,6 +372,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                      has_shared_interface_implicit_jacvec
                  ))
         index += 1
+    from .program_interaction_exchanges import emit_accepted_interaction_exchanges
+    lines += emit_accepted_interaction_exchanges(program, var, block_idx, target=target)
     # Each committed block: a scratch commit (solve_local_linear / solve_linear / a non-base
     # linear_combine wrote a scratch) is copied into the block state; a linear_combine commit already
     # wrote ctx.state(idx) in place (var == base), so its copy is a no-op (skipped).

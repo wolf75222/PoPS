@@ -193,7 +193,8 @@ def _component_sources(
 
 
 def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch: Any, *,
-                              status: str | None = None, active_mask: str | None = None) -> list:
+                              status: str | None = None, active_mask: str | None = None,
+                              reason: str | None = None) -> list:
     """Lower a ``coupled_rate`` (Spec 3 criterion 27, ADC-457) to ONE multi-state for_each_cell kernel
     filling every participating block's rate scratch at once.
 
@@ -234,6 +235,8 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
         )
     if status is not None:
         lines.append("  const auto native_status_view = %s.fab(li).view();" % status)
+        if reason is not None:
+            lines.append("  const auto native_reason_view = %s.fab(li).view();" % reason)
         lines.append("  const bool native_has_active_mask = %s != nullptr;" % active_mask)
         lines.append("  const pops::FieldView<const pops::Real, pops::kNativeDimension> "
                      "native_active_view = native_has_active_mask ? %s->fab(li).view() : "
@@ -254,6 +257,8 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
     )
     if status is not None:
         lines.append("    native_status_view(index, 0) = pops::Real(0);")
+        if reason is not None:
+            lines.append("    native_reason_view(index, 0) = pops::Real(0);")
         lines.append("    if (native_has_active_mask && native_active_view(index, 0) == pops::Real(0)) return;")
     for c in sorted(cons_source):                # bind only the referenced cons (no unused locals)
         tok, idx = cons_source[c]
@@ -267,11 +272,25 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
     lines += declarations
     if status is not None:
         lines.append("    int native_status = 0;")
+        if reason is not None:
+            lines.append("    unsigned native_reason = 0;")
         for result in native_results:
-            lines.append("    native_status = Kokkos::max(native_status, static_cast<int>(%s.status));" % result)
+            lines.append("    const int native_category_%s = static_cast<int>(%s.status);" % (result, result))
+            lines.append("    const int native_checked_%s = native_category_%s >= 0 && "
+                         "native_category_%s <= 3 ? native_category_%s : 3;" % ((result,) * 4))
+            if reason is not None:
+                lines.append("    if (native_checked_%s > native_status) native_reason = %s.reason;" % (result, result))
+                lines.append("    else if (native_checked_%s == native_status) "
+                             "native_reason = Kokkos::max(native_reason, %s.reason);" % (result, result))
+            lines.append("    native_status = Kokkos::max(native_status, native_checked_%s);" % result)
         for expression in rendered:
             lines.append("    if (native_status == 0 && !Kokkos::isfinite(%s)) native_status = 2;" % expression)
         lines.append("    native_status_view(index, 0) = static_cast<pops::Real>(native_status);")
+        if reason is not None:
+            # Binary64 exactly represents this 34-bit category/reason diagnostic. Reduction
+            # selects the highest category first, then a deterministic native reason code.
+            lines.append("    native_reason_view(index, 0) = static_cast<pops::Real>(native_status) * "
+                         "pops::Real(4294967296.0) + static_cast<pops::Real>(native_reason);")
         lines.append("    if (native_status != 0) return;")
     offset = 0
     for blk in blocks:

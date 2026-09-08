@@ -266,6 +266,12 @@ def rebuild_program(
                 raise TypeError("Schedule rebuild must preserve the exact extension type")
             return rebuilt_schedule
         if getattr(value, "__pops_ir_immutable__", False) is True:
+            references = getattr(value, "declaration_references", None)
+            resolve = getattr(value, "resolve_references", None)
+            if callable(references) and references():
+                if not callable(resolve):
+                    raise TypeError("immutable Program metadata with declarations requires reference resolution")
+                return resolve(reference_of)
             return value
         if isinstance(value, Mapping):
             return {

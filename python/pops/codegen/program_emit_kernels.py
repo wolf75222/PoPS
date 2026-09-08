@@ -368,7 +368,8 @@ def _prepared_native_component_includes(program: Any) -> str:
                 seen.add(header)
                 headers.append(header)
     result = "".join("#include <%s>  // prepared native provider\n" % header for header in headers)
-    if headers:
+    from .program_lowerability import all_ops
+    if any(value.attrs.get("native_functions") for value in all_ops(program)):
         result = "#include <pops/core/model/native_call.hpp>\n" + result
     return result
 

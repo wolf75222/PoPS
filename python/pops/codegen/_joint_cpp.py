@@ -75,6 +75,11 @@ def instantiated_body(operator, application):
                     raise ValueError("joint application declaration input is ambiguous")
                 bindings[node.handle, node.index] = application.inputs[indices[0]][node.index]
             stack.extend(_children(node))
+            if isinstance(node, NativeCall):
+                # Input substitution authenticates the complete typed argument tuple, including
+                # metadata for coordinates excluded from actual reads by the native footprint.
+                # Read planning still consumes only __pops_ir_children__.
+                stack.extend(value for values in node.inputs for value in values)
     expected = substitute_quantities(operator.body, bindings)
     if canonical_hash_data(expected) != canonical_hash_data(application.outputs):
         raise ValueError("joint application differs from its authenticated captured body")

@@ -118,6 +118,10 @@ class NativeFunction:
             raise ValueError("native derivative routes must be unique")
         if type(self.effects) is not tuple or any(type(e) is not str or not e for e in self.effects):
             raise TypeError("native effects must be an immutable named contract")
+        if set(self.effects) - {"fallible", "lagged", "diagnostic_counter"}:
+            raise ValueError("native physical mutation/I/O effects have no transactional admission")
+        if len(set(self.effects)) != len(self.effects):
+            raise ValueError("native effects must be unique")
 
     @property
     def output_entries(self):
@@ -152,9 +156,9 @@ class NativeFunction:
         return {"route": route, "target": None if record is None else record.target,
                 "component": self.component.authority(), "function_identity": self.identity}
 
-    def __call__(self, *inputs, context=None):
+    def __call__(self, *inputs, context=None, occurrence=None):
         from pops._ir.native_call import NativeCall
-        return NativeCall(self, inputs, context=context)
+        return NativeCall(self, inputs, context=context, occurrence=occurrence)
 
 
 __all__ = ["NativeFunction", "NativeDerivative", "NativeInputDomain"]

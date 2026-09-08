@@ -227,6 +227,20 @@ def _module_to_model(module: Any, state_space: Any = None,
                       if getattr(item, "kind", None) == "state")
             or state in op.signature.inputs)
     }
+    if not applicable_grid_names and any(op.lowering.get("joint_balance") for op in applicable_rates):
+        # Geometry comes from the captured physical frame, never an invented transport law.
+        joint_storage = {(tuple(op.capabilities.get("storage_axes", ())),
+                          op.capabilities.get("storage_frame"))
+                         for op in operators if op.kind == "coupled_rate"
+                         and state in op.signature.inputs}
+        if len(joint_storage) != 1:
+            raise ValueError("joint state storage requires one exact authored Cartesian frame")
+        axes, frame = next(iter(joint_storage))
+        from pops._cartesian_axes import canonical_axis_mapping
+        axes = tuple(canonical_axis_mapping(dict.fromkeys(axes), where="joint storage frame"))
+        if not axes or frame != state.frame:
+            raise ValueError("joint state storage requires its exact StateSpace frame")
+        object.__setattr__(m._m, "_program_only_storage_axes", axes)
     explicit_default = applicable_grid_names & {"flux", "flux_default"}
     declared_defaults = {
         op.lowering.get("default_flux")

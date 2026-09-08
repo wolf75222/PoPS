@@ -25,6 +25,7 @@ def lower_joint_balance(program, operator, arguments, name):
         return tuple(values)
 
     terms = []
+    accepted_occurrences = []
     for occurrence in view.occurrences:
         if occurrence.kind == "projection":
             application = occurrence.payload.application
@@ -42,6 +43,16 @@ def lower_joint_balance(program, operator, arguments, name):
             target, = [value for value in arguments if value.space == view.target.space]
             value = result[target.block]
             coefficient = occurrence.coefficient
+            declaration = program._operator_registries[application.operator.owner_path].get(
+                application.operator.registered_operator_name)
+            inventories = declaration.capabilities.get("preserves", ())
+            if inventories:
+                coupled_value = program._canonical_value(value.inputs[0])
+                accepted_occurrences.append({
+                    "application": application, "inventories": inventories,
+                    "evaluation_id": coupled_value.id, "recipient": occurrence.target,
+                    "occurrence": occurrence.identity, "coefficient": coefficient,
+                })
         else:
             handle = occurrence.payload
             registry = program._operator_registries[handle.owner_path]
@@ -58,4 +69,9 @@ def lower_joint_balance(program, operator, arguments, name):
     combined = terms[0]
     for term in terms[1:]:
         combined = combined + term
-    return program.value(name or operator.name, combined)
+    result = program.value(name or operator.name, combined)
+    if accepted_occurrences:
+        attrs = dict(result.attrs)
+        attrs["interaction_occurrences"] = tuple(accepted_occurrences)
+        result = program._replace_value(result, attrs=attrs)
+    return result

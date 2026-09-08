@@ -108,3 +108,17 @@ def test_autodiff_uses_only_declared_exact_native_jacobian(tmp_path):
         diff(replace(function, derivatives=())((a, 2), (3, 4, 5)).left[0], "a")
     with pytest.raises(ValueError, match="lagged"):
         diff(replace(function, effects=("lagged",))((a, 2), (3, 4, 5)).left[0], "a")
+
+
+def test_unsupported_native_side_effects_refuse_and_diagnostic_occurrences_stay_distinct(tmp_path):
+    for effect in ("mutation", "io", "write_state", "external_publication"):
+        with pytest.raises(ValueError, match="transactional admission"):
+            _function(tmp_path, effects=("fallible", effect))
+    _module, _left, _right, function = _function(tmp_path, effects=("fallible", "diagnostic_counter"))
+    with pytest.raises(ValueError, match="explicit logical occurrence"):
+        function((1, 2), (3, 4, 5))
+    first = function((1, 2), (3, 4, 5), occurrence="first")
+    second = function((1, 2), (3, 4, 5), occurrence="second")
+    declarations, _outputs = _cse_emit((first.left[0] + first.left[0], second.right[0]), "double", "")
+    assert sum("example::Law::evaluate(" in line for line in declarations) == 2
+    assert _key(first) != _key(second)

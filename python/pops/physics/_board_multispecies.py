@@ -78,7 +78,8 @@ class _MultiSpeciesMixin(_BoardModel):
         role_map = normalize_roles(roles, comps, "species %s" % name)
         canon = {component: _canon_role(role) for component, role in role_map.items()}
         if template is None:
-            space = module.state_space(name, comps, roles=canon)
+            space = module.state_space(name, comps, roles=canon,
+                frame="model" if self._frame is None else self._frame.canonical_id)
         else:
             # Promotion must preserve the physical type referenced by already
             # returned QuantityRef leaves, including its exact registered object
@@ -317,6 +318,9 @@ class _MultiSpeciesMixin(_BoardModel):
                     % (name, h.name, len(comp_values), h.name, len(h.components)))
             output_specs.append((h, comp_values))
         caps = {}
+        if self._frame is not None:
+            caps["storage_axes"] = self._ranked_frame_axes(where="joint state storage")
+            caps["storage_frame"] = self._frame.canonical_id
         if preserves is not None:
             caps["preserves"] = preserves
         if dissipates is not None:

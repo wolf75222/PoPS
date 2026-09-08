@@ -525,12 +525,26 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                          % (status, v.id, scratch[driver]))
             lines.append("const auto* %s = ctx.pointwise_active_mask(%d, %s);"
                          % (active, index, status))
+            reason = "joint_reason_%d" % v.id if functions else None
+            if reason is not None:
+                lines.append("static_assert(std::numeric_limits<pops::Real>::digits >= 34, "
+                             "\"native reason-code aggregation requires 34 exact mantissa bits\");")
+                lines.append("auto& %s = ctx.scalar_scratch(%d, 1, %s, 1, 0);"
+                             % (reason, v.id, scratch[driver]))
             lines += _emit_coupled_rate_kernel(components, by_block, var, scratch,
-                                               status=status, active_mask=active)
-            identity = v.attrs["operator_handle"].qualified_id
-            lines.append("ctx.consume_pointwise_evaluation_status(%d, %d, "
-                         "ctx.pointwise_status_max(%d, %s, %s, ctx.prepared_execution_lane()), %s);"
-                         % (index, v.id, index, status, active, json.dumps(identity)))
+                                               status=status, active_mask=active, reason=reason)
+            from pops.time.references import canonical_handle
+            identity = canonical_handle(v.attrs["operator_handle"]).qualified_id
+            lines.append("const pops::Real joint_collective_status_%d = "
+                         "ctx.pointwise_status_max(%d, %s, %s, ctx.prepared_execution_lane());"
+                         % (v.id, index, status, active))
+            reason_cpp = "0"
+            if reason is not None:
+                lines.append("const auto joint_collective_reason_%d = static_cast<unsigned long long>("
+                             "ctx.max_component(%d, %s, 0));" % (v.id, index, reason))
+                reason_cpp = "static_cast<unsigned>(joint_collective_reason_%d %% 4294967296ULL)" % v.id
+            lines.append("ctx.consume_pointwise_evaluation_status(%d, %d, joint_collective_status_%d, %s, %s);"
+                         % (index, v.id, v.id, json.dumps(identity), reason_cpp))
         else:
             lines += _emit_coupled_rate_kernel(components, by_block, var, scratch)
         # Per-block names live in this emission's local token table. Codegen is a pure read of the
