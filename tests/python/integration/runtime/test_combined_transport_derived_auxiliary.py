@@ -1,4 +1,6 @@
 """An actual transport-only derived provider refreshes at each accepted interval."""
+from fractions import Fraction
+
 import numpy as np
 import pops
 import pytest
@@ -57,10 +59,12 @@ def _build_derived_transport(n, dt, method):
     program = pops.Program("derived-transport-"+method)
     current = program.state(block[state])
     rhs = rate(current.n, program.input_fields(current.n, for_rate=rate))
-    candidate = program.value("predictor", current.n+program.dt*rhs, at=current.next.point)
+    predictor_point = program.stage("predictor", c=1) if method == "ssprk2" else current.next.point
+    candidate = program.value("predictor", current.n+program.dt*rhs, at=predictor_point)
     if method == "ssprk2":
         last = rate(candidate, program.input_fields(candidate, for_rate=rate))
-        candidate = program.value("corrector", .5*current.n+.5*candidate+.5*program.dt*last,
+        half = Fraction(1, 2)
+        candidate = program.value("corrector", current.n+half*program.dt*rhs+half*program.dt*last,
                                   at=current.next.point)
     program.commit(current.next, candidate)
     program.step_strategy(FixedDt(dt))
