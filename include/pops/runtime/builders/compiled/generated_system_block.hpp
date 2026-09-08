@@ -182,7 +182,26 @@ struct MaterializePoissonRhs {
 template <int Axis, int Dim, class Model>
 POPS_HD Real maximum_axis_speed(const Model& model, const typename Model::State& state,
                                 const BoundFluxProviders<Model>& providers) {
-  const Real local = detail::model_max_wave_speed_at<Axis>(model, state, providers);
+  // This reduction selects the timestep bound, not the physical Riemann wave speed.
+  // Retain the exact model-qualified provider pack used by the selected physical component.
+  Real local;
+  if constexpr (requires {
+                  {
+                    model.template stability_speed<Axis>(state, providers)
+                  } -> std::convertible_to<Real>;
+                })
+    local = model.template stability_speed<Axis>(state, providers);
+  else if constexpr (requires {
+                       {
+                         model.stability_speed(state, providers, Axis)
+                       } -> std::convertible_to<Real>;
+                     })
+    local = model.stability_speed(state, providers, Axis);
+  else
+    local = detail::model_max_wave_speed_at<Axis>(model, state, providers);
+  // An invalid axis must survive both the axis maximum and the later cell/rank reduction.
+  if (!Kokkos::isfinite(local) || local < Real(0))
+    return std::numeric_limits<Real>::infinity();
   if constexpr (Axis + 1 < Dim) {
     const Real remainder = maximum_axis_speed<Axis + 1, Dim>(model, state, providers);
     return local > remainder ? local : remainder;
