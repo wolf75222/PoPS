@@ -226,7 +226,7 @@ function(pops_add_mpi_rank_test name nproc)
                    ${_gtest_filter_arg}
                    ${MPIEXEC_POSTFLAGS})
   set_tests_properties(${name}_np${nproc} PROPERTIES
-    LABELS "backend;mpi;medium"
+    LABELS "backend;mpi;medium;cpp-target:${name}"
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=${nproc}"
     PROCESSORS ${nproc}
     TIMEOUT 600)
@@ -279,7 +279,7 @@ function(pops_add_mpi_rank_parity_test name)
       "-DPOPS_MPI_SIGNATURE_PREFIX=${ARG_SIGNATURE_PREFIX}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_mpi_rank_parity.cmake")
   set_tests_properties(${_test_name} PROPERTIES
-    LABELS "backend;mpi;medium"
+    LABELS "backend;mpi;medium;cpp-target:${name}"
     PROCESSORS ${_max_rank}
     TIMEOUT 600)
 endfunction()
@@ -339,7 +339,7 @@ function(pops_add_mpi_standalone_suite name)
              COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${_np}
                      ${MPIEXEC_PREFLAGS} $<TARGET_FILE:${name}> ${MPIEXEC_POSTFLAGS})
     set_tests_properties(${name}_np${_np} PROPERTIES
-      LABELS "backend;mpi;medium"
+      LABELS "backend;mpi;medium;cpp-target:${name}"
       PROCESSORS ${_np}
       TIMEOUT 60)
   endforeach()
