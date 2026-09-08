@@ -39,6 +39,10 @@ class FieldBoundary:
         if not isinstance(self.relation, BoundaryCondition):
             raise TypeError("FieldBoundary relation must be a typed BoundaryCondition")
 
+    def freeze(self) -> FieldBoundary:
+        # The snapshot boundary has detached and frozen the nested relation first.
+        return self
+
     def declaration_references(self) -> tuple[Handle, ...]:
         return collect_references((self.unknown, self.relation))
 
@@ -73,6 +77,9 @@ class SharedMeanGauge:
             raise FieldProblemError("field.gauge.duplicate_unknown", "shared gauge repeats an unknown")
         scalar_literal(self.value)
 
+    def freeze(self) -> SharedMeanGauge:
+        return self
+
     def declaration_references(self) -> tuple[Handle, ...]:
         return self.unknowns
 
@@ -101,6 +108,9 @@ class FieldStorageBinding:
             raise FieldProblemError("field.storage.duplicate_unknown", "field storage repeats an unknown")
         if not isinstance(self.layout, Handle) or self.layout.kind != "layout":
             raise TypeError("FieldStorageBinding layout must be a typed LayoutHandle")
+
+    def freeze(self) -> FieldStorageBinding:
+        return self
 
     @property
     def identity(self) -> Identity:

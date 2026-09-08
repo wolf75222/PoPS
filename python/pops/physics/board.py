@@ -214,6 +214,9 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         aliases = registry.aliases()
         field_routes = {}
         for descriptor in self._field_operators.values():
+            from pops.fields.operator import FieldOperator
+            if not isinstance(descriptor, FieldOperator):
+                continue
             contributions = tuple(descriptor.providers)
             if len(contributions) != 1:
                 raise ValueError(
@@ -621,7 +624,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             operators = tuple(
                 operator
                 for operator in self._field_operators.values()
-                if operator.unknown == declaration
+                if declaration in operator.unknowns
             )
             if len(operators) > 1:
                 raise ValueError(
@@ -630,6 +633,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             if operators:
                 values = []
                 for output in operators[0].outputs:
+                    if output.source is not None and output.source != declaration:
+                        continue
                     if isinstance(output, FieldOutput):
                         values.append(output.name)
                     elif isinstance(output, GradientOutput):
@@ -643,7 +648,9 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                         raise TypeError(
                             "field %r output %s has no solved-field storage protocol"
                             % (name, type(output).__name__))
-                if not values or len(values) != len(set(values)):
+                if not values:
+                    values = [name]
+                if len(values) != len(set(values)):
                     raise ValueError(
                         "field %r outputs must define unique storage components" % name)
                 components = tuple(values)

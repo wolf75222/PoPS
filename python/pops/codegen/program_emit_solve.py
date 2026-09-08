@@ -473,15 +473,17 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     frozen_coefficients = {}
     freeze_pairs = []
     for w in block:
-        if w.op == "apply_laplacian_coeff":
+        if w.op in ("apply_laplacian_coeff", "field_problem_apply"):
             coeffs = w.inputs[2]
-            sp = var[coeffs.id]
+            sp = (var[("field_pointer", coeffs.id)] if w.op == "field_problem_apply"
+                  else var[coeffs.id])
             if sp not in frozen_coefficients:
                 frozen = "frozen_A%d_%d" % (apply_id, len(frozen_coefficients))
                 prelude.append(
                     "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-                    "ctx.alloc_scalar_field(pops::kNativeDimension * "
-                    "pops::kNativeDimension, 1));" % frozen)
+                    "ctx.alloc_scalar_field(%s, 1));" % (frozen,
+                    str(int(w.attrs["ncomp"])) if w.op == "field_problem_apply"
+                    else "pops::kNativeDimension * pops::kNativeDimension"))
                 frozen_coefficients[sp] = frozen
                 freeze_pairs.append((sp, frozen))
                 captures.append(frozen)
@@ -741,6 +743,25 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                  "ctx_owner->prepare_mesh_boundary_session("
                  "*session_%s, ctx_owner->prepared_execution_lane())" % prototype))
         return mesh_stencil_boundaries[prototype]
+    general_fields = {}
+    for w in block:
+        if w.op != "field_problem_apply":
+            continue
+        if target != "system":
+            raise NotImplementedError("general field tuple requires the qualified Uniform System route")
+        from pops.fields._program_problem import validate_field_apply
+        validate_field_apply(w)
+        frozen = frozen_coefficients[var[("field_pointer", w.inputs[2].id)]]
+        unknown = "field_input_A%d_%d" % (apply_id, w.id)
+        prelude.append(
+            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+            "ctx.alloc_scalar_field(%d, 1));" % (unknown, int(w.attrs["ncomp"])))
+        captures.append(unknown)
+        session_fields.append(unknown)
+        boundary = "field_boundary_A%d_%d" % (apply_id, w.id)
+        session_dynamic.append((boundary, "ctx_owner->prepare_mesh_boundary_session("
+            "*session_%s, lane)" % unknown))
+        general_fields[w.id] = (frozen, unknown, boundary)
     var[("operator_prepare_refresh", apply_id)] = tuple(prepare_refresh)
     # 2) The lambda body: the laplacian / gradient ops + the result write into `out`.
     body = ["const pops::Real dt = *%s;" % apply_dt]
@@ -785,6 +806,23 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             body.append("ctx.tensor_laplacian(*%s, %s, *%s, *%s%s);"
                         % (sub[o.id], _apply_in_arg(sub, i), tensor,
                            boundary, point_arg))
+        elif w.op == "field_problem_apply":
+            o, i, _coefficients = w.inputs
+            frozen, unknown, boundary = general_fields[w.id]
+            sub[w.id] = sub[o.id]
+            output = "out" if sub[o.id] == "out" else "*%s" % sub[o.id]
+            ncomp = int(w.attrs["ncomp"])
+            from pops.fields._program_expression import decode_field_literal
+            reaction = ", ".join("static_cast<pops::Real>(%s)" % decode_field_literal(value).to_cpp()
+                                 for value in w.attrs["reaction"])
+            physical = w.attrs["physical_boundary"]
+            body.append("pops::PureFieldAlgebra::copy(*%s, %s);" % (unknown, _apply_in_arg(sub, i)))
+            body.append("pops::elliptic::nd::apply_general_field<pops::kNativeDimension, %d>("
+                "%s, *%s, *%s, *%s, std::array<pops::Real, %d>{%s}, "
+                "[] { std::array<pops::elliptic::nd::PhysicalFieldBoundary, "
+                "2 * pops::kNativeDimension> result{}; "
+                "result.fill(pops::elliptic::nd::PhysicalFieldBoundary::%s); return result; }());"
+                % (ncomp, output, unknown, frozen, boundary, ncomp * ncomp, reaction, physical))
         elif w.op == "rhs_jacvec":
             if coupled_pair is not None and coupled_widths is not None:
                 sub[w.id] = sub[w.inputs[0].id]
@@ -1007,6 +1045,9 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         local = "session_%s" % name
         prelude.append("  auto %s = %s;" % (local, expression))
         session_capture_initializers.append("%s = %s" % (name, local))
+    for frozen, _unknown, boundary in general_fields.values():
+        session_refresh.append("pops::elliptic::nd::prepare_general_field_coefficients(*%s, *%s);"
+                               % (frozen, boundary))
     if tensor_boundary is not None:
         session_refresh.append(
             "%s->refresh_point(*%s);" % (tensor_boundary, tensor_point)
@@ -1144,6 +1185,24 @@ def _require_system_matrix_free_stencil(
     if target != "system" or not _apply_graph_has_nearest_neighbour_stencil(operator):
         return
     indices = program._block_indices()
+    field_ops = tuple(node for node in operator.attrs.get("apply_block", ())
+                      if node.op == "field_problem_apply")
+    if field_ops:
+        from pops.fields._program_problem import validate_field_apply
+        for node in field_ops:
+            validate_field_apply(node)
+        # The field owns its storage. Every exact load-producing block is a layout witness,
+        # never a chosen field owner. Native direct loads additionally require co-distribution.
+        rhs = solve.inputs[1]
+        if rhs.op != "field_problem_load" or not rhs.inputs:
+            raise NotImplementedError("general field native storage currently requires explicit state layout witnesses")
+        owners = tuple(dict.fromkeys(value.block for value in rhs.inputs))
+        if any(owner not in indices for owner in owners):
+            raise ValueError("general field load has an unauthenticated Cartesian layout witness")
+        for owner in owners:
+            lines.append("ctx.require_cartesian_generated_operator(%d, %s);"
+                         % (indices[owner], json.dumps("field_problem_stencil")))
+        return
     owner = solve.block
     if owner not in indices:
         raise ValueError(

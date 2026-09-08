@@ -28,8 +28,13 @@ class _EllipticAuthoringMixin(_BoardModel):
         self,
         name: Any,
         *,
-        unknown: Any,
-        equation: Any,
+        unknown: Any = None,
+        equation: Any = None,
+        unknowns: Any = None,
+        equations: Any = None,
+        boundaries: Any = (),
+        gauge: Any = None,
+        branch: Any = None,
         outputs: Any = (),
     ) -> FieldOperator:
         """Return a generic physical operator over a model-owned unknown.
@@ -42,6 +47,27 @@ class _EllipticAuthoringMixin(_BoardModel):
         name = require_name(name, "field_operator name")
         if name in self._field_operators:
             raise ValueError("field operator %r is already declared" % name)
+        from pops import math as _math
+        from pops.fields import FieldProblem
+        joint = unknowns is not None or equations is not None
+        general = joint or boundaries or gauge is not None or branch is not None or (
+            equation is not None and any(isinstance(term, _math.DivCoeffGrad)
+                                        for term in _math.elliptic_terms(equation.lhs)))
+        if general:
+            if joint and (unknown is not None or equation is not None):
+                raise TypeError("field_operator uses unknown/equation or unknowns/equations, not both")
+            selected_unknowns = tuple(unknowns) if joint else (unknown,)
+            selected_equations = tuple(equations) if joint else (equation,)
+            for declaration in selected_unknowns:
+                if not isinstance(declaration, Handle) or declaration.owner_path != self.owner_path \
+                        or self._fields.get(declaration.local_id) != declaration:
+                    raise ValueError("field_operator unknown must be declared by this physics model")
+            problem = FieldProblem(name, unknowns=selected_unknowns, equations=selected_equations,
+                boundaries=tuple(boundaries), gauge=gauge, branch=branch, outputs=tuple(outputs))
+            with atomic_attrs((self, "_field_operators"), (self, "_module_cache")):
+                self._field_operators[name] = problem
+                self._module_cache = None
+            return problem
         if not isinstance(unknown, Handle):
             raise TypeError("field_operator unknown must be a declared field Handle")
         if unknown.owner_path != self.owner_path or self._fields.get(unknown.local_id) != unknown:

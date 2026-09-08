@@ -1096,6 +1096,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # execute the same context call, including ranks that own no box.
         var[v.id] = "s%d" % v.id
         kind = v.attrs["kind"]
+        if v.block is None:
+            from pops.codegen.program_emit_field_problem import field_observation_reduction
+            reduction = field_observation_reduction(v, var, target=target)
+            lines.append("const pops::Real %s = %s;" % (var[v.id], reduction))
+            return
         owner = _required_block_index(block_idx, v.block, "reduce value %r" % v.name)
         if kind == "norm2":
             (u,) = v.inputs

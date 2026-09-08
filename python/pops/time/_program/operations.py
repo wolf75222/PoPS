@@ -83,7 +83,7 @@ class _ProgramCore(
     # --- node construction ---
     def _new(self, vtype: Any, op: Any, inputs: Any, attrs: Any, name: Any, block: Any, *,
              space: Any = None, field_context: Any = None, state_ref: Any = None,
-             point: Any = None) -> Any:
+             point: Any = None, inherit_state_ref: bool = True) -> Any:
         region = self._current_region()
         validate_input_regions(self, inputs, region, "IR op %r" % op)
         value_inputs = [i for i in inputs if isinstance(i, ProgramValue)]
@@ -114,7 +114,7 @@ class _ProgramCore(
                 origins=(context["caller"], context["factory"]),
                 phase="authoring", transformation="factory_expand",
             )
-        if state_ref is None:
+        if state_ref is None and inherit_state_ref:
             input_refs = {item.state_ref for item in value_inputs if item.state_ref is not None}
             if len(input_refs) == 1:
                 state_ref = next(iter(input_refs))

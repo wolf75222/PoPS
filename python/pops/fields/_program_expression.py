@@ -6,6 +6,7 @@ from typing import Any
 
 from pops.identity import canonical_bytes
 from pops.identity.scalar import ScalarLiteral
+from pops.time._program.serialization import _json_ready
 
 
 def field_input_contract(states: Any) -> tuple[tuple[Any, tuple[str, ...]], ...]:
@@ -103,7 +104,7 @@ def field_expression_cpp(expression: Any, states: Any, *, views: tuple[str, ...]
             handle, components = rows[index]
             if type(component) is not int or not 0 <= component < len(components):
                 raise ValueError("field expression component is outside its declared State space")
-            if canonical_bytes(data) != canonical_bytes(handle.canonical_identity()):
+            if canonical_bytes(_json_ready(data)) != canonical_bytes(handle.canonical_identity()):
                 raise ValueError("field expression input identity changed after encoding")
             reads[handle.qualified_id] = handle
             return "%s(index, %d)" % (views[index], component)

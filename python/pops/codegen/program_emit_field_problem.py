@@ -6,6 +6,7 @@ from typing import Any
 
 from pops.identity import Identity, canonical_bytes
 from pops.fields._program_expression import field_expression_cpp
+from pops.time._program.serialization import _json_ready
 
 
 def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: Any,
@@ -32,7 +33,7 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
             raise ValueError("field observation component is outside its solved unknown tuple")
         from pops.model import Handle
 
-        unknown = Handle.from_canonical_identity(value.attrs.get("field_unknown"))
+        unknown = Handle.from_canonical_identity(_json_ready(value.attrs.get("field_unknown")))
         if unknown.kind != "field" or unknown.block_ref is not None:
             raise ValueError("field observation lost its independent solved-field identity")
         from pops.time._graph.base import strict_data
@@ -70,7 +71,7 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
                 reads[handle.qualified_id] = handle.canonical_identity()
         declared = value.attrs.get("field_dependencies", ())
         if any(not isinstance(item, Mapping) for item in declared) or {
-                canonical_bytes(item) for item in declared} != {
+                canonical_bytes(_json_ready(item)) for item in declared} != {
                 canonical_bytes(item) for item in reads.values()}:
             raise ValueError("field expression dependency metadata differs from its actual input reads")
 
@@ -80,6 +81,9 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
     prelude.append("auto %s_status = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
                    "ctx.alloc_scalar_field(1, 0));" % token)
     var[value.id] = "(*%s)" % token
+    var[("field_pointer", value.id)] = token
+    if component:
+        var[("field_observation", value.id)] = identity.token
     destination = "(*%s)" % token
     lines.extend(["{", "  long field_layout_invalid = 0;"])
     for i, source in enumerate(sources):
@@ -125,3 +129,21 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
 
 
 __all__ = ["emit_field_problem_value"]
+
+
+def field_observation_reduction(value: Any, var: Any, *, target: str) -> str:
+    """Reduce an already authenticated Cartesian field observation without a species owner."""
+    if target != "system" or len(value.inputs) != 1:
+        raise ValueError("field observation reduction requires one Uniform field value")
+    source = value.inputs[0]
+    if source.op != "field_component" or var.get(("field_observation", source.id)) != source.attrs.get("field_problem_identity"):
+        raise ValueError("unowned reduction requires an authenticated consumed field observation")
+    kind = value.attrs.get("kind")
+    methods = {"sum": "sum_component", "abs_sum": "abs_sum_component",
+               "max": "max_component", "min": "min_component"}
+    if kind not in methods:
+        raise NotImplementedError("this independent field observation reduction has no native realization")
+    component = value.attrs.get("comp", 0)
+    if type(component) is not int or component != 0:
+        raise ValueError("scalar field observation has exactly one component")
+    return "ctx.%s(%s, 0)" % (methods[kind], var[source.id])

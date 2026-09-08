@@ -93,9 +93,12 @@ def _linear_derivative(operator: Any, selected: Any) -> dict[str, Any]:
     exact_ops = {
         "apply_in", "apply_out", "scalar_field", "vector_field", "linear_combine",
         "laplacian", "gradient", "divergence", "apply_laplacian_coeff",
-        "fill_boundary", "scalar_field_component", "componentwise_laplacian",
+        "fill_boundary", "scalar_field_component", "componentwise_laplacian", "field_problem_apply",
     }
     for node in operator.attrs.get("apply_block") or ():
+        if node.op == "field_problem_apply":
+            from pops.fields._program_problem import validate_field_apply
+            validate_field_apply(node)
         if node.op not in exact_ops:
             raise SolveRequestError(
                 "unsupported_derivative",
