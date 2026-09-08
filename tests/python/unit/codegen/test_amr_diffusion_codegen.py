@@ -1,5 +1,7 @@
 """ADC-942: AMR diffusion lowers through stage ghosts and the sole reflux authority."""
 
+import re
+from fractions import Fraction
 from types import SimpleNamespace
 
 import pytest
@@ -106,3 +108,66 @@ def test_amr_diffusion_accuracy_rejects_lookalike_and_mismatched_transport_state
     plan = SimpleNamespace(rates=(SimpleNamespace(method=mismatched),))
     with pytest.raises(ValueError, match="exact constitutive state"):
         AMRTransfer._resolved_spatial_accuracy(state, (plan,), 2)
+
+
+@pytest.mark.parametrize("n", [16, 32, 64])
+def test_actual_subcycled_diffusion_rhs_keeps_spatial_sum_at_dt_power_zero(n):
+    resolved = _author_amr_diffusion(n, _stable_dt(n))
+    source = emit_cpp_program(
+        resolved.time, model=lower_and_validate(resolved.blocks[0].model)[0], target="amr_system"
+    )
+    additions = re.findall(r"ctx\.axpy\(diffusive_rhs_\d+,1,diffusive_transport_\d+([^;]*);", source)
+    assert additions == [",dt,{{0, 1, 1}})"]
+    # The temporal update still owns exactly one dt power after spatial assembly.
+    assert re.search(r"ctx\.axpy\([^;]*diffusive_rhs_\d+, dt, \{\{1, 1, 1\}\}\);", source)
+    assert "ctx.advance_hierarchy(dt" in source
+
+
+def test_ssprk2_diffusion_keeps_both_spatial_sums_constant_and_rational_time_weights_exact():
+    from tests.python.unit.codegen.test_diffusion_program import resolved_heat
+
+    resolved, _, model = resolved_heat(method="ssprk2", transport=(0.2, -0.1))
+    source = emit_cpp_program(
+        resolved.time, model=lower_and_validate(model)[0], target="amr_system"
+    )
+    additions = re.findall(r"ctx\.axpy\(diffusive_rhs_\d+,1,diffusive_transport_\d+([^;]*);", source)
+    assert additions == [",dt,{{0, 1, 1}})"] * 2
+    assert "dt, {{1, 1, 2}})" in source
+    assert "dt, {{1, 1, 1}})" in source
+
+
+@pytest.mark.parametrize("weight", [Fraction(-2, 3), Fraction(-1, 10**30)])
+def test_source_only_sum_has_no_spurious_native_flux_coefficient_cap(weight):
+    import pops
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    from pops.identity.scalar import scalar_cpp
+    from pops.lib.time import ForwardEuler
+    from pops.math import ddt, div, grad
+    from pops.numerics import DiscretizationPlan
+    from pops.time import FixedDt
+
+    frame = Rectangle("signed-source", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
+    model = pops.Model("signed-source", frame=frame)
+    state = model.state("U", components=("u",))
+    flux = model.diffusive_flux("diffusion", state=state, value=0.1 * grad(state[0]))
+    source = model.source("reaction", on=state, value=(state[0],))
+    rate = model.rate("balance", equation=ddt(state) == div(flux) + weight * source)
+    case = pops.Case("signed-source")
+    block = case.block("heat", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(rate, Diffusion(flux=flux))
+    case.numerics(numerics, block=block)
+    program = ForwardEuler(block[state], rate=rate)
+    program.step_strategy(FixedDt(_stable_dt(32)))
+    case.program(program)
+    emitted = emit_cpp_program(program, model=lower_and_validate(model)[0], target="amr_system")
+    source_additions = [
+        line for line in emitted.splitlines()
+        if "ctx.axpy(diffusive_rhs_" in line and "diffusive_source_" in line
+    ]
+    assert len(source_additions) == 1
+    # Source kernels carry no face basis. Keep their full scalar range, including
+    # coefficients outside the int64 rational envelope required by conservative fluxes.
+    assert ",%s,diffusive_source_" % scalar_cpp(weight) in source_additions[0]
+    assert ",dt," not in source_additions[0]

@@ -169,7 +169,9 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
         lines.extend(_prepare_provider_values(transport_binding, bidx, state_var))
         lines.append("ctx.neg_div_flux_default_with_faces_into(%d,%s,%s,%d,%s_transport_faces);" % (
             bidx,state_var,temporary,v.id,prepared_var))
-        lines.append("ctx.axpy(%s,1,%s);" % (out,temporary))
+        # This combines spatial rates. Its unit coefficient has dt power zero; the
+        # authored time update supplies the sole dt factor, including in AMR subcycles.
+        lines.append("ctx.axpy(%s,1,%s,dt,{{0, 1, 1}});" % (out,temporary))
         inverse_spacing=" + ".join("1/ctx.geometry().spacing(%d)" % axis for axis in range(selected["physical"].dimension))
         frequency+=" + ctx.max_wave_speed(%d,%s)*(%s)" % (bidx,state_var,inverse_spacing)
     if explicit:
