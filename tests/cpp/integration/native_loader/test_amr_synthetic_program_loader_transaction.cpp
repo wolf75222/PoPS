@@ -480,6 +480,24 @@ TEST(test_amr_synthetic_program_loader_transaction,
   const std::string shared_object = stem + ".so";
   auto lane = std::make_shared<pops::ExecutionLane>(
       pops::ExecutionLane::duplicate_world_collectively("test.interface-publication.package"));
+  const auto broadcast = [&](std::string& payload) {
+    const bool length_overflow =
+        lane->rank() == 0 &&
+        payload.size() > static_cast<std::size_t>(std::numeric_limits<long>::max());
+    if (pops::all_reduce_max(length_overflow ? 1L : 0L, *lane) != 0)
+      throw std::length_error("AMR publication artifact exceeds the fixture length domain");
+    const long count =
+        pops::all_reduce_max(lane->rank() == 0 ? static_cast<long>(payload.size()) : 0L, *lane);
+    long allocation_failed = 0;
+    try {
+      payload.resize(static_cast<std::size_t>(count));
+    } catch (const std::exception&) {
+      allocation_failed = 1;
+    }
+    if (pops::all_reduce_max(allocation_failed, *lane) != 0)
+      throw std::runtime_error("AMR publication artifact allocation failed collectively");
+    pops::broadcast_bytes_inplace(payload.data(), payload.size(), *lane, 0);
+  };
   std::string image;
   std::string preparation_error;
   if (lane->rank() == 0) {
@@ -505,11 +523,11 @@ TEST(test_amr_synthetic_program_loader_transaction,
       preparation_error = error.what();
     }
   }
-  preparation_error = lane->broadcast_bytes(std::move(preparation_error));
+  broadcast(preparation_error);
   ASSERT_TRUE(preparation_error.empty()) << preparation_error;
   // Independent links can carry different UUIDs. Every rank authenticates and loads the exact
   // rank-zero binary image, even when its local artifact path differs.
-  image = lane->broadcast_bytes(std::move(image));
+  broadcast(image);
   std::unique_ptr<pops::dynlib::AuthenticatedNativeFile> authenticated;
   try {
     if (lane->rank() != 0) {
