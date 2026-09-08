@@ -280,8 +280,6 @@ struct NativeFixture {
       ~ProbeScope() { native_factory_probe = nullptr; }
     } probe_scope(probe);
     for (const auto* name : {"left", "right"}) {
-      pops::add_compiled_model(*system, name, pops::nd::ScalarAdvection<kDim>::prepare(velocity),
-                               "none", "rusanov", "conservative", "explicit");
       if (probe) {
         std::vector<std::string> identities;
         for (int face = 0; face < 2 * kDim; ++face)
@@ -293,6 +291,9 @@ struct NativeFixture {
         system->install_prepared_hyperbolic_boundary(name, identity + "/" + name + "/boundary", 1,
                                                      identity + "/" + name + "/state", boundary);
       }
+      // Block preparation captures the already authenticated physical boundary.
+      pops::add_compiled_model(*system, name, pops::nd::ScalarAdvection<kDim>::prepare(velocity),
+                               "none", "rusanov", "conservative", "explicit");
     }
     auto allocate = [&](int block) {
       auto& state = system->block_state(block);
