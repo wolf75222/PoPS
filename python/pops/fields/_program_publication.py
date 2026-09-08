@@ -23,6 +23,10 @@ def _target_space(target: Handle) -> Any:
     registry = getattr(target.block_ref, "_instance_registry", None)
     if registry is None:
         raise ValueError("field publication target requires its authoritative Case registry")
+    instances = tuple(block for block in registry.handles().values()
+                      if block.model_owner_path.canonical() == target.block_ref.model_owner_path.canonical())
+    if len(instances) != 1:
+        raise ValueError("consumed field publication cannot share a model-definition provider key across block instances")
     model = registry.spec(target.block_ref.local_id)["model"]
     module = model if isinstance(model, Module) else model.module
     module.declaration_index().authenticate(target.declaration_ref)
@@ -42,7 +46,7 @@ def _states(solve: Any, program: Any) -> dict[Any, Any]:
     return states
 
 
-def publish_field_solution(solution: Any, bindings: Any) -> Any:
+def publish_field_solution(solution: Any, bindings: Any, *, states: Any = None) -> Any:
     if not isinstance(bindings, Mapping) or not bindings:
         raise TypeError("field publication requires exact field Handle to observation bindings")
     program = solution.packed.prog
@@ -79,14 +83,22 @@ def publish_field_solution(solution: Any, bindings: Any) -> Any:
         seen.add(key)
         inputs.append(source)
         rows.append({"target": target, "component": component, "source_component": selected})
-    states = _states(expected_solve, program)
-    if any(row["target"].block_ref not in states for row in rows):
+    if states is not None and not isinstance(states, Mapping):
+        raise TypeError("field publication states must map exact qualified state Handles to Program values")
+    supplemental = tuple((states or {}).items())
+    target_blocks = {row["target"].block_ref for row in rows}
+    if any(getattr(key, "block_ref", None) not in target_blocks for key, _ in supplemental):
+        raise ValueError("field publication supplemental state must belong to a destination block")
+    consumer_states = _consumer_states(program, solution.packed.point, _states(expected_solve, program),
+                                      tuple(key for key, _ in supplemental),
+                                      tuple(value for _, value in supplemental))
+    if any(row["target"].block_ref not in consumer_states for row in rows):
         raise ValueError("field publication destination block has no exact solve-stage state")
     output_names = tuple(dict.fromkeys(row["component"] for row in rows))
-    context = FieldContext(solution.field, tuple((block, value.id) for block, value in states.items()),
+    context = FieldContext(solution.field, tuple((block, value.id) for block, value in consumer_states.items()),
                            output_names)
-    return program._new("fields", "field_publication", tuple(inputs),
-        {"bindings": tuple(rows), "field_problem_identity": solution.problem_identity,
+    return program._new("fields", "field_publication", (*inputs, *(value for _, value in supplemental)),
+        {"bindings": tuple(rows), "consumer_states": tuple(key for key, _ in supplemental), "field_problem_identity": solution.problem_identity,
          "field": solution.field}, "published_fields", None,
         field_context=context, space=field_space,
         point=solution.packed.point, inherit_state_ref=False)
@@ -96,11 +108,13 @@ def validate_field_publication(value: Any) -> tuple[dict[str, Any], ...]:
     if value.op != "field_publication" or value.vtype != "fields" or value.field_context is None:
         raise ValueError("invalid consumed field publication node")
     rows = value.attrs.get("bindings")
-    if not isinstance(rows, (tuple, list)) or not rows or len(rows) != len(value.inputs):
+    supplemental = value.attrs.get("consumer_states", ())
+    if not isinstance(rows, (tuple, list)) or not rows or not isinstance(supplemental, (tuple, list)) \
+            or len(rows) + len(supplemental) != len(value.inputs):
         raise ValueError("field publication has inconsistent observation bindings")
     solves = set()
     destinations = set()
-    for row, source in zip(rows, value.inputs, strict=True):
+    for row, source in zip(rows, value.inputs[:len(rows)], strict=True):
         width, solve = _source(source)
         solves.add(solve.id)
         selected = row.get("source_component")
@@ -121,7 +135,11 @@ def validate_field_publication(value: Any) -> tuple[dict[str, Any], ...]:
             raise ValueError("field publication belongs to another physical field problem")
     if len(solves) != 1:
         raise ValueError("field publication must consume one exact joint solve")
-    states = _states(solve, value.prog)
+    target_blocks = {row["target"].block_ref for row in rows}
+    if any(getattr(key, "block_ref", None) not in target_blocks for key in supplemental):
+        raise ValueError("field publication supplemental state lost its destination block")
+    states = _consumer_states(value.prog, value.point, _states(solve, value.prog),
+                              supplemental, value.inputs[len(rows):])
     context = value.field_context
     expected = tuple((block, state.id) for block, state in states.items())
     if context.stage_sources != expected or context.field != value.attrs.get("field") \
@@ -130,3 +148,34 @@ def validate_field_publication(value: Any) -> tuple[dict[str, Any], ...]:
     if tuple(context.outputs) != tuple(dict.fromkeys(row["component"] for row in rows)):
         raise ValueError("field publication context changed its declared outputs")
     return tuple(rows)
+
+
+def _consumer_states(program: Any, point: Any, states: Any, handles: Any, values: Any) -> dict[Any, Any]:
+    from pops.time import StagePoint, TimePoint
+    from pops.time.points import point_clock
+    from pops.time.references import canonical_handle
+    result = dict(states)
+    seen = set()
+    for handle, value in zip(handles, values, strict=True):
+        require_top_level(program, value, "field publication consumer state")
+        if not isinstance(handle, Handle) or handle.kind != "state" or handle.block_ref is None \
+                or value.vtype != "state" or value.block != handle.block_ref or value.state_ref is None:
+            raise ValueError("field publication consumer requires an exact qualified state mapping")
+        if canonical_handle(handle).canonical_identity() != canonical_handle(value.state_ref).canonical_identity():
+            raise ValueError("field publication consumer state changes its declared identity")
+        same_point = value.point == point
+        if type(value.point) is TimePoint and type(point) is StagePoint:
+            same_point = value.point == point.time
+        if value.clock != point_clock(point, "field publication") or not same_point:
+            raise ValueError("field publication consumer state belongs to another clock or stage point")
+        if handle.block_ref in seen or (handle.block_ref in result and result[handle.block_ref] is not value):
+            raise ValueError("field publication consumer state has conflicting or repeated block mappings")
+        seen.add(handle.block_ref)
+        result[handle.block_ref] = value
+    return result
+
+
+def publication_states(value: Any) -> dict[Any, Any]:
+    rows = validate_field_publication(value)
+    return _consumer_states(value.prog, value.point, _states(_source(value.inputs[0])[1], value.prog),
+                            value.attrs.get("consumer_states", ()), value.inputs[len(rows):])

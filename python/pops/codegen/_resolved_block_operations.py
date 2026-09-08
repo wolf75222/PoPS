@@ -126,9 +126,11 @@ def build_block_resolved_operations(block: Any, program: Any):
     evaluations = {item.identity: item for item in requests}
     values_to_operations = {}
     for value, location, guards in _program_values(program):
-        state = getattr(value, "block", None)
-        if getattr(state, "block_ref", None) is not None \
-                and str(state.owner_path.canonical()) != block.instance_owner_qid:
+        from pops.problem.handles import BlockHandle
+
+        owner = getattr(value, "block", None)
+        instance = owner if isinstance(owner, BlockHandle) else getattr(owner, "block_ref", None)
+        if instance is not None and str(instance.instance_owner_path.canonical()) != block.instance_owner_qid:
             continue
         handle = value.attrs.get("operator_handle")
         if not isinstance(handle, OperatorHandle):

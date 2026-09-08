@@ -31,7 +31,8 @@ def publication_claims(block: Any, program: Any) -> tuple[dict[str, Any], ...]:
     for value, _location, _guards in _program_values(program):
         if value.op != "field_publication":
             continue
-        for row, source in zip(validate_field_publication(value), value.inputs, strict=True):
+        rows = validate_field_publication(value)
+        for row, source in zip(rows, value.inputs[:len(rows)], strict=True):
             target = row["target"]
             if str(target.owner_path.canonical()) != block.instance_owner_qid:
                 continue

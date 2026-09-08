@@ -59,7 +59,13 @@ def consumer_case(n, *, transport=False):
         electric = model.source("electric", on=state,
             value=(0 * rho, -rho * gradient.x, -rho * gradient.y))
         physical_rate = model.rate("Euler Poisson", equation=ddt(state) == -div(flux) + electric)
-        driver = rho
+        driver_model = pops.Model("independent Poisson driver", frame=frame)
+        driver_state = driver_model.state("U", components=("load",))
+        driver_flux = driver_model.flux("stationary", frame=frame, state=driver_state,
+            components={axis: (0 * driver_state[0],) for axis in frame.axes},
+            waves={axis: (0 * driver_state[0],) for axis in frame.axes})
+        driver_rate = driver_model.rate("frozen load", equation=ddt(driver_state) == -div(driver_flux))
+        driver = driver_state[0]
     problem = FieldProblem("Poisson", unknowns=(potential,),
         equations=(-laplacian(potential) == driver - 1,),
         boundaries=(FieldBoundary(potential, bcs.BoundaryCondition(bcs.AllPhysicalBoundaries(), bcs.Periodic())),),
@@ -71,12 +77,21 @@ def consumer_case(n, *, transport=False):
     numerics = DiscretizationPlan()
     numerics.rates.add(physical_rate, method)
     case.numerics(numerics, block=block)
+    if not transport:
+        driver_block = case.block("driver", driver_model)
+        driver_numerics = DiscretizationPlan()
+        driver_numerics.rates.add(driver_rate, FiniteVolume(flux=driver_flux,
+            variables=variables.Conservative(driver_state), reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov()))
+        case.numerics(driver_numerics, block=driver_block)
     field = case.field(problem, FieldDiscretization(method=CellCenteredSecondOrder(), boundaries=(),
         solver=CG(max_iter=4000, rel_tol=1e-11, abs_tol=1e-12)))
     program = pops.Program("published field step")
     current = program.state(block[state])
     point = program.stage("evaluate", c=0)
-    observations = field.observe(program.solve(field, values={block[state]: current.n}, at=point)
+    driver_current = current if transport else program.state(driver_block[driver_state])
+    solve_inputs = {block[state]: current.n} if transport else {driver_block[driver_state]: driver_current.n}
+    observations = field.observe(program.solve(field, values=solve_inputs, at=point)
                                   .consume(action=FailRun()))
     solved_gradient = observations.gradient(field[potential], dimension=2)
     module = model.module
@@ -84,11 +99,14 @@ def consumer_case(n, *, transport=False):
     context = observations.publish({
         (carrier, "potential_grad_x"): (solved_gradient, 0),
         (carrier, "potential_grad_y"): (solved_gradient, 1),
-    })
+    }, states=None if transport else {block[state]: current.n})
     terms = [Flux()] if transport else [SourceTerm(block[module.operator_handle("electric")])]
     rhs = program.rhs(state=current.n, fields=context, terms=terms)
     program.store_history("gradient", solved_gradient, depth=1)
     program.commit(current.next, program.value("advanced", current.n + DT * rhs, at=current.next.point))
+    if not transport:
+        program.commit(driver_current.next, program.value("frozen driver", 1 * driver_current.n,
+                                                          at=driver_current.next.point))
     program.step_strategy(FixedDt(DT))
     case.program(program)
     grid = CartesianGrid(frame=frame, cells=(n, n), periodic=PeriodicAxes(frame.axes))
@@ -131,7 +149,8 @@ def test_full_public_consumed_field_source_and_transport_matrix(
         claims = resolved.blocks[0].resolved_operations.provider_evidence["program_field_publications"]
         assert len(claims) == 2
         artifact = pops.compile(resolved)
-        runtime = pops.bind(artifact, initial_state={"fluid": initial},
+        initial_states = {"fluid": initial} if transport else {"fluid": initial, "driver": initial[0:1]}
+        runtime = pops.bind(artifact, initial_state=initial_states,
                            resources={"execution_context": artifact_execution_context(artifact)})
         report = pops.run(runtime, t_end=DT, max_steps=1)
         assert report.accepted_steps == 1
@@ -141,6 +160,8 @@ def test_full_public_consumed_field_source_and_transport_matrix(
         l2 = float(np.sqrt(np.sum(error**2) / n**2))
         gradient_error = float(np.sqrt(np.sum((observed_gradient - exact_gradient)**2) / n**2))
         if not transport:
+            np.testing.assert_array_equal(np.asarray(runtime.state_global("driver")).reshape(1, n, n),
+                                          initial[0:1])
             np.testing.assert_array_equal(actual[0], initial[0])
             np.testing.assert_allclose(actual[1:], -DT * initial[0] * observed_gradient, rtol=0, atol=1e-12)
         else:

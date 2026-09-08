@@ -21,7 +21,7 @@ def emit_field_publication(value: Any, var: Any, lines: list[str], model: Any, *
         raise ValueError("field publication requires authenticated provider prerequisite plans")
     rows = []
     destinations = {}
-    for row, source in zip(bindings, value.inputs, strict=True):
+    for row, source in zip(bindings, value.inputs[:len(bindings)], strict=True):
         destination = row["target"]
         emitter = model.model_for_block(destination.block_ref)
         destinations[destination.block_ref] = (destination, emitter)
@@ -44,9 +44,9 @@ def emit_field_publication(value: Any, var: Any, lines: list[str], model: Any, *
     from .program_emit_ops import _required_block_index
     from .program_emit_kernels import _prepare_provider_values, program_provider_consumer_qid
     from .program_field_publication import remaining_input_pack
-    from pops.fields._program_publication import _source, _states
+    from pops.fields._program_publication import publication_states
 
-    states = _states(_source(value.inputs[0])[1], value.prog)
+    states = publication_states(value)
     for block, (destination, emitter) in destinations.items():
         require_emitter_provider_carrier(emitter, where="field publication prerequisites")
         pack = emitter._auxiliary_provider_pack

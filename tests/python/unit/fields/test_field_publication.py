@@ -86,3 +86,54 @@ def test_publication_node_authenticates_destination_and_selected_width(corruptio
     replaced = next(value for value in program._values if value.id == context.id)
     with pytest.raises(ValueError, match="component|field space"):
         validate_field_publication(replaced)
+
+
+def test_independent_driver_publication_retains_actual_consumer_ssa_without_solve_dependency():
+    from tests.python.integration.runtime.test_public_field_consumers import consumer_case
+    case, layout = consumer_case(16)
+    program = case._time
+    context = next(node for node in program._values if node.op == "field_publication")
+    load = next(node for node in program._values if node.op == "field_problem_load")
+    assert {value.block.local_id for value in load.inputs} == {"driver"}
+    assert context.inputs[-1].vtype == "state" and context.inputs[-1].block.local_id == "fluid"
+    assert {block.local_id for block, _ in context.field_context.stage_sources} == {"driver", "fluid"}
+    pops.resolve(pops.validate(case), layout=layout)
+
+
+@pytest.mark.parametrize("corruption", ("future_point", "fresh_equal_time_stage", "foreign_state", "duplicate"))
+def test_supplemental_consumer_state_refuses_stale_or_conflicting_authority(corruption):
+    from pops.fields._program_publication import validate_field_publication
+    from tests.python.integration.runtime.test_public_field_consumers import consumer_case
+    case, _layout = consumer_case(16)
+    program = case._time
+    context = next(node for node in program._values if node.op == "field_publication")
+    state = context.inputs[-1]
+    if corruption in ("future_point", "fresh_equal_time_stage"):
+        offset = 1 if corruption == "future_point" else 0
+        stale = program.value("future consumer", 1 * state, at=program.stage("later", c=offset))
+        inputs, attrs = (*context.inputs[:-1], stale), context.attrs
+    elif corruption == "foreign_state":
+        load = next(node for node in program._values if node.op == "field_problem_load")
+        inputs, attrs = (*context.inputs[:-1], load.inputs[0]), context.attrs
+    else:
+        inputs = (*context.inputs, state)
+        attrs = {**context.attrs, "consumer_states": 2 * context.attrs["consumer_states"]}
+    replaced = program._new("fields", "field_publication", inputs, attrs, "corrupted context", None,
+                            field_context=context.field_context, space=context.space,
+                            point=context.point, inherit_state_ref=False)
+    with pytest.raises(ValueError, match="stage point|state mapping|repeated block"):
+        validate_field_publication(replaced)
+
+
+def test_same_model_instances_cannot_alias_distinct_consumed_publications():
+    case, field, problem, program, values, point = field_case(publication_fields=True)
+    first = case.blocks()["first"]
+    model = case._block_registry.spec("first")["model"]
+    module = model.module
+    declaration = module.field_handle(module.field_spaces()["fields"])
+    solution = field.observe(program.solve(field, values=values, at=point).consume(action=FailRun()))
+    gradient = solution.gradient(field[problem.unknowns[0]], dimension=2)
+    second_instance = case.block("repeated_definition", model)
+    with pytest.raises(ValueError, match="provider key across block instances"):
+        solution.publish({(first[declaration], "observed_gx"): (gradient, 0),
+                          (second_instance[declaration], "observed_gy"): (gradient, 1)})
