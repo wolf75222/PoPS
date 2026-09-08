@@ -1199,6 +1199,8 @@ def test_frozen_two_level_shared_interface_implicit_pair_compiles_native_route(t
         tmp_path,
         program_factory=_implicit_pair_program,
         with_checkpoint=False,
+        # The frozen base is refreshed at a consumed solve, not at operator declaration.
+        with_implicit_solve=True,
     )
     resolved = _resolve_shared_interface_amr(authoring, max_levels=2, frozen=True)
     assert resolved.resolved_hierarchy.plan.level_count == 2
