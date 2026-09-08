@@ -1465,6 +1465,7 @@ class System {
                                                   /// @}
 
  private:
+  typename SystemInterfaceProvider<Dim>::CoreEvaluator prepare_interface_core_evaluator_();
   friend class runtime::program::ProgramContext<Dim>;
   friend class PreparedSystemLayoutTransfer<Dim>;
   /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains

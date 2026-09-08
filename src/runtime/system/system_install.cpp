@@ -1359,7 +1359,13 @@ void System<Dim>::discard_hyperbolic_boundaries() {
 template <int Dim>
 void System<Dim>::install_interface_provider(SystemInterfaceProvider<Dim> provider) {
   require_assembling(p_->lifecycle_, "install_interface_provider");
-  p_->blocks_.install_interface_provider(std::move(provider));
+  const auto* const lane = &prepared_boundary_execution_lane();
+  p_->blocks_.install_interface_provider(
+      std::move(provider), prepare_interface_core_evaluator_(),
+      [lane](void (*action)(void*), void* payload) {
+        runtime::program::collective_boundary_provider_phase(
+            *lane, "System shared-interface core capability admission", [&] { action(payload); });
+      });
 }
 
 template <int Dim>

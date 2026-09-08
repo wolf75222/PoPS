@@ -15,6 +15,7 @@
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
 #include <pops/runtime/system/prepared_embedded_boundary.hpp>
+#include <pops/runtime/system/system_interface_core_session.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -325,12 +326,16 @@ struct SystemInterfaceProvider {
   /// authority and the native spatial rank before this provider is published.
   std::string provider_identity;
   std::string collective_contract;
-  std::function<void(const point_type&, const std::vector<field_type*>&,
-                     const std::vector<field_type*>&, const std::vector<int>&)>
-      evaluate_rhs;
-  std::function<void(const point_type&, const std::vector<field_type*>&,
-                     const std::vector<field_type*>&, const std::vector<int>&)>
-      evaluate_core;
+  using CoreEvaluator =
+      std::function<void(const point_type&, const std::vector<field_type*>&,
+                         const std::vector<field_type*>&, const std::vector<int>&)>;
+  using CoreAdmission = std::function<void(void (*)(void*), void*)>;
+  using CoreSession = typename SystemInterfaceCoreSession<Dim>::pointer;
+  using Evaluate = std::function<void(const point_type&, const std::vector<field_type*>&,
+                                      const std::vector<field_type*>&, const std::vector<int>&,
+                                      const CoreSession&)>;
+  Evaluate evaluate_rhs;
+  Evaluate evaluate_core;
   std::function<std::size_t(const std::string&, int)> evaluation_count;
   std::function<bool(int)> has_interfaces;
   std::function<void()> discard;

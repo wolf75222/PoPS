@@ -129,11 +129,10 @@ PreparedProviderOptions prepared_provider_options_from_python(const std::string&
 
 template <int Dim>
 void evaluate_system_interface_provider(
-    pops::System<Dim>& system,
+    std::size_t block_count,
     const std::shared_ptr<pops::runtime::multiblock::InterfaceFluxScheduler<Dim>>& scheduler,
     const pops::ExecutionLane* lane,
-    const std::vector<std::shared_ptr<pops::runtime::program::PreparedScalarBoundarySession<Dim>>>&
-        boundary_sessions,
+    const typename pops::SystemInterfaceCoreSession<Dim>::pointer& core,
     const pops::runtime::multiblock::BoundaryEvaluationPoint& point,
     const std::vector<pops::MultiFab<Dim>*>& states,
     const std::vector<pops::MultiFab<Dim>*>& residuals, const std::vector<int>& flux_only) {
@@ -142,11 +141,10 @@ void evaluate_system_interface_provider(
   std::exception_ptr request_error;
   std::string request_contract;
   try {
-    const auto blocks = static_cast<std::size_t>(system.n_blocks());
-    if (!scheduler || boundary_sessions.size() != blocks || point.clock.empty() || point.tick < 0 ||
-        point.level != 0 || point.substep < 0 || point.stage < 0 || !(point.dt > 0.0) ||
-        !std::isfinite(point.dt) || !std::isfinite(point.physical_time) ||
-        point.stage_fraction < ::pops::amr::Rational(0, 1) ||
+    const auto blocks = block_count;
+    if (!scheduler || !core || point.clock.empty() || point.tick < 0 || point.level != 0 ||
+        point.substep < 0 || point.stage < 0 || !(point.dt > 0.0) || !std::isfinite(point.dt) ||
+        !std::isfinite(point.physical_time) || point.stage_fraction < ::pops::amr::Rational(0, 1) ||
         ::pops::amr::Rational(1, 1) < point.stage_fraction || states.size() != blocks ||
         residuals.size() != blocks || (!flux_only.empty() && flux_only.size() != blocks))
       throw std::invalid_argument(
@@ -166,9 +164,6 @@ void evaluate_system_interface_provider(
         .scalar(point.physical_time)
         .scalar(static_cast<std::uint64_t>(blocks));
     for (std::size_t block = 0; block < blocks; ++block) {
-      if (!boundary_sessions[block])
-        throw std::invalid_argument(
-            "System shared-interface evaluation lacks a prepared block boundary session");
       const bool has_state = states[block] != nullptr;
       const bool has_residual = residuals[block] != nullptr;
       const int mode = flux_only.empty() ? 0 : flux_only[block];
@@ -195,12 +190,7 @@ void evaluate_system_interface_provider(
 
   std::exception_ptr core_error;
   try {
-    for (std::size_t block = 0; block < states.size(); ++block)
-      if (states[block] != nullptr)
-        system.block_rhs_core_into_at(
-            point, static_cast<int>(block), *states[block], *residuals[block],
-            !flux_only.empty() && flux_only[block] != 0, &system, static_cast<int>(block), point,
-            *lane, *boundary_sessions[block]);
+    core->evaluate();
   } catch (...) {
     core_error = std::current_exception();
   }
@@ -239,19 +229,13 @@ void install_system_interface_provider(pops::System<Dim>& system, const py::list
 
   std::shared_ptr<Scheduler> scheduler;
   const pops::ExecutionLane* lane = &prepared_lane;
-  std::vector<std::shared_ptr<pops::runtime::program::PreparedScalarBoundarySession<Dim>>>
-      boundary_sessions;
   std::optional<pops::Geometry<Dim>> geometry;
-  std::optional<pops::BoundaryTopology<Dim>> topology;
   std::vector<pops::MultiFab<Dim>*> left_states;
   std::vector<pops::MultiFab<Dim>*> right_states;
   std::exception_ptr storage_error;
   try {
     scheduler = std::make_shared<Scheduler>();
     geometry.emplace(system.prepared_block_geometry());
-    topology.emplace(
-        pops::BoundaryTopology<Dim>::axis_periodic(system.prepared_block_periodicity()));
-    boundary_sessions.reserve(static_cast<std::size_t>(system.n_blocks()));
     left_states.reserve(jobs.size());
     right_states.reserve(jobs.size());
     for (const auto& job : jobs) {
@@ -271,11 +255,6 @@ void install_system_interface_provider(pops::System<Dim>& system, const py::list
     throw std::runtime_error(
         "System shared-interface storage preparation failed on another MPI rank");
   }
-
-  for (int block = 0; block < system.n_blocks(); ++block)
-    boundary_sessions.push_back(pops::runtime::program::PreparedScalarBoundarySession<Dim>::prepare(
-        *geometry, *topology, system.block_state(block), *lane,
-        static_cast<std::uint64_t>(block) + 1));
 
   for (std::size_t index = 0; index < jobs.size(); ++index) {
     auto& job = jobs[index];
@@ -299,13 +278,15 @@ void install_system_interface_provider(pops::System<Dim>& system, const py::list
   provider.provider_identity =
       "pops.system.interface-provider.nd.v1:sha256:" + pops::identity::sha256_hex(identity_bytes);
   provider.collective_contract = std::move(provider_contract);
-  auto evaluate = [&system, scheduler, lane, boundary_sessions](
+  const auto block_count = static_cast<std::size_t>(system.n_blocks());
+  auto evaluate = [block_count, scheduler, lane](
                       const pops::runtime::multiblock::BoundaryEvaluationPoint& point,
                       const std::vector<pops::MultiFab<Dim>*>& states,
                       const std::vector<pops::MultiFab<Dim>*>& residuals,
-                      const std::vector<int>& flux_only) {
-    evaluate_system_interface_provider(system, scheduler, lane, boundary_sessions, point, states,
-                                       residuals, flux_only);
+                      const std::vector<int>& flux_only,
+                      const typename pops::SystemInterfaceCoreSession<Dim>::pointer& core) {
+    evaluate_system_interface_provider<Dim>(block_count, scheduler, lane, core, point, states,
+                                            residuals, flux_only);
   };
   provider.evaluate_rhs = evaluate;
   provider.evaluate_core = std::move(evaluate);

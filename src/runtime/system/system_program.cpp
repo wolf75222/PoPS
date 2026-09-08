@@ -429,33 +429,140 @@ void System<Dim>::block_rhs_into_at(const runtime::multiblock::BoundaryEvaluatio
 }
 
 template <int Dim>
+typename SystemInterfaceProvider<Dim>::CoreEvaluator
+System<Dim>::prepare_interface_core_evaluator_() {
+  using Session = runtime::program::PreparedScalarBoundarySession<Dim>;
+  auto* const owner = p_.get();  // Impl and its execution lane remain stable across facade moves.
+  const auto* const lane = &prepared_boundary_execution_lane();
+  std::vector<std::shared_ptr<Session>> sessions;
+  runtime::program::collective_boundary_provider_phase(
+      *lane, "System shared-interface core session allocation",
+      [&] { sessions.reserve(owner->sp.size()); });
+  const auto topology = BoundaryTopology<Dim>::axis_periodic(owner->periodicity);
+  for (std::size_t block = 0; block < owner->sp.size(); ++block)
+    sessions.push_back(Session::prepare_block(owner->geom, topology, owner->sp[block].U, *lane,
+                                              static_cast<std::uint64_t>(block) + 1));
+  return [owner, lane, sessions = std::move(sessions)](
+             const runtime::multiblock::BoundaryEvaluationPoint& point,
+             const std::vector<MultiFab<Dim>*>& states,
+             const std::vector<MultiFab<Dim>*>& residuals, const std::vector<int>& flux_only) {
+    std::string group_contract;
+    runtime::program::collective_boundary_provider_phase(
+        *lane, "System shared-interface core group preflight", [&] {
+          require_boundary_point<Dim>(point, "System shared-interface core group");
+          if (states.size() != owner->sp.size() || residuals.size() != states.size() ||
+              sessions.size() != states.size() ||
+              (!flux_only.empty() && flux_only.size() != states.size()))
+            throw std::invalid_argument(
+                "shared-interface core group changed its exact block count");
+          ExactContractBuilder contract;
+          contract.text("pops.system.interface-core-group")
+              .scalar(std::int32_t{Dim})
+              .text(lane->identity())
+              .text(point.clock)
+              .scalar(point.tick)
+              .scalar(point.level)
+              .scalar(point.substep)
+              .scalar(point.stage)
+              .scalar(point.stage_fraction.numerator)
+              .scalar(point.stage_fraction.denominator)
+              .scalar(point.dt)
+              .scalar(point.physical_time)
+              .text(point.graph_identity)
+              .text(point.rate_identity)
+              .text(point.application_identity)
+              .scalar(static_cast<std::uint64_t>(states.size()));
+          for (std::size_t block = 0; block < states.size(); ++block) {
+            const int mode = flux_only.empty() ? 0 : flux_only[block];
+            if (mode != 0 && mode != 1)
+              throw std::invalid_argument("shared-interface core has a nonboolean flux mode");
+            contract.presence(states[block] != nullptr).scalar(static_cast<std::uint8_t>(mode));
+            if ((states[block] == nullptr) != (residuals[block] == nullptr))
+              throw std::invalid_argument("shared-interface core group has unmatched state/output");
+            if (states[block] == nullptr)
+              continue;
+            const auto& selected = owner->sp[block];
+            require_same_block_field(*states[block], selected.U, "shared-interface core state");
+            require_same_block_field(*residuals[block], selected.U, "shared-interface core result");
+            if (&sessions[block]->lane() != lane)
+              throw std::invalid_argument("shared-interface core changed its prepared lane");
+            if (selected.boundary && !(flux_only.empty() || flux_only[block] == 0
+                                           ? selected.boundary_full_at_point_prepared
+                                           : selected.boundary_flux_full_at_point_prepared))
+              throw std::invalid_argument("shared-interface core lacks its exact physical closure");
+          }
+          group_contract = std::move(contract).release();
+        });
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("system-interface-core-group"), std::string_view(group_contract)}},
+            lane->communicator()))
+      throw std::runtime_error("System shared-interface core group differs across MPI ranks");
+    for (std::size_t block = 0; block < states.size(); ++block) {
+      if (states[block] == nullptr)
+        continue;
+      auto& selected = owner->sp[block];
+      auto& state = *states[block];
+      auto& result = *residuals[block];
+      const bool only_flux = !flux_only.empty() && flux_only[block] != 0;
+      if (!selected.boundary) {
+        owner->blocks_.evaluate_rhs_core(point, block, state, result, only_flux);
+        continue;
+      }
+      const auto& transport = *sessions[block];
+      invoke_prepared_boundary_transaction<Dim>(
+          state, result, *lane, "System shared-interface physical core", transport,
+          [&](MultiFab<Dim>& candidate, auto& scratch) {
+            materialize_detached_valid_field(state, scratch.detached_state);
+            // Physical closures retain all unowned faces; the generated omission mask removes
+            // only the exact shared-interface faces subsequently filled once by the scheduler.
+            auto& physical = only_flux ? selected.boundary_flux_full_at_point_prepared
+                                       : selected.boundary_full_at_point_prepared;
+            physical(point, scratch.detached_state, candidate, *selected.boundary, *lane,
+                     transport);
+          });
+    }
+  };
+}
+
+template <int Dim>
 void System<Dim>::block_rhs_group(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                   const std::vector<int>& requested_blocks,
                                   const std::vector<MultiFab<Dim>*>& requested_states,
                                   const std::vector<MultiFab<Dim>*>& requested_residuals,
                                   const std::vector<int>& requested_flux_only) {
-  if (requested_blocks.empty() || requested_blocks.size() != requested_states.size() ||
-      requested_blocks.size() != requested_residuals.size() ||
-      requested_blocks.size() != requested_flux_only.size())
-    throw std::invalid_argument("System::block_rhs_group has inconsistent request vectors");
+  std::vector<MultiFab<Dim>*> states;
+  std::vector<MultiFab<Dim>*> residuals;
+  std::vector<int> flux_only;
+  const auto prepare_group = [&] {
+    if (requested_blocks.empty() || requested_blocks.size() != requested_states.size() ||
+        requested_blocks.size() != requested_residuals.size() ||
+        requested_blocks.size() != requested_flux_only.size())
+      throw std::invalid_argument("System::block_rhs_group has inconsistent request vectors");
 
-  std::vector<MultiFab<Dim>*> states(p_->sp.size(), nullptr);
-  std::vector<MultiFab<Dim>*> residuals(p_->sp.size(), nullptr);
-  std::vector<int> flux_only(p_->sp.size(), 0);
-  for (std::size_t request = 0; request < requested_blocks.size(); ++request) {
-    const int block = requested_blocks[request];
-    if (block < 0 || block >= p_->blocks_.size())
-      throw std::out_of_range("System::block_rhs_group block index is out of range");
-    const std::size_t index = static_cast<std::size_t>(block);
-    if (states[index] != nullptr || requested_states[request] == nullptr ||
-        requested_residuals[request] == nullptr ||
-        (requested_flux_only[request] != 0 && requested_flux_only[request] != 1))
-      throw std::invalid_argument(
-          "System::block_rhs_group requires unique blocks, non-null storage and boolean modes");
-    states[index] = requested_states[request];
-    residuals[index] = requested_residuals[request];
-    flux_only[index] = requested_flux_only[request];
-  }
+    states.assign(p_->sp.size(), nullptr);
+    residuals.assign(p_->sp.size(), nullptr);
+    flux_only.assign(p_->sp.size(), 0);
+    for (std::size_t request = 0; request < requested_blocks.size(); ++request) {
+      const int block = requested_blocks[request];
+      if (block < 0 || block >= p_->blocks_.size())
+        throw std::out_of_range("System::block_rhs_group block index is out of range");
+      const std::size_t index = static_cast<std::size_t>(block);
+      if (states[index] != nullptr || requested_states[request] == nullptr ||
+          requested_residuals[request] == nullptr ||
+          (requested_flux_only[request] != 0 && requested_flux_only[request] != 1))
+        throw std::invalid_argument(
+            "System::block_rhs_group requires unique blocks, non-null storage and boolean modes");
+      states[index] = requested_states[request];
+      residuals[index] = requested_residuals[request];
+      flux_only[index] = requested_flux_only[request];
+    }
+  };
+  if (p_->blocks_.has_interface_provider())
+    runtime::program::collective_boundary_provider_phase(
+        prepared_boundary_execution_lane(), "System shared-interface request admission",
+        prepare_group);
+  else
+    prepare_group();
   if (p_->embedded_boundary_ &&
       p_->embedded_boundary_->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
     for (std::size_t request = 0; request < requested_blocks.size(); ++request) {
@@ -1127,6 +1234,8 @@ template void System<kNativeDimension>::block_rhs_into(int, MultiFab<kNativeDime
 template void System<kNativeDimension>::block_rhs_into_at(
     const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
     MultiFab<kNativeDimension>&);
+template SystemInterfaceProvider<kNativeDimension>::CoreEvaluator
+System<kNativeDimension>::prepare_interface_core_evaluator_();
 template void System<kNativeDimension>::block_rhs_group(
     const runtime::multiblock::BoundaryEvaluationPoint&, const std::vector<int>&,
     const std::vector<MultiFab<kNativeDimension>*>&,
