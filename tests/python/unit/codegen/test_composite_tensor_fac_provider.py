@@ -387,14 +387,12 @@ def _public_amr_hierarchy_case(
     solver,
     *,
     max_levels=2,
-    temporal_ratios=(3,),
     bound_plasma=False,
     manufactured_plasma=False,
     base_cells=_HIERARCHY_BASE_CELLS,
 ):
     import pops
     from pops.amr import (
-        AMRClockRelation,
         AMRExecution,
         AMRHierarchy,
         AMRRegrid,
@@ -670,10 +668,6 @@ def _public_amr_hierarchy_case(
     transfer = AMRTransfer()
     transfer.state(state_instance, StateTransfer())
     transfer.state(marker_instance, StateTransfer())
-    if len(temporal_ratios) != max_levels - 1:
-        raise ValueError(
-            "one independent temporal ratio is required per AMR transition"
-        )
     layout = AMR(
         grid=CartesianGrid(
             frame=frame,
@@ -694,12 +688,8 @@ def _public_amr_hierarchy_case(
         ),
         regrid=AMRRegrid(schedule=every(100, clock=program.clock)),
         transfer=transfer,
-        execution=AMRExecution.subcycled(
-            tuple(
-                AMRClockRelation(level, level + 1, ratio)
-                for level, ratio in enumerate(temporal_ratios)
-            )
-        ),
+        # One hierarchy solve consumes every level at the same physical stage.
+        execution=AMRExecution.synchronous(),
     )
     return case, layout, state_instance
 
@@ -967,6 +957,22 @@ def _patch_interior(mask, *, guard_cells=1):
         )
     assert np.count_nonzero(interior) >= 16
     return interior
+
+
+@pytest.mark.parametrize("max_levels", (1, 2, 3))
+def test_public_hierarchy_fixture_declares_one_synchronized_physical_stage(max_levels):
+    import pops
+
+    case, layout, _ = _public_amr_hierarchy_case(CompositeTensorFAC(), max_levels=max_levels)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    assert resolved.amr_execution.to_data() == {
+        "schema_version": 2,
+        "authority_type": "amr_execution",
+        "mode": "synchronous",
+        "relations": [],
+    }
+    assert len(resolved.resolved_hierarchy.plan.transitions) == max_levels - 1
+    assert len([value for value in resolved.time._values if value.op == "solve_linear"]) == 1
 
 
 def test_header_only_hierarchy_extension_compiles_its_own_generic_provider_identity(
@@ -1316,22 +1322,22 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
     configurations = (
         # One level has an empty ratio set and must execute the provider-selected prepared Krylov
         # fallback over the frozen packed tensor, without calling the provider's direct solve.
-        (1, (), 1, False, True, _HIERARCHY_BASE_CELLS),
+        (1, 1, False, True, _HIERARCHY_BASE_CELLS),
         # The same fallback must consume the provider-authenticated zero-Dirichlet face law.  This
         # dense-oracle case distinguishes it from the generic scalar constant extrapolation.
-        (1, (), 1, True, True, _HIERARCHY_BASE_CELLS),
+        (1, 1, True, True, _HIERARCHY_BASE_CELLS),
         # Preserve the two-step outflow/reflux/history-carry composition.
-        (2, (3,), 2, True, False, _HIERARCHY_BASE_CELLS),
+        (2, 2, True, False, _HIERARCHY_BASE_CELLS),
         # Independently quantify the nonzero two-level solve at h and h/2.
-        (2, (3,), 1, False, True, _HIERARCHY_BASE_CELLS),
-        (2, (3,), 1, False, True, 2 * _HIERARCHY_BASE_CELLS),
-        # Keep the N-level gather/publish and nonbinary temporal-ratio guard.  The nonzero N-level
-        # scientific gate remains open because the general FAC currently diverges on the MMS.
-        (3, (3, 5), 1, False, False, _HIERARCHY_BASE_CELLS),
+        (2, 1, False, True, _HIERARCHY_BASE_CELLS),
+        (2, 1, False, True, 2 * _HIERARCHY_BASE_CELLS),
+        # Keep N-level gather/publish with one shared physical stage. Nonbinary temporal
+        # subcycling is outside this synchronized solve contract; it must not be silently aligned.
+        # The nonzero N-level scientific gate remains open for the general FAC MMS.
+        (3, 1, False, False, _HIERARCHY_BASE_CELLS),
     )
     for (
         max_levels,
-        temporal_ratios,
         steps,
         bound_plasma,
         manufactured_plasma,
@@ -1340,7 +1346,6 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         case, layout, plasma_state = _public_amr_hierarchy_case(
             ExternalHierarchySolver(),
             max_levels=max_levels,
-            temporal_ratios=temporal_ratios,
             bound_plasma=bound_plasma,
             manufactured_plasma=manufactured_plasma,
             base_cells=base_cells,
@@ -1425,8 +1430,8 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
             assert run_fallback == bound_fallback
             assert run_solve == bound_solve + steps
 
-        # Each level owns a distinct qualified clock, while the authored temporal ratios remain
-        # independent from the spatial ratio two (and from each other in the three-level tower).
+        # Each level retains its qualified clock, with ratio-one physical windows for the
+        # synchronized solve independently of spatial refinement by two.
         program_report = simulation.program_report()
         level_clocks = [row for row in program_report.clocks if row["kind"] == "level"]
         assert {row["level"] for row in level_clocks} == set(range(max_levels))
@@ -1442,10 +1447,10 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
             {
                 "parent_level": level,
                 "child_level": level + 1,
-                "temporal_ratio": {"numerator": ratio, "denominator": 1},
+                "temporal_ratio": {"numerator": 1, "denominator": 1},
                 "remainder_policy": "integral_only",
             }
-            for level, ratio in enumerate(temporal_ratios)
+            for level in range(max_levels - 1)
         ]
 
         # This is one combined Program, not two adjacent tests: its explicit finite-volume rate
