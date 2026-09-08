@@ -197,6 +197,7 @@ void prepare_active_flux_basis_impl_(
           "AMR Program flux evaluations exceed their authenticated RHS-basis bound");
     if (candidate_identity == std::numeric_limits<std::uint64_t>::max())
       throw std::overflow_error("AMR Program flux basis identity exhausted uint64_t");
+    const std::string& state_identity = facade_->prepared_amr_block_state_identity_(block);
 
     if (active_outgoing_flux_[block] != nullptr) {
       const Geometry<Dim> geometry = facade_->prepared_amr_level_geometry(active_level_);
@@ -217,7 +218,7 @@ void prepare_active_flux_basis_impl_(
       for (const ProgramInterfaceFace& interface : program_interface_faces_(parent)) {
         ::pops::amr::reflux::CoarseFaceRefluxKey<Dim> query;
         query.owner = std::string(active_block_identities_[block]);
-        query.state = query.owner + "/state";
+        query.state = state_identity;
         query.levels = {static_cast<int>(parent), static_cast<int>(parent + 1)};
         query.axis = interface.axis;
         query.coarse_face = interface.coarse_face;
@@ -309,9 +310,8 @@ void prepare_active_flux_basis_impl_(
       for (Real& component : payload) {
         if (!std::isfinite(static_cast<double>(component)))
           throw std::invalid_argument("AMR Program flux basis contains a non-finite payload");
-        // Native finite-volume providers retain face-integrated fluxes. Named cell-centered and
-        // constitutive diffusion providers supply density directly. The metric ledger always
-        // receives a density and multiplies its face measure exactly once.
+        // Finite-volume providers retain integrated fluxes; cell and diffusion providers supply
+        // densities, so the metric ledger multiplies the face measure exactly once.
         if (named_cell_fluxes == nullptr && provider != FluxBasisProvider::DiffusiveFace)
           component /= static_cast<Real>(face.measure);
       }

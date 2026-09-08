@@ -1,5 +1,4 @@
-// The composite temporal solve owns provisional interface closure, independently of the
-// accepted transport reflux ledger. No residual/JVP evaluation creates a FluxBasis.
+// Composite temporal solves own provisional closure; residual/JVP evaluations create no FluxBasis.
 template <class Prepare>
 void prepare_spatial_collectively(Prepare&& prepare) const {
   std::exception_ptr error;
@@ -69,8 +68,12 @@ std::shared_ptr<PreparedAmrSpatialResidual<Dim>> prepare_spatial_hierarchy(
         maximum_faces = checked_product_(maximum_faces, static_cast<std::size_t>(ratio[axis]),
                                          "composite diffusion faces");
       const ::pops::amr::reflux::MetricRefluxBudget budget{maximum_faces, maximum_faces, 1};
+      const auto runtime_block = static_cast<std::size_t>(sys_block(program_block));
+      ::pops::amr::reflux::CoarseFaceRefluxKey<Dim> query;
+      query.owner = facade_->prepared_amr_multiblock_hierarchy_().block_identity(runtime_block);
+      query.state = facade_->prepared_amr_block_state_identity_(runtime_block);
+      query.levels = {level, level + 1};
       for (const auto& face : program_interface_faces_(static_cast<std::size_t>(level))) {
-        ::pops::amr::reflux::CoarseFaceRefluxKey<Dim> query;
         query.axis = face.axis;
         query.coarse_face = face.coarse_face;
         workspace->interfaces.push_back(
@@ -126,8 +129,7 @@ std::shared_ptr<PreparedAmrSpatialResidual<Dim>> prepare_spatial_hierarchy(
     workspace->face_values_host =
         decltype(workspace->face_values_host)("composite_spatial_face_values_host", count);
   });
-  // Cache node allocation is provisional. Node publication with the fixed integer
-  // comparator neither allocates nor copies the prepared resource.
+  // Publish the provisional cache node without allocating or copying its prepared resource.
   decltype(spatial_hierarchy_resources_) pending;
   prepare_spatial_collectively([&] {
     pending.emplace(identity,
@@ -144,8 +146,7 @@ std::shared_ptr<PreparedAmrSpatialResidual<Dim>> prepare_spatial_hierarchy(
   return workspace;
 }
 
-// The exact current conserved parent is an evaluation input. The accepted/old parent envelope
-// remains unchanged and is restored even when a constitutive law rejects the candidate.
+// Use the current conserved parent; failures restore the untouched accepted/old envelope.
 template <class Evaluate>
 auto with_spatial_parent(int program_block, const field_type* parent, Evaluate&& evaluate) const {
   const auto block = static_cast<std::size_t>(sys_block(program_block));
@@ -202,8 +203,7 @@ SolveReport solve_spatial_hierarchy(PreparedAmrSpatialResidual<Dim>& workspace) 
   prepare_spatial_face_gather(workspace);
   auto evaluate = [&](const hierarchy_type& q, const hierarchy_type& previous,
                       hierarchy_type& result, int) {
-    // Map solver coordinates first, then restrict the current conserved fine iterate.
-    // Covered coarse cells are not independent Newton unknowns or old-state ghost data.
+    // Map solver coordinates, then restrict the fine iterate; covered coarse cells are not unknowns.
     for (std::size_t level = 0; level < q.size(); ++level)
       with_program_attempt_level(static_cast<int>(level), [&] {
         workspace.conserved[level] = workspace.mappings.at(level)(q[level]);

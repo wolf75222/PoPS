@@ -11,7 +11,7 @@ void apply_multiblock_reflux_(multiblock_reflux_context_type& context) const {
   const ::pops::amr::reflux::MetricRefluxBudget budget{
       maximum_fine_faces, std::max<std::size_t>(context.flux.published_size(), 1),
       std::max<std::size_t>(context.flux.published_size(), 1)};
-  const std::string state_identity = std::string(context.block_identity) + "/state";
+  const std::string& state_identity = facade_->prepared_amr_block_state_identity_(context.block);
   for (const ProgramInterfaceFace& interface : program_interface_faces_(context.parent_level)) {
     ::pops::amr::reflux::CoarseFaceRefluxKey<Dim> query;
     query.owner = std::string(context.block_identity);

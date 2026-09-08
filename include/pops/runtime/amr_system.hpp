@@ -1392,6 +1392,8 @@ class AmrSystem {
       std::string_view reason, const runtime::multiblock::BoundaryEvaluationPoint& accepted_point);
   POPS_EXPORT PreparedMultiBlockHierarchy& prepared_amr_multiblock_hierarchy_();
   POPS_EXPORT const PreparedMultiBlockHierarchy& prepared_amr_multiblock_hierarchy_() const;
+  POPS_EXPORT const std::string& prepared_amr_block_state_identity_(
+      std::size_t runtime_block) const;
   POPS_EXPORT void prepare_generated_amr_block_level_state(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);

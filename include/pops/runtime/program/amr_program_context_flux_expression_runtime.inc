@@ -19,6 +19,7 @@ void materialize_active_flux_expression_(
     retained = retain_spatial_materialization(runtime_block, candidate, expression);
     if (retained)
       return;
+    const std::string& state_identity = facade_->prepared_amr_block_state_identity_(runtime_block);
     std::vector<std::string> stage_identities;
     stage_identities.reserve(expression.size());
     for (const auto& [identity, term] : expression) {
@@ -66,15 +67,14 @@ void materialize_active_flux_expression_(
           std::to_string(basis.point.stage_fraction.numerator) + "/" +
           std::to_string(basis.point.stage_fraction.denominator));
     }
-
     if (multiblock_flux_ledger_type* incoming = active_incoming_flux_[runtime_block];
         incoming != nullptr) {
       const std::string owner(active_block_identities_[runtime_block]);
-      const std::string state = owner + "/state";
       const auto levels = ::pops::amr::reflux::LevelTransition{active_level_ - 1, active_level_};
       const auto coarse_entry = [&](const auto& entry, int axis, const Index<Dim>& coarse_face) {
-        return entry.key.owner == owner && entry.key.state == state && entry.key.levels == levels &&
-               entry.key.axis == axis && entry.key.coarse_face == coarse_face &&
+        return entry.key.owner == owner && entry.key.state == state_identity &&
+               entry.key.levels == levels && entry.key.axis == axis &&
+               entry.key.coarse_face == coarse_face &&
                entry.key.attempt == active_subcycling_attempt_ &&
                entry.key.clock.macro_step == active_subcycling_window_.begin.macro_step &&
                entry.key.role == fragment_role_type::Coarse;
@@ -122,7 +122,7 @@ void materialize_active_flux_expression_(
           coarse_face_exists = std::any_of(
               incoming->pending_entries(axis).begin(), incoming->pending_entries(axis).end(),
               [&](const auto& entry) {
-                return entry.key.owner == owner && entry.key.state == state &&
+                return entry.key.owner == owner && entry.key.state == state_identity &&
                        entry.key.levels == levels && entry.key.axis == axis &&
                        entry.key.attempt == active_subcycling_attempt_ &&
                        entry.key.clock.macro_step == active_subcycling_window_.begin.macro_step &&
@@ -154,7 +154,7 @@ void materialize_active_flux_expression_(
               "AMR Program flux basis targets no active hierarchy-transition ledger");
         fragment_key_type key;
         key.owner = std::string(active_block_identities_[runtime_block]);
-        key.state = key.owner + "/state";
+        key.state = state_identity;
         key.levels = face.role == fragment_role_type::Coarse
                          ? ::pops::amr::reflux::LevelTransition{active_level_, active_level_ + 1}
                          : ::pops::amr::reflux::LevelTransition{active_level_ - 1, active_level_};

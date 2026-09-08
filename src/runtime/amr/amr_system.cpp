@@ -12305,6 +12305,14 @@ MultiFab<Dim>& AmrSystem<Dim>::prepared_amr_block_state(int runtime_block, int l
 }
 
 template <int Dim>
+const std::string& AmrSystem<Dim>::prepared_amr_block_state_identity_(
+    std::size_t runtime_block) const {
+  if (runtime_block >= p_->blocks.size())
+    throw std::out_of_range("prepared AMR block state identity block is out of range");
+  return p_->boundary_registry.state_route(p_->blocks[runtime_block].name);
+}
+
+template <int Dim>
 const MultiFab<Dim>* AmrSystem<Dim>::prepared_amr_block_level_active_mask(int runtime_block,
                                                                           int level) const {
   // This prepared lookup also runs inside rank-local preflight. Materialization here would
@@ -20681,6 +20689,8 @@ template const MultiFab<kNativeDimension>& AmrSystem<kNativeDimension>::prepared
     int, int) const;
 template MultiFab<kNativeDimension>& AmrSystem<kNativeDimension>::prepared_amr_block_state(int,
                                                                                            int);
+template const std::string& AmrSystem<kNativeDimension>::prepared_amr_block_state_identity_(
+    std::size_t) const;
 template const MultiFab<kNativeDimension>*
 AmrSystem<kNativeDimension>::prepared_amr_block_level_active_mask(int, int) const;
 template void AmrSystem<kNativeDimension>::install_prepared_amr_coupling_operator(
