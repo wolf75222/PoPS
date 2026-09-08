@@ -192,7 +192,8 @@ def _component_sources(
     return sources
 
 
-def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch: Any) -> list:
+def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch: Any, *,
+                              status: str | None = None, active_mask: str | None = None) -> list:
     """Lower a ``coupled_rate`` (Spec 3 criterion 27, ADC-457) to ONE multi-state for_each_cell kernel
     filling every participating block's rate scratch at once.
 
@@ -231,6 +232,12 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
             "  const pops::FieldView<pops::Real, pops::kNativeDimension> %sA = "
             "%s.fab(li).view();" % (scratch[blk], scratch[blk])
         )
+    if status is not None:
+        lines.append("  const auto native_status_view = %s.fab(li).view();" % status)
+        lines.append("  const bool native_has_active_mask = %s != nullptr;" % active_mask)
+        lines.append("  const pops::FieldView<const pops::Real, pops::kNativeDimension> "
+                     "native_active_view = native_has_active_mask ? %s->fab(li).view() : "
+                     "pops::FieldView<const pops::Real, pops::kNativeDimension>{};" % active_mask)
     read_tokens = {src[0] for src in cons_source.values()}
     seen_states = []
     for st in by_block.values():                 # input order (v.inputs); deterministic
@@ -245,12 +252,32 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
         "  pops::for_each_cell(%s.box(li), [=] POPS_HD("
         "const pops::CellIndex<pops::kNativeDimension>& index) {" % driver
     )
+    if status is not None:
+        lines.append("    native_status_view(index, 0) = pops::Real(0);")
+        lines.append("    if (native_has_active_mask && native_active_view(index, 0) == pops::Real(0)) return;")
     for c in sorted(cons_source):                # bind only the referenced cons (no unused locals)
         tok, idx = cons_source[c]
         lines.append("    const pops::Real %s = %s(index, %d);" % (c, state_handle(tok), idx))
+    from .cpp_writer import _cse_emit
+    roots = [e for blk in blocks for e in components[blk]]
+    declarations, rendered, native_results = _cse_emit(
+        roots, "pops::Real", "    ", return_native_statuses=True)
+    if native_results and status is None:
+        raise ValueError("native interaction requires its planned collective status boundary")
+    lines += declarations
+    if status is not None:
+        lines.append("    int native_status = 0;")
+        for result in native_results:
+            lines.append("    native_status = Kokkos::max(native_status, static_cast<int>(%s.status));" % result)
+        for expression in rendered:
+            lines.append("    if (native_status == 0 && !Kokkos::isfinite(%s)) native_status = 2;" % expression)
+        lines.append("    native_status_view(index, 0) = static_cast<pops::Real>(native_status);")
+        lines.append("    if (native_status != 0) return;")
+    offset = 0
     for blk in blocks:
-        for comp, e in enumerate(components[blk]):
-            lines.append("    %sA(index, %d) = %s;" % (scratch[blk], comp, e.to_cpp()))
+        for comp in range(len(components[blk])):
+            lines.append("    %sA(index, %d) = %s;" % (scratch[blk], comp, rendered[offset]))
+            offset += 1
     lines += ["  });", "}"]
     return lines
 

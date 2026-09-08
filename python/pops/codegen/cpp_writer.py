@@ -62,6 +62,10 @@ def _cpp_identifier(value: Any) -> str:
 
 def _cpp_expand(e: Any, cse_map: Any, key_memo: Any = None) -> str:
     """C++ of node e expanding ITS level; the children go through _cpp_cse (-> CSE locals)."""
+    from ._joint_cpp import joint_expand
+    joint = joint_expand(e, lambda value: _cpp_cse(value, cse_map, key_memo))
+    if joint is not None:
+        return joint
     if isinstance(e, Const):
         return e.to_cpp()
     if isinstance(e, RuntimeParamRef):
@@ -109,6 +113,7 @@ def _cse_emit(
     *,
     materialize_all: bool = False,
     return_names: bool = False,
+    return_native_statuses: bool = False,
 ) -> Any:
     """Return (local_declaration_lines, [C++ per root]). Compound subexpressions seen >= 2 times
     become ``cseK_`` locals. roots: list of Expr.
@@ -123,6 +128,8 @@ def _cse_emit(
     exponential on a deep DAG (polynomial flux of polynomials). Strictly equivalent to the
     historical re-walk: same counts, same sizes, same key INSERTION ORDER
     (post-order of the first visit) -> emitted C++ is bit-identical."""
+    from pops._ir.native_call import NativeCall
+    from ._joint_cpp import joint_kind, native_declaration
     counts, rep, size = {}, {}, {}
     memo = {}  # id(e) -> (size, {key: occurrences} of the subtree, in post-order of insertion)
     key_memo, _, _ = _dag_key_ids(roots)
@@ -153,18 +160,25 @@ def _cse_emit(
             for k, c in cnt.items():
                 counts[k] = counts.get(k, 0) + c
     cand = sorted(
-        (k for k, count in counts.items() if materialize_all or count >= 2),
+        (k for k, count in counts.items() if materialize_all or count >= 2 or joint_kind(rep[k])),
         key=lambda k: size[k],
     )
     cse_map, lines = {}, []
     for i, k in enumerate(cand):
         name = "cse%d_" % i
-        lines.append("%sconst %s %s = %s;" % (
-            indent, real, name, _cpp_expand(rep[k], cse_map, key_memo)))
+        if isinstance(rep[k], NativeCall):
+            lines += native_declaration(rep[k], name,
+                lambda value: _cpp_cse(value, cse_map, key_memo), indent)
+        else:
+            lines.append("%sconst %s %s = %s;" % (
+                indent, "auto" if joint_kind(rep[k]) else real, name,
+                _cpp_expand(rep[k], cse_map, key_memo)))
         cse_map[k] = name
     rendered = [_cpp_cse(r, cse_map, key_memo) for r in roots]
     if return_names:
-        return lines, rendered, tuple(cse_map[key] for key in cand)
+        return lines, rendered, tuple(cse_map[key] for key in cand if not joint_kind(rep[key]))
+    if return_native_statuses:
+        return lines, rendered, tuple(cse_map[key] for key in cand if isinstance(rep[key], NativeCall))
     return lines, rendered
 
 

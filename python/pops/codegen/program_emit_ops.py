@@ -513,7 +513,24 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             scratch[blk] = "cr%d_%s" % (v.id, block_name(blk))
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, %d, %s);"
                          % (scratch[blk], int(v.id), subslot, var[by_block[blk].id]))
-        lines += _emit_coupled_rate_kernel(components, by_block, var, scratch)
+        from pops._ir.native_call import native_functions
+        functions = native_functions(components)
+        if functions or v.attrs.get("joint_application") is not None:
+            driver = next(iter(scratch))
+            index = _required_block_index(block_idx, driver, "joint interaction status")
+            status, active = "joint_status_%d" % v.id, "joint_active_%d" % v.id
+            lines.append("auto& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
+                         % (status, v.id, scratch[driver]))
+            lines.append("const auto* %s = ctx.pointwise_active_mask(%d, %s);"
+                         % (active, index, status))
+            lines += _emit_coupled_rate_kernel(components, by_block, var, scratch,
+                                               status=status, active_mask=active)
+            identity = v.attrs["operator_handle"].qualified_id
+            lines.append("ctx.consume_pointwise_evaluation_status(%d, %d, "
+                         "ctx.pointwise_status_max(%d, %s, %s, ctx.prepared_execution_lane()), %s);"
+                         % (index, v.id, index, status, active, json.dumps(identity)))
+        else:
+            lines += _emit_coupled_rate_kernel(components, by_block, var, scratch)
         # Per-block names live in this emission's local token table. Codegen is a pure read of the
         # Program: repeated emission never writes scratch metadata back into frozen authoring state.
         var.update({("coupled_scratch", v.id, blk): scratch[blk] for blk in scratch})

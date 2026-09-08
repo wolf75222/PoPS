@@ -314,6 +314,14 @@ def _prepared_native_components(program: Any) -> tuple[Any, ...]:
     components: list[Any] = []
     seen: set[str] = set()
     for value in walk(program._values):
+        from pops.native_calls import NativeFunction
+        for function in value.attrs.get("native_functions", ()):
+            if type(function) is not NativeFunction:
+                raise TypeError("native call build inputs require exact NativeFunction authority")
+            component = function.component
+            if component.manifest_sha256 not in seen:
+                seen.add(component.manifest_sha256)
+                components.append(component)
         if value.op != "solve_linear":
             continue
         providers = [
@@ -345,7 +353,10 @@ def _prepared_native_component_includes(program: Any) -> str:
             if header not in seen:
                 seen.add(header)
                 headers.append(header)
-    return "".join("#include <%s>  // prepared native provider\n" % header for header in headers)
+    result = "".join("#include <%s>  // prepared native provider\n" % header for header in headers)
+    if headers:
+        result = "#include <pops/core/model/native_call.hpp>\n" + result
+    return result
 
 
 # Ops whose emitted kernels call pops::detail::block_inverse<N> (ADC-637): the GENERIC condensed-implicit

@@ -348,6 +348,12 @@ def _module_to_model(module: Any, state_space: Any = None,
             _reject(source, "unsupported_balance_realization",
                     "operator %r retains a physical balance without a native realization: %s"
                     % (op.name, refusal))
+        if op.lowering.get("joint_balance"):
+            from pops.physics.interactions import joint_balance_supported
+            if not joint_balance_supported(op.lowering.get("physical_balance")):
+                _reject(source, "invalid_joint_balance", "joint balance contract was not authenticated")
+            coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:multi_block_operator",)))
+            continue
         if op.kind == "local_rate" and len(state_inputs) != 1:
             _reject(source, "joint_balance_realization_unavailable",
                     "operator %r requires a joint numerical realization; the single-state "

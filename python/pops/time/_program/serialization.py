@@ -90,6 +90,11 @@ def _serialize_schedule(schedule: Any) -> dict[str, Any]:
 def _json_ready(value: Any) -> Any:
     if isinstance(value, Handle):
         return {"handle": handle_data(value)}
+    from pops._ir.expr import Expr
+    if isinstance(value, Expr):
+        from pops._ir.visitors import _dag_key_data
+        from pops.time.references import canonical_handle
+        return _json_ready(_dag_key_data((value.resolve_references(canonical_handle),)))
     hook = getattr(value, "to_data", None)
     if callable(hook):
         return _json_ready(hook())

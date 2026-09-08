@@ -126,6 +126,10 @@ class OperatorApplication(Expr):
             return env._applications[id(self)]
         return self._evaluate(env)
 
+    def deps(self) -> set[str]:
+        from .visitors import _dependencies
+        return _dependencies(self.__pops_ir_children__())
+
     def _evaluate(self, env: Any) -> Any:
         return {name: tuple(expr.eval(env) for expr in values)
                 for name, values in self.outputs.items()}
@@ -146,6 +150,10 @@ class OperatorApplication(Expr):
     def to_cpp(self) -> str:
         raise TypeError("a joint application requires an explicit resolved native realization")
 
+    def to_data(self) -> dict[str, Any]:
+        from .visitors import _dag_key_data
+        return _dag_key_data((self,))
+
 
 class ApplicationProjection(Expr):
     def __init__(self, application: OperatorApplication, output: str, index: int) -> None:
@@ -164,6 +172,9 @@ class ApplicationProjection(Expr):
 
     def eval(self, env: Any) -> Any:
         return self.application.eval(env)[self.output][self.index]
+
+    def deps(self) -> set[str]:
+        return self.application.deps()
 
     def __pops_ir_children__(self) -> tuple[Expr, ...]:
         return (self.application,)

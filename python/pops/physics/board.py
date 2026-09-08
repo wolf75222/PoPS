@@ -56,11 +56,18 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             _EllipticAuthoringMixin, _MultiSpeciesMixin):
     """A blackboard-style physical model that lowers to the operator-first IR."""
 
+    def interaction(self, name: Any, *, outputs: Any, preserves: Any = None,
+                    dissipates: Any = None) -> Any:
+        """Capture one heterogeneous law; each target projects the same application."""
+        from .interactions import declare_interaction
+        return declare_interaction(self, name, outputs=outputs,
+                                   preserves=preserves, dissipates=dissipates)
+
     _physics_mutators = frozenset({
         "state", "species", "primitive", "primitive_state", "scalar", "aux", "field",
         "vector", "flux", "source", "local_linear_operator", "field_operator",
         "operator", "riemann", "invariant", "rate", "select_balance",
-        "finite_volume_rate", "coupled_rate",
+        "finite_volume_rate", "coupled_rate", "interaction",
         "field_provider", "local_transform", "projection", "wave_speeds", "wave_speeds_from_jacobian",
         "roe_from_jacobian", "recovery_admissibility",
     })

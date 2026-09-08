@@ -62,7 +62,8 @@ def test_two_balances_keep_one_joint_application_and_each_signed_occurrence():
     assert operator.signature.inputs == (left.space, right.space)
     assert operator.signature.output == Rate(left.space)
     assert operator.lowering["physical_balance"] is left_rate.view
-    assert "M4" in operator.lowering["native_unsupported"]["reason"]
+    assert operator.lowering["joint_balance"] is True
+    assert "native_unsupported" not in operator.lowering
     assert "sources" not in operator.lowering
     assert left_rate.local_id not in model._dsl._m._rate_operators
 
@@ -103,7 +104,7 @@ def test_forged_application_output_cannot_replace_the_registered_joint_body():
     assert not model._rate_contracts
 
 
-def test_joint_rate_projection_is_representable_but_has_an_explicit_native_resolution_refusal():
+def test_joint_rate_projection_requires_an_explicit_joint_numerical_realization():
     model, left, _right, application, captures = _joint_model()
     rate = model.rate("balance", equation=ddt(left) == application[left])
     plan = _plan(rate)

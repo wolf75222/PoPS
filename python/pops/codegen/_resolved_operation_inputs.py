@@ -25,6 +25,11 @@ def native_route(module: Any, operator: Any) -> tuple[str | None, str | None]:
     """Current checked adapter vocabulary; no capability follows from a type name alone."""
     if operator.lowering.get("native_unsupported"):
         return None, "unsupported_physical_balance"
+    if operator.lowering.get("joint_balance"):
+        from pops.physics.interactions import joint_balance_supported
+        if joint_balance_supported(operator.lowering.get("physical_balance")):
+            return "program:multi_block_operator", None
+        return None, "invalid_joint_balance"
     if operator.kind not in _LEGACY_ROUTES:
         return None, "operator_kind_not_lowerable"
     if operator.kind not in {"local_rate", "coupled_rate"} \
@@ -380,6 +385,7 @@ def _derive_effects(module: Any, operator: Any, boundary_data: Any) -> tuple[str
     Declaration references are followed only through the selected rate terms.
     """
     from pops._ir.application import OperatorApplication
+    from pops._ir.native_call import NativeCall
     from pops._ir.expr import Const, Div, Expr, Pow, Sqrt, Var
     from pops._ir.visitors import _children
     from pops.model.handles import Handle
@@ -414,6 +420,8 @@ def _derive_effects(module: Any, operator: Any, boundary_data: Any) -> tuple[str
                 retain("fallible")
             if isinstance(value, OperatorApplication):
                 retain(*value.effects)
+            if isinstance(value, NativeCall):
+                retain("opaque", "fallible", *value.effects)
             if isinstance(value, Var) and value.kind == "prim":
                 from pops.model.primitive_recipes import resolve_primitive_recipe
 

@@ -92,6 +92,10 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
         raise ValueError(
             "coupled_rate codegen: node %r lacks its owner-qualified OperatorHandle" % v.name)
     expr = op.body
+    application = v.attrs.get("joint_application")
+    if application is not None:
+        from ._joint_cpp import instantiated_body
+        expr = instantiated_body(op, application)
     if not isinstance(expr, Mapping):
         raise NotImplementedError(
             "the coupled_rate kernel codegen (ADC-457) needs operator %r to carry its per-block "
@@ -146,7 +150,9 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
     by_block = {block_name(state.block): state for state in v.inputs}
     components = {}
     for blk, comps in expr.items():
-        state_in = by_block.get(blk)
+        bound_block = v.attrs.get("output_bindings", {}).get(blk)
+        state_in = (next((state for state in v.inputs if state.block == bound_block), None)
+                    if bound_block is not None else by_block.get(blk))
         if state_in is None or getattr(state_in, "space", None) is None:
             raise NotImplementedError(
                 "the coupled_rate kernel codegen (ADC-457) needs every output block to map to an "

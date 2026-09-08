@@ -168,6 +168,7 @@ class _RateAuthoringMixin(_BoardModel):
     def _install_retained_rates(self, module: Any) -> None:
         """Populate the typed Module with authoritative equations and derived adapters."""
         from pops.model.operators import Operator
+        from .interactions import joint_balance_supported
         from pops.provenance import ProvenanceRecord, source_span
         registry = module.operator_registry()
         from .diffusion import install_diffusive_fluxes
@@ -183,7 +184,9 @@ class _RateAuthoringMixin(_BoardModel):
                 operator.lowering = lowering
             else:
                 lowering = {"physical_balance": view}
-                if reason is not None:
+                if joint_balance_supported(view):
+                    lowering["joint_balance"] = True
+                elif reason is not None:
                     lowering["native_unsupported"] = {
                         "code": "unsupported_balance_realization", "phase": "resolve",
                         "reason": reason,

@@ -247,6 +247,9 @@ def rebuild_program(
         from pops.model.handles import Handle
         if isinstance(value, Handle):
             return reference_of(value)
+        from pops._ir.expr import Expr
+        if isinstance(value, Expr):
+            return value.resolve_references(reference_of)
         from pops.time.field_context import FieldContext, FieldReadProvenance
         if isinstance(value, (FieldContext, FieldReadProvenance)):
             return remap_provenance(value)

@@ -33,6 +33,7 @@ api pops/core/identity/prepared_provider_options.hpp
 api pops/core/identity/sha256.hpp
 api pops/core/model/coupled_system.hpp
 api pops/core/model/equation_block.hpp
+api pops/core/model/native_call.hpp
 api pops/core/model/physical_model.hpp
 api pops/core/state/state.hpp
 api pops/core/state/variables.hpp
