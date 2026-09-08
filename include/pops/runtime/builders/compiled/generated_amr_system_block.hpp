@@ -187,7 +187,8 @@ void require_level_context(const runtime::amr::AmrRuntime<Dim, MemorySpace>& run
                            int state_components, int provider_components,
                            const Extent<Dim>& required_ghosts,
                            std::string_view staircase_provider_identity,
-                           std::string_view cut_cell_provider_identity) {
+                           std::string_view cut_cell_provider_identity,
+                           bool require_physical_boundary = true) {
   if (context.level >= runtime.hierarchy().num_levels())
     throw std::out_of_range("generated AMR block level lies outside the live hierarchy");
   if (context.state_identity.empty() || context.provider_storage_identity.empty())
@@ -226,7 +227,7 @@ void require_level_context(const runtime::amr::AmrRuntime<Dim, MemorySpace>& run
   } else if (context.provider_ghost_fill || context.root_provider_ghost_fill) {
     throw std::invalid_argument("provider-free generated AMR block cannot retain provider ghosts");
   }
-  if (has_physical_faces(context.topology) &&
+  if (require_physical_boundary && has_physical_faces(context.topology) &&
       (!context.physical_boundary || context.boundary_identity.empty()))
     throw std::invalid_argument(
         "generated AMR block requires an authenticated physical-boundary provider");
@@ -1677,6 +1678,172 @@ PreparedAmrSystemBlock<Dim> select_reconstruction(Request request) {
   throw std::logic_error("generated AMR limiter route escaped its exhaustive selector");
 }
 
+/// Prepare hierarchy state/ghost storage for a Program-owned spatial operator. Diffusion and
+/// source Programs retain their own exact residual and physical-boundary providers; this adapter
+/// deliberately publishes no hyperbolic flux, Riemann, or wave-speed capability.
+template <int Dim, class Request>
+PreparedAmrSystemBlock<Dim> materialize_state_block(Request request) {
+  using Model = std::remove_cvref_t<decltype(request.model)>;
+  static_assert(PhysicalStateFor<Model, Dim>);
+  if (request.routes.limiter != "state_storage" || request.routes.riemann != "unavailable" ||
+      request.routes.reconstruction != "conservative")
+    throw std::invalid_argument("Program-only AMR model requires the exact state-storage route");
+  constexpr int provider_count = provider_count_for<Model, Dim>();
+  Extent<Dim> required_ghosts{};
+  for (int axis = 0; axis < Dim; ++axis)
+    required_ghosts[axis] = 1;
+
+  const Model model = request.model;
+  const std::string provider_identity =
+      "pops.generated.amr.program-state.nd/" + std::to_string(Dim);
+  // The prepared package schema requires exact identities for every boundary seam even when
+  // the storage-only route rejects those capabilities.  Publishing explicit unavailable
+  // identities keeps the package collectively authentic without fabricating boundary physics.
+  const std::string staircase_provider_identity =
+      "pops.generated.amr.program-state.staircase-unavailable.nd/" + std::to_string(Dim);
+  const std::string cut_cell_provider_identity =
+      "pops.generated.amr.program-state.cut-cell-unavailable.nd/" + std::to_string(Dim);
+  PreparedAmrSystemBlock<Dim> result;
+  result.name = request.name;
+  result.provider_identity = provider_identity;
+  result.provider_consumer_qid = request.provider_consumer_qid;
+  result.staircase_provider_identity = staircase_provider_identity;
+  result.cut_cell_provider_identity = cut_cell_provider_identity;
+  result.ncomp = Model::n_vars;
+  result.provider_components = provider_count;
+  result.has_pointwise_projection = false;
+  result.conservative_variables = Model::conservative_vars();
+  result.primitive_variables = Model::primitive_vars();
+  result.gamma = request.gamma;
+  result.ghosts = required_ghosts;
+  result.reconstruction_order = 1;
+  result.substeps = request.substeps;
+  result.stride = request.stride;
+  result.newton = request.newton;
+  result.newton_diagnostics = request.newton_diagnostics;
+  result.time_route = request.routes.time;
+
+  ExactContractBuilder package_contract;
+  package_contract.text("pops.prepared-generated-amr-program-state")
+      .scalar(std::uint32_t{1})
+      .scalar(std::int32_t{Dim})
+      .text(request.name)
+      .text(provider_identity)
+      .text(request.provider_consumer_qid)
+      .text(staircase_provider_identity)
+      .text(cut_cell_provider_identity)
+      .scalar(std::int32_t{Model::n_vars})
+      .scalar(std::int32_t{provider_count})
+      .presence(false)
+      .scalar(std::int32_t{1})
+      .scalar(request.gamma)
+      .scalar(std::int32_t{request.substeps})
+      .scalar(std::int32_t{request.stride})
+      .scalar(std::int32_t{request.newton.max_iters})
+      .scalar(static_cast<double>(request.newton.rel_tol))
+      .scalar(static_cast<double>(request.newton.abs_tol))
+      .scalar(static_cast<double>(request.newton.fd_eps))
+      .scalar(static_cast<double>(request.newton.damping))
+      .scalar(request.newton_diagnostics)
+      .text(request.routes.time)
+      .bytes(exact_model_contract(model))
+      .scalar(static_cast<double>(request.routes.positivity_floor))
+      .scalar(static_cast<double>(request.routes.weno_epsilon));
+  append_variable_set_contract(package_contract, result.conservative_variables);
+  append_variable_set_contract(package_contract, result.primitive_variables);
+  for (int axis = 0; axis < Dim; ++axis)
+    package_contract.scalar(std::int64_t{required_ghosts[axis]});
+  result.collective_contract = std::move(package_contract).release();
+
+  result.materialize_level = [provider_identity, staircase_provider_identity,
+                              cut_cell_provider_identity,
+                              required_ghosts](runtime::amr::AmrRuntime<Dim>& runtime,
+                                               GeneratedAmrLevelContext<Dim> context) {
+    if (context.physical_boundary || context.external_ghost_boundary ||
+        context.external_boundary_flux || !context.external_field_boundaries.empty() ||
+        (context.embedded_boundary &&
+         context.embedded_boundary->mode() !=
+             ::pops::runtime::system::PreparedEmbeddedBoundaryMode::inactive))
+      throw std::invalid_argument(
+          "Program-only AMR state storage cannot install hyperbolic boundary physics");
+    require_level_context(runtime, context, Model::n_vars, provider_count, required_ghosts,
+                          staircase_provider_identity, cut_cell_provider_identity, false);
+    auto* const provider_storage = context.provider_storage;
+    const auto state_ghost_fill = context.state_ghost_fill;
+    const auto provider_ghost_fill = context.provider_ghost_fill;
+    const auto root_state_ghost_fill = context.root_state_ghost_fill;
+    const auto root_provider_ghost_fill = context.root_provider_ghost_fill;
+    const std::size_t level = context.level;
+    const ExecutionLane* const lane = context.lane;
+    auto prepare_state = [provider_storage, state_ghost_fill, provider_ghost_fill,
+                          root_state_ghost_fill, root_provider_ghost_fill, level,
+                          lane](const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                MultiFab<Dim>& state) {
+      collective_phase(
+          *lane,
+          [&] {
+            if (level == 0) {
+              root_state_ghost_fill(state, point);
+              if constexpr (provider_count > 0)
+                root_provider_ghost_fill(*provider_storage, point);
+            } else {
+              state_ghost_fill(state, point);
+              if constexpr (provider_count > 0)
+                provider_ghost_fill(*provider_storage, point);
+            }
+          },
+          "Program-only AMR state/provider ghost preparation failed collectively");
+    };
+    using LevelBlock = PreparedGeneratedAmrLevelBlock<Dim>;
+    typename LevelBlock::PhysicalBoundaryPreparation prepare_physical = [](const auto&, auto&) {};
+    typename LevelBlock::Evaluator unavailable_evaluation = [](const auto&, auto&, auto&) {
+      throw std::logic_error("AMR state storage has no hyperbolic residual provider");
+    };
+    typename LevelBlock::BoundaryJvp unavailable_boundary_jvp = [](const auto&, auto&, const auto&,
+                                                                   auto&) {
+      throw std::logic_error("AMR state storage has no hyperbolic boundary JVP");
+    };
+    typename LevelBlock::SourceEvaluator unavailable_source = [](const auto&, auto&, auto&) {
+      throw std::logic_error("AMR state storage has no default source provider");
+    };
+    typename LevelBlock::ImplicitSourceSolver unavailable_implicit =
+        [lane](const auto&, auto&, Real, const NewtonOptions&) {
+          return SolveOutcome::collective_lane(SolveReport::capability_failure(), *lane);
+        };
+    typename LevelBlock::Speed unavailable_speed = [](const auto&) -> Real {
+      throw std::logic_error("AMR state storage has no hyperbolic wave-speed provider");
+    };
+    typename LevelBlock::PoissonRhs unavailable_poisson = [](const auto&, auto&) {
+      throw std::logic_error("AMR state storage has no implicit default Poisson source");
+    };
+    const std::string contract = level_contract(runtime, context, provider_identity, std::nullopt);
+    return LevelBlock(runtime, level, *context.state, std::move(context.state_identity),
+                      provider_identity, contract, *lane, std::move(prepare_state),
+                      std::move(prepare_physical), unavailable_evaluation, unavailable_evaluation,
+                      unavailable_evaluation, unavailable_evaluation, unavailable_evaluation,
+                      std::move(unavailable_boundary_jvp), std::move(unavailable_source),
+                      std::move(unavailable_implicit), std::move(unavailable_speed),
+                      std::move(unavailable_poisson), {}, {}, std::nullopt, {});
+  };
+  result.primitive_to_conservative = [model](const double* primitive, double* conservative) {
+    generated_system_detail::publish_conservative_state(model, primitive, conservative);
+  };
+  auto recovery = std::make_shared<PreparedModelVariableInversionRecovery<Model>>(model);
+  result.conservative_to_primitive = [recovery](const double* conservative, double* primitive) {
+    Real input[Model::n_vars]{};
+    for (int component = 0; component < Model::n_vars; ++component)
+      input[component] = static_cast<Real>(conservative[component]);
+    const auto prepared = recovery->recover(input);
+    const RecoveryOutcome<Model::n_vars>& outcome = prepared.outcome;
+    if (outcome.publication_permitted())
+      for (int component = 0; component < Model::n_vars; ++component)
+        primitive[component] = static_cast<double>(outcome.value[component]);
+    return recovery_report(outcome);
+  };
+  result.batch_conservative_to_primitive = make_uniform_variable_inversion_consumer(recovery);
+  return result;
+}
+
 }  // namespace generated_amr_detail
 
 /// Prepare one package-owned exact AMR block image without touching a runtime facade.
@@ -1687,17 +1854,25 @@ auto prepare_generated_amr_system_block(Request request)
   using Model = std::remove_cvref_t<decltype(request.model)>;
   static_assert(Model::dimension == Dim,
                 "generated AMR request and physical model have different ranks");
-  switch (parse_recon_route(request.routes.reconstruction, "generated AMR block")) {
-    case ReconRouteId::kConservative:
-      return generated_amr_detail::select_reconstruction<Dim,
-                                                         nd::ReconstructionVariables::Conservative>(
-          std::move(request));
-    case ReconRouteId::kPrimitive:
-      return generated_amr_detail::select_reconstruction<Dim,
-                                                         nd::ReconstructionVariables::Primitive>(
-          std::move(request));
+  constexpr bool storage_only = [] {
+    if constexpr (requires { Model::program_only_storage; })
+      return static_cast<bool>(Model::program_only_storage);
+    return false;
+  }();
+  if constexpr (storage_only) {
+    return generated_amr_detail::materialize_state_block<Dim>(std::move(request));
+  } else {
+    switch (parse_recon_route(request.routes.reconstruction, "generated AMR block")) {
+      case ReconRouteId::kConservative:
+        return generated_amr_detail::select_reconstruction<
+            Dim, nd::ReconstructionVariables::Conservative>(std::move(request));
+      case ReconRouteId::kPrimitive:
+        return generated_amr_detail::select_reconstruction<Dim,
+                                                           nd::ReconstructionVariables::Primitive>(
+            std::move(request));
+    }
+    throw std::logic_error("generated AMR reconstruction route escaped its exhaustive selector");
   }
-  throw std::logic_error("generated AMR reconstruction route escaped its exhaustive selector");
 }
 
 /// Authored routes frozen into one exact-ranked generated AMR package image.
@@ -1734,9 +1909,18 @@ namespace compiled_amr_detail {
 inline void validate_routes(const CompiledAmrSystemBlockRoutes& routes) {
   if (routes.limiter.empty() || routes.riemann.empty())
     throw std::invalid_argument("compiled AMR block requires explicit limiter and Riemann routes");
-  (void)parse_limiter_route(routes.limiter, "compiled AMR block");
-  (void)parse_riemann_route(routes.riemann, "compiled AMR block");
-  (void)parse_recon_route(routes.reconstruction, "compiled AMR block");
+  const bool storage_only = routes.limiter == "state_storage" && routes.riemann == "unavailable";
+  if (storage_only) {
+    if (routes.reconstruction != "conservative")
+      throw std::invalid_argument(
+          "compiled AMR state storage requires conservative reconstruction metadata");
+  } else {
+    if (routes.limiter == "state_storage" || routes.riemann == "unavailable")
+      throw std::invalid_argument("compiled AMR state-storage route is partial");
+    (void)parse_limiter_route(routes.limiter, "compiled AMR block");
+    (void)parse_riemann_route(routes.riemann, "compiled AMR block");
+    (void)parse_recon_route(routes.reconstruction, "compiled AMR block");
+  }
   if (routes.time != "explicit" && routes.time != "euler" && routes.time != "ssprk3" &&
       routes.time != "imex" && routes.time != "imexrk_ars222")
     throw std::invalid_argument("compiled AMR block has an unsupported Program time route");

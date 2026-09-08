@@ -173,6 +173,38 @@ AdvectionModel<Dim> advection_model() {
 }
 
 template <int Dim>
+struct ProgramStateModel {
+  using State = pops::StateVec<1>;
+  using Primitive = State;
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = 1;
+  static constexpr int n_providers = 0;
+  static constexpr bool program_only_storage = true;
+
+  static pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.generated-amr.program-state", 1};
+  }
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    contract.scalar(std::uint32_t{1});
+  }
+  static pops::VariableSet conservative_vars() {
+    return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Scalar}};
+  }
+  static pops::VariableSet primitive_vars() {
+    return {pops::VariableKind::Primitive, {"u"}, 1, {pops::VariableRole::Scalar}};
+  }
+  POPS_HD pops::nd::StateConversion<Primitive> recover(const State& state) const {
+    return {state, {}};
+  }
+  POPS_HD pops::nd::StateConversion<State> make_conservative(const Primitive& state) const {
+    return {state, {}};
+  }
+  POPS_HD pops::nd::StateConversionStatus admissibility(const State&) const { return {}; }
+};
+
+static_assert(!pops::PhysicalModel<ProgramStateModel<pops::kNativeDimension>>);
+
+template <int Dim>
 struct DiffusiveAdvectionModel : AdvectionModel<Dim> {
   pops::Real diffusivity_value = pops::Real(0);
 
@@ -500,6 +532,31 @@ TEST(GeneratedAmrSystemBlock, PreparesOneExactNativePackageImage) {
   EXPECT_EQ(weno.reconstruction_order, 5);
   for (int axis = 0; axis < Dim; ++axis)
     EXPECT_EQ(weno.ghosts[axis], 3);
+}
+
+TEST(GeneratedAmrSystemBlock, ProgramStateRouteDoesNotInstantiateHyperbolicPhysics) {
+  constexpr int Dim = pops::kNativeDimension;
+  const auto prepared = pops::prepare_compiled_amr_system_block<Dim>(
+      "diffusion-state", ProgramStateModel<Dim>{}, "state_storage", "unavailable", "conservative",
+      "explicit", 1.4, 1, 1, 0.0, static_cast<double>(pops::kWenoEpsilon), false,
+      "test.diffusion-state/native_model");
+  EXPECT_EQ(prepared.provider_identity,
+            "pops.generated.amr.program-state.nd/" + std::to_string(Dim));
+  EXPECT_EQ(prepared.staircase_provider_identity,
+            "pops.generated.amr.program-state.staircase-unavailable.nd/" + std::to_string(Dim));
+  EXPECT_EQ(prepared.cut_cell_provider_identity,
+            "pops.generated.amr.program-state.cut-cell-unavailable.nd/" + std::to_string(Dim));
+  EXPECT_EQ(prepared.reconstruction_order, 1);
+  EXPECT_TRUE(static_cast<bool>(prepared.materialize_level));
+  for (int axis = 0; axis < Dim; ++axis)
+    EXPECT_EQ(prepared.ghosts[axis], 1);
+
+  EXPECT_THROW(
+      (void)pops::prepare_compiled_amr_system_block<Dim>(
+          "partial-state", ProgramStateModel<Dim>{}, "state_storage", "rusanov", "conservative",
+          "explicit", 1.4, 1, 1, 0.0, static_cast<double>(pops::kWenoEpsilon), false,
+          "test.partial-state/native_model"),
+      std::invalid_argument);
 }
 
 TEST(GeneratedAmrSystemBlock, PackageContractAuthenticatesPhysicalModelParameters) {

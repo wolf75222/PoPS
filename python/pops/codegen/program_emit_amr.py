@@ -75,10 +75,19 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
     blocks = program._block_indices()
     ordered_blocks = sorted(blocks, key=blocks.get)
 
+    def flux_basis_count(value: Any) -> int:
+        if value.op == "rhs":
+            return 1 if value.attrs.get("flux", True) else 0
+        if value.op == "diffusive_rhs":
+            from pops.codegen.program_emit_diffusion import diffusive_flux_basis_count
+
+            return diffusive_flux_basis_count(value)
+        return 0
+
     def contains_rhs(values: Any, block: Any, *, flux_only: bool = False) -> bool:
         for value in values:
-            if value.op == "rhs" and value.block == block and (
-                not flux_only or value.attrs.get("flux", True)
+            if value.op in {"rhs", "diffusive_rhs"} and value.block == block and (
+                not flux_only or flux_basis_count(value) != 0
             ):
                 return True
             for key in (
@@ -189,10 +198,14 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
 
                     expression = {}
                     if value.block == block:
-                        if value.op == "rhs" and value.attrs.get("flux", True):
-                            expression = {(value.id, next_basis): {0: Fraction(1)}}
-                            next_basis += 1
-                            basis_count += 1
+                        multiplicity = flux_basis_count(value)
+                        if multiplicity:
+                            expression = {
+                                (value.id, next_basis + offset): {0: Fraction(1)}
+                                for offset in range(multiplicity)
+                            }
+                            next_basis += multiplicity
+                            basis_count += multiplicity
                         elif value.op == "history":
                             # A history read is a second live FluxExpression basis at the AMR
                             # commit boundary.  It was authored in an earlier accepted step, but
@@ -294,8 +307,9 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                     if value.id in seen:
                         return 0
                     seen.add(value.id)
-                    if value.op == "rhs":
-                        return 1
+                    multiplicity = flux_basis_count(value)
+                    if multiplicity:
+                        return multiplicity
                     return sum(source_bases(input_value, seen) for input_value in value.inputs)
 
                 source_count = max(1, source_bases(source, set()))

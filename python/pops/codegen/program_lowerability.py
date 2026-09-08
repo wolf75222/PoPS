@@ -123,6 +123,7 @@ def check_model_owner_dispatch(program: Any, model: Any) -> None:
 def _check_amr_flux_weights(program: Any) -> None:
     """Prove every conservative contribution reaches a commit as exact ``weight * dt * flux``."""
     from pops.codegen.program_emit_kernels import _coeff_metadata_terms
+    from pops.codegen.program_emit_diffusion import diffusive_flux_basis_count
 
     values = list(all_ops(program))
     stored_histories: dict[str, list[Any]] = {}
@@ -164,6 +165,10 @@ def _check_amr_flux_weights(program: Any) -> None:
             if value.op == "rhs":
                 current: object | frozenset[int] = (
                     frozenset({0}) if value.attrs.get("flux", True) else frozenset())
+            elif value.op == "diffusive_rhs":
+                current = (
+                    frozenset({0}) if diffusive_flux_basis_count(value) else frozenset()
+                )
             elif value.op == "history":
                 current = merged([
                     powers.get(source.id, frozenset())

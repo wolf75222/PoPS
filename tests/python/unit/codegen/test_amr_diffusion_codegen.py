@@ -36,6 +36,23 @@ def test_explicit_amr_diffusion_prepares_stage_and_registers_each_face_basis_onc
     assert "combined_transport_diffusion_stability" in source
 
 
+@pytest.mark.parametrize("physical,expected", [(True, 1), (False, 2)])
+def test_diffusion_flux_budget_counts_exact_native_face_providers(physical, expected):
+    from pops.codegen.program_emit_amr import _flux_expression_budgets
+
+    resolved = _author_amr_diffusion(16, _stable_dt(16), physical=physical)
+    assert _flux_expression_budgets(resolved.time) == ((expected, 1),)
+    assert "pops_program_flux_rhs_basis_bound" in _combined_source()
+
+
+def test_ssprk2_combined_diffusion_budgets_both_face_providers_at_both_stages():
+    from pops.codegen.program_emit_amr import _flux_expression_budgets
+    from tests.python.unit.codegen.test_diffusion_program import resolved_heat
+
+    resolved, _, _ = resolved_heat(method="ssprk2", transport=(0.2, -0.1))
+    assert _flux_expression_budgets(resolved.time) == ((4, 1),)
+
+
 def test_amr_accepted_exchange_inventory_uses_composite_active_cells():
     source = _combined_source()
     assert source.count("ctx.pointwise_active_mask(0,") == 1

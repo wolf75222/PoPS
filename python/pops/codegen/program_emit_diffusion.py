@@ -31,6 +31,27 @@ def _selected(v, node_model):
     return impl,selected,rows
 
 
+def diffusive_flux_basis_count(v):
+    """Return the exact number of native face bases one diffusive RHS publishes.
+
+    Constitutive diffusion is materialized once even when its resolved balance contains
+    repeated occurrences of the same law.  A selected default transport divergence owns one
+    additional prepared-face basis; sources own none.  This mirrors the two attachment calls
+    emitted by :func:`_emit_diffusive_rhs` and is the sole count used by AMR budget proofs.
+    """
+    if v.op != "diffusive_rhs":
+        return 0
+    view = v.attrs.get("physical_balance")
+    occurrences = tuple(getattr(view, "occurrences", ()))
+    diffusion = tuple(row for row in occurrences if row.kind == "diffusion")
+    if not diffusion:
+        raise ValueError("diffusive Program evaluation has no constitutive face occurrence")
+    transport = tuple(row for row in occurrences if row.kind == "flux")
+    if len(transport) > 1:
+        raise ValueError("diffusive Program evaluation has several transport face providers")
+    return 1 + len(transport)
+
+
 def _law_expressions(selected):
     if "fitted" in selected:
         from pops._ir.expr import Const
@@ -132,6 +153,8 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
         lines.append("ctx.attach_diffusive_flux_basis(%d,%s,%d,%s.faces(),%s);" % (
             bidx,out,v.id,prepared_var,scalar_cpp(coefficient)))
     transport = tuple(row for row in v.attrs["physical_balance"].occurrences if row.kind=="flux")
+    if diffusive_flux_basis_count(v) != 1 + len(transport):
+        raise AssertionError("diffusive face-basis count differs from its emitted operators")
     frequency = "%s*%s.explicit_frequency()" % (scalar_cpp(coefficient),prepared_var)
     if transport:
         if len(transport)!=1 or transport[0].coefficient!=-1 or not transport[0].payload.is_default:
