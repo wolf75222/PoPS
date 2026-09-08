@@ -104,7 +104,7 @@ def publish_field_solution(solution: Any, bindings: Any, *, states: Any = None) 
         point=solution.packed.point, inherit_state_ref=False)
 
 
-def validate_field_publication(value: Any) -> tuple[dict[str, Any], ...]:
+def validate_field_publication(value: Any, *, target_space: Any = None) -> tuple[dict[str, Any], ...]:
     if value.op != "field_publication" or value.vtype != "fields" or value.field_context is None:
         raise ValueError("invalid consumed field publication node")
     rows = value.attrs.get("bindings")
@@ -124,7 +124,7 @@ def validate_field_publication(value: Any) -> tuple[dict[str, Any], ...]:
             raise ValueError("field publication lost source component or stage authority")
         if not isinstance(target, Handle) or target.kind != "field" or target.block_ref is None:
             raise ValueError("field publication lost its qualified field destination")
-        space = _target_space(target)
+        space = (_target_space if target_space is None else target_space)(target)
         component = row.get("component")
         key = (target.qualified_id, component)
         if component not in space.components or space != value.space or key in destinations:
@@ -175,7 +175,7 @@ def _consumer_states(program: Any, point: Any, states: Any, handles: Any, values
     return result
 
 
-def publication_states(value: Any) -> dict[Any, Any]:
-    rows = validate_field_publication(value)
+def publication_states(value: Any, *, target_space: Any = None) -> dict[Any, Any]:
+    rows = validate_field_publication(value, target_space=target_space)
     return _consumer_states(value.prog, value.point, _states(_source(value.inputs[0])[1], value.prog),
                             value.attrs.get("consumer_states", ()), value.inputs[len(rows):])

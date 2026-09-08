@@ -16,7 +16,16 @@ def emit_field_publication(value: Any, var: Any, lines: list[str], model: Any, *
 
     if target != "system" or type(model) is not ProgramModelGraph:
         raise ValueError("consumed field publication requires an exact Uniform Program model graph")
-    bindings = validate_field_publication(value)
+    def target_space(destination: Any) -> Any:
+        model.model_for_block(destination.block_ref)
+        owner = destination.block_ref.model_owner_path.canonical()
+        if sum(candidate == owner for candidate in model._owners_by_block.values()) != 1:
+            raise ValueError("consumed field publication cannot share a model-definition provider key across block instances")
+        module = model.source_module_for_owner(destination.declaration_ref.owner_path)
+        module.declaration_index().authenticate(destination.declaration_ref)
+        return module.field_spaces()[destination.declaration_ref.local_id]
+
+    bindings = validate_field_publication(value, target_space=target_space)
     if provider_plans is None:
         raise ValueError("field publication requires authenticated provider prerequisite plans")
     rows = []
@@ -46,7 +55,7 @@ def emit_field_publication(value: Any, var: Any, lines: list[str], model: Any, *
     from .program_field_publication import remaining_input_pack
     from pops.fields._program_publication import publication_states
 
-    states = publication_states(value)
+    states = publication_states(value, target_space=target_space)
     for block, (destination, emitter) in destinations.items():
         require_emitter_provider_carrier(emitter, where="field publication prerequisites")
         pack = emitter._auxiliary_provider_pack

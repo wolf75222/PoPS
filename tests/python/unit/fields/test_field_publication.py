@@ -64,7 +64,11 @@ def test_actual_source_and_flux_consumers_resolve_field_signature(transport):
     from tests.python.integration.runtime.test_public_field_consumers import consumer_case
     case, layout = consumer_case(16, transport=transport)
     resolved = pops.resolve(pops.validate(case), layout=layout)
-    code = emit_cpp_program(case._time, model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
+    from pops.time._program.detach import detach_compiled_program
+    from pops.codegen.program_graph_lowering import emit_program_graph
+    detached = detach_compiled_program(case._time)
+    code = emit_program_graph(detached.to_graph(), lowering_program=detached,
+                              model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
     assert "ctx.publish_field_components(" in code
     assert "potential_grad_y" in code
 
