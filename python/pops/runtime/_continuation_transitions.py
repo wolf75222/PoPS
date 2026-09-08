@@ -10,7 +10,8 @@ from dataclasses import dataclass
 import json
 from typing import Any, cast
 
-from pops.identity import make_identity
+from pops.fields._identity import strict_field_data
+from pops.identity import canonical_bytes, make_identity
 
 _EVENTS = ("initialization", "restart", "projection", "regrid", "rollback")
 _ACTIONS = frozenset(("preserve", "transfer", "reconstruct", "solve", "invalidate"))
@@ -64,6 +65,25 @@ def derive_continuation_transitions(plan: Any) -> ContinuationTransitionPlan:
     def providers(initial, restart, topology, rollback="native.accepted_snapshot"):
         return dict(zip(_EVENTS, (initial, restart, topology, topology, rollback), strict=True))
 
+    field_slots = {}
+    field_components = {}
+    for name, field in plan.field_plans.items():
+        options = field.native_install_data()
+        slot = options["provider_slot"]
+        if slot in field_slots:
+            previous, names = field_slots[slot]
+            if canonical_bytes(strict_field_data(previous)) != canonical_bytes(strict_field_data(options)):
+                raise ValueError("one retained field slot has conflicting resolved provider policies")
+            names.add(name)
+            continue
+        field_slots[slot] = (options, {name})
+        for key in options["output_route"]["component_keys"]:
+            identity = canonical_bytes(key)
+            if identity in field_components and field_components[identity] != slot:
+                raise ValueError("one retained field component has conflicting output owners")
+            field_components[identity] = slot
+
+    field_references = {}
     for block in plan.blocks:
         for state in block.state_identities:
             add("state", state, block.name, ("transfer", "preserve", "transfer", "transfer", "preserve"),
@@ -73,8 +93,17 @@ def derive_continuation_transitions(plan: Any) -> ContinuationTransitionPlan:
         evidence = {} if operations is None else operations.to_data().get("provider_evidence", {})
         for component in evidence.get("auxiliary", {}).get("entries", ()):
             producer = component["provider"]["producer"]
-            if producer == "field_output":
-                continue  # The solved field observation owns this same provider storage.
+            # Producer strings are opaque operator identities, including joint providers.
+            # The typed FieldSpace and exact output route identify the retained storage.
+            if component["key"]["space_kind"] == "field" and producer != "runtime_input":
+                key = canonical_bytes(component["key"])
+                if key not in field_components:
+                    raise ValueError("retained field component has no exact resolved output owner")
+                reference = canonical_bytes(strict_field_data(component))
+                if key in field_references and field_references[key] != reference:
+                    raise ValueError("retained field consumers have conflicting component contracts")
+                field_references[key] = reference
+                continue  # Repeated consumers share this field's one lifecycle obligation.
             identity = make_identity("retained-auxiliary-component", component["key"]).token
             add("auxiliary", identity, block.name,
                 ("transfer" if producer == "runtime_input" else "invalidate",
@@ -82,17 +111,10 @@ def derive_continuation_transitions(plan: Any) -> ContinuationTransitionPlan:
                 providers("resolved.auxiliary_provider", "native.restore_auxiliary_checkpoint_accepted_state",
                           "native.invalidate_auxiliary_after_topology_regrid"),
                 component["key"])
-    fields = dict(plan.field_plans)
-    seen_fields = set()
-    for name, field in fields.items():
-        native_options = field.native_install_data()
-        identity = native_options["provider_slot"]
-        if identity in seen_fields:
-            continue
-        seen_fields.add(identity)
+    for identity, (_, names) in field_slots.items():
         bootstrap = getattr(plan, "bootstrap_plan", None)
         initial_action = "solve" if any(
-            action.operation == "recompute" and action.evidence.get("field_name") == name
+            action.operation == "recompute" and action.evidence.get("field_name") in names
             for action in (() if bootstrap is None else bootstrap.actions)) else "invalidate"
         for kind in ("field_value", "field_observation"):
             add(kind, kind + ":" + identity, identity,

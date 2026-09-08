@@ -1,4 +1,5 @@
 """Continuation choices are derived once; readers cannot publish provisional receipts."""
+from copy import deepcopy
 from dataclasses import FrozenInstanceError
 import json
 from types import SimpleNamespace
@@ -10,7 +11,7 @@ import pops
 from pops.codegen._compiled_artifact import CompiledPlanRecord
 from pops.runtime._continuation_transitions import (
     ContinuationTransitionPlan, completed_restart_receipt, prepare_bind_continuation,
-    require_resolved_continuation, committed_continuation_report,
+    require_resolved_continuation, committed_continuation_report, derive_continuation_transitions,
 )
 from pops.runtime._checkpoint_exchanges import (
     capture_checkpoint_continuation, prepare_checkpoint_continuation,
@@ -74,6 +75,111 @@ def test_child_scope_cannot_require_another_layouts_retained_state():
                               program=plan.time, block_names=("first",), field_names=())
     assert {row["name"] for row in owner._continuation_transition_plan.require("restart")
             if row["kind"] == "state"} == {"first"}
+
+
+@pytest.fixture(scope="module")
+def joint_field_plan():
+    from tests.python.unit.codegen.test_uniform_field_roles import uniform_multiphysics
+
+    return uniform_multiphysics.__wrapped__()
+
+
+def _field_projection(plan, options, *, blocks=None, bootstrap=None):
+    return SimpleNamespace(
+        target=plan.target, time=plan.time, blocks=plan.blocks if blocks is None else blocks,
+        field_plans={name: SimpleNamespace(native_install_data=lambda value=value: deepcopy(value))
+                     for name, value in options.items()},
+        bootstrap_plan=plan.bootstrap_plan if bootstrap is None else bootstrap,
+    )
+
+
+def test_joint_field_consumers_share_only_the_exact_solved_storage(joint_field_plan):
+    plan = joint_field_plan
+    rows = require_resolved_continuation(plan).to_data()["objects"]
+    options, = (field.native_install_data() for field in plan.field_plans.values())
+    assert len(options["provider_pack"]) == 2
+    assert len(options["output_route"]["component_keys"]) == 3
+    assert not [row for row in rows if row["kind"] == "auxiliary"]
+    assert {row["name"] for row in rows if row["kind"] == "state"} == {"electrons", "ions"}
+    assert {row["identity"] for row in rows if row["kind"].startswith("field_")} == {
+        kind + ":" + options["provider_slot"] for kind in ("field_value", "field_observation")}
+    assert require_resolved_continuation(CompiledPlanRecord.from_resolved(plan)).to_data() == \
+        require_resolved_continuation(plan).to_data()
+
+
+@pytest.mark.parametrize("change", ("missing", "owner", "space", "component"))
+def test_field_retention_requires_exact_output_component_coverage(joint_field_plan, change):
+    options = {name: field.native_install_data() for name, field in joint_field_plan.field_plans.items()}
+    if change == "missing":
+        options.clear()
+    else:
+        output, = options.values()
+        key = output["output_route"]["component_keys"][0]
+        key[{"owner": "owner_qid", "space": "space_name", "component": "component"}[change]] += "_foreign"
+    with pytest.raises(ValueError, match="no exact resolved output owner"):
+        derive_continuation_transitions(_field_projection(joint_field_plan, options))
+
+
+@pytest.mark.parametrize("change", ("contract", "producer", "slot"))
+def test_shared_field_consumers_cannot_disagree_on_storage_contract(joint_field_plan, change):
+    options = {name: field.native_install_data() for name, field in joint_field_plan.field_plans.items()}
+    blocks = list(joint_field_plan.blocks)
+    original = blocks[1]
+    evidence = original.resolved_operations.to_data()
+    component = evidence["provider_evidence"]["auxiliary"]["entries"][0]
+    if change == "contract":
+        component["contract"]["representation"] = "foreign"
+    elif change == "producer":
+        component["provider"]["producer"] += "_foreign"
+    else:
+        component["provider"]["slot"] += 1
+    blocks[1] = SimpleNamespace(name=original.name, state_identities=original.state_identities,
+                               resolved_operations=SimpleNamespace(to_data=lambda: deepcopy(evidence)))
+    with pytest.raises(ValueError, match="conflicting component contracts"):
+        derive_continuation_transitions(_field_projection(joint_field_plan, options, blocks=blocks))
+
+
+def test_same_field_slot_aliases_preserve_bootstrap_and_reject_policy_conflicts(joint_field_plan):
+    options, = (field.native_install_data() for field in joint_field_plan.field_plans.values())
+    aliases = {"first_evaluation": options, "later_evaluation": deepcopy(options)}
+    bootstrap = SimpleNamespace(actions=(SimpleNamespace(
+        operation="recompute", evidence={"field_name": "later_evaluation"}),))
+    projected = _field_projection(joint_field_plan, aliases, bootstrap=bootstrap)
+    rows = derive_continuation_transitions(projected).to_data()["objects"]
+    retained = [row for row in rows if row["kind"] in {"field_value", "field_observation", "solver_cache"}]
+    assert len(retained) == 3
+    assert all(row["transitions"]["initialization"]["action"] == "solve"
+               for row in retained if row["kind"].startswith("field_"))
+    aliases["later_evaluation"]["reaction"] = 17
+    with pytest.raises(ValueError, match="conflicting resolved provider policies"):
+        derive_continuation_transitions(_field_projection(joint_field_plan, aliases, bootstrap=bootstrap))
+
+
+def test_distinct_slots_cannot_claim_one_retained_field_component(joint_field_plan):
+    options, = (field.native_install_data() for field in joint_field_plan.field_plans.values())
+    second = deepcopy(options)
+    second["provider_slot"] += "_foreign"
+    with pytest.raises(ValueError, match="conflicting output owners"):
+        derive_continuation_transitions(_field_projection(joint_field_plan, {"first": options, "second": second}))
+
+
+def test_runtime_input_fieldspace_remains_an_auxiliary_obligation(joint_field_plan):
+    block = joint_field_plan.blocks[0]
+    evidence = block.resolved_operations.to_data()
+    for component in evidence["provider_evidence"]["auxiliary"]["entries"]:
+        component["provider"]["producer"] = "runtime_input"
+    projected_block = SimpleNamespace(name=block.name, state_identities=block.state_identities,
+                                     resolved_operations=SimpleNamespace(to_data=lambda: deepcopy(evidence)))
+    plan = derive_continuation_transitions(_field_projection(joint_field_plan, {}, blocks=(projected_block,)))
+    rows = [row for row in plan.to_data()["objects"] if row["kind"] == "auxiliary"]
+    assert len(rows) == 3
+    assert all(row["transitions"]["initialization"]["action"] == "transfer" for row in rows)
+    assert {row["validity"]["component"] for row in rows} == {"potential", "electric_x", "electric_y"}
+    # Arbitrary duplicate obligations are still rejected, not globally deduplicated.
+    duplicate = plan.to_data()
+    duplicate["objects"].append(deepcopy(rows[0]))
+    with pytest.raises(ValueError, match="duplicate retained object"):
+        ContinuationTransitionPlan(json.dumps(duplicate))
 
 
 class _NativeMailbox:
