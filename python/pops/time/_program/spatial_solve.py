@@ -105,6 +105,36 @@ def validate_spatial_request(program: Any, token: Any) -> None:
         raise SolveRequestError("solver_identity_drift", "spatial Newton controls changed")
 
 
+def validate_spatial_commit(program: Any, token: Any) -> None:
+    """Only the complete solved conservative stage has an admitted exchange quadrature."""
+    from pops.time.references import handle_data
+    from pops.time._program.serialization import _json_ready
+
+    def unit_wrapper(value: Any) -> Any:
+        while value.op == "linear_combine" and len(value.inputs) == 1 \
+                and dict(value.attrs["coeffs"][0]) == {0: 1}:
+            value = value.inputs[0]
+        return value
+
+    commits = [value for value in program._commits.values() if value.block == token.block]
+    if len(commits) != 1:
+        raise SolveRequestError("unsupported_commit", "spatial solve requires one exact conservative commit")
+    endpoint = unit_wrapper(commits[0])
+    accumulation = token.attrs["physical_mapping"]["accumulation"]
+    if accumulation is not None:
+        handle = endpoint.attrs.get("operator_handle")
+        if endpoint.op != "local_transform" or len(endpoint.inputs) != 1 or handle is None \
+                or _json_ready(handle_data(handle)) != _json_ready(accumulation):
+            raise SolveRequestError("unsupported_commit", "spatial solve must commit its exact Q(candidate) mapping")
+        endpoint = unit_wrapper(endpoint.inputs[0])
+    if endpoint.op != "solve_outcome_component" or endpoint.attrs.get("index") != 0 \
+            or len(endpoint.inputs) != 1:
+        raise SolveRequestError("unsupported_commit", "weighted or transformed spatial solve commits require a declared quadrature")
+    outcome = endpoint.inputs[0]
+    if outcome.op != "solve_outcome" or len(outcome.inputs) != 1 or outcome.inputs[0] is not token:
+        raise SolveRequestError("unsupported_commit", "spatial solve is not the committed consumed outcome")
+
+
 def spatial_rate_weight(token: Any, rate: Any) -> Any:
     """Recover tau from the authenticated residual, including exact dt powers."""
     from pops.time.values import _Coeff

@@ -59,9 +59,11 @@ def test_spatial_request_detects_changed_residual_coefficients():
         changed = program._replace_value(residual, attrs={**residual.attrs, "coeffs": coefficients})
     finally:
         program._recording.pop()
-    program._replace_value(node, attrs={**node.attrs, "residual_block": body, "residual": changed})
+    changed_token = program._replace_value(node, attrs={**node.attrs, "residual_block": body, "residual": changed})
+    from pops.time._program.spatial_solve import validate_spatial_request
+
     with pytest.raises(SolveRequestError, match="equation_identity_drift"):
-        program.validate()
+        validate_spatial_request(program, changed_token)
 
 
 def test_spatial_request_emits_prepared_global_newton_and_consumed_copy():
@@ -95,3 +97,14 @@ def test_accepted_flux_weight_is_the_actual_residual_coefficient():
 def test_spatial_adapter_requires_explicit_supported_derivative():
     with pytest.raises(SolveRequestError, match="unsupported_derivative"):
         resolve_case(derivative_route="exact")
+
+
+@pytest.mark.parametrize("replacement", ["unused", "history_only", "weighted", "raw_coordinate", "wrong_accumulation"])
+def test_spatial_exchange_refuses_unproved_commit_endpoint(replacement):
+    case, layout = make_case(16, nonlinear=replacement in ("raw_coordinate", "wrong_accumulation"),
+                             commit_mode=replacement)
+    with pytest.raises(SolveRequestError, match="unsupported_commit"):
+        case._time.validate()
+    plan = pops.resolve(pops.validate(case), layout=layout)
+    with pytest.raises(SolveRequestError, match="unsupported_commit"):
+        emit_cpp_program(plan.time, model=lower_and_validate(plan.blocks[0].model)[0])

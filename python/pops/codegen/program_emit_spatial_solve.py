@@ -11,7 +11,8 @@ def emit_spatial_solve(program: Any, value: Any, base: Any, variables: Any, mode
                        lines: Any, prelude: Any, block_indices: Any, field_plans: Any,
                        target: str, emit_node: Any) -> None:
     from pops.time._program.spatial_solve import (
-        validate_spatial_request, spatial_newton_options, spatial_scalar, spatial_rate_weight,
+        validate_spatial_request, validate_spatial_commit, spatial_newton_options,
+        spatial_scalar, spatial_rate_weight,
     )
     from pops.codegen.program_models import model_for_node
     from pops.codegen.program_emit_diffusion import (
@@ -22,6 +23,7 @@ def emit_spatial_solve(program: Any, value: Any, base: Any, variables: Any, mode
     )
     from pops.codegen.program_emit_kernels import _coeff_cpp
 
+    validate_spatial_commit(program, value)
     validate_spatial_request(program, value)
     if target != "system" or prelude is None:
         raise NotImplementedError("spatial residual currently requires a Uniform native install scope")

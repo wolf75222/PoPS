@@ -25,7 +25,7 @@ pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 
 
 def make_case(n, *, method="backward_euler", dt=0.0001, nonlinear=False, invalid=False,
-              tau_scale=1, derivative_route="finite_difference"):
+              tau_scale=1, derivative_route="finite_difference", commit_mode="solved"):
     from pops.numerics import Diffusion
 
     frame = Rectangle("implicit_heat_square", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
@@ -71,6 +71,17 @@ def make_case(n, *, method="backward_euler", dt=0.0001, nonlinear=False, invalid
             linear_max_iterations=100, restart=30)).consume(action=FailRun())[0]
         conserved = solved if accumulation is None else program.transform(solved, transform=accumulation)
         candidate = program.value("updated", conserved, at=temporal.next.point)
+    if commit_mode == "history_only":
+        program.store_history("uncommitted_solve", candidate, depth=1)
+    if commit_mode in ("unused", "history_only"):
+        candidate = program.value("unchanged", temporal.n, at=temporal.next.point)
+    elif commit_mode == "weighted":
+        candidate = program.value("blended", 0.5 * temporal.n + 0.5 * candidate,
+                                  at=temporal.next.point)
+    elif commit_mode == "raw_coordinate":
+        candidate = solved
+    elif commit_mode == "wrong_accumulation":
+        candidate = program.transform(solved, transform=seed_op)
     program.commit(temporal.next, candidate)
     program.step_strategy(FixedDt(dt))
     case.program(program)

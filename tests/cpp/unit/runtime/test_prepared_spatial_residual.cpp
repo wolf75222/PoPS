@@ -92,6 +92,27 @@ TEST(PreparedSpatialResidual, IdentityDeterminesNonzeroConstantWithoutGauge) {
   EXPECT_NEAR(reduce_max(solve.candidate()), 2.5, 1e-11);
 }
 
+TEST(PreparedSpatialResidual, LastResidualEvaluationBelongsToSolvedCandidate) {
+  const Real root = (std::sqrt(Real(5)) - Real(1)) / Real(2);
+  for (const Real initial : {root, Real(0.2)}) {
+    auto seed = scalar_field();
+    auto last_evaluation = scalar_field();
+    seed.set_val(initial);
+    runtime::program::PreparedSpatialResidual<2> solve(seed, options(), Real(6e-6));
+    auto equation = residual(Real(1), true);
+    const auto report = solve.solve(&seed,
+        [&](const MultiFab<2>& q, MultiFab<2>& output, int evaluation) {
+          lincomb(last_evaluation, Real(1), q, Real(0), q);
+          equation(q, output, evaluation);
+        }, ExecutionLane::world("test.spatial-final-evaluation"));
+    ASSERT_TRUE(report.solved_value_available()) << report.reason;
+    saxpy(last_evaluation, Real(-1), solve.candidate());
+    EXPECT_EQ(reduce_min(last_evaluation), Real(0));
+    EXPECT_EQ(reduce_max(last_evaluation), Real(0));
+    if (initial != root) EXPECT_GT(solve.derivative_evaluations(), 0);
+  }
+}
+
 TEST(PreparedSpatialResidual, InvalidResidualCannotBecomeReadableOrMutateSeed) {
   auto seed = scalar_field();
   seed.set_val(Real(0.2));

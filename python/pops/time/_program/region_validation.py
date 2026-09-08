@@ -49,6 +49,10 @@ def _block_region(program: Any, block: Any, where: str, hint: Any = None) -> int
 def validate_program_regions(program: Any) -> None:
     """Fail if a value is foreign, fabricated, or escapes/crosses an undeclared region."""
     for value in program._values:
+        if value.op == "solve_spatial_nonlinear":
+            from pops.time._program.spatial_solve import validate_spatial_commit
+
+            validate_spatial_commit(program, value)
         if "solve_request" in value.attrs:
             from pops.time._program.solve_request import validate_solve_request_node
 
