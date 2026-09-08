@@ -366,7 +366,13 @@ int apply(void* state, const PopsGhostBoundaryRequestV1* request,
       request->region.dimension != 2 || request->region.codimension != 1 ||
       request->region.axis_count != 1 || !request->region.axes ||
       !request->region.sides || request->region.axes[0] != 0 ||
-      request->region.sides[0] != -1 || request->dependency_count != 0 ||
+      request->region.sides[0] != -1 || request->dependency_count != 1 ||
+      !request->dependencies || !request->dependencies[0].present ||
+      !request->dependencies[0].qualified_id ||
+      std::strcmp(request->dependencies[0].qualified_id, request->state_identity) != 0 ||
+      !request->dependencies[0].values.data ||
+      request->dependencies[0].values.dimension != 2 ||
+      request->dependencies[0].values.component_count != 1 ||
       request->parameter_count != 0 || !request->ghosts.data ||
       request->ghosts.dimension != 2 || request->ghosts.component_count != 1) {{
     if (status)
@@ -510,6 +516,11 @@ class _ResolvedExternalGhostBoundaryAuthority:
         assert len(matches) == 1
         providers = matches[0].producer.boundary_providers
         assert len(providers) == 1
+        # External execution retains the exact Outflow state dependency; the ABI
+        # component authenticates that same qualified input before touching scratch.
+        assert providers[0].dependencies.states == (matches[0].region.subject,)
+        assert not providers[0].dependencies.fields
+        assert not providers[0].dependencies.runtime_params
         target = providers[0].handle
         return replace(
             boundary,
