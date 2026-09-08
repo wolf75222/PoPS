@@ -114,10 +114,11 @@ class ProgramProviderPlans:
     storage address after all package providers have been registered.
     """
 
-    def __init__(self, *, target: str = "system") -> None:
+    def __init__(self, *, target: str = "system", provider_halos: Any = None) -> None:
         from pops.codegen._program_kernel_reuse import ProgramSourceKernelHelpers
 
         self._plans: dict[str, tuple[tuple[Any, Any], ...]] = {}
+        self._provider_halos = dict(provider_halos or {})
         if target not in {"system", "amr_system"}:
             raise ValueError("Program provider plan target must be system or amr_system")
         self.target = target
@@ -249,10 +250,9 @@ class ProgramProviderPlans:
                     json.dumps(contract.representation), json.dumps(contract.centering), optional_unit,
                     json.dumps(contract.layout), optional_kind,
                 )
-                shape = (
-                    "Shape{pops::kNativeDimension, 1, [] { "
-                    "pops::Index<pops::kNativeDimension> halo{}; return halo; }()}"
-                )
+                from pops.codegen._native_auxiliary_shapes import auxiliary_shape_cpp
+                shape = auxiliary_shape_cpp(self._provider_halos.get(
+                    (key.owner_qid, key.space_kind, key.space_name, key.component), 0))
                 values.append(
                     "ConsumerValue{Dependency{%s, %s, %s}, %d}" % (
                         rendered_key, rendered_contract, shape, slot,

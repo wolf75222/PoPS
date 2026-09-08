@@ -128,6 +128,12 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
             raise ValueError("diffusive lowering requires one exact default -div transport occurrence")
         temporary="diffusive_transport_%d" % v.id
         lines.append("auto& %s=ctx.rhs_scratch(%d,%d,%s);" % (temporary,v.id,len(sources)+1,state_var))
+        # A native flux has its own exact read union, including derived providers that
+        # a preceding field publication deliberately leaves dirty until consumption.
+        # Do not inherit unrelated model inputs into the constitutive cell kernel.
+        transport_pack = impl._component_operator_provider_packs[transport[0].payload.reg_name]
+        transport_binding = provider_plans.bind_pack(transport_pack, qid+"/transport")
+        lines.extend(_prepare_provider_values(transport_binding, bidx, state_var))
         lines.append("ctx.neg_div_flux_default_with_faces_into(%d,%s,%s,%d,%s_transport_faces);" % (
             bidx,state_var,temporary,v.id,prepared_var))
         lines.append("ctx.axpy(%s,1,%s);" % (out,temporary))

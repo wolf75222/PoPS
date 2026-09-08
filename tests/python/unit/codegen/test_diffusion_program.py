@@ -82,6 +82,7 @@ def test_combined_transport_retains_native_riemann_and_adds_stability_frequencie
     resolved,_,model=resolved_heat(transport=(.2,.2))
     code=emit_cpp_program(resolved.time,model=lower_and_validate(model)[0])
     assert code.count("ctx.neg_div_flux_default_with_faces_into(") == 1
+    assert "ctx.prepare_provider_values(" not in code  # field-free native flux stays field-free
     assert "_transport_faces" in code
     assert "ctx.max_wave_speed(" in code
     assert "combined_transport_diffusion_stability" in code

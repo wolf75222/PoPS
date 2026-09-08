@@ -533,36 +533,12 @@ def _emit_auxiliary_route_registration(
             optional(value["value_kind"]),
         )
 
-    # Native FV binds provider values at the immediate left/right cells of each face.
-    # That access needs one halo cell even when periodic topology has no physical BC row.
-    # State reconstruction has its own (possibly wider) stencil; it does not reconstruct aux.
-    provider_halos = {route_key(row): 1 for row in flux_plan}
-    for component, route in typed_routes.items():
-        boundary = route.get("boundary")
-        provider_halos[component] = max(provider_halos.get(component, 0),
-                                        0 if boundary is None else boundary.width)
-    # A pointwise DerivedAux launcher evaluates its full output image, including its demanded
-    # halos, so propagate that exact image requirement through its declared dependencies.
-    changed = True
-    while changed:
-        changed = False
-        for component, route in typed_routes.items():
-            width = provider_halos.get(component, 0)
-            for dependency in route.get("dependencies", ()):
-                key_tuple = (dependency.owner_qid, dependency.space_kind,
-                             dependency.space_name, dependency.component)
-                if width > provider_halos.get(key_tuple, 0):
-                    provider_halos[key_tuple] = width
-                    changed = True
+    from pops.codegen._native_auxiliary_shapes import auxiliary_shape_cpp, native_auxiliary_halos
 
-    def shape_for(route: Mapping[str, Any] | None, component: Any) -> str:
-        boundary = None if route is None else route.get("boundary")
-        width = max(provider_halos.get(component, 0), 0 if boundary is None else boundary.width)
-        return (
-            "Shape{pops::kNativeDimension, 1, [] { pops::Index<pops::kNativeDimension> halo{}; "
-            "for (int axis = 0; axis < pops::kNativeDimension; ++axis) halo[axis] = %d; return halo; }()}"
-            % width
-        )
+    provider_halos = native_auxiliary_halos(model)
+
+    def shape_for(_route: Mapping[str, Any] | None, component: Any) -> str:
+        return auxiliary_shape_cpp(provider_halos.get(component, 0))
 
     def boundary_for(route: Mapping[str, Any] | None) -> str:
         from pops.identity.scalar import scalar_cpp

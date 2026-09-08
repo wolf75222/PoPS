@@ -284,7 +284,14 @@ def _emit_cpp_program_impl(
     _check_lowerable(program, authority, field_plans or {}, target=target)
     from pops.codegen.program_emit_kernels import ProgramProviderPlans
 
-    provider_plans = ProgramProviderPlans(target=target)
+    from pops.codegen._native_auxiliary_shapes import native_auxiliary_halos
+    provider_halos = {}
+    for emitter in emitters:
+        for key, width in native_auxiliary_halos(getattr(emitter, "_m", emitter)).items():
+            if key in provider_halos and provider_halos[key] != width:
+                raise ValueError("Program provider has conflicting exact native halo shapes")
+            provider_halos[key] = width
+    provider_plans = ProgramProviderPlans(target=target, provider_halos=provider_halos)
     prelude, body, post_synchronization, operator_authorities = _emit_body(
         program,
         authority,
