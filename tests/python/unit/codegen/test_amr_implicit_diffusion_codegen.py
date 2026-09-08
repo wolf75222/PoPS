@@ -152,3 +152,37 @@ def test_spatial_scratch_producers_retain_exact_block_level_and_node_ownership(k
     assert "pops::PureFieldAlgebra::copy(*spatial_%d_trial,q);" % token.id in source
     assert "frozen_previous" in source
     assert source.count("ctx.solve_spatial_hierarchy(") == 1
+
+
+@pytest.mark.parametrize("imex", [False, True])
+@pytest.mark.parametrize("kind", ["constant", "nonlinear_accumulation"])
+def test_hierarchy_solve_releases_level_envelopes_before_its_internal_traversals(kind, imex):
+    import pops
+    from tests.python.integration.runtime.test_amr_implicit_diffusion import build
+
+    case, layout = build(16, kind=kind, imex=imex)
+    plan = pops.resolve(pops.validate(case), layout=layout)
+    source = emit_cpp_program(
+        plan.time, model=lower_and_validate(plan.blocks[0].model)[0], target="amr_system"
+    )
+    driver = source.split("auto _advance_hierarchy =", 1)[1].split(
+        "ctx.advance_synchronized_hierarchy", 1
+    )[0]
+    scopes = []
+    phases = []
+    for line in driver.splitlines():
+        code = line.split("//", 1)[0]
+        for phase in ("gather", "solve", "publish"):
+            if ".%s(hierarchy_dt)" % phase in code:
+                phases.append(phase)
+                # Reconciliation and residual/JVP callbacks each select all levels.
+                # Only gather/publication may retain an outer level checkout.
+                assert any("with_program_attempt_level" in scope for scope in scopes) == (
+                    phase != "solve"
+                )
+        for char in code:
+            if char == "{":
+                scopes.append(code)
+            elif char == "}":
+                scopes.pop()
+    assert phases == ["gather", "solve", "publish"]

@@ -1691,6 +1691,73 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRefusesUnsynchronizedHierarchyBefore
   EXPECT_EQ(pops::reduce_max_local(system.engine()->hierarchy().state(1)), pops::Real(1));
 }
 
+TEST(GeneratedAmrSystemBlock, SpatialHierarchyTraversalRequiresReleasedLevelEnvelopes) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/spatial-level-envelopes");
+  system.set_temporal_relations({1}, {1}, {"integral_only"});
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  publish_centered_fine_level(system);
+  system.refresh_prepared_amr_levels();
+  auto context = pops::test::install_forward_euler_program_context(system, false);
+  context->declare_clock_relation("test.clock.macro", "test.clock.fine", 1);
+  std::array<pops::MultiFab<Dim>*, 2> candidates{};
+  std::array<int, 2> visits{};
+  int solves = 0;
+  context->advance_synchronized_hierarchy(
+      0.01,
+      [&](double dt) {
+        if (context->level() != 0)
+          return;
+        ASSERT_EQ(context->nlev(), 2);
+        auto traverse = [&] {
+          for (int level = 0; level < context->nlev(); ++level)
+            context->with_program_attempt_level(level, [&] {
+              EXPECT_EQ(context->level(), level);
+              EXPECT_EQ(&context->state(0), candidates[level]);
+              const auto evaluation = context->boundary_evaluation_point(7001);
+              EXPECT_EQ(evaluation.level, level);
+              EXPECT_EQ(evaluation.dt, dt);
+              EXPECT_EQ(evaluation.stage_fraction, (::pops::amr::Rational{1, 1}));
+              ++visits[level];
+            });
+        };
+        for (int level = 0; level < context->nlev(); ++level)
+          context->with_program_attempt_level(level, [&] {
+            candidates[level] = &context->state(0);
+            context->set_stage_time(1, 1);
+          });
+        // The former generated producer checked out level zero around the entire solve.
+        // Its first reconciliation traversal must still refuse the missing registry slot.
+        std::string refusal;
+        try {
+          context->with_program_attempt_level(0, traverse);
+        } catch (const std::logic_error& error) {
+          refusal = error.what();
+        }
+        EXPECT_EQ(refusal,
+                  "synchronized Program stage has no collectively prepared level envelope");
+        EXPECT_EQ(visits, (std::array<int, 2>{0, 0}));
+        // Releasing the gather scopes permits repeated solve traversals with the same
+        // candidates and clocks, including after the failed nested checkout unwinds.
+        ++solves;
+        traverse();
+        traverse();
+        EXPECT_EQ(context->level(), 0);
+      },
+      true);
+  EXPECT_EQ(solves, 1);
+  EXPECT_EQ(visits, (std::array<int, 2>{2, 2}));
+  EXPECT_THROW(context->with_program_attempt_level(0, [] {}), std::logic_error);
+  EXPECT_EQ(pops::reduce_max_local(system.engine()->hierarchy().state(0)), pops::Real(1));
+  EXPECT_EQ(pops::reduce_max_local(system.engine()->hierarchy().state(1)), pops::Real(1));
+}
+
 TEST(GeneratedAmrSystemBlock, ProgramContextRetainsAndInterpolatesExactLevelHistory) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;

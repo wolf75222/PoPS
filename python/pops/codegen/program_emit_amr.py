@@ -684,6 +684,17 @@ def _emit_amr_install(
         )
     else:
         gather, solve, publish = hierarchy_bodies
+        spatial_solve = any(value.op == "solve_spatial_nonlinear" for value in program._values)
+        hierarchy_solve_driver = (
+            # The spatial solve checks out each prepared level itself for predictor
+            # reconciliation and every residual/JVP. A surrounding level-0 checkout
+            # would remove that envelope from the registry before its first traversal.
+            "        _level_programs->front().solve(hierarchy_dt);\n"
+            if spatial_solve else
+            "        ctx.with_program_attempt_level(0, [&]() {\n"
+            "          _level_programs->front().solve(hierarchy_dt);\n"
+            "        });\n"
+        )
         phase_fields = (
             "    std::function<void(double)> step;\n"
             "    std::function<void(double)> gather;\n"
@@ -718,7 +729,7 @@ def _emit_amr_install(
             "      if (ctx.level() != 0)\n"
             "        return;\n"
             "      const int _nlev = ctx.program_resource_topology().levels;\n" +
-            ("      if (false) {\n" if any(value.op == "solve_spatial_nonlinear" for value in program._values)
+            ("      if (false) {\n" if spatial_solve
              else "      if (ctx.uses_prepared_krylov_fallback()) {\n") +
             "        for (int _k = 0; _k < _nlev; ++_k) {\n"
             "          ctx.with_program_attempt_level(_k, [&]() {\n"
@@ -732,9 +743,7 @@ def _emit_amr_install(
             "            _level_programs->at(static_cast<std::size_t>(_k)).gather(hierarchy_dt);\n"
             "          });\n"
             "        }\n"
-            "        ctx.with_program_attempt_level(0, [&]() {\n"
-            "          _level_programs->front().solve(hierarchy_dt);\n"
-            "        });\n"
+            + hierarchy_solve_driver +
             "        // The composite solution is complete before any level reconstructs or commits.\n"
             "        for (int _k = 0; _k < _nlev; ++_k) {\n"
             "          ctx.with_program_attempt_level(_k, [&]() {\n"
