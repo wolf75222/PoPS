@@ -12104,8 +12104,10 @@ MultiFab<Dim>& AmrSystem<Dim>::prepared_amr_block_state(int runtime_block, int l
 template <int Dim>
 const MultiFab<Dim>* AmrSystem<Dim>::prepared_amr_block_level_active_mask(int runtime_block,
                                                                           int level) const {
-  p_->ensure_engine();
-  if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
+  // This prepared lookup also runs inside rank-local preflight. Materialization here would
+  // enter collectives on only the ranks whose earlier candidate checks succeeded. The caller
+  // collectively prepares the hierarchy before validating its local candidate.
+  if (!p_->engine || !p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
     throw std::logic_error("prepared AMR active mask requires a collectively prepared hierarchy");
   if (runtime_block < 0 ||
       static_cast<std::size_t>(runtime_block) >= p_->prepared_hierarchy->block_levels.size())
