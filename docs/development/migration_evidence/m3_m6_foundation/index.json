@@ -1,0 +1,3021 @@
+{
+  "schema": "pops.migration.m3-m6.foundation-evidence.v1",
+  "status": "active",
+  "closure_claim": false,
+  "updated_at": "2026-09-08T11:23:00+02:00",
+  "source": {
+    "integration_revision": "24b58985e89b194ebd505672ca0b1e04d75ee4f4",
+    "integration_short_revision": "24b5898",
+    "source_worktree": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-m3-m6",
+    "docs_worktree": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-evidence-docs",
+    "docs_branch": "adc903-final-evidence-docs",
+    "manifest": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json",
+    "manifest_sha256": "b64efb3c33266c769aa58a7ef44ad7dc873867e7dac18792972a5df00f4c676d",
+    "evidence_root": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence",
+    "contract": "docs/development/migration_m3_m6_contract.md"
+  },
+  "lifecycle": [
+    "validate",
+    "resolve",
+    "compile",
+    "bind",
+    "run"
+  ],
+  "evidence_levels": {
+    "representable": {
+      "required": "Typed authoring or IR witness with stable identity or serialization."
+    },
+    "validated": {
+      "required": "Exact validation command, exit code and accepted diagnostic or plan."
+    },
+    "resolved": {
+      "required": "Resolved report with mapping, dependencies, effects, coverage and disposition."
+    },
+    "emitted": {
+      "required": "Generated/native source or typed operation plus authenticated artifact and build provenance."
+    },
+    "executed": {
+      "required": "Exact runtime command, configuration, exit code and retained output or artifact hashes."
+    },
+    "numerically_checked": {
+      "required": "Declared equation/oracle, norms, tolerance, comparison, refinement/restart policy and result."
+    },
+    "performance_characterized": {
+      "required": "Equivalent numerical conditions, warmups/repetitions, device/MPI completion, raw metrics and uncertainty summary."
+    }
+  },
+  "status_vocabulary": [
+    "pending",
+    "pass",
+    "fail",
+    "unsupported",
+    "unavailable"
+  ],
+  "interpretation": {
+    "source_assertion_is_not_execution": true,
+    "structured_refusal_is_not_successful_execution": true,
+    "unavailable_cells_are_not_substituted": true,
+    "stage_status_is_bounded": true
+  },
+  "matrix_policy": {
+    "axes": [
+      "dimension",
+      "backend",
+      "mpi_ranks",
+      "layout",
+      "levels_and_blocks",
+      "method",
+      "restart_and_output",
+      "tolerances"
+    ],
+    "declaration": "Only executed cells and explicit limits are recorded.",
+    "common_profile": {
+      "backend": "Kokkos OpenMP host or Serial",
+      "threads": 2,
+      "mpi_ranks": [
+        1
+      ],
+      "layout": "Uniform uncut Cartesian",
+      "levels": 1,
+      "blocks": 1,
+      "output": "none"
+    },
+    "unqualified": [
+      "AMR scientific matrices",
+      "GPU/device execution",
+      "off-diagonal tensor diffusion",
+      "full MPI2 field publication",
+      "final 178-target native package"
+    ]
+  },
+  "command_catalog": {
+    "wheel_dim2": {
+      "status": "exact",
+      "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-m3-m6",
+      "executable": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/python3.12",
+      "command": "python -m pip wheel -v . --no-deps --no-build-isolation --wheel-dir /Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-wheel-dim2 -C build-dir=build/{wheel_tag}-dim2 -C cmake.define.POPS_NATIVE_DIM=2 -C cmake.define.POPS_HEAVY_MODULE_TU_POOL=2 -C cmake.define.POPS_USE_MPI=ON -C cmake.define.POPS_USE_HDF5=ON -Ccmake.define.CMAKE_BUILD_WITH_INSTALL_RPATH=ON",
+      "receipts": [
+        "pub_dim2_proof",
+        "pub_dim2_wheel"
+      ]
+    },
+    "wheel_dim1": {
+      "status": "exact",
+      "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-m3-m6",
+      "executable": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/python3.12",
+      "command": "python -m pip wheel -v . --no-deps --no-build-isolation --wheel-dir /Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-wheel-dim1 -C build-dir=build/{wheel_tag}-dim1 -C cmake.define.POPS_NATIVE_DIM=1 -C cmake.define.POPS_HEAVY_MODULE_TU_POOL=2 -C cmake.define.POPS_USE_MPI=ON -Ccmake.define.POPS_USE_HDF5=ON -Ccmake.define.CMAKE_BUILD_WITH_INSTALL_RPATH=ON",
+      "receipts": [
+        "pub_dim1_proof",
+        "pub_dim1_wheel"
+      ]
+    },
+    "native_178": {
+      "status": "exact_argv_in_receipt",
+      "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-m3-m6",
+      "argv_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-native-full-build-v3.json#/command",
+      "receipts": [
+        "cpp_selection",
+        "native_build",
+        "native_build_log",
+        "native_build_log2"
+      ]
+    },
+    "broad_source": {
+      "status": "exact_argv_in_receipt",
+      "argv_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/broad-source-command.json#/command",
+      "receipts": [
+        "broad_command",
+        "broad_log"
+      ]
+    },
+    "source_gate": {
+      "status": "output_and_selector_only",
+      "receipts": [
+        "source_xml",
+        "source_log"
+      ],
+      "note": "Invocation not retained."
+    },
+    "field_overlay": {
+      "status": "selector_only",
+      "selector": "tests/python/integration/runtime/test_public_field_matrix.py and tests/python/integration/runtime/test_public_field_consumers.py",
+      "receipts": [
+        "fields_overlay_xml",
+        "fields_overlay"
+      ],
+      "note": "Invocation not retained."
+    },
+    "field_consumers": {
+      "status": "selector_only",
+      "selector": "tests/python/integration/runtime/test_public_field_consumers.py",
+      "receipts": [
+        "fields_consumers",
+        "fields_transport",
+        "fields_consumers_private_overlay",
+        "fields_detach"
+      ],
+      "note": "Invocation not retained; current XML and transport JSON retain the three-test/nine-row result."
+    },
+    "interactions_rank1": {
+      "status": "receipt_selector_only",
+      "selector": "rank-one interaction matrix",
+      "receipts": [
+        "interactions_rank1",
+        "interactions_rank1_log"
+      ],
+      "note": "Configuration and output retained; shell invocation not retained."
+    },
+    "interactions_mpi2": {
+      "status": "receipt_selector_only",
+      "selector": "MPI2 implicit exact/approximate/finite-difference matrix",
+      "receipts": [
+        "interactions_mpi2",
+        "interactions_mpi2_pub_r0_log",
+        "interactions_mpi2_pub_r0_xml",
+        "interactions_mpi2_pub_r1_log",
+        "interactions_mpi2_pub_r1_xml",
+        "interactions_publication_overlay",
+        "interactions_publication_overlay_branch",
+        "interactions_final_evidence"
+      ],
+      "note": "Foundation and publication rank outputs retained; shell invocation not retained."
+    },
+    "interactions_publication": {
+      "status": "receipt_selector_only",
+      "selector": "tests/python/unit/codegen/test_native_interaction_matrix.py publication MPI2 numerical/timing matrix",
+      "receipts": [
+        "interactions_mpi2_pub_r0_log",
+        "interactions_mpi2_pub_r0_xml",
+        "interactions_mpi2_pub_r1_log",
+        "interactions_mpi2_pub_r1_xml",
+        "interactions_publication_overlay",
+        "interactions_publication_overlay_branch",
+        "interactions_final_evidence"
+      ],
+      "note": "Publication native 24b5898 plus source overlay; shell invocation not retained."
+    },
+    "interactions_face": {
+      "status": "receipt_selector_only",
+      "selector": "tests/python/unit/codegen/test_native_constitutive_faces.py::test_full_native_joint_constitutive_face_matrix",
+      "receipts": [
+        "interactions_face_protocol",
+        "interactions_face_log",
+        "interactions_face_xml"
+      ]
+    },
+    "diffusion_sg": {
+      "status": "receipt_selector_only",
+      "selector": "tests/python/integration/runtime/test_public_drift_diffusion_matrix.py",
+      "receipts": [
+        "sg_public_log",
+        "sg_public_xml",
+        "sg_final_proof",
+        "sg_validation_report"
+      ],
+      "note": "6 cases pass in the final proof/report; invocation not retained."
+    },
+    "diffusion_explicit": {
+      "status": "receipt_selector_only",
+      "selector": "tests/python/integration/runtime/test_public_diffusion_matrix.py",
+      "receipts": [
+        "diff_final",
+        "diff_tensor_log",
+        "diff_tensor_xml"
+      ],
+      "note": "Final immutable gate still running."
+    },
+    "implicit": {
+      "status": "receipt_selector_only",
+      "selector": "tests/python/integration/runtime/test_public_implicit_diffusion.py",
+      "receipts": [
+        "implicit_summary",
+        "implicit_overlay"
+      ]
+    },
+    "solve": {
+      "status": "receipt_selector_only",
+      "selector": "M6.1 solve source/native lifecycle selectors",
+      "receipts": [
+        "solve_summary",
+        "solve_source",
+        "solve_lifecycle"
+      ]
+    },
+    "retry": {
+      "status": "receipt_selector_only",
+      "selector": "tests/python/integration/runtime/test_native_retry_transactions.py",
+      "receipts": [
+        "retry_summary",
+        "retry_xml",
+        "retry_overlay"
+      ]
+    },
+    "transactions": {
+      "status": "receipt_selector_only",
+      "selector": "CMake transaction/residual/ProgramContext contract filters",
+      "receipts": [
+        "transaction_xml",
+        "transaction_log",
+        "transaction_source"
+      ]
+    }
+  },
+  "receipt_catalog": {
+    "manifest": {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json",
+      "sha256": "b64efb3c33266c769aa58a7ef44ad7dc873867e7dac18792972a5df00f4c676d",
+      "note": "Pinned issue list and acceptance numbering."
+    },
+    "pub_dim1_proof": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-dim1-private-proof.json",
+      "sha256": "9f261e3e42aa21b31944e91c80544520beaf05d6e5e26b1f5a8e71cdc879bad8",
+      "note": "Immutable Dim1 publication proof.",
+      "pins": {
+        "source": "24b5898",
+        "native_manifest_sha256": "41f37df67ba78c70465b9563ae4ffec81edd9ef686f8ccafb0312a8724968ebd",
+        "native_so_sha256": "0ca463317f99e4a78d292c2946e7ad93d08b28e68840f01a80cf6e4aaff4e71e",
+        "installed_tree_sha256": "93fc6a863c59d25d988b2046eb08f9f611a89a5f5a956f61c70355189d89f024"
+      }
+    },
+    "pub_dim1_wheel": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-wheel-dim1/pops-1.0.0-cp312-cp312-macosx_26_0_arm64.whl",
+      "sha256": "c2925e874a1a3a6e16d988a4805bcda7afa92b8d947b72722a4a7cd7b53f556e",
+      "note": "Dim1 wheel."
+    },
+    "pub_dim2_proof": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-private-proof.json",
+      "sha256": "8b88a1b9bb6a14e32dbedc159a5ea5eaf9180da76a932e9edc8310ae4f9b3e3b",
+      "note": "Immutable Dim2 publication proof.",
+      "pins": {
+        "source": "24b5898",
+        "native_manifest_sha256": "4a01cf1b1ad5c8f02f827d4574b99eaf654f82d49e45abe8bb3ee94239e4967a",
+        "native_so_sha256": "a5e7032b044f9a259f3f23bc967a8430388dbc5900a9c210b067e28966f49265",
+        "installed_tree_sha256": "5082b4df59f457189e281529d16a6c97f5f60afa5137e8cdf8bba04b3c9194b8"
+      }
+    },
+    "pub_dim2_wheel": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-wheel-dim2/pops-1.0.0-cp312-cp312-macosx_26_0_arm64.whl",
+      "sha256": "762994fbdd723551e6ec64c3cf4bcc1dc8b36bfb72a8117c322e3503fd68c848",
+      "note": "Dim2 wheel."
+    },
+    "source_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/integrated-source-gate.xml",
+      "sha256": "a25710546175354739f44d86585d91e7937b91bd367daacc59f23f128177fdec",
+      "result": "222 passed, 2 deselected",
+      "note": "Integrated source-only gate."
+    },
+    "source_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/integrated-source-gate.log",
+      "sha256": "6227031d9ecfcc860e6edb680058913addfe7d9193c2ed06ad2d23c1a505759c",
+      "result": "222 passed, 2 deselected",
+      "note": "Integrated source-only output."
+    },
+    "cpp_selection": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-cpp-selection.log",
+      "sha256": "5caefbd2164d58a601d49126f6765653787f18eb447e18faa944c4646d664dc9",
+      "result": "178/178 targets selected",
+      "note": "C++ selection inventory; not execution."
+    },
+    "native_build": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-native-full-build-v3.json",
+      "sha256": "0afafb64054f6129d60d0f0e67fa3567a2616349be39288280517288a7cba7c0",
+      "note": "Exact 178-target argv; candidate source is 9bc2145."
+    },
+    "native_build_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-native-full-build-v3.log",
+      "sha256": "d36c3c792b2b8d309c5626b0a731bb477ceaf50cf235da47d8a0dc8fc5e49379",
+      "result": "incomplete; test_amr_riemann_native.cpp compile error",
+      "note": "Active native gate output."
+    },
+    "native_build_log2": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-native-full-build-v4.log",
+      "sha256": "410d64961a2c3c5b3601a6a9c7a3efb613f1c63bfe883c517611df14af1a9058",
+      "result": "incomplete; test_amr_history_ring.cpp compile error",
+      "note": "Follow-up native gate output."
+    },
+    "fields_matrix": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-public-matrix.json",
+      "sha256": "42292e6a46093c54adb9358be0ff200d65140f33ddc02b995450bca4f0ce1c4f",
+      "result": "9 accepted rows",
+      "note": "D2 field matrix."
+    },
+    "fields_overlay": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-public-overlay.json",
+      "sha256": "13c6be9cd56b083717bec58cc999b05eafdbc07e9fd25c2fe82f999d824ebc1d",
+      "note": "Private Python field overlay."
+    },
+    "fields_overlay_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-public-overlay.xml",
+      "sha256": "077b01654f9aa06bd7dc4945df9f7db22ae460cd8de891822242b4a7f2167b13",
+      "result": "2 passed",
+      "note": "Field overlay lifecycle output."
+    },
+    "fields_euler": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-public-Euler_Poisson_source.json",
+      "sha256": "2e746d1833d200c2241329b21e615df55883a4ec4fb2118dc1faaae10fd4e300",
+      "result": "N16/32/64, orders 2.002789 and 2.000696",
+      "note": "Euler-Poisson source receipt."
+    },
+    "fields_consumers": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-public-consumers.xml",
+      "sha256": "f56517cb0a3b0e1e35e68af3218c58c7225c8004e3bed10d5b57bfa504ea981c",
+      "result": "3 tests, 9 rows pass; Euler-Poisson source, field transport and joint Neumann gradient consumers",
+      "note": "Current field consumer result; supersedes the earlier transport-failure XML."
+    },
+    "fields_transport": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-public-field_transport.json",
+      "sha256": "f5d24d1ba817e8b510c0bdc61c748388c9add94a4dc558fa71487eccef373675",
+      "result": "N16/32/64; observed transport orders 1.3176677704849828 and 1.1117397898166301; finest L2 9.987480340715498e-05",
+      "note": "Current field-transport consumer numerical receipt; the observed rates do not support a strict second-order claim."
+    },
+    "fields_consumers_private_overlay": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-consumers-private-overlay.json",
+      "sha256": "900e0eaf2b2d7e21dec9db015cc7788b70dfdf8e924977256fb5aad17bebb297",
+      "result": "base 24b5898; overlay commits d2b8bca, 3bc360c, 41c0293; native and headers unchanged",
+      "note": "Private exact Python patch copy used by the current field-consumer receipt."
+    },
+    "fields_detach": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-public-consumers-detach-refusal.xml",
+      "sha256": "601eaaef63688aac21e0cb5766d86486ec851178f6881ae58f8f0da8175b1d2c",
+      "note": "Structured authoritative Case registry refusal."
+    },
+    "fields_stage": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-stage-native.log",
+      "sha256": "f26bcff1cb9e7d0900348ba19dc246eb6d8d56e4876f5a29abfeb314712c7af1",
+      "result": "4 solves plus 1 reuse",
+      "note": "Stage reuse output."
+    },
+    "fields_joint": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-joint-gradient-overlay.xml",
+      "sha256": "0d2c17748ba5f895ce0f017f8860b1b3591eb8d6d932d63405508f5a663b224c",
+      "result": "1 pass",
+      "note": "Joint gradient overlay."
+    },
+    "interactions_rank1": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-matrix-rank1-summary.json",
+      "sha256": "6faa028a3d23cc0e9c61514bea0f8bec4644a26496e646bfeb28a4e83ce5aebc",
+      "result": "13 rows pass; 1300.163 seconds",
+      "note": "D2 rank-one interaction matrix."
+    },
+    "interactions_rank1_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-matrix-rank1.log",
+      "sha256": "0efd4e6c0c749367cb568c74291f9dad2f21625c04a829f1d0400a203db5a04c",
+      "result": "13 passed, 12 warnings in 1300.75 seconds",
+      "note": "D2 rank-one output."
+    },
+    "interactions_mpi2": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-implicit-mpi2-summary.json",
+      "sha256": "61d7088779206eb3f2c067e80c97fb1bbdaa5a4f8365775e928afe92fd66aa9c",
+      "result": "9 exact/approximate/FD cases per rank",
+      "note": "D2 MPI2 derivative matrix."
+    },
+    "interactions_mpi2_pub_r0_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-matrix-publication-mpi2-rank0.log",
+      "sha256": "c811a675d6899e9217bdcbb1b16c425651171ca48f214b1f64462246e9440e90",
+      "result": "13 passed, 12 warnings in 1572.82 seconds",
+      "note": "Publication Dim2 MPI2 rank-zero interaction matrix."
+    },
+    "interactions_mpi2_pub_r0_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-matrix-publication-mpi2-rank0.xml",
+      "sha256": "7ed293e652a2d8cb7f14848e6735beb463cce627f460ff608c5866b61b53857b",
+      "result": "13 passed; N16/32/64, 100-step Heun and paired timing properties",
+      "note": "Publication Dim2 MPI2 rank-zero JUnit interaction matrix."
+    },
+    "interactions_mpi2_pub_r1_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-matrix-publication-mpi2-rank1.log",
+      "sha256": "c811a675d6899e9217bdcbb1b16c425651171ca48f214b1f64462246e9440e90",
+      "result": "13 passed, 12 warnings in 1572.82 seconds",
+      "note": "Publication Dim2 MPI2 rank-one interaction matrix."
+    },
+    "interactions_mpi2_pub_r1_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-matrix-publication-mpi2-rank1.xml",
+      "sha256": "93537baa77318684023b358e20f2241ebc38db47615347682a9c955a533204ec",
+      "result": "13 passed; N16/32/64, 100-step Heun and paired timing properties",
+      "note": "Publication Dim2 MPI2 rank-one JUnit interaction matrix."
+    },
+    "interactions_publication_overlay": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-publication-overlay.json",
+      "sha256": "fb332c28690b992a15593790e84a75b4937386ad75905aedd4c634e014cd1814",
+      "result": "native base 24b5898; source head 6ab867a226fbb653cf00ffd8a87b9b36b939f4b2",
+      "note": "Publication interaction source overlay manifest."
+    },
+    "interactions_publication_overlay_branch": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-publication-overlay-branch.json",
+      "sha256": "9381d9a3f043234fbbd4125a876a4981d4120d3230baf52f68813b597c19c902",
+      "result": "native base 24b5898 unchanged; Python authoring overlay recorded",
+      "note": "Publication interaction branch overlay manifest and projection limits."
+    },
+    "interactions_final_evidence": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-final-evidence.json",
+      "sha256": "d674fe3b3366dd5a5c082ca77c66f8b4144385df296df131aa55e6542d092c45",
+      "result": "13+13 publication MPI2, 15+15 guard/solve MPI2 and 19 final native rank-one tests pass; no failures",
+      "note": "Consolidated M4 receipt; counts are reported per rank and are not added as distinct scientific cases. Runtime native source is 24b5898 with recorded Python overlays; production head a25848d is a separate pending artifact."
+    },
+    "interactions_face_protocol": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-face-protocol.json",
+      "sha256": "cfc8e46590f607e95adc281f9bc15d19ad17ce894612b7b6b9bad8e78e78d0b3",
+      "note": "Predeclared joint face oracle."
+    },
+    "interactions_face_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-face-publication-v3.log",
+      "sha256": "ee168d7752e4c10539836c6471e950cfe615f9019f3ef52252cb999430d35a68",
+      "result": "100 accepted steps then oracle mismatch",
+      "note": "Publication face output."
+    },
+    "interactions_face_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-face-publication-v3.xml",
+      "sha256": "9b0059214fc0fe29e3b80d56056c14dd274b50e1dcae084e54c70747a70158f0",
+      "result": "1 failed",
+      "note": "Publication face XML."
+    },
+    "diff_constant": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-explicit-spatial-constant.json",
+      "sha256": "543040affa7374998856ff8a5ae39728934aa7663d49a86d1103e405150fbd11",
+      "result": "orders 1.8665, 1.8630, 1.8526",
+      "note": "D2 constant diffusion."
+    },
+    "diff_variable": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-explicit-spatial-variable.json",
+      "sha256": "eabd86c3c86696e9821f1e144daa3ba37768ef8c05d35d59530cba0d42a94627",
+      "result": "orders 2.00013, 2.00043, 1.99124",
+      "note": "D2 variable diffusion."
+    },
+    "diff_linear": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-explicit-spatial-diagonal_linear.json",
+      "sha256": "79864980a643f8dd518b1ea96e50cabbfe93c4b51f0d42b138e7315e2adada77",
+      "result": "zero-error rows",
+      "note": "D2 diagonal linear diffusion."
+    },
+    "diff_smooth": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-explicit-spatial-diagonal_smooth.json",
+      "sha256": "b2141a69eafe7f5903dc44e78721be7f93536b375c58869669c1065b91c31496",
+      "result": "orders 1.99757, 1.99497, 1.91860",
+      "note": "D2 diagonal smooth diffusion."
+    },
+    "diff_tensor_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-variable-tensor-native.log",
+      "sha256": "67772e1ea3567e648af6815d33c1244c096b415c777fa156957a4118d44e163e",
+      "result": "4 passed, 5 deselected in 1396.80 seconds",
+      "note": "D2 variable/tensor diagnostic."
+    },
+    "diff_tensor_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-variable-tensor-native.xml",
+      "sha256": "f94f358f287c95ccd561a57b90ae756ad82d7ba463a0114bd2792dfcb4e02913",
+      "result": "4 passed",
+      "note": "D2 variable/tensor XML."
+    },
+    "diff_combined": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-combined-stability-dim2.json",
+      "sha256": "1cce59a5796cf6700590d61c3a0c8bb894344dc31071081d61ae3bdcaa019c62",
+      "result": "c=.2 accepted; c=.6 refused",
+      "note": "D2 combined restriction."
+    },
+    "diff_exchange_euler": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-explicit-exchanges-euler.json",
+      "sha256": "8a5652365589a8a4241d6b59bc887780b070c5f1fa9b2205bb1059d75d292ef3",
+      "result": "1024/4096/16384 records",
+      "note": "Euler exchange ledger."
+    },
+    "diff_exchange_ssprk2": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-explicit-exchanges-ssprk2.json",
+      "sha256": "d8a0311b6d5c3f9f4a3170b0b06bb0dc27160a3461f91f14c2fe4d9bbde8b213",
+      "result": "2048/8192/32768 records",
+      "note": "SSPRK2 exchange ledger."
+    },
+    "sg_mms": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-sg-native-matrix/diffusion-sg-mms.json",
+      "sha256": "b46bcbb0d8d48c33bcb6b10a9116ca4959971ddea3e2d9571242579f56998b6e",
+      "result": "orders 2.002086, 1.999170, 1.995879",
+      "note": "SG manufactured matrix."
+    },
+    "sg_boundary": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-sg-native-matrix/diffusion-sg-boundary-equilibrium.json",
+      "sha256": "0d6088050023876f5ae555654eff8709e70fa934344da0d3d7e31f8fe82a3dcc",
+      "result": "face flux <= 1.2825e-15",
+      "note": "SG boundary matrix."
+    },
+    "sg_public_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-sg-public-2.log",
+      "sha256": "040c16774e96759b5f76751880c8efbf6abd169e89d0d7b8ef10876a7b30d162",
+      "result": "6 passed in 255.22 seconds",
+      "note": "D1 public SG output."
+    },
+    "sg_public_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-sg-public-2.xml",
+      "sha256": "89260dc5c11baff8127d2f59c3ba1eb09f5b26a6691529ebc45d7157614f4af9",
+      "result": "6 passed",
+      "note": "D1 public SG XML."
+    },
+    "sg_final_proof": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-sg-final-proof.json",
+      "sha256": "a39523a6c6bb2a161689d622552253ad9e31f8c83821d22105d55007bc13b61c",
+      "result": "6 tests pass, 0 skipped/failed in 255.22 seconds; base source 24b5898",
+      "note": "Final SG proof with native and fixture/source pins."
+    },
+    "sg_validation_report": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-sg-validation-report.md",
+      "sha256": "432f039ecf27f6b2c8f7d6385606864aa8ff7f7d8b44c85e7065cd18ff9590a0",
+      "result": "D1 N16/32/64 public SG validation; solved-potential consumer and combined bounds pass",
+      "note": "Human-readable SG validation report; no AMR/GPU/MPI2 qualification."
+    },
+    "sg_overlay": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-dim1-overlay-proof.json",
+      "sha256": "ad059c92547ed77615b685f37f135879652d9ab4c938cdc4d84d411edf71b278",
+      "result": "base source 24b5898",
+      "note": "Dim1 Python overlay."
+    },
+    "diff_final": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-final-native-provenance.json",
+      "sha256": "08c07b567d2ba527b93c9e0d3d5a3436d1453b1717af09a97e3bbea8ab0d8491",
+      "result": "running; expected 9 tests/27 scenarios",
+      "note": "Immutable Dim2 final gate provenance."
+    },
+    "solve_summary": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/solve-summary.json",
+      "sha256": "647d4d2710ec1218e784cf33e1740ba322d6d291465eb05f3dfddee1b3e0f60c",
+      "result": "60 source, 14 existing-linear, 8 residual, 2 lifecycle",
+      "note": "M6.1 solve summary."
+    },
+    "solve_source": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/solve-source.xml",
+      "sha256": "e147b2bc1fd4099cf78228124fcf74289b548f397c3a3fa65246c6262eeede8a",
+      "result": "60 pass",
+      "note": "M6.1 source solve."
+    },
+    "solve_lifecycle": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/solve-native-lifecycle.xml",
+      "sha256": "c4fb633de97eb6c0056fbb0c025efc76ade7cd59d712693107ba58b4244f87df",
+      "result": "2 pass",
+      "note": "M6.1 native lifecycle."
+    },
+    "solve_overlay": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/solve-native-overlay.json",
+      "sha256": "3992de16d132fc1bfcd1a0edf77a2c292ddd61e26942ac1392e4d952db9872cd",
+      "result": "source abb5ab25; foundation 71880cfe",
+      "note": "M6.1 native overlay."
+    },
+    "implicit_summary": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/solve-implicit-summary.json",
+      "sha256": "678a605da9e4b4ea28415b1acdaa131fdd9c00d1ad872e538d2f7b887edfae92",
+      "result": "6 public cases pass in 145.85 seconds",
+      "note": "M5.4 implicit matrix."
+    },
+    "implicit_overlay": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/solve-implicit-public-overlay.json",
+      "sha256": "5a62b98f8589c0d414f923893f07b034d0edf6aa67af418e2b3b961c0292a107",
+      "result": "a08cc5f native plus f92a55a/2fac0aa Python patches",
+      "note": "M5.4 overlay."
+    },
+    "implicit_fatal": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/solve-implicit-fatal-witness.json",
+      "sha256": "d5c8a11797fcb2bfad966b7df3281c0bc029e40e04c9b88c822ed3f7bdb228dc",
+      "result": "3/3 isolated native witnesses",
+      "note": "M5.4 fatal witness."
+    },
+    "retry_summary": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/native-retry-summary.json",
+      "sha256": "b77ba0e137d08e4bd4a42cae85ea52613f023924153afca16c857481d2e77e1b",
+      "result": "2 pass in 40.15 seconds",
+      "note": "M6.2 public retry summary."
+    },
+    "retry_overlay": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/native-retry-overlay.json",
+      "sha256": "0d4ff642e52eeea4fbfd2f9ee16c023c5bdc4940ba13502bc8abbb1eb7637ff1",
+      "result": "base 24b5898, patch a22a874, native headers unchanged",
+      "note": "M6.2 overlay."
+    },
+    "retry_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/native-retry-v5.xml",
+      "sha256": "90ac5d88272eb6888c46fc01391fce0e9881413d1dc971364aedab1c9192191c",
+      "result": "2 pass",
+      "note": "M6.2 exact retry XML."
+    },
+    "transaction_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/transaction-native-tests-2.xml",
+      "sha256": "993a42a25895e9db0a385309f2081dbe61c8558787c8497c1723e37e671d365c",
+      "result": "39 tests, 36 pass, 3 skipped",
+      "note": "M6.2 native transaction XML."
+    },
+    "transaction_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/transaction-native-tests-2.log",
+      "sha256": "ed2a81c15e157165f1182dc1cfc3b68d735ab5598031255e2d8dcb286ecca728",
+      "result": "36 pass, 3 skipped",
+      "note": "M6.2 native transaction output."
+    },
+    "transaction_source": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/transaction-source-tests.log",
+      "sha256": "e39bdfe24084bc687d6447d20969cff5ce213da2dd1b1c6802ca844b26841374",
+      "result": "79 passed in 1.81 seconds",
+      "note": "M6.2 source transaction output."
+    },
+    "broad_command": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/broad-source-command.json",
+      "sha256": "ea626f7e2f7afe80bb79f3e69d8c7c92176cbd537619d91e9d7002f763d4b5b1",
+      "result": "475 non-MPI files selected; run active",
+      "note": "Exact broad source argv."
+    },
+    "broad_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/broad-source.log",
+      "note": "Broad source log empty at refresh; no completion receipt."
+    }
+  },
+  "leaves": [
+    {
+      "id": "M3.1",
+      "title": "Define joint field problems, physical boundaries and independent storage",
+      "manifest": {
+        "issue": "M3.1",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-669",
+        "ADC-705",
+        "ADC-727"
+      ],
+      "dependencies": [
+        "M1.1",
+        "M1.2",
+        "M2.1"
+      ],
+      "bounded_matrix": {
+        "scope": "Static field contracts plus native Dim1/2/3 foundation/preflight; public package Dim1/Dim2; dynamic field evidence Dim2 OpenMP2 MPI1 Uniform.",
+        "limits": [
+          "No final integrated field consumer replay.",
+          "No AMR/GPU/distributed numerical qualification."
+        ]
+      },
+      "current_disposition": "active_bounded_evidence",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Typed joint field, physical boundary, compatibility and independent storage contracts.",
+          "receipt_refs": [
+            "fields_matrix",
+            "fields_overlay"
+          ],
+          "command_refs": [
+            "source_gate"
+          ],
+          "provenance": [
+            "integration 24b5898; field overlay source 9a32b633"
+          ],
+          "limits": [
+            "Representation witness is not execution."
+          ]
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Source and preflight/refusal diagnostics pass.",
+          "receipt_refs": [
+            "source_xml",
+            "fields_detach"
+          ],
+          "command_refs": [
+            "source_gate"
+          ],
+          "provenance": [
+            "222 source passes; structured Case registry refusal"
+          ],
+          "limits": [
+            "Exact source invocation not retained."
+          ]
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Field state/field-space identity and incompatible-load dispositions retained.",
+          "receipt_refs": [
+            "fields_matrix",
+            "fields_detach"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "D2 N16/32/64 overlay"
+          ],
+          "limits": [
+            "Final integrated resolved report pending."
+          ]
+        },
+        "emitted": {
+          "status": "pending",
+          "witness": "Dim1/Dim2 package proofs pass, but field-specific generated artifact is overlay-only.",
+          "receipt_refs": [
+            "pub_dim1_proof",
+            "pub_dim2_proof",
+            "fields_overlay"
+          ],
+          "command_refs": [
+            "wheel_dim1",
+            "wheel_dim2",
+            "field_overlay"
+          ],
+          "provenance": [
+            "package source 24b5898; overlay native source 255209d"
+          ],
+          "limits": [
+            "Wheel authentication does not close field emission."
+          ]
+        },
+        "executed": {
+          "status": "pending",
+          "command": "Foundation/preflight runs pass; final publication-native field storage/consumer run pending.",
+          "receipt_refs": [
+            "fields_overlay_xml",
+            "native_build_log"
+          ],
+          "command_refs": [
+            "field_overlay",
+            "native_178"
+          ],
+          "provenance": [
+            "Native 178 candidate incomplete"
+          ],
+          "limits": [
+            "No closure claim."
+          ]
+        },
+        "numerically_checked": {
+          "status": "pending",
+          "oracle": "Numerical field routes are carried by M3.2-M3.4.",
+          "receipt_refs": [
+            "fields_matrix"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "D2 overlay only"
+          ],
+          "limits": [
+            "No independent M3.1 numerical closure."
+          ]
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Final field-specific emitted/executed proof and downstream consumer replay."
+      ]
+    },
+    {
+      "id": "M3.2",
+      "title": "Execute variable-coefficient scalar fields through the general resolved contract",
+      "manifest": {
+        "issue": "M3.2",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-772",
+        "ADC-670",
+        "ADC-740"
+      ],
+      "dependencies": [
+        "M3.1",
+        "M2.2",
+        "M2.3",
+        "M6.1"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 OpenMP2 MPI1 Uniform periodic N16/32/64; variable scalar two-state load and joint constant/smooth observations.",
+        "limits": [
+          "Private Python overlay; no AMR/GPU/MPI>1."
+        ]
+      },
+      "current_disposition": "bounded_overlay_pass_with_final_replay_pending",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Variable scalar and joint field tuples with separate identities.",
+          "receipt_refs": [
+            "fields_matrix",
+            "fields_overlay"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "overlay source head 9a32b633; native source 255209d"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "7 source tests and 2 field overlay tests pass; incompatible rows are structured.",
+          "receipt_refs": [
+            "source_log",
+            "fields_overlay_xml",
+            "fields_detach"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "D2 OpenMP2 MPI1"
+          ],
+          "limits": [
+            "Invocation not retained."
+          ]
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Variable coefficient and joint normalization matrix retained.",
+          "receipt_refs": [
+            "fields_matrix",
+            "fields_detach"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "N16/32/64; residuals in matrix"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pending",
+          "witness": "Base package is authenticated; field dynamic artifact is private overlay.",
+          "receipt_refs": [
+            "pub_dim2_proof",
+            "fields_overlay"
+          ],
+          "command_refs": [
+            "wheel_dim2",
+            "field_overlay"
+          ],
+          "provenance": [
+            "24b package versus 255209d overlay"
+          ],
+          "limits": [
+            "Final integrated field artifact absent."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "2 overlay tests pass and cover 9 accepted rows.",
+          "receipt_refs": [
+            "fields_overlay_xml",
+            "fields_matrix"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "D2 N16/32/64"
+          ],
+          "limits": [
+            "Bounded overlay only."
+          ]
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Variable L2 orders 2.0089/2.0022; joint smooth L2 orders 2.0051/2.0013; joint constants near 1e-14.",
+          "receipt_refs": [
+            "fields_matrix"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "D2 Uniform MPI1"
+          ],
+          "limits": [
+            "No broader matrix claim."
+          ]
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Final immutable publication replay and full declared matrix."
+      ]
+    },
+    {
+      "id": "M3.3",
+      "title": "Bind stage field observations and validate precise field reuse",
+      "manifest": {
+        "issue": "M3.3",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-669",
+        "ADC-759"
+      ],
+      "dependencies": [
+        "M3.2",
+        "M1.4",
+        "M2.2",
+        "M6.1",
+        "M6.2"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 OpenMP2 MPI1 Uniform N16/32/64; Euler-Poisson source and reuse overlays; source/transport field consumer matrix.",
+        "limits": [
+          "Observed transport orders are 1.3176677704849828 and 1.1117397898166301; this does not support a strict second-order claim.",
+          "Same-source-module distinct output publication remains an explicit limitation; final integrated replay is still required."
+        ]
+      },
+      "current_disposition": "bounded_consumer_pass_with_strict_rate_and_integrated_replay_open",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Observation, solve/reuse identity and consume contracts.",
+          "receipt_refs": [
+            "fields_overlay",
+            "fields_stage",
+            "fields_joint"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "overlay source 9a32b633; 4 solves plus 1 reuse"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Source checks and structured publication-detach refusal pass.",
+          "receipt_refs": [
+            "source_xml",
+            "fields_detach"
+          ],
+          "command_refs": [
+            "source_gate",
+            "field_consumers"
+          ],
+          "provenance": [
+            "Refusal names authoritative Case registry"
+          ],
+          "limits": [
+            "Refusal is not consumer execution."
+          ]
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Euler source, joint-gradient and reuse metadata retained.",
+          "receipt_refs": [
+            "fields_euler",
+            "fields_matrix",
+            "fields_stage",
+            "fields_joint"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "Euler N16/32/64; stage sequence"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pending",
+          "witness": "Observation emission is authenticated through a private Python overlay; final integrated consumer artifact remains open.",
+          "receipt_refs": [
+            "fields_overlay",
+            "fields_consumers_private_overlay",
+            "pub_dim2_proof"
+          ],
+          "command_refs": [
+            "field_overlay",
+            "wheel_dim2"
+          ],
+          "provenance": [
+            "255209d overlay versus 24b package"
+          ],
+          "limits": [
+            "Private overlay is not the final integrated artifact."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "Three public field-consumer tests and nine N16/32/64 rows pass for Euler-Poisson source, field transport and joint Neumann gradient.",
+          "receipt_refs": [
+            "fields_euler",
+            "fields_consumers",
+            "fields_transport",
+            "fields_consumers_private_overlay",
+            "fields_detach"
+          ],
+          "command_refs": [
+            "field_consumers"
+          ],
+          "provenance": [
+            "Current XML records 3 tests and 9 rows pass in 388.11 seconds; source-only Python overlay on native 24b5898"
+          ],
+          "limits": [
+            "Invocation is not retained; final integrated emitted replay remains open."
+          ]
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Euler-Poisson orders 2.0027893432525/2.0006957742683507; transport orders 1.3176677704849828/1.1117397898166301 with finest L2 9.987480340715498e-05; joint Neumann gradient rows pass.",
+          "receipt_refs": [
+            "fields_euler",
+            "fields_consumers",
+            "fields_transport"
+          ],
+          "command_refs": [
+            "field_consumers"
+          ],
+          "provenance": [
+            "D2 N16/32/64 source route"
+          ],
+          "limits": [
+            "Prescribed consumer oracle passes, but the observed transport rate is below strict second order; no stronger convergence claim is made."
+          ]
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Retain the final integrated consumer artifact and review the observed transport rate against the strict acceptance criterion; same-source-module distinct-output publication remains an explicit refusal boundary."
+      ]
+    },
+    {
+      "id": "M3.4",
+      "title": "Execute a joint multi-field problem with one shared normalization",
+      "manifest": {
+        "issue": "M3.4",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-670"
+      ],
+      "dependencies": [
+        "M3.1",
+        "M3.2",
+        "M6.1"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 OpenMP2 MPI1 Uniform N16/32/64; joint Neumann constants/smooth gradient overlay.",
+        "limits": [
+          "Final integrated joint native replay pending.",
+          "No AMR/GPU/MPI>1."
+        ]
+      },
+      "current_disposition": "bounded_joint_overlay_pass_with_integrated_replay_pending",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Joint tuple, shared compatibility and normalization.",
+          "receipt_refs": [
+            "fields_matrix",
+            "fields_joint"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "Joint constants/smooth rows"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Joint source and overlay lifecycle checks pass.",
+          "receipt_refs": [
+            "source_log",
+            "fields_joint"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "7 source pass; joint-gradient overlay pass"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Joint compatible and incompatible-load dispositions retained.",
+          "receipt_refs": [
+            "fields_matrix",
+            "fields_detach",
+            "fields_joint"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "N16/32/64"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pending",
+          "witness": "Joint output is private overlay only.",
+          "receipt_refs": [
+            "fields_overlay",
+            "pub_dim2_proof"
+          ],
+          "command_refs": [
+            "field_overlay",
+            "wheel_dim2"
+          ],
+          "provenance": [
+            "Native 255209d overlay"
+          ],
+          "limits": []
+        },
+        "executed": {
+          "status": "pass",
+          "command": "Joint gradient overlay passes one matrix.",
+          "receipt_refs": [
+            "fields_joint",
+            "fields_overlay_xml"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "D2 N16/32/64"
+          ],
+          "limits": [
+            "Final integrated run pending."
+          ]
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Joint smooth gradient L2 orders 2.00087/1.97573 and Linf 2.00022/1.99419; constants near 1e-14.",
+          "receipt_refs": [
+            "fields_joint",
+            "fields_matrix"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "D2 Uniform MPI1"
+          ],
+          "limits": []
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Final integrated emitted/executed proof and M6.3 consumer use."
+      ]
+    },
+    {
+      "id": "M4.1",
+      "title": "Execute heterogeneous interactions and joint constitutive outputs",
+      "manifest": {
+        "issue": "M4.1",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-690"
+      ],
+      "dependencies": [
+        "M1.3",
+        "M2.1",
+        "M2.2",
+        "M2.3"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 OpenMP2 MPI2 publication native 24b5898; Uniform uncut N16/32/64; full 100-step Heun interaction matrix on ranks 0 and 1.",
+        "limits": [
+          "Final integrated 178-target native artifact remains open.",
+          "No GPU/AMR/memory qualification."
+        ]
+      },
+      "current_disposition": "bounded_publication_mpi2_pass_with_final_artifact_pending",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Heterogeneous output projections and shared evaluation context.",
+          "receipt_refs": [
+            "interactions_rank1",
+            "interactions_mpi2",
+            "interactions_publication_overlay"
+          ],
+          "command_refs": [
+            "interactions_rank1"
+          ],
+          "provenance": [
+            "Native overlay source 8406b30"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Rank-one and publication MPI2 matrices each pass 13 rows on the retained rank outputs.",
+          "receipt_refs": [
+            "interactions_rank1_log",
+            "interactions_rank1",
+            "interactions_mpi2_pub_r0_log",
+            "interactions_mpi2_pub_r1_log"
+          ],
+          "command_refs": [
+            "interactions_rank1"
+          ],
+          "provenance": [
+            "Rank-one and publication MPI2 logs each record 13 passed and 12 warnings; invocation not retained."
+          ],
+          "limits": [
+            "Invocation not retained."
+          ]
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Output-owner, inventory and projection context records.",
+          "receipt_refs": [
+            "interactions_rank1",
+            "interactions_publication_overlay"
+          ],
+          "command_refs": [
+            "interactions_rank1"
+          ],
+          "provenance": [
+            "Full 100-step Heun; publication native 24b5898 with source overlay"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pending",
+          "witness": "Package is authenticated; interaction endpoint overlay/final artifact open.",
+          "receipt_refs": [
+            "pub_dim2_proof",
+            "interactions_rank1"
+          ],
+          "command_refs": [
+            "wheel_dim2",
+            "native_178"
+          ],
+          "provenance": [
+            "24b package; 8406b30 overlay"
+          ],
+          "limits": [
+            "No final endpoint artifact."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "13 rank-one rows and 13 publication MPI2 rows pass on each rank.",
+          "receipt_refs": [
+            "interactions_rank1_log",
+            "interactions_mpi2",
+            "interactions_mpi2_pub_r0_log",
+            "interactions_mpi2_pub_r0_xml",
+            "interactions_mpi2_pub_r1_log",
+            "interactions_mpi2_pub_r1_xml",
+            "interactions_publication_overlay",
+            "interactions_final_evidence"
+          ],
+          "command_refs": [
+            "interactions_rank1",
+            "interactions_mpi2",
+            "interactions_publication"
+          ],
+          "provenance": [
+            "D2 OpenMP2 MPI2; 13 passed on each rank in 1572.82 seconds"
+          ],
+          "limits": []
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Heterogeneous numerical/inventory rows pass in rank-one receipt.",
+          "receipt_refs": [
+            "interactions_rank1",
+            "interactions_mpi2_pub_r0_xml",
+            "interactions_mpi2_pub_r1_xml",
+            "interactions_final_evidence"
+          ],
+          "command_refs": [
+            "interactions_rank1",
+            "interactions_publication"
+          ],
+          "provenance": [
+            "Declared Heun/inventory conditions; publication N16/32/64 properties retained in both JUnit files"
+          ],
+          "limits": []
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Retain the final integrated 178-target native artifact and broaden backend/device/memory qualification."
+      ]
+    },
+    {
+      "id": "M4.2",
+      "title": "Add authenticated typed native calls without core model kinds",
+      "manifest": {
+        "issue": "M4.2",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-681",
+        "ADC-719",
+        "ADC-694"
+      ],
+      "dependencies": [
+        "M1.3",
+        "M2.2",
+        "M2.3"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 OpenMP host MPI1/MPI2 overlays; imported exact/approximate/FD routes and publication face endpoint N16.",
+        "limits": [
+          "Face oracle fails by 1.98245226e-05 at atol 1e-11.",
+          "No device-call qualification."
+        ]
+      },
+      "current_disposition": "typed_import_pass_face_oracle_failure",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Typed native signature, read footprint, outputs and authenticated metadata.",
+          "receipt_refs": [
+            "interactions_mpi2",
+            "pub_dim2_proof"
+          ],
+          "command_refs": [
+            "interactions_mpi2",
+            "wheel_dim2"
+          ],
+          "provenance": [
+            "Native manifest/toolchain hashes retained"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Imported call and ownership/transform checks pass in bounded receipts.",
+          "receipt_refs": [
+            "interactions_mpi2",
+            "interactions_rank1_log"
+          ],
+          "command_refs": [
+            "interactions_mpi2",
+            "interactions_rank1"
+          ],
+          "provenance": [
+            "Exact/approximate/FD distinct"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Derivative route and face protocol are explicit.",
+          "receipt_refs": [
+            "interactions_mpi2",
+            "interactions_face_protocol"
+          ],
+          "command_refs": [
+            "interactions_mpi2",
+            "interactions_face"
+          ],
+          "provenance": [
+            "MPI2 equal bands; N16"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Authenticated Dim1/Dim2 package wheels and native manifests.",
+          "receipt_refs": [
+            "pub_dim1_proof",
+            "pub_dim2_proof",
+            "pub_dim1_wheel",
+            "pub_dim2_wheel"
+          ],
+          "command_refs": [
+            "wheel_dim1",
+            "wheel_dim2"
+          ],
+          "provenance": [
+            "source 24b5898"
+          ],
+          "limits": [
+            "Face numerical failure remains."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "Imported routes execute; face run reaches 100 accepted steps at N16.",
+          "receipt_refs": [
+            "interactions_mpi2",
+            "interactions_face_xml"
+          ],
+          "command_refs": [
+            "interactions_mpi2",
+            "interactions_face"
+          ],
+          "provenance": [
+            "MPI2 9 cases/rank; face runtime 100/0"
+          ],
+          "limits": []
+        },
+        "numerically_checked": {
+          "status": "fail",
+          "oracle": "Face oracle fails at N16 by 1.98245226e-05 against atol 1e-11; bounded derivative rows otherwise pass.",
+          "receipt_refs": [
+            "interactions_face_xml",
+            "interactions_mpi2"
+          ],
+          "command_refs": [
+            "interactions_face",
+            "interactions_mpi2"
+          ],
+          "provenance": [
+            "Failure retained in XML/log"
+          ],
+          "limits": [
+            "Explain and rerun before certification."
+          ]
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Face endpoint failure keeps the leaf open despite imported-route execution."
+      ]
+    },
+    {
+      "id": "M4.3",
+      "title": "Preserve native failure domains and derivative contracts in solves",
+      "manifest": {
+        "issue": "M4.3",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-757",
+        "ADC-750"
+      ],
+      "dependencies": [
+        "M4.2",
+        "M2.2",
+        "M2.4",
+        "M6.1",
+        "M6.2"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 OpenMP2 MPI1/MPI2 Uniform; exact/approximate/FD derivative and injected-failure matrices.",
+        "limits": [
+          "MPI2 is N16 equal bands only.",
+          "No GPU/AMR/final 178 package."
+        ]
+      },
+      "current_disposition": "bounded_derivative_and_failure_pass",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Native status, derivative strategy and solve outcome contracts.",
+          "receipt_refs": [
+            "interactions_mpi2",
+            "implicit_fatal",
+            "transaction_xml"
+          ],
+          "command_refs": [
+            "interactions_mpi2",
+            "transactions"
+          ],
+          "provenance": [
+            "Rank-coherent failure categories"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Native guard/residual/transaction selectors pass; fatal witness 3/3.",
+          "receipt_refs": [
+            "transaction_xml",
+            "implicit_fatal",
+            "interactions_mpi2"
+          ],
+          "command_refs": [
+            "transactions",
+            "interactions_mpi2"
+          ],
+          "provenance": [
+            "39 tests; 36 pass/3 skipped"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Exact/approximate/FD and failure dispositions explicit.",
+          "receipt_refs": [
+            "interactions_mpi2",
+            "implicit_fatal"
+          ],
+          "command_refs": [
+            "interactions_mpi2"
+          ],
+          "provenance": [
+            "Rank0/rank1 outcomes"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pending",
+          "witness": "Standalone witnesses exist; final 178 package emission open.",
+          "receipt_refs": [
+            "pub_dim2_proof",
+            "implicit_fatal"
+          ],
+          "command_refs": [
+            "wheel_dim2",
+            "native_178"
+          ],
+          "provenance": [
+            "Publication source 24b5898"
+          ],
+          "limits": []
+        },
+        "executed": {
+          "status": "pass",
+          "command": "MPI2 9 cases/rank pass; injected bad-cell failure terminates coherently.",
+          "receipt_refs": [
+            "interactions_mpi2",
+            "implicit_fatal"
+          ],
+          "command_refs": [
+            "interactions_mpi2"
+          ],
+          "provenance": [
+            "N16, 2 equal bands, 100 steps"
+          ],
+          "limits": []
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Derivative outcomes and StepAttemptRejected/fail_run categories retained without readable invalid outputs.",
+          "receipt_refs": [
+            "interactions_mpi2",
+            "implicit_fatal"
+          ],
+          "command_refs": [
+            "interactions_mpi2"
+          ],
+          "provenance": [
+            "Bounded MPI2"
+          ],
+          "limits": []
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Final publication artifact and broader advertised matrix."
+      ]
+    },
+    {
+      "id": "M4.4",
+      "title": "Qualify joint interaction inventories and native-call costs",
+      "manifest": {
+        "issue": "M4.4",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-690",
+        "ADC-769"
+      ],
+      "dependencies": [
+        "M4.1",
+        "M4.2",
+        "M4.3",
+        "M1.4",
+        "M6.1",
+        "M6.2"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 OpenMP2 MPI2 publication native 24b5898; Uniform N16/32/64; 100-step Heun; 2 warmups and 7 measured samples per rank.",
+        "limits": [
+          "No GPU/memory qualification; final 178-target artifact remains open.",
+          "Face numerical failure tracked under M4.2."
+        ]
+      },
+      "current_disposition": "bounded_publication_mpi2_performance_pass_with_final_timing_open",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Inventory maps, accepted exchanges and shared/unshared cost variants.",
+          "receipt_refs": [
+            "interactions_rank1",
+            "interactions_publication_overlay"
+          ],
+          "command_refs": [
+            "interactions_rank1"
+          ],
+          "provenance": [
+            "Rank-one timing summary"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Rank-one selector and publication MPI2 rank outputs each record 13 passing rows.",
+          "receipt_refs": [
+            "interactions_rank1_log",
+            "interactions_mpi2_pub_r0_log",
+            "interactions_mpi2_pub_r1_log"
+          ],
+          "command_refs": [
+            "interactions_rank1"
+          ],
+          "provenance": [
+            "Rank-one and publication MPI2 logs each record 13 pass"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Shared versus repeated use and accepted inventory records.",
+          "receipt_refs": [
+            "interactions_rank1",
+            "interactions_mpi2_pub_r0_xml",
+            "interactions_mpi2_pub_r1_xml"
+          ],
+          "command_refs": [
+            "interactions_rank1"
+          ],
+          "provenance": [
+            "D2 rank1"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pending",
+          "witness": "Final endpoint emission remains open.",
+          "receipt_refs": [
+            "pub_dim2_proof",
+            "native_build_log"
+          ],
+          "command_refs": [
+            "wheel_dim2",
+            "native_178"
+          ],
+          "provenance": [
+            "Native candidate incomplete"
+          ],
+          "limits": []
+        },
+        "executed": {
+          "status": "pass",
+          "command": "13 rank-one rows and publication MPI2 rows execute on each rank.",
+          "receipt_refs": [
+            "interactions_rank1_log",
+            "interactions_mpi2_pub_r0_log",
+            "interactions_mpi2_pub_r1_log",
+            "interactions_mpi2_pub_r0_xml",
+            "interactions_mpi2_pub_r1_xml"
+          ],
+          "command_refs": [
+            "interactions_rank1",
+            "interactions_mpi2",
+            "interactions_publication"
+          ],
+          "provenance": [
+            "D2 OpenMP2 MPI2; 13 rows pass in 1572.82 seconds on each rank"
+          ],
+          "limits": []
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Rank-one inventory and accepted quadrature rows pass.",
+          "receipt_refs": [
+            "interactions_rank1",
+            "interactions_mpi2_pub_r0_xml",
+            "interactions_mpi2_pub_r1_xml"
+          ],
+          "command_refs": [
+            "interactions_rank1",
+            "interactions_publication"
+          ],
+          "provenance": [
+            "100-step Heun; N16/32/64 publication properties"
+          ],
+          "limits": []
+        },
+        "performance_characterized": {
+          "status": "pass",
+          "protocol": "Bounded paired protocol: 2 warmups, 7 samples, shared/unshared variants; rank-one and publication MPI2 rows pass, with publication rank outputs completing in 1572.82 seconds per rank.",
+          "receipt_refs": [
+            "interactions_rank1",
+            "interactions_rank1_log",
+            "interactions_mpi2_pub_r0_log",
+            "interactions_mpi2_pub_r1_log",
+            "interactions_mpi2_pub_r0_xml",
+            "interactions_mpi2_pub_r1_xml"
+          ],
+          "command_refs": [
+            "interactions_rank1",
+            "interactions_publication"
+          ],
+          "provenance": [
+            "Publication MPI2 rank0/rank1 each report 13 pass in 1572.82 seconds; host activity may be concurrent."
+          ],
+          "limits": []
+        }
+      },
+      "open_acceptance": [
+        "Retain final endpoint timing with the integrated 178-target artifact and add GPU/memory cells."
+      ]
+    },
+    {
+      "id": "M5.1",
+      "title": "Execute scalar diffusion with explicit gradient and boundary semantics",
+      "manifest": {
+        "issue": "M5.1",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-682",
+        "ADC-749"
+      ],
+      "dependencies": [
+        "M1.2",
+        "M2.1",
+        "M2.2",
+        "M2.3"
+      ],
+      "bounded_matrix": {
+        "scope": "D2 OpenMP2 MPI1 Uniform scalar diffusion N16/32/64; explicit constant/variable, boundary and exchange controls.",
+        "limits": [
+          "Immutable Dim2 9-test gate is running.",
+          "No AMR/GPU/MPI>1."
+        ]
+      },
+      "current_disposition": "bounded_explicit_pass_final_gate_pending",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Explicit gradient, constitutive flux, boundary and exchange records.",
+          "receipt_refs": [
+            "diff_constant",
+            "diff_combined",
+            "diff_exchange_euler",
+            "diff_exchange_ssprk2"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "Generated source and addendum retained"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Combined restriction/boundary/exchange controls pass.",
+          "receipt_refs": [
+            "diff_combined",
+            "diff_exchange_euler",
+            "diff_exchange_ssprk2"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "c=.2 accepted; c=.6 refused"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Scalar coefficient, signed exchange and physical boundary closures.",
+          "receipt_refs": [
+            "diff_constant",
+            "diff_variable",
+            "diff_combined"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "D2 N16/32/64"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pending",
+          "witness": "Package and diagnostic source exist; final immutable 9-test artifact incomplete.",
+          "receipt_refs": [
+            "pub_dim2_proof",
+            "diff_final"
+          ],
+          "command_refs": [
+            "wheel_dim2",
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "Final provenance status running"
+          ],
+          "limits": []
+        },
+        "executed": {
+          "status": "pass",
+          "command": "Bounded explicit rows and exchange controls pass; final immutable gate pending.",
+          "receipt_refs": [
+            "diff_constant",
+            "diff_variable",
+            "diff_exchange_euler",
+            "diff_exchange_ssprk2",
+            "diff_final"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "D2 host MPI1"
+          ],
+          "limits": []
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Constant orders 1.8665/1.8630/1.8526 and variable 2.00013/2.00043/1.99124; exchange counts retained.",
+          "receipt_refs": [
+            "diff_constant",
+            "diff_variable",
+            "diff_exchange_euler",
+            "diff_exchange_ssprk2"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "Diagnostic D2 t=.05 rows"
+          ],
+          "limits": []
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Final immutable package gate and broad matrix."
+      ]
+    },
+    {
+      "id": "M5.2",
+      "title": "Extend diffusion to variable coefficients and a bounded tensor route",
+      "manifest": {
+        "issue": "M5.2",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-772"
+      ],
+      "dependencies": [
+        "M5.1",
+        "M2.2",
+        "M2.4"
+      ],
+      "bounded_matrix": {
+        "scope": "D2 OpenMP2 MPI1 Uniform N16/32/64; variable scalar and diagonal linear/smooth rows.",
+        "limits": [
+          "No off-diagonal tensor, AMR, GPU or MPI>1.",
+          "Diagnostic overlay until immutable gate completes."
+        ]
+      },
+      "current_disposition": "bounded_variable_diagonal_pass_final_gate_pending",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Variable scalar and bounded diagonal tensor dependencies.",
+          "receipt_refs": [
+            "diff_variable",
+            "diff_linear",
+            "diff_smooth"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "No arbitrary anisotropy claim"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Variable/tensor native diagnostic selector passes 4 cases.",
+          "receipt_refs": [
+            "diff_tensor_log",
+            "diff_tensor_xml"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "4 pass, 5 deselected"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Divergence coefficient, diagonal tensor and nonlinear gradient checks.",
+          "receipt_refs": [
+            "diff_variable",
+            "diff_linear",
+            "diff_smooth"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "N16/32/64"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pending",
+          "witness": "Immutable package authenticated; final matrix still running.",
+          "receipt_refs": [
+            "pub_dim2_proof",
+            "diff_final"
+          ],
+          "command_refs": [
+            "wheel_dim2",
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "No final overlay"
+          ],
+          "limits": []
+        },
+        "executed": {
+          "status": "pass",
+          "command": "Variable/diagonal rows execute in diagnostic 4-pass run.",
+          "receipt_refs": [
+            "diff_tensor_log",
+            "diff_tensor_xml"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "D2 host MPI1"
+          ],
+          "limits": []
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Variable orders 2.00013/2.00043/1.99124; diagonal linear exact zero; smooth orders 1.99757/1.99497/1.91860.",
+          "receipt_refs": [
+            "diff_variable",
+            "diff_linear",
+            "diff_smooth"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "Bounded D2"
+          ],
+          "limits": []
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Final immutable artifact and unsupported off-diagonal/AMR/device cells."
+      ]
+    },
+    {
+      "id": "M5.3",
+      "title": "Enforce combined explicit restrictions and weighted diffusive exchanges",
+      "manifest": {
+        "issue": "M5.3",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-677",
+        "ADC-756"
+      ],
+      "dependencies": [
+        "M5.1",
+        "M1.4",
+        "M2.1",
+        "M2.2",
+        "M6.1",
+        "M6.2"
+      ],
+      "bounded_matrix": {
+        "scope": "D1 SG combined restriction and D2 explicit exchange controls; Uniform host MPI1 N16/32/64.",
+        "limits": [
+          "The combined transport-plus-diffusion RHS ledger currently captures staged diffusion only and omits transport-face contributions.",
+          "AMR local-h/subcycling and distributed exchange unqualified.",
+          "Final immutable D2 gate pending."
+        ]
+      },
+      "current_disposition": "bounded_restriction_exchange_pass_combined_rhs_ledger_and_amr_open",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Combined restriction, stage quadrature and oriented ledgers.",
+          "receipt_refs": [
+            "diff_combined",
+            "diff_exchange_euler",
+            "diff_exchange_ssprk2",
+            "sg_public_xml"
+          ],
+          "command_refs": [
+            "diffusion_explicit",
+            "diffusion_sg"
+          ],
+          "provenance": [
+            "D1/D2 receipts"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "D2 c=.2/c=.6 and D1 SG combined rows pass.",
+          "receipt_refs": [
+            "diff_combined",
+            "sg_public_xml"
+          ],
+          "command_refs": [
+            "diffusion_explicit",
+            "diffusion_sg"
+          ],
+          "provenance": [
+            "SG public 6 pass"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Restriction policy and accepted exchange counts.",
+          "receipt_refs": [
+            "diff_combined",
+            "diff_exchange_euler",
+            "diff_exchange_ssprk2"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "Counts retained"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pending",
+          "witness": "Generated source/package exist; final immutable emission pending.",
+          "receipt_refs": [
+            "pub_dim2_proof",
+            "diff_final"
+          ],
+          "command_refs": [
+            "wheel_dim2",
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "Final gate running"
+          ],
+          "limits": []
+        },
+        "executed": {
+          "status": "pass",
+          "command": "D1 SG and D2 combined/exchange controls pass.",
+          "receipt_refs": [
+            "sg_public_xml",
+            "diff_combined",
+            "diff_exchange_euler",
+            "diff_exchange_ssprk2"
+          ],
+          "command_refs": [
+            "diffusion_sg",
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "D1/D2 host MPI1"
+          ],
+          "limits": []
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Structured combined restriction refusal and near-roundoff diffusion exchange defects; combined transport-plus-diffusion RHS face reconciliation is not yet evidenced.",
+          "receipt_refs": [
+            "diff_combined",
+            "diff_exchange_euler",
+            "diff_exchange_ssprk2",
+            "sg_public_xml"
+          ],
+          "command_refs": [
+            "diffusion_sg",
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "No AMR reflux claim"
+          ],
+          "limits": [
+            "No AMR reflux claim; transport-face capture and Euler/SSPRK2 per-cell reconciliation remain open."
+          ]
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Retain exact transport-face capture and Euler/SSPRK2 per-cell reconciliation for the combined RHS, then qualify AMR local-h/subcycling, distributed exchange and final package routes."
+      ]
+    },
+    {
+      "id": "M5.4",
+      "title": "Execute spatial implicit diffusion while preserving accumulation",
+      "manifest": {
+        "issue": "M5.4",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-670",
+        "ADC-750"
+      ],
+      "dependencies": [
+        "M5.1",
+        "M5.3",
+        "M1.2",
+        "M2.3",
+        "M6.1",
+        "M6.2"
+      ],
+      "bounded_matrix": {
+        "scope": "D2 OpenMP2 MPI1 Uniform periodic N16/32/64; explicit/implicit Fourier, MMS, shifted constant, nonlinear accumulation and invalid-domain cases.",
+        "limits": [
+          "a08cc5f native plus four Python patches; not unchanged 24b wheel.",
+          "No AMR/multirank/GPU/variable/tensor/general coupled."
+        ]
+      },
+      "current_disposition": "bounded_six_case_pass_overlay_limited",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Spatial residual, frozen data/seed, derivative and failure disposition.",
+          "receipt_refs": [
+            "implicit_summary",
+            "implicit_fatal"
+          ],
+          "command_refs": [
+            "implicit"
+          ],
+          "provenance": [
+            "foundation 16f48a1; guard f92a55a; CSE 2fac0aa"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Public six-case and fatal/source contract gates pass.",
+          "receipt_refs": [
+            "implicit_summary",
+            "implicit_fatal",
+            "transaction_xml"
+          ],
+          "command_refs": [
+            "implicit",
+            "transactions"
+          ],
+          "provenance": [
+            "6 public; 78 source; fatal 3/3"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Accumulation, current iterate/FD route and explicit failure.",
+          "receipt_refs": [
+            "implicit_summary",
+            "implicit_overlay",
+            "implicit_fatal"
+          ],
+          "command_refs": [
+            "implicit"
+          ],
+          "provenance": [
+            "D2 coefficient .1"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pending",
+          "witness": "Overlay artifacts authenticated, but package is not unchanged 24b.",
+          "receipt_refs": [
+            "implicit_overlay",
+            "pub_dim2_proof",
+            "implicit_fatal"
+          ],
+          "command_refs": [
+            "implicit",
+            "wheel_dim2"
+          ],
+          "provenance": [
+            "a08 native + Python patches"
+          ],
+          "limits": []
+        },
+        "executed": {
+          "status": "pass",
+          "command": "6 public implicit cases pass in 145.85 seconds; fatal 3/3.",
+          "receipt_refs": [
+            "implicit_summary",
+            "implicit_fatal"
+          ],
+          "command_refs": [
+            "implicit"
+          ],
+          "provenance": [
+            "D2 host MPI1"
+          ],
+          "limits": []
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "FE/BE MMS orders near 2; shifted nonzero mean exact; H(T)=T+T² gives 0.6180339887; invalid domain explicit fail_run.",
+          "receipt_refs": [
+            "implicit_summary",
+            "implicit_fatal"
+          ],
+          "command_refs": [
+            "implicit"
+          ],
+          "provenance": [
+            "Scalar route only"
+          ],
+          "limits": []
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Unchanged publication replay and broader implicit matrix."
+      ]
+    },
+    {
+      "id": "M5.5",
+      "title": "Execute a joint fitted drift-diffusion construction with exact coverage",
+      "manifest": {
+        "issue": "M5.5",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-772"
+      ],
+      "dependencies": [
+        "M5.1",
+        "M5.3",
+        "M3.3",
+        "M2.1",
+        "M2.3"
+      ],
+      "bounded_matrix": {
+        "scope": "D1 OpenMP2 MPI1 Uniform; public SG N16/32/64 and combined restriction rows.",
+        "limits": [
+          "Dim1 overlay based on 24b; no AMR/GPU/MPI>1.",
+          "Final Dim2 explicit and M3.3 consumer remain downstream; final integrated SG artifact is still open."
+        ]
+      },
+      "current_disposition": "bounded_dim1_public_pass_final_integrated_artifact_pending",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Joint fitted flux, Bernoulli zero-jump and coverage/refusal records.",
+          "receipt_refs": [
+            "sg_mms",
+            "sg_boundary",
+            "sg_overlay"
+          ],
+          "command_refs": [
+            "diffusion_sg"
+          ],
+          "provenance": [
+            "base source 24b5898"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "D1 public SG matrix completes 6 tests with no skips or failures.",
+          "receipt_refs": [
+            "sg_public_xml",
+            "sg_public_log",
+            "sg_final_proof",
+            "sg_validation_report"
+          ],
+          "command_refs": [
+            "diffusion_sg"
+          ],
+          "provenance": [
+            "6 pass, 0 skip/fail in 255.22 seconds; final proof/report retain source, native and fixture pins"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Joint coverage and separate IMEX/refusal rows.",
+          "receipt_refs": [
+            "sg_public_xml",
+            "sg_mms",
+            "sg_boundary",
+            "sg_final_proof",
+            "sg_validation_report"
+          ],
+          "command_refs": [
+            "diffusion_sg"
+          ],
+          "provenance": [
+            "N16/32/64"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pending",
+          "witness": "D1 overlay and wheel are pinned; final proof/report validate the six-case route, while the final integrated SG artifact remains pending.",
+          "receipt_refs": [
+            "sg_overlay",
+            "pub_dim1_proof",
+            "sg_final_proof"
+          ],
+          "command_refs": [
+            "wheel_dim1",
+            "diffusion_sg"
+          ],
+          "provenance": [
+            "overlay source /Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-diffusion"
+          ],
+          "limits": []
+        },
+        "executed": {
+          "status": "pass",
+          "command": "Public D1 manufactured, boundary, zero-jump, solved-potential-to-SG and combined-bound tests pass.",
+          "receipt_refs": [
+            "sg_public_xml",
+            "sg_public_log",
+            "sg_final_proof",
+            "sg_validation_report"
+          ],
+          "command_refs": [
+            "diffusion_sg"
+          ],
+          "provenance": [
+            "D1 N16/32/64; solved potential consumed by SG faces; combined c=.6/r=.3 rejected and c=.2/r=.2 accepted"
+          ],
+          "limits": []
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "MMS orders 2.002086/1.999170/1.995879; boundary flux <=1.2825e-15 and zero drift.",
+          "receipt_refs": [
+            "sg_mms",
+            "sg_boundary",
+            "sg_public_xml",
+            "sg_final_proof",
+            "sg_validation_report"
+          ],
+          "command_refs": [
+            "diffusion_sg"
+          ],
+          "provenance": [
+            "D1 Uniform host; final report records actual native package through validate/resolve/compile/bind/run"
+          ],
+          "limits": []
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Final integrated SG artifact and broader matrix."
+      ]
+    },
+    {
+      "id": "M6.1",
+      "title": "Define and execute the general solve request and result protocol",
+      "manifest": {
+        "issue": "M6.1",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-665",
+        "ADC-700"
+      ],
+      "dependencies": [
+        "M2.3"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 Kokkos host/OpenMP2 MPI1 Uniform periodic 4x4; one linear unknown, one accepted dt; source/native residual/lifecycle selectors.",
+        "limits": [
+          "One unknown per adapter; nonlinear/spatial/MPI multi-rank outside.",
+          "Standalone residual header separate; no final rebuilt artifact."
+        ]
+      },
+      "current_disposition": "bounded_solve_protocol_pass",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Typed unknown/equation inputs, seed, derivative and solve result contracts.",
+          "receipt_refs": [
+            "solve_summary",
+            "solve_source",
+            "solve_overlay"
+          ],
+          "command_refs": [
+            "solve"
+          ],
+          "provenance": [
+            "source abb5ab25; foundation 71880cfe"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "60 source, 14 existing-linear and 8 residual checks pass.",
+          "receipt_refs": [
+            "solve_summary",
+            "solve_source",
+            "solve_lifecycle"
+          ],
+          "command_refs": [
+            "solve"
+          ],
+          "provenance": [
+            "Output hashes retained"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Solve coordinates, effects, derivative route and failure disposition.",
+          "receipt_refs": [
+            "solve_summary",
+            "solve_overlay"
+          ],
+          "command_refs": [
+            "solve"
+          ],
+          "provenance": [
+            "D2 2I x=b"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Lifecycle artifact and overlay proof retain native/source hashes.",
+          "receipt_refs": [
+            "solve_lifecycle",
+            "solve_overlay",
+            "pub_dim2_proof"
+          ],
+          "command_refs": [
+            "solve",
+            "wheel_dim2"
+          ],
+          "provenance": [
+            "Package 24b; solve overlay abb5ab25"
+          ],
+          "limits": []
+        },
+        "executed": {
+          "status": "pass",
+          "command": "2 native lifecycle cases execute validate/resolve/compile/bind/run.",
+          "receipt_refs": [
+            "solve_lifecycle",
+            "solve_summary"
+          ],
+          "command_refs": [
+            "solve"
+          ],
+          "provenance": [
+            "D2 OpenMP2 MPI1"
+          ],
+          "limits": []
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Exact diagonal solve returns x=.5b with residual tolerance 2e-15.",
+          "receipt_refs": [
+            "solve_summary",
+            "solve_overlay"
+          ],
+          "command_refs": [
+            "solve"
+          ],
+          "provenance": [
+            "Exact linear route"
+          ],
+          "limits": []
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Final integrated artifact and wider solve matrix."
+      ]
+    },
+    {
+      "id": "M6.2",
+      "title": "Enforce nested attempt publication and accepted exchange transactions",
+      "manifest": {
+        "issue": "M6.2",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-666",
+        "ADC-702",
+        "ADC-757"
+      ],
+      "dependencies": [
+        "M6.1",
+        "M2.1"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 OpenMP/Serial host 2 threads MPI1 Uniform 16x16; nested retry and finite-budget rollback.",
+        "limits": [
+          "M6.3/M6.4 downstream; 3 rank-divergent native tests skipped.",
+          "No performance characterization."
+        ]
+      },
+      "current_disposition": "bounded_public_retry_transaction_pass",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Nested staged effects, accepted publication, rollback and ledgers.",
+          "receipt_refs": [
+            "transaction_source",
+            "transaction_xml",
+            "retry_summary"
+          ],
+          "command_refs": [
+            "transactions",
+            "retry"
+          ],
+          "provenance": [
+            "States/fields/topology/ledgers/caches/histories/clocks/schedules/consumers/diagnostics rollback list retained"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "79 source and 36 native transaction tests pass; 3 rank-divergent skipped.",
+          "receipt_refs": [
+            "transaction_source",
+            "transaction_xml",
+            "transaction_log"
+          ],
+          "command_refs": [
+            "transactions",
+            "source_gate"
+          ],
+          "provenance": [
+            "79 pass; 36 pass/3 skipped"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Retry/control identities and finite-budget accepted envelopes.",
+          "receipt_refs": [
+            "retry_summary",
+            "retry_overlay"
+          ],
+          "command_refs": [
+            "retry"
+          ],
+          "provenance": [
+            "fixture 71a8e81; package 24b; patch a22a874"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Dim2 wheel plus source-only storage overlay; native headers unchanged.",
+          "receipt_refs": [
+            "pub_dim2_proof",
+            "retry_overlay"
+          ],
+          "command_refs": [
+            "wheel_dim2",
+            "retry"
+          ],
+          "provenance": [
+            "native_headers_changed=false"
+          ],
+          "limits": []
+        },
+        "executed": {
+          "status": "pass",
+          "command": "Retry/control and finite exhaustion tests pass in 40.15 seconds.",
+          "receipt_refs": [
+            "retry_xml",
+            "retry_summary",
+            "transaction_xml"
+          ],
+          "command_refs": [
+            "retry",
+            "transactions"
+          ],
+          "provenance": [
+            "2 accepted/1 rejected versus 2/0 control; budget 1 after 2 attempts"
+          ],
+          "limits": []
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Retry/control end at t=.125, macro step 2; exhaustion leaves no committed effects and rolls back all staged effects.",
+          "receipt_refs": [
+            "retry_xml",
+            "retry_summary"
+          ],
+          "command_refs": [
+            "retry"
+          ],
+          "provenance": [
+            "Exact state/time/history/ledger properties"
+          ],
+          "limits": []
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Skipped rank-divergent cells and downstream M6.3/M6.4 consumer use."
+      ]
+    }
+  ],
+  "active_acceptance_gaps": [
+    {
+      "id": "G1",
+      "issue": "Final native package gate",
+      "status": "open",
+      "receipts": [
+        "cpp_selection",
+        "native_build",
+        "native_build_log",
+        "native_build_log2"
+      ],
+      "detail": "178 targets selected; retained candidate builds stop in compilation; broad 475-file source run has no completion."
+    },
+    {
+      "id": "G2",
+      "issue": "M3.3 transport consumer",
+      "status": "open",
+      "receipts": [
+        "fields_consumers",
+        "fields_transport",
+        "fields_consumers_private_overlay",
+        "fields_detach"
+      ],
+      "detail": "The three-test/nine-row consumer matrix passes, but observed transport orders are 1.3176677704849828/1.1117397898166301; strict rate qualification and final integrated replay remain open."
+    },
+    {
+      "id": "G3",
+      "issue": "M4 face endpoint",
+      "status": "open",
+      "receipts": [
+        "interactions_face_xml",
+        "interactions_face_log"
+      ],
+      "detail": "N16 oracle mismatch 1.98245226e-05 at atol 1e-11 after 100 accepted steps."
+    },
+    {
+      "id": "G4",
+      "issue": "M5 final immutable Dim2 gate",
+      "status": "open",
+      "receipts": [
+        "diff_final"
+      ],
+      "detail": "9-test/27-scenario receipt still running."
+    },
+    {
+      "id": "G5",
+      "issue": "M6.3/M6.4 and R1",
+      "status": "open",
+      "receipts": [
+        "retry_summary",
+        "fields_consumers",
+        "implicit_summary"
+      ],
+      "detail": "No integrated downstream receipts; R1 remains pending."
+    },
+    {
+      "id": "G6",
+      "issue": "M5.3 combined transport-diffusion RHS ledger",
+      "status": "open",
+      "receipts": [
+        "diff_exchange_euler",
+        "diff_exchange_ssprk2",
+        "diff_combined"
+      ],
+      "detail": "Retained exchange ledgers cover staged diffusion, but the combined RHS ledger omits transport-face contributions; exact face capture and Euler/SSPRK2 per-cell reconciliation remain required."
+    }
+  ],
+  "downstream": {
+    "M6.3": {
+      "status": "pending",
+      "dependencies": [
+        "M6.2",
+        "M3.3",
+        "M4.3",
+        "M5.4"
+      ],
+      "detail": "No integrated checked explicit/implicit/IMEX/splitting expansion receipt."
+    },
+    "M6.4": {
+      "status": "pending",
+      "dependencies": [
+        "M6.2",
+        "M3.3"
+      ],
+      "detail": "No completed AMR/multiblock/restart accepted-exchange consumer receipt."
+    },
+    "R1": {
+      "status": "pending",
+      "representative_paths": [
+        "scalar AMR",
+        "field-coupled transport",
+        "Euler-Poisson source",
+        "heterogeneous interaction",
+        "explicit diffusion",
+        "implicit diffusion",
+        "nonconstant-coefficient scalar field",
+        "imported native primitive"
+      ],
+      "entry_requirements": [
+        "M0/M2",
+        "M3.2",
+        "M3.3",
+        "M4",
+        "M5.3",
+        "M5.4",
+        "M6",
+        "M6.3",
+        "M6.4"
+      ],
+      "blockers": [
+        "M3.3 strict transport rate and integrated replay",
+        "M4 face oracle failure",
+        "M5.3 combined RHS transport-face ledger",
+        "final native/source gates",
+        "M5 final immutable gate",
+        "M6.3/M6.4 pending"
+      ]
+    }
+  },
+  "limits": [
+    "Private overlays are labeled with their base/native/source pins and are not final integration claims.",
+    "The same-source-module double-instantiation limitation requires explicit refusal while preserving distinct solved FieldSolution identities.",
+    "No Linear writes were performed."
+  ]
+}
