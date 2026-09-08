@@ -91,6 +91,11 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
     else:
         raise ValueError(
             "coupled_rate codegen: node %r lacks its owner-qualified OperatorHandle" % v.name)
+    from pops.time._program.coupled_bindings import coupled_output_inputs
+    bindings = {name: value.block for name, value in
+                coupled_output_inputs(op.signature.output, v.inputs).items()}
+    if v.attrs.get("output_bindings") is not None and dict(v.attrs["output_bindings"]) != bindings:
+        raise ValueError("coupled output binding differs from its admitted owner-qualified input")
     expr = op.body
     if v.op == "solve_coupled_implicit":
         from pops.time._program.native_derivatives import coupled_derivative_contract

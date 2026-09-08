@@ -510,7 +510,7 @@ def test_m1_balance_views_preserve_signed_occurrences_and_real_input_bodies():
     assert view.refusal == "unsupported_physical_balance"
 
 
-def test_m1_joint_projection_retains_shared_context_and_explicit_native_refusal():
+def test_m1_joint_projection_retains_shared_context_and_resolved_native_route():
     from tests.python.unit.physics.test_joint_rate_projection_balance import _joint_model
     from pops.math import ddt
 
@@ -518,8 +518,15 @@ def test_m1_joint_projection_retains_shared_context_and_explicit_native_refusal(
     physical.rate("balance", equation=ddt(left) == application[left] + application[left])
     resolved = build_resolved_operations(physical.module)
     operation = resolved.operations[-1]
-    assert operation.refusal == "unsupported_physical_balance"
-    terms = resolved.explain(operation.identity)["operations"][0]["occurrences"]
+    assert operation.refusal is None
+    assert operation.native_route == "program:multi_block_operator"
+    explanation = resolved.explain(operation.identity)["operations"][0]
+    assert explanation["evidence"] == {
+        "represented": True, "resolved": True, "native_route_selected": True,
+        "emitted": False, "executed": False, "numerically_checked": False,
+        "performance_characterized": False,
+    }
+    terms = explanation["occurrences"]
     assert terms[0]["operator"] == terms[1]["operator"]
     assert terms[0]["identity"] != terms[1]["identity"]
     assert {(read.kind, read.components) for read in operation.inputs} == {

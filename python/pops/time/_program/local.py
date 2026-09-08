@@ -220,12 +220,8 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         controls = _prepared_local_nonlinear_controls(
             prepared, where="solve: solver")
         bundle = op.signature.output
-        by_name = {}
-        for output, rate in bundle.items():
-            matches = [value for value in values if value.space == rate.base_space]
-            if len(matches) != 1:
-                raise ValueError("solve coupled output requires one exact typed input state")
-            by_name[output] = matches[0]
+        from .coupled_bindings import coupled_output_inputs
+        by_name = coupled_output_inputs(bundle, values)
         blocks = tuple(by_name[output].block for output in bundle.keys())
         from .native_derivatives import coupled_derivative_contract
         derivative_contract, functions = coupled_derivative_contract(op.body, derivative)

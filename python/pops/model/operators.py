@@ -316,8 +316,9 @@ def _coupled_rate_signature(signature: Signature) -> None:
     output_bases = [rate.base_space for _, rate in bundle.items()]
     _require(all(base in signature.inputs for base in output_bases),
              "every RateBundle output must be tangent to one input StateSpace")
-    _require(len(set(output_bases)) == len(output_bases),
-             "a coupled RateBundle cannot expose the same StateSpace twice")
+    _require(all(output_bases.count(base) <= signature.inputs.count(base)
+                 for base in output_bases),
+             "coupled RateBundle outputs must not exceed their input StateSpace multiplicity")
 
 
 def _matrix_free_signature(signature: Signature) -> None:

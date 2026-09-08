@@ -260,13 +260,9 @@ class _ProgramCall(_ProgramBase):
                 "construct one explicit partitioned StagePoint or synchronize them first"
                 % operator_name)
         bundle = op.signature.output                 # a model.RateBundle: block -> RateSpace
-        output_bindings = {}
-        for output_name, output in bundle.items():
-            matches = [argument for argument in args if argument.space == output.base_space]
-            if len(matches) != 1:
-                raise ValueError("coupled operator output requires one exact typed input state; "
-                                 "found %d for %r" % (len(matches), output_name))
-            output_bindings[output_name] = matches[0].block
+        from .coupled_bindings import coupled_output_inputs
+        output_bindings = {output: value.block for output, value in
+                           coupled_output_inputs(bundle, args).items()}
         blocks = list(output_bindings.values())
         base = name or operator_name
         coupled = self._new("rhs", "coupled_rate", tuple(args),
