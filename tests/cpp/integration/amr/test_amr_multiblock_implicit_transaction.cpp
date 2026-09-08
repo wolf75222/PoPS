@@ -536,37 +536,60 @@ TEST(test_amr_multiblock_implicit_transaction,
       raw.communicator_f_handle, raw.communicator_datatype_f_handle, raw.communicator_identity,
       raw.communicator_datatype_identity);
   const auto execution = parent.for_lane(context->prepared_execution_lane());
-  system.install_prepared_amr_interface_flux_provider(
-      "tests.pair-budget/interface@1", [&](auto& scheduler) {
-        for (int level = 0; level < 2; ++level) {
-          AxisAlignedInterface<Dim> route;
-          route.identity = "tests.pair-budget/interface";
-          route.level = level;
-          route.left_block = 0;
-          route.right_block = 1;
-          route.left_axis = route.right_axis = 0;
-          route.left_side = InterfaceSide::High;
-          route.right_side = InterfaceSide::Low;
-          route.right_component_for_left = {0};
-          route.affine_mapping_identity = "tests.pair-budget/translation";
-          route.right_normal_translation = pops::Real(1);
-          route.left_trace_projection_identity = "tests.pair-budget/left.trace";
-          route.right_trace_projection_identity = "tests.pair-budget/right.trace";
-          route.left_trace_provider_identity = "test.cell-average.left";
-          route.right_trace_provider_identity = "test.cell-average.right";
-          route.left_trace_operation = route.right_trace_operation =
-              InterfaceTraceOperation::CellAverage;
-          route.left_trace_required_depth = route.right_trace_required_depth = 1;
-          const auto geometry = system.prepared_amr_level_geometry(level);
-          scheduler.install(route, system.prepared_amr_block_state(0, level), geometry,
-                            system.prepared_amr_block_state(1, level), geometry, execution.view(),
-                            InterfaceFluxEvaluatorFactory([] {
-                              return InterfaceFluxEvaluator([](const auto&, const auto&) {
-                                throw std::logic_error("budget fixture does not evaluate flux");
-                              });
-                            }));
-        }
-      });
+  const auto install = [&](const pops::component::PreparedExecutionContextV1& execution) {
+    system.install_prepared_amr_interface_flux_provider(
+        "tests.pair-budget/interface@1", [&](auto& scheduler) {
+          for (int level = 0; level < 2; ++level) {
+            AxisAlignedInterface<Dim> route;
+            route.identity = "tests.pair-budget/interface";
+            route.sampling_provider_identity = "tests.pair-budget/sampler";
+            route.level = level;
+            route.left_block = 0;
+            route.right_block = 1;
+            route.left_axis = route.right_axis = 0;
+            route.left_side = InterfaceSide::High;
+            route.right_side = InterfaceSide::Low;
+            route.right_component_for_left = {0};
+            route.affine_mapping_identity = "tests.pair-budget/translation";
+            route.right_normal_translation = pops::Real(1);
+            route.left_trace_projection_identity = "tests.pair-budget/left.trace";
+            route.right_trace_projection_identity = "tests.pair-budget/right.trace";
+            route.left_trace_provider_identity = "test.cell-average.left";
+            route.right_trace_provider_identity = "test.cell-average.right";
+            route.left_trace_operation = route.right_trace_operation =
+                InterfaceTraceOperation::CellAverage;
+            route.left_trace_required_depth = route.right_trace_required_depth = 1;
+            const auto geometry = system.prepared_amr_level_geometry(level);
+            scheduler.install(
+                route, system.prepared_amr_block_state(0, level), geometry,
+                system.prepared_amr_block_state(1, level), geometry, execution.view(),
+                InterfaceFluxEvaluatorFactory([execution] {
+                  return InterfaceFluxEvaluator([execution](const auto&, const auto& batch) {
+                    // This exact ABI handle belongs to the original carrier, not the
+                    // current hierarchy. Rematerialization must keep its owner alive.
+                    pops::component::validate_execution_context(execution.view());
+#ifdef POPS_HAS_MPI
+                    const pops::CommunicatorView communicator{MPI_Comm_f2c(
+                        static_cast<MPI_Fint>(execution.view().communicator_f_handle))};
+                    EXPECT_EQ(pops::all_reduce_sum(1L, communicator), communicator.size());
+#endif
+                    for (int i = 0; i < batch.face_count * batch.component_count; ++i)
+                      batch.shared_flux[i] = pops::Real(0);
+                  });
+                }));
+          }
+        });
+  };
+#ifdef POPS_HAS_MPI
+  // Equal rank sets and text cannot authenticate another communicator as the retained owner.
+  const auto impostor_lane = pops::ExecutionLane::duplicate_collectively(
+      context->prepared_execution_lane(), context->prepared_execution_lane().identity());
+  const auto impostor_execution = parent.for_lane(impostor_lane);
+  const auto before_install = system.program_accepted_state();
+  EXPECT_THROW(install(impostor_execution), std::exception);
+  EXPECT_EQ(system.program_accepted_state(), before_install);
+#endif
+  ASSERT_NO_THROW(install(execution));
   ASSERT_EQ(system.n_levels(), 2);
   const auto budget = system.prepared_amr_interface_flux_ledger_budget();
   EXPECT_EQ(budget.max_fragments_per_window, 0u);
@@ -625,6 +648,16 @@ TEST(test_amr_multiblock_implicit_transaction,
   ASSERT_GT(before_rebuild.max_payload_terms_per_window, 0u);
   ASSERT_NO_THROW(system.rebuild_hierarchy(
       {pops::AmrPatch<Dim>{1, pops::Box<Dim>::from_extents(fine_shape)}}, {0}));
+  ASSERT_NO_THROW(system.rebuild_hierarchy(
+      {pops::AmrPatch<Dim>{1, pops::Box<Dim>::from_extents(fine_shape)}}, {0}));
+#ifdef POPS_HAS_MPI
+  int communicator_relation = MPI_UNEQUAL;
+  ASSERT_EQ(
+      MPI_Comm_compare(MPI_Comm_f2c(static_cast<MPI_Fint>(execution.view().communicator_f_handle)),
+                       context->prepared_execution_lane().native_handle(), &communicator_relation),
+      MPI_SUCCESS);
+  EXPECT_EQ(communicator_relation, MPI_CONGRUENT);
+#endif
   const auto after_rebuild = system.prepared_amr_interface_flux_ledger_budget();
   EXPECT_EQ(after_rebuild.max_fragments_per_window, before_rebuild.max_fragments_per_window);
   EXPECT_EQ(after_rebuild.max_payload_terms_per_window,
@@ -635,6 +668,35 @@ TEST(test_amr_multiblock_implicit_transaction,
             before_rebuild.max_evaluation_payload_terms);
   for (int level = 0; level < 2; ++level)
     EXPECT_EQ(system.interface_evaluation_count("tests.pair-budget/interface", level), 0u);
+
+  const auto capture = [&] {
+    for (int level = 0; level < 2; ++level) {
+      auto& left = system.prepared_amr_block_state(0, level);
+      auto& right = system.prepared_amr_block_state(1, level);
+      pops::MultiFab<Dim> left_rhs(left.layout(), left.distribution(), left.local_rank(),
+                                   left.ncomp(), left.ghosts());
+      pops::MultiFab<Dim> right_rhs(right.layout(), right.distribution(), right.local_rank(),
+                                    right.ncomp(), right.ghosts());
+      left_rhs.set_val(pops::Real(0));
+      right_rhs.set_val(pops::Real(0));
+      // This fixture deliberately installs the reverse Program-to-runtime block map.
+      const std::array<pops::MultiFab<Dim>*, 2> states{&right, &left};
+      const std::array<pops::MultiFab<Dim>*, 2> rhs{&right_rhs, &left_rhs};
+      auto evaluation = point;
+      evaluation.level = level;
+      const auto samples = system.capture_prepared_amr_interface_residual(evaluation, states, rhs);
+      ASSERT_EQ(samples.size(), 1u);
+      for (const auto flux : samples.front().flux_density)
+        EXPECT_EQ(flux, pops::Real(0));
+      EXPECT_EQ(pops::reduce_sum_local(left_rhs, 0), pops::Real(0));
+      EXPECT_EQ(pops::reduce_sum_local(right_rhs, 0), pops::Real(0));
+    }
+  };
+  const auto before_capture = system.program_accepted_state();
+  ASSERT_NO_THROW(capture());
+  EXPECT_EQ(system.program_accepted_state(), before_capture);
+  for (int level = 0; level < 2; ++level)
+    EXPECT_EQ(system.interface_evaluation_count("tests.pair-budget/interface", level), 1u);
 
   // A candidate that drops the declared high face must fail before replacing the live provider.
   const auto rebuilt_image = system.program_accepted_state();
@@ -649,7 +711,11 @@ TEST(test_amr_multiblock_implicit_transaction,
   EXPECT_EQ(system.program_accepted_state(), rebuilt_image);
   EXPECT_EQ(system.block_level_state_global("left", 1), rebuilt_fine);
   for (int level = 0; level < 2; ++level)
-    EXPECT_EQ(system.interface_evaluation_count("tests.pair-budget/interface", level), 0u);
+    EXPECT_EQ(system.interface_evaluation_count("tests.pair-budget/interface", level), 1u);
+  ASSERT_NO_THROW(capture());
+  EXPECT_EQ(system.program_accepted_state(), rebuilt_image);
+  for (int level = 0; level < 2; ++level)
+    EXPECT_EQ(system.interface_evaluation_count("tests.pair-budget/interface", level), 2u);
 }
 
 TEST(test_amr_multiblock_implicit_transaction, MetadataNeverCreatesAnImplicitTemporalFallback) {

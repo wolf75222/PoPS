@@ -10,6 +10,7 @@
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/config/generated_component_abi.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
@@ -200,6 +201,15 @@ class InterfaceFluxScheduler {
   using rank_type = typename field_type::rank_type;
   using ghost_type = typename field_type::ghost_type;
   using memory_space = typename field_type::memory_space;
+
+  InterfaceFluxScheduler() = default;
+  InterfaceFluxScheduler(const InterfaceFluxScheduler&) = default;
+  InterfaceFluxScheduler(InterfaceFluxScheduler&&) noexcept = default;
+  // Assignment retires old evaluators before their retained execution lane, as destruction does.
+  InterfaceFluxScheduler& operator=(InterfaceFluxScheduler other) noexcept {
+    swap(other);
+    return *this;
+  }
 
   void install(route_type route, field_type& left_state, const geometry_type& left_geometry,
                field_type& right_state, const geometry_type& right_geometry,
@@ -774,6 +784,7 @@ class InterfaceFluxScheduler {
     const CommunicatorView communicator =
         interfaces_.empty() ? CommunicatorView{} : interfaces_.front().communicator;
     InterfaceFluxScheduler candidate;
+    candidate.execution_lane_owner_ = execution_lane_owner_;
     candidate.topology_reconstruction_pending_ = topology_reconstruction_pending_;
     std::exception_ptr allocation_failure;
     try {
@@ -829,6 +840,7 @@ class InterfaceFluxScheduler {
   }
 
   void swap(InterfaceFluxScheduler& other) noexcept {
+    execution_lane_owner_.swap(other.execution_lane_owner_);
     interfaces_.swap(other.interfaces_);
     std::swap(topology_reconstruction_pending_, other.topology_reconstruction_pending_);
   }
@@ -894,6 +906,7 @@ class InterfaceFluxScheduler {
     const CommunicatorView communicator =
         interfaces_.empty() ? CommunicatorView{} : interfaces_.front().communicator;
     InterfaceFluxScheduler prefix;
+    prefix.execution_lane_owner_ = execution_lane_owner_;
     std::exception_ptr failure;
     try {
       if (active_level_count < 1)
@@ -1062,6 +1075,17 @@ class InterfaceFluxScheduler {
 
   void validate_registry_communicator_(std::string_view identity, int size, bool distributed,
                                        const CommunicatorView& communicator) const {
+#ifdef POPS_HAS_MPI
+    if (execution_lane_owner_ && identity == execution_lane_owner_->identity()) {
+      int relation = MPI_UNEQUAL;
+      ::pops::detail::require_mpi_success(
+          MPI_Comm_compare(communicator.native_handle(), execution_lane_owner_->native_handle(),
+                           &relation),
+          "MPI_Comm_compare(interface execution owner)");
+      if (relation != MPI_IDENT)
+        throw std::invalid_argument("multi-block interface execution owner is not the exact lane");
+    }
+#endif
     if (interfaces_.empty())
       return;
     const PreparedInterface& existing = interfaces_.front();
@@ -1945,6 +1969,10 @@ class InterfaceFluxScheduler {
           "AMR interface-flux fragment publication differs from its scheduler point");
   }
 
+  // AMR carriers retain their original lane across topology replacements, including evaluator
+  // closures borrowing its ABI handle. Independent external execution contexts remain caller-owned.
+  // Declare before the routes so their evaluators are destroyed before the communicator owner.
+  std::shared_ptr<const ExecutionLane> execution_lane_owner_;
   std::vector<PreparedInterface> interfaces_;
   bool topology_reconstruction_pending_ = false;
 };

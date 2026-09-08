@@ -130,7 +130,7 @@ class PreparedMultiBlockAmrHierarchy {
     }
     collectively_rethrow_(failure, "AMR interface reconstruction recipe allocation failed");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("interface-reconstruction"), request}}, lane_))
+            {{std::string_view("interface-reconstruction"), request}}, *lane_))
       throw std::invalid_argument("AMR interface reconstruction request differs between ranks");
     if (retained)
       retained->require_runtime_rematerialization_ready(static_cast<int>(level_count()));
@@ -294,8 +294,20 @@ class PreparedMultiBlockAmrHierarchy {
           "prepared multi-block AMR carrier contract differs between MPI ranks");
 
     ExecutionLane lane = ExecutionLane::duplicate_collectively(parent, lane_identity);
+    std::shared_ptr<const ExecutionLane> lane_owner;
+    try {
+      lane_owner = std::make_shared<ExecutionLane>(std::move(lane));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    // Keep both moved and unmoved duplicates alive until every rank can unwind together.
+    if (all_reduce_max(local_error ? 1L : 0L, parent) != 0) {
+      if (parent.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("prepared multi-block AMR lane ownership failed collectively");
+    }
     return PreparedMultiBlockAmrHierarchy(std::move(primary), std::move(primary_identity),
-                                          std::move(additional), std::move(lane),
+                                          std::move(additional), std::move(lane_owner),
                                           std::move(qualified_lane_identity), std::move(contract),
                                           std::move(canonical_program_contract));
   }
@@ -306,7 +318,7 @@ class PreparedMultiBlockAmrHierarchy {
   std::size_t level_count() const noexcept { return primary_->hierarchy().num_levels(); }
   std::uint64_t accepted_revision() const noexcept { return accepted_revision_; }
   std::string_view collective_contract() const noexcept { return collective_contract_; }
-  const ExecutionLane& lane() const noexcept { return lane_; }
+  const ExecutionLane& lane() const noexcept { return *lane_; }
   engine_type& topology_runtime() noexcept { return *primary_; }
   const engine_type& topology_runtime() const noexcept { return *primary_; }
 
@@ -368,7 +380,7 @@ class PreparedMultiBlockAmrHierarchy {
     collectively_rethrow_(local_error, "AMR Program block-map preflight failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("prepared-multiblock-amr-program-map"), result.exact_contract}},
-            lane_))
+            *lane_))
       throw std::invalid_argument("AMR Program block map differs between MPI ranks");
     return result;
   }
@@ -446,7 +458,7 @@ class PreparedMultiBlockAmrHierarchy {
     }
     collectively_rethrow_(local_error, "prepared AMR coupling installation failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("prepared-multiblock-amr-coupling"), exact}}, lane_))
+            {{std::string_view("prepared-multiblock-amr-coupling"), exact}}, *lane_))
       throw std::invalid_argument("prepared AMR coupling provider differs between MPI ranks");
     couplings_ = std::move(candidate);
   }
@@ -468,7 +480,7 @@ class PreparedMultiBlockAmrHierarchy {
     }
     collectively_rethrow_(local_error, "prepared AMR coupling seal failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("prepared-multiblock-amr-coupling-registry"), exact}}, lane_))
+            {{std::string_view("prepared-multiblock-amr-coupling-registry"), exact}}, *lane_))
       throw std::invalid_argument("prepared AMR coupling registry differs between MPI ranks");
     coupling_registry_contract_.swap(exact);
     couplings_sealed_ = true;
@@ -503,7 +515,7 @@ class PreparedMultiBlockAmrHierarchy {
                           "prepared AMR interface provider preflight failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("prepared-multiblock-amr-interface-provider"), next_contract}},
-            lane_))
+            *lane_))
       throw std::invalid_argument(
           "prepared AMR interface provider contracts differ between MPI ranks");
 
@@ -513,6 +525,7 @@ class PreparedMultiBlockAmrHierarchy {
     try {
       if (!interface_scheduler_) {
         interface_scheduler_ = std::make_shared<interface_scheduler_type>();
+        interface_scheduler_->execution_lane_owner_ = lane_;
         created = true;
       }
       accepted_size = interface_scheduler_->size();
@@ -522,14 +535,14 @@ class PreparedMultiBlockAmrHierarchy {
     } catch (...) {
       local_error = std::current_exception();
     }
-    const bool failed = all_reduce_max(local_error ? 1L : 0L, lane_) != 0;
+    const bool failed = all_reduce_max(local_error ? 1L : 0L, *lane_) != 0;
     if (failed) {
       if (interface_scheduler_) {
         interface_scheduler_->rollback_installations(accepted_size);
         if (created)
           interface_scheduler_.reset();
       }
-      if (lane_.size() == 1 && local_error)
+      if (lane_->size() == 1 && local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error("prepared AMR interface provider installation failed collectively");
     }
@@ -545,14 +558,14 @@ class PreparedMultiBlockAmrHierarchy {
     } catch (...) {
       local_error = std::current_exception();
     }
-    if (all_reduce_max(local_error ? 1L : 0L, lane_) != 0) {
+    if (all_reduce_max(local_error ? 1L : 0L, *lane_) != 0) {
       interface_provider_contract_.swap(next_contract);
       interface_lower_ = accepted_lower;
       interface_upper_ = accepted_upper;
       interface_scheduler_->rollback_installations(accepted_size);
       if (created)
         interface_scheduler_.reset();
-      if (lane_.size() == 1 && local_error)
+      if (lane_->size() == 1 && local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error(
           "prepared AMR interface provider accepted-state publication failed collectively");
@@ -664,13 +677,13 @@ class PreparedMultiBlockAmrHierarchy {
     } catch (...) {
       local_error = std::current_exception();
     }
-    const bool failed = all_reduce_max(local_error ? 1L : 0L, lane_.communicator()) != 0;
+    const bool failed = all_reduce_max(local_error ? 1L : 0L, lane_->communicator()) != 0;
     if (!failed)
       return couplings_.operators.size() +
              (interface_scheduler_ ? interface_scheduler_->size() : 0);
 
     restore_pack_collectively_(rollback, canonical, "candidate coupling rollback");
-    if (lane_.size() == 1 && local_error)
+    if (lane_->size() == 1 && local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("prepared AMR coupling failed and rolled back collectively");
   }
@@ -755,9 +768,9 @@ class PreparedMultiBlockAmrHierarchy {
     } catch (...) {
       local_error = std::current_exception();
     }
-    if (all_reduce_max(local_error ? 1L : 0L, lane_.communicator()) != 0) {
+    if (all_reduce_max(local_error ? 1L : 0L, lane_->communicator()) != 0) {
       restore_pack_collectively_(rollback, accepted, "accepted publication rollback");
-      if (lane_.size() == 1 && local_error)
+      if (lane_->size() == 1 && local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error("prepared AMR block publication rolled back collectively");
     }
@@ -899,7 +912,7 @@ class PreparedMultiBlockAmrHierarchy {
              {std::string_view("prepared-multiblock-amr-next"), next_collective_contract},
              {std::string_view("prepared-multiblock-amr-next-coupling"),
               next_coupling_registry_contract}},
-            lane_))
+            *lane_))
       throw std::invalid_argument("prepared multi-block AMR regrid differs between MPI ranks");
 
     const bool changes = primary_publication->changes_topology();
@@ -1001,7 +1014,7 @@ class PreparedMultiBlockAmrHierarchy {
                           "prepared multi-block AMR restore execution failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("prepared-multiblock-amr-restore"), prepared.restore_contract}},
-            lane_))
+            *lane_))
       throw std::invalid_argument("prepared multi-block AMR restore differs between MPI ranks");
     prepared.collectively_authenticated = true;
   }
@@ -1072,7 +1085,8 @@ class PreparedMultiBlockAmrHierarchy {
 
  private:
   PreparedMultiBlockAmrHierarchy(std::shared_ptr<engine_type> primary, std::string primary_identity,
-                                 std::vector<AdditionalBlock> additional, ExecutionLane lane,
+                                 std::vector<AdditionalBlock> additional,
+                                 std::shared_ptr<const ExecutionLane> lane,
                                  std::string lane_contract_identity,
                                  std::string collective_contract,
                                  std::string canonical_program_contract) noexcept
@@ -1218,9 +1232,9 @@ class PreparedMultiBlockAmrHierarchy {
 
   void collectively_rethrow_(const std::exception_ptr& local_error,
                              std::string_view collective_message) const {
-    if (all_reduce_max(local_error ? 1L : 0L, lane_.communicator()) == 0)
+    if (all_reduce_max(local_error ? 1L : 0L, lane_->communicator()) == 0)
       return;
-    if (lane_.size() == 1 && local_error)
+    if (lane_->size() == 1 && local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error(std::string(collective_message));
   }
@@ -1286,7 +1300,7 @@ class PreparedMultiBlockAmrHierarchy {
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("prepared-multiblock-amr-candidate-pointer-pack"),
               presence_contract}},
-            lane_))
+            *lane_))
       throw std::invalid_argument("AMR Program candidate pointer packs differ between MPI ranks");
 
     std::exception_ptr local_error;
@@ -1326,7 +1340,7 @@ class PreparedMultiBlockAmrHierarchy {
     collectively_rethrow_(local_error, "AMR Program candidate preflight failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("prepared-multiblock-amr-application"), invocation_contract}},
-            lane_))
+            *lane_))
       throw std::invalid_argument("AMR Program invocation differs between MPI ranks");
     return canonical;
   }
@@ -1357,7 +1371,7 @@ class PreparedMultiBlockAmrHierarchy {
                           "prepared multi-block AMR level application failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("prepared-multiblock-amr-level-application"), invocation_contract}},
-            lane_))
+            *lane_))
       throw std::invalid_argument(
           "prepared multi-block AMR level application differs between MPI ranks");
   }
@@ -1413,7 +1427,7 @@ class PreparedMultiBlockAmrHierarchy {
   void increment_revision_collectively_() {
     const long exhausted =
         accepted_revision_ == std::numeric_limits<std::uint64_t>::max() ? 1L : 0L;
-    if (all_reduce_max(exhausted, lane_.communicator()) != 0)
+    if (all_reduce_max(exhausted, lane_->communicator()) != 0)
       throw std::overflow_error("multi-block AMR accepted revision overflow");
     ++accepted_revision_;
   }
@@ -1434,7 +1448,7 @@ class PreparedMultiBlockAmrHierarchy {
   std::vector<AdditionalBlock> additional_;
   // Declared before all providers/registries so reverse member destruction releases their callbacks
   // first and frees the communicator last.
-  ExecutionLane lane_;
+  std::shared_ptr<const ExecutionLane> lane_;
   std::string lane_contract_identity_;
   coupling_registry_type couplings_;
   std::string coupling_registry_contract_;
