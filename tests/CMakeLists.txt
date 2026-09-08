@@ -543,6 +543,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_generated_amr_system_block
   test_prepared_cartesian_nd
   test_prepared_field_solver_nd
+  test_prepared_diffusion
   test_prepared_numerics_gate
   test_elliptic_interface
   test_field_nullspace

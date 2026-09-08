@@ -14,6 +14,10 @@
 #include <vector>
 
 namespace pops::runtime::program {
+class DiffusiveEvaluationError final : public std::runtime_error {
+ public:
+  using std::runtime_error::runtime_error;
+};
 enum class DiffusiveBoundaryKind { periodic, value, conormal };
 template<int Dim> struct DiffusiveBoundary {
   DiffusiveBoundaryKind kind = DiffusiveBoundaryKind::periodic;
@@ -42,6 +46,13 @@ template<int Dim> class PreparedDiffusion {
   std::vector<nd::FaceField<Dim>> faces_;
   Real frequency_ = Real(0);
   bool evaluated_ = false;
+  bool matches_storage_(const Field& field) const {
+    return field.layout()==variable_.layout() &&
+      field.distribution()==variable_.distribution() &&
+      field.local_rank()==variable_.local_rank() &&
+      field.local_size()==variable_.local_size() &&
+      field.ghosts()==variable_.ghosts() && field.ncomp()==1;
+  }
  public:
   template<class Context>
   PreparedDiffusion(Context& ctx, Field& prototype,
@@ -74,8 +85,7 @@ template<int Dim> class PreparedDiffusion {
   template<class LawFactory>
   void apply(Field& input, Field& output, LawFactory factory) {
     evaluated_ = false;
-    if (input.shares_storage_with(output) || input.ncomp()!=1 || output.ncomp()!=1 ||
-        input.local_size()!=variable_.local_size() || output.local_size()!=variable_.local_size())
+    if (input.shares_storage_with(output) || !matches_storage_(input) || !matches_storage_(output))
       throw std::invalid_argument("diffusion input/output do not match prepared scalar storage");
     for(std::size_t local=0;local<input.local_size();++local) {
       const auto law = factory(local);
@@ -95,7 +105,7 @@ template<int Dim> class PreparedDiffusion {
     }
     device_fence();
     if(reduce_max_local(status_)!=Real(0))
-      throw std::runtime_error("diffusive constitutive evaluation is non-finite or not positive");
+      throw DiffusiveEvaluationError("diffusive constitutive evaluation is non-finite or not positive");
     state_boundary_->fill_halo(input);
     variable_boundary_->fill_halo(variable_);
     coefficient_boundary_->fill_halo(coefficients_);
@@ -144,24 +154,65 @@ template<int Dim> class PreparedDiffusion {
       const auto status=status_.fab(local).view();
       for_each_cell(output.box(local),[=] POPS_HD(const Index<Dim>& cell) {
         Real divergence=0,frequency=0;
+        bool valid=true;
         for(int axis=0;axis<Dim;++axis) {
           Index<Dim> upper=cell; ++upper[axis];
+          for (int side=0;side<2;++side) {
+            const auto face=side==0 ? cell : upper;
+            valid=valid && Kokkos::isfinite(faces.axes[axis](face,0)) &&
+              Kokkos::isfinite(faces.axes[axis](face,1)) && faces.axes[axis](face,1)>=0;
+          }
           divergence+=(faces.axes[axis](upper,0)-faces.axes[axis](cell,0))/geometry.spacing(axis);
           frequency+=(faces.axes[axis](upper,1)+faces.axes[axis](cell,1))/geometry.spacing(axis);
         }
         result(cell,0)=divergence;
-        status(cell,0)=Kokkos::isfinite(divergence) && Kokkos::isfinite(frequency) && frequency>=0
+        status(cell,0)=valid && Kokkos::isfinite(divergence) && Kokkos::isfinite(frequency) && frequency>=0
                         ? frequency : std::numeric_limits<Real>::infinity();
       });
     }
     device_fence();
     frequency_=reduce_max_local(status_);
-    if(!std::isfinite(frequency_)) throw std::runtime_error("diffusive face evaluation is invalid");
+    if(!std::isfinite(frequency_)) throw DiffusiveEvaluationError("diffusive face evaluation is invalid");
     evaluated_=true;
   }
   Real explicit_frequency() const {
     if(!evaluated_) throw std::logic_error("diffusive stability requires a completed face evaluation");
     return frequency_;
+  }
+  /// The accepted affine quadrature supplies this weight once, after all evaluations succeed.
+  /// Two cell incidences of an interior face have opposite orientation. They are retained as
+  /// distinct quadrature records, so cancellation and each boundary exchange remain auditable.
+  template<class Context>
+  void stage_accepted_exchanges(Context& ctx, const std::string& operation,
+                               const std::string& occurrence, const std::string& evaluation,
+                               Real temporal_weight) const {
+    (void)explicit_frequency();
+    sync_host();
+    for(std::size_t local=0;local<variable_.local_size();++local) {
+      const auto box=variable_.box(local);
+      const auto extent=box.extent();
+      const auto faces=faces_[local].view();
+      for(std::int64_t ordinal=0;ordinal<box.numPts();++ordinal) {
+        auto remainder=ordinal;
+        Index<Dim> cell=box.lo;
+        for(int axis=0;axis<Dim;++axis) {
+          cell[axis]+=static_cast<int>(remainder%extent[axis]); remainder/=extent[axis];
+        }
+        for(int axis=0;axis<Dim;++axis) {
+          Real measure=1;
+          for(int tangent=0;tangent<Dim;++tangent)
+            if(tangent!=axis) measure*=geometry_.spacing(tangent);
+          for(int side=0;side<2;++side) {
+            Index<Dim> face=cell; face[axis]+=side;
+            std::string identity="cell";
+            for(int d=0;d<Dim;++d) identity+=":"+std::to_string(cell[d]);
+            identity+="/axis:"+std::to_string(axis)+"/side:"+std::to_string(side);
+            ctx.stage_exchange({operation,occurrence,evaluation,identity,side==0 ? -1 : 1,
+                                measure,faces.axes[axis](face,0),temporal_weight,1});
+          }
+        }
+      }
+    }
   }
   const auto& faces() const { return faces_; }
   const auto& geometry() const { return geometry_; }

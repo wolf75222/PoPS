@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 from pops.identity.scalar import scalar_cpp
+from pops.identity import make_identity
 from pops.codegen.program_emit_kernels import (
     _cell_locals, _has_runtime_param, _model_impl, _prepare_provider_values,
     program_provider_consumer_qid,
@@ -48,6 +49,7 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
     state_var=var[v.inputs[0].id]
     out="diffusive_rhs_%d" % v.id
     var[v.id]=out
+    explicit = prepared_var is None
     if prepared_var is None:
         prepared_var="diffusion_prepared_%d" % v.id
         lines.extend(_emit_diffusive_preparation(v,state_var,prepared_var,node_model,
@@ -63,6 +65,8 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
     binding=_provider_binding(impl,roots,provider_plans,qid)
     impl.assign_runtime_indices()
     lines.extend(_prepare_provider_values(binding,bidx,state_var))
+    if explicit:
+        lines.append("try {")
     lines.append("%s.apply(%s, %s, [&](std::size_t li) {" % (prepared_var,state_var,out))
     lines.append("  const auto %sA=std::as_const(%s).fab(li).view();" % (state_var,state_var))
     if binding["count"]:
@@ -76,9 +80,28 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
     lines.append("    return std::array<pops::Real,pops::kNativeDimension+2>{%s};" %
                  ", ".join(expr.to_cpp() for expr in exprs))
     lines.extend(("  };", "});"))
+    if explicit:
+        lines.extend(("} catch (const pops::runtime::program::DiffusiveEvaluationError&) {",
+            '  ctx.consume_pointwise_evaluation_status(%d,%d,2,"diffusive_face_evaluation",501);' % (bidx,v.id),
+            "}"))
     coefficient=sum(row.coefficient for row in rows)
     if coefficient != 1:
         lines.append("pops::scale(%s,%s);" % (out,scalar_cpp(coefficient)))
+    transport = tuple(row for row in v.attrs["physical_balance"].occurrences if row.kind=="flux")
+    frequency = "%s*%s.explicit_frequency()" % (scalar_cpp(coefficient),prepared_var)
+    if transport:
+        if len(transport)!=1 or transport[0].coefficient!=-1 or not transport[0].payload.is_default:
+            raise ValueError("diffusive lowering requires one exact default -div transport occurrence")
+        temporary="diffusive_transport_%d" % v.id
+        lines.append("auto& %s=ctx.rhs_scratch(%d,%d,%s);" % (temporary,v.id,len(sources)+1,state_var))
+        lines.append("ctx.neg_div_flux_default_into(%d,%s,%s,%d);" % (bidx,state_var,temporary,v.id))
+        lines.append("ctx.axpy(%s,1,%s);" % (out,temporary))
+        inverse_spacing=" + ".join("1/ctx.geometry().spacing(%d)" % axis for axis in range(selected["physical"].dimension))
+        frequency+=" + ctx.max_wave_speed(%d,%s)*(%s)" % (bidx,state_var,inverse_spacing)
+    if explicit:
+        lines.append("const pops::Real diffusion_frequency_%d=%s;" % (v.id,frequency))
+        lines.append("if (!(std::isfinite(dt) && dt>=0 && dt*diffusion_frequency_%d<=1+32*std::numeric_limits<pops::Real>::epsilon()))" % v.id)
+        lines.append('  ctx.consume_pointwise_evaluation_status(%d,%d,2,"combined_transport_diffusion_stability",502);' % (bidx,v.id))
     for ordinal,row in enumerate(sources,1):
         temporary="diffusive_source_%d_%d" % (v.id,ordinal)
         lines.append("auto& %s=ctx.rhs_scratch(%d,%d,%s);" % (temporary,v.id,ordinal,state_var))
@@ -86,3 +109,20 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
             provider_plans=provider_plans,consumer_qid=qid,plan_exprs=roots))
         lines.append("ctx.axpy(%s,%s,%s);" % (out,scalar_cpp(row.coefficient),temporary))
     return prepared_var
+
+
+def _emit_diffusive_accepted(v, prepared_var, lines, temporal_weight_cpp, evaluation_context):
+    """Publish only the selected accepted quadrature; no residual or seed contributes."""
+    view = v.attrs["physical_balance"]
+    handle = view.balance.handle
+    source = handle if handle.is_resolved else handle._resolved(handle.owner_path.canonical())
+    block = v.block if v.block.is_resolved else v.block._resolved(v.block.owner_path.canonical())
+    operation_data = {"source": source.canonical_identity(), "block": block.canonical_identity()}
+    operation = make_identity("diffusive-operation", operation_data).token
+    for row in view.occurrences:
+        if row.kind != "diffusion":
+            continue
+        occurrence = operation+"/occurrence:"+str(row.identity[1])
+        lines.append("%s.stage_accepted_exchanges(ctx,%s,%s,%s,(%s)*%s);" % (
+            prepared_var,json.dumps(operation),json.dumps(occurrence),
+            json.dumps(evaluation_context),temporal_weight_cpp,scalar_cpp(row.coefficient)))

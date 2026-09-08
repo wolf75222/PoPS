@@ -125,6 +125,7 @@ _SSPRK3_KEY = (
     (Fraction(1, 6), Fraction(1, 6), Fraction(2, 3)), (0, 1, Fraction(1, 2)),
 )
 _KNOWN_SSP = {
+    (((0,),), (1,), (0,)): SSPCertificate(Fraction(1), "one forward Euler step"),
     _SSPRK2_KEY: SSPCertificate(Fraction(1), "exact Shu-Osher convex decomposition"),
     _SSPRK3_KEY: SSPCertificate(Fraction(1), "exact Shu-Osher convex decomposition"),
 }
