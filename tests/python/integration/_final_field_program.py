@@ -142,6 +142,9 @@ def density_advection_model(
         rhs = rhs + source
         # Stability traits still live on the single-state compiler facade; the board retains that
         # exact lowering authority as ``_dsl`` until the traits become first-class board handles.
+        # The legacy native frequency trait belongs to its default physical source brick.
+        # Declare that same zero source on the carrier as well as on the selected symbolic rate.
+        model._dsl.source([0.0 * rho])
         model._dsl.source_frequency(source_frequency + 0.0 * rho)
     model.rate("explicit_rhs", equation=ddt(state) == rhs)
     if stability_speed is not None:
