@@ -13,6 +13,8 @@
 #include <cmath>
 #include <cstddef>
 #include <exception>
+#include <iomanip>
+#include <iostream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -447,6 +449,116 @@ void expect_partitioned_fac_embedded_boundary() {
   EXPECT_LT(maximum_constant_error(solver.phi_level(1), lane), Real(0.12));
 }
 
+void expect_periodic_partition_independence(bool corner) {
+  constexpr int Dim = 2;
+  const auto lane = ExecutionLane::world("pops.test.fac.periodic-partition-independence");
+  const auto coarse_geometry =
+      Geometry<Dim>::from_bounds(Box<Dim>{Index<Dim>{0, 0}, Index<Dim>{15, 15}},
+                                 coordinates<Dim>(Real(0)), coordinates<Dim>(Real(1)));
+  const auto fine_geometry = coarse_geometry.refine(Extent<Dim>{2, 2});
+  const BoxArray<Dim> coarse_boxes(std::vector<Box<Dim>>{{Index<Dim>{0, 0}, Index<Dim>{7, 7}},
+                                                         {Index<Dim>{8, 0}, Index<Dim>{15, 7}},
+                                                         {Index<Dim>{0, 8}, Index<Dim>{7, 15}},
+                                                         {Index<Dim>{8, 8}, Index<Dim>{15, 15}}});
+  const BoxArray<Dim> fine_boxes(
+      corner ? std::vector<Box<Dim>>{{Index<Dim>{0, 0}, Index<Dim>{7, 7}},
+                                     {Index<Dim>{8, 0}, Index<Dim>{11, 7}},
+                                     {Index<Dim>{0, 8}, Index<Dim>{7, 11}},
+                                     {Index<Dim>{8, 8}, Index<Dim>{11, 11}}}
+             : std::vector<Box<Dim>>{{Index<Dim>{2, 10}, Index<Dim>{9, 17}},
+                                     {Index<Dim>{10, 10}, Index<Dim>{13, 17}},
+                                     {Index<Dim>{2, 18}, Index<Dim>{9, 21}},
+                                     {Index<Dim>{10, 18}, Index<Dim>{13, 21}}});
+  const RankSpace<Dim> ranks{Index<Dim>{}, Extent<Dim>{2, 1}};
+  const auto local_rank = rank_coordinate<Dim>(pops::my_rank());
+  const std::vector<Index<Dim>> owners{rank_coordinate<Dim>(0), rank_coordinate<Dim>(1),
+                                       rank_coordinate<Dim>(1), rank_coordinate<Dim>(0)};
+  auto make = [&](bool replicated) {
+    pops::elliptic::mg::CompositeFacBuildRequest<Dim> request;
+    for (int level = 0; level < 2; ++level) {
+      const auto& boxes = level == 0 ? coarse_boxes : fine_boxes;
+      const auto& geometry = level == 0 ? coarse_geometry : fine_geometry;
+      const auto distribution = replicated ? Distribution<Dim>::replicated(boxes, ranks)
+                                           : Distribution<Dim>::partitioned(boxes, ranks, owners);
+      request.levels.push_back(EllipticBuildRequest<Dim>{
+          geometry, boxes, distribution, local_rank, periodic_boundary<Dim>(geometry),
+          Extent<Dim>{}, integer_extent<Dim>(1), BoxArrayValidationBudget{4, 6}});
+    }
+    request.ratios = {RefinementRatio<Dim>{{2, 2}}};
+    pops::CompositeFacOptions options;
+    options.max_iters = 30;
+    options.fine_sweeps = 400;
+    options.rel_tol = Real(1e-9);
+    options.abs_tol = Real(0);
+    options.coarse_rel_tol = Real(1e-12);
+    options.coarse_abs_tol = Real(0);
+    options.coarse_cycles = 100;
+    auto solver = std::make_unique<pops::elliptic::mg::CompositeFacPoisson<Dim>>(
+        std::move(request), lane, options, Real(1));
+    solver->install_nullspace(
+        pops::FieldNullspacePlan<Dim>{},
+        std::vector<pops::PreparedVectorDistribution<Dim>>(
+            2, replicated ? pops::PreparedVectorDistribution<Dim>::replicated()
+                          : pops::PreparedVectorDistribution<Dim>::distributed()));
+    for (int level = 0; level < 2; ++level) {
+      auto& rhs = solver->rhs_level(level);
+      const auto& geometry = level == 0 ? coarse_geometry : fine_geometry;
+      for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+        auto& fab = rhs.fab(local);
+        auto host = fab.create_host_mirror();
+        const auto box = fab.box();
+        const auto grown = fab.grown_box();
+        for (int y = box.lo[1]; y <= box.hi[1]; ++y)
+          for (int x = box.lo[0]; x <= box.hi[0]; ++x) {
+            const auto dx = geometry.cell_coordinate(0, x) - Real(0.25);
+            const auto dy = geometry.cell_coordinate(1, y) - Real(0.5);
+            host(static_cast<std::size_t>(x - grown.lo[0]) +
+                 static_cast<std::size_t>(y - grown.lo[1]) * grown.length(0)) =
+                Real(1) + Real(0.5) * std::exp(-Real(140) * (dx * dx + dy * dy));
+          }
+        fab.copy_from_host(host);
+      }
+      solver->phi_level(level).set_val(Real(0));
+    }
+    return solver;
+  };
+  auto reference = make(true);
+  auto partitioned = make(false);
+  const auto reference_report = reference->solve();
+  const auto partitioned_report = partitioned->solve();
+  ASSERT_TRUE(reference_report.solved())
+      << reference_report.reason << " residual=" << reference_report.residual_norm;
+  ASSERT_TRUE(partitioned_report.solved())
+      << partitioned_report.reason << " residual=" << partitioned_report.residual_norm;
+  Real maximum = Real(0);
+  for (int level = 0; level < 2; ++level) {
+    const auto& field = partitioned->phi_level(level);
+    for (std::size_t local = 0; local < field.local_size(); ++local) {
+      const auto& fab = field.fab(local);
+      const auto& reference_fab = reference->phi_level(level).fab_global(field.global_index(local));
+      auto host = fab.create_host_mirror();
+      auto reference_host = reference_fab.create_host_mirror();
+      fab.copy_to_host(host);
+      reference_fab.copy_to_host(reference_host);
+      const auto box = fab.box();
+      const auto grown = fab.grown_box();
+      for (int y = box.lo[1]; y <= box.hi[1]; ++y)
+        for (int x = box.lo[0]; x <= box.hi[0]; ++x) {
+          const auto offset = static_cast<std::size_t>(x - grown.lo[0]) +
+                              static_cast<std::size_t>(y - grown.lo[1]) * grown.length(0);
+          maximum = std::max(maximum, std::abs(host(offset) - reference_host(offset)));
+        }
+    }
+  }
+  const double global_difference = pops::all_reduce_max(static_cast<double>(maximum), lane);
+  if (pops::my_rank() == 0)
+    std::cout << std::setprecision(17) << "periodic FAC corner=" << corner
+              << " replicated_residual=" << reference_report.residual_norm
+              << " partitioned_residual=" << partitioned_report.residual_norm
+              << " max_partition_difference=" << global_difference << '\n';
+  EXPECT_LT(global_difference, 1e-8);
+}
+
 int run_partitioned_fac_matrix(int argc, char** argv) {
   pops::comm_init(&argc, &argv);
   int result = 0;
@@ -468,6 +580,8 @@ int run_partitioned_fac_matrix(int argc, char** argv) {
       expect_exact_rank_ratio_prepares<2>({3, 1});
       expect_exact_rank_ratio_prepares<3>({1, 2, 3});
       expect_collective_budget_failure();
+      expect_periodic_partition_independence(false);
+      expect_periodic_partition_independence(true);
     }
     result = ::testing::Test::HasFailure() ? 1 : 0;
   }

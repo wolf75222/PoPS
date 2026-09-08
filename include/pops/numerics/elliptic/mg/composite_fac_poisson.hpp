@@ -23,6 +23,7 @@
 #include <pops/runtime/numerical_defaults.hpp>
 
 #include <Kokkos_Core.hpp>
+#include <map>
 
 #include <algorithm>
 #include <cmath>
@@ -610,7 +611,9 @@ class CompositeFacPoisson {
     std::unique_ptr<transport_type> gather{};
     std::unique_ptr<transport_type> restriction{};
     std::unique_ptr<transport_type> flux{};
-    std::optional<field_type> increment{};
+    // Different fine patches can contribute to the same coarse interface cell. Retain
+    // their payloads separately until the additive reduction; transport unpack is a copy.
+    std::map<std::pair<std::size_t, std::size_t>, Fab<Dim, MemorySpace>> flux_destinations{};
     static constexpr std::size_t no_scratch = std::numeric_limits<std::size_t>::max();
 
     bool has_remote_transport() const noexcept {
@@ -686,7 +689,7 @@ class CompositeFacPoisson {
         auto fine = destination.fab_global(patch.fine_patch).view();
         for (const Box<Dim>& region : patch.ghost_regions)
           for_each_cell(region, fac_detail::QuadraticInterpolationTransfer<Dim>{
-                                    coarse, fine, region, ratio, mapping, child->geometry.domain()});
+                                    coarse, fine, region, ratio, mapping, {}});
       }
       Kokkos::fence();
     }
@@ -743,7 +746,7 @@ class CompositeFacPoisson {
 
     void apply_remote_flux(const field_type& parent_field, const field_type& child_field,
                            field_type& parent_residual, Real sign) {
-      if (!flux || !increment)
+      if (!flux)
         return;
       gather_parent(parent_field);
       for (ScratchPatch& patch : scratch) {
@@ -771,19 +774,8 @@ class CompositeFacPoisson {
               ++interface.hi[axis];
               interface.lo[axis] = interface.hi[axis];
             }
-            const Box<Dim>& parent_domain = parent->geometry.domain();
-            if (parent->boundary.topology().is_periodic(Face<Dim>{axis, BoundarySide::lower})) {
-              const int length = static_cast<int>(parent_domain.length(axis));
-              if (length > 0 && interface.hi[axis] < parent_domain.lo[axis]) {
-                geometry_shift[axis] = -length;
-                interface.lo[axis] += length;
-                interface.hi[axis] += length;
-              } else if (length > 0 && interface.lo[axis] > parent_domain.hi[axis]) {
-                geometry_shift[axis] = length;
-                interface.lo[axis] -= length;
-                interface.hi[axis] -= length;
-              }
-            }
+            // Scratch uses the unwrapped fine-patch neighborhood. Its periodic gather
+            // and reverse flux jobs carry the coordinate shift across the domain face.
             const Box<Dim> destination = interface.intersect(patch.flux_increment.box());
             if (destination.empty())
               continue;
@@ -795,18 +787,20 @@ class CompositeFacPoisson {
         }
       }
       Kokkos::fence();
-      increment->set_val(Real(0));
+      for (auto& [key, destination] : flux_destinations)
+        destination.set_val(Real(0));
       auto source_view = [this](const transfer_job& job) -> FieldView<const Real, Dim> {
         return std::as_const(scratch_for(job.source_patch).flux_increment).view();
       };
       auto destination_view = [this](const transfer_job& job) -> FieldView<Real, Dim> {
-        return increment->fab_global(job.destination_patch).view();
+        return flux_destinations.at({job.source_patch, job.destination_patch}).view();
       };
       flux->execute(source_view, destination_view);
+      for (const auto& [key, contribution] : flux_destinations)
+        for_each_cell(contribution.box(),
+                      fac_detail::AddKernel<Dim>{parent_residual.fab_global(key.second).view(),
+                                                 contribution.view()});
       for (std::size_t local = 0; local < parent_residual.local_size(); ++local) {
-        for_each_cell(parent_residual.box(local),
-                      fac_detail::AddKernel<Dim>{parent_residual.fab(local).view(),
-                                                 std::as_const(*increment).fab(local).view()});
         for_each_cell(parent_residual.box(local),
                       fac_detail::MaskResidualKernel<Dim>{
                           parent_residual.fab(local).view(),
@@ -1000,6 +994,40 @@ class CompositeFacPoisson {
                                              patch_owner_(child, fine_patch), gathered, gathered});
         }
       }
+      // A quadratic fine ghost stencil can reach one coarse cell beyond the physical
+      // domain even when the fine patch itself is interior. Stage periodic source images
+      // at their unwrapped destination coordinates instead of leaving that stencil zero.
+      if (!parent.phi.distribution().replicated()) {
+        constexpr int images = Dim == 1 ? 3 : Dim == 2 ? 9 : 27;
+        for (int image = 0; image < images; ++image) {
+          int ordinal = image;
+          Index<Dim> shift{};
+          Index<Dim> inverse_shift{};
+          bool permitted = true;
+          bool shifted = false;
+          for (int axis = 0; axis < Dim; ++axis) {
+            const int offset = ordinal % 3 - 1;
+            ordinal /= 3;
+            shifted = shifted || offset != 0;
+            if (offset != 0 &&
+                !parent.boundary.topology().is_periodic(Face<Dim>{axis, BoundarySide::lower}))
+              permitted = false;
+            shift[axis] = offset * static_cast<int>(parent.geometry.domain().length(axis));
+            inverse_shift[axis] = -shift[axis];
+          }
+          if (!permitted || !shifted)
+            continue;
+          for (std::size_t parent_patch = 0; parent_patch < parent.phi.layout().size();
+               ++parent_patch) {
+            const Box<Dim> destination =
+                footprint.grow(2).intersect(parent.phi.layout()[parent_patch].shift(shift));
+            if (!destination.empty())
+              gather_jobs.push_back(transfer_job{
+                  parent_patch, fine_patch, patch_owner_(parent, parent_patch),
+                  patch_owner_(child, fine_patch), destination.shift(inverse_shift), destination});
+          }
+        }
+      }
       if (restricted_cells != footprint.numPts())
         throw std::invalid_argument(
             "composite FAC fine footprint is not completely nested in its parent layout");
@@ -1100,8 +1128,15 @@ class CompositeFacPoisson {
                   coarsen(wrapped, ratio_value).grow(1).intersect(parent.geometry.domain());
               const Box<Dim> extra = parent.phi.layout()[parent_patch].intersect(parent_stencil);
               if (!extra.empty()) {
-                transfer_job extra_job{parent_patch, fine_patch, patch_owner_(parent, parent_patch),
-                                       patch_owner_(child, fine_patch), extra, extra};
+                Index<Dim> coarse_shift{};
+                for (int axis = 0; axis < Dim; ++axis)
+                  coarse_shift[axis] = -shift[axis] / connection.ratio[axis];
+                transfer_job extra_job{parent_patch,
+                                       fine_patch,
+                                       patch_owner_(parent, parent_patch),
+                                       patch_owner_(child, fine_patch),
+                                       extra,
+                                       extra.shift(coarse_shift)};
                 bool seen = false;
                 for (const transfer_job& job : gather_jobs)
                   if (job == extra_job) {
@@ -1127,8 +1162,26 @@ class CompositeFacPoisson {
       std::vector<transfer_job> flux_jobs;
       flux_jobs.reserve(gather_jobs.size());
       for (const transfer_job& job : gather_jobs)
-        flux_jobs.push_back(transfer_job{job.destination_patch, job.source_patch, job.destination_rank,
-                                         job.source_rank, job.destination_region, job.source_region});
+        if (job.source_rank != job.destination_rank)
+          flux_jobs.push_back(transfer_job{job.destination_patch, job.source_patch,
+                                           job.destination_rank, job.source_rank,
+                                           job.destination_region, job.source_region});
+      std::map<std::pair<std::size_t, std::size_t>, Box<Dim>> flux_destination_boxes;
+      for (const transfer_job& job : flux_jobs) {
+        if (job.destination_rank != parent.phi.local_rank())
+          continue;
+        auto& box = flux_destination_boxes[{job.source_patch, job.destination_patch}];
+        if (box.empty()) {
+          box = job.destination_region;
+        } else {
+          for (int axis = 0; axis < Dim; ++axis) {
+            box.lo[axis] = std::min(box.lo[axis], job.destination_region.lo[axis]);
+            box.hi[axis] = std::max(box.hi[axis], job.destination_region.hi[axis]);
+          }
+        }
+      }
+      for (const auto& [key, box] : flux_destination_boxes)
+        connection.flux_destinations.emplace(key, Fab<Dim, MemorySpace>(box, 1, Extent<Dim>{}));
       const auto gather_budget = Connection::transfer_plan::budget_from_jobs(gather_jobs);
       const auto restriction_budget = Connection::transfer_plan::budget_from_jobs(restriction_jobs);
       const auto flux_budget = Connection::transfer_plan::budget_from_jobs(flux_jobs);
@@ -1143,8 +1196,6 @@ class CompositeFacPoisson {
       connection.flux = std::make_unique<typename Connection::transport_type>(
           typename Connection::transfer_plan{parent.phi.rank_space(), parent.phi.local_rank(), 1,
                                              std::move(flux_jobs), flux_budget});
-      connection.increment.emplace(parent.residual.layout(), parent.residual.distribution(),
-                                   parent.residual.local_rank(), 1, Extent<Dim>{});
       for (std::size_t fine_patch = 0; fine_patch < child.phi.layout().size(); ++fine_patch) {
         if (!child.phi.contains_local(fine_patch))
           continue;
