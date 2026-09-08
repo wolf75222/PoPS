@@ -533,9 +533,31 @@ def _emit_auxiliary_route_registration(
             optional(value["value_kind"]),
         )
 
-    def shape_for(route: Mapping[str, Any] | None) -> str:
+    # Native FV binds provider values at the immediate left/right cells of each face.
+    # That access needs one halo cell even when periodic topology has no physical BC row.
+    # State reconstruction has its own (possibly wider) stencil; it does not reconstruct aux.
+    provider_halos = {route_key(row): 1 for row in flux_plan}
+    for component, route in typed_routes.items():
+        boundary = route.get("boundary")
+        provider_halos[component] = max(provider_halos.get(component, 0),
+                                        0 if boundary is None else boundary.width)
+    # A pointwise DerivedAux launcher evaluates its full output image, including its demanded
+    # halos, so propagate that exact image requirement through its declared dependencies.
+    changed = True
+    while changed:
+        changed = False
+        for component, route in typed_routes.items():
+            width = provider_halos.get(component, 0)
+            for dependency in route.get("dependencies", ()):
+                key_tuple = (dependency.owner_qid, dependency.space_kind,
+                             dependency.space_name, dependency.component)
+                if width > provider_halos.get(key_tuple, 0):
+                    provider_halos[key_tuple] = width
+                    changed = True
+
+    def shape_for(route: Mapping[str, Any] | None, component: Any) -> str:
         boundary = None if route is None else route.get("boundary")
-        width = 0 if boundary is None else boundary.width
+        width = max(provider_halos.get(component, 0), 0 if boundary is None else boundary.width)
         return (
             "Shape{pops::kNativeDimension, 1, [] { pops::Index<pops::kNativeDimension> halo{}; "
             "for (int axis = 0; axis < pops::kNativeDimension; ++axis) halo[axis] = %d; return halo; }()}"
@@ -654,7 +676,8 @@ def _emit_auxiliary_route_registration(
                                 key_value.space_name,
                                 key_value.component,
                             )
-                        )
+                        ),
+                        (key_value.owner_qid, key_value.space_kind, key_value.space_name, key_value.component),
                     ),
                 )
             )
@@ -765,7 +788,7 @@ def _emit_auxiliary_route_registration(
             )
         producer = value["producer"]
         route = typed_routes.get(route_key(row))
-        shape = shape_for(route)
+        shape = shape_for(route, route_key(row))
         if producer == "runtime_input":
             kind = "AuxiliaryProviderKind::input"
         elif row["key"]["space_kind"] == "field":
@@ -832,7 +855,7 @@ def _emit_auxiliary_route_registration(
                 % (
                     key(value),
                     contract(value),
-                    shape_for(typed_routes.get(route_key(value))),
+                    shape_for(typed_routes.get(route_key(value)), route_key(value)),
                     value["consumer_slot"],
                 )
             )

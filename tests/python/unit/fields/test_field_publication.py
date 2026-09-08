@@ -141,3 +141,20 @@ def test_same_model_instances_cannot_alias_distinct_consumed_publications():
     with pytest.raises(ValueError, match="provider key across block instances"):
         solution.publish({(first[declaration], "observed_gx"): (gradient, 0),
                           (second_instance[declaration], "observed_gy"): (gradient, 1)})
+
+
+@pytest.mark.parametrize("transport", (False, True))
+def test_provider_storage_halo_follows_actual_face_reads_without_inventing_boundaries(transport):
+    from tests.python.integration.runtime.test_public_field_consumers import consumer_case
+    from pops.codegen._compile_emit import _emit_auxiliary_route_registration
+    from pops.codegen.program_emit_kernels import _model_impl
+    case, layout = consumer_case(16, transport=transport)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    source = _emit_auxiliary_route_registration(_model_impl(graph.model_for_block(case.blocks()["fluid"])))
+    output_rows = [line for line in source.splitlines() if "std::vector<Output>" in line]
+    x = next(line for line in output_rows if '"potential_grad_x"' in line)
+    y = next(line for line in output_rows if '"potential_grad_y"' in line)
+    assert "halo[axis] = 0" in x
+    assert ("halo[axis] = 1" if transport else "halo[axis] = 0") in y
+    assert "BoundaryKind::inherit_topology" in x and "BoundaryKind::inherit_topology" in y

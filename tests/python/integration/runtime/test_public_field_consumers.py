@@ -167,6 +167,15 @@ def test_full_public_consumed_field_source_and_transport_matrix(
         else:
             np.testing.assert_allclose(np.mean(actual, axis=(1, 2)), np.mean(initial, axis=(1, 2)),
                                        rtol=0, atol=1e-12)
+            # Independent conservative Rusanov face oracle: left/right field samples differ.
+            velocity = observed_gradient[1]
+            right_velocity = np.roll(velocity, -1, axis=0)
+            right_state = np.roll(initial, -1, axis=1)
+            speed = np.maximum(np.abs(velocity), np.abs(right_velocity))
+            high_flux = -0.5 * speed * (right_state - initial)
+            high_flux[0] += 0.5 * (velocity * initial[0] + right_velocity * right_state[0])
+            discrete = initial - DT * n * (high_flux - np.roll(high_flux, 1, axis=1))
+            np.testing.assert_allclose(actual, discrete, rtol=0, atol=2e-12)
         rows.append({"n": n, "L2": l2, "Linf": float(np.max(np.abs(error))),
                      "gradient_L2": gradient_error, "accepted_steps": report.accepted_steps})
     orders = np.log2(np.asarray([row["L2"] for row in rows[:-1]]) /
