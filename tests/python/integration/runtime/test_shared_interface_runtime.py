@@ -1148,6 +1148,7 @@ def _resolve_shared_interface_amr(
     authoring,
     *,
     max_levels,
+    cells=(8, 8),
     patch_layout=None,
     clustering=None,
     frozen=False,
@@ -1167,7 +1168,7 @@ def _resolve_shared_interface_amr(
     return pops.resolve(
         pops.validate(authoring.core.case),
         layout=AMR(
-            grid=CartesianGrid(frame=authoring.core.frame, cells=(8, 8)),
+            grid=CartesianGrid(frame=authoring.core.frame, cells=cells),
             hierarchy=AMRHierarchy(
                 max_levels=max_levels,
                 ratios=tuple(2 for _ in range(max_levels - 1)),
@@ -1446,14 +1447,21 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     )
     np.testing.assert_array_equal(restart_authoring.left_initial, left_initial)
     np.testing.assert_array_equal(restart_authoring.right_initial, right_initial)
+    # The 8-cell domain is fully covered after nesting padding on both interface bands.
+    # Double only this independent restart grid, preserving the same physical cell averages,
+    # so native tagging has unrefined interior cells into which the moving profile can grow.
+    restart_cells = 16
     restart_initial_values = {
-        restart_authoring.core.tracer_state: restart_authoring.left_initial,
-        restart_authoring.right_state: restart_authoring.right_initial,
+        state: np.repeat(np.repeat(values, 2, axis=1), 2, axis=2)
+        for state, values in (
+            (restart_authoring.core.tracer_state, restart_authoring.left_initial),
+            (restart_authoring.right_state, restart_authoring.right_initial),
+        )
     }
     restart_dt = 1.0e-3
     restart_source_steps = 2
-    # dx_fine=1/16 and the 2:1 subcycle give CFL_fine=0.16. Four fine substeps
-    # move the profile by 0.64 cell: enough to change the thresholded hierarchy.
+    # dx_fine=1/32 and the 2:1 subcycle give CFL_fine=0.32. Four fine substeps
+    # move the profile by 1.28 cells while preserving the existing stable macro-step count.
     restart_velocity_x = 20.0
     restart_params = dict(restart_authoring.params)
     for block in (restart_authoring.core.tracer, restart_authoring.right):
@@ -1469,6 +1477,7 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     restart_resolved = _resolve_shared_interface_amr(
         restart_authoring,
         max_levels=2,
+        cells=(restart_cells, restart_cells),
         patch_layout=PatchLayout(distribute_coarse=True, coarse_max_grid=4),
         clustering=BergerRigoutsos(maximum_box_size=4),
     )
@@ -1480,6 +1489,13 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
         params=restart_params,
     )
     assert restart_source.n_levels() == 2
+    bootstrap_boxes = tuple(restart_source.patch_boxes())
+    fine_coverage = sum(
+        (upper[0] - lower[0] + 1) * (upper[1] - lower[1] + 1)
+        for level, lower, upper in bootstrap_boxes
+        if level == 1
+    )
+    assert 0 < fine_coverage < (2 * restart_cells) ** 2
     assert len(restart_source.consumer_graph.nodes) == 1
     restart_initial_integral = restart_source.integral("tracer") + restart_source.integral("right")
     source_report = pops.run(
@@ -1507,6 +1523,7 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     )
     checkpoint = restart_source.checkpoint(tmp_path / "accepted-shared-interface")
     checkpoint_boxes = tuple(restart_source.patch_boxes())
+    assert checkpoint_boxes == bootstrap_boxes
 
     # RegridOnRestart enters the native tag/cluster/regrid boundary. A deliberately rejected
     # post-transform validation must restore the fresh runtime exactly before the same restart is
