@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <vector>
@@ -402,13 +403,11 @@ TEST(test_nd_cluster, proper_nesting_preserves_parent_seams_and_authenticates_pe
   prove_nesting_preserves_patch_union_and_periodic_images<3>();
 }
 
-
 TEST(test_nd_cluster, refinement_coverage_is_independent_of_parent_tiles_and_rank_owners) {
   const Box<2> domain{Index<2>{0, 0}, Index<2>{7, 3}};
   const mesh::BoxArray<2> mono(std::vector<Box<2>>{domain});
-  const mesh::BoxArray<2> tiled(std::vector<Box<2>>{
-      Box<2>{Index<2>{0, 0}, Index<2>{3, 3}},
-      Box<2>{Index<2>{4, 0}, Index<2>{7, 3}}});
+  const mesh::BoxArray<2> tiled(std::vector<Box<2>>{Box<2>{Index<2>{0, 0}, Index<2>{3, 3}},
+                                                    Box<2>{Index<2>{4, 0}, Index<2>{7, 3}}});
   const mesh::RankSpace<2> one_rank{Index<2>{0, 0}, Extent<2>{1, 1}};
   const auto mono_level = replicated_level(domain, mono, one_rank);
   const auto tiled_level = replicated_level(domain, tiled, one_rank);
@@ -417,8 +416,8 @@ TEST(test_nd_cluster, refinement_coverage_is_independent_of_parent_tiles_and_ran
 
   // The global rectangle has efficiency 4/6 >= 0.6; clustering its left tile
   // independently sees only 2/4 and discards the two legitimate untagged cells.
-  const std::array<Index<2>, 4> tags{
-      Index<2>{2, 1}, Index<2>{3, 2}, Index<2>{4, 1}, Index<2>{4, 2}};
+  const std::array<Index<2>, 4> tags{Index<2>{2, 1}, Index<2>{3, 2}, Index<2>{4, 1},
+                                     Index<2>{4, 2}};
   for (const auto& cell : tags) {
     mono_mask.set(cell);
     tiled_mask.set(cell);
@@ -427,8 +426,7 @@ TEST(test_nd_cluster, refinement_coverage_is_independent_of_parent_tiles_and_ran
   const tagging::BergerRigoutsosProvider<2> provider;
   const auto expected = provider.cluster(std::array{mono_mask}, controls);
   const auto local_tiled = provider.cluster(std::array{tiled_mask}, controls);
-  EXPECT_EQ(expected.boxes.boxes(),
-            (std::vector<Box<2>>{Box<2>{Index<2>{2, 1}, Index<2>{4, 2}}}));
+  EXPECT_EQ(expected.boxes.boxes(), (std::vector<Box<2>>{Box<2>{Index<2>{2, 1}, Index<2>{4, 2}}}));
   EXPECT_EQ(local_tiled.boxes, expected.boxes);
   EXPECT_NE(local_tiled.identity.source_level, expected.identity.source_level);
 
@@ -447,14 +445,29 @@ TEST(test_nd_cluster, refinement_coverage_is_independent_of_parent_tiles_and_ran
 
 TEST(test_nd_cluster, unbuffered_global_clustering_does_not_refine_parent_coverage_holes) {
   const Box<1> domain{Index<1>{0}, Index<1>{7}};
-  const mesh::BoxArray<1> patches(std::vector<Box<1>>{
-      Box<1>{Index<1>{0}, Index<1>{2}}, Box<1>{Index<1>{5}, Index<1>{7}}});
+  const mesh::BoxArray<1> patches(
+      std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{2}}, Box<1>{Index<1>{5}, Index<1>{7}}});
   const mesh::RankSpace<1> ranks{Index<1>{0}, Extent<1>{1}};
   const auto level = replicated_level(domain, patches, ranks);
   tagging::TagMask<1> mask(level, Index<1>{0}, tag_budget(2, 2, 3, 6));
   for (int cell : {0, 1, 2, 5, 6, 7})
     mask.set(Index<1>{cell});
-  const auto result = tagging::BergerRigoutsosProvider<1>{}.cluster(
-      std::array{mask}, options<1>({1}, {8}, 0.5));
+  const auto result =
+      tagging::BergerRigoutsosProvider<1>{}.cluster(std::array{mask}, options<1>({1}, {8}, 0.5));
+  EXPECT_EQ(result.boxes.boxes(), patches.boxes());
+}
+
+TEST(test_nd_cluster, sparse_wide_domains_do_not_require_wide_signatures) {
+  const int last = std::numeric_limits<int>::max();
+  const Box<1> domain{Index<1>{0}, Index<1>{last}};
+  const mesh::BoxArray<1> patches(std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{0}},
+                                                      Box<1>{Index<1>{last}, Index<1>{last}}});
+  const mesh::RankSpace<1> ranks{Index<1>{0}, Extent<1>{1}};
+  const auto level = replicated_level(domain, patches, ranks);
+  tagging::TagMask<1> mask(level, Index<1>{0}, tag_budget(2, 2, 1, 2));
+  mask.set(Index<1>{0});
+  mask.set(Index<1>{last});
+  const auto result =
+      tagging::BergerRigoutsosProvider<1>{}.cluster(std::array{mask}, options<1>({1}, {8}));
   EXPECT_EQ(result.boxes.boxes(), patches.boxes());
 }

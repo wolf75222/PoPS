@@ -293,8 +293,14 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
                                                                 Work& work) {
     mask.account_cells(region, work);
     std::array<std::vector<std::int64_t>, Dim> signatures;
-    for (int axis = 0; axis < Dim; ++axis)
+    for (int axis = 0; axis < Dim; ++axis) {
+      // The canonical tag union may span several individually representable patches.
+      // Only a signature that is actually needed must fit the signed cut indices.
+      if (region.length(axis) > std::numeric_limits<int>::max())
+        throw std::length_error(
+            "Berger-Rigoutsos signature axis exceeds deterministic cut indexing");
       signatures[axis].assign(static_cast<std::size_t>(region.length(axis)), 0);
+    }
     mask.for_each_cell_in(region, [&](const Index<Dim>& index, bool tagged) {
       if (!tagged)
         return;
