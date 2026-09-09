@@ -104,8 +104,11 @@ class Provider final : public pops::PreparedKrylovMethodProvider<pops::kNativeDi
   pops::KrylovMethodValidation validate_problem(
       const pops::KrylovMethodProblemFacts<pops::kNativeDimension>& facts,
       const pops::PreparedProviderOptions&) const noexcept override {
-    if (!facts.properties.valid() || facts.footprint.components < 1 ||
-        facts.footprint.input_ghosts < 0 || facts.robust_payload_width == 0)
+    bool valid_ghosts = true;
+    for (int axis = 0; axis < pops::kNativeDimension; ++axis)
+      valid_ghosts = valid_ghosts && facts.footprint.input_ghosts[axis] >= 0;
+    if (!facts.properties.valid() || facts.footprint.components < 1 || !valid_ghosts ||
+        facts.robust_payload_width == 0)
       return pops::KrylovMethodValidation::reject(3, "invalid vector-space facts");
     if (facts.has_preconditioner || facts.footprint.preconditioned)
       return pops::KrylovMethodValidation::reject(4, "one-step method is unpreconditioned");
