@@ -57,7 +57,8 @@ struct VariableSemantic {
 
   constexpr void validate() const {
     if (is_vector() != has_axis())
-      throw std::invalid_argument("vector variable semantics require exactly one non-negative axis");
+      throw std::invalid_argument(
+          "vector variable semantics require exactly one non-negative axis");
   }
 
   template <int Dim>
@@ -71,9 +72,13 @@ struct VariableSemantic {
   }
 
   static constexpr VariableSemantic density() { return {VariableRoleKind::Density, -1}; }
-  static constexpr VariableSemantic momentum(int axis) { return {VariableRoleKind::Momentum, axis}; }
+  static constexpr VariableSemantic momentum(int axis) {
+    return {VariableRoleKind::Momentum, axis};
+  }
   static constexpr VariableSemantic energy() { return {VariableRoleKind::Energy, -1}; }
-  static constexpr VariableSemantic velocity(int axis) { return {VariableRoleKind::Velocity, axis}; }
+  static constexpr VariableSemantic velocity(int axis) {
+    return {VariableRoleKind::Velocity, axis};
+  }
   static constexpr VariableSemantic pressure() { return {VariableRoleKind::Pressure, -1}; }
   static constexpr VariableSemantic temperature() { return {VariableRoleKind::Temperature, -1}; }
   static constexpr VariableSemantic scalar() { return {VariableRoleKind::Scalar, -1}; }
@@ -265,7 +270,8 @@ inline void parse_roles_into(VariableSet& vs, const std::string& csv) {
         csv.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
     const VariableSemantic r = role_from_name(tok);
     vs.roles.push_back(r);
-    const bool is_user = (r == VariableSemantic::Custom && tok != role_name(VariableSemantic::Custom));
+    const bool is_user =
+        (r == VariableSemantic::Custom && tok != role_name(VariableSemantic::Custom));
     labels.push_back(is_user ? tok : std::string());
     any_user = any_user || is_user;
     if (comma == std::string::npos)

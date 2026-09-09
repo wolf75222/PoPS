@@ -178,10 +178,9 @@ void transport_only_flux() {
 
 template <int Dim>
 void materialize_elliptic_only() {
-  const mesh::BoxArray<Dim> layout(
-      std::vector<Box<Dim>>{test::nd::cube<Dim>(0, 3)});
-  const auto distribution = mesh::Distribution<Dim>::replicated(
-      layout, test::nd::one_rank_space<Dim>());
+  const mesh::BoxArray<Dim> layout(std::vector<Box<Dim>>{test::nd::cube<Dim>(0, 3)});
+  const auto distribution =
+      mesh::Distribution<Dim>::replicated(layout, test::nd::one_rank_space<Dim>());
   MultiFab<Dim> state(layout, distribution, Index<Dim>{}, 2, Extent<Dim>{});
   MultiFab<Dim> rhs(layout, distribution, Index<Dim>{}, 1, Extent<Dim>{});
   state.set_val(Real(3));
@@ -195,8 +194,8 @@ void materialize_elliptic_only() {
     for (std::size_t cell = 0; cell < static_cast<std::size_t>(rhs.box(local).numPts()); ++cell)
       EXPECT_EQ(host(cell), Real(8));
   }
-  EXPECT_THROW(generated_system_detail::add_poisson_rhs<Dim>(
-                   EllipticOnly<Dim>{true}, state, rhs), std::runtime_error);
+  EXPECT_THROW(generated_system_detail::add_poisson_rhs<Dim>(EllipticOnly<Dim>{true}, state, rhs),
+               std::runtime_error);
   for (std::size_t local = 0; local < rhs.local_size(); ++local) {
     auto host = rhs.fab(local).create_host_mirror();
     rhs.fab(local).copy_to_host(host);

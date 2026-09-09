@@ -175,7 +175,7 @@ struct PeriodicSparseParentGeometry {
 
 template <int Dim>
 PeriodicSparseParentGeometry<Dim> periodic_sparse_parent_geometry(int periodic_axes,
-                                                                 unsigned upper_faces) {
+                                                                  unsigned upper_faces) {
   PeriodicSparseParentGeometry<Dim> result{};
   std::array<bool, Dim> periodic{};
   for (int axis = 0; axis < Dim; ++axis) {
@@ -220,7 +220,7 @@ void prove_periodic_sparse_parent_interpolation(bool constant) {
   for (int periodic_axes = 1; periodic_axes <= Dim; ++periodic_axes) {
     for (unsigned upper_faces = 0; upper_faces < (1u << periodic_axes); ++upper_faces) {
       SCOPED_TRACE(::testing::Message() << "Dim=" << Dim << " periodic_axes=" << periodic_axes
-                                       << " upper_faces=" << upper_faces);
+                                        << " upper_faces=" << upper_faces);
       const auto geometry = periodic_sparse_parent_geometry<Dim>(periodic_axes, upper_faces);
       const BoxArray<Dim> coarse_layout(geometry.coarse_patches);
       const BoxArray<Dim> fine_layout(std::vector<Box<Dim>>{geometry.fine_patch});
@@ -251,9 +251,9 @@ void prove_periodic_sparse_parent_interpolation(bool constant) {
       fill_valid(fine, Real{-777},
                  [](const Index<Dim>&, int component) { return Real(8000 + component); });
       const auto limits = budget<Dim>(coarse_layout.size(), 1);
-      const CoarseFineGhostSchedule<Dim> schedule(
-          coarse, fine, geometry.coarse_domain, geometry.fine_domain, ratio_two<Dim>(),
-          geometry.topology, 1, limits.coarse_fine);
+      const CoarseFineGhostSchedule<Dim> schedule(coarse, fine, geometry.coarse_domain,
+                                                  geometry.fine_domain, ratio_two<Dim>(),
+                                                  geometry.topology, 1, limits.coarse_fine);
       ASSERT_EQ(schedule.patch_plans().size(), 1u);
       EXPECT_EQ(schedule.patch_plans()[0].coarse_staging_region, geometry.staging);
       EXPECT_EQ(schedule.local_elements(),
@@ -285,9 +285,9 @@ void prove_periodic_sparse_parent_interpolation(bool constant) {
           Real expected = Real(10000 * component);
           Real scale = 1;
           for (int axis = 0; axis < Dim; ++axis) {
-            const Real parent_center =
-                Real(geometry.coarse_domain.lo[axis]) +
-                Real(index[axis] - geometry.fine_domain.lo[axis]) / Real(2) - Real(0.25);
+            const Real parent_center = Real(geometry.coarse_domain.lo[axis]) +
+                                       Real(index[axis] - geometry.fine_domain.lo[axis]) / Real(2) -
+                                       Real(0.25);
             expected += scale * parent_center;
             scale *= 97;
           }
@@ -307,7 +307,7 @@ void prove_periodic_sparse_parent_gap_rejected() {
   for (int periodic_axes = 1; periodic_axes <= Dim; ++periodic_axes) {
     for (unsigned upper_faces = 0; upper_faces < (1u << periodic_axes); ++upper_faces) {
       SCOPED_TRACE(::testing::Message() << "Dim=" << Dim << " periodic_axes=" << periodic_axes
-                                       << " upper_faces=" << upper_faces);
+                                        << " upper_faces=" << upper_faces);
       auto geometry = periodic_sparse_parent_geometry<Dim>(periodic_axes, upper_faces);
       // Remove a required source layer from the wrapped edge/corner box, not from the
       // unavailable middle of the domain. Exact source coverage must still fail closed.
@@ -408,7 +408,8 @@ TEST(test_prepared_amr_ghost_fill, full_profile_parent_corner_is_reclustered_bef
   }
 }
 
-TEST(test_prepared_amr_ghost_fill, sparse_parent_level_keeps_two_halo_linear_accuracy_in_1d_2d_and_3d) {
+TEST(test_prepared_amr_ghost_fill,
+     sparse_parent_level_keeps_two_halo_linear_accuracy_in_1d_2d_and_3d) {
   prove_sparse_parent_interpolation<1>(2, 12, 19, false, true);
   prove_sparse_parent_interpolation<2>(2, 12, 19, false, true);
   prove_sparse_parent_interpolation<3>(2, 12, 19, false, true);
@@ -433,8 +434,7 @@ TEST(test_prepared_amr_ghost_fill,
   prove_periodic_sparse_parent_interpolation<3>(false);
 }
 
-TEST(test_prepared_amr_ghost_fill,
-     periodic_sparse_parent_edges_and_corners_preserve_constants) {
+TEST(test_prepared_amr_ghost_fill, periodic_sparse_parent_edges_and_corners_preserve_constants) {
   prove_periodic_sparse_parent_interpolation<1>(true);
   prove_periodic_sparse_parent_interpolation<2>(true);
   prove_periodic_sparse_parent_interpolation<3>(true);

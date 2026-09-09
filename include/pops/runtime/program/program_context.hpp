@@ -397,9 +397,9 @@ class ProgramContext {
   template <class Resource, class Matches, class... Args>
   Resource& prepared_resource(std::int64_t node, int block, Matches&& matches,
                               Args&&... args) const {
-    return prepared_resources_.template acquire<Resource>(
-        node, block, 0, prepared_execution_lane(), std::forward<Matches>(matches),
-        std::forward<Args>(args)...);
+    return prepared_resources_.template acquire<Resource>(node, block, 0, prepared_execution_lane(),
+                                                          std::forward<Matches>(matches),
+                                                          std::forward<Args>(args)...);
   }
 
   field_type& scratch_state(std::int64_t value_id, int subslot, const field_type& prototype) const {

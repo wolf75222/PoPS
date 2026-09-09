@@ -156,13 +156,27 @@ TEST(NativeFieldAttachment, OutputAuthorityRequiresExactKeysAndGradientSign) {
     SCOPED_TRACE(changed_part);
     auto expected = field_outputs();
     switch (changed_part) {
-      case 0: expected[0].owner_qid = "case:another/field:electrostatic"; break;
-      case 1: expected[0].space_kind = "auxiliary"; break;
-      case 2: expected[0].space_name = "another_potential"; break;
-      case 3: expected[0].component = "another_phi"; break;
-      case 4: std::swap(expected[0], expected[1]); break;
-      case 5: expected.pop_back(); break;
-      case 6: expected.push_back(expected.back()); break;
+      case 0:
+        expected[0].owner_qid = "case:another/field:electrostatic";
+        break;
+      case 1:
+        expected[0].space_kind = "auxiliary";
+        break;
+      case 2:
+        expected[0].space_name = "another_potential";
+        break;
+      case 3:
+        expected[0].component = "another_phi";
+        break;
+      case 4:
+        std::swap(expected[0], expected[1]);
+        break;
+      case 5:
+        expected.pop_back();
+        break;
+      case 6:
+        expected.push_back(expected.back());
+        break;
     }
     EXPECT_THROW(require_native_elliptic_output_contract(attachment, expected, -1),
                  std::logic_error);

@@ -174,9 +174,8 @@ inline constexpr int physical_model_dimension = [] {
 }();
 
 template <class Model>
-inline constexpr int flux_provider_count = [] {
-  return provider_count_for<Model, physical_model_dimension<Model>>();
-}();
+inline constexpr int flux_provider_count =
+    [] { return provider_count_for<Model, physical_model_dimension<Model>>(); }();
 
 template <class Model>
 inline constexpr bool has_qualified_flux_provider_requirements = requires {
@@ -543,9 +542,7 @@ concept ModelRoeDissipationAt =
     } ||
     requires(const Model model, const typename Model::State left,
              const typename Model::State right) {
-      {
-        model.template roe_dissipation<Axis>(left, right)
-      } -> std::same_as<typename Model::State>;
+      { model.template roe_dissipation<Axis>(left, right) } -> std::same_as<typename Model::State>;
     };
 
 template <class Model, int Axis = 0>
@@ -781,9 +778,7 @@ struct PhysicalFluxView {
 
   POPS_HD FluxDensity<State> evaluate(const Trace& trace, const FaceContext& face) const {
     FluxDensity<State> result{};
-    if constexpr (requires {
-                    physical.flux_evaluation(trace.state, trace.providers, face.axis);
-                  }) {
+    if constexpr (requires { physical.flux_evaluation(trace.state, trace.providers, face.axis); }) {
       result = physical.flux_evaluation(trace.state, trace.providers, face.axis);
     } else {
       result.value =

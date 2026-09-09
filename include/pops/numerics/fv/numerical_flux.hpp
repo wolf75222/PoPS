@@ -67,11 +67,10 @@ POPS_HD inline bool finite_state(const State& state) {
 /// Select the strongest physical failure deterministically before face arithmetic.
 /// Nonfinite kOk payloads are failures too; no policy may turn them into valid fluxes.
 template <class State>
-POPS_HD bool physical_pair_failed(const FluxDensity<State>& left,
-                                  const FluxDensity<State>& right,
-                                  FluxEvaluation<State>& failure,
-                                  RiemannFailureCause nonfinite_cause = RiemannFailureCause::kNonFinitePhysicalFlux,
-                                  EvaluationStatus nonfinite_status = EvaluationStatus::kFailed) {
+POPS_HD bool physical_pair_failed(
+    const FluxDensity<State>& left, const FluxDensity<State>& right, FluxEvaluation<State>& failure,
+    RiemannFailureCause nonfinite_cause = RiemannFailureCause::kNonFinitePhysicalFlux,
+    EvaluationStatus nonfinite_status = EvaluationStatus::kFailed) {
   EvaluationStatus selected = EvaluationStatus::kOk;
   std::uint32_t reason = 0;
   for (int side = 0; side < 2; ++side) {
@@ -89,10 +88,17 @@ POPS_HD bool physical_pair_failed(const FluxDensity<State>& left,
     }
   }
   switch (selected) {
-    case EvaluationStatus::kOk: return false;
-    case EvaluationStatus::kRetry: failure = FluxEvaluation<State>::retry(reason); break;
-    case EvaluationStatus::kReject: failure = FluxEvaluation<State>::reject(reason); break;
-    default: failure = FluxEvaluation<State>::failed(reason); break;
+    case EvaluationStatus::kOk:
+      return false;
+    case EvaluationStatus::kRetry:
+      failure = FluxEvaluation<State>::retry(reason);
+      break;
+    case EvaluationStatus::kReject:
+      failure = FluxEvaluation<State>::reject(reason);
+      break;
+    default:
+      failure = FluxEvaluation<State>::failed(reason);
+      break;
   }
   return true;
 }
@@ -256,7 +262,8 @@ struct HLLCFlux {
       const auto right_density = physical.evaluate(right, face);
       auto physical_failure = FluxEvaluation<typename Physical::State>::failed(0);
       if (detail::physical_pair_failed(left_density, right_density, physical_failure,
-                                        RiemannFailureCause::kHllcNonFinitePhysicalFlux, EvaluationStatus::kReject))
+                                       RiemannFailureCause::kHllcNonFinitePhysicalFlux,
+                                       EvaluationStatus::kReject))
         return physical_failure;
       if (lower >= Real(0)) {
         if (!detail::finite_state(left_density.value))
@@ -342,7 +349,8 @@ struct RoeFlux {
       const auto right_density = physical.evaluate(right, face);
       auto physical_failure = FluxEvaluation<typename Physical::State>::failed(0);
       if (detail::physical_pair_failed(left_density, right_density, physical_failure,
-                                        RiemannFailureCause::kRoeNonFiniteFlux, EvaluationStatus::kReject))
+                                       RiemannFailureCause::kRoeNonFiniteFlux,
+                                       EvaluationStatus::kReject))
         return physical_failure;
       const auto dissipation = physical.roe_dissipation(left, right, face);
       if (!detail::finite_state(dissipation))

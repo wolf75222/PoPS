@@ -773,7 +773,6 @@ TEST(test_field_nullspace, general_field_preflight_refuses_rank_local_storage_be
                std::invalid_argument);
 }
 
-
 TEST(test_field_nullspace, three_field_cross_diffusion_uses_complete_matrix_and_strict_spd) {
   comm_init();
   constexpr int Dim = 2, Components = 3, cells = 16;
@@ -784,7 +783,8 @@ TEST(test_field_nullspace, three_field_cross_diffusion_uses_complete_matrix_and_
   MultiFab<Dim> input(layout, distribution, Index<Dim>{}, Components, ghosts);
   MultiFab<Dim> output(layout, distribution, Index<Dim>{}, Components, ghosts);
   MultiFab<Dim> coefficients(layout, distribution, Index<Dim>{}, Components * Components, ghosts);
-  const auto geometry = Geometry<Dim>::from_bounds(domain, RealVector<Dim>{0, 0}, RealVector<Dim>{1, 1});
+  const auto geometry =
+      Geometry<Dim>::from_bounds(domain, RealVector<Dim>{0, 0}, RealVector<Dim>{1, 1});
   const auto topology = BoundaryTopology<Dim>::axis_periodic(std::array<bool, Dim>{true, true});
   const auto lane = ExecutionLane::world("field-cross-matrix");
   using Boundary = runtime::program::PreparedScalarBoundarySession<Dim>;
@@ -814,20 +814,25 @@ TEST(test_field_nullspace, three_field_cross_diffusion_uses_complete_matrix_and_
   const Real eigenvalue = Real(4 * cells * cells) * std::pow(std::sin(pi / Real(cells)), 2);
   for (std::size_t li = 0; li < output.local_size(); ++li) {
     const auto out = output.fab(li).view();
-    const Real error = for_each_cell_reduce_sum(output.box(li), [=] POPS_HD(const Index<Dim>& cell) {
-      const Real wave = Kokkos::cos(Real(2) * pi * geometry.cell_coordinate(0, cell[0]));
-      Real squared = 0;
-      for (int i = 0; i < Components; ++i) {
-        Real exact = 0;
-        for (int j = 0; j < Components; ++j)
-          exact += (eigenvalue * matrix[i * Components + j] + reaction[i * Components + j]) * amplitudes[j] * wave;
-        squared += (out(cell, i) - exact) * (out(cell, i) - exact);
-      }
-      return squared;
-    });
+    const Real error =
+        for_each_cell_reduce_sum(output.box(li), [=] POPS_HD(const Index<Dim>& cell) {
+          const Real wave = Kokkos::cos(Real(2) * pi * geometry.cell_coordinate(0, cell[0]));
+          Real squared = 0;
+          for (int i = 0; i < Components; ++i) {
+            Real exact = 0;
+            for (int j = 0; j < Components; ++j)
+              exact += (eigenvalue * matrix[i * Components + j] + reaction[i * Components + j]) *
+                       amplitudes[j] * wave;
+            squared += (out(cell, i) - exact) * (out(cell, i) - exact);
+          }
+          return squared;
+        });
     EXPECT_LT(std::sqrt(error), Real(1e-9));
   }
-  coefficients.set_val(Real(1)); // Rank-one matrix: semidefinite is insufficient for this CG principal part.
-  EXPECT_THROW((elliptic::nd::prepare_general_field_coefficients<Dim, Components, Components * Components>(
-      coefficients, *coefficient_boundary)), std::invalid_argument);
+  coefficients.set_val(
+      Real(1));  // Rank-one matrix: semidefinite is insufficient for this CG principal part.
+  EXPECT_THROW(
+      (elliptic::nd::prepare_general_field_coefficients<Dim, Components, Components * Components>(
+          coefficients, *coefficient_boundary)),
+      std::invalid_argument);
 }

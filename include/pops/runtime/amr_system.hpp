@@ -871,8 +871,8 @@ class AmrSystem {
   /// Publish a consumed field tuple over every materialized level atomically. The existing
   /// provider carriers and registry transactions own storage, freshness and rollback; source
   /// and flux consumers retain their prepared level-qualified views.
-  POPS_EXPORT void publish_program_field_components(
-      const std::string& publication_identity, const std::vector<ProgramFieldLevel>& levels);
+  POPS_EXPORT void publish_program_field_components(const std::string& publication_identity,
+                                                    const std::vector<ProgramFieldLevel>& levels);
 
   /// Durable accepted metadata for each AMR hierarchy level.  The native checkpoint backend owns
   /// rank-local group payload staging; this image authenticates its exact group identities,

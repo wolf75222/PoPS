@@ -85,8 +85,8 @@ inline void apply_general_field(
             if (other != component)
               continue;
           }
-          const int slot = CoefficientComponents == Components ? component :
-                           component * Components + other;
+          const int slot =
+              CoefficientComponents == Components ? component : component * Components + other;
           for (int axis = 0; axis < Dim; ++axis) {
             Index<Dim> lower = cell, upper = cell;
             --lower[axis];
@@ -104,7 +104,8 @@ inline void apply_general_field(
             }
             const Real spacing = geometry.spacing(axis);
             image -= (high * (value(upper, other) - value(cell, other)) -
-                      low * (value(cell, other) - value(lower, other))) / (spacing * spacing);
+                      low * (value(cell, other) - value(lower, other))) /
+                     (spacing * spacing);
           }
         }
         for (int other = 0; other < Components; ++other)
@@ -161,7 +162,8 @@ inline void prepare_general_field_coefficients(
         });
   }
   if (all_reduce_max(invalid, boundary.lane()) != Real(0))
-    throw std::invalid_argument("field diffusion matrix must be finite, symmetric and strictly positive definite");
+    throw std::invalid_argument(
+        "field diffusion matrix must be finite, symmetric and strictly positive definite");
   boundary.fill(coefficients);
 }
 
