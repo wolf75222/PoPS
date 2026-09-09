@@ -452,7 +452,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                 prelude.append(
                     "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
                     "ctx.alloc_scalar_field(%s, 1));" % (frozen,
-                    str(int(w.attrs["ncomp"])) if w.op == "field_problem_apply"
+                    str(int(coeffs.attrs["ncomp"])) if w.op == "field_problem_apply"
                     else "pops::kNativeDimension * pops::kNativeDimension"))
                 frozen_coefficients[sp] = frozen
                 freeze_pairs.append((sp, frozen))
@@ -745,7 +745,12 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         boundary = "field_boundary_A%d_%d" % (apply_id, w.id)
         session_dynamic.append((boundary, "ctx_owner->prepare_mesh_boundary_session("
             "*session_%s, ctx_owner->prepared_execution_lane())" % unknown))
-        general_fields[w.id] = (frozen, unknown, boundary)
+        coefficient_boundary = boundary
+        if w.inputs[2].attrs["ncomp"] != w.attrs["ncomp"]:
+            coefficient_boundary = "field_coeff_boundary_A%d_%d" % (apply_id, w.id)
+            session_dynamic.append((coefficient_boundary, "ctx_owner->prepare_mesh_boundary_session("
+                "*session_%s, ctx_owner->prepared_execution_lane())" % frozen))
+        general_fields[w.id] = (frozen, unknown, boundary, coefficient_boundary, int(w.attrs["ncomp"]), int(w.inputs[2].attrs["ncomp"]))
     var[("operator_prepare_refresh", apply_id)] = tuple(prepare_refresh)
     # 2) The lambda body: the laplacian / gradient ops + the result write into `out`.
     body = ["const pops::Real dt = *%s;" % apply_dt]
@@ -792,7 +797,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                            boundary, point_arg))
         elif w.op == "field_problem_apply":
             o, i, _coefficients = w.inputs
-            frozen, unknown, boundary = general_fields[w.id]
+            frozen, unknown, boundary, _coefficient_boundary, _width, coefficient_width = general_fields[w.id]
             sub[w.id] = sub[o.id]
             output = "out" if sub[o.id] == "out" else "*%s" % sub[o.id]
             ncomp = int(w.attrs["ncomp"])
@@ -801,12 +806,12 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                                  for value in w.attrs["reaction"])
             physical = w.attrs["physical_boundary"]
             body.append("pops::PureFieldAlgebra::copy(*%s, %s);" % (unknown, _apply_in_arg(sub, i)))
-            body.append("pops::elliptic::nd::apply_general_field<pops::kNativeDimension, %d>("
+            body.append("pops::elliptic::nd::apply_general_field<pops::kNativeDimension, %d, %d>("
                 "%s, *%s, *%s, *%s, std::array<pops::Real, %d>{%s}, "
                 "[] { std::array<pops::elliptic::nd::PhysicalFieldBoundary, "
                 "2 * pops::kNativeDimension> result{}; "
                 "result.fill(pops::elliptic::nd::PhysicalFieldBoundary::%s); return result; }());"
-                % (ncomp, output, unknown, frozen, boundary, ncomp * ncomp, reaction, physical))
+                % (ncomp, coefficient_width, output, unknown, frozen, boundary, ncomp * ncomp, reaction, physical))
         elif w.op == "rhs_jacvec":
             if coupled_pair is not None and coupled_widths is not None:
                 sub[w.id] = sub[w.inputs[0].id]
@@ -1033,9 +1038,9 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         local = "session_%s" % name
         prelude.append("  auto %s = %s;" % (local, expression))
         session_capture_initializers.append("%s = %s" % (name, local))
-    for frozen, _unknown, boundary in general_fields.values():
-        session_refresh.append("pops::elliptic::nd::prepare_general_field_coefficients(*%s, *%s);"
-                               % (frozen, boundary))
+    for frozen, _unknown, _boundary, boundary, width, coefficient_width in general_fields.values():
+        session_refresh.append("pops::elliptic::nd::prepare_general_field_coefficients<pops::kNativeDimension, %d, %d>(*%s, *%s);"
+                               % (width, coefficient_width, frozen, boundary))
     if tensor_boundary is not None:
         session_refresh.append(
             "%s->refresh_point(*%s);" % (tensor_boundary, tensor_point)

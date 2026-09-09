@@ -50,53 +50,72 @@ def _physical_boundary(problem: FieldProblem) -> str:
 
 
 def _physical_coefficients(problem: FieldProblem) -> tuple[Any, tuple[Any, ...]]:
-    """Authenticate the scalar principal part and complete constant reaction matrix."""
+    """Resolve component relations; prove the selected symmetric elliptic realization."""
     from fractions import Fraction
     size = len(problem.unknowns)
-    if size not in (1, 2):
-        raise FieldProblemError("field.native.arity", "native general fields support one or two scalar unknowns")
-    diffusion, reaction = [], [Fraction(0)] * (size * size)
+    diffusion = [Const(0) for _ in range(size * size)]
+    reaction = [Fraction(0)] * (size * size)
+    cross = False
     for row, equation in enumerate(problem.equations):
-        principals = []
+        principals = 0
         for term in elliptic_terms(equation.lhs):
             column = _unknown_index(problem, term)
+            slot = row * size + column
             if type(term) in (Laplacian, DivCoeffGrad):
-                if column != row:
-                    raise FieldProblemError("field.native.cross_diffusion", "off-diagonal diffusion requires a distinct native realization")
                 coefficient = Const(1) if type(term) is Laplacian else term.coeff
-                principals.append(-term.scale * coefficient)
+                diffusion[slot] = diffusion[slot] - term.scale * coefficient
+                principals += 1
+                cross |= column != row
             elif type(term) is Reaction:
                 coefficient = constant_reaction_scalar(term.coeff)
                 if coefficient is NotImplemented:
-                    raise FieldProblemError("field.native.reaction", "joint native reaction coefficients must be exact compile-time scalars")
-                reaction[row * size + column] += Fraction(coefficient) * Fraction(term.scale)
+                    raise FieldProblemError("field.native.reaction", "this numerical realization requires constant reaction entries")
+                reaction[slot] += Fraction(coefficient) * Fraction(term.scale)
             else:
                 raise FieldProblemError("field.native.principal", "field principal term has no native realization")
-        if len(principals) != 1:
-            raise FieldProblemError("field.native.principal", "one diagonal scalar diffusion term per equation is required")
-        diffusion.append(principals[0])
-    if size == 2 and reaction[1] != reaction[2]:
-        raise FieldProblemError("field.native.symmetry", "the selected CG route requires a symmetric reaction matrix")
-    if problem.gauge is not None:
-        if any(sum(reaction[row * size:(row + 1) * size]) != 0 for row in range(size)):
-            raise FieldProblemError("field.native.kernel", "the declared shared constant mode is not a kernel of the physical reaction matrix")
-        if size == 2 and not (reaction[0] > 0 and reaction[3] > 0 and reaction[1] < 0):
-            raise FieldProblemError("field.native.kernel", "two-field shared gauge requires positive lambda coupling; independent kernels need separate explicit constraints")
-    elif (size == 1 and reaction[0] <= 0) or (size == 2 and (reaction[0] <= 0 or reaction[3] <= 0 or reaction[0] * reaction[3] <= reaction[1] * reaction[2])):
-        raise FieldProblemError("field.native.kernel", "a singular field requires its explicit physical shared gauge")
+        if not principals:
+            raise FieldProblemError("field.native.principal", "each elliptic equation requires a diffusion relation")
+    if not cross:
+        diffusion = [diffusion[i * size + i] for i in range(size)]
     return tuple(diffusion), tuple(reaction)
+
+
+def _resolved_linear_properties(problem: FieldProblem, reaction: Any) -> Any:
+    """Infer algebraic facts; the chosen Krylov provider decides compatibility."""
+    from pops.linalg import LinearOperatorProperties
+    from ._field_matrix import gauge_modes, inverse, positive_definite
+    size = len(problem.unknowns)
+    matrix = tuple(tuple(reaction[i * size + j] for j in range(size)) for i in range(size))
+    symmetric = all(matrix[i][j] == matrix[j][i] for i in range(size) for j in range(size))
+    modes, _values = gauge_modes(problem.gauge, size)
+    if modes:
+        if not symmetric:
+            raise FieldProblemError("field.native.kernel", "constant mode projection requires a symmetric realization; nonsymmetric left and right kernels need a distinct numerical contract")
+        for mode in modes:
+            if any(sum(matrix[i][j] * mode[j] for j in range(size)) for i in range(size)):
+                raise FieldProblemError("field.native.kernel", "a declared constant mode is not in the physical reaction kernel")
+        completed = tuple(tuple(matrix[i][j] + sum(mode[i] * mode[j] for mode in modes)
+                                for j in range(size)) for i in range(size))
+        if not positive_definite(completed):
+            raise FieldProblemError("field.native.kernel", "the selected constant mode realization requires positivity on the complete declared kernel complement")
+        return LinearOperatorProperties.symmetric_positive_definite_on_nullspace_complement()
+    try:
+        inverse(matrix, where="singular reaction")
+    except ValueError as exc:
+        raise FieldProblemError("field.native.kernel", "a singular field requires its complete explicit constant modes") from exc
+    if positive_definite(matrix):
+        return LinearOperatorProperties.symmetric_positive_definite()
+    return LinearOperatorProperties.symmetric_operator() if symmetric else LinearOperatorProperties.general()
 
 
 def bind_field_problem(program: Any, field: Handle, registration: Any, *, values: Any, at: Any) -> Any:
     """Freeze explicit equation inputs; field storage never borrows a species owner."""
-    from pops.linalg import LinearOperatorProperties, LinearProblem
+    from pops.linalg import LinearProblem
     from pops.time import DerivativeStrategy, SolveRequest, SolveUnknown
     from pops.time._program.value_validation import require_top_level
     from pops.identity.scalar import scalar_literal
     from ._program_expression import encode_field_expression, field_expression_dependencies
-    from .gauges import MeanValueGauge
     from .methods import CellCenteredSecondOrder
-    from .nullspace import ConstantNullspace
     from .operator import FieldOperator
 
     problem = registration.operator
@@ -133,6 +152,7 @@ def bind_field_problem(program: Any, field: Handle, registration: Any, *, values
         raise FieldProblemError("field.native.input", "field solve has undeclared or duplicate equation inputs")
     states = tuple(states)
     diffusion, reaction = _physical_coefficients(problem)
+    properties = _resolved_linear_properties(problem, reaction)
     physical_boundary = _physical_boundary(problem)
     size = len(problem.unknowns)
     common = {"ncomp": size, "field_problem_identity": problem.identity.token,
@@ -147,6 +167,7 @@ def bind_field_problem(program: Any, field: Handle, registration: Any, *, values
          "stencil_access": StencilAccess.pointwise()}, problem.name + "_load", None, point=at, inherit_state_ref=False)
     coefficients = program._new("scalar_field", "field_problem_coefficients", states,
         {**common, "expressions": coefficient_expressions, "field_dependencies": coefficient_dependencies,
+         "ncomp": len(diffusion), "unknown_ncomp": size,
          "stencil_access": StencilAccess.pointwise()}, problem.name + "_coefficients", None, point=at, inherit_state_ref=False)
     operator = program.matrix_free_operator(problem.name + "_operator",
         domain="scalar" if size == 1 else "vector", range_="scalar" if size == 1 else "vector", ncomp=size)
@@ -158,14 +179,9 @@ def bind_field_problem(program: Any, field: Handle, registration: Any, *, values
     program.set_apply(operator, apply)
     if problem.gauge is None:
         nullspace, gauge = None, None
-        properties = LinearOperatorProperties.symmetric_positive_definite()
     else:
-        if size == 1:
-            nullspace, gauge = ConstantNullspace(), MeanValueGauge(problem.gauge.value)
-        else:
-            from ._joint_nullspace import shared_constant_nullspace
-            nullspace, gauge = shared_constant_nullspace(), problem.gauge
-        properties = LinearOperatorProperties.symmetric_positive_definite_on_nullspace_complement()
+        from ._joint_nullspace import constant_mode_nullspace
+        nullspace, gauge = constant_mode_nullspace(problem.gauge), problem.gauge
     linear = LinearProblem(operator, rhs, nullspace=nullspace, gauge=gauge, properties=properties)
     return SolveRequest(problem=linear, unknowns=(SolveUnknown("field_tuple", template=rhs),),
         equation_inputs={"operator": operator, "rhs": rhs}, seeds={"field_tuple": None},
@@ -245,10 +261,13 @@ def validate_field_apply(node: Any) -> None:
         raise FieldProblemError("field.native.apply", "invalid field apply input contract")
     out, value, coefficient = node.inputs
     size = node.attrs.get("ncomp")
-    if type(size) is not int or size not in (1, 2) or any(
+    if type(size) is not int or size < 1 or any(
             part.vtype != "scalar_field" or part.attrs.get("ncomp") != size
-            for part in (out, value, coefficient)):
+            for part in (out, value)):
         raise FieldProblemError("field.native.apply", "field apply changes its exact unknown width")
+    if coefficient.vtype != "scalar_field" or coefficient.attrs.get("ncomp") not in (size, size * size) \
+            or coefficient.attrs.get("unknown_ncomp") != size:
+        raise FieldProblemError("field.native.apply", "field coefficient matrix changes its exact unknown width")
     if coefficient.op != "field_problem_coefficients" or any(
             coefficient.attrs.get(key) != node.attrs.get(key) for key in
             ("field_problem_identity", "field_dependencies", "field_handle", "physical_boundary")):

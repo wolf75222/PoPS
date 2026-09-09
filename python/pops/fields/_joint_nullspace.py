@@ -23,26 +23,27 @@ from .problem import SharedMeanGauge
 def _author(options: Mapping[str, Any], gauge: Any, operator_properties: Mapping[str, bool],
             where: str) -> PreparedNullspaceContracts:
     if set(options) != {"components"} or type(options["components"]) is not int \
-            or options["components"] != 2:
-        raise TypeError("%s shared-constant provider currently requires exactly two components" % where)
+            or options["components"] < 1:
+        raise TypeError("%s shared-constant provider requires a positive component count" % where)
     if type(gauge) is not SharedMeanGauge or len(gauge.unknowns) != options["components"]:
         raise TypeError("%s requires one SharedMeanGauge over the exact field tuple" % where)
     return PreparedNullspaceContracts(
-        {"basis": "shared-constant-vector", "basis_count": 1, "components": 2},
+        {"basis": "shared-constant-vector", "basis_count": 1, "components": options["components"]},
         {"constraint": "mean-sum", "value": scalar_literal(gauge.value)},
     )
 
 
 def _validate(use: PreparedNullspaceUse, where: str) -> None:
     nullspace, gauge = use.contracts.detached()
-    if nullspace != {"basis": "shared-constant-vector", "basis_count": 1, "components": 2}:
+    components = nullspace.get("components")
+    if type(components) is not int or components < 1 or nullspace != {"basis": "shared-constant-vector", "basis_count": 1, "components": components}:
         raise ValueError("%s has an invalid joint constant basis" % where)
     if set(gauge) != {"constraint", "value"} or gauge["constraint"] != "mean-sum" \
             or type(gauge["value"]) is not ScalarLiteral:
         raise ValueError("%s has an invalid joint gauge" % where)
-    if use.components is not None and use.components != 2:
-        raise ValueError("%s joint field kernel requires exactly two packed components" % where)
-    if not use.operator_properties["symmetric"] or use.operator_properties["positive_definite"]:
+    if use.components is not None and use.components != components:
+        raise ValueError("%s joint field kernel changes its exact packed component count" % where)
+    if not use.operator_properties["symmetric"] or not use.operator_properties["positive_definite_on_nullspace_complement"]:
         raise ValueError("%s shared kernel requires symmetry and positivity on its complement" % where)
 
 
@@ -50,10 +51,10 @@ def _emit(node: Any, prelude: list[str], contracts: PreparedNullspaceContracts,
           plan_identity: str, provider: PreparedNullspaceProvider) -> PreparedNullspaceNativeEmission:
     expression = (
         "[&]() { auto plan = pops::constant_mean_zero_nullspace<pops::kNativeDimension>(%s, "
-        "\"one shared field constant mode\"); plan.bases.front().component_count = 2; "
-        "plan.gauges.front().value = static_cast<pops::Real>(%s) / pops::Real(2); "
+        "\"one shared field constant mode\"); plan.bases.front().component_count = %d; "
+        "plan.gauges.front().value = static_cast<pops::Real>(%s) / pops::Real(%d); "
         "return plan; }()"
-        % (json.dumps(plan_identity), scalar_cpp(contracts.gauge["value"]))
+        % (json.dumps(plan_identity), contracts.nullspace["components"], scalar_cpp(contracts.gauge["value"]), contracts.nullspace["components"])
     )
     return PreparedNullspaceNativeEmission(expression)
 
@@ -64,7 +65,7 @@ _PROVIDER = register_prepared_nullspace_provider(PreparedNullspaceProvider(
     singular=True,
     use_policy=PreparedNullspaceUsePolicy(
         "pops.prepared-nullspace.shared-field-constant-use", 1,
-        {"components": {"minimum": 2, "maximum": 2}, "basis_count": 1, "gauge": "mean-sum"},
+        {"components": {"minimum": 1}, "basis_count": 1, "gauge": "mean-sum"},
         _validate),
     author=_author,
     emitter=_emit,
@@ -75,5 +76,12 @@ _PROVIDER = register_prepared_nullspace_provider(PreparedNullspaceProvider(
 ))
 
 
-def shared_constant_nullspace() -> PreparedNullspace:
-    return PreparedNullspace(_PROVIDER, components=2)
+def shared_constant_nullspace(components: int = 2) -> PreparedNullspace:
+    return PreparedNullspace(_PROVIDER, components=components)
+
+
+def constant_mode_nullspace(gauge: Any) -> PreparedNullspace:
+    if type(gauge) is SharedMeanGauge:
+        return shared_constant_nullspace(len(gauge.unknowns))
+    from ._constant_mode_nullspace import constant_mode_nullspace as prepare
+    return prepare(gauge)

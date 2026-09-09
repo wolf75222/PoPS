@@ -772,3 +772,62 @@ TEST(test_field_nullspace, general_field_preflight_refuses_rank_local_storage_be
                                                           std::array<Real, 1>{0}, laws)),
                std::invalid_argument);
 }
+
+
+TEST(test_field_nullspace, three_field_cross_diffusion_uses_complete_matrix_and_strict_spd) {
+  comm_init();
+  constexpr int Dim = 2, Components = 3, cells = 16;
+  const Box<Dim> domain{Index<Dim>{0, 0}, Index<Dim>{cells - 1, cells - 1}};
+  const mesh::BoxArray<Dim> layout(std::vector<Box<Dim>>{domain});
+  const auto distribution = mesh::Distribution<Dim>::replicated(layout, one_rank_space<Dim>());
+  const Extent<Dim> ghosts{1, 1};
+  MultiFab<Dim> input(layout, distribution, Index<Dim>{}, Components, ghosts);
+  MultiFab<Dim> output(layout, distribution, Index<Dim>{}, Components, ghosts);
+  MultiFab<Dim> coefficients(layout, distribution, Index<Dim>{}, Components * Components, ghosts);
+  const auto geometry = Geometry<Dim>::from_bounds(domain, RealVector<Dim>{0, 0}, RealVector<Dim>{1, 1});
+  const auto topology = BoundaryTopology<Dim>::axis_periodic(std::array<bool, Dim>{true, true});
+  const auto lane = ExecutionLane::world("field-cross-matrix");
+  using Boundary = runtime::program::PreparedScalarBoundarySession<Dim>;
+  auto boundary = Boundary::prepare(geometry, topology, input, lane, 1);
+  auto coefficient_boundary = Boundary::prepare(geometry, topology, coefficients, lane, 1);
+  constexpr std::array<Real, 9> matrix{4, 1, -1, 1, 5, 2, -1, 2, 6};
+  constexpr std::array<Real, 3> amplitudes{1, -2, 3};
+  constexpr Real pi = Real(3.1415926535897932384626433832795);
+  for (std::size_t li = 0; li < input.local_size(); ++li) {
+    const auto u = input.fab(li).view();
+    const auto a = coefficients.fab(li).view();
+    for_each_cell(input.box(li), [=] POPS_HD(const Index<Dim>& cell) {
+      const Real wave = Kokkos::cos(Real(2) * pi * geometry.cell_coordinate(0, cell[0]));
+      for (int i = 0; i < Components; ++i)
+        u(cell, i) = amplitudes[i] * wave;
+      for (int i = 0; i < Components * Components; ++i)
+        a(cell, i) = matrix[i];
+    });
+  }
+  elliptic::nd::prepare_general_field_coefficients<Dim, Components, Components * Components>(
+      coefficients, *coefficient_boundary);
+  std::array<elliptic::nd::PhysicalFieldBoundary, 2 * Dim> laws{};
+  laws.fill(elliptic::nd::PhysicalFieldBoundary::periodic);
+  const std::array<Real, 9> reaction{2, 0, 1, 0, 3, 0, 1, 0, 4};
+  elliptic::nd::apply_general_field<Dim, Components, Components * Components>(
+      output, input, coefficients, *boundary, reaction, laws);
+  const Real eigenvalue = Real(4 * cells * cells) * std::pow(std::sin(pi / Real(cells)), 2);
+  for (std::size_t li = 0; li < output.local_size(); ++li) {
+    const auto out = output.fab(li).view();
+    const Real error = for_each_cell_reduce_sum(output.box(li), [=] POPS_HD(const Index<Dim>& cell) {
+      const Real wave = Kokkos::cos(Real(2) * pi * geometry.cell_coordinate(0, cell[0]));
+      Real squared = 0;
+      for (int i = 0; i < Components; ++i) {
+        Real exact = 0;
+        for (int j = 0; j < Components; ++j)
+          exact += (eigenvalue * matrix[i * Components + j] + reaction[i * Components + j]) * amplitudes[j] * wave;
+        squared += (out(cell, i) - exact) * (out(cell, i) - exact);
+      }
+      return squared;
+    });
+    EXPECT_LT(std::sqrt(error), Real(1e-9));
+  }
+  coefficients.set_val(Real(1)); // Rank-one matrix: semidefinite is insufficient for this CG principal part.
+  EXPECT_THROW((elliptic::nd::prepare_general_field_coefficients<Dim, Components, Components * Components>(
+      coefficients, *coefficient_boundary)), std::invalid_argument);
+}

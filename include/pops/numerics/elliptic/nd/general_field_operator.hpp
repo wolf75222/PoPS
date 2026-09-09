@@ -36,21 +36,23 @@ inline void require_field_boundary(
 
 /// Allocation-free conservative variable-coefficient apply over one physical tuple.
 /// The coefficient and boundary session are immutable, prepared solve inputs. Every
-/// diagonal diffusion coefficient is sampled by harmonic face averaging; reaction is
-/// the complete small joint matrix, including off-diagonal coupling.
-template <int Dim, int Components>
+/// diagonal-only coefficient uses harmonic face averaging. A complete component matrix
+/// uses arithmetic face averaging, preserving SPD even for signed cross terms.
+/// Reaction is the complete component matrix supplied by the authored equation.
+template <int Dim, int Components, int CoefficientComponents = Components>
 inline void apply_general_field(
     MultiFab<Dim>& output, MultiFab<Dim>& input, const MultiFab<Dim>& coefficients,
     const runtime::program::PreparedScalarBoundarySession<Dim>& boundary,
     const std::array<Real, Components * Components>& reaction,
     const std::array<PhysicalFieldBoundary, 2 * Dim>& physical) {
-  static_assert(Components == 1 || Components == 2,
-                "general field realization supports scalar or joint two-field tuples");
+  static_assert(Components > 0);
+  static_assert(CoefficientComponents == Components ||
+                CoefficientComponents == Components * Components);
   long invalid = 0;
   try {
     require_field_boundary(boundary, physical);
     if (input.ncomp() != Components || output.ncomp() != Components ||
-        coefficients.ncomp() != Components || input.layout() != output.layout() ||
+        coefficients.ncomp() != CoefficientComponents || input.layout() != output.layout() ||
         input.layout() != coefficients.layout() || input.distribution() != output.distribution() ||
         input.distribution() != coefficients.distribution() ||
         input.local_rank() != output.local_rank() ||
@@ -78,17 +80,32 @@ inline void apply_general_field(
     for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
       for (int component = 0; component < Components; ++component) {
         Real image = Real(0);
-        for (int axis = 0; axis < Dim; ++axis) {
-          Index<Dim> lower = cell, upper = cell;
-          --lower[axis];
-          ++upper[axis];
-          const Real center = coefficient(cell, component);
-          const Real low = harmonic_tensor_face_average(coefficient(lower, component), center);
-          const Real high = harmonic_tensor_face_average(center, coefficient(upper, component));
-          const Real spacing = geometry.spacing(axis);
-          image -= (high * (value(upper, component) - value(cell, component)) -
-                    low * (value(cell, component) - value(lower, component))) /
-                   (spacing * spacing);
+        for (int other = 0; other < Components; ++other) {
+          if constexpr (CoefficientComponents == Components) {
+            if (other != component)
+              continue;
+          }
+          const int slot = CoefficientComponents == Components ? component :
+                           component * Components + other;
+          for (int axis = 0; axis < Dim; ++axis) {
+            Index<Dim> lower = cell, upper = cell;
+            --lower[axis];
+            ++upper[axis];
+            const Real center = coefficient(cell, slot);
+            Real low, high;
+            if constexpr (CoefficientComponents == Components) {
+              low = harmonic_tensor_face_average(coefficient(lower, slot), center);
+              high = harmonic_tensor_face_average(center, coefficient(upper, slot));
+            } else {
+              // Convex matrix averaging preserves symmetry and positive definiteness;
+              // entrywise harmonic averaging does not preserve either for cross terms.
+              low = Real(0.5) * coefficient(lower, slot) + Real(0.5) * center;
+              high = Real(0.5) * center + Real(0.5) * coefficient(upper, slot);
+            }
+            const Real spacing = geometry.spacing(axis);
+            image -= (high * (value(upper, other) - value(cell, other)) -
+                      low * (value(cell, other) - value(lower, other))) / (spacing * spacing);
+          }
         }
         for (int other = 0; other < Components; ++other)
           image += reaction[component * Components + other] * value(cell, other);
@@ -99,27 +116,52 @@ inline void apply_general_field(
 }
 
 /// Validate and prepare coefficient halos once per frozen data version, outside CG.
-template <int Dim>
+template <int Dim, int Components = 0, int CoefficientComponents = Components>
 inline void prepare_general_field_coefficients(
     MultiFab<Dim>& coefficients,
     const runtime::program::PreparedScalarBoundarySession<Dim>& boundary) {
   Real invalid = Real(0);
   const int components = coefficients.ncomp();
+  if constexpr (Components > 0) {
+    if (all_reduce_max(components != CoefficientComponents ? 1L : 0L, boundary.lane()) != 0)
+      throw std::invalid_argument("field coefficient matrix has the wrong component count");
+  }
   for (std::size_t local = 0; local < coefficients.local_size(); ++local) {
     const auto values = std::as_const(coefficients).fab(local).view();
     invalid +=
         for_each_cell_reduce_sum(coefficients.box(local), [=] POPS_HD(const Index<Dim>& cell) {
           Real result = Real(0);
-          for (int component = 0; component < components; ++component) {
-            const Real value = values(cell, component);
-            if (!(value > Real(0)) || value > std::numeric_limits<Real>::max())
-              result += Real(1);
+          if constexpr (Components > 1 && CoefficientComponents == Components * Components) {
+            std::array<Real, Components * Components> matrix{};
+            for (int i = 0; i < Components; ++i)
+              for (int j = 0; j < Components; ++j) {
+                const Real value = values(cell, i * Components + j);
+                if (!std::isfinite(value) || value != values(cell, j * Components + i))
+                  return Real(1);
+                matrix[i * Components + j] = value;
+              }
+            // A strict local LDL factorization certifies the selected CG principal part.
+            for (int k = 0; k < Components; ++k) {
+              const Real pivot = matrix[k * Components + k];
+              if (!(pivot > Real(0)) || !std::isfinite(pivot))
+                return Real(1);
+              for (int i = k + 1; i < Components; ++i)
+                for (int j = k + 1; j < Components; ++j)
+                  matrix[i * Components + j] -=
+                      matrix[i * Components + k] * (matrix[k * Components + j] / pivot);
+            }
+          } else {
+            for (int component = 0; component < components; ++component) {
+              const Real value = values(cell, component);
+              if (!(value > Real(0)) || value > std::numeric_limits<Real>::max())
+                result += Real(1);
+            }
           }
           return result;
         });
   }
   if (all_reduce_max(invalid, boundary.lane()) != Real(0))
-    throw std::invalid_argument("field diffusion coefficient must be finite and strictly positive");
+    throw std::invalid_argument("field diffusion matrix must be finite, symmetric and strictly positive definite");
   boundary.fill(coefficients);
 }
 

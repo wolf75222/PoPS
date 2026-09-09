@@ -94,6 +94,54 @@ class SharedMeanGauge:
 
 
 @dataclass(frozen=True, slots=True)
+class ConstantModeGauge:
+    """Constant kernel vectors and constraints mean(sum(mode[i] * phi[i])) = value.
+
+    Modes may overlap, need not be orthogonal, and must span the complete kernel.
+    """
+    unknowns: tuple[Handle, ...]
+    modes: tuple[tuple[Any, ...], ...]
+    values: tuple[Any, ...] = ()
+
+    def __post_init__(self) -> None:
+        from pops.identity.scalar import scalar_literal
+        SharedMeanGauge(self.unknowns)
+        if not isinstance(self.modes, tuple) or not self.modes or any(
+                not isinstance(row, tuple) or len(row) != len(self.unknowns) for row in self.modes):
+            raise TypeError("ConstantModeGauge requires complete constant vectors over its unknowns")
+        for row in self.modes:
+            for value in row:
+                scalar_literal(value)
+        if not self.values:
+            object.__setattr__(self, "values", (0,) * len(self.modes))
+        if not isinstance(self.values, tuple) or len(self.values) != len(self.modes):
+            raise TypeError("ConstantModeGauge requires one mean value per mode")
+        for value in self.values:
+            scalar_literal(value)
+        from ._field_matrix import inverse
+        from fractions import Fraction
+        gram = tuple(tuple(sum(Fraction(a) * Fraction(b) for a, b in zip(left, right))
+                           for right in self.modes) for left in self.modes)
+        inverse(gram, where="constant field modes must be linearly independent")
+
+    def freeze(self) -> ConstantModeGauge:
+        return self
+
+    def declaration_references(self) -> tuple[Handle, ...]:
+        return self.unknowns
+
+    def resolve_references(self, resolver: Any) -> ConstantModeGauge:
+        return ConstantModeGauge(tuple(resolve_handle(row, resolver, where="constant mode gauge")
+                                       for row in self.unknowns), self.modes, self.values)
+
+    def to_data(self) -> dict[str, Any]:
+        from pops.identity.scalar import scalar_literal
+        return {"kind": "constant_mode_means", "unknowns": [row.canonical_identity()
+                for row in self.unknowns], "modes": [[scalar_literal(x).to_data() for x in row]
+                for row in self.modes], "values": [scalar_literal(x).to_data() for x in self.values]}
+
+
+@dataclass(frozen=True, slots=True)
 class FieldStorageBinding:
     """A field-owned storage binding, independent of the load-producing state blocks."""
 
@@ -141,7 +189,7 @@ class FieldProblem(Descriptor):
 
     def __init__(self, name: str, *, unknowns: tuple[Handle, ...],
                  equations: tuple[Equation, ...], boundaries: tuple[FieldBoundary, ...] = (),
-                 gauge: SharedMeanGauge | None = None, branch: Any = None,
+                 gauge: SharedMeanGauge | ConstantModeGauge | None = None, branch: Any = None,
                  outputs: tuple[Any, ...] = ()) -> None:
         if type(name) is not str or not name:
             raise TypeError("FieldProblem name must be a nonempty string")
@@ -158,7 +206,7 @@ class FieldProblem(Descriptor):
             raise TypeError("FieldProblem boundaries must be a tuple of FieldBoundary relations")
         if any(row.unknown not in unknowns for row in boundaries):
             raise FieldProblemError("field.boundary.foreign_unknown", "physical boundary belongs to a foreign field")
-        if gauge is not None and (not isinstance(gauge, SharedMeanGauge)
+        if gauge is not None and (not isinstance(gauge, (SharedMeanGauge, ConstantModeGauge))
                                   or gauge.unknowns != unknowns):
             raise FieldProblemError("field.gauge.joint_required", "a joint field problem requires one shared gauge over its exact unknown tuple")
         self._name = name
