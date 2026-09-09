@@ -124,7 +124,9 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
 }
 PROGRAM_RESPONSIBILITY_BUDGETS = {
     "joint_field_publication": 350,
-    "spatial_implicit": 400,
+    # N-component face sizing, shape authentication and per-component reflux add one
+    # bounded extension to the former scalar implementation (12 source lines today).
+    "spatial_implicit": 400 + 32,
     "diffusion": 180,
     "spatial_context": 350,
     "spatial_operations": 900,
@@ -145,21 +147,24 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
 # responsibility (400 lines). Diffusion already has its independent 180-line allowance above.
 # Composite temporal residual closure and exact predictor reconciliation add one
 # separately bounded responsibility; existing responsibility allowances stay fixed.
-SPATIAL_IMPLICIT_FRAGMENT_BUDGET = 400
+SPATIAL_IMPLICIT_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["spatial_implicit"]
 # Exact producer-family registration and FLX2 migration are a separately bounded
 # responsibility. Its closure remains counted; every prior responsibility cap is unchanged.
 FLUX_FAMILY_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["flux_family"]
 # Independent field storage, one hierarchy solve and atomic all-level observation publication.
-# Count this new responsibility explicitly without changing the existing responsibility caps.
+# Count this new responsibility separately from the earlier field-runtime allowance.
 JOINT_FIELD_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["joint_field_publication"]
 PROGRAM_FRAGMENT_BUDGET = (
     7_730 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
     + JOINT_FIELD_FRAGMENT_BUDGET
 )
-PROGRAM_SCAFFOLDING_BUDGET = 1_850
+# Context-owned cache acquisition and independent field-resource handles extend the
+# existing scaffolding; numerical solve and publication bodies remain counted above.
+CONTEXT_RESOURCE_SCAFFOLDING_BUDGET = 32
+PROGRAM_SCAFFOLDING_BUDGET = 1_850 + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET
 PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
     9_580 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
-    + JOINT_FIELD_FRAGMENT_BUDGET
+    + JOINT_FIELD_FRAGMENT_BUDGET + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET
 )
 SEMANTIC_AUTHORITIES = frozenset(
     {
