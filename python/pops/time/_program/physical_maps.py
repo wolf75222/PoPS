@@ -2,14 +2,20 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pops.time._authoring import atomic_authoring
 from pops.time._program.value_validation import require_owned
 from pops.time.values import ProgramValue, _resolve_handle
 
 
-class _ProgramPhysicalMaps:
+if TYPE_CHECKING:
+    from pops.time._program.contract import _ProgramBase
+else:
+    _ProgramBase = object
+
+
+class _ProgramPhysicalMaps(_ProgramBase):
     @atomic_authoring
     def map(self, physical_map: Any, *, source: Any, target: Any) -> Any:
         """Map one materialized state into an explicit target stage at the same time.

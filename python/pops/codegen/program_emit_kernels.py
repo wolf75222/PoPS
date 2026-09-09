@@ -20,12 +20,18 @@ import json
 from typing import Any
 
 from pops.identity.scalar import scalar_cpp
-from pops.fields._prepared_nullspace_registry import prepared_nullspace_provider_from_attrs
-from pops.solvers._prepared_preconditioner_registry import (
-    prepared_preconditioner_provider_from_attrs,
+from pops.fields._prepared_nullspace_registry import (
+    PreparedNullspaceProvider, prepared_nullspace_provider_from_attrs,
 )
-from pops.solvers.krylov._prepared_method_registry import prepared_krylov_method_provider_from_attrs
-from pops.solvers.providers import prepared_hierarchy_solver_provider_from_attrs
+from pops.solvers._prepared_preconditioner_registry import (
+    PreparedPreconditionerProvider, prepared_preconditioner_provider_from_attrs,
+)
+from pops.solvers.krylov._prepared_method_registry import (
+    PreparedKrylovMethodProvider, prepared_krylov_method_provider_from_attrs,
+)
+from pops.solvers.providers import (
+    PreparedHierarchySolverProvider, prepared_hierarchy_solver_provider_from_attrs,
+)
 from pops.time.values import ProgramValue, _to_affine  # noqa: F401
 
 # Emission-only op tables (formerly Program class constants; the lowering owns them).
@@ -343,7 +349,10 @@ def _prepared_native_components(program: Any) -> tuple[Any, ...]:
             continue
         if value.op != "solve_linear":
             continue
-        providers = [prepared_nullspace_provider_from_attrs(value.attrs)]
+        providers: list[PreparedNullspaceProvider | PreparedKrylovMethodProvider
+                        | PreparedPreconditionerProvider | PreparedHierarchySolverProvider] = [
+            prepared_nullspace_provider_from_attrs(value.attrs)
+        ]
         hierarchy = (prepared_hierarchy_solver_provider_from_attrs(value.attrs)
                      if "hierarchy_solver_provider" in value.attrs else None)
         if hierarchy is None or hierarchy.flat_execution.uses_prepared_krylov_fallback:

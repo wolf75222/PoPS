@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 def execute_program_maps(owner, dt, generation, attempt, receipts, captured):
-    from pops.runtime._native_step_target import native_step_target
+    from pops.runtime._native_step_target import native_program_region_target
     routes = owner._transfer_routes
     stage = {route.program_invocation: route for route in routes if route.program_invocation}
     accepted = [route for route in routes if not route.program_invocation
@@ -40,7 +40,7 @@ def execute_program_maps(owner, dt, generation, attempt, receipts, captured):
         for layout in sorted(waiting):
             if waiting[layout] is not None or layout in blocked:
                 continue
-            port = native_step_target(owner._engines[layout])._advance_program_region(dt)
+            port = native_program_region_target(owner._engines[layout])._advance_program_region(dt)
             if port and (port not in stage or layout not in (
                     stage[port].transfer.source_layout_id, stage[port].transfer.target_layout_id)):
                 raise RuntimeError("native Program reached an unbound map port")

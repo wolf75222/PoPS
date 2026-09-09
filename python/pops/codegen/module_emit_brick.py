@@ -9,6 +9,7 @@ Riemann capabilities (HLLC / Roe) live in ``module_emit_riemann``.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from pops.codegen.cpp_writer import (
@@ -381,6 +382,8 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         from pops._ir.native_call import native_functions
         from pops._ir.primitive_expansion import expand_primitive_recipes
         physical_fluxes = expand_primitive_recipes(model._flux, model.prim_defs)
+        if not isinstance(physical_fluxes, Mapping):
+            raise TypeError("expanded physical fluxes must preserve the axis mapping")
         all_fluxes = axis_values(physical_fluxes, "physical flux")
         fallible_flux = bool(native_functions(all_fluxes))
         # Keep legacy primitive locals for pure laws. Fallible recipes belong inside

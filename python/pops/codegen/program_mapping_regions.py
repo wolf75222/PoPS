@@ -7,6 +7,7 @@ from typing import Any
 
 from pops.identity.encoding import canonical_bytes
 from pops.time.canonical_data import _json_ready
+from pops.time.values import ProgramValue
 
 MAP_EXPORT = "layout_map_export"
 MAP_IMPORT = "layout_map_import"
@@ -120,7 +121,7 @@ def plan_program_mapping_regions(program: Any, layout_by_block: Mapping[str, str
     layouts = tuple(sorted(set(layout_by_block.values())))
     if not layouts:
         raise ValueError("Program mapping regions require resolved layout ownership")
-    values = {layout: [] for layout in layouts}
+    values: dict[str, tuple[ProgramValue, ...]] = {}
     # Slicing owns scalar/control dependency projection. Reuse it rather than duplicating an SSA
     # closure here; its preserved invocation token joins renamed per-layout SSA namespaces.
     from pops.codegen.program_slicing import slice_program

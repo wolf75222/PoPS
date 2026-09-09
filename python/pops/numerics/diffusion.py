@@ -73,6 +73,8 @@ class Diffusion(Descriptor):
         from .riemann._contract import riemann_capability_contract
         from pops.runtime.routes import resolve
         transport = self.transport
+        if transport is None:
+            raise ValueError("combined diffusion frequency requires a transport selection")
         reconstruction = authenticated_reconstruction_route(transport.reconstruction)
         flux = transport.riemann
         contract = riemann_capability_contract(flux)

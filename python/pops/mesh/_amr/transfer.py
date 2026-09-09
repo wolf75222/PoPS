@@ -405,7 +405,7 @@ class AMRTransfer:
                 variables = getattr(method, "variables", None)
                 state = getattr(variables, "options", {}).get("state") \
                     if variables is not None else None
-                if type(method) in (Diffusion, TensorDiffusion):
+                if type(method) is Diffusion or type(method) is TensorDiffusion:
                     state = method.law.state
                     if method.transport is not None:
                         transport_state = method.transport.variables.options.get("state")
