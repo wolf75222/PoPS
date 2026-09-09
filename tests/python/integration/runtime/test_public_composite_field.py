@@ -40,6 +40,8 @@ V = np.array((1., 2., -1.))
 R = np.outer(V, V)
 MODES = ((2, -1, 0), (1, 0, 1))
 MEANS = np.array((1.5, 1., 3.5))
+# V @ MEANS = 0 and MODES @ MEANS = (2, 5): the constant reaction load is zero.
+# The third amplitude 4 preserves those mean constraints while crossing zero. The same amplitudes enter both the manufactured forcing and reference.
 AMPLITUDES = np.array((1., -.3, 4.))
 WAVENUMBERS = ((1, 1), (2, 1), (1, 2))
 
@@ -148,14 +150,40 @@ def envelope(runtime):
     # The rank-local manifest includes grown payloads and accepted metadata even
     # before the initial dirty providers permit a durable auxiliary checkpoint.
     carriers = tuple(tuple(row) for row in native.checkpoint_rank_local_carrier_manifest())
-    assert sum(row[1] == "auxiliary-accepted-metadata" for row in carriers) == runtime.n_levels()
+    for kind in ("auxiliary-registry", "auxiliary-accepted-metadata"):
+        assert sorted(int(row[3]) for row in carriers if row[1] == kind) == list(range(runtime.n_levels()))
+    # A metadata-only manifest would miss a rollback that restores generations but
+    # leaves published potential/gradient bytes behind. Each locally owned fluid
+    # patch must carry at least all three observed potentials and both gradients.
+    # Use patch identity rather than requiring local ownership on every MPI rank.
+    local_fluid = {(row[3], row[5], row[7:11]) for row in carriers
+                   if row[1] == "state" and row[2] == "fluid"}
+    auxiliary_components = {}
+    for row in carriers:
+        if row[1] != "auxiliary":
+            continue
+        assert len(row) == 16  # Dim2: valid and grown boxes, component count, payload hash
+        assert row[-1].startswith("pops.amr.rank-local-carrier.v1:sha256:")
+        key = row[3], row[5], row[7:11]
+        auxiliary_components[key] = auxiliary_components.get(key, 0) + int(row[6])
+    assert all(auxiliary_components.get(key, 0) >= 5 for key in local_fluid)
     accepted = None if dirty else tuple(native.capture_auxiliary_checkpoint_accepted_state())
-    return (runtime.time(), runtime.macro_step(), tuple(runtime.patch_boxes()),
-        tuple(np.asarray(runtime.block_level_state_global(block, level)).tobytes()
-              for block in ("fluid", "load", "marker") for level in range(runtime.n_levels())),
-        accepted_histories(runtime), native._program_exchange_records(),
-        tuple(tuple(map(str, row)) for row in native.program_flux_ledger_manifest()),
-        tuple(sorted(native.program_diagnostics().items())), dirty, carriers, accepted)
+    if accepted is not None:
+        assert len(accepted) == runtime.n_levels()
+    return {
+        "clock": (runtime.time(), runtime.macro_step()),
+        "topology": tuple(runtime.patch_boxes()),
+        "state": tuple(np.asarray(runtime.block_level_state_global(block, level)).tobytes()
+                       for block in ("fluid", "load", "marker") for level in range(runtime.n_levels())),
+        "histories": accepted_histories(runtime),
+        "exchanges": native._program_exchange_records(),
+        "flux_ledger": tuple(tuple(map(str, row)) for row in native.program_flux_ledger_manifest()),
+        "diagnostics": tuple(sorted(native.program_diagnostics().items())),
+        "dirty_providers": dirty,
+        "carriers": carriers,
+        "published_fields": tuple(row for row in carriers if row[1].startswith("auxiliary")),
+        "accepted_auxiliary": accepted,
+    }
 
 
 def stationary_payload(runtime, n):
@@ -200,7 +228,10 @@ def inspect_solution(runtime, n):
     assert abs(V @ mean) < 2e-8  # integrated reaction balance, independent of the authored gauge
     raw = np.concatenate(raw)
     assert raw.min() < 0 < raw.max(), "abs_sum must be tested on a sign-changing observation"
-    assert np.abs(raw).sum() > raw.sum()
+    # Separate the two oracles by more than the diagnostic comparison tolerance;
+    # substituting signed sum for abs_sum must fail at every declared resolution.
+    absolute_sum = np.abs(raw).sum()
+    assert absolute_sum - raw.sum() > 2 * (2e-12 * absolute_sum + 2e-10)
     diagnostics = runtime._executor.program_diagnostics()
     for kind, expected in (("sum", raw.sum()), ("abs_sum", np.abs(raw).sum()), ("min", raw.min()), ("max", raw.max())):
         assert diagnostics["phi2_" + kind] == pytest.approx(float(expected), rel=2e-12, abs=2e-10)
@@ -256,4 +287,17 @@ def test_public_joint_field_publication_rollback_and_same_instance_retry(n, isol
         report = pops.run(runtime, t_end=DT, max_steps=1, console=False)
         assert report.accepted_steps == 1
         inspect_solution(runtime, n)
+    assert envelope(retried) == envelope(fresh)
+
+    # Repeat rejection after a real accepted publication: initial dirty-provider
+    # rollback alone cannot prove restoration of an existing accepted value/point.
+    accepted = envelope(retried)
+    assert accepted["published_fields"] != before["published_fields"]
+    with pytest.raises(RuntimeError, match="(?i)(invalid|evaluation|admissible|transform)"):
+        pops.run(retried, t_end=11*DT, max_steps=1, console=False)
+    assert envelope(retried) == accepted
+    for runtime in (retried, fresh):
+        report = pops.run(runtime, t_end=2*DT, max_steps=1, console=False)
+        assert report.accepted_steps == 1 and report.rejected_steps == 0
+        assert runtime.time() == 2*DT and runtime.macro_step() == 2
     assert envelope(retried) == envelope(fresh)
