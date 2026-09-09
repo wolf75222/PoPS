@@ -183,7 +183,7 @@ def test_public_flat_hierarchy_resolves_without_coarse_fine_authority():
     )
 
     case, layout, _ = _public_amr_hierarchy_case(
-        CompositeTensorFAC(), max_levels=1, temporal_ratios=())
+        CompositeTensorFAC(), max_levels=1)
     plan = pops.resolve(pops.validate(case), layout=layout)
     assert plan.resolved_hierarchy.plan.transitions == ()
     assert plan.amr_transfer.entries == ()

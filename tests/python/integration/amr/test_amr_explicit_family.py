@@ -42,6 +42,7 @@ from pops.params import RuntimeParam
 from pops.physics import Model
 from pops.projection import ConservativeCellAverage
 from pops.time import FixedDt, every
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -163,7 +164,10 @@ def _run(method: str, *, multi: bool, native_cxx: str):
     assert len(rhs) == len(names) * tableau.stages
     assert len(resolved.time.commits()) == len(names)
 
-    simulation = pops.bind(pops.compile(resolved))
+    artifact = pops.compile(resolved)
+    simulation = pops.bind(
+        artifact, resources={"execution_context": artifact_execution_context(artifact)}
+    )
     assert simulation.block_names() == names
     assert simulation.n_levels() == 2
     assert simulation.patch_boxes()

@@ -130,7 +130,8 @@ def test_resolved_plan_is_exact_deeply_frozen_and_self_authenticating():
     plan.verify()
 
     object.__setattr__(plan, "target", "amr_system")
-    with pytest.raises(ValueError, match="identity verification failed"):
+    # The target changes the retained-object authority; its cross-check precedes the digest check.
+    with pytest.raises(ValueError, match="continuation policies differ from resolved retained-object authorities"):
         plan.verify()
 
 

@@ -1109,6 +1109,17 @@ def test_rank_change_restart_rolls_back_after_hierarchy_rebuild_failure(monkeypa
     native = _TransactionalNativeAMR()
     runtime = _InjectedFailureAMR()
     runtime._s = native
+    from pops.runtime._continuation_transitions import ContinuationTransitionPlan
+
+    # This synthetic bracket has opaque native images and no Python continuation readers.
+    # Supply its exact empty AMR policy so the real lifecycle preflight remains active.
+    runtime._continuation_transition_plan = ContinuationTransitionPlan(json.dumps({
+        "schema_version": 1,
+        "kind": "pops.continuation-transitions",
+        "target": "amr_system",
+        "evidence_stage": "resolved",
+        "objects": [],
+    }, sort_keys=True, separators=(",", ":")))
     runtime._execution_context = SimpleNamespace(
         communicator=SimpleNamespace(identity="serial", handle=None)
     )
