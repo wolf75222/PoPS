@@ -190,18 +190,23 @@ def _assert_public_patch_geometry(simulation):
 def _assert_native_patch_box_binding_is_inclusive(simulation):
     """Exercise the AMR-only Python/native [lo, hi] adapter through a live hierarchy."""
     native = simulation._executor._s
-    full_fine_box = ((1, (0, 0), (31, 31)),)
+    full_fine_box = ((1, (0, 0), (63, 63)),)
     native.rebuild_hierarchy(full_fine_box, (0,))
     assert tuple(native.patch_boxes()) == full_fine_box
 
-    # The last cell is a valid singleton under the inclusive convention.
-    last_cell = ((1, (31, 31), (31, 31)),)
-    native.rebuild_hierarchy(last_cell, (0,))
-    assert tuple(native.patch_boxes()) == last_cell
+    # A ratio-two fine patch must contain complete parent cells.  The final
+    # 2x2 footprint proves that both high indices remain inclusive.
+    last_parent_cell = ((1, (62, 62), (63, 63)),)
+    native.rebuild_hierarchy(last_parent_cell, (0,))
+    assert tuple(native.patch_boxes()) == last_parent_cell
 
     # Re-import the native output verbatim: no half-open normalization is permitted.
     native.rebuild_hierarchy(native.patch_boxes(), (0,))
-    assert tuple(native.patch_boxes()) == last_cell
+    assert tuple(native.patch_boxes()) == last_parent_cell
+
+    with pytest.raises(ValueError, match="complete anisotropic parent cells"):
+        native.rebuild_hierarchy(((1, (63, 63), (63, 63)),), (0,))
+    assert tuple(native.patch_boxes()) == last_parent_cell
 
     with pytest.raises(TypeError, match="native dimension"):
         native.rebuild_hierarchy(((1, (0,), (31, 31)),), (0,))

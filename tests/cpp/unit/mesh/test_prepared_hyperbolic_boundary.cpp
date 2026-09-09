@@ -234,6 +234,17 @@ TEST(test_prepared_hyperbolic_boundary, three_dimensional_slip_uses_axis_static_
   EXPECT_EQ(value_at(state, Index<3>{-1, -1, 0}, 0), Real(-99));
 }
 
+TEST(test_prepared_hyperbolic_boundary,
+     two_dimensional_slip_preserves_out_of_plane_axial_reflection_parity) {
+  const auto transform = transform_from_semantic<2>(VariableSemantic::axial(2));
+  EXPECT_EQ(transform.parity, HyperbolicComponentParity::AxialVector);
+  EXPECT_EQ(transform.axis, 2);
+  EXPECT_EQ(transform.reflection_sign(0), Real(-1));
+  EXPECT_EQ(transform.reflection_sign(1), Real(-1));
+  EXPECT_THROW(transform_from_semantic<2>(VariableSemantic::axial(3)), std::invalid_argument);
+  EXPECT_THROW(transform_from_semantic<2>(VariableSemantic::momentum(2)), std::invalid_argument);
+}
+
 TEST(test_prepared_hyperbolic_boundary, no_flux_is_enforced_on_the_post_riemann_face_field) {
   const Box<2> domain = Box<2>::from_extents(Extent<2>{2, 2});
   const auto boundary =

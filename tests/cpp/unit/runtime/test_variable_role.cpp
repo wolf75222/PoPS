@@ -93,4 +93,28 @@ TEST(VariableRole, AxisSemanticsAreValidatedAgainstTheExactNativeRank) {
                std::invalid_argument);
   EXPECT_NO_THROW(pops::validate_variable_semantics<3>(invalid_for_one_dimensional, "test",
                                                        "three-dimensional state"));
+
+  const pops::VariableSet out_of_plane_axial{
+      pops::VariableKind::Conservative,
+      {"bz"},
+      1,
+      {R::axial(2)},
+  };
+  EXPECT_NO_THROW(
+      pops::validate_variable_semantics<1>(out_of_plane_axial, "test", "one-dimensional state"));
+  EXPECT_NO_THROW(
+      pops::validate_variable_semantics<2>(out_of_plane_axial, "test", "two-dimensional state"));
+
+  const pops::VariableSet outside_physical_embedding{
+      pops::VariableKind::Conservative,
+      {"b3"},
+      1,
+      {R::axial(3)},
+  };
+  EXPECT_THROW(pops::validate_variable_semantics<1>(outside_physical_embedding, "test",
+                                                    "one-dimensional state"),
+               std::invalid_argument);
+  EXPECT_THROW(pops::validate_variable_semantics<2>(outside_physical_embedding, "test",
+                                                    "two-dimensional state"),
+               std::invalid_argument);
 }

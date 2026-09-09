@@ -24,9 +24,9 @@ enum class VariableKind { Conservative, Primitive };
 
 /// Axis-independent kind of a variable semantic.
 ///
-/// Vector semantics carry their spatial component separately in VariableSemantic::axis.  There is
-/// deliberately no X/Y/Z enumerator: an algorithm can ask for `momentum(axis)` for every native
-/// axis without carrying a 3D vocabulary through a 1D or 2D artifact.
+/// Vector semantics carry their component separately in VariableSemantic::axis.  Polar vectors use
+/// native mesh axes; axial vectors use the fixed physical x/y/z embedding so reduced-dimensional
+/// models can retain an out-of-plane pseudovector component.
 enum class VariableRoleKind {
   Density,
   Momentum,
@@ -39,11 +39,11 @@ enum class VariableRoleKind {
   Axial,
 };
 
-/// Physical meaning of a component, optionally qualified by one spatial axis.
+/// Physical meaning of a component, optionally qualified by one component axis.
 ///
 /// This is host metadata, so `axis == -1` represents a scalar semantic and `axis >= 0` represents
-/// a vector semantic.  `validate_for_dimension` is the sole rank gate: producers and consumers
-/// must validate their exact native specialization before using an axis.
+/// a vector semantic.  Momentum and velocity axes belong to the native mesh rank.  Axial axes
+/// belong to the physical x/y/z embedding and may therefore name an out-of-plane component.
 struct VariableSemantic {
   VariableRoleKind kind = VariableRoleKind::Custom;
   int axis = -1;
@@ -63,7 +63,10 @@ struct VariableSemantic {
   template <int Dim>
   constexpr void validate_for_dimension() const {
     validate();
-    if (has_axis() && axis >= Dim)
+    if (kind == VariableRoleKind::Axial && axis >= 3)
+      throw std::invalid_argument(
+          "axial variable semantic axis lies outside the physical x/y/z embedding");
+    if (kind != VariableRoleKind::Axial && has_axis() && axis >= Dim)
       throw std::invalid_argument("variable semantic axis lies outside the native dimension");
   }
 
