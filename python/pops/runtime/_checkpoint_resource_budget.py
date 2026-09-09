@@ -807,17 +807,11 @@ def install_amr_checkpoint_resource_budget(owner: Any, install_plan: Any) -> Non
     snapshot_shard_capacity = _capacity(
         snapshot_capacity_provider(), where="native history-flux snapshot shard capacity"
     )
+    # Capture compacts every live ownership shard into one rank-independent native image. Its
+    # carrier therefore has exactly one payload vector and the canonical [0, size] offsets pair.
     history_flux_snapshot_bytes = _add(
-        _mul(
-            rank_capacity,
-            snapshot_shard_capacity,
-            where="history-flux snapshot shard capacity",
-        ),
-        _mul(
-            _add(rank_capacity, 1, where="history-flux snapshot offset count"),
-            8,
-            where="history-flux snapshot offset capacity",
-        ),
+        snapshot_shard_capacity,
+        2 * 8,
         where="history-flux snapshot archive capacity",
     )
     artifact = install_plan.artifact

@@ -611,10 +611,12 @@ def _capture_v3(owner, sim, prepared):
         raise ValueError("checkpoint AMR accepted Program image differs across source ranks")
     canonical_program_state = program_states[0]
     from pops.runtime._checkpoint_history_flux_snapshots import capture_history_flux_snapshots
+    snapshot_canonicalizer = getattr(sim, "canonical_program_history_flux_snapshots", None)
     capture_history_flux_snapshots(
         prepared.topology,
         prepared.local_history_flux_snapshot_shard,
         prepared.history_flux_snapshot_shard_capacity,
+        snapshot_canonicalizer,
         out,
     )
     rank_rows = consensus(
@@ -1133,7 +1135,6 @@ def prepare_v3(
         raise TypeError("restart: AMR engine lacks immutable history-flux snapshot capacity")
     history_flux_snapshot_shards = prepare_history_flux_snapshots(
         d,
-        checkpoint_ranks=checkpoint_ranks,
         shard_capacity=snapshot_capacity_provider(),
     )
     return _PreparedAMRRestart(
@@ -1425,7 +1426,7 @@ def apply_v3(owner, sim, prepared):
         if not callable(restore_history_flux_snapshots):
             raise TypeError("restart: AMR engine lacks immutable history-flux snapshot restore")
         restore_history_flux_snapshots(
-            list(prepared.history_flux_snapshot_shards), prepared.checkpoint_ranks
+            list(prepared.history_flux_snapshot_shards), 1
         )
 
     # (4) Restore every block/level state as saved, without re-prolongation.

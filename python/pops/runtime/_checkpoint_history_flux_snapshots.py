@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import MutableMapping
-import sys
+from hashlib import sha256
 from typing import Any
 
 import numpy as np
@@ -24,9 +24,10 @@ def capture_history_flux_snapshots(
     topology: Any,
     local_shard: bytes,
     shard_capacity: int,
+    canonicalize: Any,
     payload: MutableMapping[str, Any],
 ) -> None:
-    """Gather one immutable shard per source rank into two canonical NPZ arrays."""
+    """Gather and compact rank-owned shards into one rank-independent NPZ image."""
     from pops._native_collectives import allgather_bytes
     from pops.output._checkpoint_collective import consensus
 
@@ -39,6 +40,8 @@ def capture_history_flux_snapshots(
             raise TypeError("history-flux snapshot shard must be exact bytes")
         if len(local_shard) > capacity:
             raise ValueError("history-flux snapshot shard exceeds its artifact capacity")
+        if not callable(canonicalize):
+            raise TypeError("history-flux snapshot canonicalizer must be callable")
         present = bool(local_shard)
     except BaseException as exc:
         error = exc
@@ -59,6 +62,8 @@ def capture_history_flux_snapshots(
         if topology.distributed and present
         else (local_shard,) * topology.size
     )
+    canonical = b""
+    digest = None
     error = None
     try:
         if len(images) != topology.size or any(type(image) is not bytes for image in images):
@@ -69,32 +74,35 @@ def capture_history_flux_snapshots(
             raise RuntimeError("empty history-flux snapshot gather is not canonical")
         if any(len(image) > capacity for image in images):
             raise ValueError("history-flux snapshot shard exceeds its artifact capacity")
-        if capacity and topology.size > sys.maxsize // capacity:
-            raise OverflowError("history-flux snapshot archive capacity exceeds addressable memory")
-        offsets = [0]
-        for image in images:
-            if len(image) > sys.maxsize - offsets[-1]:
-                raise OverflowError("history-flux snapshot archive exceeds addressable memory")
-            offsets.append(offsets[-1] + len(image))
-        payload[SNAPSHOT_STATE_KEY] = np.frombuffer(b"".join(images), dtype=np.uint8).copy()
-        payload[SNAPSHOT_OFFSETS_KEY] = np.asarray(offsets, dtype=np.int64)
+        canonical = canonicalize(list(images), topology.size) if present else b""
+        if type(canonical) is not bytes:
+            raise TypeError("history-flux snapshot canonicalizer must return exact bytes")
+        if present and not canonical:
+            raise RuntimeError("history-flux snapshot canonicalizer dropped live metadata")
+        if len(canonical) > capacity:
+            raise ValueError("canonical history-flux snapshot exceeds its artifact capacity")
+        digest = sha256(canonical).hexdigest()
     except BaseException as exc:
         error = exc
-    consensus(topology, "history-flux snapshot checkpoint serialization", error=error)
+    rows = consensus(
+        topology,
+        "history-flux snapshot checkpoint canonicalization",
+        error=error,
+        value=digest,
+    )
+    if any(row["value"] != digest for row in rows):
+        raise RuntimeError("canonical history-flux snapshot differs across ranks")
+    payload[SNAPSHOT_STATE_KEY] = np.frombuffer(canonical, dtype=np.uint8).copy()
+    payload[SNAPSHOT_OFFSETS_KEY] = np.asarray((0, len(canonical)), dtype=np.int64)
 
 
 def prepare_history_flux_snapshots(
     payload: Any,
     *,
-    checkpoint_ranks: int,
     shard_capacity: int,
 ) -> tuple[bytes, ...] | None:
-    """Validate and split one sealed source-rank archive before restart mutation."""
+    """Validate one canonical rank-independent archive before restart mutation."""
     capacity = _exact_capacity(shard_capacity)
-    if isinstance(checkpoint_ranks, bool) or not isinstance(checkpoint_ranks, int):
-        raise TypeError("history-flux snapshot source rank count must be an exact integer")
-    if checkpoint_ranks < 1:
-        raise ValueError("history-flux snapshot source rank count must be positive")
     present = HISTORY_FLUX_SNAPSHOT_CHECKPOINT_KEYS.intersection(payload)
     if not present:
         return None
@@ -107,24 +115,11 @@ def prepare_history_flux_snapshots(
         raise ValueError("restart history-flux snapshot state must be one uint8 vector")
     if offsets.dtype != np.dtype(np.int64) or offsets.ndim != 1:
         raise ValueError("restart history-flux snapshot offsets must be one int64 vector")
-    if len(offsets) != checkpoint_ranks + 1 or offsets[0] != 0 or offsets[-1] != len(raw):
-        raise ValueError("restart history-flux snapshot offsets do not cover every source rank")
-    if len(raw):
-        if np.any(offsets[1:] <= offsets[:-1]):
-            raise ValueError("restart history-flux snapshot shards must be non-empty")
-    elif np.any(offsets):
-        raise ValueError("restart empty history-flux snapshot offsets are not canonical")
-
-    widths = offsets[1:] - offsets[:-1]
-    if np.any(widths > capacity):
+    if len(offsets) != 2 or offsets[0] != 0 or offsets[1] != len(raw):
+        raise ValueError("restart history-flux snapshot offsets must describe one canonical image")
+    if len(raw) > capacity:
         raise ValueError("restart history-flux snapshot shard exceeds its artifact capacity")
-    shards = tuple(
-        raw[int(first) : int(last)].tobytes()
-        for first, last in zip(offsets[:-1], offsets[1:], strict=True)
-    )
-    if any(shards) and any(not shard for shard in shards):
-        raise ValueError("restart history-flux snapshot metadata presence differs across ranks")
-    return shards
+    return (raw.tobytes(),)
 
 
 __all__ = [

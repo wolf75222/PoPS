@@ -29,6 +29,19 @@ namespace {
 using AmrSystem = pops::AmrSystem<pops::kNativeDimension>;
 using AmrSystemConfig = pops::AmrSystemConfig<pops::kNativeDimension>;
 
+std::vector<std::vector<std::uint8_t>> history_flux_snapshot_shards_from_python(
+    const py::sequence& payloads) {
+  std::vector<std::vector<std::uint8_t>> shards;
+  shards.reserve(static_cast<std::size_t>(py::len(payloads)));
+  for (const py::handle payload : payloads) {
+    if (!py::isinstance<py::bytes>(payload))
+      throw py::type_error("history-flux snapshot shards must be exact bytes");
+    const std::string bytes = py::cast<std::string>(payload);
+    shards.emplace_back(bytes.begin(), bytes.end());
+  }
+  return shards;
+}
+
 pops::PreparedProviderOptionValue prepared_provider_option_from_python(const py::handle& value,
                                                                        std::string_view key) {
   if (PyBool_Check(value.ptr()))
@@ -1151,6 +1164,14 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
              return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
            })
       .def(
+          "canonical_program_history_flux_snapshots",
+          [](const AmrSystem& s, const py::sequence& payloads, int source_rank_count) {
+            const auto bytes = s.canonical_program_history_flux_snapshots(
+                history_flux_snapshot_shards_from_python(payloads), source_rank_count);
+            return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+          },
+          py::arg("payloads"), py::arg("source_rank_count"))
+      .def(
           "restore_program_accepted_state",
           [](AmrSystem& s, py::bytes payload) {
             std::string bytes = payload;
@@ -1177,15 +1198,8 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       .def(
           "restore_program_history_flux_snapshots",
           [](AmrSystem& s, const py::sequence& payloads, int source_rank_count) {
-            std::vector<std::vector<std::uint8_t>> shards;
-            shards.reserve(static_cast<std::size_t>(py::len(payloads)));
-            for (const py::handle payload : payloads) {
-              if (!py::isinstance<py::bytes>(payload))
-                throw py::type_error("history-flux snapshot shards must be exact bytes");
-              const std::string bytes = py::cast<std::string>(payload);
-              shards.emplace_back(bytes.begin(), bytes.end());
-            }
-            s.restore_program_history_flux_snapshots(shards, source_rank_count);
+            s.restore_program_history_flux_snapshots(
+                history_flux_snapshot_shards_from_python(payloads), source_rank_count);
           },
           py::arg("payloads"), py::arg("source_rank_count"))
       .def("program_accepted_state_manifest", &AmrSystem::program_accepted_state_manifest)
