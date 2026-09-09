@@ -92,8 +92,25 @@ def capture_history_flux_snapshots(
     )
     if any(row["value"] != digest for row in rows):
         raise RuntimeError("canonical history-flux snapshot differs across ranks")
-    payload[SNAPSHOT_STATE_KEY] = np.frombuffer(canonical, dtype=np.uint8).copy()
-    payload[SNAPSHOT_OFFSETS_KEY] = np.asarray((0, len(canonical)), dtype=np.int64)
+    error = None
+    try:
+        state = np.frombuffer(canonical, dtype=np.uint8).copy()
+        offsets = np.asarray((0, len(canonical)), dtype=np.int64)
+        payload[SNAPSHOT_STATE_KEY] = state
+        payload[SNAPSHOT_OFFSETS_KEY] = offsets
+    except BaseException as exc:
+        error = exc
+    consensus(topology, "history-flux snapshot checkpoint serialization", error=error)
+
+
+def stage_history_flux_snapshots(sim: Any, shards: tuple[bytes, ...] | None) -> None:
+    """Replace archive authority inside the restart transaction, including legacy absence."""
+    restore = getattr(sim, "restore_program_history_flux_snapshots", None)
+    if not callable(restore):
+        raise TypeError("restart: AMR engine lacks immutable history-flux snapshot restore")
+    # Legacy absence authorizes an empty archive, never reuse of pre-restart live samples.
+    # A FLX4 descriptor without its archive must then fail; rollback owns the prior live map.
+    restore(list(shards) if shards is not None else [b""], 1)
 
 
 def prepare_history_flux_snapshots(
@@ -128,4 +145,5 @@ __all__ = [
     "SNAPSHOT_STATE_KEY",
     "capture_history_flux_snapshots",
     "prepare_history_flux_snapshots",
+    "stage_history_flux_snapshots",
 ]

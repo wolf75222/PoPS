@@ -1419,15 +1419,9 @@ def apply_v3(owner, sim, prepared):
                 % (name, depth, ncomp, int(sim.history_depth(name)), int(sim.history_ncomp(name)))
             )
 
-    if prepared.history_flux_snapshot_shards is not None:
-        restore_history_flux_snapshots = getattr(
-            sim, "restore_program_history_flux_snapshots", None
-        )
-        if not callable(restore_history_flux_snapshots):
-            raise TypeError("restart: AMR engine lacks immutable history-flux snapshot restore")
-        restore_history_flux_snapshots(
-            list(prepared.history_flux_snapshot_shards), 1
-        )
+    from pops.runtime._checkpoint_history_flux_snapshots import stage_history_flux_snapshots
+
+    stage_history_flux_snapshots(sim, prepared.history_flux_snapshot_shards)
 
     # (4) Restore every block/level state as saved, without re-prolongation.
     for block, levels in prepared.state_payload:

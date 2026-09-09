@@ -8,6 +8,7 @@ from pops.runtime._checkpoint_history_flux_snapshots import (
     SNAPSHOT_STATE_KEY,
     capture_history_flux_snapshots,
     prepare_history_flux_snapshots,
+    stage_history_flux_snapshots,
 )
 
 
@@ -174,3 +175,63 @@ def test_history_flux_snapshot_preflight_preserves_legacy_absence_but_refuses_pa
             {SNAPSHOT_STATE_KEY: np.array([], dtype=np.uint8)},
             shard_capacity=64,
         )
+
+
+@pytest.mark.parametrize("failure_site", ("state", "offsets", "assignment"))
+def test_history_flux_snapshot_capture_converges_final_serialization_failure(
+    monkeypatch, failure_site,
+) -> None:
+    from pops.output import _checkpoint_collective
+
+    topology = SimpleNamespace(distributed=False, communicator=object(), size=1)
+    errors = []
+
+    def consensus(topology, phase, *, error=None, value=None):
+        errors.append((phase, error))
+        return _consensus(topology, phase, error=error, value=value)
+
+    def allocation_failure(*args, **kwargs):
+        raise MemoryError("injected archive serialization failure")
+
+    class FailingPayload(dict):
+        def __setitem__(self, key, value):
+            raise MemoryError("injected archive serialization failure")
+
+    monkeypatch.setattr(_checkpoint_collective, "consensus", consensus)
+    if failure_site == "state":
+        monkeypatch.setattr(np, "frombuffer", allocation_failure)
+    elif failure_site == "offsets":
+        monkeypatch.setattr(np, "asarray", allocation_failure)
+    payload = FailingPayload() if failure_site == "assignment" else {}
+    with pytest.raises(MemoryError, match="injected archive serialization"):
+        capture_history_flux_snapshots(
+            topology, b"owned", 64, lambda shards, ranks: b"canonical", payload,
+        )
+    assert errors[-1][0] == "history-flux snapshot checkpoint serialization"
+    assert isinstance(errors[-1][1], MemoryError)
+    assert payload == {}
+
+
+def test_legacy_archive_absence_clears_live_sources_before_program_import() -> None:
+    class Native:
+        def __init__(self):
+            self.sources = {"same-physical-source-id": b"preexisting-live-payload"}
+            self.calls = []
+
+        def restore_program_history_flux_snapshots(self, shards, source_ranks):
+            self.calls.append((shards, source_ranks))
+            assert shards == [b""] and source_ranks == 1
+            self.sources = {}
+
+        def import_flx4(self, source):
+            if source not in self.sources:
+                raise ValueError("FLX4 source archive is absent")
+
+    native = Native()
+    absent = prepare_history_flux_snapshots({}, shard_capacity=64)
+    stage_history_flux_snapshots(native, absent)
+    assert native.calls == [([b""], 1)]
+    with pytest.raises(ValueError, match="source archive is absent"):
+        native.import_flx4("same-physical-source-id")
+    # FLX3 carries no raw-source references and legitimately continues with the empty map.
+    assert native.sources == {}
