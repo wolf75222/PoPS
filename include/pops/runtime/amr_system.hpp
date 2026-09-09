@@ -785,6 +785,11 @@ class AmrSystem {
                                       const std::string& centering, const std::string& projection,
                                       const analytic::AnalyticOpcodeRows& opcodes,
                                       const analytic::AnalyticLiteralRows& literals);
+  /// Same authenticated analytic source phase with the Gaussian provider's exact cell integral.
+  void stage_bootstrap_analytic_state(const std::string& subject_id,
+                                      const std::string& runtime_block, const std::string& space,
+                                      const std::string& centering, const std::string& projection,
+                                      const analytic::GaussianCellAverageProfile<Dim>& gaussian);
   /// Stage one exact-rank conservative array.  @p spatial_shape is the native spatial extent and
   /// @p components is its leading conservative-component count, both checked before publication.
   void stage_bootstrap_array(const std::string& subject_id, const std::string& runtime_block,
@@ -1381,6 +1386,11 @@ class AmrSystem {
   std::vector<double> potential();
 
  private:
+  void stage_bootstrap_analytic_state_impl(
+      const std::string& subject_id, const std::string& runtime_block, const std::string& space,
+      const std::string& centering, const std::string& projection,
+      const analytic::AnalyticOpcodeRows& opcodes, const analytic::AnalyticLiteralRows& literals,
+      const analytic::GaussianCellAverageProfile<Dim>* gaussian);
   std::pair<std::size_t, std::size_t> checkpoint_program_state_capacity_(
       const std::vector<std::uint8_t>* interface_candidate) const;
   template <int ContextDim, class MemorySpace>

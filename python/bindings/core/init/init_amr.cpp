@@ -907,9 +907,28 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
       // are accepted; there are intentionally no source-specific bootstrap entry points.
       .def("_bind_bootstrap_subject", &AmrSystem::bind_bootstrap_subject, py::arg("subject_id"),
            py::arg("runtime_block"), py::arg("source_route"))
-      .def("_stage_bootstrap_analytic_state", &AmrSystem::stage_bootstrap_analytic_state,
+      .def("_stage_bootstrap_analytic_state",
+           py::overload_cast<const std::string&, const std::string&, const std::string&,
+                             const std::string&, const std::string&,
+                             const pops::analytic::AnalyticOpcodeRows&,
+                             const pops::analytic::AnalyticLiteralRows&>(
+               &AmrSystem::stage_bootstrap_analytic_state),
            py::arg("subject_id"), py::arg("runtime_block"), py::arg("space"), py::arg("centering"),
            py::arg("projection"), py::arg("opcodes"), py::arg("literals"))
+      .def(
+          "_stage_bootstrap_analytic_state",
+          [](AmrSystem& s, const std::string& subject, const std::string& block,
+             const std::string& space, const std::string& centering, const std::string& projection,
+             py::sequence center, double background, double amplitude, double inverse_width) {
+            const pops::analytic::GaussianCellAverageProfile<pops::kNativeDimension> profile{
+                ranked_real_vector_from_python<pops::kNativeDimension>(center,
+                                                                       "AMR Gaussian center"),
+                background, amplitude, inverse_width};
+            s.stage_bootstrap_analytic_state(subject, block, space, centering, projection, profile);
+          },
+          py::arg("subject_id"), py::arg("runtime_block"), py::arg("space"), py::arg("centering"),
+          py::arg("projection"), py::arg("center"), py::arg("background"), py::arg("amplitude"),
+          py::arg("inverse_width"))
       .def(
           "_stage_bootstrap_array",
           [](AmrSystem& s, const std::string& subject_id, const std::string& runtime_block,

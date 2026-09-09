@@ -52,6 +52,15 @@ inline std::vector<AnalyticProgram> compile_component_programs(
   return result;
 }
 
+/// Exact integral metadata for the existing separable Gaussian initial provider.
+template <int Dim>
+struct GaussianCellAverageProfile {
+  RealVector<Dim> center{};
+  Real background = Real(0);
+  Real amplitude = Real(1);
+  Real inverse_width = Real(1);
+};
+
 namespace detail {
 
 POPS_HD inline Real gauss_node(int index) {
@@ -258,6 +267,7 @@ struct PreparedAnalyticMaterialization {
   MultiFab<Dim, MemorySpace>* values = nullptr;
   Geometry<Dim> geometry;
   const std::vector<AnalyticProgram>* programs = nullptr;
+  const GaussianCellAverageProfile<Dim>* gaussian = nullptr;
   bool invalid_target = true;
   std::int64_t materialized_values = 0;
 };
@@ -266,15 +276,26 @@ struct PreparedAnalyticMaterialization {
 template <int Dim, class MemorySpace>
 PreparedAnalyticMaterialization<Dim, MemorySpace> prepare_cell_average_materialization(
     MultiFab<Dim, MemorySpace>& values, const Geometry<Dim>& geometry,
-    const std::vector<AnalyticProgram>& programs) {
+    const std::vector<AnalyticProgram>& programs,
+    const GaussianCellAverageProfile<Dim>* gaussian = nullptr) {
   const std::int64_t cells = detail::checked_layout_cell_count(values.layout());
   if (values.ncomp() > 0 && cells > std::numeric_limits<std::int64_t>::max() / values.ncomp())
     throw std::overflow_error("analytic materialization value count exceeds int64_t");
+  bool invalid_gaussian = gaussian != nullptr && values.ncomp() != 1;
+  if (gaussian) {
+    invalid_gaussian = invalid_gaussian || !(gaussian->inverse_width > Real(0)) ||
+                       !std::isfinite(gaussian->inverse_width) ||
+                       !std::isfinite(gaussian->background) || !std::isfinite(gaussian->amplitude);
+    for (int axis = 0; axis < Dim; ++axis)
+      invalid_gaussian = invalid_gaussian || !std::isfinite(gaussian->center[axis]);
+  }
   return PreparedAnalyticMaterialization<Dim, MemorySpace>{
       .values = &values,
       .geometry = geometry,
       .programs = &programs,
-      .invalid_target = detail::invalid_materialization_target_local(values, geometry, programs),
+      .gaussian = gaussian,
+      .invalid_target = invalid_gaussian ||
+                        detail::invalid_materialization_target_local(values, geometry, programs),
       .materialized_values = cells * values.ncomp(),
   };
 }
@@ -292,12 +313,21 @@ std::int64_t materialize_cell_average(
   long invalid_local = 0;
   std::exception_ptr local_error;
   try {
-    for (std::size_t local = 0; local < values.local_size(); ++local)
-      for (int component = 0; component < values.ncomp(); ++component)
+    for (std::size_t local = 0; local < values.local_size(); ++local) {
+      if (prepared.gaussian) {
+        const auto& profile = *prepared.gaussian;
         invalid_local += static_cast<long>(for_each_cell_reduce_sum(
-            values.box(local),
-            detail::AnalyticInitialFiniteKernel<Dim>{
-                {programs[static_cast<std::size_t>(component)].view(), geometry}}));
+            values.box(local), detail::GaussianCellAverageFiniteKernel<Dim>{
+                                   {geometry, profile.center, profile.background, profile.amplitude,
+                                    profile.inverse_width}}));
+      } else {
+        for (int component = 0; component < values.ncomp(); ++component)
+          invalid_local += static_cast<long>(for_each_cell_reduce_sum(
+              values.box(local),
+              detail::AnalyticInitialFiniteKernel<Dim>{
+                  {programs[static_cast<std::size_t>(component)].view(), geometry}}));
+      }
+    }
   } catch (...) {
     local_error = std::current_exception();
   }
@@ -314,13 +344,22 @@ std::int64_t materialize_cell_average(
                              std::to_string(invalid) + ")");
   local_error = {};
   try {
-    for (std::size_t local = 0; local < values.local_size(); ++local)
-      for (int component = 0; component < values.ncomp(); ++component)
-        for_each_cell(values.box(local),
-                      detail::AnalyticInitialKernel<Dim>{
-                          values.fab(local).view(),
-                          component,
-                          {programs[static_cast<std::size_t>(component)].view(), geometry}});
+    for (std::size_t local = 0; local < values.local_size(); ++local) {
+      if (prepared.gaussian) {
+        const auto& profile = *prepared.gaussian;
+        for_each_cell(values.box(local), detail::GaussianCellAverageKernel<Dim>{
+                                             values.fab(local).view(),
+                                             {geometry, profile.center, profile.background,
+                                              profile.amplitude, profile.inverse_width}});
+      } else {
+        for (int component = 0; component < values.ncomp(); ++component)
+          for_each_cell(values.box(local),
+                        detail::AnalyticInitialKernel<Dim>{
+                            values.fab(local).view(),
+                            component,
+                            {programs[static_cast<std::size_t>(component)].view(), geometry}});
+      }
+    }
     device_fence();
   } catch (...) {
     local_error = std::current_exception();

@@ -2488,6 +2488,7 @@ struct AmrSystem<Dim>::Impl {
     std::vector<double> state;
     bool has_analytic_state = false;
     std::vector<analytic::AnalyticProgram> analytic_state;
+    std::optional<analytic::GaussianCellAverageProfile<Dim>> gaussian_initial;
   };
 
   enum class BootstrapSourceKind : std::uint8_t { unstaged, analytic, array };
@@ -4336,6 +4337,13 @@ struct AmrSystem<Dim>::Impl {
           source.scalar(view.instructions[index].op).scalar(view.instructions[index].operand);
         for (std::size_t index = 0; index < program.literal_count(); ++index)
           source.scalar(view.literals[index]);
+      }
+      source.presence(block.gaussian_initial.has_value());
+      if (block.gaussian_initial) {
+        const auto& profile = *block.gaussian_initial;
+        for (int axis = 0; axis < Dim; ++axis)
+          source.scalar(profile.center[axis]);
+        source.scalar(profile.background).scalar(profile.amplitude).scalar(profile.inverse_width);
       }
       contract.text(block.name)
           .scalar(std::int32_t{block.ncomp})
@@ -9954,7 +9962,8 @@ struct AmrSystem<Dim>::Impl {
           const Geometry<Dim> geometry =
               Geometry<Dim>::from_bounds(*domain_candidate, cfg.lower, cfg.upper);
           analytic_materialization.emplace(analytic::prepare_cell_average_materialization(
-              *state, geometry, block.analytic_state));
+              *state, geometry, block.analytic_state,
+              block.gaussian_initial ? &*block.gaussian_initial : nullptr));
         } else if (block.has_state) {
           write_field(*state, *domain_candidate, block.state, block.ncomp);
         } else if (block.has_density) {
@@ -15720,6 +15729,25 @@ void AmrSystem<Dim>::stage_bootstrap_analytic_state(
     const std::string& subject_id, const std::string& runtime_block, const std::string& space,
     const std::string& centering, const std::string& projection,
     const analytic::AnalyticOpcodeRows& opcodes, const analytic::AnalyticLiteralRows& literals) {
+  stage_bootstrap_analytic_state_impl(subject_id, runtime_block, space, centering, projection,
+                                      opcodes, literals, nullptr);
+}
+
+template <int Dim>
+void AmrSystem<Dim>::stage_bootstrap_analytic_state(
+    const std::string& subject_id, const std::string& runtime_block, const std::string& space,
+    const std::string& centering, const std::string& projection,
+    const analytic::GaussianCellAverageProfile<Dim>& gaussian) {
+  stage_bootstrap_analytic_state_impl(subject_id, runtime_block, space, centering, projection, {},
+                                      {}, &gaussian);
+}
+
+template <int Dim>
+void AmrSystem<Dim>::stage_bootstrap_analytic_state_impl(
+    const std::string& subject_id, const std::string& runtime_block, const std::string& space,
+    const std::string& centering, const std::string& projection,
+    const analytic::AnalyticOpcodeRows& opcodes, const analytic::AnalyticLiteralRows& literals,
+    const analytic::GaussianCellAverageProfile<Dim>* gaussian) {
   const auto prepare = [&] {
     require_amr_assembling(p_->lifecycle, "stage_bootstrap_analytic_state");
     if (p_->engine || space != "cell" || centering != "cell" ||
@@ -15734,8 +15762,40 @@ void AmrSystem<Dim>::stage_bootstrap_analytic_state(
     if (binding->second.kind != Impl::BootstrapSourceKind::unstaged)
       throw std::invalid_argument("AMR bootstrap subject already owns a staged source");
     const typename Impl::BlockSpec& block = p_->block(runtime_block);
-    std::vector<analytic::AnalyticProgram> programs =
-        analytic::compile_component_programs(opcodes, literals);
+    if ((binding->second.source_route == "gaussian_field") != (gaussian != nullptr))
+      throw std::invalid_argument("AMR Gaussian source requires its exact cell-average profile");
+    std::vector<analytic::AnalyticProgram> programs;
+    if (gaussian) {
+      if (block.ncomp != 1 || !(gaussian->inverse_width > Real(0)) ||
+          !std::isfinite(gaussian->inverse_width) || !std::isfinite(gaussian->background) ||
+          !std::isfinite(gaussian->amplitude))
+        throw std::invalid_argument(
+            "AMR Gaussian source requires finite scalar profile parameters");
+      using analytic::AnalyticNode;
+      using analytic::AnalyticOp;
+      AnalyticNode radius = AnalyticNode::constant(Real(0));
+      for (int axis = 0; axis < Dim; ++axis) {
+        if (!std::isfinite(gaussian->center[axis]))
+          throw std::invalid_argument("AMR Gaussian center must be finite on every native axis");
+        const AnalyticNode coordinate =
+            axis == 0 ? AnalyticNode::x() : (axis == 1 ? AnalyticNode::y() : AnalyticNode::z());
+        const auto delta = AnalyticNode::apply(
+            AnalyticOp::Sub, {coordinate, AnalyticNode::constant(gaussian->center[axis])});
+        radius = AnalyticNode::apply(
+            AnalyticOp::Add,
+            {std::move(radius), AnalyticNode::apply(AnalyticOp::Mul, {delta, delta})});
+      }
+      const auto exponent = AnalyticNode::apply(
+          AnalyticOp::Mul, {AnalyticNode::constant(-gaussian->inverse_width), std::move(radius)});
+      programs.push_back(analytic::compile_analytic_expression(AnalyticNode::apply(
+          AnalyticOp::Add,
+          {AnalyticNode::constant(gaussian->background),
+           AnalyticNode::apply(AnalyticOp::Mul,
+                               {AnalyticNode::constant(gaussian->amplitude),
+                                AnalyticNode::apply(AnalyticOp::Exp, {exponent})})})));
+    } else {
+      programs = analytic::compile_component_programs(opcodes, literals);
+    }
     if (programs.size() != static_cast<std::size_t>(block.ncomp))
       throw std::invalid_argument(
           "AMR analytic bootstrap component count differs from its runtime block");
@@ -15743,14 +15803,27 @@ void AmrSystem<Dim>::stage_bootstrap_analytic_state(
   };
   std::vector<analytic::AnalyticProgram> programs;
   if (p_->prepared_hierarchy && p_->prepared_hierarchy->lane) {
-    programs = analytic::collectively_prepare_analytic_request(
-        "AmrSystem::stage_bootstrap_analytic_state",
+    const std::array<analytic::AnalyticTextMetadata, 6> text{
         {{"centering", centering},
          {"projection", projection},
          {"runtime_block", runtime_block},
          {"space", space},
-         {"subject_id", subject_id}},
-        {}, opcodes, literals, prepare, p_->prepared_hierarchy->lane->communicator());
+         {"subject_id", subject_id},
+         {"cell_integral", gaussian ? "exact_gaussian" : "tensor_quadrature"}}};
+    std::array<analytic::AnalyticRealMetadata, Dim + 3> parameters{};
+    if (gaussian) {
+      constexpr std::array<std::string_view, 3> axes{"center_x", "center_y", "center_z"};
+      for (int axis = 0; axis < Dim; ++axis)
+        parameters[axis] = {axes[axis], gaussian->center[axis]};
+      parameters[Dim] = {"background", gaussian->background};
+      parameters[Dim + 1] = {"amplitude", gaussian->amplitude};
+      parameters[Dim + 2] = {"inverse_width", gaussian->inverse_width};
+    }
+    programs = analytic::collectively_prepare_analytic_request(
+        "AmrSystem::stage_bootstrap_analytic_state", std::span(text),
+        gaussian ? std::span<const analytic::AnalyticRealMetadata>(parameters)
+                 : std::span<const analytic::AnalyticRealMetadata>{},
+        opcodes, literals, prepare, p_->prepared_hierarchy->lane->communicator());
   } else {
     programs = prepare();
   }
@@ -15761,6 +15834,7 @@ void AmrSystem<Dim>::stage_bootstrap_analytic_state(
   block.has_state = false;
   block.has_analytic_state = true;
   block.analytic_state = std::move(programs);
+  block.gaussian_initial = gaussian ? std::optional{*gaussian} : std::nullopt;
   p_->bootstrap_sources.at(subject_id).kind = Impl::BootstrapSourceKind::analytic;
 }
 
@@ -15817,6 +15891,7 @@ void AmrSystem<Dim>::stage_bootstrap_array(const std::string& subject_id,
   typename Impl::BlockSpec& block = p_->block(runtime_block);
   block.density.clear();
   block.analytic_state.clear();
+  block.gaussian_initial.reset();
   block.has_density = false;
   block.has_analytic_state = false;
   block.has_state = true;
@@ -15947,7 +16022,8 @@ std::size_t AmrSystem<Dim>::materialize_bootstrap_action(const std::string& subj
       const Geometry<Dim> geometry =
           Geometry<Dim>::from_bounds(domain, p_->cfg.lower, p_->cfg.upper);
       analytic_materialization.emplace(analytic::prepare_cell_average_materialization(
-          *candidate, geometry, block->analytic_state));
+          *candidate, geometry, block->analytic_state,
+          block->gaussian_initial ? &*block->gaussian_initial : nullptr));
       materialized = static_cast<std::size_t>(analytic_materialization->materialized_values);
     } else if (level == 0) {
       candidate_storage.emplace(target.layout(), target.distribution(), target.local_rank(),
@@ -21075,6 +21151,9 @@ template void AmrSystem<kNativeDimension>::bind_bootstrap_subject(const std::str
 template void AmrSystem<kNativeDimension>::stage_bootstrap_analytic_state(
     const std::string&, const std::string&, const std::string&, const std::string&,
     const std::string&, const analytic::AnalyticOpcodeRows&, const analytic::AnalyticLiteralRows&);
+template void AmrSystem<kNativeDimension>::stage_bootstrap_analytic_state(
+    const std::string&, const std::string&, const std::string&, const std::string&,
+    const std::string&, const analytic::GaussianCellAverageProfile<kNativeDimension>&);
 template void AmrSystem<kNativeDimension>::stage_bootstrap_array(
     const std::string&, const std::string&, const std::string&, const std::string&, int,
     const Extent<kNativeDimension>&, const std::vector<double>&);

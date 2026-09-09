@@ -414,3 +414,53 @@ TEST(AnalyticExpression, ZOnATwoDimensionalTargetFailsClosedBeforePublication) {
 }
 
 }  // namespace
+
+TEST(AnalyticExpression, ExactGaussianProjectionRetainsNeutralityAcrossRefinement) {
+  constexpr int Dim = 2;
+  const auto lane = pops::ExecutionLane::world("test.exact-gaussian-projection");
+  pops::analytic::GaussianCellAverageProfile<Dim> profile{
+      pops::RealVector<Dim>{Real(.35), Real(.55)}, Real(0), Real(1), Real(80)};
+  const Real root = std::sqrt(profile.inverse_width);
+  const Real pi = std::acos(Real(-1));
+  Real integral = Real(1);
+  AnalyticNode radius = AnalyticNode::constant(Real(0));
+  for (int axis = 0; axis < Dim; ++axis) {
+    const Real center = profile.center[axis];
+    integral *= std::sqrt(pi) / (Real(2) * root) *
+                (std::erf(root * (Real(1) - center)) + std::erf(root * center));
+    const auto coordinate = axis == 0 ? AnalyticNode::x() : AnalyticNode::y();
+    const auto delta = binary(AnalyticOp::Sub, coordinate, AnalyticNode::constant(center));
+    radius = binary(AnalyticOp::Add, std::move(radius), binary(AnalyticOp::Mul, delta, delta));
+  }
+  profile.background = Real(1) - integral;
+  const auto expression = binary(
+      AnalyticOp::Add, AnalyticNode::constant(profile.background),
+      unary(AnalyticOp::Exp, binary(AnalyticOp::Mul, AnalyticNode::constant(-profile.inverse_width),
+                                    std::move(radius))));
+  const std::vector<pops::analytic::AnalyticProgram> programs{
+      compile_analytic_expression(expression)};
+  const Real tolerance = Real(128) * std::numeric_limits<Real>::epsilon();
+  for (int n : {16, 32}) {
+    const auto box = pops::Box<Dim>::from_extents(uniform_extent<Dim>(n));
+    const auto geometry = unit_geometry(box);
+    auto values = one_patch_field(box, 1);
+    const auto moment = [&] {
+      auto host = values.fab(0).create_host_mirror();
+      values.fab(0).copy_to_host(host);
+      long double total = 0;
+      for_each_host_index(box, [&](const auto& index) {
+        total += static_cast<long double>(host(host_offset(values.fab(0).grown_box(), index))) - 1;
+      });
+      return static_cast<Real>(total / box.numPts());
+    };
+    const auto generic =
+        pops::analytic::prepare_cell_average_materialization(values, geometry, programs);
+    (void)pops::analytic::materialize_cell_average(generic, lane.communicator());
+    if (n == 16)
+      EXPECT_GT(std::abs(moment()), tolerance);  // Original Gaussian bootstrap counterexample.
+    const auto exact =
+        pops::analytic::prepare_cell_average_materialization(values, geometry, programs, &profile);
+    EXPECT_EQ(pops::analytic::materialize_cell_average(exact, lane.communicator()), box.numPts());
+    EXPECT_LE(std::abs(moment()), tolerance) << "N=" << n;
+  }
+}

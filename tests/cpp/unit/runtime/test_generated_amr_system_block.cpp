@@ -2674,3 +2674,68 @@ TEST(GeneratedAmrSystemBlock, CflAuthenticatesRequestsAndBoundOrderBeforeCallbac
 }
 
 }  // namespace
+
+TEST(GeneratedAmrSystemBlock, GaussianBootstrapReprojectionPreservesExactNeutrality) {
+  using Real = pops::Real;
+  constexpr int Dim = pops::kNativeDimension;
+  constexpr const char* route = "tests.generated-amr/exact-gaussian/state";
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 2;
+  config.regrid_every = 0;
+  config.explicit_bootstrap = true;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 16;
+    config.periodicity[axis] = true;
+  }
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/exact-gaussian-runtime");
+  system.install_block_state_route("tracer", route);
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  pops::test::install_prepared_threshold_union(
+      system, {{"tracer", "u", .5, pops::test::PreparedThresholdRelation::Above, route}},
+      "tests.generated-amr/exact-gaussian-tagging@1");
+  system.bind_bootstrap_subject(route, "tracer", "gaussian_field");
+  pops::analytic::GaussianCellAverageProfile<Dim> profile;
+  profile.inverse_width = Real(80);
+  const Real root = std::sqrt(profile.inverse_width);
+  Real integral = Real(1);
+  for (int axis = 0; axis < Dim; ++axis) {
+    const Real center = axis == 0 ? Real(.35) : Real(.55);
+    profile.center[axis] = center;
+    integral *= std::sqrt(std::acos(Real(-1))) / (Real(2) * root) *
+                (std::erf(root * (Real(1) - center)) + std::erf(root * center));
+  }
+  profile.background = Real(1) - integral;
+  auto invalid = profile;
+  invalid.inverse_width = Real(0);
+  EXPECT_THROW(system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                                     "conservative_cell_average", invalid),
+               std::invalid_argument);
+  EXPECT_THROW(
+      system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                            "conservative_cell_average", {{"constant"}}, {{1.0}}),
+      std::invalid_argument);
+  system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                        "conservative_cell_average", profile);
+  EXPECT_THROW(system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                                     "conservative_cell_average", profile),
+               std::invalid_argument);
+  system.begin_bootstrap_plan();
+  system.set_program_block_map({0});
+  for (int level = 0; level < 2; ++level) {
+    if (level)
+      ASSERT_TRUE(system.bootstrap_next_level());
+    const auto count = system.materialize_bootstrap_action(
+        route, level == 0 ? "initialize_level_zero" : "analytic_reprojection", "gaussian_field",
+        level);
+    const auto state = system.block_level_state("tracer", level);
+    ASSERT_EQ(state.size(), count);
+    long double moment = 0;
+    for (double value : state) {
+      ASSERT_TRUE(std::isfinite(value));
+      moment += static_cast<long double>(value) - 1;
+    }
+    EXPECT_LE(std::abs(moment / state.size()), Real(128) * std::numeric_limits<Real>::epsilon());
+  }
+  system.commit_bootstrap_level();
+}
