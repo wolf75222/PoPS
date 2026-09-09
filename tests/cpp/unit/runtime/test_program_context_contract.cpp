@@ -2219,7 +2219,8 @@ prepare_topology_context(int blocks) {
 auto prepare_topology_regrid(TopologySystem& system, TopologyContext& context) {
   const auto& parent = system.engine()->hierarchy().layout(0);
   pops::Index<kTestDimension> upper{};
-  upper.fill(1);
+  for (int axis = 0; axis < kTestDimension; ++axis)
+    upper[axis] = 1;
   const pops::mesh::BoxArray<kTestDimension> boxes(
       std::vector<pops::Box<kTestDimension>>{{pops::Index<kTestDimension>{}, upper}});
   pops::amr::tagging::ClusterOptions<kTestDimension> options;

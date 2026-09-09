@@ -149,10 +149,10 @@ class ProgramContext {
           prior_physical_time_offset_ + static_cast<double>(iteration) * child_dt;
       if (!std::isfinite(child_dt) || !(child_dt > 0.0) || !std::isfinite(child_offset))
         throw std::overflow_error("Program logical evaluation child window is not finite");
-      const amr::Rational child_fraction(iteration, count);
-      const amr::Rational child_span(1, count);
+      const ::pops::amr::Rational child_fraction(iteration, count);
+      const ::pops::amr::Rational child_span(1, count);
       owner_->current_dt_ = child_dt;
-      owner_->stage_time_ = amr::Rational(0, 1);
+      owner_->stage_time_ = ::pops::amr::Rational(0, 1);
       owner_->logical_phase_begin_ = prior_phase_begin_ + prior_phase_span_ * child_fraction;
       owner_->logical_phase_span_ = prior_phase_span_ * child_span;
       owner_->logical_physical_time_offset_ = child_offset;
@@ -191,9 +191,9 @@ class ProgramContext {
 
     const ProgramContext* owner_ = nullptr;
     double prior_dt_ = 0.0;
-    amr::Rational prior_stage_{0, 1};
-    amr::Rational prior_phase_begin_{0, 1};
-    amr::Rational prior_phase_span_{1, 1};
+    ::pops::amr::Rational prior_stage_{0, 1};
+    ::pops::amr::Rational prior_phase_begin_{0, 1};
+    ::pops::amr::Rational prior_phase_span_{1, 1};
     double prior_physical_time_offset_ = 0.0;
   };
 
@@ -208,9 +208,9 @@ class ProgramContext {
     if (!std::isfinite(dt) || dt <= 0.0)
       throw std::invalid_argument("ProgramContext step requires a finite positive dt");
     current_dt_ = dt;
-    stage_time_ = amr::Rational(0, 1);
-    logical_phase_begin_ = amr::Rational(0, 1);
-    logical_phase_span_ = amr::Rational(1, 1);
+    stage_time_ = ::pops::amr::Rational(0, 1);
+    logical_phase_begin_ = ::pops::amr::Rational(0, 1);
+    logical_phase_span_ = ::pops::amr::Rational(1, 1);
     logical_physical_time_offset_ = 0.0;
     active_operator_snapshot_.reset();
     auxiliary_evaluation_sequence_ = 0;
@@ -229,7 +229,7 @@ class ProgramContext {
   void set_stage_time(std::int64_t numerator, std::int64_t denominator) const {
     if (denominator <= 0 || numerator < 0 || numerator > denominator)
       throw std::invalid_argument("ProgramContext stage time is outside [0, 1]");
-    stage_time_ = amr::Rational(numerator, denominator);
+    stage_time_ = ::pops::amr::Rational(numerator, denominator);
     active_operator_snapshot_.reset();
   }
 
@@ -237,7 +237,8 @@ class ProgramContext {
     require_rate_identity_(stage);
     if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
       throw std::logic_error("ProgramContext boundary evaluation has no prepared clock and dt");
-    const amr::Rational evaluation_stage = logical_phase_begin_ + stage_time_ * logical_phase_span_;
+    const ::pops::amr::Rational evaluation_stage =
+        logical_phase_begin_ + stage_time_ * logical_phase_span_;
     return {primary_clock_,
             static_cast<std::int64_t>(macro_step()),
             0,
@@ -1881,7 +1882,8 @@ class ProgramContext {
                                                         OperatorFingerprint topology,
                                                         OperatorFingerprint resources,
                                                         std::uint64_t revision) const {
-    const amr::Rational evaluation_stage = logical_phase_begin_ + stage_time_ * logical_phase_span_;
+    const ::pops::amr::Rational evaluation_stage =
+        logical_phase_begin_ + stage_time_ * logical_phase_span_;
     const double evaluation_time =
         physical_time() + logical_physical_time_offset_ + stage_time_.value() * current_dt_;
     return {authority,
@@ -2006,10 +2008,10 @@ class ProgramContext {
   mutable std::uint64_t operator_snapshot_revision_ = 0;
   mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;
   mutable double current_dt_ = 0.0;
-  mutable amr::Rational stage_time_{0, 1};
+  mutable ::pops::amr::Rational stage_time_{0, 1};
   mutable int auxiliary_evaluation_sequence_ = 0;
-  mutable amr::Rational logical_phase_begin_{0, 1};
-  mutable amr::Rational logical_phase_span_{1, 1};
+  mutable ::pops::amr::Rational logical_phase_begin_{0, 1};
+  mutable ::pops::amr::Rational logical_phase_span_{1, 1};
   mutable double logical_physical_time_offset_ = 0.0;
   mutable std::string primary_clock_;
   mutable ClockScheduleState clock_schedule_;
