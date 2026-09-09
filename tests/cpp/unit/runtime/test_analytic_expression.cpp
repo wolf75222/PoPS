@@ -222,7 +222,6 @@ void check_initial_materializers() {
       compile_analytic_expression(integral)};
   const auto exact =
       pops::analytic::prepare_cell_average_materialization(values, geometry, exact_programs, true);
-  const auto lane = pops::ExecutionLane::world("test.explicit-cell-integral");
   EXPECT_EQ(pops::analytic::materialize_cell_average(exact, lane.communicator()), box.numPts());
   auto integral_host = field.create_host_mirror();
   field.copy_to_host(integral_host);

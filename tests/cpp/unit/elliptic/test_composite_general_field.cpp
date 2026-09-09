@@ -40,18 +40,19 @@ HierarchyTensorSolverBuildRequest<1> three_field_request(const ExecutionLane& la
   values["physical.0.1"] = std::string("neumann");
   const mesh::RankSpace<1> ranks{Index<1>{0}, Extent<1>{lane.size()}};
   const Index<1> rank{lane.rank()};
-  const auto coarse =
-      Geometry<1>::from_bounds(Box<1>{{0}, {15}}, RealVector<1>{0}, RealVector<1>{1});
+  const auto coarse = Geometry<1>::from_bounds(Box<1>{Index<1>{0}, Index<1>{15}}, RealVector<1>{0},
+                                               RealVector<1>{1});
   const auto fine = coarse.refine(Extent<1>{2});
   // Genuine partial refinement, with coarse/fine interfaces at x=1/4 and x=3/4.
   // Each level is also split into patches, so same-level coefficient halos are exercised.
   const std::array<Geometry<1>, 2> geometries{coarse, fine};
-  const std::vector<std::vector<Box<1>>> boxes{{Box<1>{{0}, {7}}, Box<1>{{8}, {15}}},
-                                               {Box<1>{{8}, {15}}, Box<1>{{16}, {23}}}};
+  const std::vector<std::vector<Box<1>>> boxes{
+      {Box<1>{Index<1>{0}, Index<1>{7}}, Box<1>{Index<1>{8}, Index<1>{15}}},
+      {Box<1>{Index<1>{8}, Index<1>{15}}, Box<1>{Index<1>{16}, Index<1>{23}}}};
   for (int level = 0; level < 2; ++level) {
     const mesh::BoxArray<1> layout(boxes[level]);
     const auto distribution = mesh::Distribution<1>::partitioned(
-        layout, ranks, std::vector<Index<1>>{{0}, {lane.size() > 1 ? 1 : 0}});
+        layout, ranks, std::vector<Index<1>>{Index<1>{0}, Index<1>{lane.size() > 1 ? 1 : 0}});
     std::array<PhysicalBoundaryFace, 2> faces{};
     faces.fill({PhysicalBoundaryKind::neumann, Real(0)});
     PhysicalBoundaryConditions<1> boundary{BoundaryTopology<1>::physical(), faces,
