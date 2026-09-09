@@ -266,7 +266,7 @@ def test_empty_change_selects_none(tmp_path):
 # --------------------------------------------------------------------------- #
 # Duration-balanced C++ matrix partition                                      #
 # --------------------------------------------------------------------------- #
-def _run_plan_cpp_shard(tmp_path, changed_lines, shard_index, shard_total=10):
+def _run_plan_cpp_shard(tmp_path, changed_lines, shard_index, shard_total=11):
     changed = tmp_path / f"changed-{shard_index}.txt"
     changed.write_text("".join(f"{c}\n" for c in changed_lines), encoding="utf-8")
     out = tmp_path / f"gh-out-{shard_index}.txt"
@@ -315,12 +315,12 @@ def test_cpp_target_shards_are_deterministic_duration_balanced_exact_cover():
 
 def test_cpp_duration_catalog_verifier_authenticates_full_inventory(capsys):
     class Args:
-        shard_total = 10
+        shard_total = 11
 
     assert sel.verify_cpp_duration_catalogs(Args()) == 0
     output = capsys.readouterr().out
     assert "C++ targets in both duration catalogs" in output
-    assert "10 shards form an exact cover" in output
+    assert "11 shards form an exact cover" in output
 
 
 @pytest.mark.parametrize(
@@ -425,17 +425,17 @@ def test_cpp_cold_build_catalog_separates_five_minute_template_targets():
     very_heavy = sorted(target for target, seconds in build.items() if seconds >= 240.0)
     assert len(very_heavy) >= 7, "cold-CI catalog lost the known five-minute AMR TUs"
 
-    shards = sel.cpp_target_shards(very_heavy, 10)
+    shards = sel.cpp_target_shards(very_heavy, 11)
     sel.ci_shard_binpack.verify_partition(very_heavy, shards, excluded=())
     targets_per_shard, larger_shards = divmod(len(very_heavy), len(shards))
     expected_counts = [targets_per_shard] * (len(shards) - larger_shards)
     expected_counts += [targets_per_shard + 1] * larger_shards
     assert sorted(map(len, shards)) == expected_counts
 
-    # The heavy-template inventory assigns two or three targets across the ten CI workers.
+    # The heavy-template inventory assigns two or three targets across the eleven CI workers.
     # LPT plus deterministic exchanges stays below 15.1 modeled minutes, leaving at least 2.9
     # minutes inside the workflow's 18 min build watchdog. CTest alone remains below its 7 min watchdog.
-    full_shards = sel.cpp_target_shards(sorted(build), 10)
+    full_shards = sel.cpp_target_shards(sorted(build), 11)
     weights = sel.cpp_target_weights(sorted(build))
     modeled_loads = [
         sum(weights[target] for target in shard) for shard in full_shards
@@ -530,10 +530,10 @@ def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
     ).group("body")
 
 
-def test_full_cpp_plan_ten_shards_preserves_every_cpp_target(tmp_path):
+def test_full_cpp_plan_eleven_shards_preserves_every_cpp_target(tmp_path):
     outputs = [
         _run_plan_cpp_shard(tmp_path, ["CMakeLists.txt"], shard_index)
-        for shard_index in range(10)
+        for shard_index in range(11)
     ]
     selected = set(outputs[0]["cpp_targets"].split())
     sharded = [output["cpp_shard_targets"].split() for output in outputs]
@@ -554,11 +554,11 @@ def test_full_cpp_plan_ten_shards_preserves_every_cpp_target(tmp_path):
     ), "the generated catalog is a pure-Python architecture test, not a C++ shard"
 
 
-def test_subset_cpp_plan_ten_shards_preserves_selected_union(tmp_path):
+def test_subset_cpp_plan_eleven_shards_preserves_selected_union(tmp_path):
     changed = ["include/pops/numerics/time/schemes/splitting.hpp"]
     outputs = [
         _run_plan_cpp_shard(tmp_path, changed, shard_index)
-        for shard_index in range(10)
+        for shard_index in range(11)
     ]
     selected = set(outputs[0]["cpp_targets"].split())
     flat = [

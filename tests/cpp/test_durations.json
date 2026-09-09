@@ -71,7 +71,7 @@
     "v18_amr_transfer_estimate_source": "Unmeasured scheduling estimate: the four AMR transfer cases compile and load multiple provider DSOs; use the existing 45 s test_program_loader tier. Replace from the next complete CI timing artifact. This is not a measured result.",
     "v18_amr_continuation_estimate_source": "Unmeasured scheduling estimate copied from test_amr_multiblock_substeps: both instantiate the same prepared AMR subcycling engine and distributed multi-level fixtures in dimensions 1, 2 and 3 without provider DSO compilation. Replace from the next complete CI timing artifact; this is not a measured result for the new target.",
     "v18_amr_hierarchy_barrier_estimate_source": "Unmeasured scheduling estimate copied from test_amr_synchronized_continuation: real distributed AMR contexts retain multi-level continuations and exercise collective refusal, rollback and retry without provider DSO compilation. Replace from the next complete CI timing artifact; this is not a measured duration.",
-    "v19_amr_hierarchy_field_scratch_estimate_source": "Unmeasured scheduling estimate copied from test_amr_hierarchy_barrier_continuation: real distributed AMR contexts exercise multi-level scratch allocation, collective refusal and retry without provider DSO compilation. Replace from the next complete CI timing artifact; this is not a measured duration for the new target."
+    "v19_amr_hierarchy_field_scratch_estimate_source": "CI scheduling estimate uses the existing 45 s test_program_loader/test_amr_layout_transfer tier: rollback now compiles and loads a provider DSO on every rank. The local macOS Dim2/OMP2 CTest receipt generic-v19-rollback-fixture-ctest-r2.xml at source 296970e858a6b640ab2aaf215374ed6cb510fb75 records 14.7341772 s across four serial cases plus 14.3226 s for the np2 variant (29.0567772 s summed test time; 29.11587325 s command wall time). This supports replacing the obsolete 1.07 s estimate, but is not a cold-CI measurement. Keep this target estimated and refresh from the next complete CI timing artifact."
   },
   "test_amr_compiled_model": 0.01,
   "test_amr_composite_poisson": 1.15,
@@ -263,5 +263,5 @@
   "test_amr_layout_transfer": 45.0,
   "test_amr_synchronized_continuation": 1.07,
   "test_amr_hierarchy_barrier_continuation": 1.07,
-  "test_amr_hierarchy_field_scratch": 1.07
+  "test_amr_hierarchy_field_scratch": 45.0
 }
