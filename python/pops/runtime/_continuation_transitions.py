@@ -83,6 +83,13 @@ def derive_continuation_transitions(plan: Any) -> ContinuationTransitionPlan:
                 raise ValueError("one retained field component has conflicting output owners")
             field_components[identity] = slot
 
+    # ResolvedProgramFieldPlan.operator is the complete FieldProblem, including its
+    # qualified unknowns, equations, boundaries and normalization contract.
+    program_field_producers = {
+        field.operator.identity.token
+        for field in getattr(plan, "program_field_plans", {}).values()
+    }
+
     field_references = {}
     for block in plan.blocks:
         for state in block.state_identities:
@@ -91,19 +98,31 @@ def derive_continuation_transitions(plan: Any) -> ContinuationTransitionPlan:
                           "resolved.amr_transfer"), "accepted continuation until replacement")
         operations = block.resolved_operations
         evidence = {} if operations is None else operations.to_data().get("provider_evidence", {})
+        publication_claims = {}
+        for claim in evidence.get("program_field_publications", ()):
+            key = canonical_bytes(claim["key"])
+            producer = claim["producer"]
+            if producer not in program_field_producers:
+                raise ValueError("retained field publication has no exact resolved Program owner")
+            if key in publication_claims and publication_claims[key] != producer:
+                raise ValueError("retained field publication has conflicting resolved owners")
+            publication_claims[key] = producer
         for component in evidence.get("auxiliary", {}).get("entries", ()):
             producer = component["provider"]["producer"]
             # Producer strings are opaque operator identities, including joint providers.
             # The typed FieldSpace and exact output route identify the retained storage.
             if component["key"]["space_kind"] == "field" and producer != "runtime_input":
                 key = canonical_bytes(component["key"])
-                if key not in field_components:
+                if key in field_components:
+                    reference = canonical_bytes(strict_field_data(component))
+                    if key in field_references and field_references[key] != reference:
+                        raise ValueError("retained field consumers have conflicting component contracts")
+                    field_references[key] = reference
+                    continue  # Repeated consumers share this field's one lifecycle obligation.
+                if publication_claims.get(key) != producer:
                     raise ValueError("retained field component has no exact resolved output owner")
-                reference = canonical_bytes(strict_field_data(component))
-                if key in field_references and field_references[key] != reference:
-                    raise ValueError("retained field consumers have conflicting component contracts")
-                field_references[key] = reference
-                continue  # Repeated consumers share this field's one lifecycle obligation.
+                # An explicit Program solve publishes into this consumer instance's FieldSpace.
+                # Its retained buffer is auxiliary to the block, not the Case-owned solve scratch.
             # Ordinary auxiliary storage belongs to the consumer block instance. Two
             # instances may share a model declaration without sharing their input buffers.
             identity = make_identity("retained-auxiliary-component", {

@@ -74,6 +74,23 @@ def test_actual_field_and_coupling_partitions_emit_natively(physical_resolved):
                for row in plan.component_inputs) == 2
     assert plan.resolved_dimension == 2
     assert len(plan.program_field_plans) == 1
+    published = [
+        row
+        for row in plan.continuation_transitions.to_data()["objects"]
+        if row["kind"] == "auxiliary" and row["name"] == "field_observation"
+        and row["validity"].get("space_kind") == "field"
+    ]
+    assert len(published) == 1
+    assert published[0]["validity"]["component"] == "sample_grad_x"
+    assert {
+        event: published[0]["transitions"][event]["action"]
+        for event in ("initialization", "restart", "regrid", "rollback")
+    } == {
+        "initialization": "invalidate",
+        "restart": "preserve",
+        "regrid": "invalidate",
+        "rollback": "preserve",
+    }
 
 
 @pytest.mark.parametrize("reject_field", [False, True])

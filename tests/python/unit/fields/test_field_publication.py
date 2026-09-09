@@ -47,6 +47,58 @@ def test_consumed_field_publication_resolves_exact_existing_provider_and_emits_t
     publication = code.index("ctx.publish_field_components(")
     assert "ctx.prepare_provider_values(" in code[:publication]
     assert "observed_static" in code
+    retained = [
+        row
+        for row in resolved.continuation_transitions.to_data()["objects"]
+        if row["kind"] == "auxiliary" and row["name"] == "first"
+        and row["validity"].get("space_kind") == "field"
+    ]
+    by_component = {row["validity"]["component"]: row for row in retained}
+    assert set(by_component) == {
+        "observed_phi", "observed_gx", "observed_gy", "observed_static",
+    }
+    assert all(
+        by_component[name]["transitions"]["initialization"]["action"] == "invalidate"
+        for name in ("observed_phi", "observed_gx", "observed_gy")
+    )
+    assert by_component["observed_static"]["transitions"]["initialization"]["action"] == "transfer"
+
+    # The retained destination must remain tied to the exact Case field problem that publishes it.
+    from types import SimpleNamespace
+    from pops.runtime._continuation_transitions import derive_continuation_transitions
+
+    missing_owner = SimpleNamespace(
+        target=resolved.target,
+        time=resolved.time,
+        blocks=resolved.blocks,
+        field_plans=resolved.field_plans,
+        program_field_plans={},
+        bootstrap_plan=resolved.bootstrap_plan,
+    )
+    with pytest.raises(ValueError, match="no exact resolved Program owner"):
+        derive_continuation_transitions(missing_owner)
+
+    from copy import deepcopy
+
+    block = resolved.blocks[0]
+    evidence = block.resolved_operations.to_data()
+    evidence["provider_evidence"]["program_field_publications"][0]["producer"] += "/foreign"
+    foreign_block = SimpleNamespace(
+        name=block.name,
+        instance_owner_qid=block.instance_owner_qid,
+        state_identities=block.state_identities,
+        resolved_operations=SimpleNamespace(to_data=lambda: deepcopy(evidence)),
+    )
+    foreign_producer = SimpleNamespace(
+        target=resolved.target,
+        time=resolved.time,
+        blocks=(foreign_block, *resolved.blocks[1:]),
+        field_plans=resolved.field_plans,
+        program_field_plans=resolved.program_field_plans,
+        bootstrap_plan=resolved.bootstrap_plan,
+    )
+    with pytest.raises(ValueError, match="no exact resolved Program owner"):
+        derive_continuation_transitions(foreign_producer)
 
 
 def test_publication_rejects_unconsumed_or_unqualified_input():
