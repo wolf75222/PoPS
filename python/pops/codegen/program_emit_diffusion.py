@@ -128,13 +128,18 @@ def _emit_diffusive_preparation(v, state_var, prepared_var, node_model,
     if target not in {"system", "amr_system"}:
         raise ValueError("diffusion execution requires a Uniform or AMR native install scope")
     _,selected,_=_selected(v,node_model)
-    arguments = "ctx, %s, %s, %s" % (
+    preparation = "%s, %s, %s" % (
         state_var, _boundary_cpp(selected["physical"]),
         "true" if target == "amr_system" else "false")
     lines = ["ctx.require_cartesian_generated_operator(%d, \"diffusive_face_evaluation\");" % bidx,
+        # AMR geometry/lane getters are collective; acquire them on every rank before
+        # the cache conditionally invokes its strictly local matching predicate.
+        "const auto %s_geometry = ctx.geometry();" % prepared_var,
+        "const auto& %s_lane = ctx.prepared_execution_lane();" % prepared_var,
         "auto& %s = ctx.prepared_resource<%s>(%d, %d, "
-        "[&](const auto& resource) { return resource.matches_preparation(%s); }, %s);" % (
-            prepared_var, _prepared_diffusion_type(selected), v.id, bidx, arguments, arguments)]
+        "[&](const auto& resource) { return resource.matches_preparation(%s_geometry, %s_lane, %s); }, ctx, %s);" % (
+            prepared_var, _prepared_diffusion_type(selected), v.id, bidx,
+            prepared_var, prepared_var, preparation, preparation)]
     if any(row.kind == "flux" for row in v.attrs["physical_balance"].occurrences):
         lines.append("std::vector<pops::nd::FaceField<pops::kNativeDimension>> %s_transport_faces;" % prepared_var)
     return lines

@@ -18,8 +18,10 @@ namespace pops::runtime::program {
 /// Context-owned numerical storage, separate from accepted state and evaluated data.
 /// A Program node owns its resources until the context's layout generation changes;
 /// different nodes/blocks/levels never share retained stage outputs. A caller must
-/// reevaluate its law after acquire. Constructors containing collectives must make
-/// their internal allocations/failures collective too, as prepared providers do.
+/// reevaluate its law after acquire. Matches must be rank-local, including every
+/// getter it calls: some ranks can have no resource and skip the predicate entirely.
+/// Constructors containing collectives must make their internal allocations/failures
+/// collective too, as prepared providers do.
 class PreparedResourceCache {
  public:
   PreparedResourceCache() = default;

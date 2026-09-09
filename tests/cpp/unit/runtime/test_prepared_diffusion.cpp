@@ -448,7 +448,8 @@ TEST(PreparedDiffusion, ThreeAxesTwoComponentsAndCoupledCoefficientsPreserveEach
     });
   }
   PreparedDiffusion<3, 2> prepared(context, q, {});
-  EXPECT_TRUE(prepared.matches_preparation(context, q, {}));
+  EXPECT_TRUE(
+      prepared.matches_preparation(context.geometry(), context.prepared_execution_lane(), q, {}));
   Real scale = 1;
   const auto factory = [&](std::size_t local) {
     const auto values = std::as_const(q).fab(local).view();
@@ -704,7 +705,8 @@ TEST(PreparedDiffusion, DistinctComponentValueTracesDriveTheirOwnBoundaryFluxes)
                   }),
               0, 1e-12);
   boundary[6].value = 8;
-  EXPECT_FALSE(prepared.matches_preparation(context, q, boundary));
+  EXPECT_FALSE(prepared.matches_preparation(context.geometry(), context.prepared_execution_lane(),
+                                            q, boundary));
 }
 
 TEST(PreparedDiffusion, FittedThreeAxisPeriodicEquilibriumUsesEveryPotentialGradient) {

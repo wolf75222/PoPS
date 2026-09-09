@@ -13,12 +13,14 @@
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/runtime/program/prepared_resource_cache.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -424,6 +426,88 @@ TEST(test_amr_program_diffusion,
   Kokkos::ScopeGuard guard;
 #endif
   verify_refined_program_diffusion<pops::kNativeDimension>();
+}
+
+TEST(test_amr_program_diffusion, PreparedCacheHandlesRankLocalMissAndInvalidGhostsCollectively) {
+  pops::comm_init();
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  constexpr int Dim = pops::kNativeDimension;
+  using Field = pops::MultiFab<Dim>;
+  using Resource = pops::runtime::program::PreparedDiffusion<Dim>;
+  auto config = refined_config<Dim>();
+  config.distribute_coarse = true;
+  config.coarse_max_grid[0] = config.shape[0] / 2;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.amr.prepared-cache/runtime@1");
+  system.set_temporal_relations({1}, {1}, {"integral_only"});
+  system.install_block_state_route("heat", "tests.amr.prepared-cache/state/heat");
+  pops::add_compiled_model<Dim>(
+      system, "heat", DiffusiveScalar<Dim>{pops::Real(0), pops::RealVector<Dim>{}}, "none",
+      "rusanov", "conservative", "explicit", static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1,
+      {}, {}, 0.0, static_cast<double>(pops::kWenoEpsilon), false,
+      "tests.amr.prepared-cache/physical-flux");
+  system.set_conservative_state("heat", periodic_mode(config.shape));
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->install([](double) {}, context);
+  system.set_program_block_map({0});
+  auto& state = context->state(0);
+  Field rhs(state.layout(), state.distribution(), state.local_rank(), state.ncomp(),
+            state.ghosts());
+  const std::array<pops::runtime::program::DiffusiveBoundary<Dim>, 2 * Dim> physical{};
+  // An independent cache exposes the same rank-local miss that generated acquisition must
+  // tolerate; the provider and every geometry/lane/boundary operation use the real AMR context.
+  pops::runtime::program::PreparedResourceCache cache;
+  auto acquire = [&](Field& prototype) -> Resource& {
+    const auto geometry = context->geometry();
+    const auto& lane = context->prepared_execution_lane();
+    return cache.acquire<Resource>(
+        3000, 0, context->level(), lane,
+        [&](const Resource& resource) {
+          return resource.matches_preparation(geometry, lane, prototype, physical, true);
+        },
+        *context, prototype, physical, true);
+  };
+  auto evaluate = [&](Resource& resource, pops::Real coefficient) {
+    context->fill_boundary(state, context->prepared_execution_lane());
+    resource.apply(state, rhs, [&](std::size_t local) {
+      const auto values = std::as_const(state).fab(local).view();
+      return [=] POPS_HD(const pops::Index<Dim>& cell) {
+        std::array<pops::Real, Dim + 2> law{};
+        law[0] = values(cell, 0);
+        for (int axis = 0; axis < Dim; ++axis)
+          law[axis + 1] = coefficient;
+        law[Dim + 1] = pops::Real(1);
+        return law;
+      };
+    });
+  };
+  auto& initial = acquire(state);
+  evaluate(initial, pops::Real(0.05));
+  const pops::Real first_frequency = initial.explicit_frequency();
+  EXPECT_GT(first_frequency, pops::Real(0));
+  EXPECT_EQ(&acquire(state), &initial);
+  if (pops::my_rank() == 0)
+    cache.clear();
+  auto& rebuilt = acquire(state);
+  // Every peer must reconstruct, including peers whose original cache entry was present.
+  EXPECT_THROW(rebuilt.explicit_frequency(), std::logic_error);
+  evaluate(rebuilt, pops::Real(0.1));
+  EXPECT_EQ(rebuilt.explicit_frequency(), pops::Real(2) * first_frequency);
+
+  auto invalid_ghosts = state.ghosts();
+  if (pops::my_rank() == 0)
+    invalid_ghosts[0] = 0;
+  Field invalid(state.layout(), state.distribution(), state.local_rank(), state.ncomp(),
+                invalid_ghosts);
+  // On rank zero matches_storage_ returns before any geometry comparison. The other ranks
+  // must not enter a context getter while rank zero enters the cache's disposition reduction.
+  EXPECT_THROW((void)acquire(invalid), std::exception);
+  auto& retry = acquire(state);
+  EXPECT_THROW(retry.explicit_frequency(), std::logic_error);
+  evaluate(retry, pops::Real(0.05));
+  EXPECT_EQ(retry.explicit_frequency(), first_frequency);
 }
 
 // Prepared scalar diffusion is supported in Dim1/Dim2; the provider test above also covers Dim3.

@@ -627,20 +627,21 @@ class PreparedDiffusion {
   /// Storage reuse only. Laws and all field/parameter dependencies are reevaluated
   /// by apply; the owning context additionally keys topology/materialization epochs
   /// and the Program evaluation identity so live stage face ledgers never alias.
-  template <class Context>
-  bool matches_preparation(Context& ctx, const Field& prototype,
+  /// Compare only the already acquired geometry/lane snapshot: a cache may call this
+  /// on only some ranks, so context getters and collective preparation are forbidden here.
+  bool matches_preparation(const Geometry<Dim>& geometry, const ExecutionLane& lane,
+                           const Field& prototype,
                            const std::array<DiffusiveBoundary<Dim>, 2 * Dim * Components>& physical,
                            bool prepared_amr_ghosts = false) const {
-    if (!matches_storage_(prototype) || lane_ != &ctx.prepared_execution_lane() ||
-        prepared_amr_ghosts_ != prepared_amr_ghosts ||
-        geometry_.domain() != ctx.geometry().domain())
+    if (!matches_storage_(prototype) || lane_ != &lane ||
+        prepared_amr_ghosts_ != prepared_amr_ghosts || geometry_.domain() != geometry.domain())
       return false;
     for (std::size_t local = 0; local < prototype.local_size(); ++local)
       if (prototype.box(local) != variable_.box(local))
         return false;
     for (int axis = 0; axis < Dim; ++axis)
-      if (geometry_.spacing(axis) != ctx.geometry().spacing(axis) ||
-          geometry_.face_coordinate(axis, 0) != ctx.geometry().face_coordinate(axis, 0))
+      if (geometry_.spacing(axis) != geometry.spacing(axis) ||
+          geometry_.face_coordinate(axis, 0) != geometry.face_coordinate(axis, 0))
         return false;
     for (int face = 0; face < 2 * Dim * Components; ++face)
       if (physical_[face].kind != physical[face].kind ||

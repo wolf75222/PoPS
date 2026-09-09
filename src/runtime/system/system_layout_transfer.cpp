@@ -777,6 +777,46 @@ SystemLayoutTransferReceipt PreparedSystemLayoutTransfer<Dim>::apply(std::uint64
 
   std::uint64_t local_source_elements = 0;
   std::uint64_t local_target_elements = 0;
+  SystemLayoutTransferReceipt receipt;
+  collectively_validate(p_->communicator, "layout-transfer receipt and port preparation", [&] {
+    // Every allocation and count belongs to the collective preflight. In particular,
+    // a rank-local receipt allocation must never strand peers in the count reductions
+    // after the target or a suspended continuation has already been published.
+    (void)p_->source_transfer_state();
+    const MultiFab<Dim>& destination = p_->target_transfer_state();
+    for (std::size_t local = 0; local < p_->source_snapshot.local_size(); ++local) {
+      const auto global = p_->source_snapshot.global_index(local);
+      const auto destination_local = destination.local_index_of(global);
+      if (destination_local == MultiFab<Dim>::not_local)
+        throw std::logic_error(
+            "prepared layout-transfer source/target ownership diverged after bind");
+      const auto source_count =
+          checked_elements(p_->source_snapshot.fab(local).box(), p_->components);
+      const auto target_count =
+          checked_elements(destination.fab(destination_local).box(), p_->components);
+      if (source_count > std::numeric_limits<std::uint64_t>::max() - local_source_elements ||
+          target_count > std::numeric_limits<std::uint64_t>::max() - local_target_elements)
+        throw std::overflow_error("layout-transfer receipt element count overflow");
+      local_source_elements += source_count;
+      local_target_elements += target_count;
+    }
+    receipt.applied = true;
+    receipt.program_invocation = p_->spec.program_invocation;
+    receipt.mapping_identity = p_->spec.mapping_identity;
+    receipt.provider_identity = p_->spec.provider_identity;
+    receipt.provider_component_identity = p_->spec.provider_component_identity;
+    receipt.provider_manifest_identity = p_->spec.provider_manifest_identity;
+    receipt.source_layout_identity = p_->spec.source_layout_identity;
+    receipt.target_layout_identity = p_->spec.target_layout_identity;
+    receipt.source_block = p_->spec.source_block;
+    receipt.target_block = p_->spec.target_block;
+    receipt.execution_identity = p_->execution.execution_identity;
+    receipt.operation = p_->spec.operation;
+    receipt.generation = generation;
+    receipt.attempt = attempt;
+  });
+  receipt.source_element_count = collective_elements(local_source_elements, p_->communicator);
+  receipt.destination_element_count = collective_elements(local_target_elements, p_->communicator);
   collectively_validate(p_->communicator, "native Transfer apply", [&] {
     MultiFab<Dim>& destination = p_->target_transfer_state();
     try {
@@ -813,13 +853,6 @@ SystemLayoutTransferReceipt PreparedSystemLayoutTransfer<Dim>::apply(std::uint64
             status.action != POPS_COMPONENT_CONTINUE_V1)
           throw std::runtime_error(status.reason == nullptr ? "native Transfer provider failed"
                                                             : status.reason);
-        const std::uint64_t source_count = checked_elements(source_box, p_->components);
-        const std::uint64_t target_count = checked_elements(destination_box, p_->components);
-        if (source_count > std::numeric_limits<std::uint64_t>::max() - local_source_elements ||
-            target_count > std::numeric_limits<std::uint64_t>::max() - local_target_elements)
-          throw std::overflow_error("layout-transfer receipt element count overflow");
-        local_source_elements += source_count;
-        local_target_elements += target_count;
       }
       device_fence();
     } catch (...) {
@@ -833,23 +866,6 @@ SystemLayoutTransferReceipt PreparedSystemLayoutTransfer<Dim>::apply(std::uint64
     p_->target->program_.release_program_map(p_->spec.program_invocation, true);
   }
 
-  SystemLayoutTransferReceipt receipt;
-  receipt.applied = true;
-  receipt.program_invocation = p_->spec.program_invocation;
-  receipt.mapping_identity = p_->spec.mapping_identity;
-  receipt.provider_identity = p_->spec.provider_identity;
-  receipt.provider_component_identity = p_->spec.provider_component_identity;
-  receipt.provider_manifest_identity = p_->spec.provider_manifest_identity;
-  receipt.source_layout_identity = p_->spec.source_layout_identity;
-  receipt.target_layout_identity = p_->spec.target_layout_identity;
-  receipt.source_block = p_->spec.source_block;
-  receipt.target_block = p_->spec.target_block;
-  receipt.execution_identity = p_->execution.execution_identity;
-  receipt.operation = p_->spec.operation;
-  receipt.generation = generation;
-  receipt.attempt = attempt;
-  receipt.source_element_count = collective_elements(local_source_elements, p_->communicator);
-  receipt.destination_element_count = collective_elements(local_target_elements, p_->communicator);
   return receipt;
 }
 

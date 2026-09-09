@@ -110,11 +110,14 @@ def emit_amr_spatial_solve(
             "});",
             "ctx.stage_spatial_hierarchy_previous(%d,%d,%s,%s);"
             % (value.id, owner, variables[value.inputs[0].id], seed),
+            # Snapshot collective getters before any rank can skip the cache predicate.
+            "const auto %s_geometry = ctx.geometry();" % slot,
+            "const auto& %s_lane = ctx.prepared_execution_lane();" % slot,
             # Capture the borrowed pointer by value in the level callbacks. The context
             # owns its buffers; gathering again replaces callbacks after invalidation.
             "auto* %s = &ctx.prepared_resource<%s>(%d,%d," % (slot, diffusion_type, rate.id, owner),
-            "  [&](const auto& resource) { return resource.matches_preparation(ctx,*%s,%s,true); },"
-            % (trial, _boundary_cpp(selected["physical"])),
+            "  [&](const auto& resource) { return resource.matches_preparation(%s_geometry,%s_lane,*%s,%s,true); },"
+            % (slot, slot, trial, _boundary_cpp(selected["physical"])),
             "  ctx,*%s,%s,true);" % (trial, _boundary_cpp(selected["physical"])),
         ]
         # Every scratch allocation happens before peers enter residual/JVP collectives.
