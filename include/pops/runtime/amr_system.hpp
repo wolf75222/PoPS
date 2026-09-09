@@ -993,8 +993,11 @@ class AmrSystem {
   void step(double dt);  ///< one AMR macro-step (periodic regrid included)
   void advance(double dt, int nsteps);
   std::string advance_program_region(double dt);
-  void suspend_program_map(std::string identity, bool target, std::vector<MultiFab<Dim>*> fields,
-                           std::function<void()> continuation, std::uint64_t stage_generation);
+  /// Called across the shared-library boundary by the generated AMR Program continuation.
+  POPS_EXPORT void suspend_program_map(std::string identity, bool target,
+                                       std::vector<MultiFab<Dim>*> fields,
+                                       std::function<void()> continuation,
+                                       std::uint64_t stage_generation);
   void begin_step_transaction();
   /// Open an explicit child scope; child publication remains provisional in its parent.
   POPS_EXPORT void begin_nested_step_transaction();

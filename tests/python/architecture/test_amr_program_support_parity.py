@@ -122,6 +122,26 @@ def test_context_include_parser_authenticates_both_delimiters_and_hidden_fragmen
         raise AssertionError("quoted hidden fragment bypassed AMR Program classification")
 
 
+def test_generated_amr_field_map_continuations_import_exported_facade_seams():
+    """Generated DSOs cannot resolve hidden out-of-line methods in the native host."""
+    fragments = (
+        "mapping_continuation", "hierarchy_barriers", "general_field_public",
+        "general_field_services", "general_field_scratch",
+    )
+    source = "\n".join(
+        _strip_comments((CONTEXT_HPP.parent / f"amr_program_context_{name}.inc").read_text())
+        for name in fragments
+    )
+    callees = set(re.findall(r"\bfacade_->(\w+)\s*\(", source))
+    assert "suspend_program_map" in callees
+    facade = _strip_comments((REPO_ROOT / "include/pops/runtime/amr_system.hpp").read_text())
+    missing = sorted(
+        name for name in callees
+        if re.search(r"\bPOPS_EXPORT\b[^;{}]*?\b" + re.escape(name) + r"\s*\(", facade) is None
+    )
+    assert not missing, f"generated AMR field/map continuations import hidden facade seams: {missing}"
+
+
 def _load_support_module():
     """Load the import-free support query directly from its source path."""
     spec = importlib.util.spec_from_file_location("_amr_program_support_parity", SUPPORT_PY)
