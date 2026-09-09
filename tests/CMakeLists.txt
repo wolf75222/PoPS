@@ -664,7 +664,7 @@ pops_test_source(_src test_amr_hierarchy_barrier_continuation)
 pops_add_gtest_suite(NAME test_amr_hierarchy_barrier_continuation SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
 pops_test_source(_src test_amr_hierarchy_field_scratch)
-pops_add_gtest_suite(NAME test_amr_hierarchy_field_scratch SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+pops_add_gtest_suite(NAME test_amr_hierarchy_field_scratch SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
 pops_test_source(_src test_amr_synchronized_continuation)
 pops_add_gtest_suite(NAME test_amr_synchronized_continuation SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)

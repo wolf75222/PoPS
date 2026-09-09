@@ -1,12 +1,17 @@
 #include <gtest/gtest.h>
 
 #include "explicit_amr_program.hpp"
+#include "native_dso_compiler.hpp"
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/nd/prepared_composite_general_field.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/runtime/dynamic/dynlib.hpp>
 
 #include <array>
+#include <cstdio>
+#include <ctime>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <string>
@@ -27,6 +32,173 @@ struct Fixture {
   std::unique_ptr<System> system;
   std::shared_ptr<Context> context;
 };
+
+std::string rollback_program_source() {
+  // This artifact owns its actual Program/context. The real loader alone grants snapshot
+  // enrollment; a direct context.install callback deliberately has no artifact authority.
+  return R"CPP(
+#include <pops/runtime/config/route_ids.hpp>
+#include <pops/runtime/dynamic/abi_key.hpp>
+#include <pops/runtime/program/amr_program_context.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
+#include <memory>
+#include <stdexcept>
+    using Context = pops::runtime::program::AmrProgramContext<pops::kNativeDimension>;
+    static std::weak_ptr<Context> installed_context;
+    static int visits = 0;
+    extern "C" void pops_test_field_context(std::shared_ptr<Context>* output) {
+      *output = installed_context.lock();
+    }
+    extern "C" int pops_test_field_visits() {
+      return visits;
+    }
+    extern "C" const char* pops_program_abi_key() {
+      return POPS_ABI_KEY_LITERAL;
+    }
+    extern "C" const char* pops_program_route_manifest() {
+      return pops::kRouteRegistrySignature;
+    }
+    extern "C" const char* pops_program_name() {
+      return "authenticated-field-scratch-rollback";
+    }
+    extern "C" const char* pops_program_hash() {
+      return "tests.field-scratch/authenticated-rollback@1";
+    }
+    extern "C" int pops_program_operator_authority_count() {
+      return 0;
+    }
+    extern "C" std::uint64_t pops_program_operator_authority_word(int, int) {
+      return 0;
+    }
+    extern "C" int pops_program_block_count() {
+      return 1;
+    }
+    extern "C" const char* pops_program_block_name(int block) {
+      return block == 0 ? "scalar" : "";
+    }
+    extern "C" bool pops_program_has_flux_expression() {
+      return false;
+    }
+    extern "C" int pops_program_flux_expression_budget_count() {
+      return 1;
+    }
+    extern "C" std::uint64_t pops_program_interface_coupling_application_bound() {
+      return 0;
+    }
+    extern "C" std::uint64_t pops_program_interface_coupling_identity_character_bound() {
+      return 0;
+    }
+    extern "C" std::uint64_t pops_program_flux_rhs_basis_bound(int) {
+      return 0;
+    }
+    extern "C" std::uint64_t pops_program_flux_coefficient_term_bound(int) {
+      return 0;
+    }
+    extern "C" int pops_program_checkpoint_history_count() {
+      return 0;
+    }
+    extern "C" const char* pops_program_checkpoint_history_name(int) {
+      return "";
+    }
+    extern "C" int pops_program_checkpoint_history_owner(int) {
+      return 0;
+    }
+    extern "C" const char* pops_program_checkpoint_history_state_identity(int) {
+      return "";
+    }
+    extern "C" const char* pops_program_checkpoint_history_space_identity(int) {
+      return "";
+    }
+    extern "C" const char* pops_program_checkpoint_history_clock_identity(int) {
+      return "";
+    }
+    extern "C" const char* pops_program_checkpoint_history_interpolation_identity(int) {
+      return "";
+    }
+    extern "C" int pops_program_checkpoint_history_depth(int) {
+      return 0;
+    }
+    extern "C" int pops_program_checkpoint_history_components(int) {
+      return 0;
+    }
+    extern "C" int pops_program_checkpoint_logical_clock_count() {
+      return 1;
+    }
+    extern "C" const char* pops_program_checkpoint_logical_clock_identity(int clock) {
+      return clock == 0 ? "clock.field-scratch" : "";
+    }
+    extern "C" const char* pops_program_checkpoint_temporal_provider_identity() {
+      return "pops.temporal-partition.global@1";
+    }
+    extern "C" std::uint64_t pops_program_checkpoint_temporal_cell_capacity() {
+      return 0;
+    }
+    extern "C" std::uint64_t pops_program_checkpoint_temporal_cells_per_topology_cell() {
+      return 0;
+    }
+    extern "C" int pops_module_operator_count() {
+      return 0;
+    }
+    extern "C" const char* pops_module_operator_owner(int) {
+      return "";
+    }
+    extern "C" const char* pops_module_operator_name(int) {
+      return "";
+    }
+    extern "C" const char* pops_module_operator_kind(int) {
+      return "";
+    }
+    extern "C" const char* pops_module_operator_signature(int) {
+      return "";
+    }
+    extern "C" const char* pops_module_operator_requirements(int) {
+      return "";
+    }
+    extern "C" int pops_module_state_space_count() {
+      return 1;
+    }
+    extern "C" const char* pops_module_state_space_name(int space) {
+      return space == 0 ? "U" : "";
+    }
+    extern "C" const char* pops_module_state_space_owner(int space) {
+      return space == 0 ? "scalar" : "";
+    }
+    extern "C" int pops_module_field_space_count() {
+      return 0;
+    }
+    extern "C" const char* pops_module_field_space_name(int) {
+      return "";
+    }
+    extern "C" const char* pops_module_field_space_owner(int) {
+      return "";
+    }
+    extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>* system) {
+      auto context = pops::runtime::program::make_program_execution_provider(system);
+      installed_context = context;
+      context->configure_primary_clock("clock.field-scratch");
+      context->install(
+          [context](double dt) {
+            const bool reject = dt > 0.1;
+            context->advance_mapping_hierarchy(
+                dt,
+                [context, reject](double) {
+                  const int rank = context->prepared_execution_lane().rank();
+                  auto& scratch =
+                      context->hierarchy_field_scratch(701, 800, 0, reject ? 1 : 2, reject ? 1 : 0);
+                  if (scratch.local_size() != 0 && (pops::reduce_min_local(scratch) != 0 ||
+                                                    pops::reduce_max_local(scratch) != 0))
+                    throw std::runtime_error("field scratch was not reconstructed/reset");
+                  scratch.set_val(pops::Real(23));
+                  ++visits;
+                  if (reject && rank == 0)
+                    throw std::runtime_error("injected authenticated field scratch failure");
+                },
+                context, [] {});
+          },
+          context);
+    }
+  )CPP";
+}
 
 void expect_value(const Field& field, pops::Real value) {
   for (int component = 0; component < field.ncomp(); ++component)
@@ -63,7 +235,7 @@ void replace_child(Fixture& fixture, int upper_bound) {
   fixture.context->publish_regrid(std::move(prepared), std::move(child));
 }
 
-Fixture prepare_fixture() {
+Fixture prepare_fixture(const std::string& artifact = {}) {
   pops::comm_init();
   pops::AmrSystemConfig<Dim> config;
   config.explicit_bootstrap = true;
@@ -86,17 +258,32 @@ Fixture prepare_fixture() {
   for (int axis = 0; axis < Dim; ++axis)
     cells *= 8;
   system->set_conservative_state("scalar", std::vector<double>(cells, 7.0));
-  auto context = pops::runtime::program::make_program_execution_provider(system.get());
+  std::shared_ptr<Context> context;
+  if (artifact.empty()) {
+    context = pops::runtime::program::make_program_execution_provider(system.get());
+    context->install([](double) {}, context);
+    system->set_program_block_map({0});
+    using Budget = System::PreparedAmrProgramFluxExpressionBlockBudget;
+    system->install_prepared_amr_program_flux_expression_budget(
+        "tests.hierarchy-field-scratch/program@1", {Budget{0, 0}}, 0, 0);
+    context->configure_primary_clock("clock.field-scratch");
+  } else {
+    system->install_program(artifact);
+    const auto handle = pops::dynlib::open(artifact);
+    if (!pops::dynlib::valid(handle))
+      throw std::runtime_error("cannot inspect the installed field scratch fixture artifact");
+    auto get_context = reinterpret_cast<void (*)(std::shared_ptr<Context>*)>(
+        pops::dynlib::sym(handle, "pops_test_field_context"));
+    if (get_context)
+      get_context(&context);
+    pops::dynlib::close(handle);
+    if (!context)
+      throw std::runtime_error("field scratch fixture did not install its exact context");
+  }
   // Explicit bootstrap stages the source before materialization, then initializes its live storage.
   system->set_conservative_state("scalar", std::vector<double>(cells, 7.0));
   system->register_program_hierarchy_tensor_solver_provider(
       pops::elliptic::nd::make_composite_general_field_provider<Dim>());
-  context->install([](double) {}, context);
-  system->set_program_block_map({0});
-  using Budget = System::PreparedAmrProgramFluxExpressionBlockBudget;
-  system->install_prepared_amr_program_flux_expression_budget(
-      "tests.hierarchy-field-scratch/program@1", {Budget{0, 0}}, 0, 0);
-  context->configure_primary_clock("clock.field-scratch");
   Fixture fixture{std::move(system), std::move(context)};
   replace_child(fixture, 1);
   pops::PreparedProviderOptions options;
@@ -199,16 +386,40 @@ TEST(AmrHierarchyFieldScratch, RegridRepreparesSolverAndScratchAgainstTheNewFine
 }
 
 TEST(AmrHierarchyFieldScratch, RollbackDiscardsProviderScratchBeforeReconstruction) {
-  auto fixture = prepare_fixture();
+  pops::comm_init();
+  const std::string stem = std::string(POPS_TEST_TMPDIR) + "/amr_field_scratch_" +
+                           std::to_string(pops::my_rank()) + "_" + std::to_string(std::clock());
+  const std::string source = stem + ".cpp", library = stem + ".so";
+  {
+    std::ofstream output(source);
+    output << rollback_program_source();
+  }
+  const auto package = pops::test::native_dso::compile_shared(
+      source, library, "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");
+  if (!package.ok)
+    pops::test::native_dso::report_compile_failure("AmrHierarchyFieldScratch", package);
+  ASSERT_EQ(pops::all_reduce_min(package.ok ? 1L : 0L), 1L);
+  auto fixture = prepare_fixture(library);
   auto& context = *fixture.context;
+  ASSERT_TRUE(fixture.system->program_runtime_state_().artifact_backed_);
+  const auto handle = pops::dynlib::open(library);
+  ASSERT_TRUE(pops::dynlib::valid(handle));
+  auto visits = reinterpret_cast<int (*)()>(pops::dynlib::sym(handle, "pops_test_field_visits"));
+  ASSERT_NE(visits, nullptr);
   const auto accepted = fixture.system->program_accepted_state();
   context.for_each_program_resource_level(
       [&](int) { context.hierarchy_field_scratch(701, 800, 0, 1, 1).set_val(pops::Real(19)); });
-  fixture.system->begin_step_transaction();
-  context.for_each_program_resource_level(
-      [&](int) { context.hierarchy_field_scratch(701, 800, 0, 1, 1).set_val(pops::Real(23)); });
-  fixture.system->rollback_step_transaction();
+  EXPECT_THROW(fixture.system->step(0.125), std::exception);
+  EXPECT_EQ(visits(), 1);
   EXPECT_EQ(fixture.system->program_accepted_state(), accepted);
+  EXPECT_EQ(fixture.system->macro_step(), 0);
+  EXPECT_DOUBLE_EQ(fixture.system->time(), 0.0);
+  // The artifact requests a new shape at the same solve/value/subslot on retry. Only the real
+  // facade-owned context rollback clears that old contract; weakening the shape guard is invalid.
+  EXPECT_NO_THROW(fixture.system->step(0.0625));
+  EXPECT_EQ(visits(), 3);
+  EXPECT_EQ(fixture.system->macro_step(), 1);
+  EXPECT_DOUBLE_EQ(fixture.system->time(), 0.0625);
   context.for_each_program_resource_level([&](int level) {
     auto& scratch = context.hierarchy_field_scratch(701, 800, 0, 2, 0);
     EXPECT_EQ(scratch.ncomp(), 2);
@@ -216,4 +427,7 @@ TEST(AmrHierarchyFieldScratch, RollbackDiscardsProviderScratchBeforeReconstructi
     expect_value(scratch, pops::Real(0));
     expect_value(fixture.system->engine()->hierarchy().state(level), pops::Real(7));
   });
+  pops::dynlib::close(handle);
+  std::remove(source.c_str());
+  std::remove(library.c_str());
 }
