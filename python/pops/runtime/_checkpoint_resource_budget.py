@@ -503,6 +503,8 @@ def _checkpoint_member_names(
             SPATIAL_CONTRACT_KEY,
             *cadence,
             "program_accepted_state_source_authority",
+            "program_history_flux_snapshot_state",
+            "program_history_flux_snapshot_offsets",
             *history_names,
         ]
         for block in block_names:
@@ -538,6 +540,7 @@ def _common_budget(
     auxiliary_components: int,
     accepted_program_bytes: int,
     source_authority_bytes: int,
+    history_flux_snapshot_bytes: int,
     structural_bytes: int,
     field_provider_manifest_characters: int,
     program: Any,
@@ -626,6 +629,7 @@ def _common_budget(
         cache_bytes,
         auxiliary_bytes,
         program_bytes,
+        history_flux_snapshot_bytes,
         exchange_bytes,
         source_authority_bytes,
         structural_bytes,
@@ -660,6 +664,7 @@ def _common_budget(
         "temporal": temporal_manifest,
         "continuation": owner._continuation_transition_plan.to_data(),
         "accepted_exchange_bytes": exchange_bytes,
+        "history_flux_snapshot_bytes": history_flux_snapshot_bytes,
         "consumer_graph": consumer_data,
         "consumer_identity": consumer_identity,
         "consumer_count": consumer_count,
@@ -701,6 +706,7 @@ def _common_budget(
             "auxiliary": [auxiliary_metadata_bytes, auxiliary_components],
             "accepted_program_bytes": accepted_program_bytes,
             "source_authority_bytes": source_authority_bytes,
+            "history_flux_snapshot_bytes": history_flux_snapshot_bytes,
             "structural_bytes": structural_bytes,
             "field_provider_manifest_characters": field_provider_manifest_characters,
             "members": list(names),
@@ -723,6 +729,7 @@ def _common_budget(
             text_bytes,
             accepted_program_bytes,
             source_authority_bytes,
+            history_flux_snapshot_bytes,
             migration_bytes,
             1,
         ),
@@ -752,6 +759,7 @@ def install_uniform_checkpoint_resource_budget(owner: Any, install_plan: Any) ->
         auxiliary_components=_capacity(capacity[1], where="auxiliary component capacity"),
         accepted_program_bytes=0,
         source_authority_bytes=0,
+        history_flux_snapshot_bytes=0,
         structural_bytes=0,
         field_provider_manifest_characters=0,
         program=program,
@@ -790,6 +798,27 @@ def install_amr_checkpoint_resource_budget(owner: Any, install_plan: Any) -> Non
     )
     source_authority_bytes = _capacity(
         program_state[1], where="native source Program authority capacity", positive=True
+    )
+    snapshot_capacity_provider = getattr(
+        owner._s, "_checkpoint_program_history_flux_snapshot_capacity", None
+    )
+    if not callable(snapshot_capacity_provider):
+        raise TypeError("AMR native history-flux snapshot capacity is unavailable")
+    snapshot_shard_capacity = _capacity(
+        snapshot_capacity_provider(), where="native history-flux snapshot shard capacity"
+    )
+    history_flux_snapshot_bytes = _add(
+        _mul(
+            rank_capacity,
+            snapshot_shard_capacity,
+            where="history-flux snapshot shard capacity",
+        ),
+        _mul(
+            _add(rank_capacity, 1, where="history-flux snapshot offset count"),
+            8,
+            where="history-flux snapshot offset capacity",
+        ),
+        where="history-flux snapshot archive capacity",
     )
     artifact = install_plan.artifact
     field_slots, field_manifest_characters, field_manifest_bytes = (
@@ -841,6 +870,7 @@ def install_amr_checkpoint_resource_budget(owner: Any, install_plan: Any) -> Non
         auxiliary_components=_capacity(capacity[1], where="auxiliary component capacity"),
         accepted_program_bytes=accepted_capacity,
         source_authority_bytes=source_authority_bytes,
+        history_flux_snapshot_bytes=history_flux_snapshot_bytes,
         structural_bytes=structural_bytes,
         field_provider_manifest_characters=field_manifest_characters,
         program=program,
@@ -886,6 +916,7 @@ def install_layout_checkpoint_resource_budget(
         auxiliary_components=_capacity(capacity[1], where="auxiliary component capacity"),
         accepted_program_bytes=0,
         source_authority_bytes=0,
+        history_flux_snapshot_bytes=0,
         structural_bytes=0,
         field_provider_manifest_characters=0,
         program=program,

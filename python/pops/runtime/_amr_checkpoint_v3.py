@@ -39,6 +39,7 @@ class _PreparedAMRRestart:
     multi: bool
     state_payload: tuple[Any, ...]
     auxiliary_checkpoint_payload: tuple[bytes, ...]
+    history_flux_snapshot_shards: tuple[bytes, ...] | None
     exchange_checkpoint: bytes
     potential_payload: tuple[Any, ...]
     field_payload: tuple[Any, ...]
@@ -63,6 +64,8 @@ class _PreparedAMRCapture:
     local_distribution_modes: tuple[str, ...]
     local_dmaps: tuple[tuple[int, ...], ...]
     local_program_state: bytes
+    local_history_flux_snapshot_shard: bytes
+    history_flux_snapshot_shard_capacity: int
     capture_identity: str
 
 
@@ -413,6 +416,26 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
         raise RuntimeError("checkpoint requires the AMR temporal restart state")
     temporal_json = temporal.checkpoint_json(time=time, macro_step=macro_step)
     program_state = bytes(sim.program_accepted_state())
+    snapshot_provider = getattr(sim, "program_history_flux_snapshot_shard", None)
+    snapshot_capacity_provider = getattr(
+        sim, "_checkpoint_program_history_flux_snapshot_capacity", None
+    )
+    if not callable(snapshot_provider) or not callable(snapshot_capacity_provider):
+        raise TypeError("checkpoint AMR engine lacks immutable history-flux snapshot capture")
+    history_flux_snapshot_shard = snapshot_provider()
+    history_flux_snapshot_shard_capacity = snapshot_capacity_provider()
+    if type(history_flux_snapshot_shard) is not bytes:
+        raise TypeError("checkpoint AMR history-flux snapshot shard must be exact bytes")
+    if (
+        isinstance(history_flux_snapshot_shard_capacity, bool)
+        or not isinstance(history_flux_snapshot_shard_capacity, int)
+        or history_flux_snapshot_shard_capacity < 0
+    ):
+        raise TypeError("checkpoint AMR history-flux snapshot capacity must be non-negative")
+    if len(history_flux_snapshot_shard) > history_flux_snapshot_shard_capacity:
+        raise ValueError("checkpoint AMR history-flux snapshot exceeds its artifact capacity")
+    if history_flux_snapshot_shard and not program_state:
+        raise ValueError("checkpoint AMR native route returned Program history-flux snapshots")
     accepted_contract = encode_contract(sim)
     mode_provider = getattr(sim, "level_distribution_mode", None)
     owner_provider = getattr(sim, "level_owner_ranks", None)
@@ -537,6 +560,8 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
             "program_hash": str(out["program_hash"]),
             "program_cadence": cadence.to_data(),
             "program_state_present": bool(program_state),
+            "history_flux_snapshot_present": bool(history_flux_snapshot_shard),
+            "history_flux_snapshot_shard_capacity": history_flux_snapshot_shard_capacity,
             "accepted_contract": accepted_contract,
             "histories": history_plan.to_data(),
             "runtime_identities": [value.to_data() for value in owner._checkpoint_identities()],
@@ -559,6 +584,8 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
         distribution_modes,
         dmaps,
         program_state,
+        history_flux_snapshot_shard,
+        history_flux_snapshot_shard_capacity,
         capture_identity,
     )
 
@@ -583,6 +610,13 @@ def _capture_v3(owner, sim, prepared):
     if any(state != program_states[0] for state in program_states[1:]):
         raise ValueError("checkpoint AMR accepted Program image differs across source ranks")
     canonical_program_state = program_states[0]
+    from pops.runtime._checkpoint_history_flux_snapshots import capture_history_flux_snapshots
+    capture_history_flux_snapshots(
+        prepared.topology,
+        prepared.local_history_flux_snapshot_shard,
+        prepared.history_flux_snapshot_shard_capacity,
+        out,
+    )
     rank_rows = consensus(
         prepared.topology,
         "AMR rank-local distribution topology",
@@ -1091,6 +1125,17 @@ def prepare_v3(
     _preflight_histories_v3(sim, d, current_ranks, spatial)
 
     from pops.runtime._checkpoint_exchanges import prepare_checkpoint_continuation
+    from pops.runtime._checkpoint_history_flux_snapshots import prepare_history_flux_snapshots
+    snapshot_capacity_provider = getattr(
+        sim, "_checkpoint_program_history_flux_snapshot_capacity", None
+    )
+    if not callable(snapshot_capacity_provider):
+        raise TypeError("restart: AMR engine lacks immutable history-flux snapshot capacity")
+    history_flux_snapshot_shards = prepare_history_flux_snapshots(
+        d,
+        checkpoint_ranks=checkpoint_ranks,
+        shard_capacity=snapshot_capacity_provider(),
+    )
     return _PreparedAMRRestart(
         payload=d,
         temporal_state=restored_temporal,
@@ -1109,6 +1154,7 @@ def prepare_v3(
         multi=bool(multi),
         state_payload=tuple((block, tuple(levels)) for block, levels in state_payload),
         auxiliary_checkpoint_payload=tuple(auxiliary_checkpoint_payload),
+        history_flux_snapshot_shards=history_flux_snapshot_shards,
         exchange_checkpoint=prepare_checkpoint_continuation(owner, d),
         potential_payload=tuple(phi_payload),
         field_payload=tuple((slot, tuple(levels)) for slot, levels in field_payload),
@@ -1371,6 +1417,16 @@ def apply_v3(owner, sim, prepared):
                 "restart: history '%s' shape (%d, %d) != installed shape (%d, %d)"
                 % (name, depth, ncomp, int(sim.history_depth(name)), int(sim.history_ncomp(name)))
             )
+
+    if prepared.history_flux_snapshot_shards is not None:
+        restore_history_flux_snapshots = getattr(
+            sim, "restore_program_history_flux_snapshots", None
+        )
+        if not callable(restore_history_flux_snapshots):
+            raise TypeError("restart: AMR engine lacks immutable history-flux snapshot restore")
+        restore_history_flux_snapshots(
+            list(prepared.history_flux_snapshot_shards), prepared.checkpoint_ranks
+        )
 
     # (4) Restore every block/level state as saved, without re-prolongation.
     for block, levels in prepared.state_payload:

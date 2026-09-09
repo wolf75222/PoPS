@@ -861,6 +861,9 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
           "Return the artifact-authenticated Program face/interface flux capacity.")
       .def("_checkpoint_program_state_capacity", &AmrSystem::checkpoint_program_state_capacity,
            "Return the artifact-authenticated POPSAND4/source-authority byte capacities.")
+      .def("_checkpoint_program_history_flux_snapshot_capacity",
+           &AmrSystem::checkpoint_program_history_flux_snapshot_capacity,
+           "Return the artifact-authenticated capacity of one history-flux snapshot shard.")
       .def(
           "restore_restart_auxiliary_checkpoint_accepted_state",
           [](AmrSystem& s, py::object payloads) {
@@ -1142,6 +1145,11 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
              const auto bytes = s.program_accepted_state();
              return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
            })
+      .def("program_history_flux_snapshot_shard",
+           [](const AmrSystem& s) {
+             const auto bytes = s.program_history_flux_snapshot_shard();
+             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+           })
       .def(
           "restore_program_accepted_state",
           [](AmrSystem& s, py::bytes payload) {
@@ -1166,6 +1174,20 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
                 std::vector<std::uint8_t>(bytes.begin(), bytes.end()), names, depths, ncomps);
           },
           py::arg("payload"), py::arg("names"), py::arg("depths"), py::arg("ncomps"))
+      .def(
+          "restore_program_history_flux_snapshots",
+          [](AmrSystem& s, const py::sequence& payloads, int source_rank_count) {
+            std::vector<std::vector<std::uint8_t>> shards;
+            shards.reserve(static_cast<std::size_t>(py::len(payloads)));
+            for (const py::handle payload : payloads) {
+              if (!py::isinstance<py::bytes>(payload))
+                throw py::type_error("history-flux snapshot shards must be exact bytes");
+              const std::string bytes = py::cast<std::string>(payload);
+              shards.emplace_back(bytes.begin(), bytes.end());
+            }
+            s.restore_program_history_flux_snapshots(shards, source_rank_count);
+          },
+          py::arg("payloads"), py::arg("source_rank_count"))
       .def("program_accepted_state_manifest", &AmrSystem::program_accepted_state_manifest)
       .def("program_clock_manifest", &AmrSystem::program_clock_manifest)
       .def("program_temporal_partition_manifest", &AmrSystem::program_temporal_partition_manifest)
