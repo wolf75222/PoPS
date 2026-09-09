@@ -702,6 +702,7 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
             auxiliary_components=0,
             accepted_program_bytes=0,
             source_authority_bytes=0,
+            history_flux_snapshot_bytes=0,
             structural_bytes=0,
             field_provider_manifest_characters=0,
             program=program,

@@ -15437,6 +15437,14 @@ std::vector<std::string> AmrSystem<Dim>::field_provider_slots() const {
 }
 
 template <int Dim>
+bool AmrSystem<Dim>::field_provider_materialized(const std::string& provider_slot) const {
+  const auto found = p_->field_plans.find(provider_slot);
+  if (found == p_->field_plans.end())
+    throw std::out_of_range("AMR field provider slot is unknown: " + provider_slot);
+  return p_->engine && found->second.materialized_for(*p_->engine);
+}
+
+template <int Dim>
 std::string AmrSystem<Dim>::checkpoint_phi_provider_slot() const {
   if (!p_->default_field_slot.empty())
     return p_->default_field_slot;
@@ -21704,6 +21712,7 @@ template SolveOutcome AmrSystem<kNativeDimension>::solve_program_field_from_bloc
 template SolveOutcome AmrSystem<kNativeDimension>::solve_program_default_field(int);
 template std::vector<double> AmrSystem<kNativeDimension>::named_field_values(const std::string&);
 template std::vector<std::string> AmrSystem<kNativeDimension>::field_provider_slots() const;
+template bool AmrSystem<kNativeDimension>::field_provider_materialized(const std::string&) const;
 template std::string AmrSystem<kNativeDimension>::checkpoint_phi_provider_slot() const;
 template std::vector<std::vector<std::string>>
 AmrSystem<kNativeDimension>::field_provider_checkpoint_manifest() const;

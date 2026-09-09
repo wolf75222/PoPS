@@ -377,7 +377,8 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
 
         A 1-component model's conservative state may be represented by a ``scalar_field`` (for
         example a ``solve_linear`` result); it is accepted and copied back into the block state by
-        the final runtime ``ctx.lincomb``."""
+        the final atomic commit group. If its solver halo differs, publication first
+        stages valid cells in cached storage shaped like the destination state."""
         self._guard_mutable("commit a state")
         if not isinstance(endpoint, StateEndpointHandle):
             raise TypeError(

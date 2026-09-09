@@ -922,6 +922,9 @@ class AmrSystem {
   /// field is unregistered.
   std::vector<double> named_field_values(const std::string& field);
   std::vector<std::string> field_provider_slots() const;
+  /// Whether the exact registered provider is materialized for the current hierarchy. This query
+  /// is collective-free and never prepares a hierarchy or solver.
+  bool field_provider_materialized(const std::string& provider_slot) const;
   /// Collective-free identity of the exact provider aliased by the historical ``phi`` checkpoint
   /// member. The configured default wins; a generic-only registry uses its deterministic first
   /// slot. Every provider remains independently present in the all-provider image.

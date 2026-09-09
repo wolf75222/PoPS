@@ -1634,6 +1634,13 @@ TEST(GeneratedAmrSystemBlock, DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptan
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   system.set_program_block_map({0});
 
+  const std::string field_slot = "pops.amr.default-field";
+  EXPECT_FALSE(system.field_provider_materialized(field_slot));
+  EXPECT_THROW((void)system.field_provider_materialized("unknown-provider"), std::out_of_range);
+  const auto unmaterialized_manifest = system.field_provider_checkpoint_manifest();
+  EXPECT_FALSE(system.field_provider_materialized(field_slot));
+  EXPECT_EQ(system.field_provider_checkpoint_manifest(), unmaterialized_manifest);
+
   auto context = pops::runtime::program::make_program_execution_provider(&system);
   context->configure_primary_clock("test-clock");
   context->begin_step(0.01);
@@ -1645,8 +1652,12 @@ TEST(GeneratedAmrSystemBlock, DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptan
 
   const pops::SolveReport accepted = outcome.consume(pops::SolveConsumption::kAccept);
   EXPECT_TRUE(accepted.solved());
-  EXPECT_EQ(system.field_provider_levels("pops.amr.default-field"), 1);
-  EXPECT_EQ(system.field_provider_slots(), std::vector<std::string>{"pops.amr.default-field"});
+  EXPECT_EQ(system.field_provider_levels(field_slot), 1);
+  EXPECT_EQ(system.field_provider_slots(), std::vector<std::string>{field_slot});
+  const auto materialized_manifest = system.field_provider_checkpoint_manifest();
+  EXPECT_TRUE(system.field_provider_materialized(field_slot));
+  EXPECT_TRUE(system.field_provider_materialized(field_slot));
+  EXPECT_EQ(system.field_provider_checkpoint_manifest(), materialized_manifest);
 }
 
 TEST(GeneratedAmrSystemBlock, NamedFieldConsumesExactStageWithoutPublishingState) {

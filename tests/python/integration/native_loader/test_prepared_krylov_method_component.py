@@ -166,7 +166,7 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_krylov_solve_calls() noexcept {
     )
 
 
-def _provider(include_root: Path):
+def _provider(include_root: Path, *, provider_id="vendor.one-step-krylov"):
     from pops.native_components import PreparedNativeComponent
     from pops.solvers import krylov
 
@@ -193,7 +193,7 @@ def _provider(include_root: Path):
 
     return krylov.register_prepared_krylov_method_provider(
         krylov.PreparedKrylovMethodProvider(
-            provider_id="vendor.one-step-krylov",
+            provider_id=provider_id,
             interface_version=1,
             options_schema="vendor.one-step-krylov.options@1",
             emitter_id="vendor.one-step-krylov@1",
@@ -248,7 +248,7 @@ def _program(model, provider):
     return program
 
 
-def _public_program(state, provider):
+def _public_program(state, provider, *, physical_step=0.5):
     from pops.linalg import LinearOperatorProperties, LinearProblem
     from pops.solvers import krylov
     from pops.time import FailRun, FixedDt, Program
@@ -269,7 +269,7 @@ def _public_program(state, provider):
             provider,
             max_iter=1,
             rel_tol=1.0e-12,
-            method_options={"physical_step": 0.5},
+            method_options={"physical_step": physical_step},
             name="PublicExternalOneStep",
         ),
     ).consume(action=FailRun())
@@ -338,6 +338,10 @@ def test_external_krylov_provider_compiles_and_executes_its_native_recurrence(
     low_workspace_calls, low_solve_calls = _native_counters(compiled.so_path)
     assert low_workspace_calls == 1
     assert low_solve_calls == 1
+    simulation.step(0.01)
+    np.testing.assert_allclose(np.asarray(simulation.get_state("blk"))[0],
+                               0.25 * initial, rtol=0.0, atol=1.0e-13)
+    assert _native_counters(compiled.so_path) == (1, 2)
 
     # The exact same provider must survive the final public lifecycle rather than only the private
     # compile/install seam used above.  Keep both proofs: the first exposes generated C++, while this
@@ -373,3 +377,50 @@ def test_external_krylov_provider_compiles_and_executes_its_native_recurrence(
     public_workspace_calls, public_solve_calls = _native_counters(public_compiled.so_path)
     assert public_workspace_calls == 1
     assert public_solve_calls == 1
+
+    second_report = pops.run(public_runtime, t_end=0.02, max_steps=1)
+    assert second_report.accepted_steps == 1
+    assert public_runtime.time() == 0.02
+    np.testing.assert_allclose(np.asarray(public_runtime.state_global("blk"))[0],
+                               0.25 * initial, rtol=0.0, atol=1.0e-13)
+    assert _native_counters(public_compiled.so_path) == (1, 2)
+
+
+def test_external_krylov_failure_keeps_accepted_state_and_clock(
+    tmp_path, isolated_native_cache,
+):
+    _require_native()
+    import pops
+    from tests.python.integration._final_field_program import (
+        resolve_periodic_field_program,
+        scalar_advection_model,
+    )
+
+    include_root = tmp_path / "component-include"
+    _write_component(include_root)
+    provider = _provider(include_root, provider_id="vendor.one-step-krylov.failure")
+    model = scalar_advection_model("failed_external_krylov_model")
+    resolved = resolve_periodic_field_program(
+        model,
+        lambda state, _rate, _field: _public_program(state, provider, physical_step=0.25),
+        name="failed-external-krylov", block_name="blk", target="system", n=8,
+        cxx=default_cxx(), include=repo_include(),
+    )
+    artifact = pops.compile(resolved)
+    axis = (np.arange(8) + 0.5) / 8
+    x, y = np.meshgrid(axis, axis, indexing="ij")
+    initial = np.stack([1.0 + 0.2 * np.sin(2 * np.pi * x) * np.cos(2 * np.pi * y)])
+    runtime = pops.bind(
+        artifact, initial_state={"blk": initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
+    before = np.asarray(runtime.state_global("blk")).copy()
+    before_time = runtime.time()
+    # A=2I and a quarter residual update leave a genuine nonzero residual at the
+    # exact one-iteration budget. FailRun must reject before state publication.
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="solve_linear"):
+            pops.run(runtime, t_end=0.01, max_steps=1)
+        np.testing.assert_array_equal(runtime.state_global("blk"), before)
+        assert runtime.time() == before_time
+    assert _native_counters(artifact.so_path) == (1, 2)

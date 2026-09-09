@@ -114,6 +114,7 @@ class ExactNamedField final {
   }
   field_type& accepted_potential_for_restore() { return accepted_; }
   int maximum_iterations() const noexcept { return solver_->maximum_iterations(); }
+  bool materialized() const noexcept { return solver_->materialized(); }
   std::string_view solver_provider_identity() const noexcept {
     return solver_->provider_identity();
   }

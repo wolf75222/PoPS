@@ -277,8 +277,14 @@ TEST(test_coupled_fieldsolve, simultaneous_stage_rhs_uses_every_qualified_block)
   const auto second = charge_density(cells, 0.6, 0.25);
   NativeSystem system = two_block_system(cells, first, second);
 
+  const std::string default_slot = "pops.system.default-field";
+  const auto slots_before_materialization = system.field_provider_slots();
+  EXPECT_FALSE(system.field_provider_materialized(default_slot));
+  EXPECT_FALSE(system.field_provider_materialized(default_slot));
+  EXPECT_EQ(system.field_provider_slots(), slots_before_materialization);
   const pops::SolveReport live_report = pops::consume_solve_outcome(system.solve_fields());
   ASSERT_TRUE(live_report.solved()) << live_report.reason;
+  EXPECT_TRUE(system.field_provider_materialized(default_slot));
   const std::vector<double> all_live = system.potential();
   ASSERT_EQ(all_live.size(), cell_count(cells));
 
@@ -344,8 +350,19 @@ TEST(test_coupled_fieldsolve,
       slot, "pops.field-nullspace.operator-topology-derived",
       pops::PreparedProviderOptions{"pops.field-nullspace.operator-topology-derived.options@1",
                                     {{"gauge.value", 0.0}}});
+  const auto unmaterialized_slots = system.field_provider_slots();
+  EXPECT_FALSE(system.field_provider_materialized(slot));
+  EXPECT_FALSE(system.field_provider_materialized(slot));
+  EXPECT_EQ(system.field_provider_slots(), unmaterialized_slots);
+  EXPECT_THROW((void)system.field_provider_materialized("unknown-provider"), std::out_of_range);
   const auto outputs = install_field_outputs(system, "test.qualified-coupled", "potential");
   system.register_elliptic_field("first", "potential", outputs, -1);
+  const auto materialized_slots = system.field_provider_slots();
+  const auto configured_slots = system.configured_field_provider_slots();
+  EXPECT_TRUE(system.field_provider_materialized(slot));
+  EXPECT_TRUE(system.field_provider_materialized(slot));
+  EXPECT_EQ(system.field_provider_slots(), materialized_slots);
+  EXPECT_EQ(system.configured_field_provider_slots(), configured_slots);
   system.set_block_elliptic_field("first", "potential",
                                   [](const NativeField& state, NativeField& rhs) {
                                     pops::add_scaled_component(state, pops::Real(1), 0, rhs);

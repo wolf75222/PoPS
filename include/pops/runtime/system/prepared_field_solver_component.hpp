@@ -134,6 +134,9 @@ class PreparedFieldSolverComponent final {
     return collective_contract_;
   }
   [[nodiscard]] int maximum_iterations() const noexcept { return spec_.max_iterations; }
+  [[nodiscard]] bool materialized() const noexcept {
+    return topology_.has_value() && solver_request_.has_value();
+  }
 
   SolveReport solve(field_type& rhs, field_type& solution, const geometry_type& geometry,
                     const periodicity_type& periodicity) {

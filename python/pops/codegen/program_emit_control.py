@@ -271,6 +271,37 @@ def _emit_contiguous_rhs_group(
     lines.append("ctx.rhs_group(%d, {%s});" % (group_identity, ", ".join(requests)))
 
 
+def _emit_commit_group(commits: Any, bases: Any, var: Any, *, phase: int) -> list[str]:
+    """Adapt scalar publication storage without changing the solve's vector space.
+
+    Base state nodes only bind ctx.state; they never own scratch. Their SSA ids,
+    paired with the publication phase, cannot collide with producer scratch ids
+    or another destination. AMR additionally keys scratch by active level/owner.
+    """
+    lines = []
+    pairs = []
+    for state_ref, committed in commits.items():
+        base = bases[state_ref.block_ref]
+        destination = var[base.id]
+        source = var[committed.id]
+        if committed.vtype == "scalar_field":
+            token = "commit_source_%d_%d" % (base.id, phase)
+            lines.append("auto* %s = &%s;" % (token, source))
+            lines.append("if (%s->ghosts() != %s.ghosts()) {" % (token, destination))
+            # This cache is provisional and destination-shaped. Copy validates
+            # layout/owner/components before touching it, never readable state.
+            lines.append("  auto& publication = ctx.scratch_state(%d, %d, %s);"
+                         % (base.id, phase, destination))
+            lines.append("  pops::PureFieldAlgebra::copy(publication, *%s);" % token)
+            lines.append("  %s = &publication;" % token)
+            lines.append("}")
+            source = "(*%s)" % token
+        pairs.append("{&%s, &%s}" % (destination, source))
+    if pairs:
+        lines.append("ctx.commit_many({%s});" % ", ".join(pairs))
+    return lines
+
+
 def _emit_body(program: Any, model: Any = None, target: Any = "system",
                field_plans: Any = None, balance_due_contract: Any = None,
                has_shared_interface_implicit_jacvec: bool = False,
@@ -398,15 +429,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     from pops.codegen.program_diffusion_exchanges import emit_accepted_diffusive_exchanges
     lines.extend(emit_accepted_diffusive_exchanges(
         program, target=target, block_indices=block_idx))
-    # Each committed block: a scratch commit (solve_local_linear / solve_linear / a non-base
-    # linear_combine wrote a scratch) is copied into the block state; a linear_combine commit already
-    # wrote ctx.state(idx) in place (var == base), so its copy is a no-op (skipped).
-    commit_pairs = []
-    for state_ref, committed in program._commits.items():
-        base = bases[state_ref.block_ref]
-        commit_pairs.append("{&%s, &%s}" % (var[base.id], var[committed.id]))
-    if commit_pairs:
-        lines.append("ctx.commit_many({%s});" % ", ".join(commit_pairs))
+    # All outputs stay provisional until the one atomic publication group.
+    lines.extend(_emit_commit_group(program._commits, bases, var, phase=0))
     # Rotate the history rings ONCE at the very end of the step (after the commit), so the next step
     # reads lag k as the value k stores ago. Only emitted when the Program uses histories.
     if any(row["clock"] == program.clock.qualified_id for row in temporal["histories"]):
@@ -477,12 +501,8 @@ def _emit_post_synchronization_phase(
             field_plans=field_plans,
             has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
         )
-    commit_pairs = []
-    for state_ref, committed in getattr(program, "_post_sync_commits", {}).items():
-        base = bases[state_ref.block_ref]
-        commit_pairs.append("{&%s, &%s}" % (var[base.id], var[committed.id]))
-    if commit_pairs:
-        lines.append("ctx.commit_many({%s});" % ", ".join(commit_pairs))
+    lines.extend(_emit_commit_group(
+        getattr(program, "_post_sync_commits", {}), bases, var, phase=1))
     return lines
 
 
@@ -644,12 +664,7 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
                 else:
                     lines.append("ctx.stage_linear_initial_guess();")
         if phase == "publish":
-            commit_pairs = []
-            for state_ref, committed in program._commits.items():
-                base = bases[state_ref.block_ref]
-                commit_pairs.append("{&%s, &%s}" % (var[base.id], var[committed.id]))
-            if commit_pairs:
-                lines.append("ctx.commit_many({%s});" % ", ".join(commit_pairs))
+            lines.extend(_emit_commit_group(program._commits, bases, var, phase=0))
             histories = program.temporal_manifest()["histories"]
             if any(row["clock"] == program.clock.qualified_id for row in histories):
                 lines.append(

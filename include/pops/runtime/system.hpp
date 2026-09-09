@@ -1403,6 +1403,9 @@ class System {
   /// same exact-ranked flattened layout as potential().
   void set_potential(const std::vector<double>& phi);
   std::vector<std::string> field_provider_slots() const;
+  /// Whether the exact registered field provider owns its complete prepared backend. This query is
+  /// collective-free and never constructs a field provider.
+  bool field_provider_materialized(const std::string& provider_slot) const;
   /// Read-only restart authority. Named identities match ``field_provider_slots`` exactly and in
   /// order. The default slot is included when the installed prepared RHS/configuration can
   /// materialize that exact field, even if it has not been instantiated yet. This query never

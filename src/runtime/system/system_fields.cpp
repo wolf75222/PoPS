@@ -1012,6 +1012,23 @@ std::vector<std::string> System<Dim>::field_provider_slots() const {
 }
 
 template <int Dim>
+bool System<Dim>::field_provider_materialized(const std::string& provider_slot) const {
+  if (provider_slot == "pops.system.default-field") {
+    if (p_->default_field_)
+      return p_->default_field_->materialized();
+    if (default_field_has_prepared_rhs(*p_))
+      return false;
+    throw std::out_of_range("System field provider slot is unknown: " + provider_slot);
+  }
+  const auto field = p_->named_fields_.find(provider_slot);
+  if (field != p_->named_fields_.end())
+    return field->second->materialized();
+  if (p_->field_plans_.contains(provider_slot))
+    return false;
+  throw std::out_of_range("System field provider slot is unknown: " + provider_slot);
+}
+
+template <int Dim>
 std::vector<std::string> System<Dim>::configured_field_provider_slots() const {
   std::vector<std::string> result;
   if (p_->default_field_ || default_field_has_prepared_rhs(*p_))
@@ -1610,6 +1627,7 @@ template SolveOutcome System<kNativeDimension>::run_field_publication_outcome_(
     const std::function<SolveReport()>&);
 template void System<kNativeDimension>::set_potential(const std::vector<double>&);
 template std::vector<std::string> System<kNativeDimension>::field_provider_slots() const;
+template bool System<kNativeDimension>::field_provider_materialized(const std::string&) const;
 template std::vector<std::string> System<kNativeDimension>::configured_field_provider_slots() const;
 template void System<kNativeDimension>::set_field_potential(const std::string&,
                                                             const std::vector<double>&);

@@ -1081,6 +1081,9 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       .def("macro_step", &AmrSystem::macro_step)
       .def("set_clock", &AmrSystem::set_clock, py::arg("t"), py::arg("macro_step"))
       .def("field_provider_slots", &AmrSystem::field_provider_slots)
+      .def("field_provider_materialized", &AmrSystem::field_provider_materialized,
+           py::arg("provider_slot"),
+           "Collective-free readiness of one exact registered AMR field provider.")
       .def("checkpoint_phi_provider_slot", &AmrSystem::checkpoint_phi_provider_slot)
       .def("field_provider_checkpoint_manifest", &AmrSystem::field_provider_checkpoint_manifest,
            "Collective-free immutable manifest for every exact AMR field provider.")

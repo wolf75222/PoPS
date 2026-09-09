@@ -839,6 +839,9 @@ void bind_system_physics(py::class_<System>& cls) {
       .def("set_clock", &System::set_clock, py::arg("t"), py::arg("macro_step"))
       .def("set_potential", &System::set_potential, py::arg("phi"))
       .def("field_provider_slots", &System::field_provider_slots)
+      .def("field_provider_materialized", &System::field_provider_materialized,
+           py::arg("provider_slot"),
+           "Collective-free readiness of one exact registered field provider.")
       .def("configured_field_provider_slots", &System::configured_field_provider_slots,
            "Read-only installed/configured field-provider restart authority; does not materialize "
            "the default field")
