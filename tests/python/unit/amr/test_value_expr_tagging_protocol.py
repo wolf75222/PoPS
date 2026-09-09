@@ -63,13 +63,16 @@ def test_value_indicator_refuses_unresolved_and_foreign_case_handles(component) 
             handle=resolved_foreign, component=component, action="refine", comparison="gt", threshold=None)
 
 
-def _unit_typed_tagging_identity(units):
+def _unit_typed_tagging_identity(units, **physical_type):
     import json
 
     from pops.amr import AMRTagging, Buffer, ConflictPolicy, EqualityPolicy, Hysteresis, Tag
 
-    model = pops.Model("model")
-    state = model.state("U", components=("first", "second"), units=units)
+    from pops.model import Module
+
+    model = Module("model")
+    space = model.state_space("U", components=("first", "second"), units=units, **physical_type)
+    state = model.state_handle(space)
     case = pops.Case("typed_units")
     block = case.block("fluid", model)
     case.freeze()
@@ -134,3 +137,49 @@ def test_tagging_expression_identity_rejects_unknown_objects_with_serialization_
 
     with pytest.raises(TypeError, match="unsupported UnknownIdentity"):
         _expression_data(UnknownExpression())
+
+
+def test_tagging_full_space_identity_preserves_support_and_each_semantic_field():
+    from pops._ir.quantity import PhysicalDimension, PhysicalSupport
+
+    units = (PhysicalDimension(()),) * 2
+    support = PhysicalSupport((("x", "position"), ("v", "velocity")))
+    base = dict(support=support, sampling="cell_average")
+    left = _unit_typed_tagging_identity(units, **base)
+    right = _unit_typed_tagging_identity(
+        units, support=PhysicalSupport.from_data(support.to_data()), sampling="cell_average")
+    assert left == right
+    assert '"kind": "physical_support"' in left[1]
+    variants = (
+        {"support": None}, {"support": PhysicalSupport(())},
+        {"support": PhysicalSupport(tuple(reversed(support.coordinates)))},
+        {"support": PhysicalSupport((("x", "position"), ("v", "position")))},
+        {"sampling": "point"}, {"frame": "other"}, {"clock": "other"},
+        {"domain": "complex"}, {"value_shape": (1, 2)},
+        {"representation": "primitive"}, {"centering": "face"},
+        {"storage": "alternate"}, {"roles": {"first": "density"}},
+    )
+    values = [left, *(_unit_typed_tagging_identity(units, **(base | change))
+                      for change in variants)]
+    identities = {identity.replace(handle, "same-qualified-handle") for handle, identity in values}
+    assert len(identities) == len(values)
+
+
+@pytest.mark.parametrize("descriptor", ["dimension", "support"])
+def test_tagging_does_not_invoke_subclass_physical_descriptor_protocols(descriptor):
+    from pops._ir import Expr
+    from pops._ir.quantity import PhysicalDimension, PhysicalSupport
+    from pops.amr.authoring import _expression_data
+
+    base = PhysicalDimension if descriptor == "dimension" else PhysicalSupport
+
+    class UntrustedDescriptor(base):
+        def to_data(self):
+            raise AssertionError("subclass protocols cannot supply canonical physical identity")
+
+    class SubclassExpression(Expr):
+        def __pops_ir_key__(self, recurse):
+            return ("physical", UntrustedDescriptor(()))
+
+    with pytest.raises(TypeError, match="unsupported UntrustedDescriptor"):
+        _expression_data(SubclassExpression())

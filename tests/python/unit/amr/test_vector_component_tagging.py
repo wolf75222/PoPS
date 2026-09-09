@@ -24,10 +24,11 @@ from pops.time import FixedDt, every
 
 
 def _case(*, component="mx", gradient=False, layout_frame=None,
-          components=("rho", "mx", "my"), units=None):
+          components=("rho", "mx", "my"), units=None, support=None, sampling="unspecified"):
     frame = Rectangle("domain", lower=(0., 0.), upper=(1., 1.)).frame(Cartesian2D())
     model = pops.Model("transport", frame=frame)
-    state = model.state("U", components=components, units=units)
+    state = model.state("U", components=components, units=units,
+                        support=support, sampling=sampling)
     flux = model.flux("advection", frame=frame, state=state,
                       components={axis: tuple(q for q in state) for axis in frame.axes},
                       waves={axis: (1.,) * len(components) for axis in frame.axes})
@@ -100,12 +101,14 @@ def test_selected_component_reaches_resolved_graph_and_native_vm(gradient, compo
 
 
 @pytest.mark.parametrize("gradient", [False, True])
-def test_two_component_state_with_explicit_units_resolves_its_selected_indicator(gradient):
-    from pops._ir.quantity import PhysicalDimension
+def test_two_component_state_with_full_physical_type_resolves_its_selected_indicator(gradient):
+    from pops._ir.quantity import PhysicalDimension, PhysicalSupport
 
     case, subject, high, low, layout = _case(
         component="second", gradient=gradient, components=("first", "second"),
-        units=(PhysicalDimension(()),) * 2)
+        units=(PhysicalDimension(()),) * 2,
+        support=PhysicalSupport((("x", "position"), ("y", "position"))),
+        sampling="cell_average")
     resolved = pops.resolve(pops.validate(case), layout=layout)
     data = resolved.bootstrap_plan.tagging.runtime_tagging_data(
         {case.resolve(high): 1.2, case.resolve(low): .8})
