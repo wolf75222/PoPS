@@ -2294,10 +2294,9 @@ TEST(ProgramContextContract, AmrProgramTopologyPublishesAndRollsBackExactContrac
     estimate.materialization_generation = engine->materialization_generation();
     estimate.samples = 1;
     estimate.cell_updates = 1;
-    estimate.compute_nanoseconds =
-        layout.distribution().owners()[patch] == layout.distribution().rank_space().coordinate(0)
-            ? 1000
-            : 1;
+    // SFC assigns a patch before crossing its cumulative-weight boundary. One heavy first
+    // patch moves the second patch away from rank zero; two heavy patches would keep the map.
+    estimate.compute_nanoseconds = patch == 0 ? 1000 : 1;
     estimate.memory_bytes = 64;
     estimate.resident_bytes = 64;
   }
@@ -2325,14 +2324,28 @@ TEST(ProgramContextContract, AmrProgramTopologyPublishesAndRollsBackExactContrac
     EXPECT_EQ(decision.reason, pops::RebalanceReason::MappingUnchanged);
     EXPECT_ANY_THROW(context->apply_rebalance(0, decision, make_remapped()));
   } else {
-    ASSERT_TRUE(decision.accepted);
+    ASSERT_EQ(n_ranks(), 2) << "the accepted rebalance control has an explicit MPI2 registration";
+    ASSERT_TRUE(decision.accepted)
+        << "reason=" << static_cast<int>(decision.reason)
+        << " current_max=" << decision.current_max_nanoseconds_per_step
+        << " proposed_max=" << decision.proposed_max_nanoseconds_per_step
+        << " moved=" << decision.moved_patches << " migration_ns=" << decision.migration_nanoseconds
+        << " predicted_net_speedup=" << decision.predicted_net_speedup;
     ASSERT_EQ(decision.reason, pops::RebalanceReason::NetBenefit);
+    EXPECT_EQ(decision.current_max_nanoseconds_per_step, 1001);
+    EXPECT_EQ(decision.proposed_max_nanoseconds_per_step, 1000);
+    EXPECT_EQ(decision.moved_patches, 1);
+    EXPECT_GT(decision.predicted_net_speedup, 1.0);
     auto alternate_estimates = estimates;
     for (auto& estimate : alternate_estimates)
       estimate.compute_nanoseconds *= 2;
     const auto alternate = context->prepare_rebalance(
         0, alternate_estimates, {16, 16, std::numeric_limits<std::int64_t>::max()}, policy);
     ASSERT_TRUE(alternate.accepted);
+    EXPECT_EQ(alternate.reason, pops::RebalanceReason::NetBenefit);
+    EXPECT_EQ(alternate.current_max_nanoseconds_per_step, 2002);
+    EXPECT_EQ(alternate.proposed_max_nanoseconds_per_step, 2000);
+    EXPECT_EQ(alternate.moved_patches, 1);
     ASSERT_EQ(alternate.proposed.plan().distribution(), decision.proposed.plan().distribution());
     ASSERT_NE(alternate.exact_contract, decision.exact_contract);
     // Both decisions are authentically prepared and produce the same layout. Their distinct
