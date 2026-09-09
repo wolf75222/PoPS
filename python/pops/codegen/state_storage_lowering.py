@@ -42,18 +42,19 @@ def prepare_source_storage_carrier(emitter, module, *, state_space=None):
     object.__setattr__(impl, "_program_only_storage_axes", axes)
 
 
-def prepare_named_flux_storage_carrier(emitter, module, resolved_operations):
-    """Select state-only storage for an entirely Program-owned named-flux route."""
-    del module
+def prepare_named_flux_storage_carrier(
+    emitter, module, resolved_operations, *, emitter_is_private=False
+):
+    """Return a private state-only carrier for a Program-owned named-flux route."""
     if resolved_operations is None:
-        return
+        return emitter
     transport = tuple(
         operation
         for operation in resolved_operations.operations
         if operation.exchanges and "program_evaluation" in operation.guarantees
     )
     if not transport:
-        return
+        return emitter
     methods = tuple(operation.guarantees.get("numerical_method") for operation in transport)
     if any(
         operation.sampling != "cell_centered_divergence"
@@ -61,11 +62,11 @@ def prepare_named_flux_storage_carrier(emitter, module, resolved_operations):
         or method.get("method") != "native_named_centered_divergence"
         for operation, method in zip(transport, methods, strict=True)
     ):
-        return
+        return emitter
 
     flux_packs = tuple(method.get("physical_fluxes") for method in methods)
     if any(
-        not isinstance(pack, list)
+        type(pack) is not tuple
         or not pack
         or any(not isinstance(name, str) or not name for name in pack)
         for pack in flux_packs
@@ -91,8 +92,14 @@ def prepare_named_flux_storage_carrier(emitter, module, resolved_operations):
     previous = getattr(impl, "_program_only_storage_axes", axes)
     if previous != axes:
         raise ValueError("named centered-divergence storage differs from another storage authority")
+    if not emitter_is_private:
+        from pops.model.state_symbols import native_formula_view
+
+        emitter = native_formula_view(emitter, module)
+        impl = getattr(emitter, "_m", emitter)
     object.__setattr__(impl, "_program_only_storage_axes", axes)
     # The exact resolved Program owns every evolved transport evaluation.  Retain named formulas
     # for Program codegen, while removing the unused legacy default-flux and eigenvalue routes.
     object.__setattr__(impl, "_flux", {})
     object.__setattr__(impl, "_eig", {})
+    return emitter

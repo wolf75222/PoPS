@@ -436,7 +436,9 @@ def _module_to_model(module: Any, state_space: Any = None,
         coverage_rows.append(LoweringCoverageRow(
             "module:%s:eigenvalues" % module.name, "documentary"))
     from pops.codegen.state_storage_lowering import prepare_named_flux_storage_carrier
-    prepare_named_flux_storage_carrier(m, module, resolved_operations)
+    prepare_named_flux_storage_carrier(
+        m, module, resolved_operations, emitter_is_private=True
+    )
     coverage_report = LoweringCoverageReport(coverage_rows)
     object.__setattr__(m, "lowering_coverage_report", coverage_report)
     object.__setattr__(m, "_lowering_coverage_report", coverage_report)
@@ -536,14 +538,26 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
                 resolved_operations=resolved_operations)
             emit_model.check()
             return emit_model, lowering.source_module
-        lowering.bind_component_provider_packs(packs)
         if resolved_operations is not None:
-            object.__setattr__(lowering.emit_model, "_resolved_operations", resolved_operations)
+            from pops.codegen._compiler_lowering import CompilerLowering
             from pops.codegen.state_storage_lowering import prepare_named_flux_storage_carrier
 
-            prepare_named_flux_storage_carrier(
-                lowering.emit_model, lowering.source_module, resolved_operations
+            emit_model = prepare_named_flux_storage_carrier(
+                lowering.emit_model,
+                lowering.source_module,
+                resolved_operations,
+                # Module and Board providers nominate a private emitter. The facade provider
+                # nominates itself, so storage specialization must first detach that authoring view.
+                emitter_is_private=lowering.emit_model is not lowering.facade,
             )
+            if emit_model is not lowering.emit_model:
+                lowering = CompilerLowering(
+                    emit_model=emit_model,
+                    source_module=lowering.source_module,
+                    facade=lowering.facade,
+                )
+            object.__setattr__(lowering.emit_model, "_resolved_operations", resolved_operations)
+        lowering.bind_component_provider_packs(packs)
         lowering.emit_model.check()
         return lowering.emit_model, lowering.source_module
     except ValueError as exc:

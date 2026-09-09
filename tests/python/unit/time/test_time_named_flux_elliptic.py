@@ -1,6 +1,7 @@
 """Named-flux composition through the final operator-first Module and Program APIs."""
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -41,9 +42,10 @@ from pops.numerics import (
     riemann,
     variables,
 )
+from pops.numerics.terms import Flux
 from pops.params import RuntimeParam
 from pops.projection import ConservativeCellAverage
-from pops.time import FixedDt, every
+from pops.time import FixedDt, Program, every
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -275,6 +277,29 @@ def test_named_centered_divergence_is_the_exact_program_storage_authority() -> N
     from pops.codegen.module_lowering import lower_and_validate
 
     block = resolved.blocks[0]
+    tampered_operations = tuple(
+        replace(
+            operation,
+            guarantees={
+                **operation.guarantees,
+                "numerical_method": {
+                    "method": "native_named_centered_divergence",
+                    "physical_fluxes": ("pressure",),
+                },
+            },
+        )
+        if "program_evaluation" in operation.guarantees and operation.exchanges
+        else operation
+        for operation in block.resolved_operations.operations
+    )
+    with pytest.raises(ValueError, match="checked numerical method"):
+        lower_and_validate(
+            block.model,
+            state_space=block.state_spaces[0],
+            resolved_operations=replace(
+                block.resolved_operations, operations=tampered_operations
+            ),
+        )
     lowered, _ = lower_and_validate(
         block.model,
         state_space=block.state_spaces[0],
@@ -284,6 +309,87 @@ def test_named_centered_divergence_is_the_exact_program_storage_authority() -> N
     assert lowered._m._flux == {}
     assert lowered._m._eig == {}
     assert set(lowered._m._flux_terms) == {"whole", "convective", "pressure"}
+
+
+def test_named_centered_divergence_does_not_poison_a_reused_formula_emitter() -> None:
+    module, state, _, whole_rate, split_rate = _named_flux_module()
+    contract = module.rate_contract(whole_rate)
+    named = _named_centered_plan(module, whole_rate, split_rate)
+    finite_volume = DiscretizationPlan()
+    for rate in (whole_rate, split_rate):
+        finite_volume.rates.add(
+            rate,
+            FiniteVolume(
+                flux=module.rate_contract(rate)["flux"],
+                variables=variables.Conservative(state),
+                reconstruction=reconstruction.FirstOrder(),
+                riemann=riemann.Rusanov(),
+            ),
+        )
+    frame = Rectangle(
+        "named-centered-reuse-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    layout = Uniform(CartesianGrid(
+        frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes)
+    ))
+
+    def resolved_block(numerics, name, flux):
+        case = pops.Case(name + "-case")
+        block = case.block("plasma", module)
+        current = Program(name + "-program")
+        temporal = current.state(block[state])
+        rate = current.rhs(state=temporal.n, terms=(flux,))
+        candidate = current.value(
+            "candidate", temporal.n + current.dt * rate, at=temporal.next.point
+        )
+        current.commit(temporal.next, candidate)
+        current.step_strategy(FixedDt(DT))
+        case.numerics(numerics, block=block)
+        case.program(current)
+        return pops.resolve(pops.validate(case), layout=layout).blocks[0]
+
+    named_block = resolved_block(
+        named, "named-centered-reuse-first", Flux(contract["flux"][0])
+    )
+    finite_volume_block = resolved_block(
+        finite_volume, "named-centered-reuse-second", Flux()
+    )
+    shared = module.to_dsl()
+    authored_flux = shared._m._flux
+    authored_eigenvalues = shared._m._eig
+    from pops.codegen.module_lowering import lower_and_validate
+
+    named_emitter, _ = lower_and_validate(
+        shared,
+        facade=shared,
+        state_space=named_block.state_spaces[0],
+        resolved_operations=named_block.resolved_operations,
+    )
+    assert named_emitter is not shared
+    assert named_emitter._m._flux == {}
+    assert named_emitter._m._eig == {}
+    assert shared._m._flux is authored_flux
+    assert shared._m._eig is authored_eigenvalues
+
+    finite_volume_emitter, _ = lower_and_validate(
+        shared,
+        facade=shared,
+        state_space=finite_volume_block.state_spaces[0],
+        resolved_operations=finite_volume_block.resolved_operations,
+    )
+    assert finite_volume_emitter._m._flux is authored_flux
+    assert finite_volume_emitter._m._eig is authored_eigenvalues
+
+    repeated_named_emitter, _ = lower_and_validate(
+        shared,
+        facade=shared,
+        state_space=named_block.state_spaces[0],
+        resolved_operations=named_block.resolved_operations,
+    )
+    assert repeated_named_emitter is not shared
+    assert repeated_named_emitter._m._flux == {}
+    assert shared._m._flux is authored_flux
+    assert shared._m._eig is authored_eigenvalues
 
 
 def test_named_centered_divergence_rejects_mixed_runtime_methods() -> None:

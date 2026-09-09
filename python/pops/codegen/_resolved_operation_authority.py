@@ -35,6 +35,7 @@ def require_operation_authority(plan: Any, operation: Any, module: Any) -> None:
         reject("native Program evaluation context must retain its structured identity")
     selection = None if context is None else context.get("selection")
     centered = False
+    centered_fluxes = None
 
     if context is not None and selection is not None:
         # The retained Program.rhs adapter selects one grid/source contribution per
@@ -54,6 +55,8 @@ def require_operation_authority(plan: Any, operation: Any, module: Any) -> None:
         expected_exchanges = ((ExchangeRecord(actual_terms[0].identity, prototype.target),)
                               if coefficient < 0 else ())
         centered = coefficient < 0 and operation.sampling == "cell_centered_divergence"
+        if centered:
+            centered_fluxes = (definition.name,)
     else:
         expected_terms = original_request.occurrences
         expected_exchanges = original.exchanges
@@ -61,6 +64,18 @@ def require_operation_authority(plan: Any, operation: Any, module: Any) -> None:
             reject("native construction changes scientific occurrence coverage")
         if context is None and operation.identity != declaration:
             reject("native construction lacks an authenticated declaration or Program evaluation")
+        declared_fluxes = definition.lowering.get("fluxes")
+        if (
+            context is not None
+            and context.get("operation") == "rhs"
+            and definition.kind == "local_rate"
+            and definition.lowering.get("flux") is True
+            and type(declared_fluxes) is tuple
+            and declared_fluxes
+            and operation.sampling == "cell_centered_divergence"
+        ):
+            centered = True
+            centered_fluxes = tuple(declared_fluxes)
 
     if actual_terms != expected_terms:
         reject("native construction changes a scientific occurrence, coefficient, or target")
@@ -72,8 +87,14 @@ def require_operation_authority(plan: Any, operation: Any, module: Any) -> None:
         reject("native construction discards a required scientific effect")
     if centered:
         method = operation.guarantees.get("numerical_method")
-        if operation.stencil_radius != 1 or method is None \
-                or method.get("method") != "native_named_centered_divergence":
+        if (
+            operation.stencil_radius != 1
+            or not isinstance(method, Mapping)
+            or dict(method) != {
+                "method": "native_named_centered_divergence",
+                "physical_fluxes": centered_fluxes,
+            }
+        ):
             reject("native centered-divergence sampling lacks its checked numerical method")
     elif operation.sampling != original.sampling:
         reject("native construction changes sampling without a supported adapter realization")
