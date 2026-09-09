@@ -49,6 +49,7 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/amr_program_context_field_runtime_definitions.inc",
         "pops/runtime/program/amr_program_context_flux_expression_services.inc",
         "pops/runtime/program/amr_program_context_cell_temporal_runtime.inc",
+        "pops/runtime/program/amr_program_context_mapping_continuation.inc",
         "pops/runtime/program/amr_program_context_subcycling_runtime.inc",
         "pops/runtime/program/amr_program_context_flux_family.inc",
         "pops/runtime/program/amr_program_context_flux_basis.inc",
