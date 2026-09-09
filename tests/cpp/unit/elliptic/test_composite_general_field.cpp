@@ -107,12 +107,20 @@ void copy_fields(const Solver::hierarchy_type& input, Solver& solver, std::strin
 }
 
 TEST(CompositeGeneralField, ThreeFieldsSignedDiffusionGeneralReactionTwoModesAndReflux) {
-  auto lane = ExecutionLane::world();
+  // The partitioned coarse/fine exchanges borrow this exact owning lane, as they do
+  // during RuntimeInstance preparation. A borrowed MPI_COMM_WORLD view is insufficient.
+  auto lane = ExecutionLane::duplicate_world_collectively("composite-field-science-test");
   const auto request = three_field_request(lane);
   Provider provider;
   ASSERT_TRUE(provider.supports(request).accepted());
   Solver solver(request, provider.expected_prepared_contract(request), lane);
   solver.seal_preparation(lane);
+  {
+    auto other_lane = ExecutionLane::duplicate_world_collectively("composite-field-other-test");
+    // Equal ranks and even another owned communicator do not authorize a different lane.
+    EXPECT_THROW(solver.execute_collectively({Real(1e-10), Real(1e-12), 100}, other_lane),
+                 std::invalid_argument);
+  }
   fill_coefficients(solver);
   solver.prepare_coefficients();
   // The observation coverage excludes 8 covered coarse cells: 8 coarse + 16 fine,
@@ -177,7 +185,7 @@ TEST(CompositeGeneralField, ThreeFieldsSignedDiffusionGeneralReactionTwoModesAnd
 }
 
 TEST(CompositeGeneralField, IncompatibleRhsAndIndefiniteDiffusionDoNotPublish) {
-  auto lane = ExecutionLane::world();
+  auto lane = ExecutionLane::duplicate_world_collectively("composite-field-refusal-test");
   const auto request = three_field_request(lane);
   Provider provider;
   Solver solver(request, provider.expected_prepared_contract(request), lane);
@@ -205,6 +213,16 @@ TEST(CompositeGeneralField, IncompatibleRhsAndIndefiniteDiffusionDoNotPublish) {
 TEST(CompositeGeneralField, FacBorrowedOwnedLaneDoesNotClaimOwnership) {
   auto lane = ExecutionLane::duplicate_world_collectively("composite-field-borrow-test");
   const auto request = three_field_request(lane);
+#ifdef POPS_HAS_MPI
+  if (lane.size() > 1) {
+    const auto world = ExecutionLane::world();
+    Provider provider;
+    // A distributed request must still fail closed on a borrowed communicator; the
+    // provider must not silently replace it with an unrelated world duplicate.
+    EXPECT_THROW((Solver(request, provider.expected_prepared_contract(request), world)),
+                 std::invalid_argument);
+  }
+#endif
   const auto scalar = elliptic::nd::general_composite_detail::fac_request(request);
   elliptic::amr::CompositeFacPoisson<1> borrowed(scalar, {}, Real(0), &lane, true);
   EXPECT_FALSE(borrowed.owns_execution_lane());
