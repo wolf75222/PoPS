@@ -659,8 +659,9 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
           if constexpr (Dim == 1) {
             initial[x] = static_cast<double>(x + 1);
           } else {
+            // System::set_state takes axis-zero-fast data: x is axis 0 and velocity is axis 1.
             for (std::size_t velocity = 0; velocity < 4; ++velocity)
-              initial[4 * x + velocity] = static_cast<double>(x + 10 * velocity);
+              initial[x + 4 * velocity] = static_cast<double>(x + 10 * velocity);
           }
         }
         high.set_state("fine", initial);
@@ -718,7 +719,8 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
             for (std::size_t linear = 0; linear < values.size(); ++linear) {
               std::size_t remainder = linear;
               pops::Index<Dim> index{};
-              for (int axis = Dim - 1; axis >= 0; --axis) {
+              // local_state preserves the same axis-zero-fast order within each owned patch.
+              for (int axis = 0; axis < Dim; ++axis) {
                 index[axis] =
                     boxes[patch].lo[axis] + static_cast<int>(remainder % boxes[patch].length(axis));
                 remainder /= boxes[patch].length(axis);
