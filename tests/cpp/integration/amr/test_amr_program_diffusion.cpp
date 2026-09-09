@@ -14,11 +14,13 @@
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -261,7 +263,7 @@ void install_prepared_constitutive_program(pops::AmrSystem<Dim>& system) {
 }
 
 template <int Dim, bool PreparedConstitutive = false>
-void verify_refined_program_diffusion() {
+void verify_refined_program_diffusion(double dt = 2.0e-4) {
   const pops::AmrSystemConfig<Dim> config = refined_config<Dim>();
   const std::vector<double> initial = periodic_mode(config.shape);
   pops::AmrSystem<Dim> system(config);
@@ -315,8 +317,6 @@ void verify_refined_program_diffusion() {
   const double transport_projection_before = transported_sine_projection(initial, config.shape);
   EXPECT_NEAR(transport_projection_before, 0.0, 2.0e-14);
   const pops::Real peak_before = pops::reduce_max(fine_before);
-  constexpr double dt = 2.0e-4;
-
   system.begin_step_transaction();
   system.step(dt);
   pops::MultiFab<Dim> coarse_trial(system.prepared_amr_block_state(0, 0));
@@ -327,17 +327,60 @@ void verify_refined_program_diffusion() {
   bool saw_fine_flux = false;
   bool saw_constitutive_flux = false;
   bool saw_transport_flux = false;
+  std::array<double, Dim> coarse_weighted_measure{};
+  std::array<double, Dim> fine_weighted_measure{};
+  std::array<std::size_t, Dim> coarse_fragments{};
+  std::array<std::size_t, Dim> fine_fragments{};
   for (const auto& row : trial_flux) {
     ASSERT_EQ(row.size(), 17u);
-    EXPECT_FALSE(row[13].empty());  // Exact accepted face-evidence space.
-    saw_coarse_flux = saw_coarse_flux || row[10].ends_with("_coarse");
-    saw_fine_flux = saw_fine_flux || row[10].ends_with("_fine");
     saw_constitutive_flux =
         saw_constitutive_flux || row[2].find("/provider/4/") != std::string::npos;
     saw_transport_flux = saw_transport_flux || row[2].find("/provider/1/") != std::string::npos;
+    EXPECT_FALSE(row[13].empty());  // Exact accepted face-evidence space.
+    ASSERT_GE(row[10].size(), 3u);
+    const int axis = static_cast<int>(row[10].front() - 'x');
+    ASSERT_GE(axis, 0);
+    ASSERT_LT(axis, Dim);
+    const bool coarse_role = row[10].ends_with("_coarse");
+    const bool fine_role = row[10].ends_with("_fine");
+    ASSERT_TRUE(coarse_role || fine_role);
+    saw_coarse_flux = saw_coarse_flux || coarse_role;
+    saw_fine_flux = saw_fine_flux || fine_role;
+
+    const int level = std::stoi(row[4]);
+    const double face_measure = std::stod(row[11]);
+    const double duration = std::stod(row[12]);
+    double expected_face_measure = 1.0;
+    const auto geometry = system.prepared_amr_level_geometry(level);
+    for (int tangent = 0; tangent < Dim; ++tangent)
+      if (tangent != axis)
+        expected_face_measure *= geometry.spacing(tangent);
+    EXPECT_DOUBLE_EQ(face_measure, expected_face_measure);
+    EXPECT_DOUBLE_EQ(duration, coarse_role ? dt : dt / 2.0);
+
+    const double stage_weight =
+        static_cast<double>(std::stoll(row[8])) / static_cast<double>(std::stoll(row[9]));
+    const double weighted_measure = stage_weight * face_measure * duration;
+    if (coarse_role) {
+      coarse_weighted_measure[static_cast<std::size_t>(axis)] += weighted_measure;
+      ++coarse_fragments[static_cast<std::size_t>(axis)];
+    } else {
+      fine_weighted_measure[static_cast<std::size_t>(axis)] += weighted_measure;
+      ++fine_fragments[static_cast<std::size_t>(axis)];
+    }
   }
   EXPECT_TRUE(saw_coarse_flux);
   EXPECT_TRUE(saw_fine_flux);
+  for (int axis = 0; axis < Dim; ++axis) {
+    const auto index = static_cast<std::size_t>(axis);
+    if (coarse_fragments[index] == 0 && fine_fragments[index] == 0)
+      continue;
+    ASSERT_GT(coarse_fragments[index], 0u);
+    ASSERT_GT(fine_fragments[index], 0u);
+    const double scale = std::max(
+        {1.0, std::abs(coarse_weighted_measure[index]), std::abs(fine_weighted_measure[index])});
+    EXPECT_NEAR(coarse_weighted_measure[index], fine_weighted_measure[index], 5.0e-14 * scale);
+  }
   if constexpr (PreparedConstitutive) {
     EXPECT_TRUE(saw_constitutive_flux);
     EXPECT_TRUE(saw_transport_flux);
@@ -364,6 +407,15 @@ void verify_refined_program_diffusion() {
   expect_covered_coarse_equals_fine_restriction(system, config.transition_ratios.front());
   EXPECT_LT(pops::reduce_max(system.prepared_amr_block_state(0, 1)),
             peak_before - pops::Real(1e-7));
+}
+
+TEST(test_amr_program_diffusion, FluxLedgerManifestPreservesFractionalMetricTimeClosure) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  // Six-decimal formatting cannot reproduce this duration. The common helper
+  // verifies exact manifest round trips and coarse/fine metric-time closure.
+  verify_refined_program_diffusion<pops::kNativeDimension>(2.0e-4 / 3.0);
 }
 
 TEST(test_amr_program_diffusion,

@@ -53,6 +53,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -68,6 +69,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -20507,6 +20509,17 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::program_flux_ledger_manife
           ? prefixed_sha256("pops.amr-program.face-evidence-space.v1:sha256:",
                             state.face_evidence_provenance->spatial_contract)
           : std::string{};
+  // The manifest is a public numerical diagnostic: preserve enough digits to
+  // reconstruct the exact binary64 metric and duration used by reconciliation.
+  const auto lossless_real = [](double value) {
+    std::array<char, 64> characters{};
+    const auto [end, error] =
+        std::to_chars(characters.data(), characters.data() + characters.size(), value,
+                      std::chars_format::general, std::numeric_limits<double>::max_digits10);
+    if (error != std::errc{})
+      throw std::runtime_error("AMR flux-ledger diagnostic cannot encode its binary64 measure");
+    return std::string(characters.data(), end);
+  };
   for (int axis = 0; axis < Dim; ++axis)
     for (const auto& fragment : state.accepted_face_flux[static_cast<std::size_t>(axis)]) {
       const auto& key = fragment.key;
@@ -20522,7 +20535,7 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::program_flux_ledger_manife
            std::to_string(key.clock.phase.denominator),
            std::to_string(measure.stage_weight.numerator),
            std::to_string(measure.stage_weight.denominator), orientation,
-           std::to_string(measure.face_measure), std::to_string(measure.substep_duration),
+           lossless_real(measure.face_measure), lossless_real(measure.substep_duration),
            evidence_space, std::to_string(state.face_evidence_provenance->topology_epoch),
            std::to_string(state.face_evidence_provenance->materialization_generation),
            std::to_string(state.face_evidence_provenance->level_count)});
