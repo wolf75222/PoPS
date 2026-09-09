@@ -1106,6 +1106,75 @@ void PreparedAmrLayoutTransfer<Dim>::capture(const AmrTransferEndpoint<Dim>& sou
 }
 
 template <int Dim>
+AmrLayoutTransferBudget PreparedAmrLayoutTransfer<Dim>::capacity_budget(
+    const AmrTransferEndpoint<Dim>& source, const AmrTransferEndpoint<Dim>& target,
+    std::size_t source_cells, std::size_t target_cells, std::size_t source_name_bytes,
+    std::size_t target_name_bytes) {
+  if (!source_cells || !target_cells || source.levels.empty() || target.levels.empty() ||
+      !source.levels.front().state || !target.levels.front().state)
+    throw std::invalid_argument("AMR Transfer capacity requires nonempty typed endpoints");
+  const int components = source.levels.front().state->ncomp();
+  if (components <= 0 || target.levels.front().state->ncomp() != components)
+    throw std::invalid_argument("AMR Transfer capacity component counts disagree");
+  const auto limit = std::numeric_limits<std::size_t>::max();
+  std::size_t bytes = 0;
+  const auto charge = [&](std::size_t count, std::size_t width) {
+    add(bytes, multiply(count, width), limit, "AMR Transfer capacity bytes overflow");
+  };
+  const auto patch_capacity = [&](const auto& endpoint, std::size_t valid, bool input) {
+    std::array<std::size_t, Dim> ghosts{};
+    std::size_t present = 0;
+    for (const auto& level : endpoint.levels) {
+      if (!level.state || !level.coverage || level.state->ncomp() != components)
+        throw std::invalid_argument("AMR Transfer capacity endpoint is incomplete");
+      for (const auto& box : level.state->layout().boxes())
+        add(present, cells(box), limit, "AMR Transfer capacity valid-cell overflow");
+      for (const auto* field :
+           {level.state, level.coverage, level.activity, level.relative_measure}) {
+        if (!field)
+          continue;
+        for (int axis = 0; axis < Dim; ++axis)
+          ghosts[axis] = std::max(ghosts[axis], static_cast<std::size_t>(field->ghosts()[axis]));
+      }
+    }
+    if (present > valid)
+      throw std::invalid_argument("AMR Transfer layout exceeds its resolved cell capacity");
+    // Every patch contains at least one cell. Degenerate one-cell patches maximize
+    // the grown/valid ratio, so this also bounds arbitrary future decompositions.
+    std::size_t grown = valid;
+    for (const auto ghost : ghosts) {
+      std::size_t extent = 1;
+      add(extent, multiply(2, ghost), limit, "AMR Transfer ghost extent overflow");
+      grown = multiply(grown, extent);
+    }
+    charge(grown, multiply(static_cast<std::size_t>(components) + 3, sizeof(double)));
+    charge(multiply(valid, static_cast<std::size_t>(components)), (input ? 2 : 1) * sizeof(double));
+    charge(valid, sizeof(typename Impl::PatchStorage) + sizeof(Box<Dim>) + sizeof(Index<Dim>));
+  };
+  patch_capacity(source, source_cells, true);
+  patch_capacity(target, target_cells, false);
+  const auto jobs = multiply(source_cells, target_cells);
+  const auto transported = multiply(jobs, static_cast<std::size_t>(components));
+  // Each source cell occurs at most once per destination cell; each tensor axis
+  // length is bounded by its region's cell count, even for axis permutations.
+  charge(multiply(jobs, Dim), sizeof(double));
+  charge(transported, 6 * sizeof(double));
+  charge(multiply(jobs, static_cast<std::size_t>(components)), sizeof(double));
+  charge(jobs, sizeof(typename Impl::Contribution) +
+                   16 * sizeof(mesh::parallel::RegionTransferJob<Dim>) + 2 * sizeof(Box<Dim>) +
+                   2 * sizeof(Index<Dim>));
+  constexpr auto digits = std::numeric_limits<std::size_t>::digits10 + 1;
+  std::size_t names = source_name_bytes;
+  add(names, target_name_bytes, limit, "AMR Transfer name capacity overflow");
+  add(names,
+      2 * (sizeof("::level::") - 1 + sizeof("::patch::") - 1) + sizeof("::cell::") - 1 +
+          5 * digits + 2,
+      limit, "AMR Transfer name capacity overflow");
+  charge(jobs, names);
+  return {target_cells, jobs, jobs, transported, bytes};
+}
+
+template <int Dim>
 AmrLayoutTransferReceipt PreparedAmrLayoutTransfer<Dim>::apply(
     const AmrTransferEndpoint<Dim>& target, const std::vector<MultiFab<Dim>*>& candidates,
     std::uint64_t generation, std::uint64_t attempt) {

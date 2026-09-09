@@ -87,6 +87,9 @@ def _archive_byte_capacity(
 
 
 def _program_for_install(install_plan: Any) -> tuple[Any, dict[str, int]]:
+    from pops.runtime._layout_install_projection import LayoutInstallProjection
+    if type(install_plan) is LayoutInstallProjection:
+        install_plan.verify()
     artifact = install_plan.artifact
     program_handle = artifact.program
     if program_handle is None or getattr(program_handle, "program", None) is None:
@@ -655,10 +658,13 @@ def _common_budget(
     )
     consumer_identity, consumer_count, consumer_data = _consumer_evidence(install_plan)
     temporal_manifest = program.temporal_manifest()
+    from pops.runtime._layout_install_projection import LayoutInstallProjection
     control_data = {
         "artifact": install_plan.artifact.artifact_identity.token,
         "bind": install_plan.bind_identity.token,
         "runtime_kind": runtime_kind,
+        "layout_identity": (install_plan.layout_id
+                            if type(install_plan) is LayoutInstallProjection else None),
         "blocks": list(zip(block_names, block_nvars, strict=True)),
         "block_variables": {
             name: list(owner._s.variable_names(name, "conservative")) for name in block_names
@@ -1018,8 +1024,11 @@ def aggregate_checkpoint_resource_budgets(
     archive_bytes = _archive_byte_capacity(
         total, tuple(member_names), where="multi-layout container archive budget"
     )
+    kinds = {row.runtime_kind for row in rows}
+    if kinds not in ({"uniform"}, {"amr"}):
+        raise ValueError("multi-layout checkpoint needs one authenticated runtime family")
     return CheckpointResourceBudget(
-        "multi_layout_uniform",
+        "multi_layout_uniform" if kinds == {"uniform"} else "multi_layout_amr",
         len(member_names),
         manifest,
         max(maximum_array, text_bytes),

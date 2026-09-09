@@ -120,6 +120,26 @@ template <int Dim>
 PreparedAmrSystemLayoutTransfer<Dim>::~PreparedAmrSystemLayoutTransfer() = default;
 
 template <int Dim>
+AmrLayoutTransferBudget PreparedAmrSystemLayoutTransfer<Dim>::capacity_budget(
+    AmrSystem<Dim>& source, AmrSystem<Dim>& target, const std::string& source_block,
+    const std::string& target_block, std::size_t source_cells, std::size_t target_cells) {
+  source.p_->ensure_engine();
+  target.p_->ensure_engine();
+  const auto& lane = source.p_->require_prepared_engine_lane("AMR Transfer capacity");
+  AmrLayoutTransferBudget result;
+  amr_layout_transfer_bridge_detail::collective(lane, "AMR Transfer capacity preparation", [&] {
+    AmrPhysicalTransferSpec<Dim> spec;
+    spec.authentication.source_block = source_block;
+    spec.authentication.target_block = target_block;
+    Impl endpoint_reader(source, target, nullptr, std::move(spec), {});
+    result = PreparedAmrLayoutTransfer<Dim>::capacity_budget(
+        endpoint_reader.endpoint(source, true), endpoint_reader.endpoint(target, false),
+        source_cells, target_cells, source_block.size(), target_block.size());
+  });
+  return result;
+}
+
+template <int Dim>
 std::shared_ptr<PreparedAmrSystemLayoutTransfer<Dim>> PreparedAmrSystemLayoutTransfer<Dim>::prepare(
     AmrSystem<Dim>& source, AmrSystem<Dim>& target,
     std::shared_ptr<component::LoadedComponent> provider, AmrPhysicalTransferSpec<Dim> spec,

@@ -514,6 +514,7 @@ class ResolvedSimulationPlan:
     bootstrap_plan: Any = None
     amr_execution: Any = None
     amr_providers: Mapping[str, Any] = field(default_factory=dict)
+    layout_amr_authorities: Mapping[str, Any] = field(default_factory=dict)
     continuation_transitions: Any = field(init=False)
     resolved_dimension: int = field(init=False)
     plan_identity: Identity = field(init=False)
@@ -682,6 +683,9 @@ class ResolvedSimulationPlan:
             self.compile_options, where="ResolvedSimulationPlan.compile_options"))
         object.__setattr__(self, "amr_providers", _string_mapping(
             self.amr_providers, where="ResolvedSimulationPlan.amr_providers"))
+        from pops.codegen._layout_amr_authorities import validate_layout_amr_authorities
+        validate_layout_amr_authorities(self.layout_plan, self.layout_amr_authorities)
+        object.__setattr__(self, "layout_amr_authorities", _deep_freeze(self.layout_amr_authorities))
         self._validate_amr_authorities()
         from pops.runtime._continuation_transitions import derive_continuation_transitions
         object.__setattr__(self, "continuation_transitions", derive_continuation_transitions(self))
@@ -769,6 +773,8 @@ class ResolvedSimulationPlan:
             ) if self.amr_execution is not None else None,
             "amr_providers": _evidence(
                 self.amr_providers, where="plan.amr_providers"),
+            "layout_amr_authorities": _evidence(
+                self.layout_amr_authorities, where="plan.layout_amr_authorities"),
         }
 
     def verify(self) -> None:
@@ -1015,6 +1021,10 @@ class InstallPlan:
     @property
     def amr_execution(self) -> Any:
         return self.artifact.plan.amr_execution
+
+    @property
+    def layout_amr_authorities(self) -> Mapping[str, Any]:
+        return self.artifact.plan.layout_amr_authorities
 
     @property
     def amr_providers(self) -> Mapping[str, Any]:

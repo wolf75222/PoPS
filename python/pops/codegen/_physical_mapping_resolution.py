@@ -15,9 +15,16 @@ def validate_physical_mapping_geometry(plan: Any) -> None:
                 raise ValueError("different physical supports require an explicit physical map: "
                                  + requirement.qualified_id)
             continue
-        source = plan.normalized(requirement.source_layout).native_spatial_layout
-        target = plan.normalized(requirement.target_layout).native_spatial_layout
-        validate_physical_geometry(requirement, source, target)
+        source_layout = plan.normalized(requirement.source_layout)
+        target_layout = plan.normalized(requirement.target_layout)
+        validate_physical_geometry(requirement, source_layout.native_spatial_layout,
+            target_layout.native_spatial_layout, composite=source_layout.adaptive and target_layout.adaptive)
+        physical = requirement.physical_map
+        for layout, active in ((source_layout, physical.source_axes),
+                               (target_layout, physical.target_axes)):
+            for ratio in layout.transition_ratios:
+                if any(ratio[axis] != 1 for axis in range(physical.native_dimension) if axis not in active):
+                    raise ValueError("AMR physical maps must preserve singleton hidden storage axes")
 
 
 def validate_physical_mapping_program(plan: Any, program: Any, field_plans: Any,

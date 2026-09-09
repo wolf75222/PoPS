@@ -31,6 +31,7 @@ class _NativeTransferRoute:
     source_element_count: int
     destination_element_count: int
     program_invocation: str = ""
+    physical_contract_identity: str = ""
 
 
 def _common_exact(values: Any, *, where: str) -> Any:
@@ -329,6 +330,12 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
     contract = {"physical_contract": False, "physical_source_to_target": (-1,) * dimension,
                 "physical_source_active": (0,) * dimension, "physical_target_active": (0,) * dimension}
     source_cells = math.prod(source_shape)
+    layout_targets = {row.layout_id: row.target for row in plan.artifact.layout_programs}
+    source_target = layout_targets[transfer.source_layout_id]
+    target_target = layout_targets[transfer.target_layout_id]
+    if source_target != target_target or source_target not in ("system", "amr_system"):
+        raise ValueError("layout Transfer requires matching resolved native execution targets")
+    adaptive = source_target == "amr_system"
     if transfer.operation_abi in (2, 3):
         requirement = next(row.requirement for row in plan.artifact.layout_plan.mappings
                            if row.requirement.qualified_id == transfer.mapping_id)
@@ -338,7 +345,7 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
         source = plan.artifact.native_layouts[transfer.source_layout_id]
         target = plan.artifact.native_layouts[transfer.target_layout_id]
         from pops.runtime._physical_mapping import validate_physical_geometry
-        validate_physical_geometry(requirement, source, target)
+        validate_physical_geometry(requirement, source, target, composite=adaptive)
         if source_shape != tuple(source.shape) or target_shape != tuple(target.shape):
             raise ValueError("native physical Transfer storage differs from its resolved geometry")
         contract = physical.native_contract()
@@ -359,10 +366,19 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
     component = plan.components.get(transfer.component_id)
     if getattr(component, "native_handle", None) is None:
         raise TypeError("mapping Transfer component has no authenticated native handle")
-    source_components = int(source_engine.n_vars(source_block))
-    target_components = int(target_engine.n_vars(target_block))
+    source_components = int(source_engine.block_n_vars(source_block) if adaptive
+                            else source_engine.n_vars(source_block))
+    target_components = int(target_engine.block_n_vars(target_block) if adaptive
+                            else target_engine.n_vars(target_block))
     if source_components != target_components or source_components <= 0:
         raise ValueError("layout transfer source/target component counts differ")
+    physical_spec = None
+    if adaptive:
+        if transfer.operation_abi not in (2, 3):
+            raise NotImplementedError("AMR cross-layout transfer requires a typed physical map")
+        from pops.runtime._amr_physical_mapping import physical_amr_spec
+        physical_spec = physical_amr_spec(plan, requirement, source_engine, target_engine,
+                                          source_block, target_block)
     return SimpleNamespace(
         transfer=transfer,
         source_engine=source_engine,
@@ -387,6 +403,7 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
             "program_invocation": program_invocation,
             **contract,
         },
+        physical_spec=physical_spec,
         source_element_count=source_components * source_cells,
         destination_element_count=target_components * math.prod(target_shape),
     )
@@ -400,12 +417,11 @@ def _prepare_layout_transfer_route(prepared: Any, execution: Any) -> tuple[Any, 
     try:
         source_native = prepared.source_engine._native_step_target()
         target_native = prepared.target_engine._native_step_target()
-        session = source_native._prepare_layout_transfer(
-            target_native,
-            prepared.component.native_handle,
-            prepared.spec,
-            execution,
-        )
+        arguments = (target_native, prepared.component.native_handle, prepared.spec, execution)
+        physical_spec = getattr(prepared, "physical_spec", None)
+        if physical_spec is not None:
+            arguments += (physical_spec,)
+        session = source_native._prepare_layout_transfer(*arguments)
         route = _NativeTransferRoute(
             transfer=prepared.transfer,
             source_block=prepared.source_block,
@@ -414,6 +430,8 @@ def _prepare_layout_transfer_route(prepared: Any, execution: Any) -> tuple[Any, 
             source_element_count=prepared.source_element_count,
             destination_element_count=prepared.destination_element_count,
             program_invocation=prepared.spec["program_invocation"],
+            physical_contract_identity=(physical_spec["physical_contract_identity"]
+                                        if physical_spec is not None else ""),
         )
         published = (source_native, target_native)
         session = None
@@ -1000,6 +1018,14 @@ class _MultiLayoutUniformExecutor:
     def state_global(self, block: str) -> Any:
         return self.executor_for_block(block).state_global(block)
 
+    def block_level_state_global(self, block: str, level: int) -> Any:
+        return self.executor_for_block(block).block_level_state_global(block, level)
+
+    @property
+    def _checkpoint_runtime_kind(self) -> str:
+        from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
+        return require_checkpoint_resource_budget(self).runtime_kind
+
     def get_state(self, block: str) -> Any:
         return self.executor_for_block(block).get_state(block)
 
@@ -1074,6 +1100,9 @@ class _MultiLayoutUniformExecutor:
             "source_element_count": route.source_element_count,
             "destination_element_count": route.destination_element_count,
         }
+        if route.physical_contract_identity:
+            from pops.runtime._amr_physical_mapping import authenticate_amr_receipt
+            authenticate_amr_receipt(route, receipt, expected)
         if route.program_invocation:
             expected["program_invocation"] = route.program_invocation
         for name, value in expected.items():
@@ -1354,7 +1383,7 @@ class _MultiLayoutUniformExecutor:
                     child_path, child_budget.max_archive_bytes
                 )
                 stored = decode_checkpoint_bytes(child_bytes, child_budget)
-                authenticate_checkpoint_payload(child_engine, stored, runtime_kind="uniform")
+                authenticate_checkpoint_payload(child_engine, stored, runtime_kind=child_budget.runtime_kind)
                 return child_bytes if retain_payloads else None
 
             payload = root_effect(
@@ -1453,7 +1482,7 @@ class _MultiLayoutUniformExecutor:
                     payload["layout_checkpoint_%d" % index] = np.frombuffer(
                         child, dtype=np.uint8
                     ).copy()
-                seal_checkpoint_payload(self, payload, runtime_kind="multi_layout_uniform")
+                seal_checkpoint_payload(self, payload, runtime_kind=self._checkpoint_runtime_kind)
                 if precreated_inode:
                     if type(precreated_descriptor) is not int:
                         raise RuntimeError(
@@ -1486,7 +1515,7 @@ class _MultiLayoutUniformExecutor:
                     _bounded_checkpoint_path_bytes(target, container_budget.max_archive_bytes),
                     container_budget,
                 )
-                authenticate_checkpoint_payload(self, stored, runtime_kind="multi_layout_uniform")
+                authenticate_checkpoint_payload(self, stored, runtime_kind=self._checkpoint_runtime_kind)
 
             root_effect(topology, "multi-layout container sealing", write_root)
         finally:
@@ -1518,7 +1547,7 @@ class _MultiLayoutUniformExecutor:
         policy = require_restart_bit_identical(bit_identical, where="multi-layout restart")
         stored = decode_checkpoint_bytes(payload, require_checkpoint_resource_budget(self))
         identity = authenticate_checkpoint_payload(
-            self, stored, runtime_kind="multi_layout_uniform"
+            self, stored, runtime_kind=self._checkpoint_runtime_kind
         )
         layout_ids = tuple(str(value) for value in stored["layout_ids"])
         if layout_ids != tuple(self._engines):
@@ -1717,7 +1746,8 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
         source = configs[transfer.source_layout_id]
         target = configs[transfer.target_layout_id]
         if transfer.operation_abi in (2, 3):
-            validate_physical_geometry(requirements[transfer.mapping_id], source, target)
+            validate_physical_geometry(requirements[transfer.mapping_id], source, target,
+                                       composite=programs[transfer.source_layout_id].target == "amr_system")
         else:
             if transfer.synchronization_uri != "pops://synchronization/before-step@1":
                 raise NotImplementedError("native conservative transfer timing is unsupported")
@@ -1728,13 +1758,23 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
     from pops.runtime._runtime_authorities import install_runtime_authorities
     from pops.runtime._runtime_executor import _uniform_initial_sources
 
-    initial_sources = _uniform_initial_sources(plan)
+    initial_sources = (_uniform_initial_sources(plan)
+                       if any(row.target == "system" for row in programs.values()) else {})
     engines = {}
     materialized: list[Any] = []
     transfer_routes, native_handles = _transfer_publication_containers()
     try:
         for row in layouts.rows:
             layout_id = row.handle.qualified_id
+            if programs[layout_id].target == "amr_system":
+                from pops.runtime._layout_install_projection import LayoutInstallProjection
+                from pops.runtime._runtime_executor import _install_adaptive_native_engine
+                child = LayoutInstallProjection(plan, programs[layout_id],
+                                                plan.layout_amr_authorities[layout_id])
+                engine = _install_adaptive_native_engine(child)
+                materialized.append(engine)
+                engines[layout_id] = engine
+                continue
             engine = System(configs[layout_id])
             materialized.append(engine)
             from pops.runtime._checkpoint_spatial import install_checkpoint_spatial_contract

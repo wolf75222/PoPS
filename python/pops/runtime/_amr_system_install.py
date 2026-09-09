@@ -250,7 +250,13 @@ class _AmrSystemInstall(_AmrSystem):
             if amr_transfer is not install_plan.amr_transfer:
                 raise ValueError("AMR transfer must be the exact value from the InstallPlan")
             from pops.runtime._continuation_transitions import prepare_bind_continuation
-            prepare_bind_continuation(self, install_plan)
+            from pops.runtime._layout_install_projection import LayoutInstallProjection
+            if type(install_plan) is LayoutInstallProjection:
+                prepare_bind_continuation(self, install_plan,
+                    program=install_plan.selected.program.program,
+                    block_names=install_plan.selected.block_names, field_names=())
+            else:
+                prepare_bind_continuation(self, install_plan)
             compiled = install_plan.artifact
             instances = install_plan.instances
             params = install_plan.params

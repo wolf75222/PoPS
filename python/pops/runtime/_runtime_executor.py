@@ -360,87 +360,96 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
 
     def install(self, install_plan: Any, runtime_plan: Any = None) -> Any:
         plan = require_install_plan(install_plan)
+        if len(plan.artifact.layout_plan.layouts) > 1:
+            from pops.runtime._multi_layout_executor import install_multi_layout_uniform
+            return install_multi_layout_uniform(plan, runtime_plan)
         _require_single_layout_runtime_plan(plan, runtime_plan)
-        _require_native_geometry(plan)
-        if plan.initial_condition_plan is None or plan.bootstrap_plan is None:
-            raise ValueError(
-                "adaptive runtime installation requires the resolved InitialConditionPlan and "
-                "its authenticated AMR bootstrap plan"
-            )
-        from pops.runtime._amr_bind_lowering import amr_config_from_layout
-        from pops.runtime._system import AmrSystem
+        return _install_adaptive_native_engine(plan)
 
-        artifact = plan.artifact
-        assert artifact.program is not None, \
-            "resolved single-layout AMR artifact lost its compiled Program"
-        normalized_layout, = artifact.layout_plan.layouts
-        engine = AmrSystem(amr_config_from_layout(
-            plan.layout,
-            hierarchy=plan.resolved_hierarchy,
-            native_layout=normalized_layout.native_spatial_layout,
-        ))
-        from pops.runtime._checkpoint_spatial import install_checkpoint_spatial_contract
 
-        install_checkpoint_spatial_contract(
-            engine,
-            normalized_layout.native_spatial_layout,
-            transition_ratios=normalized_layout.transition_ratios,
+def _install_adaptive_native_engine(plan: Any) -> Any:
+    from pops.runtime._layout_install_projection import require_install_authority
+    plan = require_install_authority(plan)
+    _require_native_geometry(plan)
+    if plan.initial_condition_plan is None or plan.bootstrap_plan is None:
+        raise ValueError(
+            "adaptive runtime installation requires the resolved InitialConditionPlan and "
+            "its authenticated AMR bootstrap plan"
         )
-        engine._execution_context = plan.execution_context
-        from pops.runtime._runtime_mesh_lowering import install_embedded_boundary
+    from pops.runtime._amr_bind_lowering import amr_config_from_layout
+    from pops.runtime._system import AmrSystem
 
-        install_embedded_boundary(engine, normalized_layout)
-        from pops.runtime._runtime_authorities import install_runtime_authorities
+    artifact = plan.artifact
+    assert artifact.program is not None, \
+        "resolved single-layout AMR artifact lost its compiled Program"
+    normalized_layout, = artifact.layout_plan.layouts
+    engine = AmrSystem(amr_config_from_layout(
+        plan.layout,
+        hierarchy=plan.resolved_hierarchy,
+        native_layout=normalized_layout.native_spatial_layout,
+    ))
+    from pops.runtime._checkpoint_spatial import install_checkpoint_spatial_contract
 
-        install_runtime_authorities(engine, plan)
-        schema = artifact.bind_schema
-        by_id = {handle.qualified_id: value for handle, value in plan.initial_values.items()}
-        initial_rows = []
-        from pops.mesh._amr import AnalyticReprojection
+    install_checkpoint_spatial_contract(
+        engine,
+        normalized_layout.native_spatial_layout,
+        transition_ratios=normalized_layout.transition_ratios,
+    )
+    engine._execution_context = plan.execution_context
+    from pops.runtime._runtime_mesh_lowering import install_embedded_boundary
 
-        selections = {
-            row.subject.qualified_id: row.method for row in plan.bootstrap_plan.selections
-        }
-        physical = {
-            requirement.subject.qualified_id: requirement
-            for entry in plan.amr_transfer.entries
-            for requirement in entry.requirements
-            if requirement.materialization == "physical"
-        }
-        for binding in plan.initial_condition_plan.bindings:
-            subject = binding.subject
-            if subject.kind != "state":
-                raise NotImplementedError(
-                    "RuntimeInstance adaptive bootstrap currently accepts state Handles only"
-                )
-            space, centering = _adaptive_initial_location(plan, subject, physical)
-            block = subject.block_ref.local_id if subject.block_ref is not None else None
-            initial_rows.append(
-                (
-                    subject.qualified_id,
-                    block,
-                    by_id.get(subject.qualified_id),
-                    space,
-                    centering,
-                    "analytic"
-                    if type(selections[subject.qualified_id]) is AnalyticReprojection
-                    else "prolong",
-                    binding.source.options.to_data(),
-                )
+    install_embedded_boundary(engine, normalized_layout)
+    from pops.runtime._runtime_authorities import install_runtime_authorities
+
+    install_runtime_authorities(engine, plan)
+    schema = artifact.bind_schema
+    by_id = {handle.qualified_id: value for handle, value in plan.initial_values.items()}
+    initial_rows = []
+    from pops.mesh._amr import AnalyticReprojection
+
+    selections = {
+        row.subject.qualified_id: row.method for row in plan.bootstrap_plan.selections
+    }
+    physical = {
+        requirement.subject.qualified_id: requirement
+        for entry in plan.amr_transfer.entries
+        for requirement in entry.requirements
+        if requirement.materialization == "physical"
+    }
+    for binding in plan.initial_condition_plan.bindings:
+        subject = binding.subject
+        if subject.kind != "state":
+            raise NotImplementedError(
+                "RuntimeInstance adaptive bootstrap currently accepts state Handles only"
             )
-        engine._install_compiled(
-            compiled=artifact,
-            instances=plan.instances,
-            params=plan.params,
-            aux=plan.aux,
-            field_plans=artifact.plan.field_plans,
-            bind_schema=schema,
-            initial_values=tuple(initial_rows),
-            bootstrap_plan=plan.bootstrap_plan,
-            amr_transfer=plan.amr_transfer,
-            install_plan=plan,
+        space, centering = _adaptive_initial_location(plan, subject, physical)
+        block = subject.block_ref.local_id if subject.block_ref is not None else None
+        initial_rows.append(
+            (
+                subject.qualified_id,
+                block,
+                by_id.get(subject.qualified_id),
+                space,
+                centering,
+                "analytic"
+                if type(selections[subject.qualified_id]) is AnalyticReprojection
+                else "prolong",
+                binding.source.options.to_data(),
+            )
         )
-        return engine
+    engine._install_compiled(
+        compiled=artifact,
+        instances=plan.instances,
+        params=plan.params,
+        aux=plan.aux,
+        field_plans=artifact.plan.field_plans,
+        bind_schema=schema,
+        initial_values=tuple(initial_rows),
+        bootstrap_plan=plan.bootstrap_plan,
+        amr_transfer=plan.amr_transfer,
+        install_plan=plan,
+    )
+    return engine
 
 
 _PROVIDERS: tuple[RuntimeExecutorProvider, ...] = (

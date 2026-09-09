@@ -96,6 +96,20 @@ def validate_amr_authorities(plan: Any) -> None:
             raise ValueError(
                 "ResolvedSimulationPlan initial conditions reference another LayoutPlan")
 
+    local_authorities = getattr(plan, "layout_amr_authorities", {})
+    if local_authorities:
+        from pops.codegen._layout_amr_authorities import AMRAuthorityValidationContext
+        assignments = {row.subject.local_id: row.layout.qualified_id
+                       for row in plan.layout_plan.assignments if row.subject_kind == "block"}
+        for layout_id, authority in local_authorities.items():
+            validate_amr_authorities(AMRAuthorityValidationContext.from_layout(
+                authority, component_inputs=plan.component_inputs,
+                blocks=tuple(block for block in plan.blocks
+                             if assignments[block.name] == layout_id)))
+        if len(plan.layout_plan.layouts) > 1 and any(value is not None for value in (
+                plan.resolved_hierarchy, plan.amr_transfer, plan.bootstrap_plan, plan.amr_execution)):
+            raise ValueError("multiple layouts cannot carry a competing global AMR authority")
+
     amr_authorities = (
         plan.resolved_hierarchy,
         plan.amr_transfer,

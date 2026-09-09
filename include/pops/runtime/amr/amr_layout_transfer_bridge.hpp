@@ -10,6 +10,11 @@ class AmrSystem;
 template <int Dim>
 class POPS_EXPORT PreparedAmrSystemLayoutTransfer final {
  public:
+  static AmrLayoutTransferBudget capacity_budget(AmrSystem<Dim>& source, AmrSystem<Dim>& target,
+                                                 const std::string& source_block,
+                                                 const std::string& target_block,
+                                                 std::size_t source_cells,
+                                                 std::size_t target_cells);
   static std::shared_ptr<PreparedAmrSystemLayoutTransfer> prepare(
       AmrSystem<Dim>& source, AmrSystem<Dim>& target,
       std::shared_ptr<component::LoadedComponent> provider, AmrPhysicalTransferSpec<Dim> spec,

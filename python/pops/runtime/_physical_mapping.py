@@ -62,7 +62,8 @@ def physical_mapping_schedule(transfers: Any, layouts: Any) -> PhysicalMappingSc
     return PhysicalMappingSchedule(tuple(sorted(captures)), tuple(events))
 
 
-def validate_physical_geometry(requirement: Any, source: Any, target: Any) -> None:
+def validate_physical_geometry(requirement: Any, source: Any, target: Any, *,
+                               composite: bool = False) -> None:
     physical = requirement.physical_map
     if physical is None:
         raise ValueError("physical Transfer lost its resolved physical map")
@@ -74,7 +75,7 @@ def validate_physical_geometry(requirement: Any, source: Any, target: Any) -> No
     for source_axis, target_axis in enumerate(physical.source_to_target):
         if target_axis < 0:
             continue
-        if (source.shape[source_axis] != target.shape[target_axis] or
+        if ((not composite and source.shape[source_axis] != target.shape[target_axis]) or
                 source.lower[source_axis] != target.lower[target_axis] or
                 source.upper[source_axis] != target.upper[target_axis] or
                 source.periodicity[source_axis] != target.periodicity[target_axis]):

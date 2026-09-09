@@ -991,6 +991,16 @@ class LayoutPlan:
             raise KeyError("layout %s is not declared by this LayoutPlan" % handle.qualified_id)
         return matches[0]
 
+    def project(self, handle: LayoutHandle) -> LayoutPlan:
+        """Authenticate one layout's local authority; cross-layout maps stay on the parent."""
+        selected = self.normalized(handle)
+        assignments = tuple(row for row in self.assignments if row.layout == handle)
+        if len(self.layouts) == 1:
+            return self
+        payload = plan_payload(self.owner, (selected,), assignments, ())
+        return LayoutPlan(self.owner, (selected,), assignments, (),
+                          hashlib.sha256(canonical(payload).encode("utf-8")).hexdigest())
+
     def validate_subjects(self, *, states: Any = (), fields: Any = (), blocks: Any = ()) -> None:
         """Prove every materialized subject has exactly one assignment and no extras."""
         expected = set()

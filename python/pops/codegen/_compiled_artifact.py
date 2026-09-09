@@ -113,6 +113,7 @@ class CompiledPlanRecord:
     bootstrap_plan: Any = None
     amr_execution: Any = None
     amr_providers: Mapping[str, Any] = field(default_factory=dict)
+    layout_amr_authorities: Mapping[str, Any] = field(default_factory=dict)
     resolved_dimension: int = field(init=False)
     contract_identity: Identity = field(init=False)
 
@@ -163,6 +164,7 @@ class CompiledPlanRecord:
             bootstrap_plan=plan.bootstrap_plan,
             amr_execution=plan.amr_execution,
             amr_providers=plan.amr_providers,
+            layout_amr_authorities=plan.layout_amr_authorities,
         )
 
     def __post_init__(self) -> None:
@@ -227,6 +229,9 @@ class CompiledPlanRecord:
         object.__setattr__(self, "requirements", _deep_freeze(self.requirements))
         object.__setattr__(self, "capabilities", _deep_freeze(self.capabilities))
         object.__setattr__(self, "amr_providers", _deep_freeze(self.amr_providers))
+        from pops.codegen._layout_amr_authorities import validate_layout_amr_authorities
+        validate_layout_amr_authorities(self.layout_plan, self.layout_amr_authorities)
+        object.__setattr__(self, "layout_amr_authorities", _deep_freeze(self.layout_amr_authorities))
         contracts = tuple(_deep_freeze(item) for item in self.component_contracts)
         component_ids = [item.get("component_id") for item in contracts]
         if any(not isinstance(component_id, str) or not component_id
@@ -272,7 +277,8 @@ class CompiledPlanRecord:
                 for value, kind in zip(amr_authorities, expected, strict=True)
             ):
                 raise TypeError("CompiledPlanRecord contains a non-exact AMR authority")
-        elif self.target == "amr_system":
+        elif self.target == "amr_system" and (not self.layout_amr_authorities
+                                                or len(self.layout_plan.layouts) == 1):
             raise ValueError("CompiledPlanRecord AMR target has no complete AMR authority set")
         object.__setattr__(
             self, "contract_identity", make_identity("compiled-plan", self._payload()))
@@ -360,6 +366,8 @@ class CompiledPlanRecord:
             ) if self.amr_execution is not None else None,
             "amr_providers": _evidence(
                 self.amr_providers, where="compiled plan AMR providers"),
+            "layout_amr_authorities": _evidence(
+                self.layout_amr_authorities, where="compiled plan.layout_amr_authorities"),
         }
 
     def verify(self) -> None:

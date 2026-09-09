@@ -89,6 +89,12 @@ struct AmrLayoutTransferReceipt {
 template <int Dim>
 class POPS_EXPORT PreparedAmrLayoutTransfer final {
  public:
+  /// Capacity ceiling for the same numerical/storage inventory charged by prepare().
+  static AmrLayoutTransferBudget capacity_budget(const AmrTransferEndpoint<Dim>& source,
+                                                 const AmrTransferEndpoint<Dim>& target,
+                                                 std::size_t source_cells, std::size_t target_cells,
+                                                 std::size_t source_name_bytes,
+                                                 std::size_t target_name_bytes);
   static std::shared_ptr<PreparedAmrLayoutTransfer> prepare(
       const AmrTransferEndpoint<Dim>& source, const AmrTransferEndpoint<Dim>& target,
       AmrPhysicalTransferSpec<Dim> spec,

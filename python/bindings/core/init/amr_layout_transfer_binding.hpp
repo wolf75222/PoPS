@@ -155,6 +155,20 @@ inline void bind(py::module_& module, py::class_<pops::AmrSystem<pops::kNativeDi
       .def("reject_attempt", &Session::reject_attempt, py::arg("generation"), py::arg("attempt"))
       .def("finalize_transaction", &Session::finalize_transaction, py::arg("generation"))
       .def("rollback_transaction", &Session::rollback_transaction, py::arg("generation"));
+  cls.def("_layout_transfer_capacity_budget",
+          [](pops::AmrSystem<pops::kNativeDimension>& source,
+             pops::AmrSystem<pops::kNativeDimension>& target, const std::string& source_block,
+             const std::string& target_block, std::size_t source_cells, std::size_t target_cells) {
+            const auto budget = Session::capacity_budget(source, target, source_block, target_block,
+                                                         source_cells, target_cells);
+            py::dict result;
+            result["destination_cells"] = budget.destination_cells;
+            result["intersection_probes"] = budget.intersection_probes;
+            result["canonical_jobs"] = budget.canonical_jobs;
+            result["transported_elements"] = budget.transported_elements;
+            result["prepared_bytes"] = budget.prepared_bytes;
+            return result;
+          });
   cls.def(
       "_prepare_layout_transfer",
       [](pops::AmrSystem<pops::kNativeDimension>& source,

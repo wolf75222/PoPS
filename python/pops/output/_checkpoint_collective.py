@@ -282,7 +282,7 @@ def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) 
         isinstance(manifest["schema_version"], bool)
         or manifest["schema_version"] != CHECKPOINT_ENVELOPE_SCHEMA_VERSION
         or not isinstance(manifest["runtime_kind"], str)
-        or manifest["runtime_kind"] not in {"uniform", "amr", "multi_layout_uniform"}
+        or manifest["runtime_kind"] not in {"uniform", "amr", "multi_layout_uniform", "multi_layout_amr"}
     ):
         raise ValueError("checkpoint manifest version/runtime kind is unsupported")
     clock = manifest["clock"]

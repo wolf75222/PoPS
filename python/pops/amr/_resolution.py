@@ -6,9 +6,10 @@ extension is invoked through a narrow protocol; there is no class-name or string
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
+from types import MappingProxyType
 
 from pops.identity import make_identity
 from pops.identity.semantic import semantic_value
@@ -31,6 +32,17 @@ class ResolvedAMRAuthorities:
     bootstrap: Any
     execution: Any
     providers: Any
+
+    def __post_init__(self):
+        def freeze(value):
+            if isinstance(value, Mapping):
+                return MappingProxyType({key: freeze(item) for key, item in value.items()})
+            if isinstance(value, (tuple, list)):
+                return tuple(freeze(item) for item in value)
+            if isinstance(value, (set, frozenset)):
+                return frozenset(freeze(item) for item in value)
+            return value
+        object.__setattr__(self, "providers", freeze(self.providers))
 
     def canonical_identity(self) -> dict[str, Any]:
         return {

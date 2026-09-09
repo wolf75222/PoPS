@@ -359,7 +359,22 @@ TEST(AmrLayoutTransfer, ActiveCompositeMeasureStageRebindingRetryAndRestartFence
   auto lane = pops::ExecutionLane::duplicate_world_collectively("test::amr-layout-transfer");
   auto component = provider(lane);
   auto high = high_hierarchy(lane), low = low_hierarchy(lane);
-  const auto spec = specification(high, low);
+  auto spec = specification(high, low);
+  const auto capacity = [](const Hierarchy& hierarchy) {
+    std::size_t cells = 0;
+    for (const auto& geometry : hierarchy.geometries)
+      cells += static_cast<std::size_t>(geometry.domain().numPts());
+    return cells;
+  };
+  spec.budget = Transfer::capacity_budget(high.endpoint(), low.endpoint(), capacity(high),
+                                          capacity(low), spec.authentication.source_block.size(),
+                                          spec.authentication.target_block.size());
+  EXPECT_THROW(Transfer::capacity_budget(high.endpoint(), low.endpoint(), 1, 1, 4, 3),
+               std::invalid_argument);
+  EXPECT_THROW(
+      Transfer::capacity_budget(high.endpoint(), low.endpoint(),
+                                std::numeric_limits<std::size_t>::max(), capacity(low), 4, 3),
+      std::exception);
   auto transfer =
       Transfer::prepare(high.endpoint(), low.endpoint(), spec, component, execution(lane), lane);
   EXPECT_GT(transfer->canonical_jobs(), 0u);
