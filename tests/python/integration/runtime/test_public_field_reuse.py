@@ -6,6 +6,7 @@ import pops
 import pytest
 from pops.layouts import Uniform
 from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.solvers import CG
 from pops.time import FailRun, FixedDt
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.unit.fields.test_program_field_problem import field_case
@@ -45,6 +46,38 @@ def _stage_case(n):
     frame = model._frame
     layout = Uniform(CartesianGrid(frame=frame, cells=(n, n), periodic=PeriodicAxes(frame.axes)))
     return case, layout, case.resolve(field).qualified_id
+
+
+def _accuracy_invalidation_case(n):
+    """Keep the equation context fixed while changing only the solve accuracy."""
+    case, field, problem, program, values, point = field_case()
+    strict = CG(max_iter=4000, rel_tol=5e-12, abs_tol=5e-13)
+    samples = []
+    for solver in (None, strict, strict):
+        kwargs = {} if solver is None else {"solver": solver}
+        solution = program.solve(field, values=values, at=point, **kwargs).consume(
+            action=FailRun())
+        samples.append(field.observe(solution)[field[problem.unknowns[0]]])
+    solves = [value for value in program._values if value.op == "solve_linear"]
+    equation_identities = tuple(
+        value.attrs["solve_request"]["equation_identity"] for value in solves)
+    solver_identities = tuple(
+        value.attrs["solve_request"]["solver_identity"] for value in solves)
+    assert len(set(equation_identities)) == 1
+    assert solver_identities[0] != solver_identities[1] == solver_identities[2]
+    for index, sample in enumerate(samples):
+        program.store_history("accuracy_phi%d" % index, sample, depth=1)
+    for handle, value in values.items():
+        state = program.state(handle)
+        program.commit(state.next, program.value(
+            "unchanged " + value.name, 1 * value, at=state.next.point))
+    program.step_strategy(FixedDt(0.125))
+    case.program(program)
+    frame = case._block_registry.spec("first")["model"]._frame
+    layout = Uniform(CartesianGrid(
+        frame=frame, cells=(n, n), periodic=PeriodicAxes(frame.axes)))
+    return (case, layout, case.resolve(field).qualified_id,
+            equation_identities[0], solver_identities)
 
 
 def test_full_component_version_and_gradient_matrix(isolated_native_cache, native_cxx, kokkos_root):
@@ -92,3 +125,63 @@ def test_full_component_version_and_gradient_matrix(isolated_native_cache, nativ
     assert min(np.log2(np.asarray(errors[:-1]) / np.asarray(errors[1:]))) > 1.8
     assert errors[-1] < 0.025
     _write_evidence("fields-stage-matrix", evidence)
+
+
+def test_accuracy_change_executes_a_new_native_solve_then_exact_reuse(
+        isolated_native_cache, native_cxx, kokkos_root):
+    """Accuracy is a solve identity: changing it cannot reuse the prior native result."""
+    del isolated_native_cache, native_cxx, kokkos_root
+    n = 16
+    first, second, _exact = _data("variable_scalar_two_state_load", n)
+    case, layout, field_identity, equation_identity, solver_identities = (
+        _accuracy_invalidation_case(n))
+    artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
+    runtime = pops.bind(
+        artifact,
+        initial_state={"first": first, "second": second},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
+    report = pops.run(runtime, t_end=0.125, max_steps=1)
+    assert report.accepted_steps == 1
+    actual = [
+        np.asarray(runtime.history_global("accuracy_phi%d" % index, 0)).reshape(n, n)
+        for index in range(3)
+    ]
+    np.testing.assert_allclose(actual[1], actual[0], rtol=0, atol=2e-9)
+    np.testing.assert_array_equal(actual[2], actual[1])
+    diagnostics = runtime.program_report().diagnostics
+    assert diagnostics["field.solves/" + field_identity] == 2
+    assert diagnostics["field.reuses/" + field_identity] == 1
+    _write_evidence("fields-accuracy-invalidation", {
+        "schema": "pops.m3.field-accuracy-invalidation.v1",
+        "n": n,
+        "field_identity": field_identity,
+        "equation_identity": equation_identity,
+        "solver_identities": solver_identities,
+        "accuracy": {
+            "default": {"max_iter": 4000, "rel_tol": 1e-11, "abs_tol": 1e-12},
+            "strict": {"max_iter": 4000, "rel_tol": 5e-12, "abs_tol": 5e-13},
+        },
+        "default_to_strict_Linf": float(np.max(np.abs(actual[1] - actual[0]))),
+        "strict_repeat_bitwise_equal": True,
+        "diagnostics": diagnostics,
+        "artifact_identity": artifact.artifact_identity.token,
+    })
+
+
+@pytest.mark.parametrize("keyword", ("boundary", "geometry", "gauge"))
+def test_per_solve_physical_authority_transition_is_refused_before_authoring(keyword):
+    """Boundary, geometry, and gauge are immutable field/artifact authorities.
+
+    The public solve API has no per-solve override for these identities. A changed authority must
+    be registered as a new field or resolved as a new artifact, so it cannot enter the invocation
+    reuse cache as an apparent update of the installed field.
+    """
+    _case, field, _problem, program, values, point = field_case()
+    with pytest.raises(TypeError, match="unexpected keyword argument %r" % keyword):
+        program.solve(field, values=values, at=point, **{keyword: object()})
+    assert not any(value.op in ("field_problem_load", "solve_linear")
+                   for value in program._values)
+    # The failed authoring transaction did not poison an exact valid retry.
+    program.solve(field, values=values, at=point).consume(action=FailRun())
+    assert sum(value.op == "solve_linear" for value in program._values) == 1
