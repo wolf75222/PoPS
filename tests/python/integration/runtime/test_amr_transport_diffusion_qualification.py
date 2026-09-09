@@ -8,6 +8,7 @@ import json
 import math as pmath
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pops
@@ -49,6 +50,7 @@ from pops.time import FixedDt, every
 from tests.python.support.amr_snapshots import (
     composite_active_block_state,
     composite_active_mask,
+    level_valid_mask,
 )
 from tests.python.support.native_execution_context import artifact_execution_context
 
@@ -225,8 +227,23 @@ def _quadrature(record):
     return cell, int(axis_token.split(":")[1]), int(side_token.split(":")[1])
 
 
+def _assert_physical_linear_profile(runtime, level, *, n):
+    level_n = n * 2**level
+    valid = level_valid_mask(runtime, level, refinement_ratio=2)
+    state = np.asarray(
+        runtime.block_level_state_global("heat", level), dtype=np.float64
+    ).reshape(level_n, level_n)
+    exact_x = 1.0 + (np.arange(level_n, dtype=np.float64) + 0.5) / level_n
+    exact = np.broadcast_to(exact_x, state.shape)
+    np.testing.assert_allclose(state[valid], exact[valid], rtol=0.0, atol=3.0e-12)
+    # The public dense snapshot uses zero only to represent cells without a patch.
+    np.testing.assert_array_equal(state[~valid], 0.0)
+    return valid, float(np.max(np.abs(state[valid] - exact[valid])))
+
+
 def _coarse_fine_basis_oracle(runtime, providers=("provider/1", "provider/4")):
     rows = tuple(tuple(map(str, row)) for row in runtime._executor.program_flux_ledger_manifest())
+    assert all(len(row) == 17 for row in rows)
     assert runtime.n_levels() == 2
     coarse_active = composite_active_mask(runtime, 0, refinement_ratio=2)
     if not coarse_active.any():
@@ -237,7 +254,8 @@ def _coarse_fine_basis_oracle(runtime, providers=("provider/1", "provider/4")):
         return {"no_coarse_fine_faces": "full_fine_cover", "ledger_count": 0}
     result = {}
     for provider in providers:
-        selected = tuple(row for row in rows if provider in "/".join(row))
+        stage_prefix = "pops.program-flux-expression.v1/" + provider + "/rhs/"
+        selected = tuple(row for row in rows if row[2].startswith(stage_prefix))
         assert selected
         provider_result = {}
         axes = tuple(
@@ -395,31 +413,93 @@ def test_physical_diffusion_boundary_is_steady_across_refinement_and_subcycling(
     resolved = _author(n, _stable_dt(n), physical=True, cxx=native_cxx)
     artifact = _compile(resolved, route="physical-n%d" % n)
     runtime = _bind(artifact)
-    before = tuple(
-        np.asarray(runtime.block_level_state_global("heat", level)).copy()
+    before_boxes = tuple(runtime.patch_boxes())
+    before_profiles = tuple(
+        _assert_physical_linear_profile(runtime, level, n=n)
         for level in range(runtime.n_levels())
     )
-    report = pops.run(runtime, t_end=FINAL_TIME, max_steps=128, console=False)
-    state_error = 0.0
-    for level, expected in enumerate(before):
-        actual = runtime.block_level_state_global("heat", level)
-        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=3.0e-12)
-        state_error = max(state_error, float(np.max(np.abs(actual - expected))))
+    initial_mass = _mass(runtime, n)
+    accepted_step_topologies = []
+    accepted_controller_step = type(runtime)._accepted_controller_step
+
+    def observe_accepted_step(simulation, *args, **kwargs):
+        topology_before = tuple(simulation.patch_boxes())
+        step_report = accepted_controller_step(simulation, *args, **kwargs)
+        accepted_step_topologies.append((topology_before, tuple(simulation.patch_boxes())))
+        return step_report
+
+    with patch.object(type(runtime), "_accepted_controller_step", observe_accepted_step):
+        report = pops.run(runtime, t_end=FINAL_TIME, max_steps=128, console=False)
+    after_boxes = tuple(runtime.patch_boxes())
+    after_profiles = tuple(
+        _assert_physical_linear_profile(runtime, level, n=n)
+        for level in range(runtime.n_levels())
+    )
+    final_mass = _mass(runtime, n)
+    support_changes = tuple(
+        int(np.count_nonzero(before[0] != after[0]))
+        for before, after in zip(before_profiles, after_profiles, strict=True)
+    )
+    assert before_boxes != after_boxes
+    assert any(support_changes)
+    assert report.accepted_steps > 0
+    assert len(accepted_step_topologies) == report.accepted_steps
+    last_step_topology_before, last_step_topology_after = accepted_step_topologies[-1]
+    assert last_step_topology_before == last_step_topology_after == after_boxes
+    state_error = max(
+        error
+        for profiles in (before_profiles, after_profiles)
+        for _valid, error in profiles
+    )
+    active_by_level = tuple(
+        composite_active_mask(runtime, level, refinement_ratio=2)
+        for level in range(runtime.n_levels())
+    )
+    valid_by_level = tuple(
+        level_valid_mask(runtime, level, refinement_ratio=2)
+        for level in range(runtime.n_levels())
+    )
+    physical_raw = {(axis, side): [] for axis in range(2) for side in range(2)}
     physical = {(axis, side): [] for axis in range(2) for side in range(2)}
+    covered_coarse = {(axis, side): [] for axis in range(2) for side in range(2)}
     for record in runtime._executor._program_exchange_records():
         cell, axis, side = _quadrature(record)
         level = _exchange_level(record["evaluation_context"])
+        assert 0 <= level < runtime.n_levels()
         level_n = n * 2**level
-        if (side == 0 and cell[axis] == 0) or (side == 1 and cell[axis] == level_n - 1):
+        assert all(0 <= coordinate < level_n for coordinate in cell)
+        on_physical_face = (side == 0 and cell[axis] == 0) or (
+            side == 1 and cell[axis] == level_n - 1
+        )
+        if not on_physical_face:
+            continue
+        physical_raw[axis, side].append(record)
+        if active_by_level[level][tuple(reversed(cell))]:
             physical[axis, side].append(record)
+            continue
+        assert level + 1 < runtime.n_levels()
+        child_cell = tuple(reversed(cell))
+        child_region = tuple(
+            slice(coordinate * 2, (coordinate + 1) * 2) for coordinate in child_cell
+        )
+        assert valid_by_level[level + 1][child_region].all()
+        covered_coarse[axis, side].append(record)
     boundary_evidence = {}
     net_boundary_amount = 0.0
     last_dt = runtime._executor.program_last_dt()
     for (axis, side), records in physical.items():
         assert records
+        raw_records = physical_raw[axis, side]
+        excluded_records = covered_coarse[axis, side]
+        assert len(raw_records) == len(records) + len(excluded_records)
         expected_flux = DIFFUSIVITY if axis == 0 else 0.0
+        raw_flux_defect = max(abs(row["numerical_flux"] - expected_flux) for row in raw_records)
+        assert raw_flux_defect < 3.0e-13
         flux_defect = max(abs(row["numerical_flux"] - expected_flux) for row in records)
         assert flux_defect < 3.0e-13
+        raw_weighted_area = sum(
+            row["face_measure"] * row["temporal_weight"] for row in raw_records
+        )
         weighted_area = sum(row["face_measure"] * row["temporal_weight"] for row in records)
         assert abs(weighted_area - last_dt) < 3.0e-13
         amount = sum(row["integrated_amount"] for row in records)
@@ -427,14 +507,26 @@ def test_physical_diffusion_boundary_is_steady_across_refinement_and_subcycling(
         assert abs(amount - expected_amount) < 3.0e-13
         net_boundary_amount += amount
         boundary_evidence["axis%d_side%d" % (axis, side)] = {
-            "count": len(records),
+            "raw_count": len(raw_records),
+            "composite_count": len(records),
+            "covered_coarse_count": len(excluded_records),
+            "raw_level_counts": {
+                str(level): sum(
+                    _exchange_level(row["evaluation_context"]) == level for row in raw_records
+                )
+                for level in range(runtime.n_levels())
+            },
             "expected_flux": expected_flux,
+            "raw_max_flux_defect": raw_flux_defect,
             "max_flux_defect": flux_defect,
+            "raw_weighted_area": raw_weighted_area,
             "weighted_area": weighted_area,
             "integrated_amount": amount,
             "expected_integrated_amount": expected_amount,
         }
     assert abs(net_boundary_amount) < 3.0e-13
+    mass_change = final_mass - initial_mass
+    assert abs(net_boundary_amount - mass_change) < 3.0e-13
     _evidence(
         artifact,
         n,
@@ -444,9 +536,18 @@ def test_physical_diffusion_boundary_is_steady_across_refinement_and_subcycling(
             "accepted_steps": report.accepted_steps,
             "rejected_steps": report.rejected_steps,
             "max_state_error": state_error,
+            "initial_patch_boxes": before_boxes,
+            "final_patch_boxes": after_boxes,
+            "last_accepted_step_patch_boxes": {
+                "before": last_step_topology_before,
+                "after": last_step_topology_after,
+            },
+            "level_support_changes": support_changes,
             "last_dt": last_dt,
             "physical_boundary": boundary_evidence,
             "net_weighted_boundary_amount": net_boundary_amount,
+            "composite_mass_change": mass_change,
+            "boundary_mass_defect": net_boundary_amount - mass_change,
             "coarse_fine_basis": _coarse_fine_basis_oracle(runtime, ("provider/4",)),
         },
         record_property=record_property,
