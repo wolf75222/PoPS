@@ -184,6 +184,13 @@ TEST(AmrProgramFieldPublication, ThreeFieldsReachPreparedSourcesAtEveryLevelAndR
   const auto metadata = system.capture_auxiliary_checkpoint_accepted_state();
   ASSERT_EQ(metadata.size(), 2U);
 
+  // Even a no-write rollback rebuilds the graph. It must preserve every accepted halo byte,
+  // independently of the publication transaction's own candidate rejection path.
+  system.begin_step_transaction();
+  system.rollback_step_transaction();
+  EXPECT_EQ(system.checkpoint_rank_local_carrier_manifest(), accepted);
+  verify_native_source(system, Real(0));
+
   // The coarse candidate is valid and different; the fine NaN must reject the entire batch.
   fill_tuple(fields, Real(20));
   fields[1].set_val(std::numeric_limits<Real>::quiet_NaN());
@@ -213,5 +220,19 @@ TEST(AmrProgramFieldPublication, ThreeFieldsReachPreparedSourcesAtEveryLevelAndR
   system.rollback_step_transaction();
   EXPECT_EQ(system.checkpoint_rank_local_carrier_manifest(), accepted);
   verify_native_source(system, Real(0));
+
+  // The reconstructed candidate carriers and borrowed consumer views must also support retry.
+  system.begin_step_transaction();
+  system.publish_program_field_components("tests.fields/retried-tuple",
+                                          publication(fields, keys, 2));
+  verify_native_source(system, Real(30), 2);
+  system.commit_step_transaction();
+  system.finalize_step_transaction();
+  const auto retried = system.checkpoint_rank_local_carrier_manifest();
+  EXPECT_NE(retried, accepted);
+  system.begin_step_transaction();
+  system.rollback_step_transaction();
+  EXPECT_EQ(system.checkpoint_rank_local_carrier_manifest(), retried);
+  verify_native_source(system, Real(30), 2);
 }
 }  // namespace

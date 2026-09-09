@@ -7283,20 +7283,10 @@ struct AmrSystem<Dim>::Impl {
               throw std::logic_error("AMR auxiliary storage-group identity is duplicated");
             inserted->second.set_val(Real(0));
           }
-        const auto restore_provider_groups = [&](const auxiliary_groups_type& restored) {
-          if (restored.groups.size() != provider_storage->groups.size())
-            throw std::invalid_argument(
-                "AMR rollback provider image differs from the resolved storage-group set");
-          for (auto& [identity, group] : provider_storage->groups) {
-            const auto* source = restored.find(identity);
-            if (source == nullptr || !same_field_shape(*source, group))
-              throw std::invalid_argument(
-                  "AMR rollback provider image differs from its exact level layout");
-            copy_valid_field(*source, group);
-          }
-        };
+        // The accepted registry restores its freshness alongside this image. Restore the full
+        // grown carriers as well: valid-cell copies would leave zero halos falsely marked fresh.
         if (pending_provider_restore)
-          restore_provider_groups((*pending_provider_restore)[level]);
+          copy_auxiliary_groups_in_place((*pending_provider_restore)[level], *provider_storage);
         else if (previous != nullptr && level < previous->provider_storage.size() &&
                  previous->provider_storage[level]) {
           const auto& prior = *previous->provider_storage[level];

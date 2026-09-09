@@ -727,23 +727,30 @@ class PreparedMultiBlockAmrHierarchy {
   std::size_t apply_coupling_operators_at_level(std::size_t level, Real dt,
                                                 std::span<field_type* const> candidates) {
     ProgramBlockMap map;
-    map.hierarchy_contract = collective_contract_;
-    map.canonical_indices.resize(block_count());
-    for (std::size_t block = 0; block < block_count(); ++block)
-      map.canonical_indices[block] = block;
-    map.exact_contract = canonical_program_contract_;
     runtime::multiblock::BoundaryEvaluationPoint point;
-    point.clock = "pops.prepared-multiblock.direct";
-    point.tick = 0;
-    point.level = static_cast<int>(level);
-    point.substep = 0;
-    point.stage = 0;
-    point.stage_fraction = {0, 1};
-    point.dt = dt;
-    point.physical_time = 0.0;
-    if (interface_scheduler_)
-      throw std::logic_error(
-          "direct AMR coupling application cannot bypass interface accepted-state provenance");
+    std::exception_ptr local_error;
+    try {
+      map.hierarchy_contract = collective_contract_;
+      map.canonical_indices.resize(block_count());
+      for (std::size_t block = 0; block < block_count(); ++block)
+        map.canonical_indices[block] = block;
+      map.exact_contract = canonical_program_contract_;
+      point.clock = "pops.prepared-multiblock.direct";
+      point.tick = 0;
+      point.level = static_cast<int>(level);
+      point.substep = 0;
+      point.stage = 0;
+      point.stage_fraction = {0, 1};
+      point.dt = dt;
+      point.physical_time = 0.0;
+      if (interface_scheduler_)
+        throw std::logic_error(
+            "direct AMR coupling application cannot bypass interface accepted-state provenance");
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    collectively_rethrow_(local_error,
+                          "prepared AMR direct coupling request preparation failed collectively");
     return apply_program_candidates(map, level, dt, candidates, point, nullptr);
   }
 
@@ -757,12 +764,18 @@ class PreparedMultiBlockAmrHierarchy {
                                      /*require_dt_consensus=*/false,
                                      /*require_sealed_couplings=*/false);
     std::vector<field_type*> accepted;
-    accepted.reserve(block_count());
-    for (std::size_t block = 0; block < block_count(); ++block)
-      accepted.push_back(&state(block, level));
+    std::exception_ptr local_error;
+    try {
+      accepted.reserve(block_count());
+      for (std::size_t block = 0; block < block_count(); ++block)
+        accepted.push_back(&state(block, level));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    collectively_rethrow_(local_error,
+                          "prepared AMR publication accepted-pack preparation failed collectively");
     std::vector<field_type> rollback = copy_pack_collectively_(accepted, "publication rollback");
 
-    std::exception_ptr local_error;
     try {
       copy_pack_(canonical, accepted);
     } catch (...) {
@@ -782,22 +795,34 @@ class PreparedMultiBlockAmrHierarchy {
   std::size_t apply_and_publish_level(std::size_t level, Real dt) {
     preflight_application_level_(level, dt);
     std::vector<field_type*> accepted;
-    accepted.reserve(block_count());
-    for (std::size_t block = 0; block < block_count(); ++block)
-      accepted.push_back(&state(block, level));
+    std::exception_ptr local_error;
+    try {
+      accepted.reserve(block_count());
+      for (std::size_t block = 0; block < block_count(); ++block)
+        accepted.push_back(&state(block, level));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    collectively_rethrow_(local_error,
+                          "prepared AMR coupling accepted-pack preparation failed collectively");
     std::vector<field_type> candidates = copy_pack_collectively_(accepted, "coupling candidates");
     std::vector<field_type*> candidate_pack;
-    candidate_pack.reserve(candidates.size());
-    for (field_type& candidate : candidates)
-      candidate_pack.push_back(&candidate);
-    const std::size_t applied = apply_coupling_operators_at_level(level, dt, candidate_pack);
-
     ProgramBlockMap map;
-    map.hierarchy_contract = collective_contract_;
-    map.canonical_indices.resize(block_count());
-    for (std::size_t block = 0; block < block_count(); ++block)
-      map.canonical_indices[block] = block;
-    map.exact_contract = canonical_program_contract_;
+    try {
+      candidate_pack.reserve(candidates.size());
+      for (field_type& candidate : candidates)
+        candidate_pack.push_back(&candidate);
+      map.hierarchy_contract = collective_contract_;
+      map.canonical_indices.resize(block_count());
+      for (std::size_t block = 0; block < block_count(); ++block)
+        map.canonical_indices[block] = block;
+      map.exact_contract = canonical_program_contract_;
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    collectively_rethrow_(local_error,
+                          "prepared AMR coupling candidate-pack preparation failed collectively");
+    const std::size_t applied = apply_coupling_operators_at_level(level, dt, candidate_pack);
     publish_program_candidates(map, level, candidate_pack);
     return applied;
   }
@@ -1455,11 +1480,11 @@ class PreparedMultiBlockAmrHierarchy {
                                   std::span<field_type* const> destination,
                                   std::string_view purpose) const {
     std::vector<field_type*> source;
-    source.reserve(rollback.size());
-    for (field_type& field : rollback)
-      source.push_back(&field);
     std::exception_ptr local_error;
     try {
+      source.reserve(rollback.size());
+      for (field_type& field : rollback)
+        source.push_back(&field);
       copy_pack_(source, destination);
     } catch (...) {
       local_error = std::current_exception();
