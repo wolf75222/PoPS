@@ -28,6 +28,7 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/amr_program_context_field_runtime_public.inc",
         "pops/runtime/program/amr_program_context_general_field_public.inc",
         "pops/runtime/program/amr_program_context_general_field_services.inc",
+        "pops/runtime/program/amr_program_context_general_field_scratch.inc",
         "pops/runtime/program/amr_program_context_diffusion.inc",
         "pops/runtime/program/amr_program_context_flux_expression_public.inc",
         "pops/runtime/program/amr_program_context_spatial_operations.inc",
@@ -57,6 +58,9 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
     }
 )
 PROGRAM_RESPONSIBILITY_AUTHORITIES = {
+    "field_scratch": frozenset(
+        {"pops/runtime/program/amr_program_context_general_field_scratch.inc"}
+    ),
     "joint_field_publication": frozenset(
         {
             "pops/runtime/program/amr_program_context_general_field_public.inc",
@@ -129,6 +133,8 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
     ),
 }
 PROGRAM_RESPONSIBILITY_BUDGETS = {
+    # Collective shape authentication and stable per-level general-field scratch identity.
+    "field_scratch": 96,
     "joint_field_publication": 350,
     # N-component face sizing, shape authentication and per-component reflux add one
     # bounded extension to the former scalar implementation (12 source lines today).
@@ -164,13 +170,14 @@ FLUX_FAMILY_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["flux_family"]
 # Independent field storage, one hierarchy solve and atomic all-level observation publication.
 # Count this new responsibility separately from the earlier field-runtime allowance.
 JOINT_FIELD_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["joint_field_publication"]
+FIELD_SCRATCH_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["field_scratch"]
 # Resumable per-level map ports have their own authority and aggregate allowance.
 MAPPING_CONTINUATION_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["mapping_continuation"]
 HIERARCHY_BARRIER_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["hierarchy_barriers"]
 PROGRAM_FRAGMENT_BUDGET = (
     7_730 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
     + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
-    + HIERARCHY_BARRIER_FRAGMENT_BUDGET
+    + HIERARCHY_BARRIER_FRAGMENT_BUDGET + FIELD_SCRATCH_FRAGMENT_BUDGET
 )
 # Context-owned cache acquisition and independent field-resource handles extend the
 # existing scaffolding; numerical solve and publication bodies remain counted above.
@@ -185,7 +192,7 @@ PROGRAM_SCAFFOLDING_BUDGET = (
 PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
     9_580 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
     + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
-    + HIERARCHY_BARRIER_FRAGMENT_BUDGET
+    + HIERARCHY_BARRIER_FRAGMENT_BUDGET + FIELD_SCRATCH_FRAGMENT_BUDGET
     + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET + SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET
 )
 SEMANTIC_AUTHORITIES = frozenset(

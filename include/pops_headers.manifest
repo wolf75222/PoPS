@@ -281,6 +281,7 @@ sdk-support pops/runtime/program/amr_program_context_field_runtime_public.inc
 sdk-support pops/runtime/program/amr_program_context_field_runtime_services.inc
 sdk-support pops/runtime/program/amr_program_context_general_field_public.inc
 sdk-support pops/runtime/program/amr_program_context_general_field_services.inc
+sdk-support pops/runtime/program/amr_program_context_general_field_scratch.inc
 sdk-support pops/runtime/program/amr_program_context_field_runtime_solver.inc
 sdk-support pops/runtime/program/amr_program_context_flux_basis.inc
 sdk-support pops/runtime/program/amr_program_context_flux_basis_definitions.inc

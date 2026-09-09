@@ -51,6 +51,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
 
   void publish_restore() noexcept override {
     owner_->cancel_mapping_hierarchy_();
+    owner_->staged_field_publications_.clear();
     static_assert(std::is_nothrow_swappable_v<ClockScheduleState>);
     static_assert(std::is_nothrow_swappable_v<decltype(history_levels_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(history_flux_expressions_)>);
@@ -77,8 +78,10 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
     owner_->deferred_history_lag_scratches_.swap(deferred_history_lag_scratches_);
     owner_->scratches_.swap(discarded_scratches_);
     owner_->hierarchy_tensor_solver_.reset();
-    for (auto& [key, resource] : owner_->hierarchy_field_resources_)
+    for (auto& [key, resource] : owner_->hierarchy_field_resources_) {
+      resource.scratches.clear();
       resource.solver.reset();
+    }
     owner_->hierarchy_tensor_topology_epoch_ = std::numeric_limits<std::uint64_t>::max();
     owner_->hierarchy_tensor_materialization_generation_ =
         std::numeric_limits<std::uint64_t>::max();

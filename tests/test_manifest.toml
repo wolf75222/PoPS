@@ -54,6 +54,12 @@ labels = ["integration", "amr", "medium"]
 mpi_variants = [2]
 
 [[cpp.suite]]
+name = "test_amr_hierarchy_field_scratch"
+sources = ["tests/cpp/integration/amr/test_amr_hierarchy_field_scratch.cpp"]
+labels = ["integration", "amr", "medium"]
+mpi_variants = [2]
+
+[[cpp.suite]]
 name = "test_amr_synchronized_continuation"
 sources = ["tests/cpp/integration/amr/test_amr_synchronized_continuation.cpp"]
 labels = ["integration", "amr", "medium"]

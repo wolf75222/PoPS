@@ -75,11 +75,13 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
     if hierarchy:
         solve = hierarchy_field_solve(value)
         if component:
-            lines.append("auto& %s = ctx.scalar_scratch(%d, 0, %s, 1, 1);" % (token, value.id, var[sources[0].id]))
+            lines.append("auto& %s = ctx.hierarchy_field_scratch(%d, %d, 0, 1, 1);" %
+                         (token, solve.id, value.id))
         else:
             slot = "coefficients" if value.op == "field_problem_coefficients" else "rhs"
             lines.append('auto& %s = ctx.hierarchy_field_assembly(%d, "pops.general-field.%s");' % (token, solve.id, slot))
-        lines.append("auto* %s_status = &ctx.scalar_scratch(%d, 1, %s, 1, 0);" % (token, value.id, token))
+        lines.append("auto* %s_status = &ctx.hierarchy_field_scratch(%d, %d, 1, 1, 0);" %
+                     (token, solve.id, value.id))
         pointer = "(&%s)" % token
     else:
         prelude.append("auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("

@@ -88,6 +88,8 @@ field_type& hierarchy_field_solution(std::int64_t key) const {
   return configured_hierarchy_field_solver_(key).solution(active_level_);
 }
 
+#include "amr_program_context_general_field_scratch.inc"
+
 void stage_hierarchy_field_initial_guess(std::int64_t key) const {
   configured_hierarchy_field_solver_(key).stage_initial_guess(active_level_, nullptr);
 }

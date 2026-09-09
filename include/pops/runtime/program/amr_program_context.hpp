@@ -224,6 +224,7 @@ class AmrProgramContext {
     std::unique_ptr<hierarchy_tensor_solver_type> solver;
     std::uint64_t topology_epoch = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t generation = std::numeric_limits<std::uint64_t>::max();
+    std::map<std::tuple<int, std::int64_t, int>, field_type> scratches{};
   };
 
   class LogicalEvaluationScope {

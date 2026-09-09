@@ -17,8 +17,8 @@ def emit_field_gradient(value: Any, var: Any, lines: Any, prelude: Any, *, targe
     if target == "amr_system":
         selected = source.attrs["component"]
         lines.append("static_assert(pops::kNativeDimension == %d);" % dimension)
-        lines.append("auto& %s = ctx.scalar_scratch(%d, 0, %s, %d, 1);" % (
-            token, value.id, var[source.id], dimension))
+        lines.append("auto& %s = ctx.hierarchy_field_scratch(%d, %d, 0, %d, 1);" % (
+            token, solve.id, value.id, dimension))
         lines.append("ctx.observe_hierarchy_field_gradient(%d, %s, %d);" % (solve.id, token, selected))
         var[value.id] = token
         var[("field_observation", value.id)] = source.attrs["field_problem_identity"]

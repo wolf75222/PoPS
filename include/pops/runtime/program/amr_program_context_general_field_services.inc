@@ -67,7 +67,11 @@ hierarchy_tensor_solver_type& configured_hierarchy_field_solver_(std::int64_t ke
                          ? 1L
                          : 0L;
   if (all_reduce_max(stale, lane) != 0) {
+    if (all_reduce_max(mapping_continuation_ && !resource.scratches.empty() ? 1L : 0L, lane) != 0)
+      throw std::logic_error("hierarchy field scratch generation changed during a live continuation");
     auto prepared = prepare_hierarchy_field_solver_(resource);
+    staged_field_publications_.clear();
+    resource.scratches.clear();
     resource.solver = std::move(prepared);
     resource.topology_epoch = runtime_->topology_epoch();
     resource.generation = runtime_->materialization_generation();
