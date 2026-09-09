@@ -22,7 +22,7 @@ from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
 from pops._manifest_protocol import strict_json_loads
 
 
-UNIFORM_V2_MIGRATION_SCHEMA_VERSION = 4
+UNIFORM_V2_MIGRATION_SCHEMA_VERSION = 5
 UNIFORM_V2_SOURCE_VERSION = 2
 UNIFORM_V2_AUTHORITY_TRANSFERS = (
     "lifecycle_identities",
@@ -37,6 +37,8 @@ UNIFORM_V2_AUTHORITY_TRANSFERS = (
     "embedded_boundary_contract",
     "auxiliary_checkpoint",
     "auxiliary_registry_contract",
+    "accepted_exchange_mailbox",
+    "continuation_transition_plan",
 )
 
 
@@ -454,6 +456,22 @@ def _validate_legacy_v2(payload: Mapping[str, Any]) -> _LegacyUniformV2:
     )
 
 
+def _attest_empty_accepted_exchange_authority(payload: Mapping[str, Any]) -> None:
+    """Require the target authority's native mailbox to carry no trajectory absent from v2."""
+    from pops.runtime._checkpoint_exchanges import validate_checkpoint_continuation_arrays
+
+    _contract, raw, offsets = validate_checkpoint_continuation_arrays(payload)
+    empty_native_image = b"POPSEX01" + bytes(8)
+    images = tuple(
+        raw[int(first) : int(last)].tobytes()
+        for first, last in zip(offsets[:-1], offsets[1:], strict=True)
+    )
+    if not images or any(image != empty_native_image for image in images):
+        raise ValueError(
+            "Uniform v2 migration authority has a non-empty accepted exchange mailbox"
+        )
+
+
 def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
     from pops.output._consumer_contracts import ConsumerGraph
     from pops.runtime._checkpoint_manifest import (
@@ -491,6 +509,7 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
         runtime_kind="Uniform migration authority",
     )
     preflight_uniform_restart(payload)
+    _attest_empty_accepted_exchange_authority(payload)
     spatial = inspect_checkpoint_spatial_contract(payload)
     inspect_checkpoint_embedded_boundary_contract(payload)
     auxiliary_checkpoint = _uint8_vector(payload, "auxiliary_checkpoint", minimum=8)
@@ -514,6 +533,8 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
     if _int_vector(payload, "cache_nodes") or _text_vector(payload, "cache_names", nonempty=False):
         raise ValueError("Uniform v2 migration authority must have no scheduled caches")
 
+    from pops.runtime._checkpoint_exchanges import CONTINUATION_CHECKPOINT_KEYS
+
     expected = {
         "pops_checkpoint_version",
         "t",
@@ -535,7 +556,7 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
         "runtime_consumer_diagnostics",
         MANIFEST_KEY,
         IDENTITY_KEY,
-    } | set(PROGRAM_CADENCE_CHECKPOINT_KEYS)
+    } | set(PROGRAM_CADENCE_CHECKPOINT_KEYS) | set(CONTINUATION_CHECKPOINT_KEYS)
     block_components: dict[str, tuple[str, ...]] = {}
     for block in blocks:
         ncomp = _int_scalar(payload, "ncomp_" + block, minimum=1)
@@ -998,6 +1019,8 @@ def _validate_migrated_bytes(
     expected_restart: Any,
     expected_mapping_identity: Any,
 ) -> None:
+    import numpy as np
+
     from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
     from pops.output._consumer_contracts import ConsumerGraph
     from pops.output._checkpoint_collective import decode_checkpoint_bytes
@@ -1025,6 +1048,13 @@ def _validate_migrated_bytes(
         runtime_kind="migrated Uniform",
     )
     preflight_uniform_restart(payload)
+    _attest_empty_accepted_exchange_authority(payload)
+    from pops.runtime._checkpoint_exchanges import CONTINUATION_CHECKPOINT_KEYS
+    for key in CONTINUATION_CHECKPOINT_KEYS:
+        if not np.array_equal(np.asarray(payload[key]), np.asarray(authority.payload[key])):
+            raise RuntimeError(
+                "migrated checkpoint continuation authority differs for %s" % key
+            )
     _canonical_zero_float64_array(payload, "phi", authority.spatial.shape)
     auxiliary_checkpoint = _uint8_vector(payload, "auxiliary_checkpoint", minimum=8)
     if auxiliary_checkpoint != authority.auxiliary_checkpoint:
@@ -1091,7 +1121,7 @@ def migrate_uniform_v2_checkpoint(
     """Publish one current checkpoint from a true v2 artifact, entirely offline.
 
     ``current_authority`` is a complete, authenticated v8 checkpoint captured from the exact
-    target runtime. The schema-4 mapping pins both artifact byte streams, their ABI/Program and
+    target runtime. The schema-5 mapping pins both artifact byte streams, their ABI/Program and
     lifecycle identities, the empty natively attested POPSAUX2 image and binary registry-contract
     SHA-256 values, and supplies every semantic correspondence absent from v2. The emitted
     ``checkpoint_migration`` member remains inside the fixed 16 Ki-character envelope reserved by

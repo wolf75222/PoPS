@@ -206,6 +206,20 @@ def test_checkpoint_migration_provenance_is_consumed_by_producer_and_restart():
         preflight_uniform_restart(payload)
 
 
+def test_uniform_v2_authority_requires_an_empty_native_exchange_mailbox():
+    from pops.codegen._checkpoint_migration_uniform_v2 import (
+        _attest_empty_accepted_exchange_authority,
+    )
+
+    payload = _strict_uniform_preflight_payload()
+    _attest_empty_accepted_exchange_authority(payload)
+    state = np.asarray(payload["program_exchange_state"]).copy()
+    state[8] = 1  # POPSEX01's exact little-endian accepted-record count.
+    payload["program_exchange_state"] = state
+    with pytest.raises(ValueError, match="non-empty accepted exchange mailbox"):
+        _attest_empty_accepted_exchange_authority(payload)
+
+
 def _write_source(tmp_path):
     path = tmp_path / "legacy-v2.npz"
     raw = base64.b64decode(
@@ -417,6 +431,13 @@ def test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts(tmp_path, na
     assert int(migrated["pops_checkpoint_version"]) == UNIFORM_CHECKPOINT_PAYLOAD_VERSION
     authority_payload = decode_checkpoint_bytes(authority_bytes, owner._checkpoint_resource_budget)
     assert str(migrated["program_hash"]) == str(authority_payload["program_hash"])
+    from pops.runtime._checkpoint_exchanges import CONTINUATION_CHECKPOINT_KEYS
+    assert UNIFORM_V2_AUTHORITY_TRANSFERS[-2:] == (
+        "accepted_exchange_mailbox",
+        "continuation_transition_plan",
+    )
+    for key in CONTINUATION_CHECKPOINT_KEYS:
+        assert np.array_equal(migrated[key], authority_payload[key])
     assert np.array_equal(
         migrated["auxiliary_checkpoint"], authority_payload["auxiliary_checkpoint"]
     )
