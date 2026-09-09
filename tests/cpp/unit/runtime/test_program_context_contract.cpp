@@ -25,6 +25,8 @@
 
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/core/foundation/allocator.hpp>
@@ -2162,4 +2164,208 @@ TEST(ProgramContextContract, ConsumedFieldPublicationIsExactCollectiveAndTransac
     EXPECT_EQ(value, 5.0);
   EXPECT_NO_THROW(ctx.prepare_provider_values("read-electric", 0, ctx.state(0), 9));
   EXPECT_EQ(all_reduce_sum(1L, ctx.prepared_execution_lane()), n_ranks());
+}
+
+namespace {
+using TopologySystem = pops::AmrSystem<kTestDimension>;
+using TopologyContext = pops::runtime::program::AmrProgramContext<kTestDimension>;
+struct TopologyModel : pops::nd::ScalarAdvection<kTestDimension> {
+  static constexpr int n_providers = 0;
+  POPS_HD State source(const State&, const pops::ProviderValues<0>&) const { return {}; }
+  POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
+};
+
+std::pair<std::unique_ptr<TopologySystem>, std::shared_ptr<TopologyContext>>
+prepare_topology_context(int blocks) {
+  pops::AmrSystemConfig<kTestDimension> config;
+  config.explicit_bootstrap = true;
+  config.regrid_every = 0;
+  config.distribute_coarse = true;
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    config.shape[axis] = 8;
+    config.periodicity[axis] = true;
+    config.coarse_max_grid[axis] = axis == 0 ? 2 : 8;
+  }
+  auto system = std::make_unique<TopologySystem>(config);
+  pops::test::install_amr_runtime_authority(*system, "tests.program-context/topology-publication");
+  system->set_temporal_relations({1}, {1}, {"integral_only"});
+  std::vector<int> block_map;
+  for (int block = 0; block < blocks; ++block) {
+    const auto name = "scalar" + std::to_string(block);
+    system->install_block_state_route(name, "tests.topology/state/" + name);
+    block_map.push_back(block);
+  }
+  for (int block = 0; block < blocks; ++block) {
+    const auto name = "scalar" + std::to_string(block);
+    pops::add_compiled_model<kTestDimension>(*system, name, TopologyModel{}, "minmod", "rusanov",
+                                             "conservative", "explicit", 1.4, 1, 1, {}, {}, 0.0,
+                                             static_cast<double>(pops::kWenoEpsilon), false,
+                                             "tests.topology/physical-flux");
+  }
+  for (int block = 0; block < blocks; ++block)
+    system->set_conservative_state("scalar" + std::to_string(block),
+                                   std::vector<double>(uniform_cell_count(8), 7.0));
+  auto context = pops::runtime::program::make_program_execution_provider(system.get());
+  context->install([](double) {}, context);
+  system->set_program_block_map(block_map);
+  using Budget = TopologySystem::PreparedAmrProgramFluxExpressionBlockBudget;
+  system->install_prepared_amr_program_flux_expression_budget(
+      "tests.program-context/topology-publication@1", std::vector<Budget>(blocks, Budget{0, 0}), 0,
+      0);
+  context->configure_primary_clock("clock.topology");
+  return {std::move(system), std::move(context)};
+}
+
+auto prepare_topology_regrid(TopologySystem& system, TopologyContext& context) {
+  const auto& parent = system.engine()->hierarchy().layout(0);
+  pops::Index<kTestDimension> upper{};
+  upper.fill(1);
+  const pops::mesh::BoxArray<kTestDimension> boxes(
+      std::vector<pops::Box<kTestDimension>>{{pops::Index<kTestDimension>{}, upper}});
+  pops::amr::tagging::ClusterOptions<kTestDimension> options;
+  options.min_efficiency = 0.7;
+  options.min_box_size.fill(1);
+  options.max_box_size.fill(16);
+  options.budget = {16, 256, 8192, 64, 1U << 20};
+  pops::amr::tagging::ClusterResultIdentity<kTestDimension> identity{
+      "tests.program-context/cluster", parent.exact_identity(), options, {}, boxes.boxes()};
+  std::array<int, kTestDimension> ratio{};
+  ratio.fill(2);
+  return context.prepare_regrid(
+      0, pops::amr::RefinementRatio<kTestDimension>(ratio), {boxes, std::move(identity)},
+      {.clustered_parent_layout = {16, 120},
+       .fine_layout = {16, 120},
+       .load_balance = {16, 16, std::numeric_limits<std::int64_t>::max()}});
+}
+
+auto topology_child(TopologySystem& system,
+                    const pops::amr::regridding::PreparedRegrid<kTestDimension>& prepared) {
+  const auto& parent = system.engine()->hierarchy().state(0);
+  NativeField child(prepared.fine_layout()->patches(), prepared.fine_layout()->distribution(),
+                    parent.local_rank(), parent.ncomp(), parent.ghosts());
+  child.set_val(Real(7));
+  return child;
+}
+}  // namespace
+
+TEST(ProgramContextContract, AmrProgramTopologyPublishesAndRollsBackExactContracts) {
+  ensure_kokkos();
+  comm_init();
+  auto [system, context] = prepare_topology_context(1);
+  auto* engine = system->engine();
+  ASSERT_EQ(system->n_levels(), 1);
+  const auto coarse_contract = context->spatial_snapshot();
+  const auto coarse_program = system->program_accepted_state();
+  const auto coarse_values = engine->hierarchy().state(0);
+  const auto publish = [&] {
+    auto prepared = prepare_topology_regrid(*system, *context);
+    auto child = topology_child(*system, prepared);
+    context->publish_regrid(std::move(prepared), std::move(child));
+  };
+  system->begin_restart_transaction();
+  publish();
+  EXPECT_EQ(system->engine(), engine);
+  EXPECT_EQ(system->n_levels(), 2);
+  EXPECT_NE(context->spatial_snapshot().spatial_contract, coarse_contract.spatial_contract);
+  system->rollback_restart_transaction();
+  EXPECT_EQ(system->engine(), engine);
+  EXPECT_EQ(context->spatial_snapshot().spatial_contract, coarse_contract.spatial_contract);
+  EXPECT_EQ(system->program_accepted_state(), coarse_program);
+  EXPECT_EQ(difference_sum_sq_all(engine->hierarchy().state(0), coarse_values), Real(0));
+
+  publish();
+  const auto refined_contract = context->spatial_snapshot();
+  const auto refined_program = system->program_accepted_state();
+  const auto refined_values = engine->hierarchy().state(1);
+  // Capture AFTER publication: the original bypass saved a current engine with a stale carrier.
+  system->begin_restart_transaction();
+  engine->hierarchy().state(1).set_val(Real(19));
+  system->rollback_restart_transaction();
+  EXPECT_EQ(context->spatial_snapshot().spatial_contract, refined_contract.spatial_contract);
+  EXPECT_EQ(system->program_accepted_state(), refined_program);
+  EXPECT_EQ(difference_sum_sq_all(engine->hierarchy().state(1), refined_values), Real(0));
+
+  const auto layout = engine->hierarchy().layout(0);
+  std::vector<pops::ResourceEstimate> estimates(layout.patches().size());
+  for (std::size_t patch = 0; patch < estimates.size(); ++patch) {
+    auto& estimate = estimates[patch];
+    estimate.topology_epoch = engine->topology_epoch();
+    estimate.materialization_generation = engine->materialization_generation();
+    estimate.samples = 1;
+    estimate.cell_updates = 1;
+    estimate.compute_nanoseconds =
+        layout.distribution().owners()[patch] == layout.distribution().rank_space().coordinate(0)
+            ? 1000
+            : 1;
+    estimate.memory_bytes = 64;
+    estimate.resident_bytes = 64;
+  }
+  pops::RebalancePolicy policy;
+  policy.minimum_improvement_ppm = 0;
+  policy.amortization_steps = 100;
+  policy.migration_bandwidth_bytes_per_second = 1000000000000LL;
+  auto decision = context->prepare_rebalance(
+      0, estimates, {16, 16, std::numeric_limits<std::int64_t>::max()}, policy);
+  const auto make_remapped = [&] {
+    NativeField value(layout.patches(), decision.proposed.plan().distribution(),
+                      engine->hierarchy().state(0).local_rank(), 1,
+                      engine->hierarchy().state(0).ghosts());
+    value.set_val(Real(7));
+    return value;
+  };
+  auto malformed = decision;
+  if (my_rank() == 0)
+    malformed.exact_contract += "foreign";
+  EXPECT_ANY_THROW(context->apply_rebalance(0, std::move(malformed), make_remapped()));
+  EXPECT_EQ(context->spatial_snapshot().spatial_contract, refined_contract.spatial_contract);
+  EXPECT_EQ(system->program_accepted_state(), refined_program);
+  if (n_ranks() == 1) {
+    EXPECT_FALSE(decision.accepted);
+    EXPECT_EQ(decision.reason, pops::RebalanceReason::MappingUnchanged);
+    EXPECT_ANY_THROW(context->apply_rebalance(0, decision, make_remapped()));
+  } else {
+    ASSERT_TRUE(decision.accepted);
+    ASSERT_EQ(decision.reason, pops::RebalanceReason::NetBenefit);
+    auto alternate_estimates = estimates;
+    for (auto& estimate : alternate_estimates)
+      estimate.compute_nanoseconds *= 2;
+    const auto alternate = context->prepare_rebalance(
+        0, alternate_estimates, {16, 16, std::numeric_limits<std::int64_t>::max()}, policy);
+    ASSERT_TRUE(alternate.accepted);
+    ASSERT_EQ(alternate.proposed.plan().distribution(), decision.proposed.plan().distribution());
+    ASSERT_NE(alternate.exact_contract, decision.exact_contract);
+    // Both decisions are authentically prepared and produce the same layout. Their distinct
+    // measured-cost authority must still refuse collectively before any state publication.
+    EXPECT_ANY_THROW(
+        context->apply_rebalance(0, my_rank() == 0 ? decision : alternate, make_remapped()));
+    EXPECT_EQ(context->spatial_snapshot().spatial_contract, refined_contract.spatial_contract);
+    EXPECT_EQ(system->program_accepted_state(), refined_program);
+    system->begin_restart_transaction();
+    context->apply_rebalance(0, decision, make_remapped());
+    EXPECT_EQ(system->engine(), engine);
+    EXPECT_EQ(system->n_levels(), 1);
+    EXPECT_NE(context->spatial_snapshot().spatial_contract, refined_contract.spatial_contract);
+    system->rollback_restart_transaction();
+    EXPECT_EQ(context->spatial_snapshot().spatial_contract, refined_contract.spatial_contract);
+    EXPECT_EQ(system->program_accepted_state(), refined_program);
+    EXPECT_EQ(difference_sum_sq_all(engine->hierarchy().state(0), coarse_values), Real(0));
+    EXPECT_EQ(difference_sum_sq_all(engine->hierarchy().state(1), refined_values), Real(0));
+  }
+}
+
+TEST(ProgramContextContract, AmrProgramSingleCarrierTopologyRejectsMultipleBlocks) {
+  ensure_kokkos();
+  comm_init();
+  auto [system, context] = prepare_topology_context(2);
+  const auto before = context->spatial_snapshot();
+  const auto program = system->program_accepted_state();
+  const std::array<NativeField, 2> before_values{context->state(0), context->state(1)};
+  auto prepared = prepare_topology_regrid(*system, *context);
+  auto child = topology_child(*system, prepared);
+  EXPECT_ANY_THROW(context->publish_regrid(std::move(prepared), std::move(child)));
+  EXPECT_EQ(system->n_levels(), 1);
+  EXPECT_EQ(context->spatial_snapshot().spatial_contract, before.spatial_contract);
+  EXPECT_EQ(system->program_accepted_state(), program);
+  for (int block = 0; block < 2; ++block)
+    EXPECT_EQ(difference_sum_sq_all(context->state(block), before_values[block]), Real(0));
 }

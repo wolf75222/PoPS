@@ -1428,6 +1428,13 @@ class AmrSystem {
       std::string_view reason, const runtime::multiblock::BoundaryEvaluationPoint& accepted_point);
   std::vector<std::vector<std::string>> rematerialize_fields_after_topology_change(
       std::string_view reason, const runtime::multiblock::BoundaryEvaluationPoint& accepted_point);
+  /// Single-carrier Program topology seams preserve the complete facade publication lifecycle.
+  POPS_EXPORT void publish_prepared_amr_program_regrid_(
+      ::pops::amr::regridding::PreparedRegrid<Dim> prepared,
+      std::optional<MultiFab<Dim>> child_state);
+  POPS_EXPORT void apply_prepared_amr_program_rebalance_(std::size_t level,
+                                                         PreparedRebalanceDecision<Dim> decision,
+                                                         MultiFab<Dim> remapped_state);
   POPS_EXPORT PreparedMultiBlockHierarchy& prepared_amr_multiblock_hierarchy_();
   POPS_EXPORT const PreparedMultiBlockHierarchy& prepared_amr_multiblock_hierarchy_() const;
   POPS_EXPORT const std::string& prepared_amr_block_state_identity_(

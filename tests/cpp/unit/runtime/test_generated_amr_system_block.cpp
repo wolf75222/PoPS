@@ -882,38 +882,49 @@ TEST(GeneratedAmrSystemBlock, ScalarParentPreparationRefreshesSparsePeriodicGhos
   for (int axis = 0; axis < Dim; ++axis) {
     config.shape[axis] = 8;
     config.periodicity[axis] = true;
+    config.transition_buffers.front()[axis] = 0;
+    config.transition_lookaheads.front()[axis] = 0;
   }
   pops::AmrSystem<Dim> system(config);
   pops::test::install_amr_runtime_authority(system, "tests.generated-amr/scalar-parent");
   system.set_temporal_relations({1}, {1}, {"integral_only"});
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
-  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  const std::vector<double> uniform(cell_count(config.shape), 1.0);
+  system.set_conservative_state("tracer", uniform);
+  pops::test::install_prepared_threshold_union(
+      system, {{"tracer", "u", 1.5, pops::test::PreparedThresholdRelation::Above, "state/tracer"}},
+      "tests.generated-amr/scalar-parent-tagging@1");
   auto* engine = system.engine();
   ASSERT_NE(engine, nullptr);
-  auto cluster = centered_cluster(engine->hierarchy().layout(0));
-  pops::Index<Dim> upper{};
-  for (int axis = 0; axis < Dim; ++axis)
-    upper[axis] = 1;
-  cluster.boxes = pops::mesh::BoxArray<Dim>(
-      std::vector<pops::Box<Dim>>{pops::Box<Dim>{pops::Index<Dim>{}, upper}});
-  cluster.identity.boxes = cluster.boxes.boxes();
-  std::array<int, Dim> ratios{};
-  ratios.fill(2);
-  const pops::amr::regridding::RegridPreparationBudget budget{
-      .clustered_parent_layout = {16, 120},
-      .fine_layout = {16, 120},
-      .load_balance = {16, 16, std::numeric_limits<std::int64_t>::max()},
-  };
-  auto regrid = engine->prepare_regrid(0, pops::amr::RefinementRatio<Dim>(ratios), cluster, budget);
-  ASSERT_TRUE(regrid.fine_layout().has_value());
-  const auto& coarse_live = engine->hierarchy().state(0);
-  pops::MultiFab<Dim> child(regrid.fine_layout()->patches(), regrid.fine_layout()->distribution(),
-                            coarse_live.local_rank(), coarse_live.ncomp(), coarse_live.ghosts());
-  child.set_val(pops::Real(1));
-  engine->publish_regrid(0, std::move(regrid), std::move(child));
-  system.refresh_prepared_amr_levels();
+  ASSERT_EQ(system.n_levels(), 1);
+  // Author exactly the original parent [0,1]^Dim patch, without buffer expansion. Publish
+  // through the facade so its durable multi-block contract owns the same topology as the engine.
+  auto tagged = uniform;
+  for (std::size_t cell = 0; cell < tagged.size(); ++cell) {
+    std::size_t quotient = cell;
+    bool selected = true;
+    for (int axis = 0; axis < Dim; ++axis) {
+      selected = selected && quotient % static_cast<std::size_t>(config.shape[axis]) < 2;
+      quotient /= static_cast<std::size_t>(config.shape[axis]);
+    }
+    if (selected)
+      tagged[cell] = 2.0;
+  }
+  system.set_conservative_state("tracer", tagged);
+  (void)system.execute_prepared_tagging(0);
+  ASSERT_TRUE(system.regrid_from_prepared_tagging(0));
   ASSERT_EQ(system.n_levels(), 2);
+  const auto& fine_patches = engine->hierarchy().layout(1).patches();
+  ASSERT_EQ(fine_patches.size(), 1U);
+  for (int axis = 0; axis < Dim; ++axis) {
+    ASSERT_EQ(fine_patches[0].lo[axis], 0);
+    ASSERT_EQ(fine_patches[0].hi[axis], 3);
+  }
+  // The tagging witness is setup-only: both live levels retain the original constant state.
+  system.set_conservative_state("tracer", uniform);
+  const auto fine_shape = engine->hierarchy().layout(1).domain().extent();
+  system.set_block_level_state("tracer", 1, std::vector<double>(cell_count(fine_shape), 1.0));
   const auto& coarse_after_regrid = engine->hierarchy().state(0);
   const auto& fine_live = engine->hierarchy().state(1);
   pops::Extent<Dim> one_ghost{};

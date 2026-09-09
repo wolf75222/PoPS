@@ -9512,6 +9512,79 @@ struct AmrSystem<Dim>::Impl {
     return shards;
   }
 
+  template <class Publish>
+  void publish_program_topology(Publish&& publish) {
+    ensure_engine();
+    const ExecutionLane& lane = multiblock_hierarchy->lane();
+    std::exception_ptr authority_error;
+    try {
+      if (multiblock_hierarchy->block_count() != 1)
+        throw std::invalid_argument(
+            "single-carrier AMR Program topology requires exactly one block");
+      if (!program.hist_.histories.empty())
+        throw std::invalid_argument("AMR Program topology publication requires history-free state");
+      if (checkpoint_regrid_count_value == std::numeric_limits<int>::max())
+        throw std::overflow_error("AMR checkpoint regrid count overflow");
+    } catch (...) {
+      authority_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        authority_error, &lane, "AMR Program topology authority failed collectively");
+    execute_transaction([&] {
+      std::string reason;
+      runtime::multiblock::BoundaryEvaluationPoint point;
+      std::exception_ptr admission_error;
+      try {
+        reason = restart_transaction     ? "restart_regrid"
+                 : bootstrap_transaction ? "bootstrap_regrid"
+                                         : "ordinary_regrid";
+        point.clock = restart_transaction ? "pops.amr.restart-regrid.accepted"
+                                          : "pops.amr.topology-rematerialization.accepted";
+        point.tick = macro_step;
+        point.level = 0;
+        point.substep = 0;
+        point.stage = 0;
+        point.stage_fraction = {0, 1};
+        point.dt = static_cast<double>(program.last_dt_);
+        point.physical_time = accepted_time;
+      } catch (...) {
+        admission_error = std::current_exception();
+      }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          admission_error, &lane, "AMR Program topology admission failed collectively");
+      (void)facade->prepare_topology_field_order(reason, point);
+      const auto prior_epoch = engine->topology_epoch();
+      std::forward<Publish>(publish)();
+      tagging_plan.reset();
+      component_tagging_plan.reset();
+      if (engine->topology_epoch() != prior_epoch) {
+        ++checkpoint_regrid_count_value;
+        topology_regrid_auxiliary_invalidation_pending = true;
+        try {
+          refresh_prepared_hierarchy();
+        } catch (...) {
+          topology_regrid_auxiliary_invalidation_pending = false;
+          throw;
+        }
+        topology_regrid_auxiliary_invalidation_pending = false;
+        invalidate_auxiliary_after_topology_regrid(reason);
+        if (!bootstrap_transaction)
+          (void)facade->rematerialize_fields_after_topology_change(reason, point);
+      } else {
+        refresh_prepared_hierarchy();
+      }
+      const auto& published_lane = require_prepared_engine_lane("AMR Program topology publication");
+      std::exception_ptr refresh_error;
+      try {
+        program.refresh_hierarchy_state("AmrSystem Program topology publication");
+      } catch (...) {
+        refresh_error = std::current_exception();
+      }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          refresh_error, &published_lane, "AMR Program topology refresh failed collectively");
+    });
+  }
+
   bool regrid_parent(int parent_level,
                      const std::optional<SparseFieldImage<Dim>>& previous_child = std::nullopt,
                      runtime::amr::PersistentTaggingState<Dim>* hierarchy_cycle_state = nullptr,
@@ -16594,6 +16667,37 @@ runtime::amr::PreparedTaggerCandidates<Dim> AmrSystem<Dim>::execute_prepared_tag
 }
 
 template <int Dim>
+void AmrSystem<Dim>::publish_prepared_amr_program_regrid_(
+    ::pops::amr::regridding::PreparedRegrid<Dim> prepared,
+    std::optional<MultiFab<Dim>> child_state) {
+  p_->publish_program_topology([&] {
+    std::vector<std::optional<MultiFab<Dim>>> children;
+    std::exception_ptr preparation_error;
+    try {
+      children.emplace_back(std::move(child_state));
+    } catch (...) {
+      preparation_error = std::current_exception();
+    }
+    const auto& lane = p_->multiblock_hierarchy->lane();
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        preparation_error, &lane, "AMR Program child carrier preparation failed collectively");
+    const int parent = prepared.source_level().level;
+    p_->multiblock_hierarchy->publish_regrid(static_cast<std::size_t>(parent), std::move(prepared),
+                                             std::move(children));
+  });
+}
+
+template <int Dim>
+void AmrSystem<Dim>::apply_prepared_amr_program_rebalance_(std::size_t level,
+                                                           PreparedRebalanceDecision<Dim> decision,
+                                                           MultiFab<Dim> remapped_state) {
+  p_->publish_program_topology([&] {
+    p_->multiblock_hierarchy->apply_single_block_rebalance(level, std::move(decision),
+                                                           std::move(remapped_state));
+  });
+}
+
+template <int Dim>
 bool AmrSystem<Dim>::regrid_from_prepared_tagging(int parent_level) {
   return p_->execute_transaction([&] { return p_->regrid_parent(parent_level); });
 }
@@ -21373,6 +21477,11 @@ template void AmrSystem<kNativeDimension>::set_analytic_level_set(const std::vec
                                                                   const std::string&, double,
                                                                   double, double);
 template void AmrSystem<kNativeDimension>::set_geometry_mode(const std::string&);
+template void AmrSystem<kNativeDimension>::publish_prepared_amr_program_regrid_(
+    ::pops::amr::regridding::PreparedRegrid<kNativeDimension>,
+    std::optional<MultiFab<kNativeDimension>>);
+template void AmrSystem<kNativeDimension>::apply_prepared_amr_program_rebalance_(
+    std::size_t, PreparedRebalanceDecision<kNativeDimension>, MultiFab<kNativeDimension>);
 template void AmrSystem<kNativeDimension>::refresh_prepared_amr_levels();
 template const PreparedAmrLevelEvaluation<kNativeDimension>&
 AmrSystem<kNativeDimension>::evaluate_prepared_amr_level(

@@ -929,46 +929,51 @@ class PreparedMultiBlockAmrHierarchy {
       interface_scheduler_->swap(*next_interface_scheduler);
   }
 
+  /// The scalar Program rebalance seam supplies one remapped carrier. Prepare its replacement
+  /// hierarchy once, then publish topology and all carrier contracts on this owner.
+  void apply_single_block_rebalance(std::size_t level, PreparedRebalanceDecision<Dim> decision,
+                                    field_type remapped_state) {
+    std::optional<PreparedRestore> prepared;
+    std::exception_ptr local_error;
+    std::string decision_contract;
+    try {
+      if (block_count() != 1)
+        throw std::invalid_argument("single-carrier AMR rebalance requires exactly one block");
+      if (accepted_revision_ == std::numeric_limits<std::uint64_t>::max())
+        throw std::overflow_error("multi-block AMR accepted revision overflow");
+      ExactContractBuilder request;
+      request.scalar(static_cast<std::uint64_t>(level))
+          .bytes(decision.source_contract)
+          .bytes(decision.exact_contract);
+      decision_contract = std::move(request).release();
+      auto primary_publication = primary_->prepare_rebalance_publication(level, std::move(decision),
+                                                                         std::move(remapped_state));
+      prepared.emplace(
+          prepare_primary_publication_(std::move(primary_publication), {}, accepted_revision_ + 1));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    collectively_rethrow_(local_error,
+                          "single-carrier AMR rebalance preparation failed collectively");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"single-carrier-amr-rebalance-decision", decision_contract},
+             {"single-carrier-amr-rebalance-next", prepared->collective_contract}},
+            *lane_))
+      throw std::invalid_argument("AMR rebalance decision differs between carrier-lane ranks");
+    execute_prepared_restore(*prepared);
+    publish_prepared_restore(std::move(*prepared));
+  }
+
   Snapshot snapshot() const {
     return {primary_->snapshot(), additional_, accepted_revision_, collective_contract_};
   }
 
   /// Build the entire topology/carrier rollback image without entering the owning lane.
   PreparedRestore prepare_restore(const Snapshot& snapshot) {
-    PreparedRestore prepared;
-    prepared.owner = this;
-    prepared.additional = snapshot.additional;
-    validate_snapshot_carriers_(snapshot.primary.hierarchy, prepared.additional, additional_);
-    prepared.primary_publication.emplace(primary_->prepare_restore_publication(snapshot.primary));
-    if (interface_scheduler_) {
-      const auto state_provider = [&](std::size_t block, int level) -> field_type& {
-        if (block == 0)
-          return const_cast<field_type&>(
-              prepared.primary_publication->hierarchy().state(static_cast<std::size_t>(level)));
-        return prepared.additional.at(block - 1).levels.at(static_cast<std::size_t>(level));
-      };
-      const auto geometry_provider = [&](int level) {
-        return Geometry<Dim>::from_bounds(prepared.primary_publication->hierarchy()
-                                              .layout(static_cast<std::size_t>(level))
-                                              .domain(),
-                                          interface_lower_, interface_upper_);
-      };
-      // A restart parent can fail inside its own accepted transaction while the enclosing
-      // complete-hierarchy reconstruction still owns the original recipe. Restore that parent's
-      // exact prefix through the private non-executable projection, not the live shorter recipe.
-      if (interface_reconstruction_recipe_)
-        prepared.interface_scheduler.emplace(
-            interface_reconstruction_recipe_->rematerialized_reconstruction_prefix_(
-                static_cast<int>(prepared.primary_publication->hierarchy().num_levels()),
-                state_provider, geometry_provider));
-      else
-        prepared.interface_scheduler.emplace(interface_scheduler_->rematerialized(
-            static_cast<int>(prepared.primary_publication->hierarchy().num_levels()),
-            state_provider, geometry_provider));
-    }
-    prepared.collective_contract = exact_hierarchy_contract_(
-        prepared.primary_publication->hierarchy(), prepared.primary_publication->spatial_contract(),
-        primary_identity_, prepared.additional, lane_contract_identity_);
+    validate_snapshot_carriers_(snapshot.primary.hierarchy, snapshot.additional, additional_);
+    auto prepared =
+        prepare_primary_publication_(primary_->prepare_restore_publication(snapshot.primary),
+                                     snapshot.additional, snapshot.accepted_revision);
     if (snapshot.exact_collective_contract != prepared.collective_contract) {
       const auto mismatch = std::mismatch(
           snapshot.exact_collective_contract.begin(), snapshot.exact_collective_contract.end(),
@@ -980,22 +985,6 @@ class PreparedMultiBlockAmrHierarchy {
           " (snapshot bytes=" + std::to_string(snapshot.exact_collective_contract.size()) +
           ", restored bytes=" + std::to_string(prepared.collective_contract.size()) + ")");
     }
-    prepared.canonical_program_contract = exact_canonical_program_contract_(
-        prepared.collective_contract, primary_identity_, prepared.additional);
-    if (couplings_sealed_)
-      prepared.coupling_registry_contract =
-          exact_coupling_registry_contract_(prepared.collective_contract);
-    ExactContractBuilder contract;
-    contract.text("pops.prepared-multiblock-amr.restore")
-        .scalar(std::uint32_t{1})
-        .scalar(std::int32_t{Dim})
-        .bytes(collective_contract_)
-        .bytes(prepared.collective_contract)
-        .scalar(snapshot.accepted_revision);
-    prepared.restore_contract = std::move(contract).release();
-    prepared.accepted_revision = snapshot.accepted_revision;
-    prepared.source_accepted_revision = accepted_revision_;
-    prepared.source_collective_contract = collective_contract_;
     return prepared;
   }
 
@@ -1084,6 +1073,61 @@ class PreparedMultiBlockAmrHierarchy {
   }
 
  private:
+  PreparedRestore prepare_primary_publication_(
+      typename engine_type::PreparedRestorePublication publication,
+      std::vector<AdditionalBlock> additional, std::uint64_t revision) {
+    PreparedRestore prepared;
+    prepared.owner = this;
+    prepared.additional = std::move(additional);
+    prepared.primary_publication.emplace(std::move(publication));
+    if (interface_scheduler_) {
+      const auto state_provider = [&](std::size_t block, int level) -> field_type& {
+        if (block == 0)
+          return const_cast<field_type&>(
+              prepared.primary_publication->hierarchy().state(static_cast<std::size_t>(level)));
+        return prepared.additional.at(block - 1).levels.at(static_cast<std::size_t>(level));
+      };
+      const auto geometry_provider = [&](int level) {
+        return Geometry<Dim>::from_bounds(prepared.primary_publication->hierarchy()
+                                              .layout(static_cast<std::size_t>(level))
+                                              .domain(),
+                                          interface_lower_, interface_upper_);
+      };
+      // A restart parent can fail inside its own accepted transaction while the enclosing
+      // complete-hierarchy reconstruction still owns the original recipe. Restore that parent's
+      // exact prefix through the private non-executable projection, not the live shorter recipe.
+      if (interface_reconstruction_recipe_)
+        prepared.interface_scheduler.emplace(
+            interface_reconstruction_recipe_->rematerialized_reconstruction_prefix_(
+                static_cast<int>(prepared.primary_publication->hierarchy().num_levels()),
+                state_provider, geometry_provider));
+      else
+        prepared.interface_scheduler.emplace(interface_scheduler_->rematerialized(
+            static_cast<int>(prepared.primary_publication->hierarchy().num_levels()),
+            state_provider, geometry_provider));
+    }
+    prepared.collective_contract = exact_hierarchy_contract_(
+        prepared.primary_publication->hierarchy(), prepared.primary_publication->spatial_contract(),
+        primary_identity_, prepared.additional, lane_contract_identity_);
+    prepared.canonical_program_contract = exact_canonical_program_contract_(
+        prepared.collective_contract, primary_identity_, prepared.additional);
+    if (couplings_sealed_)
+      prepared.coupling_registry_contract =
+          exact_coupling_registry_contract_(prepared.collective_contract);
+    ExactContractBuilder contract;
+    contract.text("pops.prepared-multiblock-amr.restore")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .bytes(collective_contract_)
+        .bytes(prepared.collective_contract)
+        .scalar(revision);
+    prepared.restore_contract = std::move(contract).release();
+    prepared.accepted_revision = revision;
+    prepared.source_accepted_revision = accepted_revision_;
+    prepared.source_collective_contract = collective_contract_;
+    return prepared;
+  }
+
   PreparedMultiBlockAmrHierarchy(std::shared_ptr<engine_type> primary, std::string primary_identity,
                                  std::vector<AdditionalBlock> additional,
                                  std::shared_ptr<const ExecutionLane> lane,

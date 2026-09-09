@@ -98,12 +98,9 @@ subcycle_plan_type prepare_subcycling(
 void publish_regrid(::pops::amr::regridding::PreparedRegrid<Dim> prepared,
                     std::optional<field_type> child_state) const {
   require_facade_execution_();
-  require_history_free_for_topology_change_("regrid");
-  const int parent_level = prepared.source_level().level;
-  if (parent_level < 0)
-    throw std::invalid_argument("AMR Program regrid has no source level");
-  runtime_->publish_regrid(static_cast<std::size_t>(parent_level), std::move(prepared),
-                           std::move(child_state));
+  if (all_reduce_max(history_levels_.empty() ? 0L : 1L, prepared_execution_lane()) != 0)
+    throw std::runtime_error("AmrProgramContext regrid requires history-free state on every rank");
+  facade_->publish_prepared_amr_program_regrid_(std::move(prepared), std::move(child_state));
 }
 
 PreparedRebalanceDecision<Dim> prepare_rebalance(
@@ -124,8 +121,11 @@ PreparedRebalanceDecision<Dim> prepare_rebalance(
 void apply_rebalance(std::size_t selected, PreparedRebalanceDecision<Dim> decision,
                      field_type remapped_state) const {
   require_facade_execution_();
-  require_history_free_for_topology_change_("rebalance");
-  runtime_->apply_rebalance(selected, std::move(decision), std::move(remapped_state));
+  if (all_reduce_max(history_levels_.empty() ? 0L : 1L, prepared_execution_lane()) != 0)
+    throw std::runtime_error(
+        "AmrProgramContext rebalance requires history-free state on every rank");
+  facade_->apply_prepared_amr_program_rebalance_(selected, std::move(decision),
+                                                 std::move(remapped_state));
 }
 
 template <class Payload, class Axpy>
