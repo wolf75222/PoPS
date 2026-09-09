@@ -37,6 +37,9 @@ from tests.python.support.native_execution_context import artifact_execution_con
 
 
 _HIERARCHY_BASE_CELLS = 8
+# The resolved transfer buffer (2) plus lookahead (1) fully covers a centered N8 profile.
+# Refined configurations retain that reach and use enough cells for genuine C/F interfaces.
+_HIERARCHY_REFINED_BASE_CELLS = 16
 _HIERARCHY_DT = 0.01
 _HIERARCHY_ROTATION_RATE = 3.0
 _HIERARCHY_DENSITY = 2.0
@@ -740,15 +743,36 @@ def _external_hierarchy_carry_metrics(so_path):
     )
 
 
-def _nonuniform_plasma_initial():
-    coordinate = (
-        np.arange(_HIERARCHY_BASE_CELLS, dtype=np.float64) + 0.5
-    ) / _HIERARCHY_BASE_CELLS
+def _nonuniform_plasma_initial(cells=_HIERARCHY_BASE_CELLS):
+    coordinate = (np.arange(cells, dtype=np.float64) + 0.5) / cells
     x, y = np.meshgrid(coordinate, coordinate, indexing="xy")
     density = 1.0 + 0.20 * np.exp(-80.0 * ((x - 0.40) ** 2 + (y - 0.55) ** 2))
     east = density * (0.25 + 0.08 * np.sin(2.0 * np.pi * y))
     north = density * (-0.15 + 0.06 * np.cos(2.0 * np.pi * x))
     return np.ascontiguousarray(np.stack((density, east, north)))
+
+
+def _assert_partial_hierarchy(simulation, *, max_levels, base_cells):
+    """Require actual child patches and uncovered valid parent cells at every transition."""
+    patches = tuple(simulation.patch_boxes())
+    parent_valid = np.ones((base_cells, base_cells), dtype=bool)
+    for child in range(1, max_levels):
+        cells = base_cells * 2 ** child
+        child_valid = np.zeros((cells, cells), dtype=bool)
+        child_patches = [(lower, upper) for level, lower, upper in patches if level == child]
+        assert child_patches, "level %d has no actual fine patches" % child
+        for lower, upper in child_patches:
+            assert all(0 <= lower[axis] <= upper[axis] < cells for axis in range(2))
+            assert all(lower[axis] % 2 == 0 and (upper[axis] + 1) % 2 == 0 for axis in range(2))
+            child_valid[lower[1]:upper[1] + 1, lower[0]:upper[0] + 1] = True
+        covered = child_valid.reshape(cells // 2, 2, cells // 2, 2).all(axis=(1, 3))
+        assert np.any(covered)
+        assert not np.any(covered & ~parent_valid), "fine patches exceed valid parent coverage"
+        assert np.any(parent_valid & ~covered), (
+            "level %d fully covers its valid parent; the C/F ledger oracle requires partial cover"
+            % child
+        )
+        parent_valid = child_valid
 
 
 def _manufactured_plasma_initial(cells):
@@ -1327,14 +1351,14 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         # dense-oracle case distinguishes it from the generic scalar constant extrapolation.
         (1, 1, True, True, _HIERARCHY_BASE_CELLS),
         # Preserve the two-step outflow/reflux/history-carry composition.
-        (2, 2, True, False, _HIERARCHY_BASE_CELLS),
+        (2, 2, True, False, _HIERARCHY_REFINED_BASE_CELLS),
         # Independently quantify the nonzero two-level solve at h and h/2.
-        (2, 1, False, True, _HIERARCHY_BASE_CELLS),
-        (2, 1, False, True, 2 * _HIERARCHY_BASE_CELLS),
+        (2, 1, False, True, _HIERARCHY_REFINED_BASE_CELLS),
+        (2, 1, False, True, 2 * _HIERARCHY_REFINED_BASE_CELLS),
         # Keep N-level gather/publish with one shared physical stage. Nonbinary temporal
         # subcycling is outside this synchronized solve contract; it must not be silently aligned.
         # The nonzero N-level scientific gate remains open for the general FAC MMS.
-        (3, 1, False, False, _HIERARCHY_BASE_CELLS),
+        (3, 1, False, False, _HIERARCHY_REFINED_BASE_CELLS),
     )
     for (
         max_levels,
@@ -1366,7 +1390,7 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         simulation = pops.bind(
             compiled,
             initial_values=(
-                {plasma_state: _nonuniform_plasma_initial()}
+                {plasma_state: _nonuniform_plasma_initial(base_cells)}
                 if bound_plasma and not manufactured_plasma
                 else None
             ),
@@ -1381,6 +1405,10 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         assert bound_execution >= before_bind[2]
         assert bound_solve == before_bind[3]
         assert simulation.n_levels() == max_levels
+        if max_levels > 1:
+            _assert_partial_hierarchy(
+                simulation, max_levels=max_levels, base_cells=base_cells
+            )
 
         manufactured_oracle = None
         if manufactured_plasma:
@@ -1506,8 +1534,8 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
 
         if not manufactured_plasma:
             # N-level orchestration guard: every qualified level receives the exact local implicit
-            # rotation for the spatial zero mode, while ratios 3 then 5 remain distinct from spatial
-            # ratio two.  The independent nonzero scientific proof is the refined MMS pair below.
+            # rotation for the spatial zero mode on synchronized clocks and spatial ratio two.
+            # The independent nonzero scientific proof is the refined MMS pair below.
             for level in range(max_levels):
                 actual = np.asarray(
                     simulation.block_level_state_global("plasma", level),
@@ -1630,15 +1658,15 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
     assert flat_periodic_fallback_proved
     assert flat_dirichlet_fallback_proved
     assert set(manufactured_errors) == {
-        _HIERARCHY_BASE_CELLS,
-        2 * _HIERARCHY_BASE_CELLS,
+        _HIERARCHY_REFINED_BASE_CELLS,
+        2 * _HIERARCHY_REFINED_BASE_CELLS,
     }
     observed_order = np.log(
-        manufactured_errors[_HIERARCHY_BASE_CELLS]
-        / manufactured_errors[2 * _HIERARCHY_BASE_CELLS]
+        manufactured_errors[_HIERARCHY_REFINED_BASE_CELLS]
+        / manufactured_errors[2 * _HIERARCHY_REFINED_BASE_CELLS]
     ) / np.log(2.0)
     assert observed_order >= 1.5, {
-        "coarse_8_relative_l2": manufactured_errors[_HIERARCHY_BASE_CELLS],
-        "coarse_16_relative_l2": manufactured_errors[2 * _HIERARCHY_BASE_CELLS],
+        "coarse_16_relative_l2": manufactured_errors[_HIERARCHY_REFINED_BASE_CELLS],
+        "coarse_32_relative_l2": manufactured_errors[2 * _HIERARCHY_REFINED_BASE_CELLS],
         "observed_order": observed_order,
     }
