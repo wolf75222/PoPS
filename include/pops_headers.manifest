@@ -263,6 +263,9 @@ api pops/runtime/numerical_defaults.hpp
 sdk-support pops/runtime/output/hdf5_collective.hpp
 sdk-support pops/runtime/output_piece.hpp
 sdk-support pops/runtime/output_piece_collective.hpp
+sdk-support pops/runtime/program/amr_history_flux_snapshot.hpp
+sdk-support pops/runtime/program/amr_history_flux_snapshot_codec.hpp
+sdk-support pops/runtime/program/amr_history_flux_snapshot_execution.hpp
 sdk-support pops/runtime/program/amr_program_checkpoint.hpp
 sdk-support pops/runtime/program/amr_program_context_cell_temporal_runtime.inc
 sdk-support pops/runtime/program/amr_program_context_cell_temporal_configuration.inc
