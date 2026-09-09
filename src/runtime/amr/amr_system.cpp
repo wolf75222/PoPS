@@ -2,6 +2,7 @@
 /// @brief Exact compile-time-ranked AMR facade over runtime::amr::AmrRuntime<Dim>.
 
 #include <pops/runtime/amr_system.hpp>
+#include <pops/runtime/program/history_sample_identity_codec.hpp>
 #include <pops/runtime/program/amr_history_flux_snapshot_codec.hpp>
 
 #include <pops/amr/hierarchy/amr_hierarchy.hpp>
@@ -748,6 +749,7 @@ struct PreparedHistoryHierarchyImages {
     std::string clock_identity;
     std::string interpolation_identity;
     std::vector<Real> slot_dt;
+    std::vector<runtime::program::HistorySampleIdentity> slot_sample;
     std::vector<PreparedSparseFieldGather<Dim>> slots;
   };
 
@@ -1113,6 +1115,18 @@ bool retained_image_covers_layout(const SparseFieldImage<Dim>& image,
       if (image.populated[offset(unflatten(patch, ordinal), image.domain)] == 0)
         return false;
   return true;
+}
+
+template <int Dim>
+bool retained_image_overlaps_layout(const SparseFieldImage<Dim>& image,
+                                    const amr::hierarchy::LevelLayout<Dim>& layout) {
+  if (image.domain != layout.domain() || image.populated.size() != checked_cells(image.domain))
+    return false;
+  for (const Box<Dim>& patch : layout.patches().boxes())
+    for (std::size_t ordinal = 0; ordinal < checked_cells(patch); ++ordinal)
+      if (image.populated[offset(unflatten(patch, ordinal), image.domain)] != 0)
+        return true;
+  return false;
 }
 
 template <int Dim>
@@ -8382,7 +8396,7 @@ struct AmrSystem<Dim>::Impl {
                                      "AMR Program accepted-state capture");
       for (std::size_t slot = 0; slot < ring.size(); ++slot)
         result.push_back({name, level, static_cast<int>(slot), static_cast<double>(dts[slot]),
-                          initialized, fill_count});
+                          initialized, fill_count, program.hist_.slot_sample.at(key).at(slot)});
     }
     std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) {
       return std::tie(left.name, left.level, left.slot) <
@@ -8723,6 +8737,9 @@ struct AmrSystem<Dim>::Impl {
         image.clock_identity = program.hist_.clock_identity.at(key);
         image.interpolation_identity = program.hist_.interpolation_identity.at(key);
         image.slot_dt = slot_dt;
+        image.slot_sample = program.hist_.slot_sample.at(key);
+        if (image.slot_sample.size() != ring.size())
+          throw std::invalid_argument("AMR history sample identities differ from the ring depth");
         image.slots.reserve(ring.size());
         exact.text(image.key)
             .scalar(image.level)
@@ -8738,6 +8755,13 @@ struct AmrSystem<Dim>::Impl {
             .scalar(static_cast<std::uint64_t>(image.slot_dt.size()));
         for (const Real dt : image.slot_dt)
           exact.scalar(dt);
+        for (const auto& sample : image.slot_sample) {
+          sample.validate();
+          exact.scalar(sample.kind)
+              .scalar(sample.start_bits)
+              .scalar(sample.interval_bits)
+              .scalar(sample.ordinal);
+        }
         for (const field_type& slot : ring) {
           image.slots.push_back(prepare_sparse_field_gather(slot, domain, communicator));
           exact.bytes(image.slots.back().exact_contract);
@@ -8841,6 +8865,7 @@ struct AmrSystem<Dim>::Impl {
         candidate->clock_identity.erase(key);
         candidate->interpolation_identity.erase(key);
         candidate->slot_dt.erase(key);
+        candidate->slot_sample.erase(key);
       }
       if (fine_layout != nullptr) {
         const int child_level = parent_level + 1;
@@ -8889,7 +8914,7 @@ struct AmrSystem<Dim>::Impl {
                 relation.remainder_policy() == ::pops::amr::RemainderPolicy::IntegralOnly &&
                 !program.hist_.store_pending.at(parent_key);
             if (parent->second.size() > 2 && exact_direct_clock && ratio.numerator == 1) {
-              // Equal clocks authenticate the same past instants slot by slot.  Project those
+              // Equal clocks and authenticated sample IDs align mixed-source slots. Project those
               // actual parent samples onto newly covered cells; keep the aligned child samples
               // wherever they already exist.  This performs no temporal interpolation, replay,
               // or CopyCurrent initialization of an earned lag.  The artifact callback also
@@ -8916,6 +8941,14 @@ struct AmrSystem<Dim>::Impl {
                    previous->interpolation_identity != descriptor.interpolation_identity))
                 throw std::invalid_argument(
                     "AMR Program aligned state history projection has unaligned child samples");
+              if (previous != nullptr)
+                for (std::size_t slot = 0; slot < previous->slots.size(); ++slot)
+                  if (retained_image_overlaps_layout(previous->slots[slot].image, *fine_layout) &&
+                      (!previous->slot_sample[slot].authenticated() ||
+                       previous->slot_sample[slot] !=
+                           program.hist_.slot_sample.at(parent_key).at(slot)))
+                    throw std::invalid_argument(
+                        "AMR Program aligned state history projection has unaligned child samples");
               source = runtime::program::AmrProgramHistoryRemapSource::ParentAlignedState;
             } else if (parent->second.size() != 2 || program.hist_.depth.at(parent_key) != 2 ||
                        !exact_direct_clock || (ratio.numerator != 1 && ratio.numerator != 2) ||
@@ -8962,6 +8995,9 @@ struct AmrSystem<Dim>::Impl {
                                        : previous->interpolation_identity);
           candidate->slot_dt.insert_or_assign(
               child_key, parent_source ? program.hist_.slot_dt.at(parent_key) : previous->slot_dt);
+          candidate->slot_sample.insert_or_assign(
+              child_key,
+              parent_source ? program.hist_.slot_sample.at(parent_key) : previous->slot_sample);
           remap_plan.push_back({child_key, parent_source ? parent_key : std::string{}, source});
           const amr::transfer::TransferKind transfer_kind =
               regrid_transfer_kind(parent_level, static_cast<std::size_t>(runtime_owner));
@@ -16032,7 +16068,7 @@ void AmrSystem<Dim>::stage_bootstrap_analytic_state_impl(
     return programs;
   };
   std::vector<analytic::AnalyticProgram> programs;
-  if (p_->prepared_hierarchy && p_->prepared_hierarchy->lane) {
+  if (p_->package_assembly_lane) {
     const std::array<analytic::AnalyticTextMetadata, 6> text{
         {{"centering", centering},
          {"projection", projection},
@@ -16053,7 +16089,7 @@ void AmrSystem<Dim>::stage_bootstrap_analytic_state_impl(
         "AmrSystem::stage_bootstrap_analytic_state", std::span(text),
         gaussian ? std::span<const analytic::AnalyticRealMetadata>(parameters)
                  : std::span<const analytic::AnalyticRealMetadata>{},
-        opcodes, literals, prepare, p_->prepared_hierarchy->lane->communicator());
+        opcodes, literals, prepare, p_->require_package_assembly_lane().communicator());
   } else {
     programs = prepare();
   }
@@ -16094,7 +16130,7 @@ void AmrSystem<Dim>::stage_bootstrap_array(const std::string& subject_id,
     return values;
   };
   std::vector<double> state;
-  if (p_->prepared_hierarchy && p_->prepared_hierarchy->lane) {
+  if (p_->package_assembly_lane) {
     const auto canonicalize = [&] {
       ExactContractBuilder contract;
       contract.text("pops.amr.bootstrap-array")
@@ -16114,7 +16150,7 @@ void AmrSystem<Dim>::stage_bootstrap_array(const std::string& subject_id,
     };
     state = analytic::collectively_prepare_exact_analytic_request(
         "AmrSystem::stage_bootstrap_array", prepare, canonicalize,
-        p_->prepared_hierarchy->lane->communicator());
+        p_->require_package_assembly_lane().communicator());
   } else {
     state = prepare();
   }
@@ -19095,6 +19131,10 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
             provisional_histories->interpolation_identity.emplace(key, descriptor.interpolation);
             provisional_histories->slot_dt.emplace(
                 key, std::vector<Real>(static_cast<std::size_t>(descriptor.depth), Real(0)));
+            provisional_histories->slot_sample.emplace(
+                key, std::vector<runtime::program::HistorySampleIdentity>(
+                         static_cast<std::size_t>(descriptor.depth),
+                         runtime::program::HistorySampleIdentity::zero_start()));
           }
         }
       }
@@ -19541,12 +19581,16 @@ void AmrSystem<Dim>::set_history_initialized(const std::string& name, int level,
   p_->ensure_engine();
   const int fill = initialized ? p_->history_descriptor(name).depth : 0;
   const std::string key = p_->history_level_key(name, level);
+  auto& identities = p_->program.hist_.slot_sample.at(key);
+  if (identities.size() != p_->program.hist_.histories.at(key).size())
+    throw std::invalid_argument("AMR history sample metadata has an invalid depth");
   require_amr_history_provenance(p_->program.hist_.slot_dt.at(key),
                                  p_->history_descriptor(name).depth, initialized, fill,
                                  "AMR history initialized restore");
   p_->program.hist_.initialized.at(key) = initialized;
   p_->program.hist_.fill_count.at(key) = fill;
   p_->program.hist_.store_pending.at(key) = false;
+  std::fill(identities.begin(), identities.end(), runtime::program::HistorySampleIdentity{});
 }
 
 template <int Dim>
@@ -19557,11 +19601,15 @@ void AmrSystem<Dim>::restore_history_fill_count(const std::string& name, int lev
   if (fill_count < 0 || fill_count > depth)
     throw std::invalid_argument("AMR history fill count lies outside its exact ring depth");
   const std::string key = p_->history_level_key(name, level);
+  auto& identities = p_->program.hist_.slot_sample.at(key);
+  if (identities.size() != p_->program.hist_.histories.at(key).size())
+    throw std::invalid_argument("AMR history sample metadata has an invalid depth");
   require_amr_history_provenance(p_->program.hist_.slot_dt.at(key), depth, fill_count > 0,
                                  fill_count, "AMR history fill-count restore");
   p_->program.hist_.fill_count.at(key) = fill_count;
   p_->program.hist_.initialized.at(key) = fill_count > 0;
   p_->program.hist_.store_pending.at(key) = false;
+  std::fill(identities.begin(), identities.end(), runtime::program::HistorySampleIdentity{});
 }
 
 template <int Dim>
@@ -19572,6 +19620,9 @@ void AmrSystem<Dim>::restore_history_metadata(const std::string& name, int level
   if (fill_count < 0 || fill_count > depth)
     throw std::invalid_argument("AMR history fill count lies outside its exact ring depth");
   const std::string key = p_->history_level_key(name, level);
+  auto& identities = p_->program.hist_.slot_sample.at(key);
+  if (identities.size() != p_->program.hist_.histories.at(key).size())
+    throw std::invalid_argument("AMR history sample metadata has an invalid depth");
   if (!p_->program.hist_.initialized.contains(key) || !p_->program.hist_.fill_count.contains(key) ||
       !p_->program.hist_.store_pending.contains(key))
     throw std::logic_error("AMR history publication metadata is incomplete");
@@ -19580,6 +19631,7 @@ void AmrSystem<Dim>::restore_history_metadata(const std::string& name, int level
   p_->program.hist_.initialized.at(key) = initialized;
   p_->program.hist_.fill_count.at(key) = fill_count;
   p_->program.hist_.store_pending.at(key) = false;
+  std::fill(identities.begin(), identities.end(), runtime::program::HistorySampleIdentity{});
 }
 
 template <int Dim>
@@ -19601,6 +19653,9 @@ void AmrSystem<Dim>::restore_history_provenance(const std::string& name, int lev
   require_amr_history_provenance(candidate, depth, initialized, fill_count,
                                  "AMR history provenance restore");
   const std::string key = p_->history_level_key(name, level);
+  auto& identities = p_->program.hist_.slot_sample.at(key);
+  if (identities.size() != p_->program.hist_.histories.at(key).size())
+    throw std::invalid_argument("AMR history sample metadata has an invalid depth");
   auto candidate_slot_dt = p_->program.hist_.slot_dt.find(key);
   if (!p_->program.hist_.initialized.contains(key) || !p_->program.hist_.fill_count.contains(key) ||
       !p_->program.hist_.store_pending.contains(key) ||
@@ -19612,6 +19667,7 @@ void AmrSystem<Dim>::restore_history_provenance(const std::string& name, int lev
   p_->program.hist_.initialized.at(key) = initialized;
   p_->program.hist_.fill_count.at(key) = fill_count;
   p_->program.hist_.store_pending.at(key) = false;
+  std::fill(identities.begin(), identities.end(), runtime::program::HistorySampleIdentity{});
 }
 
 template <int Dim>
@@ -19662,9 +19718,61 @@ void AmrSystem<Dim>::restore_history(const std::string& name, int level, int slo
                            "AMR history restore level size overflow");
   if (values.size() != expected)
     throw std::invalid_argument("AMR history restore payload has the wrong exact-ranked size");
+  // Numeric restoration alone cannot attest which accepted publication produced these values.
+  // The separately authenticated whole-ledger restore follows all numeric anchor writes.
+  auto& sample = p_->program.hist_.slot_sample.at(key).at(static_cast<std::size_t>(slot));
   auto& field = p_->program.hist_.histories.at(key)[static_cast<std::size_t>(slot)];
   write_field(field, p_->engine->hierarchy().layout(static_cast<std::size_t>(level)).domain(),
               values, descriptor.components);
+  sample = {};
+}
+
+template <int Dim>
+std::vector<std::uint8_t> AmrSystem<Dim>::history_sample_identity(const std::string& name,
+                                                                  int level) const {
+  if (!p_->engine)
+    throw std::logic_error("AMR history sample capture requires an already materialized hierarchy");
+  const auto key = p_->history_level_key(name, level);
+  const auto& samples = p_->program.hist_.slot_sample.at(key);
+  if (samples.size() != static_cast<std::size_t>(p_->history_descriptor(name).depth))
+    throw std::invalid_argument("AMR history sample identity depth differs from its descriptor");
+  for (std::size_t slot = 0; slot < samples.size(); ++slot)
+    runtime::program::validate_history_sample_provenance(
+        samples[slot], p_->program.hist_.initialized.at(key),
+        p_->program.hist_.slot_dt.at(key).at(slot));
+  return runtime::program::encode_history_sample_identity(name, level, samples);
+}
+
+template <int Dim>
+void AmrSystem<Dim>::restore_history_sample_identity(const std::string& name, int level,
+                                                     const std::vector<std::uint8_t>& bytes) {
+  p_->ensure_engine();
+  const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR history sample restore");
+  std::string key;
+  auto candidate = analytic::collectively_prepare_exact_analytic_request(
+      "AmrSystem::restore_history_sample_identity",
+      [&] {
+        key = p_->history_level_key(name, level);
+        const auto depth = static_cast<std::size_t>(p_->history_descriptor(name).depth);
+        if (p_->program.hist_.slot_sample.at(key).size() != depth)
+          throw std::invalid_argument("AMR history sample restore has an invalid registered depth");
+        auto restored = runtime::program::decode_history_sample_identity(bytes, name, level, depth);
+        for (std::size_t slot = 0; slot < depth; ++slot)
+          runtime::program::validate_history_sample_provenance(
+              restored[slot], p_->program.hist_.initialized.at(key),
+              p_->program.hist_.slot_dt.at(key).at(slot));
+        return restored;
+      },
+      [&] {
+        ExactContractBuilder proof;
+        proof.text("pops.amr.history-sample-restore")
+            .text(name)
+            .scalar(level)
+            .bytes(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+        return std::move(proof).release();
+      },
+      lane.communicator());
+  p_->program.hist_.slot_sample.at(key).swap(candidate);
 }
 
 template <int Dim>
@@ -19695,7 +19803,9 @@ void AmrSystem<Dim>::restore_history_slot_dt(const std::string& name, int level,
   require_amr_history_provenance(candidate, depth, p_->program.hist_.initialized.at(key),
                                  p_->program.hist_.fill_count.at(key),
                                  "AMR history outgoing-dt restore");
+  auto& sample = p_->program.hist_.slot_sample.at(key).at(static_cast<std::size_t>(slot));
   p_->program.hist_.slot_dt.at(key).swap(candidate);
+  sample = {};
 }
 
 template <int Dim>
@@ -20864,6 +20974,10 @@ void AmrSystem<Dim>::materialize_program_restart_histories(const std::vector<std
         candidate.interpolation_identity.emplace(key, descriptor.interpolation_identity);
         candidate.slot_dt.emplace(
             key, std::vector<Real>(static_cast<std::size_t>(descriptor.depth), Real(0)));
+        candidate.slot_sample.emplace(key,
+                                      std::vector<runtime::program::HistorySampleIdentity>(
+                                          static_cast<std::size_t>(descriptor.depth),
+                                          runtime::program::HistorySampleIdentity::zero_start()));
       }
     }
     contract = std::move(exact).release();
@@ -21702,6 +21816,10 @@ template std::vector<double> AmrSystem<kNativeDimension>::history_global(const s
                                                                          int) const;
 template void AmrSystem<kNativeDimension>::restore_history(const std::string&, int, int,
                                                            const std::vector<double>&);
+template std::vector<std::uint8_t> AmrSystem<kNativeDimension>::history_sample_identity(
+    const std::string&, int) const;
+template void AmrSystem<kNativeDimension>::restore_history_sample_identity(
+    const std::string&, int, const std::vector<std::uint8_t>&);
 template double AmrSystem<kNativeDimension>::history_slot_dt(const std::string&, int, int) const;
 template void AmrSystem<kNativeDimension>::restore_history_slot_dt(const std::string&, int, int,
                                                                    double);

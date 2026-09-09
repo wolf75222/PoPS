@@ -505,3 +505,12 @@ def test_history_flux_utilities_are_bounded_stateless_upstream_authorities() -> 
     assert "history_flux_expressions_" in counted
     assert "publish_history_flux_snapshots_" in counted
     assert "prepare_remapped_history_flux_faces_" in counted
+
+
+def test_history_sample_codec_is_bounded_exact_metadata_only() -> None:
+    path = "pops/runtime/program/history_sample_identity_codec.hpp"
+    source = (INCLUDE / path).read_text(encoding="utf-8")
+    assert len(source.splitlines()) <= 110
+    assert set(_local_includes(source)) == {"pops/runtime/program/program_runtime_state.hpp"}
+    assert not re.search(r"\b(?:AmrProgramContext|AmrSystem|MultiFab|Kokkos|HistoryManager)\b", source)
+    assert "field_values" not in source

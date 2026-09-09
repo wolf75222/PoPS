@@ -885,6 +885,7 @@ TEST(GeneratedAmrSystemBlock, ScalarParentPreparationRefreshesSparsePeriodicGhos
   }
   pops::AmrSystem<Dim> system(config);
   pops::test::install_amr_runtime_authority(system, "tests.generated-amr/scalar-parent");
+  system.set_temporal_relations({1}, {1}, {"integral_only"});
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
@@ -1000,8 +1001,12 @@ TEST(GeneratedAmrSystemBlock, ScalarParentPreparationRefreshesSparsePeriodicGhos
         context->rotate_histories("clock.macro");
       }
     });
+  context->install([](double) {}, context);
+  const auto parent_samples = system.history_sample_identity("tracer.prior", 0);
+  const auto child_samples = system.history_sample_identity("tracer.prior", 1);
+  system.begin_restart_transaction();
   // A parent-only publication leaves saturated counts and constant dt prefixes equal, but
-  // advances the parent's actual sample. Metadata equality cannot create a gather authority.
+  // advances the actual sample. Test its refusal INSIDE the genuine synchronized gather scope.
   context->with_program_resource_level(0, [&] {
     context->begin_step(0.25);
     auto value = context->scratch_state_like(context->state(0));
@@ -1009,11 +1014,44 @@ TEST(GeneratedAmrSystemBlock, ScalarParentPreparationRefreshesSparsePeriodicGhos
     context->store_history("tracer.prior", value, 0);
     context->rotate_histories("clock.macro");
   });
-  context->with_program_resource_level(1, [&] {
-    auto& prior = context->history("tracer.prior", 1, 0);
-    EXPECT_ANY_THROW(context->prepare_condensed_prior(0, prior));
-    EXPECT_ANY_THROW(context->with_synchronized_field_gather([&] {}));
-  });
+  const auto gather = [&](bool reject) {
+    bool entered = false;
+    context->advance_synchronized_hierarchy(
+        .25,
+        [&](double) {
+          if (context->level() != 0)
+            return;
+          context->with_synchronized_field_gather([&] {
+            context->with_program_attempt_level(1, [&] {
+              entered = true;
+              auto& prior = context->history("tracer.prior", 1, 0);
+              if (!reject) {
+                EXPECT_NO_THROW(context->prepare_condensed_prior(0, prior));
+                return;
+              }
+              std::string reason;
+              try {
+                context->prepare_condensed_prior(0, prior);
+              } catch (const std::exception& error) {
+                reason = error.what();
+              }
+              EXPECT_EQ(reason,
+                        pops::n_ranks() == 1
+                            ? "AMR prior-field history parent has a different publication sample"
+                            : "composite spatial preparation failed collectively");
+            });
+          });
+        },
+        true);
+    EXPECT_TRUE(entered);
+  };
+  gather(true);
+  system.rollback_restart_transaction();
+  EXPECT_EQ(system.history_sample_identity("tracer.prior", 0), parent_samples);
+  EXPECT_EQ(system.history_sample_identity("tracer.prior", 1), child_samples);
+  // Restored identical accepted windows must pass the SAME entrypoint; a scope rejection would
+  // make this positive control fail. Rollback also restores the per-window publication ordinal.
+  gather(false);
 }
 
 TEST(GeneratedAmrSystemBlock, SparseParentRegridRequiresOnlyChildInterpolationSources) {
@@ -2270,6 +2308,8 @@ TEST(GeneratedAmrSystemBlock, AlignedFourSlotHistoryProjectsEarnedSamplesAtomica
   for (int slot = 0; slot < 4; ++slot)
     old_slots.push_back(system.history_global("tracer.U", 1, slot));
   // The retained partial layout and parent must refer to exactly the same sample instants.
+  const auto parent_identity = system.history_sample_identity("tracer.U", 0);
+  const auto child_identity = system.history_sample_identity("tracer.U", 1);
   const double authentic_dt = system.history_slot_dt("tracer.U", 1, 2);
   system.restore_history_slot_dt("tracer.U", 1, 2, authentic_dt * 2.0);
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
@@ -2284,6 +2324,21 @@ TEST(GeneratedAmrSystemBlock, AlignedFourSlotHistoryProjectsEarnedSamplesAtomica
   for (int slot = 0; slot < 4; ++slot)
     EXPECT_EQ(system.history_global("tracer.U", 1, slot), old_slots[slot]);
   system.restore_history_slot_dt("tracer.U", 1, 2, authentic_dt);
+  // Unknown==Unknown is not chronology evidence when retained and parent cells will be mixed.
+  system.restore_history_sample_identity("tracer.U", 0, {});
+  system.restore_history_sample_identity("tracer.U", 1, {});
+  system.execute_prepared_tagging(0);
+  const auto unknown_before_failure = system.program_accepted_state();
+  if (Observer::lane_size(*context) == 1)
+    EXPECT_THROW(system.regrid_from_prepared_tagging(0), std::invalid_argument);
+  else
+    EXPECT_THROW(system.regrid_from_prepared_tagging(0), std::runtime_error);
+  EXPECT_EQ(system.patch_boxes(), old_boxes);
+  EXPECT_EQ(system.program_accepted_state(), unknown_before_failure);
+  for (int slot = 0; slot < 4; ++slot)
+    EXPECT_EQ(system.history_global("tracer.U", 1, slot), old_slots[slot]);
+  system.restore_history_sample_identity("tracer.U", 0, parent_identity);
+  system.restore_history_sample_identity("tracer.U", 1, child_identity);
   system.execute_prepared_tagging(0);
   Observer::Observation observation;
   Observer::install_one_shot_observer(*context, observation);
@@ -2849,6 +2904,9 @@ TEST(GeneratedAmrSystemBlock, ConstantBootstrapReprojectionPreservesExactValue) 
   constexpr const char* route = "tests.generated-amr/exact-constant/state";
   pops::AmrSystemConfig<Dim> config;
   config.level_count = 3;
+  config.transition_ratios.assign(2, pops::runtime_config_detail::filled_extent<Dim>(2));
+  config.transition_buffers.assign(2, pops::runtime_config_detail::filled_extent<Dim>(2));
+  config.transition_lookaheads.assign(2, pops::runtime_config_detail::filled_extent<Dim>(2));
   config.regrid_every = 0;
   config.explicit_bootstrap = true;
   for (int axis = 0; axis < Dim; ++axis) {
@@ -2973,6 +3031,34 @@ TEST(GeneratedAmrSystemBlock, GaussianBootstrapRejectsMpiProfileMismatchBeforeVa
   pops::test::install_prepared_threshold_union(
       system, {{"tracer", "u", .5, pops::test::PreparedThresholdRelation::Above, route}},
       "tests.generated-amr/mpi-gaussian-tagging@1");
+  constexpr const char* array_route = "tests.generated-amr/mpi-gaussian/array-state";
+  system.install_block_state_route("array-tracer", array_route);
+  pops::add_compiled_model<Dim>(system, "array-tracer", advection_model<Dim>());
+  system.bind_bootstrap_subject(array_route, "array-tracer", "array_field");
+  std::vector<double> array_values(cell_count(config.shape), 2.0);
+  const auto stage_array = [&](const auto& shape, const auto& values) {
+    system.stage_bootstrap_array(array_route, "array-tracer", "cell", "cell", 1, shape, values);
+  };
+  const auto refused_array = [&](const auto& shape, const auto& values, const char* expected) {
+    std::string reason;
+    try {
+      stage_array(shape, values);
+    } catch (const std::exception& error) {
+      reason = error.what();
+    }
+    EXPECT_NE(reason.find(expected), std::string::npos) << reason;
+    EXPECT_EQ(pops::all_reduce_sum(reason.empty() ? 0L : 1L), 2L);
+  };
+  auto divergent_values = array_values;
+  if (pops::my_rank() == 1)
+    divergent_values.front() = 3.0;
+  refused_array(config.shape, divergent_values, "analytic request differs across MPI ranks");
+  auto invalid_shape = config.shape;
+  if (pops::my_rank() == 1)
+    --invalid_shape[0];
+  refused_array(invalid_shape, array_values,
+                "rank-local analytic validation failed collectively on 1 rank(s)");
+  EXPECT_NO_THROW(stage_array(config.shape, array_values));
   system.bind_bootstrap_subject(route, "tracer", "gaussian_field");
   pops::analytic::GaussianCellAverageProfile<Dim> profile;
   profile.inverse_width = Real(80);
@@ -3010,10 +3096,14 @@ TEST(GeneratedAmrSystemBlock, GaussianBootstrapRejectsMpiProfileMismatchBeforeVa
   // Both refusals precede source publication: the same subject remains available for valid staging.
   EXPECT_NO_THROW(stage(profile));
   system.begin_bootstrap_plan();
-  system.set_program_block_map({0});
+  system.set_program_block_map({0, 1});
   EXPECT_EQ(
       system.materialize_bootstrap_action(route, "initialize_level_zero", "gaussian_field", 0),
       cell_count(config.shape));
+  EXPECT_EQ(
+      system.materialize_bootstrap_action(array_route, "initialize_level_zero", "array_field", 0),
+      cell_count(config.shape));
+  EXPECT_EQ(system.block_level_state("array-tracer", 0), array_values);
   const auto state = system.block_level_state("tracer", 0);
   ASSERT_EQ(state.size(), cell_count(config.shape));
   long double moment = 0;

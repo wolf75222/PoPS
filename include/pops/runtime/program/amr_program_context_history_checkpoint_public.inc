@@ -123,6 +123,8 @@ void register_history(const std::string& name, int lag, int ncomp, int program_o
   manager.clock_identity[key] = clock_identity;
   manager.interpolation_identity[key] = interpolation_identity;
   manager.slot_dt[key] = std::vector<Real>(static_cast<std::size_t>(depth), Real(0));
+  manager.slot_sample[key].assign(static_cast<std::size_t>(depth),
+                                  HistorySampleIdentity::zero_start());
   history_flux_expressions_.emplace(key,
                                     std::vector<FluxExpression>(static_cast<std::size_t>(depth)));
   history_levels_.emplace(key, active_level_);

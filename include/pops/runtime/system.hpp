@@ -1203,6 +1203,11 @@ class System {
   /// Program. The per-slot outgoing dt is exposed so the checkpoint records the exact interval
   /// between adjacent state samples and replay reproduces a variable-dt history bit-for-bit.
   /// @{
+  /// Canonical noncollective typed ledger. Empty restore bytes explicitly mark legacy unknowns.
+  POPS_EXPORT std::vector<std::uint8_t> history_sample_identity(const std::string& name) const;
+  POPS_EXPORT void restore_history_sample_identity(const std::string& name,
+                                                   const std::vector<std::uint8_t>& bytes);
+
   /// The outgoing dt from slot @p slot toward its newer neighbour (HistoryManager::slot_dt). 0 for a
   /// slot that was never stored (a never-stepped ring). @throws if @p name is unknown or @p slot out
   /// of range.

@@ -1577,6 +1577,21 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           },
           py::arg("name"), py::arg("level"), py::arg("slot_dt"), py::arg("initialized"),
           py::arg("fill_count"))
+      .def(
+          "history_sample_identity",
+          [](const AmrSystem& s, const std::string& name, int level) {
+            const auto bytes = s.history_sample_identity(name, level);
+            return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+          },
+          py::arg("name"), py::arg("level"))
+      .def(
+          "restore_history_sample_identity",
+          [](AmrSystem& s, const std::string& name, int level, py::bytes encoded) {
+            const std::string bytes = encoded;
+            s.restore_history_sample_identity(
+                name, level, std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+          },
+          py::arg("name"), py::arg("level"), py::arg("encoded"))
       .def("history_slot_dt", &AmrSystem::history_slot_dt, py::arg("name"), py::arg("level"),
            py::arg("slot"))
       .def("restore_history_slot_dt", &AmrSystem::restore_history_slot_dt, py::arg("name"),

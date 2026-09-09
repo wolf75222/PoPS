@@ -499,28 +499,22 @@ void prepare_condensed_prior(int program_block, field_type& field) const {
     if (identity.family == Family::Direct || identity.direct_level != active_level_)
       throw std::invalid_argument(
           "AMR prior-field sampling lacks an exact state, scratch SSA, or history ancestor");
+    ExactContractBuilder proof;
+    proof.text("pops.program.synchronous-prior-scalar");
     if (identity.family == Family::History) {
       const auto& history = runtime_state().hist_;
       const auto coarse = history_key_(identity.history_name, active_level_ - 1);
       const auto fine = history_key_(identity.history_name, active_level_);
-      if (pending_history_remaps_.contains(coarse) || pending_history_remaps_.contains(fine) ||
-          history.owner.at(coarse) != history.owner.at(fine) ||
-          history.state_identity.at(coarse) != history.state_identity.at(fine) ||
-          history.space_identity.at(coarse) != history.space_identity.at(fine) ||
-          history.clock_identity.at(coarse) != history.clock_identity.at(fine) ||
-          history.interpolation_identity.at(coarse) != history.interpolation_identity.at(fine) ||
-          history.initialized.at(coarse) != history.initialized.at(fine) ||
-          history.fill_count.at(coarse) != history.fill_count.at(fine) ||
-          history.store_pending.at(coarse) || history.store_pending.at(fine) ||
-          history.slot_dt.at(coarse) != history.slot_dt.at(fine))
+      history.matching_authenticated_sample(coarse, fine, identity.history_lag)
+          .append_contract(proof);
+      history.append_descriptor_contract(fine, proof);
+      if (pending_history_remaps_.contains(coarse) || pending_history_remaps_.contains(fine))
         throw std::invalid_argument(
             "AMR prior-field history parent has a different retained sample or pending remap");
     }
     parent = &resolve_owner_field_(owner, field, identity, active_level_ - 1,
                                    "AMR prior-field sampling");
-    ExactContractBuilder proof;
-    proof.text("pops.program.synchronous-prior-scalar")
-        .scalar(owner)
+    proof.scalar(owner)
         .scalar(static_cast<std::uint8_t>(identity.family))
         .scalar(identity.scratch_kind)
         .scalar(identity.scratch_value_id)

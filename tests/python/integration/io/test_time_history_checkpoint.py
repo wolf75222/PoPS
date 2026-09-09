@@ -295,6 +295,16 @@ def test_history_persistence_key_scheme():
         def history_slot_dt(self, name, slot):
             return 0.01 * (slot + 1)
 
+        def history_sample_identity(self, name):
+            import struct
+
+            encoded = name.encode("utf-8")
+            return (b"POPSHID1" + struct.pack("<Q", len(encoded)) + encoded
+                    + struct.pack("<qQ", -1, depth) + bytes(32 * depth))
+
+        def restore_history_sample_identity(self, name, encoded):
+            self.restored_sample_identity = bytes(encoded)
+
         # --- reader side ---
         def restore_history(self, name, slot, values):
             self.restored[slot] = np.asarray(values)
@@ -564,6 +574,9 @@ def test_restore_histories_installs_every_ring_before_replay():
 
         def restore_history_fill_count(self, name, fill_count):
             assert int(fill_count) == depth
+
+        def restore_history_sample_identity(self, name, encoded):
+            assert encoded == b""  # This fixture intentionally exercises an old absent ledger.
 
         def rebuild_history_slots(self, name, stored_slots):
             assert tuple(stored_slots) == stored

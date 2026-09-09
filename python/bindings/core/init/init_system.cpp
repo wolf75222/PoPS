@@ -765,6 +765,21 @@ void bind_system_checkpoint(py::class_<System>& cls) {
       // Selective history persistence + deterministic ring replay (ADC-626): the checkpoint stores only
       // the policy-selected slots + the per-slot dt; the restart replays the gaps via
       // rebuild_history_slots (re-stepping the installed Program from the nearest older stored slot).
+      .def(
+          "history_sample_identity",
+          [](const System& s, const std::string& name) {
+            const auto bytes = s.history_sample_identity(name);
+            return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+          },
+          py::arg("name"))
+      .def(
+          "restore_history_sample_identity",
+          [](System& s, const std::string& name, py::bytes encoded) {
+            const std::string bytes = encoded;
+            s.restore_history_sample_identity(
+                name, std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+          },
+          py::arg("name"), py::arg("encoded"))
       .def("history_slot_dt", &System::history_slot_dt, py::arg("name"), py::arg("slot"))
       .def("restore_history_slot_dt", &System::restore_history_slot_dt, py::arg("name"),
            py::arg("slot"), py::arg("dt"))

@@ -1115,11 +1115,20 @@ MultiFab<Dim>& System<Dim>::register_history(const std::string& name, int lag, i
       throw std::invalid_argument("System history cannot be requalified");
     if (ncomp >= 1 && found->second.front().ncomp() != ncomp)
       throw std::invalid_argument("System history component count changed");
-    while (static_cast<int>(found->second.size()) < depth)
+    auto& samples = histories.slot_sample.at(name);
+    if (samples.size() != found->second.size())
+      throw std::logic_error("System history registration has an invalid sample ledger");
+    const auto tail_sample = histories.initialized.at(name)
+                                 ? runtime::program::HistorySampleIdentity{}
+                                 : runtime::program::HistorySampleIdentity::zero_start();
+    while (static_cast<int>(found->second.size()) < depth) {
       found->second.emplace_back(p_->ba, p_->dm, p_->local_rank, found->second.front().ncomp(),
                                  found->second.front().ghosts());
+      found->second.back().set_val(Real(0));
+    }
     histories.depth[name] = static_cast<int>(found->second.size());
     histories.slot_dt[name].resize(found->second.size(), Real(0));
+    samples.resize(found->second.size(), tail_sample);
     return found->second.front();
   }
   const int components =
@@ -1131,8 +1140,10 @@ MultiFab<Dim>& System<Dim>::register_history(const std::string& name, int lag, i
     ghosts[axis] = 1;
   std::vector<MultiFab<Dim>> ring;
   ring.reserve(static_cast<std::size_t>(depth));
-  for (int slot = 0; slot < depth; ++slot)
+  for (int slot = 0; slot < depth; ++slot) {
     ring.emplace_back(p_->ba, p_->dm, p_->local_rank, components, ghosts);
+    ring.back().set_val(Real(0));
+  }
   auto& stored = histories.histories.emplace(name, std::move(ring)).first->second;
   histories.depth[name] = depth;
   histories.initialized[name] = false;
@@ -1140,6 +1151,8 @@ MultiFab<Dim>& System<Dim>::register_history(const std::string& name, int lag, i
   histories.store_pending[name] = false;
   histories.owner[name] = qualified ? owner : -1;
   histories.slot_dt[name] = std::vector<Real>(static_cast<std::size_t>(depth), Real(0));
+  histories.slot_sample[name] = std::vector<runtime::program::HistorySampleIdentity>(
+      static_cast<std::size_t>(depth), runtime::program::HistorySampleIdentity::zero_start());
   if (qualified) {
     histories.state_identity[name] = state_identity;
     histories.space_identity[name] = space_identity;

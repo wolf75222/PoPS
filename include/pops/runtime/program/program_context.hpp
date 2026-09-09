@@ -1231,6 +1231,8 @@ class ProgramContext {
     history.clock_identity[name] = clock_identity;
     history.interpolation_identity[name] = interpolation_identity;
     history.slot_dt[name] = std::vector<Real>(static_cast<std::size_t>(ring_depth), Real(0));
+    history.slot_sample[name].assign(static_cast<std::size_t>(ring_depth),
+                                     HistorySampleIdentity::zero_start());
   }
 
   field_type& history(const std::string& name, int lag, int ncomp = -1) const {
@@ -1259,7 +1261,7 @@ class ProgramContext {
 
   void store_history(const std::string& name, const field_type& value) const {
     if (std::isfinite(current_dt_) && current_dt_ > 0.0) {
-      store_history_(name, value, static_cast<Real>(current_dt_));
+      store_history_(name, value, current_dt_);
       return;
     }
     // Preserve the direct legacy route when this context has no active generated-step interval:
@@ -1269,7 +1271,7 @@ class ProgramContext {
   void store_history(const std::string& name, const field_type& value, double dt) const {
     if (!std::isfinite(dt) || dt <= 0.0)
       throw std::invalid_argument("ProgramContext history dt must be finite and positive");
-    store_history_(name, value, static_cast<Real>(dt));
+    store_history_(name, value, dt);
   }
   void rotate_histories() const { runtime_state().hist_.rotate(); }
   void rotate_histories(const std::string& clock) const { runtime_state().hist_.rotate(clock); }
@@ -1930,27 +1932,61 @@ class ProgramContext {
     return result;
   }
 
-  void store_history_(const std::string& name, const field_type& value,
-                      std::optional<Real> dt) const {
+  void store_history_(const std::string& name, const field_type& value, double dt) const {
     auto& manager = runtime_state().hist_;
-    auto found = manager.histories.find(name);
-    if (found == manager.histories.end())
-      throw std::out_of_range("ProgramContext history is not registered");
-    require_same_field_contract_(found->second.front(), value, "ProgramContext history store");
-    auto dt_ledger = manager.slot_dt.find(name);
-    if (dt_ledger == manager.slot_dt.end() || dt_ledger->second.size() != found->second.size())
-      throw std::logic_error("ProgramContext history dt ledger differs from its ring depth");
-    found->second.front() = value;
-    if (!manager.initialized.at(name))
-      for (std::size_t slot = 1; slot < found->second.size(); ++slot) {
-        found->second[slot] = value;
-        if (dt)
-          dt_ledger->second[slot] = *dt;
+    std::vector<field_type> prepared_fields;
+    std::vector<Real> prepared_dts;
+    std::vector<HistorySampleIdentity> prepared_samples;
+    std::string contract;
+    std::exception_ptr error;
+    try {
+      const auto found = manager.histories.find(name);
+      if (found == manager.histories.end() || found->second.empty())
+        throw std::out_of_range("ProgramContext history is not registered");
+      require_same_field_contract_(found->second.front(), value, "ProgramContext history store");
+      prepared_dts = manager.slot_dt.at(name);
+      prepared_samples =
+          manager.prepare_sample_store(name, system_->time() + logical_physical_time_offset_, dt);
+      const std::size_t count = manager.initialized.at(name) ? 1 : found->second.size();
+      prepared_fields.reserve(count);
+      for (std::size_t slot = 0; slot < count; ++slot) {
+        prepared_fields.push_back(value);
+        prepared_dts[slot] = static_cast<Real>(dt);
       }
-    manager.initialized[name] = true;
-    manager.store_pending[name] = true;
-    if (dt)
-      dt_ledger->second.front() = *dt;
+      ExactContractBuilder proof;
+      const auto clock = manager.clock_identity.find(name);
+      proof.text("pops.program.history-publication")
+          .text(name)
+          .text(clock == manager.clock_identity.end() ? std::string_view{} : clock->second)
+          .scalar(count);
+      for (std::size_t slot = 0; slot < prepared_samples.size(); ++slot) {
+        const auto& identity = prepared_samples[slot];
+        proof.scalar(identity.kind)
+            .scalar(identity.start_bits)
+            .scalar(identity.interval_bits)
+            .scalar(identity.ordinal)
+            .scalar(prepared_dts[slot]);
+      }
+      contract = std::move(proof).release();
+    } catch (...) {
+      error = std::current_exception();
+    }
+    const auto& lane = prepared_execution_lane();
+    if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && error)
+        std::rethrow_exception(error);
+      throw std::runtime_error("Program history publication preparation failed collectively");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs({{"pops.program.history", contract}}, lane))
+      throw std::invalid_argument("Program history publication identity differs between ranks");
+    static_assert(std::is_nothrow_swappable_v<field_type>);
+    auto& ring = manager.histories.at(name);
+    for (std::size_t slot = 0; slot < prepared_fields.size(); ++slot)
+      std::swap(ring[slot], prepared_fields[slot]);
+    manager.slot_dt.at(name).swap(prepared_dts);
+    manager.slot_sample.at(name).swap(prepared_samples);
+    manager.initialized.at(name) = true;
+    manager.store_pending.at(name) = true;
   }
 
   std::optional<ScheduleCoordinate> schedule_coordinate_(ScheduleDomainKind kind,

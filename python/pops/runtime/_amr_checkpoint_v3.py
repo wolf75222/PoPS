@@ -1261,6 +1261,7 @@ def _restart_history_identity(owner, sim, *, phase):
             "slot": slot,
             "size": int(values.size),
             "dt": float(sim.history_slot_dt(name, level, slot)).hex(),
+            "sample_identity": bytes(sim.history_sample_identity(name, level)).hex(),
             "sha256": hashlib.sha256(values.tobytes(order="C")).hexdigest(),
         }
 
@@ -1607,6 +1608,7 @@ def _preflight_histories_v3(sim, d, current_ranks, spatial):
                 "restart: history '%s' requires depth >= 2 and component count >= 1" % name
             )
         policy = HistoryPersistence.from_json(str(d["history_policy_" + name]))
+        from pops.runtime._history_sample_identity import prepare_identity_payload
         from pops.runtime._system_io_history import (
             history_fill_count_from_payload,
             resolve_hierarchy_history_storage,
@@ -1705,7 +1707,9 @@ def _preflight_histories_v3(sim, d, current_ranks, spatial):
                         "restart: history '%s' level %d slot %d has size %d, expected %d"
                         % (name, level, slot, values.size, expected_values)
                     )
-            validate_history_slot_dt_payload(d, name, depth, fill_count, level=level)
+            slot_dt = validate_history_slot_dt_payload(d, name, depth, fill_count, level=level)
+            prepare_identity_payload(d, name, level, depth, initialized=fill_count > 0,
+                                     slot_dt=slot_dt)
 
 
 def _restore_histories_v3(sim, d, cur_ranks, *, accepted_state):

@@ -611,6 +611,7 @@ void validate_accepted_history_remap_metadata_() const {
   require_exact_metadata_keys(manager.clock_identity);
   require_exact_metadata_keys(manager.interpolation_identity);
   require_exact_metadata_keys(manager.slot_dt);
+  require_exact_metadata_keys(manager.slot_sample);
 
   const std::size_t live_levels = runtime_->hierarchy().num_levels();
   if (live_levels == 0)
@@ -625,6 +626,7 @@ void validate_accepted_history_remap_metadata_() const {
     const bool initialized = manager.initialized.at(key);
     const int fill_count = manager.fill_count.at(key);
     const auto& slot_dt = manager.slot_dt.at(key);
+    (void)manager.validated_samples(key);
     if (depth < 1 || ring.size() != static_cast<std::size_t>(depth) || fill_count < 0 ||
         fill_count > depth || initialized != (fill_count > 0) ||
         slot_dt.size() != static_cast<std::size_t>(depth))

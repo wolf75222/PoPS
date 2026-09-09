@@ -30,6 +30,7 @@
 #include <pops/core/foundation/allocator.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/runtime/program/history_sample_identity_codec.hpp>
 #include <pops/runtime/program/program_context.hpp>  // NativeProgramContext (the contract under test)
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
 #include <pops/runtime/system.hpp>
@@ -1363,6 +1364,16 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   NativeProgramContext ctx(&sim);
   ctx.configure_primary_clock("clock.macro");
   ctx.declare_clock_relation("clock.macro", "clock.fast", 2);
+  // Direct legacy stores before any active interval remain readable, with no fabricated sample.
+  ctx.register_history("legacy_no_interval", 1, 1);
+  NativeField legacy_value = ctx.alloc_scalar_field(1, 1);
+  legacy_value.set_val(Real(6));
+  EXPECT_NO_THROW(ctx.store_history("legacy_no_interval", legacy_value));
+  EXPECT_EQ(first_value(ctx.history("legacy_no_interval", 1)), Real(6));
+  EXPECT_EQ(sim.history_slot_dt("legacy_no_interval", 0), 0.0);
+  const auto legacy_samples = runtime::program::decode_history_sample_identity(
+      sim.history_sample_identity("legacy_no_interval"), "legacy_no_interval", -1, 2);
+  EXPECT_EQ(legacy_samples, std::vector<runtime::program::HistorySampleIdentity>(2));
   ctx.begin_step(dt);
   ctx.set_stage_time(0, 1);
   {
@@ -1522,6 +1533,25 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   EXPECT_TRUE(sc.ncomp() == U.ncomp()) << "scratch_state_like ncomp";
   NativeField sf = ctx.alloc_scalar_field(1, 1);
   EXPECT_TRUE(sf.ncomp() == 1) << "alloc_scalar_field ncomp";
+  // Native depth growth retains earned samples; newly allocated tails have unknown provenance.
+  sim.register_history("growing_history", 1, 1);
+  sf.set_val(Real(9));
+  ctx.store_history("growing_history", sf);
+  const auto before_samples = sim.history_sample_identity("growing_history");
+  const auto before_values = sim.history_global("growing_history", 0);
+  EXPECT_ANY_THROW(sim.restore_history("growing_history", 0, {}));
+  EXPECT_EQ(sim.history_sample_identity("growing_history"), before_samples);
+  EXPECT_EQ(sim.history_global("growing_history", 0), before_values);
+  const auto earned =
+      runtime::program::decode_history_sample_identity(before_samples, "growing_history", -1, 2);
+  sim.register_history("growing_history", 2, 1);
+  const auto grown = runtime::program::decode_history_sample_identity(
+      sim.history_sample_identity("growing_history"), "growing_history", -1, 3);
+  ASSERT_EQ(grown.size(), 3u);
+  EXPECT_EQ(grown[0], earned[0]);
+  EXPECT_EQ(grown[1], earned[1]);
+  EXPECT_EQ(grown[2], runtime::program::HistorySampleIdentity{});
+  EXPECT_TRUE(sim.history_initialized("growing_history"));
 }
 
 TEST(ProgramContextContract, LaplacianPreservesEveryComponentAndExactStencilAuthority) {
@@ -1738,6 +1768,7 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
   NativeProgramContext ctx(&sim);
   ctx.configure_primary_clock("clock.nested");
   int evaluated_substeps = 0;
+  double last_publication_start = 0.0;
   ctx.install([&](double dt) {
     ctx.begin_step(dt);
     ctx.set_stage_time(0, 1);
@@ -1746,6 +1777,7 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
     (void)solve.consume(SolveConsumption::kAccept);
     auto& rate = ctx.rhs_scratch(880, 0, state);
     ctx.rhs_into(0, state, rate, 880);
+    last_publication_start = sim.time();
     ctx.store_history("nested.state", state);
     const double flux = static_cast<double>(ctx.sum_component(rate, GasSchema::density));
     double measure = 1.0;
@@ -1766,6 +1798,22 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
   const auto before_field = sim.potential_global();
   const auto before_diagnostics = sim.program_diagnostics();
   const auto before_history = sim.history_fill_count("nested.state");
+  const auto before_samples = sim.history_sample_identity("nested.state");
+  if (n_ranks() > 1) {
+    const auto original = sim.history_global("nested.state", 0);
+    auto divergent = original;
+    if (my_rank() == 1)
+      divergent.front() += 1.0;
+    std::string refusal;
+    try {
+      sim.restore_history("nested.state", 0, divergent);
+    } catch (const std::exception& error) {
+      refusal = error.what();
+    }
+    EXPECT_EQ(refusal, "exact global field restore payload differs between MPI ranks");
+    EXPECT_EQ(sim.history_sample_identity("nested.state"), before_samples);
+    EXPECT_EQ(sim.history_global("nested.state", 0), original);
+  }
   NativeField before_history_value = ctx.scratch_state_like(ctx.history("nested.state", 1));
   ctx.lincomb(before_history_value, Real(1), ctx.history("nested.state", 1), Real(0),
               ctx.history("nested.state", 1));
@@ -1800,6 +1848,7 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
   EXPECT_EQ(sim.potential_global(), before_field);
   EXPECT_EQ(sim.program_diagnostics(), before_diagnostics);
   EXPECT_EQ(sim.history_fill_count("nested.state"), before_history);
+  EXPECT_EQ(sim.history_sample_identity("nested.state"), before_samples);
   EXPECT_EQ(difference_sum_sq_all(ctx.history("nested.state", 1), before_history_value), Real(0));
   EXPECT_TRUE(sim.program_exchange_records().empty());
   EXPECT_EQ(sim.macro_step(), 0);
@@ -1832,6 +1881,9 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
   const double expected_factor = (1.0 - 0.25 * 0.1) * (1.0 - 0.25 * 0.2);
   EXPECT_NEAR(static_cast<double>(ctx.sum_component(ctx.state(0), GasSchema::density)),
               static_cast<double>(initial_mass) * expected_factor, 1e-11);
+  const auto accepted_samples = runtime::program::decode_history_sample_identity(
+      sim.history_sample_identity("nested.state"), "nested.state", -1, 3);
+  EXPECT_EQ(accepted_samples[1].start_bits, std::bit_cast<std::uint64_t>(last_publication_start));
 }
 
 TEST(ProgramContextContract, NativeEvaluationFailureIsCollectiveAndCannotPublishWork) {

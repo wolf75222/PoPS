@@ -200,8 +200,9 @@ void refresh_resources_() const {
       if (manager.histories.empty() || live_levels == 0 || !exact_metadata(manager.depth) ||
           !exact_metadata(manager.initialized) || !exact_metadata(manager.fill_count) ||
           !exact_metadata(manager.store_pending) || !exact_metadata(manager.slot_dt) ||
-          !exact_metadata(manager.owner) || !exact_metadata(manager.state_identity) ||
-          !exact_metadata(manager.space_identity) || !exact_metadata(manager.clock_identity) ||
+          !exact_metadata(manager.slot_sample) || !exact_metadata(manager.owner) ||
+          !exact_metadata(manager.state_identity) || !exact_metadata(manager.space_identity) ||
+          !exact_metadata(manager.clock_identity) ||
           !exact_metadata(manager.interpolation_identity))
         throw std::runtime_error(
             "AMR Program topology changed while retained histories still name the prior layouts");
@@ -213,6 +214,7 @@ void refresh_resources_() const {
             manager.depth.at(key) != static_cast<int>(ring.size()) || manager.initialized.at(key) ||
             manager.fill_count.at(key) != 0 || manager.store_pending.at(key) ||
             manager.slot_dt.at(key).size() != ring.size() ||
+            manager.slot_sample.at(key).size() != ring.size() ||
             !std::all_of(
                 manager.slot_dt.at(key).begin(), manager.slot_dt.at(key).end(),
                 [](Real dt) { return dt == Real(0); }) ||

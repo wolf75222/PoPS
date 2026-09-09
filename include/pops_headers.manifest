@@ -295,6 +295,7 @@ sdk-support pops/runtime/program/amr_program_context_spatial_operations.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_operations_services.inc
 sdk-support pops/runtime/program/amr_program_context_subcycling_runtime.inc
 sdk-support pops/runtime/program/cache_manager.hpp
+sdk-support pops/runtime/program/history_sample_identity_codec.hpp
 sdk-support pops/runtime/program/cell_temporal_partition.hpp
 sdk-support pops/runtime/program/cell_temporal_partition_executor.hpp
 sdk-support pops/runtime/program/clock_schedule.hpp

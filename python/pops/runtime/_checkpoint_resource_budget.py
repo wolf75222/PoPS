@@ -200,6 +200,7 @@ def _history_capacity(
                     "history_init_" + suffix,
                     "history_fill_count_" + suffix,
                     "history_slot_dt_" + suffix,
+                    "history_sample_identity_" + suffix,
                 )
             )
             for slot in range(depth):
@@ -208,6 +209,11 @@ def _history_capacity(
                     if level is None
                     else "history_%s_level_%d_%d" % (name, level, slot)
                 )
+            # POPSHID1: fixed magic/name-length/level/depth, exact UTF-8 name, four u64 per slot.
+            identity_bytes = _add(32, len(name.encode("utf-8")), where="history identity header")
+            identity_bytes = _add(identity_bytes, _mul(depth, 32, where="history identity slots"),
+                                  where="history identity bytes")
+            data_bytes = _add(data_bytes, identity_bytes, where="history identity budget")
             values = _mul(level_cells, ncomp, where="history scalar budget")
             values = _mul(values, depth, where="history scalar budget")
             data_bytes = _add(

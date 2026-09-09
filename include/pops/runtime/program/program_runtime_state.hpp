@@ -46,6 +46,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -53,6 +54,7 @@
 #include <utility>
 #include <vector>
 
+#include <pops/core/identity/prepared_provider.hpp>
 #include <pops/core/foundation/types.hpp>  // Real
 #include <pops/mesh/storage/multifab.hpp>  // MultiFab (history ring element)
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
@@ -123,6 +125,72 @@ class AcceptedProgramContextSnapshot {
 using AcceptedProgramContextSnapshotFactory =
     std::function<std::unique_ptr<AcceptedProgramContextSnapshot>()>;
 
+/// Exact publication window and its logical occurrence, independent of a level's lifetime step
+/// count. Unknown legacy provenance differs from an actually allocated zero-start ring.
+enum class HistorySampleKind : std::uint8_t { UnknownLegacy, RegisteredZeroStart, Publication };
+struct HistorySampleIdentity {
+  std::uint64_t start_bits = 0;
+  std::uint64_t interval_bits = 0;
+  std::uint64_t ordinal = 0;
+  HistorySampleKind kind = HistorySampleKind::UnknownLegacy;
+  static HistorySampleIdentity zero_start() {
+    return {0, 0, 0, HistorySampleKind::RegisteredZeroStart};
+  }
+  bool authenticated() const noexcept { return kind != HistorySampleKind::UnknownLegacy; }
+  void append_contract(ExactContractBuilder& proof) const {
+    proof.scalar(kind).scalar(start_bits).scalar(interval_bits).scalar(ordinal);
+  }
+
+  void validate() const {
+    if (kind != HistorySampleKind::UnknownLegacy &&
+        kind != HistorySampleKind::RegisteredZeroStart && kind != HistorySampleKind::Publication)
+      throw std::invalid_argument("history sample identity has an invalid kind");
+    if (kind != HistorySampleKind::Publication) {
+      if (start_bits != 0 || interval_bits != 0 || ordinal != 0)
+        throw std::invalid_argument("unknown history sample identity has nonzero window metadata");
+    } else if (ordinal == 0 || !std::isfinite(std::bit_cast<double>(start_bits)) ||
+               !std::isfinite(std::bit_cast<double>(interval_bits)) ||
+               !(std::bit_cast<double>(interval_bits) > 0.0))
+      throw std::invalid_argument("history sample identity has an invalid physical window");
+  }
+  friend bool operator==(const HistorySampleIdentity&, const HistorySampleIdentity&) = default;
+};
+
+inline void validate_history_sample_provenance(const HistorySampleIdentity& sample,
+                                               bool initialized, Real outgoing_dt) {
+  sample.validate();
+  if ((sample.kind == HistorySampleKind::RegisteredZeroStart && initialized) ||
+      (sample.kind == HistorySampleKind::Publication &&
+       (!initialized ||
+        outgoing_dt != static_cast<Real>(std::bit_cast<double>(sample.interval_bits)))))
+    throw std::invalid_argument("history sample differs from its publication metadata");
+}
+
+inline HistorySampleIdentity next_history_sample(std::span<const HistorySampleIdentity> slots,
+                                                 bool pending, double start, double interval) {
+  HistorySampleIdentity result{std::bit_cast<std::uint64_t>(start),
+                               std::bit_cast<std::uint64_t>(interval), 1,
+                               HistorySampleKind::Publication};
+  result.validate();
+  std::uint64_t latest = 0;
+  for (const auto& sample : slots) {
+    sample.validate();
+    if (sample.kind == HistorySampleKind::Publication && sample.start_bits == result.start_bits &&
+        sample.interval_bits == result.interval_bits)
+      latest = std::max(latest, sample.ordinal);
+  }
+  if (pending && !slots.empty() && slots.front().kind == HistorySampleKind::Publication) {
+    if (slots.front().start_bits != result.start_bits ||
+        slots.front().interval_bits != result.interval_bits)
+      throw std::invalid_argument("pending history publication changed its physical window");
+    return slots.front();
+  }
+  if (latest == std::numeric_limits<std::uint64_t>::max())
+    throw std::overflow_error("history publication ordinal exhausted its physical window");
+  result.ordinal = latest + 1;
+  return result;
+}
+
 /// Multistep history ring buffers (ADC-406a), owned by the Program runtime state.
 ///
 /// A name maps to a ring of (depth = max lag + 1) MultiFabs, newest at [0]. Qualified keep_history
@@ -156,6 +224,58 @@ struct HistoryManager {
   /// run-to-target controller clips only its terminal step. A plain data member (no method the
   /// stepper template instantiates) -> MockImpl-safe; empty by default so dense paths never touch it.
   std::map<std::string, std::vector<Real>> slot_dt;
+  std::map<std::string, std::vector<HistorySampleIdentity>> slot_sample;
+
+  const std::vector<HistorySampleIdentity>& validated_samples(const std::string& name) const {
+    const auto& samples = slot_sample.at(name);
+    if (samples.size() != histories.at(name).size() || slot_dt.at(name).size() != samples.size())
+      throw std::invalid_argument("history sample ledger differs from its ring depth");
+    for (const auto& sample : samples)
+      sample.validate();
+    return samples;
+  }
+
+  std::vector<HistorySampleIdentity> prepare_sample_store(const std::string& name, double start,
+                                                          double interval) const {
+    auto samples = validated_samples(name);
+    const auto sample = next_history_sample(samples, store_pending.at(name), start, interval);
+    if (!initialized.at(name))
+      std::fill(samples.begin(), samples.end(), sample);
+    else
+      samples.front() = sample;
+    return samples;
+  }
+
+  void append_descriptor_contract(const std::string& name, ExactContractBuilder& proof) const {
+    proof.text(state_identity.at(name))
+        .text(space_identity.at(name))
+        .text(clock_identity.at(name))
+        .text(interpolation_identity.at(name));
+  }
+
+  HistorySampleIdentity matching_authenticated_sample(const std::string& coarse,
+                                                      const std::string& fine, int lag) const {
+    const auto& parent = slot_sample.at(coarse).at(lag);
+    const auto& child = slot_sample.at(fine).at(lag);
+    validate_history_sample_provenance(parent, initialized.at(coarse), slot_dt.at(coarse).at(lag));
+    validate_history_sample_provenance(child, initialized.at(fine), slot_dt.at(fine).at(lag));
+    if (!parent.authenticated() || !child.authenticated())
+      throw std::invalid_argument("AMR prior-field history has unknown legacy sample provenance");
+    if (parent != child)
+      throw std::invalid_argument(
+          "AMR prior-field history parent has a different publication sample");
+    if (owner.at(coarse) != owner.at(fine) ||
+        state_identity.at(coarse) != state_identity.at(fine) ||
+        space_identity.at(coarse) != space_identity.at(fine) ||
+        clock_identity.at(coarse) != clock_identity.at(fine) ||
+        interpolation_identity.at(coarse) != interpolation_identity.at(fine) ||
+        initialized.at(coarse) != initialized.at(fine) ||
+        fill_count.at(coarse) != fill_count.at(fine) || store_pending.at(coarse) ||
+        store_pending.at(fine) || slot_dt.at(coarse) != slot_dt.at(fine))
+      throw std::invalid_argument(
+          "AMR prior-field history parent has a different retained sample or pending remap");
+    return child;
+  }
 
   /// Shift each ring one step (newest-to-oldest), called ONCE at the end of a macro-step. O(1)
   /// std::swap of the MultiFab handles (not a deep copy): the swap chain from the deepest slot down
@@ -173,6 +293,9 @@ struct HistoryManager {
         for (std::size_t k = dts.size(); k-- > 1;)
           std::swap(dts[k], dts[k - 1]);
       }
+      if (auto samples = slot_sample.find(name); samples != slot_sample.end())
+        for (std::size_t k = samples->second.size(); k-- > 1;)
+          std::swap(samples->second[k], samples->second[k - 1]);
       if (store_pending[name]) {
         fill_count[name] = std::min(static_cast<int>(ring.size()), fill_count[name] + 1);
         store_pending[name] = false;
@@ -195,6 +318,9 @@ struct HistoryManager {
         for (std::size_t k = dts.size(); k-- > 1;)
           std::swap(dts[k], dts[k - 1]);
       }
+      if (auto samples = slot_sample.find(name); samples != slot_sample.end())
+        for (std::size_t k = samples->second.size(); k-- > 1;)
+          std::swap(samples->second[k], samples->second[k - 1]);
       if (store_pending[name]) {
         fill_count[name] = std::min(static_cast<int>(ring.size()), fill_count[name] + 1);
         store_pending[name] = false;

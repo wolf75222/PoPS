@@ -4,6 +4,7 @@ void store_history_(const std::string& name, const field_type& value) const {
     std::vector<field_type> rollback_ring;
     std::vector<field_type> ring;
     std::vector<Real> dts;
+    std::vector<HistorySampleIdentity> samples;
     std::vector<FluxExpression> expressions;
     std::string exact_contract;
   };
@@ -25,9 +26,9 @@ void store_history_(const std::string& name, const field_type& value) const {
         staged.rollback_ring = found->second;
         staged.ring = staged.rollback_ring;
         staged.dts = manager.slot_dt.at(staged.key);
+        staged.samples =
+            manager.prepare_sample_store(staged.key, current_interval_start_time_, current_dt_);
         staged.expressions = flux_found->second;
-        if (staged.dts.size() != staged.ring.size())
-          throw std::logic_error("AMR Program history dt ledger differs from its ring depth");
         const FluxExpression active_expression = active_flux_expression_(value);
         staged.ring.front() = value;
         staged.expressions.front() = active_expression;
@@ -46,6 +47,9 @@ void store_history_(const std::string& name, const field_type& value) const {
             .scalar(std::bit_cast<std::uint64_t>(current_dt_))
             .scalar(static_cast<std::uint64_t>(staged.ring.size()))
             .scalar(manager.initialized.at(staged.key));
+        manager.append_descriptor_contract(staged.key, contract);
+        for (const auto& identity : staged.samples)
+          identity.append_contract(contract);
         staged.exact_contract = std::move(contract).release();
         return staged;
       },
@@ -82,6 +86,7 @@ void store_history_(const std::string& name, const field_type& value) const {
   }
   for (std::size_t slot = 0; slot < candidate.dts.size(); ++slot) {
     manager.slot_dt.at(candidate.key)[slot] = candidate.dts[slot];
+    manager.slot_sample.at(candidate.key)[slot] = candidate.samples[slot];
     flux_found->second[slot].swap(candidate.expressions[slot]);
   }
   manager.initialized.at(candidate.key) = true;
@@ -116,6 +121,8 @@ void rotate_histories_(std::optional<std::string> clock_identity) const {
             throw std::runtime_error("AMR Program history registry is incomplete");
           if (!clock_identity || clock->second == *clock_identity) {
             (void)manager.fill_count.at(key);
+            for (const auto& sample : manager.validated_samples(key))
+              sample.append_contract(contract);
             (void)manager.store_pending.at(key);
             staged.selected.push_back(key);
             contract.bytes(key).bytes(clock->second).scalar(manager.store_pending.at(key));
@@ -133,6 +140,9 @@ void rotate_histories_(std::optional<std::string> clock_identity) const {
     auto& dts = manager.slot_dt.at(key);
     for (std::size_t slot = dts.size(); slot-- > 1;)
       std::swap(dts[slot], dts[slot - 1]);
+    auto& samples = manager.slot_sample.at(key);
+    for (std::size_t slot = samples.size(); slot-- > 1;)
+      std::swap(samples[slot], samples[slot - 1]);
     auto& expressions = history_flux_expressions_.at(key);
     for (std::size_t slot = expressions.size(); slot-- > 1;)
       std::swap(expressions[slot], expressions[slot - 1]);

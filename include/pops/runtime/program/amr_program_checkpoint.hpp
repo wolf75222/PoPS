@@ -60,6 +60,7 @@ struct AmrProgramHistorySlotProvenance {
   double outgoing_dt = 0.0;
   bool initialized = false;
   int fill_count = 0;
+  HistorySampleIdentity sample;
 
   friend bool operator==(const AmrProgramHistorySlotProvenance&,
                          const AmrProgramHistorySlotProvenance&) = default;
@@ -221,7 +222,8 @@ HistoryMetadata history_metadata(const Manager& manager, const BlockMap& block_m
     for (std::size_t slot = 0; slot < ring.size(); ++slot)
       result.history_slots.push_back({name, level, static_cast<int>(slot),
                                       static_cast<double>(dts[slot]), manager.initialized.at(key),
-                                      manager.fill_count.at(key)});
+                                      manager.fill_count.at(key),
+                                      manager.slot_sample.at(key).at(slot)});
   }
   for (auto& [name, accumulated] : histories) {
     (void)name;
@@ -237,7 +239,8 @@ HistoryMetadata history_metadata(const Manager& manager, const BlockMap& block_m
   return result;
 }
 
-inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '6'};
+inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '7'};
+inline constexpr std::array<std::uint8_t, 8> kLegacyMagic6{'P', 'O', 'P', 'S', 'A', 'N', 'D', '6'};
 inline constexpr std::array<std::uint8_t, 8> kLegacyMagic5{'P', 'O', 'P', 'S', 'A', 'N', 'D', '5'};
 inline constexpr std::array<std::uint8_t, 8> kLegacyMagic4{'P', 'O', 'P', 'S', 'A', 'N', 'D', '4'};
 
@@ -419,7 +422,8 @@ inline constexpr std::size_t kEncodedClockBytes = 5 * kEncodedScalarBytes;
 // credible binary shape even when semantic validation later rejects them.
 inline constexpr std::size_t kMinLogicalClockBytes = 2 * kEncodedScalarBytes;
 inline constexpr std::size_t kMinHistoryDescriptorBytes = 8 * kEncodedScalarBytes;
-inline constexpr std::size_t kMinHistorySlotBytes = 6 * kEncodedScalarBytes;
+inline constexpr std::size_t kLegacyMinHistorySlotBytes = 6 * kEncodedScalarBytes;
+inline constexpr std::size_t kMinHistorySlotBytes = 10 * kEncodedScalarBytes;
 inline constexpr std::size_t kMinTemporalPartitionRecordBytes = 4 * kEncodedScalarBytes;
 inline constexpr std::size_t kMinInterfaceFragmentBytes = 32 * kEncodedScalarBytes;
 inline constexpr std::size_t kMinSynchronizationEventBytes = 9 * kEncodedScalarBytes;
@@ -692,6 +696,8 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
   std::tuple<std::string, int, int> previous_slot{"", -1, -1};
   bool first_slot = true;
   for (const AmrProgramHistorySlotProvenance& slot : state.history_slots) {
+    validate_history_sample_provenance(slot.sample, slot.initialized,
+                                       static_cast<Real>(slot.outgoing_dt));
     const auto descriptor = std::find_if(
         state.histories.begin(), state.histories.end(),
         [&](const AmrProgramHistoryDescriptor& history) { return history.name == slot.name; });
@@ -918,6 +924,10 @@ void write_state(Output& out, const AmrProgramAcceptedState<Dim>& state) {
     out.real(slot.outgoing_dt);
     out.u64(slot.initialized ? 1U : 0U);
     out.i32(slot.fill_count);
+    out.u64(static_cast<std::uint64_t>(slot.sample.kind));
+    out.u64(slot.sample.start_bits);
+    out.u64(slot.sample.interval_bits);
+    out.u64(slot.sample.ordinal);
   }
   out.size(state.pending_history_remaps.size());
   for (const auto& pending : state.pending_history_remaps) {
@@ -1180,8 +1190,10 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
   };
   const bool legacy4 = has_magic(checkpoint_detail::kLegacyMagic4);
   const bool legacy5 = has_magic(checkpoint_detail::kLegacyMagic5);
+  const bool legacy6 = has_magic(checkpoint_detail::kLegacyMagic6);
   in.expect_raw(legacy4   ? checkpoint_detail::kLegacyMagic4
                 : legacy5 ? checkpoint_detail::kLegacyMagic5
+                : legacy6 ? checkpoint_detail::kLegacyMagic6
                           : checkpoint_detail::kMagic);
   if (in.i32() != Dim)
     throw std::runtime_error(
@@ -1212,7 +1224,9 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
     history.depth = in.i32();
     history.components = in.i32();
   }
-  state.history_slots.resize(in.size(checkpoint_detail::kMinHistorySlotBytes));
+  state.history_slots.resize(in.size(legacy4 || legacy5 || legacy6
+                                         ? checkpoint_detail::kLegacyMinHistorySlotBytes
+                                         : checkpoint_detail::kMinHistorySlotBytes));
   for (AmrProgramHistorySlotProvenance& slot : state.history_slots) {
     slot.name = in.string();
     slot.level = in.i32();
@@ -1224,6 +1238,15 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
           "invalid exact AMR Program checkpoint: invalid history initialized tag");
     slot.initialized = initialized != 0;
     slot.fill_count = in.i32();
+    if (!legacy4 && !legacy5 && !legacy6) {
+      const auto kind = in.u64();
+      if (kind > static_cast<std::uint64_t>(HistorySampleKind::Publication))
+        throw std::invalid_argument("history sample identity has an invalid encoded kind");
+      slot.sample.kind = static_cast<HistorySampleKind>(kind);
+      slot.sample.start_bits = in.u64();
+      slot.sample.interval_bits = in.u64();
+      slot.sample.ordinal = in.u64();
+    }
   }
   state.pending_history_remaps.resize(in.size(checkpoint_detail::kMinPendingHistoryRemapBytes));
   for (auto& pending : state.pending_history_remaps) {

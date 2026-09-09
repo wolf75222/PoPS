@@ -1384,6 +1384,9 @@ class AmrSystem {
   std::vector<double> history_global(const std::string& name, int level, int slot) const;
   void restore_history(const std::string& name, int level, int slot,
                        const std::vector<double>& values);
+  std::vector<std::uint8_t> history_sample_identity(const std::string& name, int level) const;
+  void restore_history_sample_identity(const std::string& name, int level,
+                                       const std::vector<std::uint8_t>& bytes);
   double history_slot_dt(const std::string& name, int level, int slot) const;
   void restore_history_slot_dt(const std::string& name, int level, int slot, double dt);
   int rebuild_history_slots(const std::string& name, const std::vector<int>& stored_slots);

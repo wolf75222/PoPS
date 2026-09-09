@@ -332,7 +332,7 @@ def _accepted_tagging_hysteresis(payload):
         cursor += size
         assert cursor <= len(encoded), "accepted-state string is truncated"
 
-    assert encoded[:8] in (b"POPSAND4", b"POPSAND5", b"POPSAND6")
+    assert encoded[:8] in (b"POPSAND4", b"POPSAND5", b"POPSAND6", b"POPSAND7")
     cursor = 8
     cursor += 8  # native dimension
     skip_string()  # exact spatial contract
@@ -356,6 +356,8 @@ def _accepted_tagging_hysteresis(payload):
     for _ in range(history_slot_count):
         skip_string()
         cursor += 5 * 8  # level, slot, outgoing dt, initialized, fill count
+        if encoded[:8] == b"POPSAND7":
+            cursor += 4 * 8  # exact typed publication identity
     pending_count = read_size()
     for _ in range(pending_count):
         skip_string()

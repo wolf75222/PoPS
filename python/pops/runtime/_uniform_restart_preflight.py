@@ -255,7 +255,13 @@ def preflight_uniform_restart(payload: Any) -> None:
                 raise ValueError(
                     "restart : history '%s' has inconsistent initialized/fill-count metadata" % name
                 )
-            validate_history_slot_dt_payload(payload, name, depth, fill_count, level=level)
+            slot_dt = validate_history_slot_dt_payload(payload, name, depth, fill_count, level=level)
+            from pops.runtime._history_sample_identity import identity_key, prepare_identity_payload
+
+            sample_key = identity_key(name, level)
+            if sample_key in files:
+                allowed.add(sample_key)
+            prepare_identity_payload(payload, name, level, depth, initialized=initialized, slot_dt=slot_dt)
             for slot in stored:
                 key = _history_slot_key(name, level, slot)
                 if key not in files:
