@@ -1040,18 +1040,18 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
   sim.set_state("gas", U0);
   sim.set_program_block_map({0});
 
-  runtime::program::ProgramContext ctx(&sim);
-  ctx.configure_primary_clock("macro");
-  ctx.install([ctx](double h) {
-    ctx.begin_step(h);
-    ctx.set_stage_time(0, 1);
-    auto field_outcome = ctx.solve_fields();
+  auto ctx = runtime::program::make_program_execution_provider(&sim);
+  ctx->configure_primary_clock("macro");
+  ctx->install([ctx](double h) {
+    ctx->begin_step(h);
+    ctx->set_stage_time(0, 1);
+    auto field_outcome = ctx->solve_fields();
     (void)field_outcome.consume(SolveConsumption::kAccept);
-    for (int b = 0; b < ctx.n_blocks(); ++b) {
-      MultiFab<kNativeDimension>& U = ctx.state(b);
-      MultiFab<kNativeDimension> R = ctx.rhs_scratch_like(U);
-      ctx.rhs_into(b, U, R, 0);
-      ctx.axpy(U, Real(h), R);  // U <- U + h * R  (Forward Euler)
+    for (int b = 0; b < ctx->n_blocks(); ++b) {
+      MultiFab<kNativeDimension>& U = ctx->state(b);
+      MultiFab<kNativeDimension> R = ctx->rhs_scratch_like(U);
+      ctx->rhs_into(b, U, R, 0);
+      ctx->axpy(U, Real(h), R);  // U <- U + h * R  (Forward Euler)
     }
   });
   sim.set_program_block_map({0});
@@ -1111,15 +1111,15 @@ TEST(ProgramRuntime, ForwardEulerProgramContextHonorsEmbeddedBoundaryResidualMet
 
   const auto install_forward_euler = [](System<kNativeDimension>& system) {
     system.set_program_block_map({0});
-    runtime::program::ProgramContext context(&system);
-    context.configure_primary_clock("macro");
-    context.install([context](double step) {
-      context.begin_step(step);
-      context.set_stage_time(0, 1);
-      MultiFab<kNativeDimension>& state = context.state(0);
-      MultiFab<kNativeDimension> residual = context.rhs_scratch_like(state);
-      context.rhs_into(0, state, residual, 0);
-      context.axpy(state, Real(step), residual);
+    auto context = runtime::program::make_program_execution_provider(&system);
+    context->configure_primary_clock("macro");
+    context->install([context](double step) {
+      context->begin_step(step);
+      context->set_stage_time(0, 1);
+      MultiFab<kNativeDimension>& state = context->state(0);
+      MultiFab<kNativeDimension> residual = context->rhs_scratch_like(state);
+      context->rhs_into(0, state, residual, 0);
+      context->axpy(state, Real(step), residual);
     });
     system.set_program_block_map({0});
   };
@@ -1215,14 +1215,14 @@ TEST(ProgramRuntime, SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCell
 
   const auto install_source_step = [](System<kNativeDimension>& system) {
     system.set_program_block_map({0});
-    runtime::program::ProgramContext context(&system);
-    context.configure_primary_clock("macro");
-    context.install([context](double step) {
-      context.begin_step(step);
-      MultiFab<kNativeDimension>& state = context.state(0);
-      MultiFab<kNativeDimension> source = context.rhs_scratch_like(state);
-      context.source_default_into(0, state, source);
-      context.axpy(state, Real(step), source);
+    auto context = runtime::program::make_program_execution_provider(&system);
+    context->configure_primary_clock("macro");
+    context->install([context](double step) {
+      context->begin_step(step);
+      MultiFab<kNativeDimension>& state = context->state(0);
+      MultiFab<kNativeDimension> source = context->rhs_scratch_like(state);
+      context->source_default_into(0, state, source);
+      context->axpy(state, Real(step), source);
     });
     system.set_program_block_map({0});
   };
@@ -1322,17 +1322,17 @@ TEST(ProgramRuntime, TerminalSourcePublicationAcceptsPreparedRecoveryCandidate) 
   fill_ic(initial, n, gamma);
   system.set_state("gas", initial);
   system.set_program_block_map({0});
-  runtime::program::ProgramContext context(&system);
-  context.configure_primary_clock("test.clock.source-recovery");
-  context.install([context](double step) {
-    context.begin_step(step);
-    MultiFab<kNativeDimension>& live = context.state(0);
-    MultiFab<kNativeDimension>& source = context.rhs_scratch(920001, 0, live);
-    MultiFab<kNativeDimension>& candidate = context.scratch_state(920002, 0, live);
-    context.source_default_into(0, live, source);
-    context.lincomb(candidate, Real(1), live, Real(0), live);
-    context.axpy(candidate, Real(step), source);
-    context.commit_many({{&live, &candidate}});
+  auto context = runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("test.clock.source-recovery");
+  context->install([context](double step) {
+    context->begin_step(step);
+    MultiFab<kNativeDimension>& live = context->state(0);
+    MultiFab<kNativeDimension>& source = context->rhs_scratch(920001, 0, live);
+    MultiFab<kNativeDimension>& candidate = context->scratch_state(920002, 0, live);
+    context->source_default_into(0, live, source);
+    context->lincomb(candidate, Real(1), live, Real(0), live);
+    context->axpy(candidate, Real(step), source);
+    context->commit_many({{&live, &candidate}});
   });
   system.set_program_block_map({0});
 
@@ -1362,23 +1362,23 @@ TEST(ProgramRuntime, TerminalSourceRecoveryRefusalPreventsPartialMultiBlockCommi
   system.set_state("first", initial);
   system.set_state("second", initial);
   system.set_program_block_map({0, 1});
-  runtime::program::ProgramContext context(&system);
-  context.configure_primary_clock("test.clock.source-recovery-multiblock");
-  context.install([context](double step) {
-    context.begin_step(step);
-    MultiFab<kNativeDimension>& first = context.state(0);
-    MultiFab<kNativeDimension>& second = context.state(1);
-    MultiFab<kNativeDimension>& first_source = context.rhs_scratch(920011, 0, first);
-    MultiFab<kNativeDimension>& second_source = context.rhs_scratch(920012, 1, second);
-    MultiFab<kNativeDimension>& first_candidate = context.scratch_state(920013, 0, first);
-    MultiFab<kNativeDimension>& second_candidate = context.scratch_state(920014, 1, second);
-    context.source_default_into(0, first, first_source);
-    context.source_default_into(1, second, second_source);
-    context.lincomb(first_candidate, Real(1), first, Real(0), first);
-    context.lincomb(second_candidate, Real(1), second, Real(0), second);
-    context.axpy(first_candidate, Real(step), first_source);
-    context.axpy(second_candidate, Real(2) * Real(step), second_source);
-    context.commit_many({{&first, &first_candidate}, {&second, &second_candidate}});
+  auto context = runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("test.clock.source-recovery-multiblock");
+  context->install([context](double step) {
+    context->begin_step(step);
+    MultiFab<kNativeDimension>& first = context->state(0);
+    MultiFab<kNativeDimension>& second = context->state(1);
+    MultiFab<kNativeDimension>& first_source = context->rhs_scratch(920011, 0, first);
+    MultiFab<kNativeDimension>& second_source = context->rhs_scratch(920012, 1, second);
+    MultiFab<kNativeDimension>& first_candidate = context->scratch_state(920013, 0, first);
+    MultiFab<kNativeDimension>& second_candidate = context->scratch_state(920014, 1, second);
+    context->source_default_into(0, first, first_source);
+    context->source_default_into(1, second, second_source);
+    context->lincomb(first_candidate, Real(1), first, Real(0), first);
+    context->lincomb(second_candidate, Real(1), second, Real(0), second);
+    context->axpy(first_candidate, Real(step), first_source);
+    context->axpy(second_candidate, Real(2) * Real(step), second_source);
+    context->commit_many({{&first, &first_candidate}, {&second, &second_candidate}});
   });
   system.set_program_block_map({0, 1});
 
@@ -1416,14 +1416,14 @@ TEST(ProgramRuntime, ExplicitSourceProgramPreservesEmbeddedBoundaryInactiveCells
   install_centered_ball(system, 0.31, "staircase");
   const auto mask = system.embedded_boundary_mask();
   system.set_program_block_map({0});
-  runtime::program::ProgramContext context(&system);
-  context.configure_primary_clock("macro");
-  context.install([context](double step) {
-    context.begin_step(step);
-    MultiFab<kNativeDimension>& state = context.state(0);
-    MultiFab<kNativeDimension> source = context.rhs_scratch_like(state);
-    context.source_default_into(0, state, source);
-    context.axpy(state, Real(step), source);
+  auto context = runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("macro");
+  context->install([context](double step) {
+    context->begin_step(step);
+    MultiFab<kNativeDimension>& state = context->state(0);
+    MultiFab<kNativeDimension> source = context->rhs_scratch_like(state);
+    context->source_default_into(0, state, source);
+    context->axpy(state, Real(step), source);
   });
   system.set_program_block_map({0});
   system.step(dt);
@@ -1803,31 +1803,31 @@ TEST(ProgramRuntime, Ssprk3ProgramAlgebraPreservesInactiveBits) {
         initial[static_cast<std::size_t>(component) * cells + cell] = inactive_value;
   program.set_state("gas", initial);
   program.set_program_block_map({0});
-  runtime::program::ProgramContext context(&program);
-  context.configure_primary_clock("macro");
-  context.install([context](double step) {
-    context.begin_step(step);
-    MultiFab<kNativeDimension>& state = context.state(0);
+  auto context = runtime::program::make_program_execution_provider(&program);
+  context->configure_primary_clock("macro");
+  context->install([context](double step) {
+    context->begin_step(step);
+    MultiFab<kNativeDimension>& state = context->state(0);
     MultiFab<kNativeDimension> initial_state = state;
     MultiFab<kNativeDimension> stage = state;
-    MultiFab<kNativeDimension> residual = context.rhs_scratch_like(state);
+    MultiFab<kNativeDimension> residual = context->rhs_scratch_like(state);
 
-    context.set_stage_time(0, 1);
-    context.rhs_into(0, state, residual, 100);
-    context.axpy(stage, Real(step), residual);
+    context->set_stage_time(0, 1);
+    context->rhs_into(0, state, residual, 100);
+    context->axpy(stage, Real(step), residual);
 
-    context.set_stage_time(1, 1);
+    context->set_stage_time(1, 1);
     residual.set_val(Real(0));
-    context.rhs_into(0, stage, residual, 101);
-    context.axpy(stage, Real(step), residual);
-    context.lincomb(stage, Real(3) / Real(4), initial_state, Real(1) / Real(4), stage);
+    context->rhs_into(0, stage, residual, 101);
+    context->axpy(stage, Real(step), residual);
+    context->lincomb(stage, Real(3) / Real(4), initial_state, Real(1) / Real(4), stage);
 
-    context.set_stage_time(1, 2);
+    context->set_stage_time(1, 2);
     residual.set_val(Real(0));
-    context.rhs_into(0, stage, residual, 102);
-    context.axpy(stage, Real(step), residual);
-    context.lincomb(stage, Real(1) / Real(3), initial_state, Real(2) / Real(3), stage);
-    context.commit_many({{&state, &stage}});
+    context->rhs_into(0, stage, residual, 102);
+    context->axpy(stage, Real(step), residual);
+    context->lincomb(stage, Real(1) / Real(3), initial_state, Real(2) / Real(3), stage);
+    context->commit_many({{&state, &stage}});
   });
   program.set_program_block_map({0});
   program.step(1.0e-4);
@@ -1892,11 +1892,11 @@ TEST(ProgramRuntime, PointwiseProjectionPreservesEmbeddedBoundaryInactiveCells) 
 
   const auto install_projection_step = [](System<kNativeDimension>& system) {
     system.set_program_block_map({0});
-    runtime::program::ProgramContext context(&system);
-    context.configure_primary_clock("macro");
-    context.install([context](double step) {
-      context.begin_step(step);
-      context.apply_projection(0, context.state(0));
+    auto context = runtime::program::make_program_execution_provider(&system);
+    context->configure_primary_clock("macro");
+    context->install([context](double step) {
+      context->begin_step(step);
+      context->apply_projection(0, context->state(0));
     });
     system.set_program_block_map({0});
   };
@@ -1955,27 +1955,27 @@ TEST(ProgramRuntime, ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate)
   sim.set_program_block_map({0});
 
   int consumed_solves = 0;
-  runtime::program::ProgramContext ctx(&sim);
-  ctx.install([ctx, &consumed_solves](double dt) {
-    ctx.begin_step(dt);
-    MultiFab<kNativeDimension>& state = ctx.state(0);
-    MultiFab<kNativeDimension>& candidate = ctx.scratch_state(666001, 0, state);
+  auto ctx = runtime::program::make_program_execution_provider(&sim);
+  ctx->install([ctx, &consumed_solves](double dt) {
+    ctx->begin_step(dt);
+    MultiFab<kNativeDimension>& state = ctx->state(0);
+    MultiFab<kNativeDimension>& candidate = ctx->scratch_state(666001, 0, state);
     candidate.set_val(Real(-1));
 
-    auto field_outcome = ctx.solve_fields();
+    auto field_outcome = ctx->solve_fields();
     const SolveReport field_report = field_outcome.consume(SolveConsumption::kAccept);
     if (!field_report.solved_value_available())
       throw std::logic_error("ProjectAndRecheck test did not receive a solved field value");
     ++consumed_solves;
 
-    if (ctx.min_component(candidate, 0) <= Real(0)) {
-      ctx.apply_projection(0, candidate);
-      if (ctx.min_component(candidate, 0) <= Real(0))
+    if (ctx->min_component(candidate, 0) <= Real(0)) {
+      ctx->apply_projection(0, candidate);
+      if (ctx->min_component(candidate, 0) <= Real(0))
         throw runtime::program::StepAttemptRejected(
             SolveStatus::kIterationLimit, "guard recheck",
             "ProjectAndRecheck projection did not repair the candidate");
     }
-    ctx.commit_many({{&state, &candidate}});
+    ctx->commit_many({{&state, &candidate}});
   });
   sim.set_program_block_map({0});
 
@@ -2015,31 +2015,31 @@ TEST(ProgramRuntime, ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPub
   sim.set_program_block_map({0});
 
   int consumed_solves = 0;
-  runtime::program::ProgramContext ctx(&sim);
-  ctx.install([ctx, &consumed_solves](double dt) {
-    ctx.begin_step(dt);
-    MultiFab<kNativeDimension>& state = ctx.state(0);
-    MultiFab<kNativeDimension>& candidate = ctx.scratch_state(666002, 0, state);
+  auto ctx = runtime::program::make_program_execution_provider(&sim);
+  ctx->install([ctx, &consumed_solves](double dt) {
+    ctx->begin_step(dt);
+    MultiFab<kNativeDimension>& state = ctx->state(0);
+    MultiFab<kNativeDimension>& candidate = ctx->scratch_state(666002, 0, state);
     candidate.set_val(Real(-1));
 
-    auto field_outcome = ctx.solve_fields();
+    auto field_outcome = ctx->solve_fields();
     const SolveReport field_report = field_outcome.consume(SolveConsumption::kAccept);
     if (!field_report.solved_value_available())
       throw std::logic_error("ProjectAndRecheck test did not receive a solved field value");
     ++consumed_solves;
 
-    if (ctx.min_component(candidate, 0) < Real(3)) {
-      ctx.apply_projection(0, candidate);
-      ctx.store_history("gas.guard_candidate", candidate);
-      ctx.rotate_histories();
-      ctx.cache_store_scratch(666002, candidate);
-      ctx.record_scalar("project_and_recheck.provisional", Real(1));
-      if (ctx.min_component(candidate, 0) < Real(3))
+    if (ctx->min_component(candidate, 0) < Real(3)) {
+      ctx->apply_projection(0, candidate);
+      ctx->store_history("gas.guard_candidate", candidate);
+      ctx->rotate_histories();
+      ctx->cache_store_scratch(666002, candidate);
+      ctx->record_scalar("project_and_recheck.provisional", Real(1));
+      if (ctx->min_component(candidate, 0) < Real(3))
         throw runtime::program::StepAttemptRejected(
             SolveStatus::kIterationLimit, "guard recheck",
             "ProjectAndRecheck candidate remained inadmissible");
     }
-    ctx.commit_many({{&state, &candidate}});
+    ctx->commit_many({{&state, &candidate}});
   });
   sim.set_program_block_map({0});
 
@@ -2100,11 +2100,11 @@ TEST(ProgramRuntime, GeneratedUniformProjectionPreservesEmbeddedBoundaryInactive
 
   const auto install_projection_step = [](System<kNativeDimension>& system) {
     system.set_program_block_map({0});
-    runtime::program::ProgramContext context(&system);
-    context.configure_primary_clock("macro");
-    context.install([context](double step) {
-      context.begin_step(step);
-      context.apply_projection(0, context.state(0));
+    auto context = runtime::program::make_program_execution_provider(&system);
+    context->configure_primary_clock("macro");
+    context->install([context](double step) {
+      context->begin_step(step);
+      context->apply_projection(0, context->state(0));
     });
     system.set_program_block_map({0});
   };
@@ -2399,18 +2399,18 @@ TEST(ProgramRuntime, RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
   sim.set_state("gas", initial);
   sim.set_program_block_map({0});
 
-  runtime::program::ProgramContext ctx(&sim);
-  ctx.register_history("gas.U", 2, kGasComponents);
-  ctx.install([ctx](double dt) {
-    ctx.begin_step(dt);
-    MultiFab<kNativeDimension>& state = ctx.state(0);
+  auto ctx = runtime::program::make_program_execution_provider(&sim);
+  ctx->register_history("gas.U", 2, kGasComponents);
+  ctx->install([ctx](double dt) {
+    ctx->begin_step(dt);
+    MultiFab<kNativeDimension>& state = ctx->state(0);
     MultiFab<kNativeDimension> bump = state;
     bump.set_val(Real(dt));
-    ctx.axpy(state, Real(1), bump);
-    ctx.store_history("gas.U", state);
-    ctx.rotate_histories();
-    ctx.cache_store_scratch(17, state);
-    ctx.record_scalar("provisional", Real(42));
+    ctx->axpy(state, Real(1), bump);
+    ctx->store_history("gas.U", state);
+    ctx->rotate_histories();
+    ctx->cache_store_scratch(17, state);
+    ctx->record_scalar("provisional", Real(42));
     throw runtime::program::StepAttemptRejected(SolveStatus::kIterationLimit, "solve",
                                                 "fault injection after provisional publications");
   });

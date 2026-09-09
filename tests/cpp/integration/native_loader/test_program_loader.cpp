@@ -191,26 +191,26 @@ extern "C" bool pops_program_has_dt_bound() { return true; }
   if (install_step) {
     source += R"CPP(
 extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* sys) {
-  pops::runtime::program::ProgramContext<pops::kNativeDimension> ctx(sys);
+  auto ctx = pops::runtime::program::make_program_execution_provider(sys);
 )CPP";
     if (register_history) {
       source += R"CPP(
-  ctx.register_history("artifact.history", 1, 1, 0, "test:artifact/state",
+  ctx->register_history("artifact.history", 1, 1, 0, "test:artifact/state",
                        "test:artifact/space", "clock.macro", "test:artifact/interp");
 )CPP";
     }
     source += R"CPP(
-  ctx.configure_primary_clock("clock.macro");
-  ctx.install([ctx](double dt) {
-    ctx.begin_step(dt);
-    ctx.set_stage_time(0, 1);
-    auto field_outcome = ctx.solve_fields();
+  ctx->configure_primary_clock("clock.macro");
+  ctx->install([ctx](double dt) {
+    ctx->begin_step(dt);
+    ctx->set_stage_time(0, 1);
+    auto field_outcome = ctx->solve_fields();
     (void)field_outcome.consume(pops::SolveConsumption::kAccept);
-    for (int b = 0; b < ctx.n_blocks(); ++b) {
-      pops::MultiFab<pops::kNativeDimension>& U = ctx.state(b);
-      pops::MultiFab<pops::kNativeDimension> R = ctx.rhs_scratch_like(U);
-      ctx.rhs_into(b, U, R, 0);
-      ctx.axpy(U, static_cast<pops::Real>(dt), R);
+    for (int b = 0; b < ctx->n_blocks(); ++b) {
+      pops::MultiFab<pops::kNativeDimension>& U = ctx->state(b);
+      pops::MultiFab<pops::kNativeDimension> R = ctx->rhs_scratch_like(U);
+      ctx->rhs_into(b, U, R, 0);
+      ctx->axpy(U, static_cast<pops::Real>(dt), R);
     }
   });
 }
