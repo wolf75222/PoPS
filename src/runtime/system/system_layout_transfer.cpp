@@ -368,16 +368,21 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
     if (!physical && spec.operation != POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1)
       throw std::invalid_argument("prepared System transfer operation is unsupported");
     if (physical) {
-      if (Dim != 2 || communicator.size() != 1 || source->ba.size() != 1 ||
-          target->ba.size() != 1 || execution.memory_space != POPS_MEMORY_SPACE_HOST_V1)
+      if constexpr (Dim != 2) {
         throw std::invalid_argument(
             "physical maps require Dim=2, host memory, one rank and one patch per layout");
-      const auto* field = moment ? target : source;
-      if (field->dom.length(1) != 1 || field->cfg.lower[1] != 0.0 ||
-          field->cfg.upper[1] != 1.0 || !field->periodicity[1] ||
-          spec.refinement_ratio[0] != 1)
-        throw std::invalid_argument(
-            "physical field requires a periodic unit-measure singleton hidden storage axis");
+      } else {
+        if (communicator.size() != 1 || source->ba.size() != 1 || target->ba.size() != 1 ||
+            execution.memory_space != POPS_MEMORY_SPACE_HOST_V1)
+          throw std::invalid_argument(
+              "physical maps require Dim=2, host memory, one rank and one patch per layout");
+        const auto* field = moment ? target : source;
+        if (field->dom.length(1) != 1 || field->cfg.lower[1] != 0.0 ||
+            field->cfg.upper[1] != 1.0 || !field->periodicity[1] ||
+            spec.refinement_ratio[0] != 1)
+          throw std::invalid_argument(
+              "physical field requires a periodic unit-measure singleton hidden storage axis");
+      }
     }
     for (int axis = 0; axis < Dim; ++axis) {
       const auto position = static_cast<std::size_t>(axis);
