@@ -9,6 +9,7 @@ set(POPS_CPP_TEST_SOURCE_test_amr_multiblock_compiled "tests/cpp/integration/amr
 set(POPS_CPP_TEST_SOURCE_test_amr_multiblock_coupled_source "tests/cpp/integration/amr/test_amr_multiblock_coupled_source.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_multiblock_implicit_transaction "tests/cpp/integration/amr/test_amr_multiblock_implicit_transaction.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_multiblock_regrid_union "tests/cpp/integration/amr/test_amr_multiblock_regrid_union.cpp")
+set(POPS_CPP_TEST_SOURCE_test_amr_synchronized_continuation "tests/cpp/integration/amr/test_amr_synchronized_continuation.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_multiblock_substeps "tests/cpp/integration/amr/test_amr_multiblock_substeps.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_named_field "tests/cpp/integration/amr/test_amr_named_field.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_program_field_publication "tests/cpp/integration/amr/test_amr_program_field_publication.cpp")
