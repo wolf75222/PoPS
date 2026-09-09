@@ -251,6 +251,9 @@ using AmrCompiledBlockBuilder = std::function<AmrRuntimeBlock<Dim>(
 /// amr.step_cfl(0.4);                       // conservative refluxed step + composite FAC Poisson
 /// @endcode
 template <int Dim>
+class PreparedAmrSystemLayoutTransfer;
+
+template <int Dim>
 class AmrSystem {
   static_assert(Dim >= 1 && Dim <= 3, "AmrSystem only supports dimensions 1, 2, and 3");
 
@@ -1432,6 +1435,7 @@ class AmrSystem {
       const std::vector<std::uint8_t>* interface_candidate) const;
   template <int ContextDim, class MemorySpace>
   friend class runtime::program::AmrProgramContext;
+  friend class PreparedAmrSystemLayoutTransfer<Dim>;
   /// Private DSO seam: only the generated AmrProgramContext may install the post-publication
   /// prepared-history remap boundary. It is intentionally absent from the public facade surface.
   POPS_EXPORT void install_program_history_remap_accepted(

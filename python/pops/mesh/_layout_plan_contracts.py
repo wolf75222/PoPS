@@ -44,7 +44,7 @@ class LayoutMappingOperation(IntEnum):
 
     def to_data(self) -> dict[str, Any]:
         return {
-            "interface": "pops://interfaces/transfer@1",
+            "interface": "pops://interfaces/transfer@2",
             "name": self.name,
             "abi_value": int(self),
         }

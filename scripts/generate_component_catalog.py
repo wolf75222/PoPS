@@ -233,6 +233,10 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
                 or native["version"] < 1:
             raise CatalogError(f"native_interface_abis[{index}].version must be >= 1")
         table = _identifier(native["cpp_table"], f"native_interface_abis[{index}].cpp_table")
+        if name == "transfer" and (native["version"] != 2 or table != "PopsTransferApiV2"
+                                   or native["operations"] != ["apply", "apply_integral"]):
+            raise CatalogError(
+                "transfer must declare the indivisible PopsTransferApiV2 interface")
         if name == "field_solver" and (native["version"] != 2 or
                                         table != "PopsFieldSolverApiV2"):
             raise CatalogError(
@@ -675,6 +679,11 @@ def _render_component_abi(catalog: dict[str, Any], digest: str) -> str:
         % (row["name"].upper(), row["version"], row["cpp_table"])
         for row in catalog["native_interface_abis"]
     )
+    table_version_rows = "\n".join(
+        "    case POPS_NATIVE_INTERFACE_%s_V%d: return %du;"
+        % (row["name"].upper(), row["version"], row["version"])
+        for row in catalog["native_interface_abis"]
+    )
     table_name_rows = "\n".join(
         "    case POPS_NATIVE_INTERFACE_%s_V%d: return \"%s\";"
         % (row["name"].upper(), row["version"], row["cpp_table"])
@@ -683,6 +692,9 @@ def _render_component_abi(catalog: dict[str, Any], digest: str) -> str:
     table_complete_rows = "\n".join(
         """    case POPS_NATIVE_INTERFACE_%s_V%d: {
       if (table_size < sizeof(%s)) return false;
+      const auto* header = static_cast<const PopsComponentTableHeaderV1*>(table);
+      if (header->struct_size < sizeof(%s) || header->struct_size > table_size ||
+          header->interface_version != %du) return false;
       const auto* api = static_cast<const %s*>(table);
       return %s;
     }"""
@@ -690,6 +702,8 @@ def _render_component_abi(catalog: dict[str, Any], digest: str) -> str:
             row["name"].upper(),
             row["version"],
             row["cpp_table"],
+            row["cpp_table"],
+            row["version"],
             row["cpp_table"],
             " && ".join("api->%s != nullptr" % operation
                         for operation in row["operations"]),
@@ -719,6 +733,8 @@ extern "C" {{
 
 typedef enum PopsNativeInterfaceIdV1 {{
 {enum_rows}
+  // Retired numeric spelling for diagnostic/refusal fixtures only; version 1 is never accepted.
+  POPS_NATIVE_INTERFACE_TRANSFER_V1 = POPS_NATIVE_INTERFACE_TRANSFER_V2,
 }} PopsNativeInterfaceIdV1;
 
 typedef enum PopsTaggingOpcodeV1 {{
@@ -1159,6 +1175,32 @@ typedef struct PopsTransferApiV1 {{
   PopsTransferApplyFnV1 apply;
 }} PopsTransferApiV1;
 
+// Version 2 requires both callbacks. Integral callbacks are patch-local and noncollective;
+// the native carrier owns transport, exact interval coefficients and transactional publication.
+// physical_contract_identity names the immutable resolved support/measure compiled into the
+// provider. Each source axis has extents[axis] explicit weights starting at weight_offsets[axis].
+// The destination contains one scalar per component, with one cell on every embedding axis.
+typedef struct PopsTransferIntegralRequestV2 {{
+  uint32_t struct_size;
+  PopsConstFieldViewV1 source;
+  PopsFieldViewV1 destination;
+  int32_t dimension;
+  PopsTransferOperationV1 operation;
+  const char* physical_contract_identity;
+  const double* axis_weights;
+  size_t weight_count;
+  size_t weight_offsets[3];
+  PopsExecutionContextV1 execution;
+}} PopsTransferIntegralRequestV2;
+typedef int32_t (*PopsTransferApplyIntegralFnV2)(
+    void*, const PopsTransferIntegralRequestV2*, PopsComponentStatusV1*);
+typedef struct PopsTransferApiV2 {{
+  PopsComponentTableHeaderV1 header;
+  PopsTransferApplyFnV1 apply;
+  PopsTransferApplyIntegralFnV2 apply_integral;
+}} PopsTransferApiV2;
+
+
 // Reflux providers are patch-local numerical kernels only. PoPS retains sole ownership of the
 // time-integrated flux ledger, interface topology, MPI reduction, transaction and state update.
 // Each face contains coarse/fine fluxes already integrated in time and averaged onto the same
@@ -1469,6 +1511,12 @@ inline constexpr size_t generated_native_interface_table_size(
     PopsNativeInterfaceIdV1 id) noexcept {{
   switch (id) {{
 {table_size_rows}
+  }}
+  return 0;
+}}
+inline constexpr uint32_t generated_native_interface_version(PopsNativeInterfaceIdV1 id) noexcept {{
+  switch (id) {{
+{table_version_rows}
   }}
   return 0;
 }}
@@ -1954,14 +2002,14 @@ inline py::dict transfer_apply(
   PopsTransferRequestV1 request{
       sizeof(PopsTransferRequestV1), source.const_value, destination.mutable_value,
       ratio.data(), source.const_value.dimension, operation, execution.value};
-  PopsComponentStatusV1 status{
-      sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
-  const auto& api = loaded.table<PopsTransferApiV1>(POPS_NATIVE_INTERFACE_TRANSFER_V1,
+  PopsComponentStatusV1 status = unwritten_component_status();
+  const auto& api = loaded.table<PopsTransferApiV2>(POPS_NATIVE_INTERFACE_TRANSFER_V2,
                                                     @TRANSFER_VERSION@);
   void* state = loaded.prepared_state(
-      POPS_NATIVE_INTERFACE_TRANSFER_V1, @TRANSFER_VERSION@, execution.value);
+      POPS_NATIVE_INTERFACE_TRANSFER_V2, @TRANSFER_VERSION@, execution.value);
   const int code = apply_transfer(api, state, request, status);
-  if (code != 0 || status.code != 0 || status.action != POPS_COMPONENT_CONTINUE_V1)
+  if (!component_status_is_well_formed(status) || code != 0 || status.code != 0 ||
+      status.action != POPS_COMPONENT_CONTINUE_V1)
     throw std::runtime_error(status.reason == nullptr ? "native Transfer failed"
                                                       : status.reason);
   py::dict receipt;

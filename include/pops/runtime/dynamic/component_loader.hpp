@@ -468,6 +468,9 @@ class LoadedComponent final {
           static_cast<std::uint64_t>(row.interface_version);
       if (!identities.insert(key).second)
         throw std::runtime_error("native component exports a duplicate interface table");
+      if (row.interface_version != generated_native_interface_version(row.interface_id))
+        throw std::runtime_error(
+            "native component interface version differs from the closed catalog");
       if (!expected_identities.contains(key))
         throw std::runtime_error(
             "native component exports an interface table absent from its manifest");

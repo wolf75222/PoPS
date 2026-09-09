@@ -439,9 +439,15 @@ std::string component_source() {
          POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, &prepare, &destroy},
         &evaluate};
 #endif
-    const PopsTransferApiV1 transfer{{sizeof(PopsTransferApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
-                                      POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, &prepare, &destroy},
-                                     &apply_transfer};
+    int apply_integral(void*, const PopsTransferIntegralRequestV2*, PopsComponentStatusV1* status) {
+      *status = {sizeof(PopsComponentStatusV1), 91, POPS_COMPONENT_ABORT_RUN_V1,
+                 "fixture only supports standard transfer"};
+      return 91;
+    }
+    const PopsTransferApiV2 transfer{{sizeof(PopsTransferApiV2), POPS_COMPONENT_PROTOCOL_ABI_V1,
+                                      POPS_NATIVE_INTERFACE_TRANSFER_V2, 2, &prepare, &destroy},
+                                     &apply_transfer,
+                                     &apply_integral};
     const PopsGhostBoundaryApiV1 ghost{
         {sizeof(PopsGhostBoundaryApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
          POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, &prepare, &destroy},
@@ -464,7 +470,7 @@ std::string component_source() {
 #else
          sizeof(flux), &flux},
 #endif
-        {POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1), &transfer},
+        {POPS_NATIVE_INTERFACE_TRANSFER_V2, 2, sizeof(PopsTransferApiV2), &transfer},
         {POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, sizeof(PopsGhostBoundaryApiV1), &ghost},
         {POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1, 1, sizeof(PopsBoundaryFluxApiV1), &boundary_flux},
         {POPS_NATIVE_INTERFACE_TAGGER_V2, 2, sizeof(PopsTaggerApiV2), &tagger},
@@ -545,7 +551,7 @@ pops::component::ExpectedNativeComponent expected(const std::filesystem::path& l
           POPS_ABI_KEY_LITERAL,
           pops::dynlib::AuthenticatedNativeFile(library.string()).binary_identity(),
           {{POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, sizeof(PopsNumericalFluxApiV1)},
-           {POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1)},
+           {POPS_NATIVE_INTERFACE_TRANSFER_V2, 2, sizeof(PopsTransferApiV2)},
            {POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, sizeof(PopsGhostBoundaryApiV1)},
            {POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1, 1, sizeof(PopsBoundaryFluxApiV1)},
            {POPS_NATIVE_INTERFACE_TAGGER_V2, 2, sizeof(PopsTaggerApiV2)},
@@ -726,7 +732,7 @@ TEST(test_amr_native_loader, RefusesIdentityInterfaceAndTableSizeMismatches) {
                std::runtime_error);
 
   auto missing = expected(library);
-  missing.interfaces = {{POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1)}};
+  missing.interfaces = {{POPS_NATIVE_INTERFACE_TRANSFER_V2, 2, sizeof(PopsTransferApiV2)}};
   EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), missing),
                std::runtime_error);
 

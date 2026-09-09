@@ -40,6 +40,12 @@ class NativeLayoutMapping:
                 claimed = self.component.component_manifest.to_data()["signature"].get("physical_map")
                 if canonical_bytes(claimed) != canonical_bytes(requirement.physical_map.to_data()):
                     raise ValueError("native component does not authenticate the exact physical map")
+                from .native_physical_mapping import physical_map_identity
+                integral = self.component.component_manifest.to_data()["signature"].get("physical_integral")
+                expected = {"interface_version": 2,
+                            "physical_contract_identity": physical_map_identity(requirement.physical_map)}
+                if canonical_bytes(integral) != canonical_bytes(expected):
+                    raise ValueError("native component does not authenticate the physical integral V2 contract")
         ids = tuple(row.qualified_id for row in requirements)
         if len(ids) != len(set(ids)):
             raise ValueError("NativeLayoutMapping requirements cannot contain duplicates")

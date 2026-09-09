@@ -1,4 +1,4 @@
-/// Generic tensor-product support reduction / constant extension for Transfer ABI v1.
+/// Generic tensor-product support kernels for the negotiated Transfer interface.
 #pragma once
 
 #include <pops/runtime/config/generated_component_abi.hpp>
@@ -28,6 +28,9 @@ struct PhysicalSupportTransfer {
 inline int apply_physical_support_transfer(const PhysicalSupportTransfer& map,
                                            const PopsTransferRequestV1* request,
                                            PopsComponentStatusV1* status) {
+  if (status)
+    *status = {sizeof(PopsComponentStatusV1), 2, POPS_COMPONENT_ABORT_RUN_V1,
+               "physical transfer has an invalid request or field contract"};
   if (!request || !status || request->struct_size < sizeof(PopsTransferRequestV1) ||
       map.dimension < 1 || map.dimension > 3 || request->dimension != map.dimension ||
       request->operation != map.operation || (map.operation != 2 && map.operation != 3))
@@ -41,6 +44,8 @@ inline int apply_physical_support_transfer(const PhysicalSupportTransfer& map,
       !s.component_count || s.component_count != d.component_count || s.component_stride <= 0 ||
       d.component_stride <= 0)
     return 2;
+  *status = {sizeof(PopsComponentStatusV1), 3, POPS_COMPONENT_ABORT_RUN_V1,
+             "physical transfer has invalid extents, strides or support weights"};
   const auto offset_fits = [](const auto& view, int dimension) {
     const auto limit =
         static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()) / sizeof(double);
@@ -114,6 +119,8 @@ inline int apply_physical_support_transfer(const PhysicalSupportTransfer& map,
   const auto* source = static_cast<const double*>(s.data);
   auto* destination = static_cast<double*>(d.data);
   const std::size_t count = cells * d.component_count;
+  *status = {sizeof(PopsComponentStatusV1), 4, POPS_COMPONENT_ABORT_RUN_V1,
+             "physical transfer produced a non-finite value"};
   using Policy =
       Kokkos::RangePolicy<Kokkos::DefaultHostExecutionSpace, Kokkos::IndexType<std::size_t>>;
   Kokkos::parallel_for(
@@ -170,4 +177,51 @@ inline int apply_physical_support_transfer(const PhysicalSupportTransfer& map,
   *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
   return 0;
 }
+/// One tensor-product intersection integral. Every source axis is integrated into one
+/// destination cell; axis weights already contain retained-coordinate overlap fractions and
+/// eliminated-coordinate measure. This is the same authoritative reduction used by a physical
+/// support map, exposed explicitly for composite AMR contributions rather than relabeling a map.
+struct PhysicalSupportIntegral {
+  int dimension = 0;
+  std::size_t weight_offsets[3] = {0, 0, 0};
+  const double* weights = nullptr;
+  std::size_t weight_count = 0;
+};
+
+inline int apply_physical_support_integral(const PhysicalSupportIntegral& integral,
+                                           const PopsConstFieldViewV1& source,
+                                           const PopsFieldViewV1& destination,
+                                           PopsComponentStatusV1* status) {
+  if (status)
+    *status = {sizeof(PopsComponentStatusV1), 2, POPS_COMPONENT_ABORT_RUN_V1,
+               "physical integral has an invalid dimension"};
+  if (integral.dimension < 1 || integral.dimension > 3)
+    return 2;
+  PhysicalSupportTransfer reduction{};
+  reduction.dimension = integral.dimension;
+  reduction.operation = POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1;
+  reduction.weights = integral.weights;
+  reduction.weight_count = integral.weight_count;
+  const std::int32_t identity_ratios[3] = {1, 1, 1};
+  for (int axis = 0; axis < integral.dimension; ++axis) {
+    if (destination.extents[axis] != 1) {
+      if (status)
+        *status = {sizeof(PopsComponentStatusV1), 3, POPS_COMPONENT_ABORT_RUN_V1,
+                   "physical integral requires one destination cell"};
+      return 3;
+    }
+    reduction.source_active[axis] = 1;
+    reduction.reduction_cells[axis] = source.extents[axis];
+    reduction.weight_offsets[axis] = integral.weight_offsets[axis];
+  }
+  PopsTransferRequestV1 request{};
+  request.struct_size = sizeof(request);
+  request.source = source;
+  request.destination = destination;
+  request.refinement_ratio = identity_ratios;
+  request.dimension = integral.dimension;
+  request.operation = POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1;
+  return apply_physical_support_transfer(reduction, &request, status);
+}
+
 }  // namespace pops::component

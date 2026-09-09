@@ -152,11 +152,11 @@
       "id": 5,
       "name": "transfer",
       "uri": "pops://interfaces/transfer",
-      "version": 1,
-      "cpp_table": "PopsTransferApiV1",
+      "version": 2,
+      "cpp_table": "PopsTransferApiV2",
       "hot_path": true,
       "facets": ["stencil", "lowering"],
-      "operations": ["apply"]
+      "operations": ["apply", "apply_integral"]
     },
     {
       "id": 6,

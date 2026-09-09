@@ -1283,14 +1283,19 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
 
   std::array<double, 1> transferred{};
   std::array<std::int32_t, 2> ratio{2, 2};
-  PopsTransferApiV1 transfer_api{
-      abi_header(sizeof(PopsTransferApiV1), POPS_NATIVE_INTERFACE_TRANSFER_V1),
+  PopsTransferApiV2 transfer_api{
+      abi_header(sizeof(PopsTransferApiV2), POPS_NATIVE_INTERFACE_TRANSFER_V2, 2),
       +[](void*, const PopsTransferRequestV1* request, PopsComponentStatusV1* result) {
         const auto* source = static_cast<const double*>(request->source.data);
         auto* destination = static_cast<double*>(request->destination.data);
         destination[0] = 0.25 * (source[0] + source[1] + source[2] + source[3]);
         *result = ok_status();
         return 0;
+      },
+      +[](void*, const PopsTransferIntegralRequestV2*, PopsComponentStatusV1* result) {
+        *result = {sizeof(PopsComponentStatusV1), 91, POPS_COMPONENT_ABORT_RUN_V1,
+                   "fixture only supports standard conservative transfer"};
+        return 91;
       }};
   PopsTransferRequestV1 transfer_request{sizeof(PopsTransferRequestV1),
                                          abi::const_field_view(tag_values.data(), 2, 2),
@@ -2147,6 +2152,64 @@ TEST(ComponentInterfaces, FieldTopologyAuthenticatesShiftedAnisotropicLevelGeome
     patches[0].upper[0] = topology.domain_upper[0] + 1;
     EXPECT_THROW(validate_field_global_topology(coarse_only), std::invalid_argument);
   }
+}
+
+TEST(ComponentInterfaces, TransferV2IntegralDispatchIsTypedAndPreflighted) {
+  std::array<double, 4> source{1, 2, 3, 4};
+  std::array<double, 1> destination{-99};
+  std::array<double, 4> weights{1, -1, 0.5, 0.5};
+  int calls = 0;
+  PopsTransferApiV2 api{abi_header(sizeof(PopsTransferApiV2), POPS_NATIVE_INTERFACE_TRANSFER_V2, 2),
+                        +[](void*, const PopsTransferRequestV1*, PopsComponentStatusV1* status) {
+                          *status = ok_status();
+                          return 0;
+                        },
+                        +[](void* state, const PopsTransferIntegralRequestV2* request,
+                            PopsComponentStatusV1* status) {
+                          ++*static_cast<int*>(state);
+                          *static_cast<double*>(request->destination.data) = 37;
+                          *status = ok_status();
+                          return 0;
+                        }};
+  EXPECT_TRUE(pops::component::generated_native_interface_table_is_complete(
+      POPS_NATIVE_INTERFACE_TRANSFER_V2, &api, sizeof(api)));
+  auto missing = api;
+  missing.apply_integral = nullptr;
+  EXPECT_FALSE(pops::component::generated_native_interface_table_is_complete(
+      POPS_NATIVE_INTERFACE_TRANSFER_V2, &missing, sizeof(missing)));
+  auto retired = api;
+  retired.header.interface_version = 1;
+  EXPECT_FALSE(pops::component::generated_native_interface_table_is_complete(
+      POPS_NATIVE_INTERFACE_TRANSFER_V2, &retired, sizeof(retired)));
+  auto truncated = api;
+  truncated.header.struct_size = sizeof(PopsComponentTableHeaderV1);
+  EXPECT_FALSE(pops::component::generated_native_interface_table_is_complete(
+      POPS_NATIVE_INTERFACE_TRANSFER_V2, &truncated, sizeof(truncated)));
+  PopsTransferIntegralRequestV2 request{};
+  request.struct_size = sizeof(request);
+  request.source = abi::const_field_view(source.data(), 2, 2);
+  request.destination = abi::field_view(destination.data(), 1, 1);
+  request.dimension = 2;
+  request.operation = POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1;
+  request.physical_contract_identity = "test::physical-map";
+  request.axis_weights = weights.data();
+  request.weight_count = weights.size();
+  request.weight_offsets[1] = 2;
+  request.execution = abi::host_execution_context();
+  PopsComponentStatusV1 status = pops::component::unwritten_component_status();
+  EXPECT_EQ(pops::component::apply_transfer_integral(api, &calls, request, status), 0);
+  EXPECT_EQ(calls, 1);
+  EXPECT_DOUBLE_EQ(destination[0], 37);
+  request.weight_offsets[1] = 3;
+  EXPECT_THROW(pops::component::apply_transfer_integral(api, &calls, request, status),
+               std::invalid_argument);
+  request.weight_offsets[1] = 2;
+  request.source.component_stride = std::numeric_limits<std::ptrdiff_t>::max();
+  request.source.component_count = request.destination.component_count = 2;
+  EXPECT_THROW(pops::component::apply_transfer_integral(api, &calls, request, status),
+               std::invalid_argument);
+  EXPECT_EQ(calls, 1);
+  EXPECT_DOUBLE_EQ(destination[0], 37);
 }
 
 }  // namespace

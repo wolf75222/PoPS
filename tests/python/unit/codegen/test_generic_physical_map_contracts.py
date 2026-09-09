@@ -104,7 +104,7 @@ def test_cycle_and_ambiguous_atomic_overwrites_refuse_instead_of_inventing_stage
 
 
 def test_provider_package_contains_data_and_common_kernel_only(tmp_path):
-    from pops.mesh.native_physical_mapping import _native_source
+    from pops.mesh.native_physical_mapping import _native_source, physical_map_identity
     manifest = SimpleNamespace(component_id="test.component", semantic_digest=SimpleNamespace(token="semantic"),
                                manifest_digest=SimpleNamespace(token="manifest"))
     mapping = PhysicalSupportMap(PhysicalSupport((V, X)), PhysicalSupport((X,)),
@@ -113,6 +113,12 @@ def test_provider_package_contains_data_and_common_kernel_only(tmp_path):
     assert '#include <pops/runtime/dynamic/physical_support_transfer.hpp>' in source
     assert 'apply_physical_support_transfer(descriptor, request, status)' in source
     assert 'const double weights[] = {-2.0, 3.0};' in source
+    assert 'PopsTransferApiV2' in source and '&apply, &integral' in source
+    assert 'PopsTransferIntegralRequestV2' in source
+    assert physical_map_identity(mapping) in source
+    assert 'apply_physical_support_integral(operation, request->source, request->destination, status)' in source
+    changed = replace(mapping, reductions=(replace(mapping.reductions[0], weights=(1, 1)),))
+    assert physical_map_identity(changed) != physical_map_identity(mapping)
     assert 'for (' not in source and 'parallel_for' not in source
     tiny = replace(mapping, reductions=(replace(mapping.reductions[0], weights=(Fraction(1, 10**500), 1)),))
     with pytest.raises(ValueError, match="finite float64"):

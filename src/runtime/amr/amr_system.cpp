@@ -2,6 +2,7 @@
 /// @brief Exact compile-time-ranked AMR facade over runtime::amr::AmrRuntime<Dim>.
 
 #include <pops/runtime/amr_system.hpp>
+#include <pops/runtime/amr/amr_layout_transfer_bridge.hpp>
 #include <pops/runtime/program/history_sample_identity_codec.hpp>
 #include <pops/runtime/program/amr_history_flux_snapshot_codec.hpp>
 
@@ -21390,6 +21391,8 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::checkpoint_transfer_routes
   }
   return rows;
 }
+
+#include "amr_layout_transfer_bridge.inc"
 
 template AmrSystem<kNativeDimension>::AmrSystem(const AmrSystemConfig<kNativeDimension>&);
 template AmrSystem<kNativeDimension>::~AmrSystem();

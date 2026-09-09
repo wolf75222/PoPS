@@ -28,6 +28,7 @@ set(POPS_CPP_TEST_SOURCE_test_amr_tensor_fac_provider "tests/cpp/unit/runtime/te
 set(POPS_CPP_TEST_SOURCE_test_analytic_expression "tests/cpp/unit/runtime/test_analytic_expression.cpp")
 set(POPS_CPP_TEST_SOURCE_test_analytic_level_set "tests/cpp/unit/runtime/test_analytic_level_set.cpp")
 set(POPS_CPP_TEST_SOURCE_test_exact_aux_registry_nd "tests/cpp/unit/runtime/test_exact_aux_registry_nd.cpp")
+set(POPS_CPP_TEST_SOURCE_test_amr_layout_transfer "tests/cpp/unit/runtime/test_amr_layout_transfer.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_transfer_properties "tests/cpp/integration/amr/test_amr_transfer_properties.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_weno5_native "tests/cpp/integration/native_loader/test_amr_weno5_native.cpp")
 set(POPS_CPP_TEST_SOURCE_test_ap_limit "tests/cpp/unit/physics/test_ap_limit.cpp")

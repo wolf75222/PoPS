@@ -215,6 +215,10 @@ TEST(PhysicalSupportTransfer, OffsetOverflowFailsPreflightWithoutWritingDestinat
                                   {std::numeric_limits<std::ptrdiff_t>::max(), 1, 1}, 1, 1));
   PopsComponentStatusV1 status{};
   EXPECT_NE(apply_physical_support_transfer(broadcast, &request, &status), 0);
+  EXPECT_EQ(status.struct_size, sizeof(PopsComponentStatusV1));
+  EXPECT_EQ(status.code, 3);
+  EXPECT_EQ(status.action, POPS_COMPONENT_ABORT_RUN_V1);
+  EXPECT_NE(status.reason, nullptr);
   EXPECT_TRUE(std::all_of(destination.begin(), destination.end(),
                           [](double value) { return value == kCanary; }));
 
@@ -243,6 +247,40 @@ TEST(PhysicalSupportTransfer, OffsetOverflowFailsPreflightWithoutWritingDestinat
   EXPECT_NE(apply_physical_support_transfer(broadcast, &request, &status), 0);
   EXPECT_TRUE(std::all_of(destination.begin(), destination.end(),
                           [](double value) { return value == kCanary; }));
+}
+
+TEST(PhysicalSupportTransfer, FailureStatusDistinguishesInputAndNumericalFailureThenClears) {
+  ensure_kokkos();
+  std::array<double, 2> source{1e308, 1e308};
+  std::array<double, 1> destination{kCanary};
+  const double weights[] = {1, 1};
+  PhysicalSupportTransfer reduction{};
+  reduction.dimension = 1;
+  reduction.operation = POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1;
+  reduction.source_active[0] = 1;
+  reduction.reduction_cells[0] = 2;
+  reduction.weights = weights;
+  reduction.weight_count = 2;
+  auto request = request_for(
+      reduction, field_view<PopsConstFieldViewV1>(source.data(), 1, {2, 1, 1}, {1, 1, 1}, 1, 2),
+      field_view<PopsFieldViewV1>(destination.data(), 1, {1, 1, 1}, {1, 1, 1}, 1, 1));
+  PopsComponentStatusV1 status{};
+  request.dimension = 2;
+  EXPECT_EQ(apply_physical_support_transfer(reduction, &request, &status), 2);
+  EXPECT_EQ(status.code, 2);
+  EXPECT_EQ(status.action, POPS_COMPONENT_ABORT_RUN_V1);
+  EXPECT_DOUBLE_EQ(destination[0], kCanary);
+  request.dimension = 1;
+  EXPECT_EQ(apply_physical_support_transfer(reduction, &request, &status), 4);
+  EXPECT_EQ(status.code, 4);
+  EXPECT_EQ(status.action, POPS_COMPONENT_ABORT_RUN_V1);
+  EXPECT_NE(status.reason, nullptr);
+  source = {1, 2};
+  ASSERT_EQ(apply_physical_support_transfer(reduction, &request, &status), 0);
+  EXPECT_EQ(status.code, 0);
+  EXPECT_EQ(status.action, POPS_COMPONENT_CONTINUE_V1);
+  EXPECT_EQ(status.reason, nullptr);
+  EXPECT_DOUBLE_EQ(destination[0], 3);
 }
 
 }  // namespace

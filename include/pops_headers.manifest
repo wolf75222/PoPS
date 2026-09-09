@@ -196,6 +196,8 @@ api pops/physics/fluids/euler.hpp
 api pops/physics/inversion/inversion.hpp
 api pops/physics/inversion/variable_inversion.hpp
 sdk-support pops/runtime/accelerator/prepared_stream_executor.hpp
+api pops/runtime/amr/amr_layout_transfer.hpp
+sdk-support pops/runtime/amr/amr_layout_transfer_bridge.hpp
 sdk-support pops/runtime/amr/amr_runtime.hpp
 sdk-support pops/runtime/amr/amr_tensor_elliptic.hpp
 sdk-support pops/runtime/amr/tensor_composite_fac.hpp

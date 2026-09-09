@@ -766,9 +766,10 @@ inline int cluster_tags(const PopsClusteringApiV1& api, void* state,
   return code;
 }
 
-inline int apply_transfer(const PopsTransferApiV1& api, void* state,
+inline int apply_transfer(const PopsTransferApiV2& api, void* state,
                           const PopsTransferRequestV1& request, PopsComponentStatusV1& status) {
   require_operation(api.apply != nullptr, "apply");
+  require_operation(api.apply_integral != nullptr, "apply_integral");
   validate_execution_context(request.execution);
   validate_execution_field(request.execution, request.source, "transfer source");
   validate_execution_field(request.execution, request.destination, "transfer destination");
@@ -790,8 +791,9 @@ inline int apply_transfer(const PopsTransferApiV1& api, void* state,
                                       request.destination.ghost_lower[axis] -
                                       request.destination.ghost_upper[axis];
     if (request.operation == POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1) {
-      if (ratio <= 0 || destination_interior >
-                            std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(ratio) ||
+      if (ratio <= 0 ||
+          destination_interior >
+              std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(ratio) ||
           source_interior != destination_interior * static_cast<std::size_t>(ratio))
         throw std::invalid_argument("transfer refinement ratio must authenticate aligned extents");
     } else if (ratio != 1) {
@@ -801,6 +803,72 @@ inline int apply_transfer(const PopsTransferApiV1& api, void* state,
     }
   }
   return api.apply(state, &request, &status);
+}
+
+/// Dispatch the mandatory V2 integral operation. Numerical reduction belongs to the provider;
+/// the runtime validates the complete borrowed-view and tensor-coefficient contract first.
+inline int apply_transfer_integral(const PopsTransferApiV2& api, void* state,
+                                   const PopsTransferIntegralRequestV2& request,
+                                   PopsComponentStatusV1& status) {
+  require_operation(api.apply != nullptr, "apply");
+  require_operation(api.apply_integral != nullptr, "apply_integral");
+  if (request.struct_size < sizeof(PopsTransferIntegralRequestV2) ||
+      !component_text(request.physical_contract_identity) || !request.axis_weights ||
+      request.dimension < 1 || request.dimension > 3 ||
+      request.source.dimension != request.dimension ||
+      request.destination.dimension != request.dimension ||
+      (request.operation != POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1 &&
+       request.operation != POPS_TRANSFER_OPERATION_PHYSICAL_PULLBACK_V1))
+    throw std::invalid_argument("Transfer integral request has incomplete physical provenance");
+  validate_execution_context(request.execution);
+  validate_execution_field(request.execution, request.source, "transfer integral source");
+  validate_execution_field(request.execution, request.destination, "transfer integral destination");
+  if (request.execution.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
+      request.source.component_count != request.destination.component_count ||
+      request.source.centering != POPS_FIELD_CENTERING_CELL_V1 ||
+      request.destination.centering != POPS_FIELD_CENTERING_CELL_V1)
+    throw std::invalid_argument("Transfer integral requires matched host cell components");
+  const auto offset_fits = [](const auto& view) {
+    const auto limit =
+        static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()) / sizeof(double);
+    std::size_t span = 0;
+    const auto include = [&](std::size_t count, std::ptrdiff_t stride) {
+      if (!count || stride <= 0 || count - 1 > (limit - span) / static_cast<std::size_t>(stride))
+        return false;
+      span += (count - 1) * static_cast<std::size_t>(stride);
+      return true;
+    };
+    if (!include(view.component_count, view.component_stride))
+      return false;
+    for (int axis = 0; axis < view.dimension; ++axis)
+      if (!include(view.extents[axis], view.axis_strides[axis]))
+        return false;
+    return true;
+  };
+  if (!offset_fits(request.source) || !offset_fits(request.destination))
+    throw std::invalid_argument("Transfer integral field offsets exceed addressable storage");
+  std::size_t consumed = 0;
+  for (int axis = 0; axis < 3; ++axis) {
+    if (axis >= request.dimension) {
+      if (request.weight_offsets[axis] != 0)
+        throw std::invalid_argument("Transfer integral has inactive coefficient metadata");
+      continue;
+    }
+    if (request.destination.extents[axis] != 1 || request.source.ghost_lower[axis] ||
+        request.source.ghost_upper[axis] || request.destination.ghost_lower[axis] ||
+        request.destination.ghost_upper[axis] || request.weight_offsets[axis] != consumed ||
+        consumed > request.weight_count ||
+        request.source.extents[axis] > request.weight_count - consumed)
+      throw std::invalid_argument(
+          "Transfer integral coefficient segments do not match source axes");
+    consumed += request.source.extents[axis];
+  }
+  if (consumed != request.weight_count)
+    throw std::invalid_argument("Transfer integral has unconsumed coefficient storage");
+  for (std::size_t index = 0; index < consumed; ++index)
+    if (!std::isfinite(request.axis_weights[index]))
+      throw std::invalid_argument("Transfer integral coefficients must be finite");
+  return api.apply_integral(state, &request, &status);
 }
 
 template <class Left, class Right>

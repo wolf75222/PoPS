@@ -714,6 +714,12 @@ pops_add_gtest_suite(NAME test_cell_temporal_program_route SOURCES "${_src}" EXT
 pops_test_source(_src test_amr_transition_invariants)
 pops_add_gtest_suite(NAME test_amr_transition_invariants SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
+# Physical AMR transfer providers are compiled into DSOs by the fixture and resolve
+# Kokkos symbols exported by the executable. Keep their shared temporary files exclusive.
+pops_test_source(_src test_amr_layout_transfer)
+pops_native_loader_definitions(_native_defs)
+pops_add_gtest_suite(NAME test_amr_layout_transfer SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
+
 pops_test_source(_src test_amr_transfer_properties)
 pops_add_gtest_suite(NAME test_amr_transfer_properties SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
@@ -854,6 +860,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_composite_general_field 2)
   set(POPS_MPI_RANKS_test_prepared_resource_cache 2)
   set(POPS_MPI_RANKS_test_amr_program_diffusion 2)
+  set(POPS_MPI_RANKS_test_amr_layout_transfer 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_implicit_transaction 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_substeps 2)
   set(POPS_MPI_RANKS_test_collective_step_rejection 2)
@@ -1033,6 +1040,8 @@ if(POPS_HAS_MPI)
     test_prepared_resource_cache
     # Run only the real AMR cache collective preflight witness under MPI.
     test_amr_program_diffusion
+    # Independent hierarchy ownership is reversed across ranks; all four cases are collective.
+    test_amr_layout_transfer
     test_amr_multiblock_implicit_transaction
     test_amr_multiblock_substeps
     test_collective_step_rejection
@@ -1145,6 +1154,10 @@ if(POPS_HAS_MPI)
       endif()
     endforeach()
   endforeach()
+  set_tests_properties(test_amr_layout_transfer_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
+    RESOURCE_LOCK native_loader
+    TIMEOUT 600)
   set_tests_properties(test_amr_program_diffusion_np2 PROPERTIES
     ENVIRONMENT "OMP_NUM_THREADS=1"
     TIMEOUT 60)

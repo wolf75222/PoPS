@@ -176,12 +176,18 @@ std::string transfer_component_source(int dimension) {
       return 0;
     }
 
-    const PopsTransferApiV1 transfer_table{
-        {sizeof(PopsTransferApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
-         POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, nullptr, nullptr},
-        &apply};
-    const PopsComponentInterfaceEntryV1 interface_entry{POPS_NATIVE_INTERFACE_TRANSFER_V1, 1,
-                                                        sizeof(PopsTransferApiV1), &transfer_table};
+    int apply_integral(void*, const PopsTransferIntegralRequestV2*, PopsComponentStatusV1* status) {
+      *status = {sizeof(PopsComponentStatusV1), 91, POPS_COMPONENT_ABORT_RUN_V1,
+                 "fixture only supports standard transfer"};
+      return 91;
+    }
+    const PopsTransferApiV2 transfer_table{
+        {sizeof(PopsTransferApiV2), POPS_COMPONENT_PROTOCOL_ABI_V1,
+         POPS_NATIVE_INTERFACE_TRANSFER_V2, 2, nullptr, nullptr},
+        &apply,
+        &apply_integral};
+    const PopsComponentInterfaceEntryV1 interface_entry{POPS_NATIVE_INTERFACE_TRANSFER_V2, 2,
+                                                        sizeof(PopsTransferApiV2), &transfer_table};
     const PopsComponentApiV1 component_api{sizeof(PopsComponentApiV1),
                                            POPS_COMPONENT_PROTOCOL_ABI_V1,
                                            POPS_ABI_KEY_LITERAL,
@@ -259,7 +265,7 @@ pops::component::ExpectedNativeComponent expected_component(const std::string& l
           POPS_COMPONENT_CATALOG_SHA256_V1,
           POPS_ABI_KEY_LITERAL,
           pops::dynlib::AuthenticatedNativeFile(library).binary_identity(),
-          {{POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1)}}};
+          {{POPS_NATIVE_INTERFACE_TRANSFER_V2, 2, sizeof(PopsTransferApiV2)}}};
 }
 
 pops::SystemLayoutTransferExecution transfer_execution(MPI_Comm communicator) {

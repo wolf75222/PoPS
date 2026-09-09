@@ -7,6 +7,7 @@
 
 #include <pops/runtime/amr/prepared_tagging_execution.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
+#include "amr_layout_transfer_binding.hpp"
 
 #include <array>
 #include <cstdint>
@@ -1740,4 +1741,5 @@ void init_amr(py::module_& m) {
   bind_amr_stepping(cls);
   bind_amr_program(cls);
   bind_amr_data(cls);
+  amr_layout_transfer_binding::bind(m, cls);
 }

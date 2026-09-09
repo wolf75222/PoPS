@@ -312,7 +312,7 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
   system_impl_type* target = nullptr;
   std::shared_ptr<component::LoadedComponent> component_handle;
   component::LoadedComponent::PreparedState component_state;
-  const PopsTransferApiV1* transfer_api = nullptr;
+  const PopsTransferApiV2* transfer_api = nullptr;
   SystemLayoutTransferSpec<Dim> spec;
   SystemLayoutTransferExecution execution;
   PopsExecutionContextV1 execution_abi{};
@@ -467,7 +467,7 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
         spec.provider_manifest_identity != api.manifest_identity)
       throw std::invalid_argument(
           "prepared System transfer provider identity differs from its loaded component");
-    (void)component_handle->table<PopsTransferApiV1>(POPS_NATIVE_INTERFACE_TRANSFER_V1, 1u);
+    (void)component_handle->table<PopsTransferApiV2>(POPS_NATIVE_INTERFACE_TRANSFER_V2, 2u);
   }
 
   void validate_physical_contract(bool moment) const {
@@ -662,9 +662,9 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
 
   void prepare_provider() {
     transfer_api =
-        &component_handle->table<PopsTransferApiV1>(POPS_NATIVE_INTERFACE_TRANSFER_V1, 1u);
+        &component_handle->table<PopsTransferApiV2>(POPS_NATIVE_INTERFACE_TRANSFER_V2, 2u);
     component_state =
-        component_handle->prepare_fresh_state(POPS_NATIVE_INTERFACE_TRANSFER_V1, 1u, execution_abi);
+        component_handle->prepare_fresh_state(POPS_NATIVE_INTERFACE_TRANSFER_V2, 2u, execution_abi);
   }
 
   void validate_active(std::uint64_t generation, std::uint64_t attempt, const char* where) const {
@@ -845,8 +845,7 @@ SystemLayoutTransferReceipt PreparedSystemLayoutTransfer<Dim>::apply(std::uint64
                                       Dim,
                                       static_cast<PopsTransferOperationV1>(p_->spec.operation),
                                       p_->execution_abi};
-        PopsComponentStatusV1 status{sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1,
-                                     nullptr};
+        PopsComponentStatusV1 status = component::unwritten_component_status();
         const int code = component::apply_transfer(*p_->transfer_api, p_->component_state.get(),
                                                    request, status);
         if (!component::component_status_is_well_formed(status) || code != 0 || status.code != 0 ||
