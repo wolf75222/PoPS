@@ -75,12 +75,6 @@ def emit_amr_spatial_solve(
                 controls,
                 scalar_cpp(spatial_scalar(value.attrs["finite_difference_step"])),
             ),
-            "std::shared_ptr<std::optional<%s>> %s;"
-            % (diffusion_type, slot),
-            "ctx.prepare_spatial_collectively([&] {",
-            "  %s = std::make_shared<std::optional<%s>>();"
-            % (slot, diffusion_type),
-            "});",
         ]
         lines += [
             'throw std::logic_error("composite spatial stage requires the unique synchronized hierarchy barrier");',
@@ -116,7 +110,12 @@ def emit_amr_spatial_solve(
             "});",
             "ctx.stage_spatial_hierarchy_previous(%d,%d,%s,%s);"
             % (value.id, owner, variables[value.inputs[0].id], seed),
-            "%s->emplace(ctx,*%s,%s,true);" % (slot, trial, _boundary_cpp(selected["physical"])),
+            # Capture the borrowed pointer by value in the level callbacks. The context
+            # owns its buffers; gathering again replaces callbacks after invalidation.
+            "auto* %s = &ctx.prepared_resource<%s>(%d,%d," % (slot, diffusion_type, rate.id, owner),
+            "  [&](const auto& resource) { return resource.matches_preparation(ctx,*%s,%s,true); },"
+            % (trial, _boundary_cpp(selected["physical"])),
+            "  ctx,*%s,%s,true);" % (trial, _boundary_cpp(selected["physical"])),
         ]
         # Every scratch allocation happens before peers enter residual/JVP collectives.
         lines.append("ctx.prepare_spatial_collectively([&] {")
@@ -162,7 +161,7 @@ def emit_amr_spatial_solve(
                     variables.get(("program_provider_plans",)),
                     owner,
                     "amr_system",
-                    prepared_var=slot + "->value()",
+                    prepared_var="(*" + slot + ")",
                 )
             else:
                 emit_node(
@@ -193,12 +192,12 @@ def emit_amr_spatial_solve(
         lines += [
             "    });",
             "  };",
-            "  %s->faces.at(ctx.level()) = &%s->value().faces();" % (workspace, slot),
+            "  %s->faces.at(ctx.level()) = &%s->faces();" % (workspace, slot),
         ]
         accepted = []
         _emit_diffusive_accepted(
             rate,
-            slot + "->value()",
+            "(*" + slot + ")",
             accepted,
             _coeff_cpp(spatial_rate_weight(value, rate)),
             "implicit-stage:" + str(value.point) + "/solve:" + str(value.id),
