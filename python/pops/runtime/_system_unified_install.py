@@ -241,8 +241,12 @@ class _SystemUnifiedInstall(_System):
         if route == "analytic_expression":
             from pops.runtime._analytic_expression_lowering import lower_analytic_components
 
+            # Authenticate the declared point expression and every parameter dependency even
+            # when its explicit integral owns materialization.
+            if "cell_integrals" in source:
+                lower_analytic_components(source["components"], frame_id=source["frame_id"], bindings=params)
             lowered = lower_analytic_components(
-                source["components"],
+                source.get("cell_integrals", source)["components"],
                 frame_id=source["frame_id"],
                 bindings=params,
             )
@@ -250,7 +254,8 @@ class _SystemUnifiedInstall(_System):
                 name,
                 "cell",
                 "cell",
-                "conservative_cell_average",
+                "exact_cell_integral" if "cell_integrals" in source
+                else "conservative_cell_average",
                 [list(opcodes) for opcodes, _ in lowered],
                 [list(literals) for _, literals in lowered],
             )

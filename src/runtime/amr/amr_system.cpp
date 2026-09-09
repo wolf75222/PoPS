@@ -2550,6 +2550,7 @@ struct AmrSystem<Dim>::Impl {
     std::vector<double> state;
     bool has_analytic_state = false;
     std::vector<analytic::AnalyticProgram> analytic_state;
+    bool exact_initial_integral = false;
     std::optional<analytic::GaussianCellAverageProfile<Dim>> gaussian_initial;
   };
 
@@ -4416,6 +4417,7 @@ struct AmrSystem<Dim>::Impl {
         for (std::size_t index = 0; index < program.literal_count(); ++index)
           source.scalar(view.literals[index]);
       }
+      source.presence(block.exact_initial_integral);
       source.presence(block.gaussian_initial.has_value());
       if (block.gaussian_initial) {
         const auto& profile = *block.gaussian_initial;
@@ -4423,6 +4425,7 @@ struct AmrSystem<Dim>::Impl {
           source.scalar(profile.center[axis]);
         source.scalar(profile.background).scalar(profile.amplitude).scalar(profile.inverse_width);
       }
+
       contract.text(block.name)
           .scalar(std::int32_t{block.ncomp})
           .scalar(block.gamma)
@@ -10237,9 +10240,12 @@ struct AmrSystem<Dim>::Impl {
         } else if (block.has_analytic_state) {
           const Geometry<Dim> geometry =
               Geometry<Dim>::from_bounds(*domain_candidate, cfg.lower, cfg.upper);
-          analytic_materialization.emplace(analytic::prepare_cell_average_materialization(
-              *state, geometry, block.analytic_state,
-              block.gaussian_initial ? &*block.gaussian_initial : nullptr));
+          analytic_materialization.emplace(
+              block.gaussian_initial
+                  ? analytic::prepare_cell_average_materialization(
+                        *state, geometry, block.analytic_state, &*block.gaussian_initial)
+                  : analytic::prepare_cell_average_materialization(
+                        *state, geometry, block.analytic_state, block.exact_initial_integral));
         } else if (block.has_state) {
           write_field(*state, *domain_candidate, block.state, block.ncomp);
         } else if (block.has_density) {
@@ -16100,7 +16106,8 @@ void AmrSystem<Dim>::stage_bootstrap_analytic_state_impl(
   const auto prepare = [&] {
     require_amr_assembling(p_->lifecycle, "stage_bootstrap_analytic_state");
     if (p_->engine || space != "cell" || centering != "cell" ||
-        projection != "conservative_cell_average")
+        (projection != "conservative_cell_average" &&
+         (gaussian || projection != "exact_cell_integral")))
       throw std::invalid_argument(
           "AMR analytic bootstrap requires a pre-materialization cell conservative-cell-average "
           "state");
@@ -16144,6 +16151,7 @@ void AmrSystem<Dim>::stage_bootstrap_analytic_state_impl(
                                 AnalyticNode::apply(AnalyticOp::Exp, {exponent})})})));
     } else {
       programs = analytic::compile_component_programs(opcodes, literals);
+      analytic::validate_cell_program_inputs<Dim>(programs, projection == "exact_cell_integral");
     }
     if (programs.size() != static_cast<std::size_t>(block.ncomp))
       throw std::invalid_argument(
@@ -16152,13 +16160,15 @@ void AmrSystem<Dim>::stage_bootstrap_analytic_state_impl(
   };
   std::vector<analytic::AnalyticProgram> programs;
   if (p_->package_assembly_lane) {
+    const std::string_view cell_integral_mode =
+        gaussian ? std::string_view{"exact_gaussian"} : std::string_view{projection};
     const std::array<analytic::AnalyticTextMetadata, 6> text{
         {{"centering", centering},
          {"projection", projection},
          {"runtime_block", runtime_block},
          {"space", space},
          {"subject_id", subject_id},
-         {"cell_integral", gaussian ? "exact_gaussian" : "tensor_quadrature"}}};
+         {"cell_integral", cell_integral_mode}}};
     std::array<analytic::AnalyticRealMetadata, Dim + 3> parameters{};
     if (gaussian) {
       constexpr std::array<std::string_view, 3> axes{"center_x", "center_y", "center_z"};
@@ -16184,6 +16194,7 @@ void AmrSystem<Dim>::stage_bootstrap_analytic_state_impl(
   block.has_analytic_state = true;
   block.analytic_state = std::move(programs);
   block.gaussian_initial = gaussian ? std::optional{*gaussian} : std::nullopt;
+  block.exact_initial_integral = projection == "exact_cell_integral";
   p_->bootstrap_sources.at(subject_id).kind = Impl::BootstrapSourceKind::analytic;
 }
 
@@ -16240,6 +16251,7 @@ void AmrSystem<Dim>::stage_bootstrap_array(const std::string& subject_id,
   typename Impl::BlockSpec& block = p_->block(runtime_block);
   block.density.clear();
   block.analytic_state.clear();
+  block.exact_initial_integral = false;
   block.gaussian_initial.reset();
   block.has_density = false;
   block.has_analytic_state = false;
@@ -16370,9 +16382,12 @@ std::size_t AmrSystem<Dim>::materialize_bootstrap_action(const std::string& subj
           p_->engine->hierarchy().layout(static_cast<std::size_t>(level)).domain();
       const Geometry<Dim> geometry =
           Geometry<Dim>::from_bounds(domain, p_->cfg.lower, p_->cfg.upper);
-      analytic_materialization.emplace(analytic::prepare_cell_average_materialization(
-          *candidate, geometry, block->analytic_state,
-          block->gaussian_initial ? &*block->gaussian_initial : nullptr));
+      analytic_materialization.emplace(
+          block->gaussian_initial
+              ? analytic::prepare_cell_average_materialization(
+                    *candidate, geometry, block->analytic_state, &*block->gaussian_initial)
+              : analytic::prepare_cell_average_materialization(
+                    *candidate, geometry, block->analytic_state, block->exact_initial_integral));
       materialized = static_cast<std::size_t>(analytic_materialization->materialized_values);
     } else if (level == 0) {
       candidate_storage.emplace(target.layout(), target.distribution(), target.local_rank(),

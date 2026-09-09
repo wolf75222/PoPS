@@ -3050,6 +3050,158 @@ TEST(GeneratedAmrSystemBlock, ConstantBootstrapReprojectionPreservesExactValue) 
   system.commit_bootstrap_level();
 }
 
+TEST(GeneratedAmrSystemBlock, CellIntegralBootstrapReprojectionPreservesConstant) {
+  using Real = pops::Real;
+  constexpr int Dim = pops::kNativeDimension;
+  constexpr const char* route = "tests.generated-amr/exact-cell-integral/state";
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 2;
+  config.regrid_every = 0;
+  config.explicit_bootstrap = true;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 16;
+    config.periodicity[axis] = true;
+  }
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.generated-amr/exact-cell-integral-runtime");
+  system.install_block_state_route("tracer", route);
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  pops::test::install_prepared_threshold_union(
+      system, {{"tracer", "u", .5, pops::test::PreparedThresholdRelation::Above, route}},
+      "tests.generated-amr/exact-cell-integral-tagging@1");
+  system.bind_bootstrap_subject(route, "tracer", "analytic_expression");
+  const pops::analytic::AnalyticOpcodeRows opcodes{{"constant", "input", "mul"}};
+  const pops::analytic::AnalyticLiteralRows literals{{1.0, double(2 * Dim), 0.0}};
+  EXPECT_THROW(system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                                     "exact_cell_integral", {{"input"}}, {{64.0}}),
+               std::invalid_argument);
+  system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell", "exact_cell_integral",
+                                        opcodes, literals);
+  EXPECT_THROW(system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                                     "exact_cell_integral", opcodes, literals),
+               std::invalid_argument);
+  system.begin_bootstrap_plan();
+  system.set_program_block_map({0});
+  for (int level = 0; level < 2; ++level) {
+    if (level)
+      ASSERT_TRUE(system.bootstrap_next_level());
+    const auto count = system.materialize_bootstrap_action(
+        route, level == 0 ? "initialize_level_zero" : "analytic_reprojection",
+        "analytic_expression", level);
+    const auto state = system.block_level_state("tracer", level);
+    ASSERT_EQ(state.size(), count);
+    long double moment = 0;
+    for (double value : state) {
+      ASSERT_TRUE(std::isfinite(value));
+      moment += static_cast<long double>(value) - 1;
+    }
+    EXPECT_LE(std::abs(moment / state.size()), Real(128) * std::numeric_limits<Real>::epsilon());
+  }
+  system.commit_bootstrap_level();
+}
+
+TEST(GeneratedAmrSystemBlock, CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry) {
+  if (pops::n_ranks() != 2)
+    GTEST_SKIP() << "requires the registered two-rank analytic program consensus control";
+  using Real = pops::Real;
+  constexpr int Dim = pops::kNativeDimension;
+  constexpr const char* route = "tests.generated-amr/mpi-cell-integral/state";
+  constexpr const char* array_route = "tests.generated-amr/mpi-cell-integral/array-state";
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 1;
+  config.transition_ratios.clear();
+  config.transition_buffers.clear();
+  config.transition_lookaheads.clear();
+  config.regrid_every = 0;
+  config.explicit_bootstrap = true;
+  config.distribute_coarse = true;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 16;
+    config.coarse_max_grid[axis] = 8;
+    config.periodicity[axis] = true;
+  }
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.generated-amr/mpi-cell-integral-runtime");
+  system.install_block_state_route("tracer", route);
+  system.install_block_state_route("array-tracer", array_route);
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  pops::test::install_prepared_threshold_union(
+      system, {{"tracer", "u", .5, pops::test::PreparedThresholdRelation::Above, route}},
+      "tests.generated-amr/mpi-cell-integral-tagging@1");
+  pops::add_compiled_model<Dim>(system, "array-tracer", advection_model<Dim>());
+  system.bind_bootstrap_subject(array_route, "array-tracer", "array_field");
+  std::vector<double> array_values(cell_count(config.shape), 2.0);
+  const auto stage_array = [&](const auto& shape, const auto& values) {
+    system.stage_bootstrap_array(array_route, "array-tracer", "cell", "cell", 1, shape, values);
+  };
+  const auto refused_array = [&](const auto& shape, const auto& values, const char* expected) {
+    std::string reason;
+    try {
+      stage_array(shape, values);
+    } catch (const std::exception& error) {
+      reason = error.what();
+    }
+    EXPECT_NE(reason.find(expected), std::string::npos) << reason;
+    EXPECT_EQ(pops::all_reduce_sum(reason.empty() ? 0L : 1L), 2L);
+  };
+  auto divergent_values = array_values;
+  if (pops::my_rank() == 1)
+    divergent_values.front() = 3.0;
+  refused_array(config.shape, divergent_values, "analytic request differs across MPI ranks");
+  auto invalid_shape = config.shape;
+  if (pops::my_rank() == 1)
+    --invalid_shape[0];
+  refused_array(invalid_shape, array_values,
+                "rank-local analytic validation failed collectively on 1 rank(s)");
+  EXPECT_NO_THROW(stage_array(config.shape, array_values));
+  system.bind_bootstrap_subject(route, "tracer", "analytic_expression");
+  const pops::analytic::AnalyticOpcodeRows opcodes{{"constant", "input", "mul"}};
+  const pops::analytic::AnalyticLiteralRows literals{{1.0, double(2 * Dim), 0.0}};
+  const auto stage = [&](const auto& source) {
+    system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell", "exact_cell_integral",
+                                          opcodes, source);
+  };
+  const auto collectively_refused = [&](const auto& source, const char* expected) {
+    std::string reason;
+    try {
+      stage(source);
+    } catch (const std::exception& error) {
+      reason = error.what();
+    }
+    EXPECT_NE(reason.find(expected), std::string::npos) << reason;
+    EXPECT_EQ(pops::all_reduce_sum(reason.empty() ? 0L : 1L), 2L);
+  };
+  auto divergent = literals;
+  if (pops::my_rank() == 1)
+    divergent[0][0] = 2.0;
+  collectively_refused(divergent, "analytic request differs across MPI ranks");
+  auto invalid = literals;
+  if (pops::my_rank() == 1)
+    invalid[0][1] = 64.0;
+  collectively_refused(invalid, "rank-local analytic validation failed collectively on 1 rank(s)");
+  // Both refusals precede source publication: the same subject remains available for valid staging.
+  EXPECT_NO_THROW(stage(literals));
+  system.begin_bootstrap_plan();
+  system.set_program_block_map({0, 1});
+  EXPECT_EQ(
+      system.materialize_bootstrap_action(route, "initialize_level_zero", "analytic_expression", 0),
+      cell_count(config.shape));
+  EXPECT_EQ(
+      system.materialize_bootstrap_action(array_route, "initialize_level_zero", "array_field", 0),
+      cell_count(config.shape));
+  EXPECT_EQ(system.block_level_state("array-tracer", 0), array_values);
+  const auto state = system.block_level_state("tracer", 0);
+  ASSERT_EQ(state.size(), cell_count(config.shape));
+  long double moment = 0;
+  for (double value : state) {
+    ASSERT_TRUE(std::isfinite(value));
+    moment += static_cast<long double>(value) - 1;
+  }
+  EXPECT_LE(std::abs(moment / state.size()), Real(128) * std::numeric_limits<Real>::epsilon());
+}
+
 TEST(GeneratedAmrSystemBlock, GaussianBootstrapReprojectionPreservesExactNeutrality) {
   using Real = pops::Real;
   constexpr int Dim = pops::kNativeDimension;

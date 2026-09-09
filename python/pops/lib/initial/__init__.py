@@ -172,7 +172,7 @@ class Gaussian:
     background: float
     amplitude: float
     inverse_width: float
-    native_route = "gaussian_field"
+    native_route = "analytic_expression"
     reprojectable = True
     __pops_ir_immutable__ = True
 
@@ -210,15 +210,29 @@ class Gaussian:
             raise ValueError("Gaussian frame differs from the target state frame")
         return True
 
+    def as_analytic(self):
+        """Compose point values and explicit exact integrals from public scalar operations."""
+        from pops.analytic import CellBounds, constant, coordinate, erf, erfc, exp, where
+        bounds = CellBounds(self.frame)
+        radius = constant(0.0)
+        integral = constant(1.0)
+        root = math.sqrt(self.inverse_width)
+        scale = math.sqrt(math.pi) / (2.0 * root)
+        for axis, center in self.center:
+            delta = coordinate(self.frame, axis) - center
+            radius = radius + delta * delta
+            lo = root * (bounds.lower(axis) - center)
+            hi = root * (bounds.upper(axis) - center)
+            # Same-sign tails use erfc differences; direct erf subtraction would erase them.
+            difference = where(lo >= 0.0, erfc(lo) - erfc(hi),
+                               where(hi <= 0.0, erfc(-hi) - erfc(-lo), erf(hi) - erf(lo)))
+            integral = integral * (scale * difference)
+        return Analytic(frame=self.frame,
+                        components=(self.background + self.amplitude * exp(-self.inverse_width * radius),),
+                        cell_integrals=(self.background * bounds.measure + self.amplitude * integral,))
+
     def initial_source_options(self) -> dict[str, Any]:
-        return {
-            "native_route": self.native_route,
-            "frame_id": self.frame.canonical_id,
-            "center": {axis.name: value for axis, value in self.center},
-            "background": self.background,
-            "amplitude": self.amplitude,
-            "inverse_width": self.inverse_width,
-        }
+        return self.as_analytic().initial_source_options()
 
     def to_data(self) -> dict[str, Any]:
         return {
@@ -240,17 +254,22 @@ class Analytic:
     """An ordered conservative state assembled from generic analytic expressions.
 
     The expressions are immutable data bound to one physical frame.  They are lowered to the
-    native analytic evaluator and sampled by the selected projection policy; no Python callback is
-    retained by the Case or invoked while the simulation runs.
+    native analytic evaluator. Without ``cell_integrals`` the declared projection uses tensor
+    quadrature. With ``cell_integrals``, provide one exact Cartesian cell integral per component,
+    built from ``pops.analytic.CellBounds``. The author supplies the mathematical identity; PoPS
+    authenticates its frame, input bounds, parameters, shape and finite native evaluation, then
+    divides by the native cell volume. It does not infer or prove arbitrary symbolic primitives.
+    No Python callback is retained by the Case or invoked while the simulation runs.
     """
 
     frame: Any
     components: tuple[Any, ...]
+    cell_integrals: tuple[Any, ...] | None
     native_route = "analytic_expression"
     reprojectable = True
     __pops_ir_immutable__ = True
 
-    def __init__(self, *, frame: Any, components: Any) -> None:
+    def __init__(self, *, frame: Any, components: Any, cell_integrals: Any = None) -> None:
         frame_id = getattr(frame, "canonical_id", None)
         axes = getattr(frame, "axes", None)
         if not isinstance(frame_id, str) or not frame_id \
@@ -273,11 +292,20 @@ class Analytic:
                     "Analytic.components[%d] must be a ScalarExpr, got %s"
                     % (index, type(expression).__name__))
             expression.validate()
+            if expression.input_references():
+                raise ValueError("point expressions cannot read cell-bound or discrete inputs")
             if expression.frame_id not in (None, frame_id):
                 raise ValueError(
                     "Analytic.components[%d] belongs to another physical frame" % index)
         object.__setattr__(self, "frame", frame)
         object.__setattr__(self, "components", values)
+        integrals = None if cell_integrals is None else tuple(cell_integrals)
+        if integrals is not None:
+            if len(integrals) != len(values) or any(type(e) is not ScalarExpr for e in integrals):
+                raise ValueError("cell_integrals requires one ScalarExpr per component")
+            from pops.analytic._cell_bounds import validate_cell_integrals
+            validate_cell_integrals(integrals, frame)
+        object.__setattr__(self, "cell_integrals", integrals)
 
     def validate_for(self, state: Any) -> bool:
         if len(self.components) != _component_count(state):
@@ -297,6 +325,8 @@ class Analytic:
             components=tuple(
                 expression.resolve_references(resolver) for expression in self.components
             ),
+            cell_integrals=None if self.cell_integrals is None else tuple(
+                expression.resolve_references(resolver) for expression in self.cell_integrals),
         )
 
     def captured_reference_handles(self) -> tuple[Any, ...]:
@@ -304,7 +334,7 @@ class Analytic:
 
         ordered = []
         seen = set()
-        for expression in self.components:
+        for expression in self.components + (self.cell_integrals or ()):
             for handle in expression.parameter_handles():
                 if handle not in seen:
                     seen.add(handle)
@@ -333,6 +363,9 @@ class Analytic:
             "schema_version", "profile", "frame_id", "components",
         }
         expected_source_keys = {"native_route", "frame_id", "components"}
+        if type(value_identity) is dict and "cell_integrals" in value_identity:
+            expected_value_keys.add("cell_integrals")
+            expected_source_keys.add("cell_integrals")
         if type(value_identity) is not dict or set(value_identity) != expected_value_keys \
                 or value_identity.get("schema_version") != 1 \
                 or value_identity.get("profile") != "analytic":
@@ -374,6 +407,13 @@ class Analytic:
             used=used,
             where="captured Analytic components",
         )
+        integral_data = None
+        if "cell_integrals" in value_identity:
+            if value_identity["cell_integrals"] != source_options["cell_integrals"]:
+                raise ValueError("captured cell integral identity and source disagree")
+            integral_data = _replace_captured_parameter_references(
+                value_identity["cell_integrals"], replacements=replacements, used=used,
+                where="captured Analytic cell_integrals")
         if used != set(replacements):
             raise ValueError(
                 "captured Analytic parameter authorities do not exactly match its expression data"
@@ -396,13 +436,29 @@ class Analytic:
             "frame_id": source_options["frame_id"],
             "components": canonical_components,
         }
+        if integral_data is not None:
+            from pops.runtime._initial_source_lowering import validate_cell_integral_contract
+            validate_cell_integral_contract(integral_data, frame_id=source_options["frame_id"],
+                                            component_count=len(canonical_components))
+            resolved_value["cell_integrals"] = integral_data
+            resolved_source["cell_integrals"] = integral_data
         return {
             "value_identity": resolved_value,
             "source_options": resolved_source,
         }
 
+    def _integral_options(self):
+        if self.cell_integrals is None:
+            return {}
+        return {"cell_integrals": {
+            "schema_version": 1, "frame": self.frame.to_dict(),
+            "measure": "cartesian_volume", "exactness": "author_declared",
+            "components": [expression.to_data() for expression in self.cell_integrals],
+        }}
+
     def initial_source_options(self) -> dict[str, Any]:
         return {
+            **self._integral_options(),
             "native_route": self.native_route,
             "frame_id": self.frame.canonical_id,
             "components": [expression.to_data() for expression in self.components],
@@ -410,6 +466,7 @@ class Analytic:
 
     def to_data(self) -> dict[str, Any]:
         return {
+            **self._integral_options(),
             "schema_version": 1,
             "profile": "analytic",
             "frame_id": self.frame.canonical_id,

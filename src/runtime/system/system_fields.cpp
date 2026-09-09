@@ -1214,11 +1214,13 @@ std::int64_t System<Dim>::set_analytic_expression_state(
       opcodes, literals,
       [&] {
         require_assembling(p_->lifecycle_, "set_analytic_expression_state");
-        if (space != "cell" || centering != "cell" || projection != "conservative_cell_average")
+        if (space != "cell" || centering != "cell" ||
+            (projection != "conservative_cell_average" && projection != "exact_cell_integral"))
           throw std::invalid_argument(
               "System analytic state requires cell conservative_cell_average projection");
         typename Impl::Species& block = p_->find(name);
         auto programs = analytic::compile_component_programs(opcodes, literals);
+        analytic::validate_cell_program_inputs<Dim>(programs, projection == "exact_cell_integral");
         if (programs.size() != static_cast<std::size_t>(block.ncomp))
           throw std::invalid_argument("System analytic expression component count differs");
         return std::pair<typename Impl::Species*, std::vector<analytic::AnalyticProgram>>{
@@ -1234,8 +1236,8 @@ std::int64_t System<Dim>::set_analytic_expression_state(
     candidate.emplace(prepared.first->U.layout(), prepared.first->U.distribution(),
                       prepared.first->U.local_rank(), prepared.first->U.ncomp(),
                       prepared.first->U.ghosts());
-    materialization.emplace(
-        analytic::prepare_cell_average_materialization(*candidate, p_->geom, prepared.second));
+    materialization.emplace(analytic::prepare_cell_average_materialization(
+        *candidate, p_->geom, prepared.second, projection == "exact_cell_integral"));
   } catch (...) {
     local_error = std::current_exception();
   }
@@ -1649,6 +1651,7 @@ template std::int64_t System<kNativeDimension>::set_analytic_mapped_state(
     const std::string&, const std::vector<std::vector<std::string>>&,
     const std::vector<std::vector<double>>&,
     const std::vector<runtime::system::AnalyticMappedInput>&, const std::string&);
+
 template std::int64_t System<kNativeDimension>::set_analytic_gaussian_state(
     const std::string&, const RealVector<kNativeDimension>&, double, double, double);
 template int System<kNativeDimension>::n_vars(const std::string&) const;

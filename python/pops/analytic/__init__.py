@@ -4,6 +4,7 @@ The package authors immutable expression trees only.  It stores no Python callba
 performs no mesh computation; native consumers may validate and lower its canonical data.
 """
 
+from ._cell_bounds import CellBounds
 from ._functions import (
     abs,
     angle,
@@ -15,6 +16,8 @@ from ._functions import (
     coordinates,
     cos,
     exp,
+    erf,
+    erfc,
     hypot,
     input,
     log,
@@ -43,6 +46,7 @@ from ._model import (
 )
 
 __all__ = [
+    "CellBounds",
     "AnalyticTruthValueError",
     "DEFAULT_MAX_DEPTH",
     "DEFAULT_MAX_NODES",
@@ -61,6 +65,8 @@ __all__ = [
     "coordinates",
     "cos",
     "exp",
+    "erf",
+    "erfc",
     "hypot",
     "input",
     "log",

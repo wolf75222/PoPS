@@ -408,8 +408,12 @@ class _AmrSystemInstall(_AmrSystem):
                         lower_analytic_components,
                     )
 
+                    # Authenticate the declared point expression and every parameter dependency even
+                    # when its explicit integral owns materialization.
+                    if "cell_integrals" in source:
+                        lower_analytic_components(source["components"], frame_id=source["frame_id"], bindings=params)
                     lowered = lower_analytic_components(
-                        source.get("components"),
+                        source.get("cell_integrals", source).get("components"),
                         frame_id=source.get("frame_id"),
                         bindings=params,
                     )
@@ -418,7 +422,8 @@ class _AmrSystemInstall(_AmrSystem):
                         name,
                         space,
                         centering,
-                        "conservative_cell_average",
+                        "exact_cell_integral" if "cell_integrals" in source
+                        else "conservative_cell_average",
                         [list(component_opcodes) for component_opcodes, _ in lowered],
                         [list(component_literals) for _, component_literals in lowered],
                     )

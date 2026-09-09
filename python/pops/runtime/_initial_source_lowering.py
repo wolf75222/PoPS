@@ -24,6 +24,7 @@ _SOURCE_KEYS = {
         "projection",
     },
 }
+
 _CARTESIAN_AXIS_NAMES = ("x", "y", "z")
 
 
@@ -62,6 +63,26 @@ def ranked_gaussian_center(source: Mapping[str, Any], *, where: str) -> tuple[fl
     )
 
 
+def validate_cell_integral_contract(data, *, frame_id, component_count):
+    """Authenticate exact user-supplied integrals and their complete native bound authority."""
+    from pops.analytic import ScalarExpr
+    from pops.analytic._cell_bounds import cell_frame_from_data, validate_cell_integrals
+    if not isinstance(data, Mapping) or set(data) != {
+            "schema_version", "frame", "measure", "exactness", "components"}:
+        raise TypeError("cell integral contract has an unsupported shape")
+    if type(data["schema_version"]) is not int or data["schema_version"] != 1 \
+            or data["measure"] != "cartesian_volume" or data["exactness"] != "author_declared":
+        raise ValueError("cell integral requires explicit Cartesian volume and declared exactness")
+    frame = cell_frame_from_data(data["frame"])
+    if frame.canonical_id != frame_id:
+        raise ValueError("cell integral frame differs from initial expression frame")
+    components = data["components"]
+    if not isinstance(components, (list, tuple)) or len(components) != component_count:
+        raise ValueError("cell integral component count differs from initial state")
+    validate_cell_integrals(tuple(ScalarExpr.from_data(e) for e in components), frame)
+    return frame
+
+
 def validate_initial_source(source: Any, *, where: str) -> str:
     """Authenticate the complete route schema before either native runtime consumes it."""
     if not isinstance(source, Mapping):
@@ -69,10 +90,12 @@ def validate_initial_source(source: Any, *, where: str) -> str:
     route = source.get("native_route")
     if type(route) is not str or route not in _SOURCE_KEYS:
         raise NotImplementedError("%s route %r is not implemented" % (where, route))
-    if set(source) != _SOURCE_KEYS[route]:
+    expected_keys = _SOURCE_KEYS[route] | ({"cell_integrals"} if route == "analytic_expression"
+                                             and "cell_integrals" in source else set())
+    if set(source) != expected_keys:
         raise TypeError(
             "%s route %r requires exactly keys %s"
-            % (where, route, sorted(_SOURCE_KEYS[route]))
+            % (where, route, sorted(expected_keys))
         )
     projection = source["projection"]
     if not isinstance(projection, Mapping) or set(projection) != _PROJECTION_KEYS:
@@ -108,6 +131,16 @@ def validate_initial_source(source: Any, *, where: str) -> str:
         if isinstance(components, (str, bytes)) or not isinstance(components, Sequence) \
                 or not components:
             raise TypeError("%s analytic components must be a non-empty sequence" % where)
+        from pops.analytic import ScalarExpr
+        for raw in components:
+            expression = ScalarExpr.from_data(raw)
+            if expression.frame_id not in (None, source["frame_id"]):
+                raise ValueError("initial point expression belongs to another frame")
+            if expression.input_references() or expression.time_clocks():
+                raise ValueError("initial point expressions cannot read discrete inputs or clocks")
+        if "cell_integrals" in source:
+            validate_cell_integral_contract(source["cell_integrals"], frame_id=source["frame_id"],
+                                            component_count=len(components))
     elif route == "field_mapped_analytic_expression":
         if not isinstance(source["frame_id"], str) or not source["frame_id"]:
             raise TypeError("%s field-mapped analytic frame_id must be non-empty" % where)
@@ -159,4 +192,4 @@ def validate_initial_source(source: Any, *, where: str) -> str:
     return route
 
 
-__all__ = ["native_binary64", "ranked_gaussian_center", "validate_initial_source"]
+__all__ = ["native_binary64", "ranked_gaussian_center", "validate_cell_integral_contract", "validate_initial_source"]
