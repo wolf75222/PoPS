@@ -219,9 +219,16 @@ def test_bound_aux_drives_public_projection_in_a_native_amr_step(
     artifact = pops.compile(_resolve_projection_case(cxx=native_cxx))
     floor = np.full((GRID_CELLS, GRID_CELLS), FLOOR_VALUE, dtype=np.float64)
     peer_floor = np.full((GRID_CELLS, GRID_CELLS), PEER_FLOOR_VALUE, dtype=np.float64)
+    from pops.model.provider_pack import ProviderPack
+    providers = [ProviderPack.from_data(block.resolved_operations.to_data()
+                 ["provider_evidence"]["auxiliary"]) for block in artifact.plan.blocks]
+    inputs = {key: {"floor": floor, "peer_ceiling": peer_floor}[key.component]
+              for pack in providers for key in pack
+              if pack.declared_entry(key).producer == "runtime_input"}
+    assert {key.component for key in inputs} == {"floor", "peer_ceiling"}
     simulation = pops.bind(
         artifact,
-        aux={"floor": floor, "peer_ceiling": peer_floor},
+        aux=inputs,
         resources={"execution_context": artifact_execution_context(artifact)},
     )
     assert simulation.spatial_shape() == (GRID_CELLS, GRID_CELLS)
