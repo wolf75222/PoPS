@@ -26,9 +26,11 @@
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
+#include <pops/runtime/program/history_sample_identity_codec.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -131,6 +133,8 @@ struct SerializedHistory {
   bool initialized = false;
   int fill_count = 0;
   std::vector<std::vector<double>> slots;  // slots[s] = global component-major buffer of slot s
+  std::vector<double> slot_dt;
+  std::vector<std::uint8_t> sample_identity;
 };
 
 // Serialize every registered ring the way sim.checkpoint does (history_names -> per-name accessors).
@@ -145,7 +149,9 @@ std::vector<SerializedHistory> serialize(const NativeSystem& s) {
     h.fill_count = s.history_fill_count(name);
     for (int slot = 0; slot < h.depth; ++slot) {
       h.slots.push_back(s.history_global(name, slot));
+      h.slot_dt.push_back(s.history_slot_dt(name, slot));
     }
+    h.sample_identity = s.history_sample_identity(name);
     out.push_back(std::move(h));
   }
   return out;
@@ -157,9 +163,15 @@ void deserialize(NativeSystem& s, const std::vector<SerializedHistory>& hist) {
   for (const SerializedHistory& h : hist) {
     for (int slot = 0; slot < h.depth; ++slot) {
       s.restore_history(h.name, slot, h.slots[static_cast<std::size_t>(slot)]);
+      // Each incremental numeric restore already exposes a complete ring ledger, before setters
+      // could hide an omitted dt resize. Raw restored slots carry no fabricated sample identity.
+      EXPECT_NO_THROW((void)s.history_sample_identity(h.name));
     }
     s.set_history_initialized(h.name, h.initialized);
     s.restore_history_fill_count(h.name, h.fill_count);
+    for (int slot = 0; slot < h.depth; ++slot)
+      s.restore_history_slot_dt(h.name, slot, h.slot_dt[static_cast<std::size_t>(slot)]);
+    s.restore_history_sample_identity(h.name, h.sample_identity);
   }
 }
 
@@ -198,6 +210,44 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
   src.store_history("fill_age", src.block_state(0));
   src.rotate_histories();
   EXPECT_EQ(src.history_fill_count("fill_age"), 4) << "fill count saturates at ring depth";
+
+  // Exercise restore-driven growth with authentic, unequal outgoing intervals already retained.
+  // The missing slots are zero/Unknown; neither growing nor rejecting a payload may erase the
+  // existing publication identities or their exact dt prefix.
+  const auto growth_values = ramp(nn, 11.0);
+  src.register_history("published", 1);
+  src.store_history("published", src.block_state(0), 0.125);
+  src.rotate_histories();
+  src.store_history("published", src.block_state(0), 0.25);
+  src.rotate_histories();
+  const auto published_before = runtime::program::decode_history_sample_identity(
+      src.history_sample_identity("published"), "published", -1, 2);
+  const std::vector<double> published_dt{src.history_slot_dt("published", 0),
+                                         src.history_slot_dt("published", 1)};
+  EXPECT_NE(published_dt[0], published_dt[1]);
+  src.restore_history("published", 3, growth_values);
+  const auto published_after_bytes = src.history_sample_identity("published");
+  const auto published_after =
+      runtime::program::decode_history_sample_identity(published_after_bytes, "published", -1, 4);
+  ASSERT_EQ(published_after.size(), 4u);
+  for (int slot = 0; slot < 2; ++slot) {
+    EXPECT_EQ(published_after[slot], published_before[slot]);
+    EXPECT_EQ(src.history_slot_dt("published", slot), published_dt[slot]);
+  }
+  for (int slot = 2; slot < 4; ++slot) {
+    EXPECT_EQ(published_after[slot], runtime::program::HistorySampleIdentity{});
+    EXPECT_EQ(src.history_slot_dt("published", slot), 0.0);
+  }
+  EXPECT_EQ(src.history_global("published", 2), std::vector<double>(growth_values.size(), 0.0));
+  EXPECT_EQ(src.history_global("published", 3), growth_values);
+  EXPECT_ANY_THROW(src.restore_history("published", 4, {}));
+  EXPECT_THROW(src.restore_history("published", std::numeric_limits<int>::max(), growth_values),
+               std::overflow_error);
+  EXPECT_EQ(src.history_depth("published"), 4);
+  EXPECT_EQ(src.history_sample_identity("published"), published_after_bytes);
+  for (int slot = 0; slot < 2; ++slot)
+    EXPECT_EQ(src.history_slot_dt("published", slot), published_dt[slot]);
+  EXPECT_EQ(src.history_global("published", 3), growth_values);
 
   // Register a ring with max lag 2 (depth 3): slot 0 = current, slot 1 = R_{n-1}, slot 2 = R_{n-2}.
   src.register_history("rhs_prev", /*lag=*/2);
@@ -250,6 +300,14 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
   install_execution_lane(dst, "pops.test.checkpoint-history.destination");
   add_gas(dst);
   deserialize(dst, blob);
+  for (const auto& h : blob) {
+    EXPECT_EQ(dst.history_sample_identity(h.name), h.sample_identity);
+    EXPECT_EQ(dst.history_fill_count(h.name), h.fill_count);
+    for (int slot = 0; slot < h.depth; ++slot) {
+      EXPECT_EQ(dst.history_slot_dt(h.name, slot), h.slot_dt[slot]);
+      EXPECT_EQ(dst.history_global(h.name, slot), h.slots[slot]);
+    }
+  }
 
   // depth / ncomp / initialized restored, and every slot is BIT-EQUAL to the source ring.
   EXPECT_TRUE(dst.history_depth("rhs_prev") == 3) << "restore_depth";

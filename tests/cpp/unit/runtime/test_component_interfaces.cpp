@@ -1978,8 +1978,8 @@ TEST(ComponentInterfaces, FieldSolverV2CarriesOneBinaryCoverageMultilevelBatch) 
         result->status = ok_status();
         return 0;
       }};
-  const auto topology = pops::component::prepare_field_topology(
-      topology_api, &calls, global, inputs, execution, level_geometry);
+  const auto topology = pops::component::prepare_field_topology(topology_api, &calls, global,
+                                                                inputs, execution, level_geometry);
   ASSERT_EQ(topology.local_patches().size(), 2u);
   EXPECT_EQ(topology.local_patches()[0].material_mask, (std::vector<std::uint8_t>{1, 0}));
   EXPECT_EQ(topology.local_patches()[1].material_mask, (std::vector<std::uint8_t>{1, 1}));

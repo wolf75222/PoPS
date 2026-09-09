@@ -986,8 +986,10 @@ TEST(GeneratedAmrSystemBlock, ScalarParentPreparationRefreshesSparsePeriodicGhos
   EXPECT_NO_THROW(
       system.prepare_generated_amr_scalar_parent(1, parent, fine, "tests.scalar-prior"));
 
-  system.set_program_block_map({0});
   auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->install([](double) {}, context);
+  system.set_program_block_map({0});
+  ASSERT_EQ(system.program_block_map(), std::vector<int>{0});
   context->configure_primary_clock("clock.macro");
   for (int level = 0; level < 2; ++level)
     context->with_program_resource_level(level, [&] {
@@ -1001,7 +1003,6 @@ TEST(GeneratedAmrSystemBlock, ScalarParentPreparationRefreshesSparsePeriodicGhos
         context->rotate_histories("clock.macro");
       }
     });
-  context->install([](double) {}, context);
   const auto parent_samples = system.history_sample_identity("tracer.prior", 0);
   const auto child_samples = system.history_sample_identity("tracer.prior", 1);
   system.begin_restart_transaction();
@@ -2590,50 +2591,72 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
       }
     EXPECT_THROW(pops::runtime::program::serialize_amr_program_accepted_state(unearned_lag),
                  std::invalid_argument);
-    // Cursor-walk POPSAND4 to its pending section.  The history key also occurs in earlier slot
-    // payloads, so searching raw bytes would mutate the wrong record.
+    // Cursor-walk the authenticated AND7 layout to its pending section. The history key also
+    // occurs in earlier slot payloads, so raw searching could mutate the wrong record.
     const std::string& pending_key = pending_after_regrid.pending_history_remaps.front().key;
-    std::size_t cursor = 8 + 8;  // magic, native dimension
+    constexpr std::array<std::uint8_t, 8> expected_magic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '7'};
+    ASSERT_GE(pending_bytes.size(), expected_magic.size());
+    ASSERT_TRUE(std::equal(expected_magic.begin(), expected_magic.end(), pending_bytes.begin()));
+    const auto advance = [&](std::size_t& position, std::uint64_t count, std::size_t width = 1) {
+      if (position > pending_bytes.size() || width == 0 ||
+          count > (pending_bytes.size() - position) / width)
+        throw std::out_of_range("AND7 test cursor exceeds the checkpoint payload");
+      position += static_cast<std::size_t>(count) * width;
+    };
     const auto read_word = [&](std::size_t& position) {
+      const std::size_t offset = position;
+      advance(position, 8);
       std::uint64_t value = 0;
       for (std::size_t byte = 0; byte < 8; ++byte)
-        value |= std::uint64_t{pending_bytes[position + byte]} << (8 * byte);
-      position += 8;
+        value |= std::uint64_t{pending_bytes[offset + byte]} << (8 * byte);
       return value;
     };
-    const auto skip_string = [&](std::size_t& position) { position += read_word(position); };
-    skip_string(cursor);               // spatial contract
-    cursor += 16;                      // topology, materialization generation
-    cursor += read_word(cursor) * 40;  // level clocks
-    for (std::size_t count = read_word(cursor); count > 0; --count) {
+    const auto skip_string = [&](std::size_t& position) {
+      const auto length = read_word(position);
+      advance(position, length);
+    };
+    const auto read_count = [&](std::size_t& position, std::size_t minimum_record_bytes) {
+      const auto count = read_word(position);
+      if (minimum_record_bytes == 0 ||
+          count > (pending_bytes.size() - position) / minimum_record_bytes)
+        throw std::out_of_range("AND7 test record count exceeds the checkpoint payload");
+      return count;
+    };
+    std::size_t cursor = expected_magic.size();
+    ASSERT_EQ(read_word(cursor), static_cast<std::uint64_t>(Dim));
+    skip_string(cursor);  // spatial contract
+    advance(cursor, 16);  // topology, materialization generation
+    const auto level_count = read_count(cursor, 40);
+    advance(cursor, level_count, 40);
+    for (auto count = read_count(cursor, 16); count > 0; --count) {
       skip_string(cursor);
-      cursor += 8;
+      advance(cursor, 8);
     }
-    for (std::size_t count = read_word(cursor); count > 0; --count) {
+    for (auto count = read_count(cursor, 64); count > 0; --count) {
       skip_string(cursor);
-      cursor += 8;
+      advance(cursor, 8);
       for (int identity = 0; identity < 4; ++identity)
         skip_string(cursor);
-      cursor += 16;
+      advance(cursor, 16);
     }
-    for (std::size_t count = read_word(cursor); count > 0; --count) {
+    for (auto count = read_count(cursor, 80); count > 0; --count) {
       skip_string(cursor);
-      cursor += 40;
+      advance(cursor, 72);  // five legacy words plus four exact sample-identity words
     }
     const std::size_t pending_count_offset = cursor;
-    ASSERT_EQ(read_word(cursor), 1u);
-    const std::size_t record_offset = cursor;
-    const std::size_t pending_key_length = read_word(cursor);
+    ASSERT_EQ(read_count(cursor, 104), 1u);
+    const auto pending_key_length = read_word(cursor);
     const std::size_t key_offset = cursor;
     ASSERT_EQ(pending_key_length, pending_key.size());
+    advance(cursor, pending_key_length);
     ASSERT_TRUE(std::equal(pending_key.begin(), pending_key.end(),
                            pending_bytes.begin() + static_cast<std::ptrdiff_t>(key_offset)));
-    cursor += pending_key_length;
     const std::size_t after_key = cursor;
-    ASSERT_LE(record_offset + 8 + pending_key_length + 96, pending_bytes.size());
+    advance(cursor, 96);
     const auto write_word = [](std::vector<std::uint8_t>& bytes, std::size_t offset,
                                std::uint64_t value) {
-      ASSERT_LE(offset + 8, bytes.size());
+      ASSERT_LE(offset, bytes.size());
+      ASSERT_LE(std::size_t{8}, bytes.size() - offset);
       for (std::size_t byte = 0; byte < 8; ++byte)
         bytes[offset + byte] = static_cast<std::uint8_t>(value >> (8 * byte));
     };
@@ -2642,7 +2665,7 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
       SCOPED_TRACE(label);
       try {
         system.restore_checkpoint_accepted_state(corrupt);
-        ADD_FAILURE() << "corrupt POPSAND4 accepted state was accepted";
+        ADD_FAILURE() << "corrupt POPSAND7 accepted state was accepted";
       } catch (const std::exception& exception) {
         EXPECT_NE(std::string_view(exception.what()).find(diagnostic_class), std::string_view::npos)
             << exception.what();

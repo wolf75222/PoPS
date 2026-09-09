@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -225,6 +226,10 @@ void System<Dim>::restore_history(const std::string& name, int slot,
   if (all_reduce_max(slot < 0 ? 1L : 0L) != 0)
     throw std::runtime_error("System::restore_history: slot=" + std::to_string(slot) +
                              " must be >= 0 for history '" + name + "'");
+  // The public slot is int, but its required depth is slot + 1 and must also fit int. Refuse
+  // collectively before auto-registration or growth can allocate or change the live ring.
+  if (all_reduce_max(slot == std::numeric_limits<int>::max() ? 1L : 0L) != 0)
+    throw std::overflow_error("System::restore_history: required ring depth exceeds int");
   if (all_reduce_max(p_->sp.empty() ? 1L : 0L) != 0)
     throw std::runtime_error(
         "System::restore_history: a block must exist before restoring a history ring");
@@ -256,26 +261,60 @@ void System<Dim>::restore_history(const std::string& name, int slot,
   if (ring.front().ncomp() != expected_components)
     throw std::runtime_error(
         "System::restore_history: registered ring component count differs from block 0");
-  if (slot >= static_cast<int>(ring.size())) {
-    // A deeper slot than currently registered: grow the ring (zero-filled tail) so it fits, matching
-    // register_history's idempotent growth.
-    const int ncomp = ring[0].ncomp();
-    for (int k = static_cast<int>(ring.size()); k <= slot; ++k) {
-      MultiFab<Dim> s(p_->ba, p_->dm, p_->local_rank, ncomp, uniform_ghosts<Dim>(1));
-      s.set_val(Real(0));
-      ring.push_back(std::move(s));
+  // Numeric restore may grow a ring before its checkpoint metadata is imported. Keep the dt
+  // and typed sample ledgers complete immediately; retained entries are never reconstructed.
+  auto& manager = p_->program_.hist_;
+  std::vector<MultiFab<Dim>> tail;
+  std::vector<MultiFab<Dim>> prepared_ring;
+  std::vector<Real> prepared_dts;
+  std::vector<runtime::program::HistorySampleIdentity> prepared_samples;
+  std::exception_ptr preparation_error;
+  const auto old_depth = ring.size();
+  const auto required_depth = static_cast<std::size_t>(slot) + 1;
+  try {
+    manager.validated_samples(name);
+    if (manager.depth.at(name) != static_cast<int>(old_depth))
+      throw std::logic_error("System history restore has an invalid registered depth");
+    if (required_depth > old_depth) {
+      prepared_dts = manager.slot_dt.at(name);
+      prepared_dts.resize(required_depth, Real(0));
+      prepared_samples = manager.slot_sample.at(name);
+      prepared_samples.resize(required_depth);
+      tail.reserve(required_depth - old_depth);
+      for (auto k = old_depth; k < required_depth; ++k) {
+        tail.emplace_back(p_->ba, p_->dm, p_->local_rank, ring.front().ncomp(),
+                          ring.front().ghosts());
+        tail.back().set_val(Real(0));
+      }
+      // Only a separate vector may allocate here: rejected payloads must preserve live field
+      // references as well as the ring's values and metadata.
+      prepared_ring.reserve(required_depth);
     }
-    p_->program_.hist_.depth[name] = static_cast<int>(ring.size());
-    p_->program_.hist_.slot_sample[name].resize(ring.size());
+  } catch (...) {
+    preparation_error = std::current_exception();
   }
-  // Scatter the GLOBAL component-major buffer into the exact ranked slot. Structural ownership and
-  // payload consensus are authenticated collectively before any resident Fab is mutated.
-  // Raw numeric restore does not authenticate a publication; the checkpoint stages the complete
-  // typed ledger only after all its anchors and metadata have been restored.
-  auto& sample = p_->program_.hist_.slot_sample.at(name).at(static_cast<std::size_t>(slot));
-  runtime::system::marshaling::write_global(ring[static_cast<std::size_t>(slot)], p_->dom, values,
-                                            ring.front().ncomp());
-  sample = {};
+  if (all_reduce_max(preparation_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && preparation_error)
+      std::rethrow_exception(preparation_error);
+    throw std::runtime_error("System history restore preparation failed collectively");
+  }
+  // Authenticate the complete global payload before publishing any new slot or invalidating an
+  // existing identity. New numeric tails remain Unknown until the exact checkpoint ledger arrives.
+  auto& target = tail.empty() ? ring[static_cast<std::size_t>(slot)] : tail.back();
+  runtime::system::marshaling::write_global(target, p_->dom, values, ring.front().ncomp());
+  if (!tail.empty()) {
+    static_assert(std::is_nothrow_move_constructible_v<MultiFab<Dim>>);
+    static_assert(noexcept(ring.swap(prepared_ring)));
+    for (auto& field : ring)
+      prepared_ring.push_back(std::move(field));
+    for (auto& field : tail)
+      prepared_ring.push_back(std::move(field));
+    ring.swap(prepared_ring);
+    manager.slot_dt.at(name).swap(prepared_dts);
+    manager.slot_sample.at(name).swap(prepared_samples);
+    manager.depth.at(name) = static_cast<int>(ring.size());
+  }
+  manager.slot_sample.at(name).at(static_cast<std::size_t>(slot)) = {};
 }
 template <int Dim>
 void System<Dim>::set_history_initialized(const std::string& name, bool initialized) {

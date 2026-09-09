@@ -1787,6 +1787,8 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
                         "forward_euler", 1, measure, flux, dt, 1});
     ctx.axpy(state, Real(dt), rate);
     ctx.record_scalar("nested.work", Real(++evaluated_substeps));
+    // This handwritten Program owns the same once-per-substep tail rotation as generated code.
+    ctx.rotate_histories();
   });
   sim.set_program_block_map({0});
   ctx.register_history("nested.state", 2);
@@ -1799,6 +1801,24 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
   const auto before_diagnostics = sim.program_diagnostics();
   const auto before_history = sim.history_fill_count("nested.state");
   const auto before_samples = sim.history_sample_identity("nested.state");
+  // A pending write cannot silently become a different physical publication window. Refusal
+  // leaves the accepted seed intact; the real first child repeats its original (0, 0.1) window.
+  const auto before_history_front = sim.history_global("nested.state", 0);
+  ctx.begin_step(0.2);
+  std::string changed_window_refusal;
+  try {
+    ctx.store_history("nested.state", ctx.state(0));
+  } catch (const std::exception& error) {
+    changed_window_refusal = error.what();
+  }
+  EXPECT_EQ(changed_window_refusal,
+            n_ranks() == 1 ? "pending history publication changed its physical window"
+                           : "Program history publication preparation failed collectively");
+  EXPECT_EQ(sim.history_sample_identity("nested.state"), before_samples);
+  EXPECT_EQ(sim.history_global("nested.state", 0), before_history_front);
+  EXPECT_EQ(sim.history_fill_count("nested.state"), before_history);
+  EXPECT_EQ(sim.get_state("gas"), before_state);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.0);
   if (n_ranks() > 1) {
     const auto original = sim.history_global("nested.state", 0);
     auto divergent = original;
@@ -1834,6 +1854,7 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
   ASSERT_EQ(sim.program_exchange_records().size(), 2u);
   const auto attempted_state = sim.get_state("gas");
   const auto attempted_field = sim.potential_global();
+  const auto attempted_samples = sim.history_sample_identity("nested.state");
   NativeField attempted_history_value = ctx.scratch_state_like(ctx.history("nested.state", 1));
   ctx.lincomb(attempted_history_value, Real(1), ctx.history("nested.state", 1), Real(0),
               ctx.history("nested.state", 1));
@@ -1864,6 +1885,7 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
   EXPECT_DOUBLE_EQ(sim.time(), 0.1 + 0.2);
   EXPECT_EQ(sim.get_state("gas"), attempted_state);
   EXPECT_EQ(sim.potential_global(), attempted_field);
+  EXPECT_EQ(sim.history_sample_identity("nested.state"), attempted_samples);
   EXPECT_EQ(difference_sum_sq_all(ctx.history("nested.state", 1), attempted_history_value),
             Real(0));
   const auto accepted = sim.program_exchange_records();
@@ -1884,6 +1906,13 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
   const auto accepted_samples = runtime::program::decode_history_sample_identity(
       sim.history_sample_identity("nested.state"), "nested.state", -1, 3);
   EXPECT_EQ(accepted_samples[1].start_bits, std::bit_cast<std::uint64_t>(last_publication_start));
+  EXPECT_EQ(accepted_samples[1].interval_bits, std::bit_cast<std::uint64_t>(0.2));
+  EXPECT_EQ(accepted_samples[2].start_bits, std::bit_cast<std::uint64_t>(0.0));
+  EXPECT_EQ(accepted_samples[2].interval_bits, std::bit_cast<std::uint64_t>(0.1));
+  EXPECT_EQ(accepted_samples[1].kind, runtime::program::HistorySampleKind::Publication);
+  EXPECT_EQ(accepted_samples[2].kind, runtime::program::HistorySampleKind::Publication);
+  EXPECT_EQ(accepted_samples[1].ordinal, 1u);
+  EXPECT_EQ(accepted_samples[2].ordinal, 1u);
 }
 
 TEST(ProgramContextContract, NativeEvaluationFailureIsCollectiveAndCannotPublishWork) {
