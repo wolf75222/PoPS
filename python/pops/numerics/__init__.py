@@ -20,6 +20,7 @@ from . import riemann, reconstruction, variables, projections, spatial, terms
 from .reconstruction import limiters
 from .spatial import FiniteVolume
 from .state_storage import StateStorage
+from .named_flux import NamedCenteredDivergence
 from .interactions import JointEvaluation
 from .diffusion import Diffusion
 from .scharfetter_gummel import ScharfetterGummel
@@ -27,5 +28,6 @@ from .indicator_stencils import DiscreteGradientStencil, LinearAxisStencil
 from .plan import DiscretizationPlan
 
 __all__ = ["riemann", "reconstruction", "limiters", "variables", "projections", "terms",
-           "spatial", "FiniteVolume", "StateStorage", "Diffusion", "ScharfetterGummel",
+           "spatial", "FiniteVolume", "StateStorage", "NamedCenteredDivergence", "Diffusion",
+           "ScharfetterGummel",
            "DiscreteGradientStencil", "LinearAxisStencil", "DiscretizationPlan", "JointEvaluation"]

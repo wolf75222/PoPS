@@ -126,18 +126,21 @@ def _projection_case() -> tuple[pops.Case, AMR]:
 
     program = pops.Program("project_after_step")
     temporal = program.state(state_instance)
+    peer_temporal = program.state(peer_state_instance)
     candidate = program.value(
         "candidate",
         temporal.n + program.dt * rate(temporal.n),
         at=temporal.next.point,
     )
-    program.commit(temporal.next, program.project(candidate))
-    peer_temporal = program.state(peer_state_instance)
     peer_candidate = program.value(
         "peer_candidate",
         peer_temporal.n + program.dt * peer_rate(peer_temporal.n),
         at=peer_temporal.next.point,
     )
+    # Both sibling residuals belong to one coherent evaluation round.  Materialize them before
+    # either projection publishes a side effect; the projections remain separate block-owned
+    # commits after that shared residual barrier.
+    program.commit(temporal.next, program.project(candidate))
     program.commit(peer_temporal.next, program.project(peer_candidate))
     program.step_strategy(FixedDt(PROJECTION_DT))
     case.program(program)
