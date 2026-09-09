@@ -1581,7 +1581,6 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
                 "name": "plasma.tensor-potential",
                 "depth": 2,
                 "ncomp": 1,
-                "initialized": True,
                 "levels": [
                     {
                         "level": level,
