@@ -584,8 +584,7 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
     if (source_lane) {
       source_transport->execute(
           [this](const auto& job) {
-            return FieldView<const Real, Dim>(
-                source_transfer_state().fab_global(job.source_patch).view());
+            return std::as_const(source_transfer_state()).fab_global(job.source_patch).view();
           },
           [this](const auto& job) {
             return source_snapshot.fab_global(job.destination_patch).view();

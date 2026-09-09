@@ -1,4 +1,6 @@
 #include <gtest/gtest.h>
+#include <map>
+#include <sstream>
 #include <pops/numerics/diffusion/prepared_diffusion.hpp>
 
 namespace {
@@ -460,7 +462,29 @@ TEST(PreparedDiffusion, ThreeAxesTwoComponentsAndCoupledCoefficientsPreserveEach
   for (int application = 0; application < 2; ++application) {
     scale = application + 1;
     prepared.apply(q, out, factory);
-    Real sums[2] = {0, 0};
+    Real raw_sums[2] = {0, 0};
+    // This oracle must not confuse the accuracy of a Real parallel reduction with
+    // finite-volume conservation. Long double is not wider on every platform;
+    // Neumaier compensation remains effective when its precision equals Real.
+    struct CompensatedSum {
+      long double sum = 0, correction = 0;
+      void add(long double value) {
+        const long double next = sum + value;
+        correction +=
+            std::abs(sum) >= std::abs(value) ? (sum - next) + value : (value - next) + sum;
+        sum = next;
+      }
+      long double value() const { return sum + correction; }
+    };
+    std::array<CompensatedSum, 2> sums;
+    struct FaceIncidences {
+      std::array<int, 2> count{};
+      std::array<std::array<Real, 2>, 2> flux{};
+    };
+    // A global periodic face has exactly one lower and one upper cell incidence,
+    // even when its two stored copies belong to different local patches.
+    std::map<std::array<int, 4>, FaceIncidences> face_incidences;
+    pops::sync_host();
     for (std::size_t local = 0; local < q.local_size(); ++local) {
       const auto result = std::as_const(out).fab(local).view();
       const auto values = std::as_const(q).fab(local).view();
@@ -478,11 +502,50 @@ TEST(PreparedDiffusion, ThreeAxesTwoComponentsAndCoupledCoefficientsPreserveEach
               }),
           0, 3e-13);
       for (int component = 0; component < 2; ++component)
-        sums[component] += for_each_cell_reduce_sum(
+        raw_sums[component] += for_each_cell_reduce_sum(
             out.box(local), [=] POPS_HD(const Index<3>& cell) { return result(cell, component); });
+      const auto faces = prepared.faces()[local].view();
+      const auto box = out.box(local);
+      for (int k = box.lo[2]; k <= box.hi[2]; ++k)
+        for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+          for (int i = box.lo[0]; i <= box.hi[0]; ++i) {
+            const Index<3> cell{i, j, k};
+            for (int component = 0; component < 2; ++component)
+              sums[component].add(static_cast<long double>(result(cell, component)));
+            for (int axis = 0; axis < 3; ++axis)
+              for (int side = 0; side < 2; ++side) {
+                auto face = cell;
+                face[axis] += side;
+                const auto& domain = context.geometry().domain();
+                auto canonical = face;
+                if (canonical[axis] == domain.hi[axis] + 1)
+                  canonical[axis] = domain.lo[axis];
+                auto& entry = face_incidences[{axis, canonical[0], canonical[1], canonical[2]}];
+                ASSERT_EQ(++entry.count[side], 1);
+                for (int component = 0; component < 2; ++component)
+                  entry.flux[side][component] = faces.axes[axis](face, component);
+              }
+          }
     }
-    EXPECT_NEAR(sums[0], 0, 2e-12);
-    EXPECT_NEAR(sums[1], 0, 2e-12);
+    ASSERT_EQ(face_incidences.size(), 3 * 8 * 8 * 8);
+    for (const auto& [identity, entry] : face_incidences) {
+      EXPECT_EQ(entry.count[0], 1);
+      EXPECT_EQ(entry.count[1], 1);
+      for (int component = 0; component < 2; ++component)
+        EXPECT_EQ(entry.flux[0][component], entry.flux[1][component])
+            << "axis=" << identity[0] << " face=" << identity[1] << "," << identity[2] << ","
+            << identity[3] << " component=" << component;
+    }
+    RecordProperty("conservation_oracle_mantissa_bits", std::numeric_limits<long double>::digits);
+    for (int component = 0; component < 2; ++component) {
+      std::ostringstream observed;
+      observed.precision(std::numeric_limits<long double>::max_digits10);
+      observed << "raw=" << raw_sums[component] << ";compensated=" << sums[component].value();
+      RecordProperty("inventory_scale" + std::to_string(application + 1) + "_component" +
+                         std::to_string(component),
+                     observed.str());
+      EXPECT_NEAR(sums[component].value(), 0, 2e-12) << observed.str();
+    }
     EXPECT_EQ(prepared.faces()[0].ncomp(), 6);
   }
 }
