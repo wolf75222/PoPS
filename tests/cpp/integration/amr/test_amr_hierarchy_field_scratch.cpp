@@ -401,7 +401,8 @@ TEST(AmrHierarchyFieldScratch, RollbackDiscardsProviderScratchBeforeReconstructi
   ASSERT_EQ(pops::all_reduce_min(package.ok ? 1L : 0L), 1L);
   auto fixture = prepare_fixture(library);
   auto& context = *fixture.context;
-  ASSERT_TRUE(fixture.system->program_runtime_state_().artifact_backed_);
+  ASSERT_EQ(fixture.system->installed_program_hash(),
+            "tests.field-scratch/authenticated-rollback@1");
   const auto handle = pops::dynlib::open(library);
   ASSERT_TRUE(pops::dynlib::valid(handle));
   auto visits = reinterpret_cast<int (*)()>(pops::dynlib::sym(handle, "pops_test_field_visits"));
