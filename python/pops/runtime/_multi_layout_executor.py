@@ -1,4 +1,4 @@
-"""Exact multi-layout Uniform runtime coordination and transactional persistence."""
+"""Exact multi-layout native runtime coordination and transactional persistence."""
 
 from __future__ import annotations
 
@@ -28,8 +28,9 @@ class _NativeTransferRoute:
     source_block: str
     target_block: str
     session: Any
-    source_element_count: int
-    destination_element_count: int
+    # AMR inventories belong to the active native hierarchy/stage receipt census.
+    source_element_count: int | None
+    destination_element_count: int | None
     program_invocation: str = ""
     physical_contract_identity: str = ""
 
@@ -350,14 +351,16 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
             raise ValueError("native physical Transfer storage differs from its resolved geometry")
         contract = physical.native_contract()
         ratio = (1,) * dimension
-        # Capture storage is indexed by destination patch. A broadcast may duplicate
-        # source regions; authenticate the actual native carrier inventory.
-        source_cells = 0
-        for box in target.decomposition["boxes"]:
-            extent = tuple(upper - lower for lower, upper in
-                           zip(box["lower"], box["upper_exclusive"], strict=True))
-            source_cells += math.prod(extent[target_axis] if target_axis >= 0 else source_shape[axis]
-                                      for axis, target_axis in enumerate(physical.source_to_target))
+        if not adaptive:
+            # Uniform capture storage is indexed by destination patch. A broadcast
+            # may duplicate source regions; authenticate that carrier inventory.
+            source_cells = 0
+            for box in target.decomposition["boxes"]:
+                extent = tuple(upper - lower for lower, upper in
+                               zip(box["lower"], box["upper_exclusive"], strict=True))
+                source_cells += math.prod(
+                    extent[target_axis] if target_axis >= 0 else source_shape[axis]
+                    for axis, target_axis in enumerate(physical.source_to_target))
     else:
         if dimension != len(target_shape) or any(
                 a < b or a % b for a, b in zip(source_shape, target_shape, strict=True)):
@@ -404,8 +407,8 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
             **contract,
         },
         physical_spec=physical_spec,
-        source_element_count=source_components * source_cells,
-        destination_element_count=target_components * math.prod(target_shape),
+        source_element_count=None if adaptive else source_components * source_cells,
+        destination_element_count=None if adaptive else target_components * math.prod(target_shape),
     )
 
 
@@ -1712,6 +1715,7 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
     strategies = []
     transaction_plans = []
     configs = {}
+    native_layouts = plan.artifact.native_layouts
     for row in layouts.rows:
         layout_id = row.handle.qualified_id
         authored = programs[layout_id].program.program
@@ -1722,7 +1726,13 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
             )
         strategies.append(strategy)
         transaction_plans.append(authored.transaction_plan())
-        configs[layout_id] = system_config_from_layout(plan.artifact.native_layouts[layout_id])
+        execution_target = programs[layout_id].target
+        if execution_target == "system":
+            # Validate every ranked Uniform tiling before materializing any child.
+            # Adaptive layouts are lowered by their exact LayoutInstallProjection.
+            configs[layout_id] = system_config_from_layout(native_layouts[layout_id])
+        elif execution_target != "amr_system":
+            raise NotImplementedError("multi-layout native execution target is unsupported")
     if any(value != strategies[0] for value in strategies[1:]) or any(
         value != transaction_plans[0] for value in transaction_plans[1:]
     ):
@@ -1734,7 +1744,7 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
         raise ValueError("runtime transfer plan differs from the resolved LayoutPlan")
     from pops.runtime._physical_mapping import physical_mapping_schedule, validate_physical_geometry
     physical_mapping_schedule((row for row in transfer_rows.values()
-        if row.synchronization_uri != "pops://synchronization/program-point@1"), configs)
+        if row.synchronization_uri != "pops://synchronization/program-point@1"), native_layouts)
     requirements = {row.requirement.qualified_id: row.requirement
                     for row in plan.artifact.layout_plan.mappings}
     for transfer in transfer_rows.values():
@@ -1743,12 +1753,19 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
         component = plan.components.get(transfer.component_id)
         if getattr(component, "native_handle", None) is None:
             raise TypeError("mapping Transfer component has no authenticated native handle")
-        source = configs[transfer.source_layout_id]
-        target = configs[transfer.target_layout_id]
+        source_target = programs[transfer.source_layout_id].target
+        target_target = programs[transfer.target_layout_id].target
+        if source_target != target_target:
+            raise ValueError("layout Transfer requires matching resolved native execution targets")
+        adaptive = source_target == "amr_system"
+        source = native_layouts[transfer.source_layout_id]
+        target = native_layouts[transfer.target_layout_id]
         if transfer.operation_abi in (2, 3):
             validate_physical_geometry(requirements[transfer.mapping_id], source, target,
-                                       composite=programs[transfer.source_layout_id].target == "amr_system")
+                                       composite=adaptive)
         else:
+            if adaptive:
+                raise NotImplementedError("AMR cross-layout transfer requires a typed physical map")
             if transfer.synchronization_uri != "pops://synchronization/before-step@1":
                 raise NotImplementedError("native conservative transfer timing is unsupported")
             _require_conservative_cell_average_geometry(source, target)
