@@ -73,6 +73,89 @@ TEST(AmrSpatialNorm, MixedOwnershipCountsOnlyThePhysicalActiveCover) {
   }
 }
 
+TEST(AmrSpatialNorm, PreparedNewtonProjectsCompositeOwnershipAcrossGmresRestarts) {
+  using namespace pops;
+  using runtime::program::PreparedAmrSpatialResidual;
+  const auto lane = ExecutionLane::world("test.amr-spatial.prepared-composite-cover");
+  for (const auto ownership :
+       {std::array<bool, 2>{false, false}, {true, false}, {false, true}, {true, true}}) {
+    auto coarse = field(false, ownership[0]), fine = field(true, ownership[1]);
+    auto coarse_eb = field(false, ownership[0]), fine_eb = field(true, ownership[1]);
+    auto coarse_cover = field(false, ownership[0]), fine_cover = field(true, ownership[1]);
+    coarse.set_val(0);
+    fine.set_val(0);
+    coarse_eb.set_val(1);
+    fine_eb.set_val(1);
+    fine_cover.set_val(1);
+    for (std::size_t local = 0; local < coarse_cover.local_size(); ++local) {
+      const auto cover = coarse_cover.fab(local).view();
+      const auto eb = coarse_eb.fab(local).view();
+      for_each_cell(coarse_cover.box(local), [=] POPS_HD(const Index<2>& cell) {
+        cover(cell, 0) =
+            cell[0] >= 4 && cell[0] <= 11 && cell[1] >= 4 && cell[1] <= 11 ? Real(0) : Real(1);
+        eb(cell, 0) = cell[0] == 0 && cell[1] == 0 ? Real(0) : Real(1);
+      });
+    }
+    const std::array<const MultiFab<2>*, 2> layouts{&coarse, &fine}, embedded{&coarse_eb, &fine_eb},
+        coverage{&coarse_cover, &fine_cover};
+    const std::array<Real, 2> measures{Real(1) / 256, Real(1) / 1024};
+    FieldNewtonOptions options;
+    options.tolerance = Real(1e-12);
+    options.linear_tolerance = Real(1e-8);
+    // Three active diagonal values cannot be solved by one two-vector Krylov cycle.
+    options.restart = 2;
+    PreparedAmrSpatialResidual<2> workspace(layouts, embedded, measures, options, Real(1e-5),
+                                            coverage);
+    workspace.stage(0, coarse, &coarse);
+    workspace.stage(1, fine, &fine);
+    auto evaluate = [](const auto& q, const auto&, auto& result, int) {
+      for (std::size_t level = 0; level < result.size(); ++level)
+        for (std::size_t local = 0; local < result[level].local_size(); ++local) {
+          const auto values = q[level].fab(local).view();
+          const auto output = result[level].fab(local).view();
+          const auto box = result[level].box(local);
+          // Each coarse patch has an active exterior corner. Avoid the one EB-inactive cell.
+          const Index<2> active_reference{box.lo[0] == 0 ? 1 : box.hi[0],
+                                          box.lo[1] == 0 ? 0 : box.hi[1]};
+          for_each_cell(box, [=] POPS_HD(const Index<2>& cell) {
+            const bool excluded =
+                level == 0 && ((cell[0] >= 4 && cell[0] <= 11 && cell[1] >= 4 && cell[1] <= 11) ||
+                               (cell[0] == 0 && cell[1] == 0));
+            const Real diagonal = Real(1) + Real(0.25) * Real(cell[0] % 3);
+            // Excluded equations depend on an active DOF: their true finite-difference JVP
+            // is nonzero. Both Arnoldi work_ and restarted-GMRES image_ must project it out,
+            // or the excluded entries contaminate a basis and evolve the frozen candidate.
+            output(cell, 0) = excluded ? Real(5) + Real(2) * values(active_reference, 0)
+                                       : diagonal * values(cell, 0) - Real(1);
+          });
+        }
+    };
+    const auto report = workspace.solve(evaluate, lane);
+    ASSERT_TRUE(report.solved_value_available()) << report.reason;
+    EXPECT_NEAR(report.reference_residual_norm, std::sqrt(Real(255) / 256), Real(1e-14));
+    // Without a restart, each Newton iteration can invoke at most restart JVPs. Exceeding
+    // that bound proves a restart image was evaluated, independently of convergence roundoff.
+    EXPECT_GT(workspace.derivative_evaluations(), options.restart * report.iters);
+    for (std::size_t level = 0; level < workspace.levels(); ++level) {
+      const auto& solved = workspace.candidate(level);
+      sync_host();
+      for (std::size_t local = 0; local < solved.local_size(); ++local) {
+        const auto values = solved.fab(local).view();
+        for (std::int64_t ordinal = 0; ordinal < solved.box(local).numPts(); ++ordinal) {
+          const auto box = solved.box(local);
+          const Index<2> cell{box.lo[0] + static_cast<int>(ordinal % box.length(0)),
+                              box.lo[1] + static_cast<int>(ordinal / box.length(0))};
+          const bool excluded =
+              level == 0 && ((cell[0] >= 4 && cell[0] <= 11 && cell[1] >= 4 && cell[1] <= 11) ||
+                             (cell[0] == 0 && cell[1] == 0));
+          const Real diagonal = Real(1) + Real(0.25) * Real(cell[0] % 3);
+          EXPECT_NEAR(values(cell, 0), excluded ? Real(0) : Real(1) / diagonal, Real(1e-12));
+        }
+      }
+    }
+  }
+}
+
 // This facade fixture matches the Dim2 public implicit qualification matrix.
 #if POPS_NATIVE_DIM == 2
 namespace pops::runtime::program {

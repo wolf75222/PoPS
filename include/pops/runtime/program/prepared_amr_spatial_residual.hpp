@@ -17,12 +17,14 @@ class PreparedAmrSpatialResidual final {
   PreparedAmrSpatialResidual(std::span<const field_type* const> layouts,
                              std::span<const field_type* const> masks,
                              std::span<const Real> measures, FieldNewtonOptions options,
-                             Real difference_step)
+                             Real difference_step, std::span<const field_type* const> coverage = {})
       : masks_(masks.begin(), masks.end()),
         measures_(measures.begin(), measures.end()),
         difference_step_(difference_step) {
     if (!std::isfinite(difference_step_) || !(difference_step_ > Real(0)))
       throw std::invalid_argument("composite spatial residual requires a finite positive FD step");
+    if (masks_.size() != layouts.size() || (!coverage.empty() && coverage.size() != layouts.size()))
+      throw std::invalid_argument("composite spatial residual has an incomplete mask hierarchy");
     for (const auto* layout : layouts)
       for (auto* tower : {&candidate_, &previous_, &perturbed_, &plus_, &minus_})
         tower->emplace_back(layout->layout(), layout->distribution(), layout->local_rank(), 1,
@@ -36,6 +38,22 @@ class PreparedAmrSpatialResidual final {
         lincomb(owned_masks_.back(), Real(1), *masks_[level], Real(0), *masks_[level]);
       else
         owned_masks_.back().set_val(Real(1));
+      if (!coverage.empty()) {
+        const auto* active = coverage[level];
+        if (!active || active->ncomp() != 1 || active->layout() != prototype.layout() ||
+            active->distribution() != prototype.distribution() ||
+            active->local_rank() != prototype.local_rank())
+          throw std::invalid_argument("composite spatial coverage differs from its level carrier");
+        // Preserve EB inactivity and remove covered parent DOFs once per prepared topology.
+        for (std::size_t local = 0; local < prototype.local_size(); ++local) {
+          const auto destination = owned_masks_.back().fab(local).view();
+          const auto covered = active->fab(local).view();
+          for_each_cell(prototype.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+            if (!(covered(cell, 0) >= Real(0.5)))
+              destination(cell, 0) = Real(0);
+          });
+        }
+      }
     }
     for (std::size_t level = 0; level < layouts.size(); ++level)
       masks_[level] = &owned_masks_[level];

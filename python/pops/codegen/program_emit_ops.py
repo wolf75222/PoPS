@@ -726,10 +726,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
         )
         reduced = "transform_failed_%d" % v.id
+        # Composite Q maps are produced and checked collectively one level at a time.
+        # Their sibling statuses do not exist yet (or belong to a previous residual evaluation).
+        status_reduction = "pointwise_level_status_max" if spatial_map else "pointwise_status_max"
         lines.append(
-            "const pops::Real %s = ctx.pointwise_status_max("
+            "const pops::Real %s = ctx.%s("
             "%d, %s, %s, ctx.prepared_execution_lane());"
-            % (reduced, bidx, status, active_mask)
+            % (reduced, status_reduction, bidx, status, active_mask)
         )
         lines.append("if (%s != pops::Real(0)) {" % reduced)
         lines.append(

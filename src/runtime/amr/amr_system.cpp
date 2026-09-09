@@ -12318,6 +12318,24 @@ const std::string& AmrSystem<Dim>::prepared_amr_block_state_identity_(
 }
 
 template <int Dim>
+const MultiFab<Dim>& AmrSystem<Dim>::prepared_amr_block_level_coverage_mask(int runtime_block,
+                                                                            int level) const {
+  // This lookup must not materialize or enter collectives during rank-local preflight.
+  if (!p_->engine || !p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
+    throw std::logic_error("prepared AMR coverage requires a collectively prepared hierarchy");
+  if (level < 0 ||
+      static_cast<std::size_t>(level) >= p_->prepared_hierarchy->active_coverage.size())
+    throw std::out_of_range("prepared AMR coverage level is out of range");
+  const MultiFab<Dim>& state = prepared_amr_block_state(runtime_block, level);
+  const auto& stored = p_->prepared_hierarchy->active_coverage[static_cast<std::size_t>(level)];
+  if (!stored || stored->ncomp() != 1 || stored->layout() != state.layout() ||
+      stored->distribution() != state.distribution() ||
+      stored->local_rank() != state.local_rank() || stored->local_size() != state.local_size())
+    throw std::logic_error("prepared AMR coverage differs from its exact block-level carrier");
+  return *stored;
+}
+
+template <int Dim>
 const MultiFab<Dim>* AmrSystem<Dim>::prepared_amr_block_level_active_mask(int runtime_block,
                                                                           int level) const {
   // This prepared lookup also runs inside rank-local preflight. Materialization here would
@@ -20716,6 +20734,8 @@ template MultiFab<kNativeDimension>& AmrSystem<kNativeDimension>::prepared_amr_b
                                                                                            int);
 template const std::string& AmrSystem<kNativeDimension>::prepared_amr_block_state_identity_(
     std::size_t) const;
+template const MultiFab<kNativeDimension>&
+AmrSystem<kNativeDimension>::prepared_amr_block_level_coverage_mask(int, int) const;
 template const MultiFab<kNativeDimension>*
 AmrSystem<kNativeDimension>::prepared_amr_block_level_active_mask(int, int) const;
 template void AmrSystem<kNativeDimension>::install_prepared_amr_coupling_operator(

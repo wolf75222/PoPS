@@ -376,6 +376,9 @@ class AmrSystem {
   /// Borrow one accepted block/level carrier through its authenticated runtime identity.
   POPS_EXPORT const MultiFab<Dim>& prepared_amr_block_state(int runtime_block, int level) const;
   POPS_EXPORT MultiFab<Dim>& prepared_amr_block_state(int runtime_block, int level);
+  /// Immutable finest-owner coverage used by composite reductions; independent of EB activity.
+  [[nodiscard]] POPS_EXPORT const MultiFab<Dim>& prepared_amr_block_level_coverage_mask(
+      int runtime_block, int level) const;
   /// Borrow the exact prepared embedded-boundary active mask for one block/level, or null when
   /// that level has no active embedded-boundary authority.
   [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_amr_block_level_active_mask(

@@ -302,6 +302,20 @@ const field_type* pointwise_active_mask(int program_block, const field_type& fie
 /// globally empty active domain is 0; otherwise the lane maximum finite severity is returned.
 Real pointwise_status_max(int program_block, const field_type& status,
                           const field_type* active_cells, const ExecutionLane& lane) const {
+  return pointwise_status_max_impl_(program_block, status, active_cells, lane, true);
+}
+
+/// A synchronized spatial map produces one authenticated level before visiting the next.
+/// Check every rank now; its caller checks every level before consuming the complete hierarchy.
+Real pointwise_level_status_max(int program_block, const field_type& status,
+                                const field_type* active_cells, const ExecutionLane& lane) const {
+  return pointwise_status_max_impl_(program_block, status, active_cells, lane, false);
+}
+
+private:
+Real pointwise_status_max_impl_(int program_block, const field_type& status,
+                                const field_type* active_cells, const ExecutionLane& lane,
+                                bool cover_all_scratch_levels) const {
   require_prepared_lane_(lane, "AMR Program pointwise status");
   std::exception_ptr local_error;
   long ncomp_error = 1;
@@ -323,7 +337,7 @@ Real pointwise_status_max(int program_block, const field_type& status,
           local.has_invalid = local.has_invalid || part.has_invalid;
           local.maximum = std::max(local.maximum, part.maximum);
         },
-        true);
+        cover_all_scratch_levels);
   } catch (...) {
     local_error = std::current_exception();
   }
@@ -343,3 +357,5 @@ Real pointwise_status_max(int program_block, const field_type& status,
   const Real maximum = static_cast<Real>(all_reduce_max(static_cast<double>(local.maximum), lane));
   return std::isfinite(maximum) ? maximum : Real(3);
 }
+
+public:

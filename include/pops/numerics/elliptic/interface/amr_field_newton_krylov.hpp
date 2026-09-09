@@ -97,6 +97,7 @@ class AmrFieldNewtonKrylovWorkspace final {
     auto&& gauge_provider = apply_gauge;
     gauge_provider(iterate_);
     residual_provider(iterate_, residual_, 0);
+    project_unknowns_(residual_);
     Kokkos::fence();
 
     SolveReport report;
@@ -150,6 +151,7 @@ class AmrFieldNewtonKrylovWorkspace final {
         lincomb_(trial_, Real(1), iterate_, step, correction_);
         gauge_provider(trial_);
         residual_provider(trial_, trial_residual_, iteration + 1);
+        project_unknowns_(trial_residual_);
         Kokkos::fence();
         ++report.evaluations;
         const Real trial_norm = norm_(trial_residual_, lane);
@@ -221,6 +223,7 @@ class AmrFieldNewtonKrylovWorkspace final {
       bool cycle_converged = false;
       for (int column = 0; column < cycle; ++column) {
         apply_jvp(iterate, basis_[static_cast<std::size_t>(column)], work_, nonlinear_iteration);
+        project_unknowns_(work_);
         Kokkos::fence();
         ++result.evaluations;
         for (int row = 0; row <= column; ++row) {
@@ -271,6 +274,7 @@ class AmrFieldNewtonKrylovWorkspace final {
         return result;
       }
       apply_jvp(iterate, correction_, image_, nonlinear_iteration);
+      project_unknowns_(image_);
       Kokkos::fence();
       ++result.evaluations;
       lincomb_(linear_residual_, Real(1), rhs, Real(-1), image_);
@@ -302,6 +306,20 @@ class AmrFieldNewtonKrylovWorkspace final {
       saxpy_(correction_, coefficients_[static_cast<std::size_t>(index)],
              basis_[static_cast<std::size_t>(index)]);
     return true;
+  }
+
+  // Covered/EB-inactive cells remain available to the operator but are not Krylov DOFs.
+  // Project both defects and JVP images so corrections cannot evolve those stored values.
+  void project_unknowns_(hierarchy_type& fields) const {
+    for (std::size_t level = 0; level < fields.size(); ++level)
+      for (std::size_t local = 0; local < fields[level].local_size(); ++local) {
+        const auto values = fields[level].fab(local).view();
+        const auto active = std::as_const(*active_cells_[level]).fab(local).view();
+        for_each_cell(fields[level].box(local), [=] POPS_HD(const Index<Dim>& cell) {
+          if (!(active(cell, 0) >= Real(0.5)))
+            values(cell, 0) = Real(0);
+        });
+      }
   }
 
   static hierarchy_type make_hierarchy_(std::span<const field_type* const> layouts) {

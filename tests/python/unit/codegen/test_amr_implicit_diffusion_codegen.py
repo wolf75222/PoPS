@@ -144,6 +144,7 @@ def test_spatial_scratch_producers_retain_exact_block_level_and_node_ownership(k
             node.id, node.id) in source
         assert "transform_status_resource_%d = &ctx.scalar_scratch(%d, 0, ctx.state(0), 1, 0);" % (
             node.id, node.id) in source
+        assert "ctx.pointwise_level_status_max(0, transform_status_field_%d," % node.id in source
     install = source.split('extern "C" void pops_install_program_amr', 1)[1]
     resources = install.split("return _PopsAmrLevelProgram{", 1)[0]
     assert "_trial" not in resources

@@ -44,17 +44,19 @@ std::shared_ptr<PreparedAmrSpatialResidual<Dim>> prepare_spatial_hierarchy(
   }
   std::shared_ptr<PreparedAmrSpatialResidual<Dim>> workspace;
   prepare_spatial_collectively([&] {
-    std::vector<const field_type*> layouts, masks;
+    std::vector<const field_type*> layouts, masks, coverage;
     std::vector<Real> measures;
     const auto count = program_resource_topology().levels;
     for (int level = 0; level < count; ++level) {
       with_program_resource_level(level, [&] { layouts.push_back(&state(program_block)); });
       masks.push_back(
           facade_->prepared_amr_block_level_active_mask(sys_block(program_block), level));
+      coverage.push_back(
+          &facade_->prepared_amr_block_level_coverage_mask(sys_block(program_block), level));
       measures.push_back(cell_measure_(facade_->prepared_amr_level_geometry(level)));
     }
     workspace = std::make_shared<PreparedAmrSpatialResidual<Dim>>(layouts, masks, measures, options,
-                                                                  difference_step);
+                                                                  difference_step, coverage);
     for (int level = 0; level + 1 < count; ++level) {
       const auto& coarse = runtime_->hierarchy().layout(level);
       const auto& fine = runtime_->hierarchy().layout(level + 1);
