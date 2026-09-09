@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "explicit_amr_program.hpp"
+#include <pops/core/foundation/kokkos_env.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
@@ -40,8 +41,6 @@ void expect_value(const Field& field, pops::Real value) {
 }
 
 Fixture prepare_fixture() {
-  if (!Kokkos::is_initialized())
-    Kokkos::initialize();
   pops::comm_init();
   pops::AmrSystemConfig<Dim> config;
   config.explicit_bootstrap = true;
@@ -65,6 +64,10 @@ Fixture prepare_fixture() {
     cells *= 8;
   system->set_conservative_state("scalar", std::vector<double>(cells, 7.0));
   auto context = pops::runtime::program::make_program_execution_provider(system.get());
+#ifdef POPS_HAS_KOKKOS
+  EXPECT_TRUE(pops::kokkos_initialized_by_pops());
+  EXPECT_TRUE(pops::kokkos_atexit_finalize_registered());
+#endif
   // Explicit bootstrap stages the source before materialization; initialize its accepted buffers.
   system->set_conservative_state("scalar", std::vector<double>(cells, 7.0));
   auto evidence = std::make_shared<Evidence>();
