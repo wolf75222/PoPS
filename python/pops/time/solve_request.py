@@ -7,11 +7,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from fractions import Fraction
 from types import MappingProxyType
 from typing import Any
 
 from pops.identity import make_identity
 from pops.time.canonical_data import CanonicalData
+from pops.time.points import TimePoint
 from pops.time.residual_common import residual_name
 
 
@@ -24,6 +26,43 @@ class SolveRequestError(ValueError):
 
     def to_data(self) -> dict[str, str]:
         return {"code": self.code, "detail": self.detail, "where": self.where}
+
+
+def _temporal_coordinate(point: TimePoint) -> Any:
+    return point.step + Fraction(point.offset.to_python())
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalInterval:
+    """An exact closed logical interval; endpoints must share one clock."""
+
+    start: TimePoint
+    end: TimePoint
+    __pops_ir_immutable__ = True
+
+    def __post_init__(self) -> None:
+        if type(self.start) is not TimePoint or type(self.end) is not TimePoint:
+            raise SolveRequestError(
+                "invalid_interval", "interval endpoints must be exact TimePoint values"
+            )
+        if self.start.clock != self.end.clock or _temporal_coordinate(
+            self.start
+        ) >= _temporal_coordinate(self.end):
+            raise SolveRequestError(
+                "invalid_interval", "interval endpoints need one clock and positive duration"
+            )
+
+    def contains(self, point: TimePoint) -> bool:
+        return (
+            type(point) is TimePoint
+            and point.clock == self.start.clock
+            and _temporal_coordinate(self.start)
+            <= _temporal_coordinate(point)
+            <= _temporal_coordinate(self.end)
+        )
+
+    def to_data(self) -> dict[str, Any]:
+        return {"start": self.start.to_data(), "end": self.end.to_data()}
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +121,6 @@ class SolveUnknown:
                 "invalid_unknown", "unknown template must be a typed state or field ProgramValue")
 
         if self.interval is not None:
-            from pops.time.method_regions import TemporalInterval
             if type(self.interval) is not TemporalInterval:
                 raise SolveRequestError("invalid_interval", "unknown interval must be a TemporalInterval")
             point = self.template.point

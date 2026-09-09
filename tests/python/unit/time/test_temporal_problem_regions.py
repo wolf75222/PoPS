@@ -11,6 +11,19 @@ from pops.time.method_regions import temporal_value_signature
 from pops.time.canonical_data import CanonicalData
 
 
+def test_temporal_interval_reexports_one_solve_request_identity() -> None:
+    from pops.time.method_regions import TemporalInterval as RegionInterval
+    from pops.time.solve_request import TemporalInterval as RequestInterval
+
+    assert TemporalInterval is RegionInterval is RequestInterval
+    clock = Clock("interval_identity")
+    interval = TemporalInterval(TimePoint(clock, Fraction(1, 3)), TimePoint(clock, 1))
+    assert interval.to_data() == {
+        "start": TimePoint(clock, Fraction(1, 3)).to_data(),
+        "end": TimePoint(clock, 1).to_data(),
+    }
+
+
 def _request(*, offsets=(1,), interval=False, history=False, window=False):
     program = Program("temporal_equations")
     clock = program.clock

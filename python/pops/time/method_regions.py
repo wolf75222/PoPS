@@ -10,34 +10,7 @@ from typing import Any
 
 from pops.identity import make_identity
 from pops.time.canonical_data import CanonicalData
-from pops.time.points import TimePoint
-from pops.time.solve_request import SolveRequestError, _bindings
-
-
-def _coordinate(point: TimePoint) -> Any:
-    from pops.time._methods.coefficients import exact_fraction
-    return point.step + exact_fraction(point.offset, "temporal interval endpoint")
-
-
-@dataclass(frozen=True, slots=True)
-class TemporalInterval:
-    """An exact closed logical interval; endpoints must share one clock."""
-    start: TimePoint
-    end: TimePoint
-    __pops_ir_immutable__ = True
-
-    def __post_init__(self) -> None:
-        if type(self.start) is not TimePoint or type(self.end) is not TimePoint:
-            raise SolveRequestError("invalid_interval", "interval endpoints must be exact TimePoint values")
-        if self.start.clock != self.end.clock or _coordinate(self.start) >= _coordinate(self.end):
-            raise SolveRequestError("invalid_interval", "interval endpoints need one clock and positive duration")
-
-    def contains(self, point: TimePoint) -> bool:
-        return (type(point) is TimePoint and point.clock == self.start.clock
-                and _coordinate(self.start) <= _coordinate(point) <= _coordinate(self.end))
-
-    def to_data(self) -> dict[str, Any]:
-        return {"start": self.start.to_data(), "end": self.end.to_data()}
+from pops.time.solve_request import SolveRequestError, TemporalInterval, _bindings
 
 
 def temporal_value_signature(value: Any) -> dict[str, Any]:
@@ -105,7 +78,7 @@ def resolve_temporal_problem(request: Any, *, program: Any) -> ResolvedTemporalP
     """Qualify Region captures/results against one exact SolveRequest before lowering."""
     from pops.time.solve_request import SolveRequest
     from pops.time._program.value_validation import require_owned, validate_input_regions
-    from pops.time._program.solve_request import _equation_value
+    from pops.time._program.equation_identity import _equation_value
     if type(request) is not SolveRequest or type(request.problem) is not TemporalProblemRegion:
         raise SolveRequestError("invalid_temporal_problem", "resolution requires a temporal-region SolveRequest")
     problem = request.problem
