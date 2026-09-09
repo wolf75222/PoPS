@@ -578,7 +578,10 @@ def test_system_direct_step_requires_the_installed_python_program_strategy(
 
     engine._step_strategy = None
 
-    with pytest.raises(TypeError, match=r"Program\.step_strategy"):
+    with pytest.raises(
+        RuntimeError,
+        match="installed step transaction plan differs from the authored strategy",
+    ):
         engine.step(dt)
 
     assert (runtime.time(), runtime.macro_step()) == initial_clock
