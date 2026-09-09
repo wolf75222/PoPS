@@ -341,13 +341,14 @@ def _prepared_native_components(program: Any) -> tuple[Any, ...]:
             continue
         if value.op != "solve_linear":
             continue
-        providers = [
-            prepared_krylov_method_provider_from_attrs(value.attrs),
-            prepared_preconditioner_provider_from_attrs(value.attrs),
-            prepared_nullspace_provider_from_attrs(value.attrs),
-        ]
-        if "hierarchy_solver_provider" in value.attrs:
-            providers.append(prepared_hierarchy_solver_provider_from_attrs(value.attrs))
+        providers = [prepared_nullspace_provider_from_attrs(value.attrs)]
+        hierarchy = (prepared_hierarchy_solver_provider_from_attrs(value.attrs)
+                     if "hierarchy_solver_provider" in value.attrs else None)
+        if hierarchy is None or hierarchy.flat_execution.uses_prepared_krylov_fallback:
+            providers.extend((prepared_krylov_method_provider_from_attrs(value.attrs),
+                              prepared_preconditioner_provider_from_attrs(value.attrs)))
+        if hierarchy is not None:
+            providers.append(hierarchy)
         for provider in providers:
             component = provider.native_component
             identity = component.manifest_sha256

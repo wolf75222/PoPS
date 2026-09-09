@@ -10706,6 +10706,8 @@ AmrSystem<Dim>::prepared_amr_auxiliary_consumer_plan(const std::string& consumer
       .consumer_plan(consumer_qid);
 }
 
+#include "amr_program_field_publication.inc"
+
 template <int Dim>
 std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>
 AmrSystem<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
@@ -21616,6 +21618,8 @@ template const runtime::system::AuxiliaryStorageGroups<kNativeDimension>*
 AmrSystem<kNativeDimension>::prepared_amr_provider_storage_groups(int) const;
 template const runtime::system::ResolvedAuxiliaryConsumerPlan<kNativeDimension>&
 AmrSystem<kNativeDimension>::prepared_amr_auxiliary_consumer_plan(const std::string&, int) const;
+template void AmrSystem<kNativeDimension>::publish_program_field_components(
+    const std::string&, const std::vector<AmrSystem<kNativeDimension>::ProgramFieldLevel>&);
 template std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<kNativeDimension>>
 AmrSystem<kNativeDimension>::capture_auxiliary_checkpoint_accepted_state() const;
 template std::vector<std::vector<std::string>>

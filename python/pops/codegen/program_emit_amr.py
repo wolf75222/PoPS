@@ -712,8 +712,13 @@ def _emit_amr_install(
             + post_sync_driver
         )
     else:
-        gather, solve, publish = hierarchy_bodies
+        if len(hierarchy_bodies) == 4:
+            gather, solve, observe, publish = hierarchy_bodies
+        else:
+            gather, solve, publish = hierarchy_bodies
+            observe = None
         spatial_solve = any(value.op == "solve_spatial_nonlinear" for value in program._values)
+        direct_field_solve = any("hierarchy_field_identity" in value.attrs for value in program._values)
         hierarchy_solve_driver = (
             # The spatial solve checks out each prepared level itself for predictor
             # reconciliation and every residual/JVP. A surrounding level-0 checkout
@@ -729,6 +734,7 @@ def _emit_amr_install(
             "    std::function<void(double)> gather;\n"
             "    std::function<void(double)> solve;\n"
             "    std::function<void(double)> publish;\n"
+            + ("    std::function<void(double)> observe;\n" if observe is not None else "")
             + post_sync_field
         )
         phase_initializers = (
@@ -748,6 +754,9 @@ def _emit_amr_install(
             "        auto& ctx = *ctx_owner;\n"
             "        (void)dt;\n" + publish + "\n"
             "      }\n"
+            + (",\n      [=](double dt) {\n"
+               "        auto& ctx = *ctx_owner;\n"
+               "        (void)dt;\n" + observe + "\n      }\n" if observe is not None else "")
             + post_sync_initializer
         )
         installed_driver = (
@@ -758,7 +767,7 @@ def _emit_amr_install(
             "      if (ctx.level() != 0)\n"
             "        return;\n"
             "      const int _nlev = ctx.program_resource_topology().levels;\n" +
-            ("      if (false) {\n" if spatial_solve
+            ("      if (false) {\n" if spatial_solve or direct_field_solve
              else "      if (ctx.uses_prepared_krylov_fallback()) {\n") +
             "        for (int _k = 0; _k < _nlev; ++_k) {\n"
             "          ctx.with_program_attempt_level(_k, [&]() {\n"
@@ -774,7 +783,14 @@ def _emit_amr_install(
             "          });\n"
             "        }\n"
             "        });\n"
-            + hierarchy_solve_driver +
+            + hierarchy_solve_driver
+            + ("        ctx.begin_staged_field_publications();\n"
+               "        for (int _k = 0; _k < _nlev; ++_k) {\n"
+               "          ctx.with_program_attempt_level(_k, [&]() {\n"
+               "            _level_programs->at(static_cast<std::size_t>(_k)).observe(hierarchy_dt);\n"
+               "          });\n"
+               "        }\n"
+               "        ctx.publish_staged_field_components();\n" if observe is not None else "") +
             "        // The composite solution is complete before any level reconstructs or commits.\n"
             "        for (int _k = 0; _k < _nlev; ++_k) {\n"
             "          ctx.with_program_attempt_level(_k, [&]() {\n"

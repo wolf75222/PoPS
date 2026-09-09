@@ -494,6 +494,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_composite_fac_variable_eps
   test_composite_fac_variable_k
   test_composite_fac_tensor
+  test_composite_general_field
   test_amr_composite_poisson
   test_polar_poisson_mms
   test_polar_tensor_elliptic_mms
@@ -653,6 +654,8 @@ pops_add_gtest_suite(NAME test_amr_system_twoblock SOURCES "${_src}" EXTRA_LIBS 
 
 pops_test_source(_src test_amr_named_field)
 pops_add_gtest_suite(NAME test_amr_named_field SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+pops_test_source(_src test_amr_program_field_publication)
+pops_add_gtest_suite(NAME test_amr_program_field_publication SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
 pops_test_source(_src test_amr_multiblock_compiled)
 pops_add_gtest_suite(NAME test_amr_multiblock_compiled SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)

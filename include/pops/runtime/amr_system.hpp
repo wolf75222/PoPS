@@ -30,6 +30,7 @@
 #include <pops/runtime/system/system_poisson_options.hpp>
 #include <pops/runtime/system/auxiliary_checkpoint.hpp>
 #include <pops/runtime/system/exact_aux_registry.hpp>
+#include <pops/runtime/system/program_field_publication.hpp>
 
 #include <array>
 #include <functional>
@@ -861,6 +862,14 @@ class AmrSystem {
   prepared_amr_provider_storage_groups(int level) const;
   [[nodiscard]] POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
   prepared_amr_auxiliary_consumer_plan(const std::string& consumer_qid, int level) const;
+
+  using ProgramFieldComponent = runtime::system::ProgramFieldComponent<Dim>;
+  using ProgramFieldLevel = runtime::system::ProgramFieldLevel<Dim>;
+  /// Publish a consumed field tuple over every materialized level atomically. The existing
+  /// provider carriers and registry transactions own storage, freshness and rollback; source
+  /// and flux consumers retain their prepared level-qualified views.
+  POPS_EXPORT void publish_program_field_components(
+      const std::string& publication_identity, const std::vector<ProgramFieldLevel>& levels);
 
   /// Durable accepted metadata for each AMR hierarchy level.  The native checkpoint backend owns
   /// rank-local group payload staging; this image authenticates its exact group identities,

@@ -14,8 +14,8 @@ def emit_field_publication(value: Any, var: Any, lines: list[str], model: Any, *
     from .program_field_publication import _key, provider_identity
     from .component_provider_packs import require_emitter_provider_carrier
 
-    if target != "system" or type(model) is not ProgramModelGraph:
-        raise ValueError("consumed field publication requires an exact Uniform Program model graph")
+    if target not in ("system", "amr_system") or type(model) is not ProgramModelGraph:
+        raise ValueError("consumed field publication requires an exact native Program model graph")
     def target_space(destination: Any) -> Any:
         model.model_for_block(destination.block_ref)
         owner = destination.block_ref.model_owner_path.canonical()
@@ -55,6 +55,12 @@ def emit_field_publication(value: Any, var: Any, lines: list[str], model: Any, *
     from .program_field_publication import remaining_input_pack
     from pops.fields._program_publication import publication_states
 
+    if target == "amr_system" and var.get(("hierarchy_field_phase",)) == "publish":
+        var[value.id] = var[value.inputs[0].id]
+        return
+    from pops.time._evaluation_point import evaluation_stage_fraction
+    stage = evaluation_stage_fraction(value)
+    lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
     states = publication_states(value, target_space=target_space)
     for block, (destination, emitter) in destinations.items():
         require_emitter_provider_carrier(emitter, where="field publication prerequisites")
@@ -73,6 +79,7 @@ def emit_field_publication(value: Any, var: Any, lines: list[str], model: Any, *
             _required_block_index(block_idx, block, "field publication prerequisites"),
             var[states[block].id]))
     publication_identity = "%s/publication/%d" % (value.attrs["field_problem_identity"], value.id)
-    lines.append("ctx.publish_field_components(%d, %s, {%s});" % (
-        value.id, json.dumps(publication_identity), ", ".join(rows)))
+    method = "stage_field_components" if target == "amr_system" else "publish_field_components"
+    lines.append("ctx.%s(%d, %s, {%s});" % (
+        method, value.id, json.dumps(publication_identity), ", ".join(rows)))
     var[value.id] = var[value.inputs[0].id]

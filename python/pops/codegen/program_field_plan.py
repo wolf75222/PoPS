@@ -96,8 +96,8 @@ class ResolvedProgramFieldPlan:
             raise ValueError("Program field storage differs from the physical unknown tuple")
         if not all(item.is_resolved and item.block_ref is None for item in self.storage.unknowns):
             raise ValueError("Program field storage cannot be owned by a contributing species block")
-        if self.target != "system":
-            raise NotImplementedError("generic Program field storage currently requires a Uniform layout")
+        if self.target not in ("system", "amr_system"):
+            raise NotImplementedError("generic Program field storage has no native target realization")
         if not self.solve_node_ids or any(type(item) is not int or item < 0
                                          for item in self.solve_node_ids):
             raise ValueError("Program field plan requires actual native solve node identities")
@@ -144,6 +144,10 @@ class ResolvedProgramFieldPlan:
         }
         all_nodes = _nodes(program)
         for solve in solves:
+            if self.target == "amr_system" and solve.attrs.get("scope") != "hierarchy":
+                raise ValueError("AMR field problems require an explicit synchronized hierarchy solver")
+            if self.target == "system" and solve.attrs.get("scope") == "hierarchy":
+                raise ValueError("a hierarchy field solver requires an AMR layout")
             metadata = _physical_metadata(solve)
             if _canonical(metadata.get("field_problem")) != expected_problem:
                 raise ValueError("Program field solve changed its registered physical equations")
@@ -182,6 +186,10 @@ def capture_program_field_plans(problem: Any, detach: Any, *, target: str,
         if not targets:
             raise ValueError("generic field %r requires an explicit Program solve" % name)
         storage = FieldStorageBinding(registration.operator.unknowns, layout_plan.layout_for(handle))
+        if target == "amr_system":
+            resolved_layout = next(row for row in layout_plan.layouts if row.handle == storage.layout)
+            if resolved_layout.capabilities.get("execution") != "synchronous":
+                raise ValueError("general field hierarchy coupling requires explicit synchronous AMR execution; asynchronous or subcycled policies have no declared field-time transfer")
         registration = detach(registration)
         coverage = LoweringCoverageReport((LoweringCoverageRow(
             "program-field:%s" % handle.qualified_id, "lowered", targets),))

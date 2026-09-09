@@ -7,13 +7,23 @@ from pops.fields._observation_contract import validate_field_gradient
 
 
 def emit_field_gradient(value: Any, var: Any, lines: Any, prelude: Any, *, target: str) -> None:
-    if target != "system" or prelude is None:
-        raise NotImplementedError("field gradient requires the authenticated Uniform field route")
+    if target not in ("system", "amr_system") or prelude is None:
+        raise NotImplementedError("field gradient requires an authenticated native field route")
     dimension, solve = validate_field_gradient(value)
     source = value.inputs[0]
     if var.get(("field_observation", source.id)) != source.attrs["field_problem_identity"]:
         raise ValueError("field gradient source has no emitted consumed observation authority")
     token, boundary = "field_gradient_%d" % value.id, "field_gradient_boundary_%d" % value.id
+    if target == "amr_system":
+        selected = source.attrs["component"]
+        lines.append("static_assert(pops::kNativeDimension == %d);" % dimension)
+        lines.append("auto& %s = ctx.scalar_scratch(%d, 0, %s, %d, 1);" % (
+            token, value.id, var[source.id], dimension))
+        lines.append("ctx.observe_hierarchy_field_gradient(%d, %s, %d);" % (solve.id, token, selected))
+        var[value.id] = token
+        var[("field_observation", value.id)] = source.attrs["field_problem_identity"]
+        var[("field_pointer", value.id)] = "(&%s)" % token
+        return
     prelude.append("static_assert(pops::kNativeDimension == %d, "
                    '"field gradient dimension differs from the resolved geometry");' % dimension)
     prelude.append("auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("

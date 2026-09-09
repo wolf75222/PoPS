@@ -420,6 +420,7 @@ class ExactAuxiliaryRegistry final {
     require_sealed_();
     return accepted_points_;
   }
+  [[nodiscard]] bool has_pending_publication() const noexcept { return candidate_open_; }
 
   /// Replace the accepted publication provenance after a checkpoint owner has restored its
   /// carrier groups.  This is deliberately unavailable while a candidate exists: a failed

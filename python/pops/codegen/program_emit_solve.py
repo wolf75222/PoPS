@@ -372,6 +372,11 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     out_sf = v.attrs["apply_out"]
     block = v.attrs["apply_block"]
     result = v.attrs["apply_result"]
+    if target == "amr_system" and v.attrs.get("scope") == "hierarchy" and any(w.op == "field_problem_apply" for w in block):
+        from pops.solvers._composite_field import _field_apply
+        _field_apply(v)
+        # The authenticated hierarchy provider owns its complete apply and persistent resources.
+        return
     coupled_jacvec = _coupled_interface_jacvec_plan(
         v,
         block,
@@ -1261,7 +1266,8 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     # level-0 scratch remains the actual solve argument, while every downstream consumer resolves the
     # published field through the context's current-level seam.  Flat AMR returns the scratch itself.
     if direct_provider_execution:
-        var[v.id] = "ctx.hierarchy_solution()"
+        var[v.id] = ("ctx.hierarchy_field_solution(%d)" % v.id if "hierarchy_field_identity" in v.attrs
+                     else "ctx.hierarchy_solution()")
     else:
         var[v.id] = ("ctx.linear_solution(*%s)" % sol_sp
                      if target == "amr_system" and v.attrs.get("scope") == "hierarchy"

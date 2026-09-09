@@ -545,6 +545,17 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
         hierarchy_provider = prepared_hierarchy_solver_provider_from_attrs(solve.attrs)
         hierarchy_provider.validate_node(solve, target="amr_system")
     split = next(index for index, value in enumerate(program._values) if value is solve)
+    publications = [index for index, value in enumerate(program._values) if value.op == "field_publication"]
+    observation_end = max(publications, default=split)
+    if publications:
+        if min(publications) <= split:
+            raise ValueError("hierarchy field publication must follow its consumed solve")
+        observation_ops = {"solve_fields", "solve_outcome", "solve_outcome_component", "field_component", "field_gradient", "field_publication"}
+        unsupported = [value.op for value in program._values[split + 1:observation_end + 1]
+                       if value.op not in observation_ops]
+        if unsupported:
+            raise NotImplementedError("hierarchy field publication barrier requires observation-only preparation; "
+                                      "move consumers after publication: %r" % unsupported)
     control = {"while", "range", "branch"}
     nested = [v.name for v in program._values if v.op in control]
     if nested:
@@ -556,7 +567,7 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
     # wider than one per-level loop iteration.  This is the load-bearing refusal that prevents a local
     # C++ temporary from being referenced after the loop that declared it.  Alias ops are admitted only
     # when their storage input is itself portable.
-    portable_ops = {"state", "history", "scalar_field", "matrix_free_operator", "condensed_coeffs"}
+    portable_ops = {"state", "history", "scalar_field", "matrix_free_operator", "condensed_coeffs", "field_problem_load", "field_problem_coefficients"}
     portable = {v.id for v in program._values[:split] if v.op in portable_ops}
     changed = True
     aliases = {"solve_fields": 0, "condensed_rhs": 0, "laplacian": 0,
@@ -591,7 +602,7 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
         if value.op == "state" and value.block not in bases:
             bases[value.block] = value
     committed_ids = frozenset()
-    binding_ops = frozenset({"state", "history", "scalar_field", "matrix_free_operator"})
+    binding_ops = frozenset({"state", "history", "scalar_field", "matrix_free_operator", "field_problem_load", "field_problem_coefficients"})
 
     def registrations() -> list[str]:
         lines = []
@@ -622,7 +633,8 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
     def emit_phase(phase: str) -> str:
         var: dict[Any, Any] = {("hierarchy_retained_bindings",): frozenset(
             value.id for value in program._values[:split] if value.op in binding_ops
-        ) if phase in ("solve", "publish") else frozenset()}
+        ) if phase in ("solve", "observe", "publish") else frozenset()}
+        var[("hierarchy_field_phase",)] = phase
         if spatial:
             var[("spatial_hierarchy_phase",)] = phase
         if provider_plans is not None:
@@ -648,6 +660,8 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
                 keep = index < split or (bool(spatial) and index == split)
             elif phase == "solve":
                 keep = index == split or (index < split and value.op in binding_ops)
+            elif phase == "observe":
+                keep = (split < index <= observation_end) or (index < split and value.op in binding_ops)
             else:
                 keep = index > split or (bool(spatial) and index == split) or (index < split and value.op in binding_ops)
             if keep:
@@ -660,9 +674,11 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
                 # makes the ADC-427 scalar phi^n history carry compose on refined AMR.
                 if value.attrs.get("has_guess"):
                     guess = value.inputs[2]
-                    lines.append("ctx.stage_linear_initial_guess(%s);" % var[guess.id])
+                    lines.append("ctx.stage_hierarchy_field_initial_guess(%d, %s);" % (value.id, var[guess.id])
+                                 if "hierarchy_field_identity" in value.attrs else "ctx.stage_linear_initial_guess(%s);" % var[guess.id])
                 else:
-                    lines.append("ctx.stage_linear_initial_guess();")
+                    lines.append("ctx.stage_hierarchy_field_initial_guess(%d);" % value.id
+                                 if "hierarchy_field_identity" in value.attrs else "ctx.stage_linear_initial_guess();")
         if phase == "publish":
             lines.extend(_emit_commit_group(program._commits, bases, var, phase=0))
             histories = program.temporal_manifest()["histories"]
@@ -671,6 +687,8 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
                     "ctx.rotate_histories(%s);" % json.dumps(program.clock.qualified_id))
         return "\n".join("    " + line for line in lines)
 
+    if publications:
+        return emit_phase("gather"), emit_phase("solve"), emit_phase("observe"), emit_phase("publish")
     return emit_phase("gather"), emit_phase("solve"), emit_phase("publish")
 
 

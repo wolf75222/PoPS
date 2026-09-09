@@ -13,7 +13,7 @@ from pops.solvers import CG
 from pops.time import FailRun
 
 
-def field_case(*, joint=False, duplicate_input=False, component_transforms=False, publication_fields=False):
+def field_case(*, joint=False, duplicate_input=False, component_transforms=False, publication_fields=False, publication_source=False, problem_override=None, solver=None):
     case = pops.Case("general fields")
     from pops.domain import Rectangle
     from pops.frames import Cartesian2D
@@ -25,9 +25,10 @@ def field_case(*, joint=False, duplicate_input=False, component_transforms=False
     components = ("rho", "a", "mx") if component_transforms else ("rho", "a")
     first_state = first_model.state("U", components=components)
     second_state = second_model.state("U", components=components)
+    publication_values = {}
     if publication_fields:
         for name in ("observed_phi", "observed_gx", "observed_gy", "observed_static"):
-            first_model.aux(name)
+            publication_values[name] = first_model.aux(name)
     if component_transforms:
         rho, coefficient, momentum = first_state
         first_model.local_transform("momentum_update", (rho, coefficient, momentum + 1))
@@ -38,7 +39,12 @@ def field_case(*, joint=False, duplicate_input=False, component_transforms=False
         flux = model.flux("static flux", frame=frame, state=state,
             components={axis: tuple(0 * value for value in state) for axis in frame.axes},
             waves={axis: tuple(0 * value for value in state) for axis in frame.axes})
-        rate = model.rate("static", equation=ddt(state) == -div(flux))
+        if publication_source and model is first_model:
+            published = model.source("published force", on=state,
+                value=(0 * state[0], publication_values["observed_phi"]))
+            rate = model.rate("static", equation=ddt(state) == -div(flux) + published)
+        else:
+            rate = model.rate("static", equation=ddt(state) == -div(flux))
         numerics = DiscretizationPlan()
         numerics.rates.add(rate, FiniteVolume(flux=flux, variables=variables.Conservative(state),
             reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov()))
@@ -61,8 +67,12 @@ def field_case(*, joint=False, duplicate_input=False, component_transforms=False
     problem = FieldProblem("electric", unknowns=unknowns, equations=equations,
         boundaries=tuple(FieldBoundary(unknown, bcs.BoundaryCondition(bcs.AllPhysicalBoundaries(), condition))
                          for unknown in unknowns), gauge=SharedMeanGauge(unknowns))
+    if problem_override is not None:
+        problem = FieldProblem(problem_override.name, unknowns=problem_override.unknowns,
+            equations=tuple(eq.lhs == first + second for eq in problem_override.equations),
+            boundaries=problem_override.boundaries, gauge=problem_override.gauge)
     field = case.field(problem, FieldDiscretization(method=CellCenteredSecondOrder(), boundaries=(),
-        solver=CG(max_iter=4000, rel_tol=1e-11, abs_tol=1e-12)))
+        solver=CG(max_iter=4000, rel_tol=1e-11, abs_tol=1e-12) if solver is None else solver))
     program = pops.Program("field stage")
     first_time, second_time = program.state(first_block[first_state]), program.state(second_block[second_state])
     values = {first_block[first_state]: first_time.n,
@@ -284,3 +294,116 @@ def test_general_reaction_is_physical_and_krylov_provider_checks_compatibility(r
     other = pops.Program("incompatible CG")
     with pytest.raises(ValueError, match="positive|symmetric"):
         other.solve(field, solver=CG(max_iter=200), values={}, at=other.stage("solve", c=0))
+
+
+@pytest.mark.parametrize("synchronous", (True, False))
+def test_three_field_amr_uses_field_owned_composite_provider_and_synchronized_phases(synchronous):
+    from pops.solvers import CompositeFieldGMRES
+    from pops.codegen import Production
+    from pops.codegen.program_models import ProgramModelGraph
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.layouts import AMR
+    from pops.mesh import CartesianGrid, PeriodicAxes
+    from pops.time import FixedDt, every
+    from pops.amr import AMRClockRelation, AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging, AMRTransfer, Buffer, ConflictPolicy, EqualityPolicy, Hysteresis, Tag
+    from pops.lib.amr import StateTransfer
+    relation = _many_field_problem(3, cross=True, reaction=((4,-2,0),(-2,1,0),(0,0,3)), gauge=((1,2,0),))
+    case, field, problem, program, values, point = field_case(problem_override=relation,
+        publication_fields=True, publication_source=True, solver=CompositeFieldGMRES(max_iter=200, restart=25))
+    solved = program.solve(field, values=values, at=point).consume(action=FailRun())
+    observed = field.observe(solved)
+    gradient = observed.gradient(field[problem.unknowns[2]], dimension=2)
+    first = case.blocks()["first"]
+    first_model = case._block_registry.spec("first")["model"]
+    module = first_model.module
+    carrier = first[module.field_handle(module.field_spaces()["fields"])]
+    context = observed.publish({(carrier, "observed_phi"): observed[field[problem.unknowns[2]]],
+        (carrier, "observed_gx"): (gradient, 0), (carrier, "observed_gy"): (gradient, 1)})
+    from pops.numerics.terms import SourceTerm
+    observed_third = observed[field[problem.unknowns[2]]]
+    for kind in ("sum", "min", "max"):
+        program.record_scalar("field_" + kind, getattr(program, kind)(observed_third))
+    program.record_scalar("field_abs_sum", program.abs_sum_component(observed_third, 0))
+    for handle in values:
+        current = program.state(handle)
+        if handle.block_ref.local_id == "first":
+            rhs = program.rhs(state=current.n, fields=context,
+                terms=[SourceTerm(first[module.operator_handle("published_force")])])
+            update = current.n + 0.1 * rhs
+        else:
+            update = 1 * current.n
+        program.commit(current.next, program.value("updated_" + current.n.name, update, at=current.next.point))
+    program.step_strategy(FixedDt(0.1))
+    case.program(program)
+    frame = case._block_registry.spec("first")["model"]._frame
+    from pops.math import ValueExpr, ddt, div
+    from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+    from pops.numerics.spatial import FiniteVolume
+    marker_model = pops.Model("marker", frame=frame)
+    marker_state = marker_model.state("U", components=("rho",))
+    flux = marker_model.flux("static flux", frame=frame, state=marker_state,
+        components={axis: (0 * marker_state[0],) for axis in frame.axes},
+        waves={axis: (0 * marker_state[0],) for axis in frame.axes})
+    rate = marker_model.rate("static", equation=ddt(marker_state) == -div(flux))
+    marker_numerics = DiscretizationPlan()
+    marker_numerics.rates.add(rate, FiniteVolume(flux=flux, variables=variables.Conservative(marker_state),
+        reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov()))
+    marker_block = case.block("marker", marker_model)
+    case.numerics(marker_numerics, block=marker_block)
+    marker_handle = marker_block[marker_state]
+    marker_time = program.state(marker_handle)
+    program.commit(marker_time.next, program.value("unchanged_marker", 1 * marker_time.n, at=marker_time.next.point))
+    transfer = AMRTransfer()
+    transfer.state(marker_handle, StateTransfer())
+    for state in values:
+        transfer.state(state, StateTransfer())
+    from pops.initial import InitialCondition
+    from pops.lib.initial import Constant
+    from pops.projection import ConservativeCellAverage
+    for state in values:
+        case.initials.add(InitialCondition(state=state, value=Constant((0, 1)), projection=ConservativeCellAverage()))
+    case.initials.add(InitialCondition(state=marker_handle, value=Constant((1,)), projection=ConservativeCellAverage()))
+    from pops.params import RuntimeParam
+    threshold = case.param(RuntimeParam("field-refine", default=0.0))
+    layout = AMR(grid=CartesianGrid(frame=frame, cells=(16,16), periodic=PeriodicAxes(frame.axes)),
+        hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
+        tagging=AMRTagging(rules=(Tag(ValueExpr(marker_handle) > case.value(threshold)), Buffer(cells=1)),
+            hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
+        regrid=AMRRegrid(schedule=every(10, clock=program.clock)), transfer=transfer,
+        execution=AMRExecution.synchronous() if synchronous else AMRExecution.subcycled((AMRClockRelation(0,1,2),)))
+    if not synchronous:
+        with pytest.raises(ValueError, match="requires explicit synchronous AMR execution"):
+            pops.resolve(pops.validate(case), layout=layout, backend=Production())
+        return
+    plan = pops.resolve(pops.validate(case), layout=layout, backend=Production())
+    assert plan.program_field_plans[problem.name].target == "amr_system"
+    code = emit_cpp_program(program, model_graph=ProgramModelGraph.from_resolved_blocks(plan.blocks), target="amr_system")
+    assert "ctx.configure_hierarchy_field_solver(" in code
+    assert "ctx.solve_hierarchy_field(" in code
+    assert "ctx.hierarchy_field_assembly(" in code
+    assert "ctx.hierarchy_field_solution(" in code
+    assert "ctx.stage_hierarchy_field_initial_guess(" in code
+    assert "ctx.advance_synchronized_hierarchy(" in code
+    assert "ctx.uses_prepared_krylov_fallback()" not in code
+    assert "ctx.stage_field_components(" in code
+    assert "ctx.publish_staged_field_components();" in code
+    assert "ctx.observe_hierarchy_field_gradient(" in code
+    for kind in ("sum", "min", "max", "abs_sum"):
+        assert 'ctx.reduce_hierarchy_field_component(8, 2, "%s")' % kind in code
+    assert any(node.op == "rhs" and node.field_context == context.field_context for node in program._values)
+    assert code.index(".observe(hierarchy_dt)") < code.index("ctx.publish_staged_field_components();") < code.index(".publish(hierarchy_dt)")
+
+
+def test_field_solver_override_changes_numerical_scope_without_redeclaring_equations():
+    from pops.solvers import CompositeFieldGMRES
+    problem = _many_field_problem(3)
+    case = pops.Case("field scope override")
+    field = case.field(problem, FieldDiscretization(method=CellCenteredSecondOrder(), boundaries=(),
+        solver=CompositeFieldGMRES(max_iter=200)))
+    for override, scope in ((None, "hierarchy"), (CG(max_iter=200), "level")):
+        program = pops.Program("scope")
+        program.solve(field, solver=override, values={}, at=program.stage("solve", c=0)).consume(action=FailRun())
+        solve = next(v for v in program._values if v.op == "solve_linear")
+        assert solve.attrs.get("scope", "level") == scope
+        assert solve.block is None
+        assert ("hierarchy_field_identity" in solve.attrs) == (scope == "hierarchy")

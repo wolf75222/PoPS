@@ -108,7 +108,7 @@ def _resolved_linear_properties(problem: FieldProblem, reaction: Any) -> Any:
     return LinearOperatorProperties.symmetric_operator() if symmetric else LinearOperatorProperties.general()
 
 
-def bind_field_problem(program: Any, field: Handle, registration: Any, *, values: Any, at: Any) -> Any:
+def bind_field_problem(program: Any, field: Handle, registration: Any, *, values: Any, at: Any, solver: Any = None) -> Any:
     """Freeze explicit equation inputs; field storage never borrows a species owner."""
     from pops.linalg import LinearProblem
     from pops.time import DerivativeStrategy, SolveRequest, SolveUnknown
@@ -151,13 +151,19 @@ def bind_field_problem(program: Any, field: Handle, registration: Any, *, values
     if len(values) != len(dependencies):
         raise FieldProblemError("field.native.input", "field solve has undeclared or duplicate equation inputs")
     states = tuple(states)
+    physical_boundary = _physical_boundary(problem)
     diffusion, reaction = _physical_coefficients(problem)
     properties = _resolved_linear_properties(problem, reaction)
-    physical_boundary = _physical_boundary(problem)
+    selected_solver = registration.discretization.solver if solver is None else solver
+    scope_protocol = getattr(selected_solver, "field_problem_scope", None)
+    from pops.solvers.scopes import Hierarchy, Level, solve_scope_id
+    scope = solve_scope_id(None if scope_protocol is None else scope_protocol())
+    if scope not in ("level", "hierarchy"):
+        raise FieldProblemError("field.native.scope", "field numerical scope must be level or synchronized hierarchy")
     size = len(problem.unknowns)
     common = {"ncomp": size, "field_problem_identity": problem.identity.token,
               "field_dependencies": tuple(_identity(row) for row in dependencies),
-              "field_handle": field.canonical_identity(), "physical_boundary": physical_boundary}
+              "field_handle": field.canonical_identity(), "physical_boundary": physical_boundary, "scope": scope}
     rhs_expressions = tuple(encode_field_expression(eq.rhs, states) for eq in problem.equations)
     coefficient_expressions = tuple(encode_field_expression(eq, states) for eq in diffusion)
     rhs_dependencies = field_expression_dependencies(rhs_expressions, states)
@@ -170,7 +176,7 @@ def bind_field_problem(program: Any, field: Handle, registration: Any, *, values
          "ncomp": len(diffusion), "unknown_ncomp": size,
          "stencil_access": StencilAccess.pointwise()}, problem.name + "_coefficients", None, point=at, inherit_state_ref=False)
     operator = program.matrix_free_operator(problem.name + "_operator",
-        domain="scalar" if size == 1 else "vector", range_="scalar" if size == 1 else "vector", ncomp=size)
+        domain="scalar" if size == 1 else "vector", range_="scalar" if size == 1 else "vector", ncomp=size, scope=Hierarchy() if scope == "hierarchy" else Level())
     def apply(p: Any, out: Any, value: Any) -> Any:
         return p._new("scalar_field", "field_problem_apply", (out, value, coefficients),
             {**common, "field_dependencies": coefficient_dependencies,

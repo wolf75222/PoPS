@@ -218,6 +218,14 @@ class AmrProgramContext {
     std::vector<HierarchyTensorLevelBoundary> boundaries;
   };
 
+  struct HierarchyFieldResource {
+    HierarchyTensorSelection selection;
+    std::string field_identity;
+    std::unique_ptr<hierarchy_tensor_solver_type> solver;
+    std::uint64_t topology_epoch = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t generation = std::numeric_limits<std::uint64_t>::max();
+  };
+
   class LogicalEvaluationScope {
    public:
     LogicalEvaluationScope(const AmrProgramContext& owner, int iteration, int count)
@@ -307,6 +315,7 @@ class AmrProgramContext {
 #include <pops/runtime/program/amr_program_context_spatial_operations.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_public.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_solver.inc>
+#include <pops/runtime/program/amr_program_context_general_field_public.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_private.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_polynomial.inc>
 #include <pops/runtime/program/amr_program_context_cell_temporal_configuration.inc>
@@ -324,6 +333,7 @@ class AmrProgramContext {
 #include <pops/runtime/program/amr_program_context_shared_flux.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_runtime.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_services.inc>
+#include <pops/runtime/program/amr_program_context_general_field_services.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_services.inc>
 #include <pops/runtime/program/amr_program_context_spatial_operations_services.inc>
 
@@ -367,6 +377,8 @@ class AmrProgramContext {
   mutable std::map<std::int64_t, GeneratedFieldRoute> generated_field_routes_;
   std::shared_ptr<const hierarchy_tensor_registry_type> hierarchy_tensor_solver_registry_;
   mutable std::optional<HierarchyTensorSelection> hierarchy_tensor_selection_;
+  mutable std::map<std::int64_t, HierarchyFieldResource> hierarchy_field_resources_;
+  mutable std::map<std::string, std::vector<ProgramFieldLevel>> staged_field_publications_;
   mutable std::unique_ptr<hierarchy_tensor_solver_type> hierarchy_tensor_solver_;
   mutable std::vector<HierarchyTensorLevelBoundary> hierarchy_tensor_boundaries_;
   mutable std::uint64_t hierarchy_tensor_topology_epoch_ =

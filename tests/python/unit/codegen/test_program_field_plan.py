@@ -79,11 +79,11 @@ def test_program_field_admission_refuses_changed_equations_or_input_reads():
         plan.validate_program(program)
 
 
-def test_program_field_admission_refuses_unconsumed_registration_and_amr_route():
+def test_program_field_admission_refuses_unconsumed_registration_and_level_solve_on_amr():
     case, program, layout, _load, _apply, _solve = _graph()
     plan = _capture(case, program, layout)
-    with pytest.raises(NotImplementedError, match="Uniform"):
-        replace(plan, target="amr_system")
+    with pytest.raises(ValueError, match="synchronized hierarchy solver"):
+        replace(plan, target="amr_system").validate_program(program)
     program._values = ()
     with pytest.raises(ValueError, match="explicit Program solve"):
         _capture(case, program, layout)

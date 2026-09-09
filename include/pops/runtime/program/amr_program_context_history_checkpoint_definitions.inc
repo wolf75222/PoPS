@@ -76,6 +76,8 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
     owner_->deferred_history_lag_scratches_.swap(deferred_history_lag_scratches_);
     owner_->scratches_.swap(discarded_scratches_);
     owner_->hierarchy_tensor_solver_.reset();
+    for (auto& [key, resource] : owner_->hierarchy_field_resources_)
+      resource.solver.reset();
     owner_->hierarchy_tensor_topology_epoch_ = std::numeric_limits<std::uint64_t>::max();
     owner_->hierarchy_tensor_materialization_generation_ =
         std::numeric_limits<std::uint64_t>::max();

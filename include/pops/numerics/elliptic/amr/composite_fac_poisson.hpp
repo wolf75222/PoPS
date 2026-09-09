@@ -550,8 +550,17 @@ class CompositeFacPoisson {
   using nonlinear_hierarchy_type = typename nonlinear_workspace_type::hierarchy_type;
 
   CompositeFacPoisson(request_type request, CompositeFacOptions options = {},
-                      Real reaction = Real(0))
-      : options_(options), reaction_(reaction) {
+                      Real reaction = Real(0), const ExecutionLane* prepared_lane = nullptr,
+                      bool operator_only = false)
+      : options_(options), reaction_(reaction), operator_only_(operator_only) {
+    lane_identity_ = "pops.elliptic.amr.composite-fac.nd" + std::to_string(Dim);
+    if (prepared_lane != nullptr) {
+      lane_ = prepared_lane;
+      lane_borrow_.emplace(prepared_lane->borrow_immutably());
+    } else {
+      owned_lane_.emplace(ExecutionLane::duplicate_world_collectively(lane_identity_));
+      lane_ = &*owned_lane_;
+    }
     std::exception_ptr local_error;
     try {
       fac_detail::validate_options(options_);
@@ -560,20 +569,30 @@ class CompositeFacPoisson {
       validate_request_(request, reaction_);
       lane_identity_ = "pops.elliptic.amr.composite-fac.nd" + std::to_string(Dim);
       exact_contract_ = fac_detail::exact_contract(request, options_, reaction_);
+      exact_contract_ += operator_only_ ? "/operator-only@1" : "/fac-solver@1";
       build_levels_(request);
       build_connections_(request);
+      if (operator_only_) {
+        for (auto& level : levels_)
+          level->coefficient.emplace(level->phi.layout(), level->phi.distribution(),
+                                     level->phi.local_rank(), 1, fac_detail::unit_ghosts<Dim>());
+        for (auto& connection : connections_)
+          for (auto& patch : connection->scratch)
+            patch.coefficient_staging.emplace(patch.parent_staging.box(), 1, Extent<Dim>{});
+      }
     } catch (...) {
       local_error = std::current_exception();
     }
-    if (all_reduce_max(local_error ? 1L : 0L) != 0) {
-      if (n_ranks() == 1 && local_error)
+    if (all_reduce_max(local_error ? 1L : 0L, *lane_) != 0) {
+      if (lane_->size() == 1 && local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error(
           "partitioned FAC metadata, budget, or reusable allocation failed collectively");
     }
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("pops-partitioned-composite-fac"),
-              std::string_view(exact_contract_)}}))
+              std::string_view(exact_contract_)}},
+            *lane_))
       throw std::invalid_argument(
           "partitioned FAC exact hierarchy contract differs between MPI ranks");
     for (std::size_t connection = 0; connection < connections_.size(); ++connection) {
@@ -583,12 +602,12 @@ class CompositeFacPoisson {
                {std::string_view("pops-fac-fine-restriction"),
                 std::string_view(connections_[connection]->restriction_contract)},
                {std::string_view("pops-fac-flux-mismatch"),
-                std::string_view(connections_[connection]->flux_contract)}}))
+                std::string_view(connections_[connection]->flux_contract)}},
+              *lane_))
         throw std::invalid_argument(
             "partitioned FAC coarse/fine transfer plan differs between MPI ranks");
     }
 
-    lane_.emplace(ExecutionLane::duplicate_world_collectively(lane_identity_));
     for (auto& connection : connections_)
       connection->attach_lane(*lane_);
     for (std::size_t level = 0; level < levels_.size(); ++level) {
@@ -601,8 +620,10 @@ class CompositeFacPoisson {
         levels_[level]->halo_exchange.emplace(levels_[level]->halo_schedule, *lane_, context);
       }
     }
-    build_coarse_solver_(request.levels.front());
-    try_prepare_fft_coarse_();
+    if (!operator_only_) {
+      build_coarse_solver_(request.levels.front());
+      try_prepare_fft_coarse_();
+    }
   }
 
   CompositeFacPoisson(const CompositeFacPoisson&) = delete;
@@ -644,9 +665,9 @@ class CompositeFacPoisson {
   }
   Real residual() const noexcept { return last_report_.residual_norm; }
   const SolveReport& last_solve_report() const noexcept { return last_report_; }
-  bool owns_execution_lane() const noexcept {
-    return lane_ && (n_ranks() == 1 || lane_->owns_communicator());
-  }
+  /// True when this FAC owns the lane object; an immutable borrow remains non-owning
+  /// even when the caller's lane owns its duplicated communicator.
+  bool owns_execution_lane() const noexcept { return owned_lane_.has_value(); }
   bool has_remote_same_level_halo() const noexcept {
     return std::any_of(levels_.begin(), levels_.end(),
                        [](const auto& level) { return level->halo_schedule.has_remote_jobs(); });
@@ -747,6 +768,83 @@ class CompositeFacPoisson {
     }
   }
 
+  /// Apply-only matrix entries borrow FAC coverage and conservative transfer schedules.
+  /// Their enclosing coupled provider remains the sole solve/publication authority.
+  field_type& linear_coefficient_level(int level) {
+    if (!operator_only_)
+      throw std::logic_error("linear coefficient access requires operator-only preparation");
+    return *levels_.at(static_cast<std::size_t>(level))->coefficient;
+  }
+  const field_type& linear_active_level(int level) const {
+    return levels_.at(static_cast<std::size_t>(level))->active;
+  }
+  const field_type& linear_image_level(int level) const {
+    return levels_.at(static_cast<std::size_t>(level))->residual;
+  }
+  void prepare_linear_coefficients() {
+    if (!operator_only_)
+      throw std::logic_error("matrix-entry preparation requires operator-only resources");
+    for (auto& storage : levels_) {
+      auto& level = *storage;
+      // Extrapolate before peer exchange: owned same-level/periodic ghosts must win.
+      for (std::size_t local = 0; local < level.coefficient->local_size(); ++local)
+        for_each_cell(level.coefficient->fab(local).grown_box(),
+                      ::pops::elliptic::mg::fac_detail::ExtrudeScalarValidToGhosts<Dim>{
+                          level.coefficient->fab(local).view(), level.coefficient->box(local)});
+      same_level_fill_(level, *level.coefficient);
+      fill_physical_boundary(*level.coefficient, level.coefficient_boundary);
+    }
+    Kokkos::fence();
+  }
+  void synchronize_linear_solution() {
+    if (!operator_only_)
+      throw std::logic_error("matrix-entry synchronization requires operator-only resources");
+    average_solution_down_();
+    fill_all_solution_ghosts_();
+  }
+  void apply_linear_composite(bool arithmetic) {
+    synchronize_linear_solution();
+    for (auto& storage : levels_) {
+      auto& level = *storage;
+      const auto geometry = level.geometry;
+      for (std::size_t local = 0; local < level.phi.local_size(); ++local) {
+        const auto value = std::as_const(level.phi).fab(local).view();
+        const auto coefficient = std::as_const(*level.coefficient).fab(local).view();
+        const auto active = std::as_const(level.active).fab(local).view();
+        const auto result = level.residual.fab(local).view();
+        for_each_cell(level.phi.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+          Real image = Real(0);
+          if (active(cell, 0) >= Real(0.5))
+            for (int axis = 0; axis < Dim; ++axis) {
+              auto lower = cell, upper = cell;
+              --lower[axis];
+              ++upper[axis];
+              const Real center = coefficient(cell, 0);
+              const Real lo = coefficient(lower, 0), hi = coefficient(upper, 0);
+              const Real low =
+                  arithmetic
+                      ? Real(0.5) * lo + Real(0.5) * center
+                      : (lo + center != Real(0) ? Real(2) * lo * center / (lo + center) : Real(0));
+              const Real high =
+                  arithmetic
+                      ? Real(0.5) * hi + Real(0.5) * center
+                      : (hi + center != Real(0) ? Real(2) * hi * center / (hi + center) : Real(0));
+              const Real dx = geometry.spacing(axis);
+              image -= (high * (value(upper, 0) - value(cell, 0)) -
+                        low * (value(cell, 0) - value(lower, 0))) /
+                       (dx * dx);
+            }
+          result(cell, 0) = image;
+        });
+      }
+    }
+    for (std::size_t edge = 0; edge < connections_.size(); ++edge)
+      connections_[edge]->apply_flux_mismatch(levels_[edge]->phi, levels_[edge + 1]->phi,
+                                              levels_[edge]->residual, levels_[edge]->scratch, true,
+                                              arithmetic);
+    Kokkos::fence();
+  }
+
   void install_embedded_boundary(int level, const field_type& active,
                                  const field_type& inverse_volume, const field_type& aperture_lower,
                                  const field_type& aperture_upper) {
@@ -787,6 +885,8 @@ class CompositeFacPoisson {
   }
 
   SolveReport solve() {
+    if (operator_only_)
+      throw std::logic_error("prepared composite operator has no solve authority");
     if (newton_workspace_ || boundary_kernel_)
       return solve_dynamic_();
     try {
@@ -974,6 +1074,7 @@ class CompositeFacPoisson {
       Fab<Dim, MemorySpace> restricted{};
       Fab<Dim, MemorySpace> flux_increment{};
       Fab<Dim, MemorySpace> covered_staging{};
+      std::optional<Fab<Dim, MemorySpace>> coefficient_staging{};
       std::vector<Box<Dim>> ghost_regions{};
     };
 
@@ -1335,8 +1436,18 @@ class CompositeFacPoisson {
     }
 
     void apply_flux_mismatch(const field_type& parent_phi, const field_type& child_phi,
-                             field_type& parent_residual, field_type& parent_scratch) {
+                             field_type& parent_residual, field_type& parent_scratch,
+                             bool matrix_entry = false, bool arithmetic = false) {
       gather_parent(parent_phi);
+      if (matrix_entry) {
+        auto source = [this](const transfer_job& job) -> FieldView<const Real, Dim> {
+          return std::as_const(*parent->coefficient).fab_global(job.source_patch).view();
+        };
+        auto destination = [this](const transfer_job& job) -> FieldView<Real, Dim> {
+          return scratch_for(job.destination_patch).coefficient_staging->view();
+        };
+        gather->execute(source, destination);
+      }
       for (ScratchPatch& patch : scratch) {
         patch.flux_increment.set_val(Real(0));
         const Box<Dim> footprint = patch.restricted.box();
@@ -1378,6 +1489,11 @@ class CompositeFacPoisson {
                 fine_face_weight,
                 Real(1),
                 geometry_shift};
+            if (matrix_entry) {
+              transfer.parent_coefficient = std::as_const(*patch.coefficient_staging).view();
+              transfer.arithmetic_average = arithmetic;
+              transfer.sign = Real(-1);
+            }
             if (child->coefficient)
               transfer.fine_coefficient =
                   std::as_const(*child->coefficient).fab_global(patch.fine_patch).view();
@@ -1439,7 +1555,7 @@ class CompositeFacPoisson {
     }
   };
 
-  static void validate_request_(const request_type& request, Real reaction) {
+  void validate_request_(const request_type& request, Real reaction) const {
     if (request.levels.empty() || request.ratios.size() + 1 != request.levels.size())
       throw std::invalid_argument(
           "partitioned FAC requires one ratio between adjacent hierarchy levels");
@@ -1456,10 +1572,10 @@ class CompositeFacPoisson {
         throw std::invalid_argument("partitioned FAC level distribution does not match its boxes");
       if (current.distribution.rank_space() != rank_space)
         throw std::invalid_argument("partitioned FAC levels must share one rank space");
-      if (rank_space.size() != static_cast<std::size_t>(n_ranks()))
+      if (rank_space.size() != static_cast<std::size_t>(lane_->size()))
         throw std::invalid_argument("partitioned FAC rank space disagrees with MPI world size");
       if (!rank_space.contains(current.local_rank) ||
-          rank_space.linear_rank(current.local_rank) != static_cast<std::size_t>(my_rank()))
+          rank_space.linear_rank(current.local_rank) != static_cast<std::size_t>(lane_->rank()))
         throw std::invalid_argument("partitioned FAC local rank disagrees with MPI world rank");
       if (!current.boxes.is_disjoint_within(current.geometry.domain(), current.layout_budget))
         throw std::invalid_argument("partitioned FAC boxes are not disjoint within the domain");
@@ -2135,7 +2251,10 @@ class CompositeFacPoisson {
 
   CompositeFacOptions options_{};
   Real reaction_ = Real(0);
-  std::optional<ExecutionLane> lane_{};
+  bool operator_only_ = false;
+  std::optional<ExecutionLane> owned_lane_{};
+  const ExecutionLane* lane_ = nullptr;
+  std::optional<ExecutionLane::ImmutableBorrow> lane_borrow_{};
   std::optional<EllipticBuildRequest<Dim>> coarse_request_{};
   std::unique_ptr<::pops::elliptic::mg::GeometricMG<Dim, MemorySpace>> coarse_solver_{};
   std::unique_ptr<::pops::elliptic::PoissonFftMultiFabAdapter<Dim>> fft_coarse_{};

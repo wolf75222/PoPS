@@ -161,7 +161,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             bind_inputs = getattr(problem, "bind_program_inputs", None)
             if not callable(bind_inputs):
                 raise TypeError("solve: values/at require a problem with bind_program_inputs")
-            problem = bind_inputs(program=self, values=values, at=at)
+            problem = bind_inputs(program=self, values=values, at=at, solver=solver)
         if isinstance(solver, str):
             raise TypeError("solve: solver must be a typed descriptor, not %r" % solver)
         prepare = getattr(solver, "prepare_program_solve", None)

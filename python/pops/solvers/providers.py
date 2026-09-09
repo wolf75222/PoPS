@@ -579,11 +579,14 @@ class PreparedHierarchySolverProvider:
             != maximum
         ):
             raise ValueError("hierarchy solve convergence controls disagree with provider identity")
-        exact_cpp_int(
-            attrs.get("hierarchy_block_index"),
-            where="hierarchy provider block index",
-            minimum=0,
-        )
+        field_identity = attrs.get("hierarchy_field_identity")
+        if field_identity is not None:
+            if type(field_identity) is not str or not field_identity or attrs.get("hierarchy_block_index") != -1:
+                raise ValueError("field-owned hierarchy solve changed its storage authority")
+            if not any(row.attrs.get("field_problem_identity") == field_identity for row in operator_attrs.get("apply_block", ())):
+                raise ValueError("field-owned hierarchy solve differs from its physical operator")
+        else:
+            exact_cpp_int(attrs.get("hierarchy_block_index"), where="hierarchy provider block index", minimum=0)
         return options
 
     def emit(
