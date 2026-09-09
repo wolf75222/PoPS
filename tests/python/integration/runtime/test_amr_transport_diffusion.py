@@ -14,6 +14,7 @@ from pops.amr import (
     AMRTagging,
     AMRTransfer,
     Buffer,
+    Coarsen,
     ConflictPolicy,
     EqualityPolicy,
     Hysteresis,
@@ -106,7 +107,13 @@ def _case_and_layout():
         grid=CartesianGrid(frame=frame, cells=(CELLS, CELLS), periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
-            rules=(Tag(ValueExpr(block_state) > case.value(threshold)), Buffer(cells=1)),
+            # Explicit coarsening prevents HOLD outside the refined region from repeatedly
+            # padding the old patch until no coarse-fine interface remains to test.
+            rules=(
+                Tag(ValueExpr(block_state) > case.value(threshold)),
+                Coarsen(ValueExpr(block_state) < case.value(threshold)),
+                Buffer(cells=1),
+            ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,
         ),
@@ -151,6 +158,10 @@ def test_bounded_generated_amr_transport_diffusion_reconciles_fluxes(
     report = pops.run(simulation, t_end=2 * DT, max_steps=2, console=False)
     assert report.accepted_steps == 2 and report.rejected_steps == 0
     assert simulation.n_levels() == 2
+    for level in (0, 1):
+        assert composite_active_block_state(
+            simulation, "heat", level, refinement_ratio=2
+        ).size > 0
     assert abs(_composite_mass(simulation) - mass_before) < 5.0e-11
 
     manifest = tuple(
