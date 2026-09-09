@@ -393,6 +393,11 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         lines,
     )
     values = list(program._values)
+    from pops.codegen.program_emit_hierarchy_regions import (
+        hierarchy_region_solves, open_hierarchy_continuation,
+    )
+    hierarchy_solves = (hierarchy_region_solves(program) if target == "amr_system" else ())
+    hierarchy_solve_ids = {value.id for value in hierarchy_solves}
     index = 0
     mapping_continuations = 0
     # Group identities occupy compiler-reserved slots after the authored SSA namespace.  They are
@@ -419,12 +424,34 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
             index += 1
             continue
         base = bases.get(v.block)  # the block-state value of THIS op's block (None: a scalar op)
-        _emit_op(program, v, base, committed_ids, var, model, lines, prelude, block_idx,
+        hierarchy_solve = v.id in hierarchy_solve_ids
+        if hierarchy_solve:
+            var[("direct_hierarchy_solve", v.id)] = True
+        if hierarchy_solves and v.op == "field_publication":
+            # Levels enter the same qualified barrier in order. Reset before its first gather,
+            # including a retry after a prior attempt failed between two level callbacks.
+            lines.append("if (ctx.level() == 0) ctx.begin_staged_field_publications();")
+        emitted = [] if hierarchy_solve else lines
+        _emit_op(program, v, base, committed_ids, var, model, emitted, prelude, block_idx,
                  target=target, field_plans=field_plans,
                  has_shared_interface_implicit_jacvec=(
                      has_shared_interface_implicit_jacvec
                  ))
-        if v.op in ("layout_map_export", "layout_map_import"):
+        if hierarchy_solve:
+            if v.attrs.get("has_guess"):
+                lines.append("ctx.stage_hierarchy_field_initial_guess(%d, %s);" %
+                             (v.id, var[v.inputs[2].id]))
+            else:
+                lines.append("ctx.stage_hierarchy_field_initial_guess(%d);" % v.id)
+            open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
+                                        emitted, kind="linear_solve")
+            mapping_continuations += 1
+        elif hierarchy_solves and v.op == "field_publication":
+            open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
+                                        ["ctx.publish_staged_field_components();"],
+                                        kind="field_publication")
+            mapping_continuations += 1
+        elif v.op in ("layout_map_export", "layout_map_import"):
             from pops.codegen.program_emit_mapping_regions import open_map_continuation
             open_map_continuation(v, values[:index + 1], var, lines)
             mapping_continuations += 1
@@ -524,11 +551,16 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
     """
     from pops.codegen.program_emit_ops import _emit_op
     from pops.codegen.program_lowerability import all_ops
+    from pops.codegen.program_emit_hierarchy_regions import hierarchy_region_solves
 
     if type(has_shared_interface_implicit_jacvec) is not bool:
         raise TypeError(
             "AMR hierarchy lowering requires exact shared-interface JVP evidence"
         )
+    if hierarchy_region_solves(program):
+        # Invocation-owned field resources cross each actual solve/publication barrier through
+        # the same continuation scheduler as physical maps. No singleton phase split is needed.
+        return None
     solves = [v for v in all_ops(program) if v.op == "solve_linear"]
     spatial = [v for v in all_ops(program) if v.op == "solve_spatial_nonlinear"]
     scoped = [v for v in solves if v.attrs.get("scope") == "hierarchy"] + spatial

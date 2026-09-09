@@ -85,7 +85,6 @@ def _author(program, problem, prepared, name, provider):
         "hierarchy_solver_provider": provider.authority(), "hierarchy_solver_options": deepcopy(options),
         "hierarchy_solver_identity": prepared.identity.token, "solver_identity": prepared.identity.token,
         "hierarchy_block_index": -1, "hierarchy_field_identity": apply.attrs["field_problem_identity"],
-        "hierarchy_field_coefficients": apply.inputs[2].id,
         "problem_kind": "general_field_hierarchy", "hierarchy_use_facts": {}}
     token = program._new("scalar_field", "solve_linear", (operator, rhs) if guess is None else (operator, rhs, guess),
         attrs, name, None, space=rhs.space, point=rhs.point, inherit_state_ref=False)

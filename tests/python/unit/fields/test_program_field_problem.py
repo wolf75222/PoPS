@@ -383,7 +383,9 @@ def test_three_field_amr_uses_field_owned_composite_provider_and_synchronized_ph
     assert "ctx.hierarchy_field_assembly(" in code
     assert "ctx.hierarchy_field_solution(" in code
     assert "ctx.stage_hierarchy_field_initial_guess(" in code
-    assert "ctx.advance_synchronized_hierarchy(" in code
+    assert "ctx.advance_mapping_hierarchy(" in code
+    assert code.count("HierarchyBarrierKind::linear_solve") == 1
+    assert code.count("HierarchyBarrierKind::field_publication") == 1
     assert "ctx.uses_prepared_krylov_fallback()" not in code
     assert "ctx.stage_field_components(" in code
     assert "ctx.publish_staged_field_components();" in code
@@ -391,7 +393,7 @@ def test_three_field_amr_uses_field_owned_composite_provider_and_synchronized_ph
     for kind in ("sum", "min", "max", "abs_sum"):
         assert 'ctx.reduce_hierarchy_field_component(8, 2, "%s")' % kind in code
     assert any(node.op == "rhs" and node.field_context == context.field_context for node in program._values)
-    assert code.index(".observe(hierarchy_dt)") < code.index("ctx.publish_staged_field_components();") < code.index(".publish(hierarchy_dt)")
+    assert code.index("ctx.stage_field_components(") < code.index("ctx.publish_staged_field_components();")
 
 
 def test_field_solver_override_changes_numerical_scope_without_redeclaring_equations():

@@ -12,7 +12,6 @@ from pops.layouts import Uniform
 from pops.mesh import (AxisQuadrature, CartesianGrid, LayoutPlanBuilder, LayoutMappingOperation,
     LayoutRepresentation, LayoutSynchronization, PeriodicAxes, PhysicalSupportMap, native_physical_mapping)
 from pops.numerics import DiscretizationPlan, FiniteVolume, reconstruction, riemann, variables
-from pops.numerics.terms import Flux
 from pops.time import FixedDt
 from tests.python.support.native_execution_context import artifact_execution_context
 
@@ -22,13 +21,15 @@ PHYSICAL = PhysicalSupport((("position", "periodic-position"),))
 ROOT = Path(__file__).resolve().parents[4]
 
 
-def resolve_interstage_maps(directory, *, reverse=False, adaptive=False, retry_by_dt=False, adaptive_execution=None):
+def resolve_interstage_maps(directory, *, reverse=False, adaptive=False, retry_by_dt=False,
+                            adaptive_execution=None, with_fields=False):
     phase_frame = Rectangle("phase axes v then x", (-2, 0), (2, 1)).frame(Cartesian2D())
     physical_frame = Rectangle("physical x then hidden", (0, 0), (1, 1)).frame(Cartesian2D())
     case = pops.Case("independent weighted moments and explicit extension")
     program = pops.Program("intermediate moment twice and pullback")
     states = {}
     block_states = {}
+    physical_field_inputs = None
     if adaptive:
         from pops.params import RuntimeParam
         threshold = case.param(RuntimeParam("refine", default=-100.))
@@ -42,7 +43,12 @@ def resolve_interstage_maps(directory, *, reverse=False, adaptive=False, retry_b
         flux = model.flux("zero_flux", frame=frame, state=state,
                           components={axis: tuple(0 * state[index] for index in range(len(components))) for axis in frame.axes},
                           waves={axis: (Const(0),) * len(components) for axis in frame.axes})
-        rate = model.rate("retain", equation=ddt(state) == -div(flux))
+        if name == "integral" and with_fields:
+            force = tuple(model.aux("force_" + component) for component in components)
+            source = model.source("field_force", on=state, value=force)
+            rate = model.rate("retain", equation=ddt(state) == -div(flux) + source)
+        else:
+            rate = model.rate("retain", equation=ddt(state) == -div(flux))
         numerics = DiscretizationPlan()
         numerics.rates.add(rate, FiniteVolume(flux=flux, variables=variables.Conservative(state),
             reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov()))
@@ -50,6 +56,8 @@ def resolve_interstage_maps(directory, *, reverse=False, adaptive=False, retry_b
         case.numerics(numerics, block=block)
         states[name] = program.state(block[state])
         block_states[name] = block[state]
+        if name == "integral" and with_fields:
+            physical_field_inputs = (model, state, block, source)
         if adaptive:
             from pops.initial import InitialCondition
             from pops.lib.initial import Constant
@@ -59,19 +67,57 @@ def resolve_interstage_maps(directory, *, reverse=False, adaptive=False, retry_b
     reduction = PhysicalSupportMap(PHASE, PHYSICAL,
         reductions=(AxisQuadrature(0, -2, 2, 4, UNIT, weights=(-3, -1, 1, 5 if adaptive else 3)),))
     extension = PhysicalSupportMap(PHYSICAL, PHASE)
+    if with_fields:
+        from pops.fields import FieldBoundary, FieldDiscretization, FieldProblem, bcs
+        from pops.fields.methods import CellCenteredSecondOrder
+        from pops.math import Reaction, laplacian
+        from pops.model import Handle, OwnerPath
+        from pops.solvers import CompositeFieldGMRES
+        model, state, block, source = physical_field_inputs
+        unknowns = tuple(Handle("potential_" + name, kind="field", owner=OwnerPath.model("mapped fields"))
+                         for name in ("first", "second"))
+        problem = FieldProblem("two mapped Helmholtz fields", unknowns=unknowns,
+            equations=tuple(-laplacian(unknown) + Reaction(unknown, index + 1) == state[index]
+                            for index, unknown in enumerate(unknowns)),
+            boundaries=tuple(FieldBoundary(unknown, bcs.BoundaryCondition(
+                bcs.AllPhysicalBoundaries(), bcs.Periodic())) for unknown in unknowns))
+        field = case.field(problem, FieldDiscretization(method=CellCenteredSecondOrder(), boundaries=(),
+            solver=CompositeFieldGMRES(max_iter=200, restart=20, rel_tol=1e-12, abs_tol=1e-13)))
+
+    def consume_fields(moment, name):
+        if not with_fields:
+            return moment
+        from pops.numerics.terms import SourceTerm
+        from pops.time import FailRun
+        model, state, block, source = physical_field_inputs
+        observed = field.observe(program.solve(field, values={block[state]: moment}, at=moment.point)
+                                 .consume(action=FailRun()))
+        module = model.module
+        carrier = block[module.field_handle(module.field_spaces()["fields"])]
+        context = observed.publish({(carrier, "force_" + component): observed[field[unknown]]
+                                    for component, unknown in zip(("first", "second"), unknowns, strict=True)})
+        rhs = program.rhs(state=moment, fields=context,
+                          terms=[SourceTerm(block[module.operator_handle("field_force")])])
+        driven = program.value(name, moment + program.dt * rhs, at=moment.point)
+        program.store_history(name + " history", driven, depth=1)
+        return driven
     first = states["population"].stage("half", point=program.stage("half", c=Fraction(1, 2)))
-    scale = (200 * program.dt) * 1e307 if retry_by_dt else 2
+    scale = (200 * program.dt) * 1e307 if retry_by_dt and not with_fields else 2
     program.value(first, scale * states["population"].n)
     moment = states["integral"].stage("half moment", point=program.stage("half moment", c=Fraction(1, 2)))
-    program.map(reduction, source=first, target=moment)
-    transformed = program.value("three times intermediate moment", 3 * moment, at=moment.point)
+    imported_moment = program.map(reduction, source=first, target=moment)
+    driven_moment = consume_fields(imported_moment, "half driven moment")
+    transfer_scale = (200 * program.dt) * 1e307 if retry_by_dt and with_fields else 1
+    transformed = program.value("three times intermediate moment", (3 * transfer_scale) * driven_moment,
+                                at=moment.point)
     back = states["extended"].stage("half extension", point=program.stage("half extension", c=Fraction(1, 2)))
     program.map(extension, source=transformed, target=back)
     late = states["population"].stage("late", point=program.stage("late", c=Fraction(3, 4)))
     program.value(late, 5 * first)
     final_moment = states["integral"].stage("late moment", point=program.stage("late moment", c=Fraction(3, 4)))
-    program.map(reduction, source=late, target=final_moment)
-    for name, value in (("population", late), ("integral", final_moment), ("extended", back)):
+    imported_final_moment = program.map(reduction, source=late, target=final_moment)
+    driven_final_moment = consume_fields(imported_final_moment, "late driven moment")
+    for name, value in (("population", late), ("integral", driven_final_moment), ("extended", back)):
         program.commit(states[name].next, program.value(name + " accepted", value, at=states[name].next.point))
     program.step_strategy(FixedDt(0.01))
     case.program(program)
@@ -89,7 +135,7 @@ def resolve_interstage_maps(directory, *, reverse=False, adaptive=False, retry_b
         from pops.layouts import AMR
         from pops.lib.amr import StateTransfer
         from pops.math import ValueExpr
-        for name, grid in tuple(descriptors.items()):
+        for name, _grid in tuple(descriptors.items()):
             transfer = AMRTransfer()
             transfer.state(block_states[name], StateTransfer())
             descriptors[name] = AMR(grid=physical_mesh if name == "integral" else phase_mesh,
@@ -103,6 +149,8 @@ def resolve_interstage_maps(directory, *, reverse=False, adaptive=False, retry_b
     for block in subjects.blocks:
         builder.assign_block(block, layouts[block.local_id])
         builder.assign_state(resolved_states[block.local_id], layouts[block.local_id])
+    for field_subject in subjects.fields:
+        builder.assign_field(field_subject, layouts["integral"])
     requirements = []
     recipes = [("population", "integral", reduction, LayoutSynchronization.PROGRAM_POINT_V1),
                ("integral", "extended", extension, LayoutSynchronization.PROGRAM_POINT_V1)]

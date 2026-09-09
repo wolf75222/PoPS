@@ -18,8 +18,13 @@ def hierarchy_field_solve(value: Any) -> Any:
     for solve in value.prog._values:
         if solve.op != "solve_linear" or solve.attrs.get("hierarchy_field_identity") != value.attrs.get("field_problem_identity"):
             continue
-        if (value.op == "field_problem_load" and solve.inputs[1].id == value.id) or (
-                value.op == "field_problem_coefficients" and solve.attrs.get("hierarchy_field_coefficients") == value.id):
+        coefficient = None
+        if value.op == "field_problem_coefficients":
+            from pops.fields._program_problem import validate_field_apply
+            apply = solve.inputs[0].attrs.get("apply_result")
+            validate_field_apply(apply)
+            coefficient = apply.inputs[2]
+        if (value.op == "field_problem_load" and solve.inputs[1] is value) or coefficient is value:
             matches.append(solve)
     if len(matches) != 1:
         raise ValueError("field hierarchy storage requires one exact consuming solve identity")
@@ -84,6 +89,10 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
         pointer = token
     var[value.id] = "(*%s)" % pointer
     var[("field_pointer", value.id)] = pointer
+    if hierarchy:
+        # This token is a reference to context-owned storage, even though the ordinary
+        # expression spelling uses a pointer wrapper. Continuations retain the object by reference.
+        var[("continuation_reference", value.id)] = token
     if component:
         var[("field_observation", value.id)] = identity.token
     destination = "(*%s)" % pointer

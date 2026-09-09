@@ -54,9 +54,11 @@ def slice_program(program: Any, block_names: Any) -> Any:
     selected = frozenset(block_names)
     if not selected or any(not isinstance(name, str) or not name for name in selected):
         raise TypeError("slice_program block_names must contain non-empty names")
-    if program._dt_bound is not None or program._histories or program._acceptance_guards:
+    if program._dt_bound is not None or program._acceptance_guards:
         raise ValueError(
-            "multi-layout Program slicing does not support dt bounds, histories, or guards")
+            "multi-layout Program slicing does not support dt bounds or guards")
+    if set(program._histories) - set(program._history_state_refs):
+        raise ValueError("multi-layout histories require exact qualified state ownership")
     values = tuple(program._values)
     unsupported = sorted({value.op for value in values if value.op in _UNSLICEABLE_OPS})
     if unsupported:
@@ -138,6 +140,12 @@ def slice_program(program: Any, block_names: Any) -> Any:
                 % (name, sorted(retained - selected)))
     if _block_ids(clone._commits) - selected or _block_ids(clone._state_spaces) - selected:
         raise RuntimeError("sliced Program retained foreign state authority")
+    if _block_ids(clone._history_state_refs) - selected or _block_ids(clone._history_blocks) - selected:
+        raise RuntimeError("sliced Program retained foreign history authority")
+    expected_histories = {name for name, state in program._history_state_refs.items()
+                          if _block_id(state) in selected}
+    if set(clone._histories) != expected_histories:
+        raise RuntimeError("sliced Program histories differ from their exact state partition")
     if set(clone._operator_registries) - set(registry_owners):
         raise RuntimeError("sliced Program retained a foreign operator registry")
     clone.validate()

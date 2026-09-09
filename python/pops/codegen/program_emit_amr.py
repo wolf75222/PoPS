@@ -696,6 +696,9 @@ def _emit_amr_install(
         transform_refresh_guard = "    _require_local_transform_level_contract();\n"
     has_maps = any(value.op in ("layout_map_export", "layout_map_import")
                    for value in program._values)
+    from pops.codegen.program_emit_hierarchy_regions import hierarchy_region_solves
+    has_hierarchy_regions = bool(hierarchy_region_solves(program))
+    has_continuations = has_maps or has_hierarchy_regions
     if has_maps and hierarchy_bodies is not None:
         raise NotImplementedError("AMR mapping and field barriers require one combined region schedule")
     if hierarchy_bodies is None:
@@ -707,7 +710,7 @@ def _emit_amr_install(
             "      }\n"
             + post_sync_initializer
         )
-        if has_maps:
+        if has_continuations:
             installed_driver = (
                 "    ctx.advance_mapping_hierarchy(dt, [=](double level_dt) {\n"
                 "      auto& ctx = *ctx_owner;\n"
@@ -715,7 +718,7 @@ def _emit_amr_install(
                 "      if (*_level_program_epoch != topology.epoch ||\n"
                 "          *_level_program_generation != topology.generation ||\n"
                 "          _level_programs->size() != static_cast<std::size_t>(topology.levels))\n"
-                '        throw std::logic_error("AMR mapping level resources lost their exact hierarchy generation");\n'
+                '        throw std::logic_error("AMR continuation level resources lost their exact hierarchy generation");\n'
                 "      _level_programs->at(static_cast<std::size_t>(ctx.level())).step(level_dt);\n"
                 "    }, ctx_owner, [=]() {\n"
                 "      auto& ctx = *ctx_owner;\n"
@@ -880,7 +883,7 @@ def _emit_amr_install(
         "    auto& ctx = *ctx_owner;\n"
         # Map continuations use the bundles materialized at install/regrid/restart.
         # Their collective level region checks the exact generation before use.
-        + ("" if has_maps else "    _refresh_level_programs();\n")
+        + ("" if has_continuations else "    _refresh_level_programs();\n")
         + installed_driver
         + "  }, ctx_owner, _refresh_level_programs);\n"
         "}\n"
