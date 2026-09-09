@@ -305,6 +305,7 @@ class AmrProgramContext {
 #include <pops/runtime/program/amr_program_context_flux_expression_services.inc>
 #include <pops/runtime/program/amr_program_context_cell_temporal_runtime.inc>
 #include <pops/runtime/program/amr_program_context_subcycling_runtime.inc>
+#include <pops/runtime/program/amr_program_context_flux_family.inc>
 #include <pops/runtime/program/amr_program_context_flux_basis.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_runtime.inc>
 #include <pops/runtime/program/amr_program_context_shared_flux.inc>

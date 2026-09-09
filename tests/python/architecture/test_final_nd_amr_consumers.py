@@ -42,6 +42,7 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/amr_program_context_flux_expression_services.inc",
         "pops/runtime/program/amr_program_context_cell_temporal_runtime.inc",
         "pops/runtime/program/amr_program_context_subcycling_runtime.inc",
+        "pops/runtime/program/amr_program_context_flux_family.inc",
         "pops/runtime/program/amr_program_context_flux_basis.inc",
         "pops/runtime/program/amr_program_context_flux_expression_runtime.inc",
         "pops/runtime/program/amr_program_context_shared_flux.inc",
@@ -93,6 +94,9 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
         }
     ),
     "shared_flux": frozenset({"pops/runtime/program/amr_program_context_shared_flux.inc"}),
+    "flux_family": frozenset(
+        {"pops/runtime/program/amr_program_context_flux_family.inc"}
+    ),
     "flux_basis": frozenset(
         {
             "pops/runtime/program/amr_program_context_flux_basis.inc",
@@ -119,6 +123,7 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     "history_checkpoint": 1_800,
     "flux_expression": 1_200,
     "shared_flux": 400,
+    "flux_family": 128,
     "flux_basis": 500,
     "subcycling_runtime": 800,
     "cell_temporal_runtime": 800,
@@ -132,9 +137,16 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
 # Composite temporal residual closure and exact predictor reconciliation add one
 # separately bounded responsibility; existing responsibility allowances stay fixed.
 SPATIAL_IMPLICIT_FRAGMENT_BUDGET = 400
-PROGRAM_FRAGMENT_BUDGET = 7_730 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET
+# Exact producer-family registration and FLX2 migration are a separately bounded
+# responsibility. Its closure remains counted; every prior responsibility cap is unchanged.
+FLUX_FAMILY_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["flux_family"]
+PROGRAM_FRAGMENT_BUDGET = (
+    7_730 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
+)
 PROGRAM_SCAFFOLDING_BUDGET = 1_850
-PROGRAM_SEMANTIC_CLOSURE_BUDGET = 9_580 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET
+PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
+    9_580 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
+)
 SEMANTIC_AUTHORITIES = frozenset(
     {
         "pops/numerics/time/amr/reflux/amr_flux_execution.hpp",

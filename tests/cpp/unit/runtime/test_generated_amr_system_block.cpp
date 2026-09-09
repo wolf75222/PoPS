@@ -709,8 +709,8 @@ TEST(GeneratedAmrSystemBlock, PhysicalFacesUseTheirAuthenticatedNumericalAuthori
   pops::AmrSystem<Dim> hyperbolic(config);
   hyperbolic.install_block_state_route("tracer", "state/tracer");
   auto transport = pops::prepare_compiled_amr_system_block<Dim>(
-      "tracer", advection_model<Dim>(), "minmod", "rusanov", "conservative", "explicit", 1.4, 1,
-      1, 0.0, static_cast<double>(pops::kWenoEpsilon), false, "tests.tracer/physical_flux");
+      "tracer", advection_model<Dim>(), "minmod", "rusanov", "conservative", "explicit", 1.4, 1, 1,
+      0.0, static_cast<double>(pops::kWenoEpsilon), false, "tests.tracer/physical_flux");
   try {
     hyperbolic.install_prepared_amr_block(std::move(transport));
     FAIL() << "physical hyperbolic transport installed without its qualified boundary";

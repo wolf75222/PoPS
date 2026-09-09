@@ -360,6 +360,24 @@ TEST(test_nd_flux_ledger, exact_stage_weights_are_applied_before_metric_reflux) 
   EXPECT_TRUE(ledger.published_entries(1).empty());
 }
 
+TEST(test_nd_flux_ledger, legacy_aggregate_key_keeps_its_stage_and_empty_family) {
+  FaceFluxFragmentKey<1> key{"owner",
+                             "state",
+                             {0, 1},
+                             FaceLedgerCentering::Face,
+                             0,
+                             Index<1>{4},
+                             Index<1>{2},
+                             ClockStamp{0, 0, {0, 1}, 0.0},
+                             "accepted-stage",
+                             7,
+                             FaceLedgerRole::Coarse,
+                             FaceLedgerContribution::NumericalFlux};
+  EXPECT_EQ(key.stage, "accepted-stage");
+  EXPECT_EQ(key.attempt, 7u);
+  EXPECT_TRUE(key.temporal_family.empty());
+}
+
 TEST(test_nd_flux_ledger, same_provider_occurrences_close_independent_temporal_quadratures) {
   const RefinementRatio<2> ratio{2, 2};
   const auto mapping = sample_mapping<2>();

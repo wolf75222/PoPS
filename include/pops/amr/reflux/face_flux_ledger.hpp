@@ -82,13 +82,14 @@ struct FaceFluxFragmentKey {
   Index<Dim> face{};
   Index<Dim> coarse_face{};
   ClockStamp clock{};
-  /// Stable mathematical flux occurrence across temporal stages and AMR levels. Empty retains
-  /// the pre-POPSAND6 legacy quadrature family without manufacturing an operation identity.
-  std::string temporal_family;
   std::string stage;
   std::uint64_t attempt = 0;
   FaceLedgerRole role = FaceLedgerRole::Coarse;
   FaceLedgerContribution contribution = FaceLedgerContribution::NumericalFlux;
+
+  /// Stable mathematical flux occurrence across temporal stages and AMR levels. Empty retains
+  /// the pre-POPSAND6 legacy quadrature family without manufacturing an operation identity.
+  std::string temporal_family;
 
   friend bool operator<(const FaceFluxFragmentKey& left, const FaceFluxFragmentKey& right) {
     const auto left_prefix = std::tie(left.owner, left.state, left.levels.coarse, left.levels.fine,
