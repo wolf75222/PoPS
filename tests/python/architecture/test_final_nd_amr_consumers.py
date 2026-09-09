@@ -43,6 +43,7 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/amr_program_context_field_runtime_definitions.inc",
         "pops/runtime/program/amr_program_context_flux_expression_services.inc",
         "pops/runtime/program/amr_program_context_cell_temporal_runtime.inc",
+        "pops/runtime/program/amr_program_context_mapping_continuation.inc",
         "pops/runtime/program/amr_program_context_subcycling_runtime.inc",
         "pops/runtime/program/amr_program_context_flux_family.inc",
         "pops/runtime/program/amr_program_context_flux_basis.inc",
@@ -111,6 +112,9 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
             "pops/runtime/program/amr_program_context_flux_basis_definitions.inc",
         }
     ),
+    "mapping_continuation": frozenset(
+        {"pops/runtime/program/amr_program_context_mapping_continuation.inc"}
+    ),
     "subcycling_runtime": frozenset(
         {"pops/runtime/program/amr_program_context_subcycling_runtime.inc"}
     ),
@@ -136,6 +140,8 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     "shared_flux": 400,
     "flux_family": 128,
     "flux_basis": 500,
+    # Retained per-level map ports and resumable callbacks are counted independently.
+    "mapping_continuation": 250,
     "subcycling_runtime": 800,
     "cell_temporal_runtime": 800,
 }
@@ -154,17 +160,26 @@ FLUX_FAMILY_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["flux_family"]
 # Independent field storage, one hierarchy solve and atomic all-level observation publication.
 # Count this new responsibility separately from the earlier field-runtime allowance.
 JOINT_FIELD_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["joint_field_publication"]
+# Resumable per-level map ports have their own authority and aggregate allowance.
+MAPPING_CONTINUATION_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["mapping_continuation"]
 PROGRAM_FRAGMENT_BUDGET = (
     7_730 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
-    + JOINT_FIELD_FRAGMENT_BUDGET
+    + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
 )
 # Context-owned cache acquisition and independent field-resource handles extend the
 # existing scaffolding; numerical solve and publication bodies remain counted above.
 CONTEXT_RESOURCE_SCAFFOLDING_BUDGET = 32
-PROGRAM_SCAFFOLDING_BUDGET = 1_850 + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET
+# The shared subcycling engine retains synchronized attempts, callback authority and
+# rollback state across begin/resume/finish; this is distinct from context map ports.
+SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET = 200
+PROGRAM_SCAFFOLDING_BUDGET = (
+    1_850 + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET
+    + SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET
+)
 PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
     9_580 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
-    + JOINT_FIELD_FRAGMENT_BUDGET + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET
+    + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
+    + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET + SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET
 )
 SEMANTIC_AUTHORITIES = frozenset(
     {
@@ -316,7 +331,8 @@ def test_amr_consumer_closures_are_explicit_bounded_and_acyclic() -> None:
         )
 
     assert len(_source(closures["flux"]).splitlines()) <= 700
-    assert len(_source(closures["subcycling"]).splitlines()) <= 1_600
+    # Persistent synchronized continuations add retained state and rollback to this closure.
+    assert len(_source(closures["subcycling"]).splitlines()) <= 1_650
     program_fragments = tuple(
         path for path in closures["program"] if path in CONTEXT_FRAGMENT_PATHS
     )

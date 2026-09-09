@@ -299,6 +299,7 @@ sdk-root pops/runtime/program/amr_program_context.hpp
 sdk-support pops/runtime/program/amr_program_context_spatial.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_operations.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_operations_services.inc
+sdk-support pops/runtime/program/amr_program_context_mapping_continuation.inc
 sdk-support pops/runtime/program/amr_program_context_subcycling_runtime.inc
 sdk-support pops/runtime/program/cache_manager.hpp
 sdk-support pops/runtime/program/history_sample_identity_codec.hpp
