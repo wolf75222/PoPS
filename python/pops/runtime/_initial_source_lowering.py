@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-import math
 from typing import Any
+
+from pops.identity.scalar import native_binary64
+from pops.analytic._cell_bounds import validate_cell_integral_contract
 
 
 _PROJECTION_KEYS = {
@@ -28,25 +30,6 @@ _SOURCE_KEYS = {
 _CARTESIAN_AXIS_NAMES = ("x", "y", "z")
 
 
-def native_binary64(value: Any, *, where: str) -> float:
-    """Decode exactly one canonical finite binary64 value; no loose numeric fallback."""
-    if not isinstance(value, Mapping) or set(value) != {"binary64"} \
-            or not isinstance(value["binary64"], str):
-        raise TypeError("%s must be one canonical binary64 value" % where)
-    try:
-        result = float.fromhex(value["binary64"])
-    except (OverflowError, ValueError):
-        raise ValueError("%s contains an invalid binary64 payload" % where) from None
-    if not math.isfinite(result):
-        raise ValueError("%s must be finite" % where)
-    if value["binary64"] != result.hex():
-        raise ValueError(
-            "%s binary64 payload is not canonical; expected %r"
-            % (where, result.hex())
-        )
-    return result
-
-
 def ranked_gaussian_center(source: Mapping[str, Any], *, where: str) -> tuple[float, ...]:
     """Return the exact 1D/2D/3D Cartesian center carried by one Gaussian source."""
     center = source.get("center")
@@ -61,26 +44,6 @@ def ranked_gaussian_center(source: Mapping[str, Any], *, where: str) -> tuple[fl
         native_binary64(center[name], where="%s.center.%s" % (where, name))
         for name in names
     )
-
-
-def validate_cell_integral_contract(data, *, frame_id, component_count):
-    """Authenticate exact user-supplied integrals and their complete native bound authority."""
-    from pops.analytic import ScalarExpr
-    from pops.analytic._cell_bounds import cell_frame_from_data, validate_cell_integrals
-    if not isinstance(data, Mapping) or set(data) != {
-            "schema_version", "frame", "measure", "exactness", "components"}:
-        raise TypeError("cell integral contract has an unsupported shape")
-    if type(data["schema_version"]) is not int or data["schema_version"] != 1 \
-            or data["measure"] != "cartesian_volume" or data["exactness"] != "author_declared":
-        raise ValueError("cell integral requires explicit Cartesian volume and declared exactness")
-    frame = cell_frame_from_data(data["frame"])
-    if frame.canonical_id != frame_id:
-        raise ValueError("cell integral frame differs from initial expression frame")
-    components = data["components"]
-    if not isinstance(components, (list, tuple)) or len(components) != component_count:
-        raise ValueError("cell integral component count differs from initial state")
-    validate_cell_integrals(tuple(ScalarExpr.from_data(e) for e in components), frame)
-    return frame
 
 
 def validate_initial_source(source: Any, *, where: str) -> str:

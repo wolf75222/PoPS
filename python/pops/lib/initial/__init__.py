@@ -437,7 +437,7 @@ class Analytic:
             "components": canonical_components,
         }
         if integral_data is not None:
-            from pops.runtime._initial_source_lowering import validate_cell_integral_contract
+            from pops.analytic._cell_bounds import validate_cell_integral_contract
             validate_cell_integral_contract(integral_data, frame_id=source_options["frame_id"],
                                             component_count=len(canonical_components))
             resolved_value["cell_integrals"] = integral_data

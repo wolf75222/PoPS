@@ -230,19 +230,26 @@ def test_boundary_installation_registry_is_ranked_and_transactional() -> None:
         assert legacy not in source
 
 
-def test_layout_transfer_is_generic_with_one_bounded_physical_map_profile() -> None:
+def test_layout_transfer_is_generic_with_exact_physical_support_contracts() -> None:
     source = _read(LAYOUT_TRANSFER)
     assert "template <int Dim>" in source
     assert "SystemLayoutTransferSpec<Dim>" in source
     assert "MultiFab<Dim>" in source
     assert "Box<Dim>" in source
     assert "template class PreparedSystemLayoutTransfer<kNativeDimension>;" in source
-    assert source.count("if constexpr") == 1
-    assert source.count("if constexpr (Dim != 2)") == 1
-    assert re.search(r"if \(physical\) \{\s+if constexpr \(Dim != 2\) \{", source)
-    assert source.count(
-        '"physical maps require Dim=2, host memory, one rank and one patch per layout"'
-    ) == 2
+    assert "if constexpr" not in source
+    for required in (
+        "validate_physical_contract(moment)",
+        "physical maps require host memory",
+        "physical maps require the authenticated field rank space",
+        "distributed physical maps require uniquely owned patches",
+        "hidden storage axes must be periodic unit-measure singletons",
+        "physical shared axes must be active and injective",
+        "physical shared axes require exact geometry, extents and topology",
+        "physical reduction/broadcast requires strict nested supports",
+        "physical patches must tile their domains exactly",
+    ):
+        assert required in source
     assert (
         "if (!physical && spec.operation != "
         "POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1)"

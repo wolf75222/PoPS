@@ -26,6 +26,8 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/amr_program_context_spatial_implicit.inc",
         "pops/runtime/program/amr_program_context_spatial_imex.inc",
         "pops/runtime/program/amr_program_context_field_runtime_public.inc",
+        "pops/runtime/program/amr_program_context_general_field_public.inc",
+        "pops/runtime/program/amr_program_context_general_field_services.inc",
         "pops/runtime/program/amr_program_context_diffusion.inc",
         "pops/runtime/program/amr_program_context_flux_expression_public.inc",
         "pops/runtime/program/amr_program_context_spatial_operations.inc",
@@ -53,6 +55,12 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
     }
 )
 PROGRAM_RESPONSIBILITY_AUTHORITIES = {
+    "joint_field_publication": frozenset(
+        {
+            "pops/runtime/program/amr_program_context_general_field_public.inc",
+            "pops/runtime/program/amr_program_context_general_field_services.inc",
+        }
+    ),
     "spatial_implicit": frozenset(
         {
             "pops/runtime/program/amr_program_context_spatial_implicit.inc",
@@ -115,6 +123,7 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
     ),
 }
 PROGRAM_RESPONSIBILITY_BUDGETS = {
+    "joint_field_publication": 350,
     "spatial_implicit": 400,
     "diffusion": 180,
     "spatial_context": 350,
@@ -140,12 +149,17 @@ SPATIAL_IMPLICIT_FRAGMENT_BUDGET = 400
 # Exact producer-family registration and FLX2 migration are a separately bounded
 # responsibility. Its closure remains counted; every prior responsibility cap is unchanged.
 FLUX_FAMILY_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["flux_family"]
+# Independent field storage, one hierarchy solve and atomic all-level observation publication.
+# Count this new responsibility explicitly without changing the existing responsibility caps.
+JOINT_FIELD_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["joint_field_publication"]
 PROGRAM_FRAGMENT_BUDGET = (
     7_730 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
+    + JOINT_FIELD_FRAGMENT_BUDGET
 )
 PROGRAM_SCAFFOLDING_BUDGET = 1_850
 PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
     9_580 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
+    + JOINT_FIELD_FRAGMENT_BUDGET
 )
 SEMANTIC_AUTHORITIES = frozenset(
     {
@@ -187,6 +201,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/program/clock_schedule.hpp",
         "pops/runtime/program/source_mask.hpp",
         "pops/runtime/program/prepared_scalar_boundary_session.hpp",
+        "pops/runtime/program/prepared_resource_cache.hpp",
         "pops/runtime/program/prepared_condensed_sampling.hpp",
         "pops/runtime/program/program_owner_field_identity.hpp",
         "pops/runtime/program/prepared_amr_spatial_residual.hpp",

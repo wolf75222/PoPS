@@ -30,6 +30,8 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
     {
         "pops/runtime/program/amr_program_context_spatial.inc",
         "pops/runtime/program/amr_program_context_field_runtime_public.inc",
+        "pops/runtime/program/amr_program_context_general_field_public.inc",
+        "pops/runtime/program/amr_program_context_general_field_services.inc",
         "pops/runtime/program/amr_program_context_diffusion.inc",
         "pops/runtime/program/amr_program_context_spatial_implicit.inc",
         "pops/runtime/program/amr_program_context_spatial_imex.inc",

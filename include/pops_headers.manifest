@@ -104,6 +104,7 @@ api pops/numerics/elliptic/linear/krylov_method_provider.hpp
 api pops/numerics/elliptic/linear/krylov_workspace.hpp
 api pops/numerics/elliptic/linear/prepared_affine_problem.hpp
 sdk-root pops/numerics/elliptic/nd/general_field_operator.hpp
+sdk-root pops/numerics/elliptic/nd/prepared_composite_general_field.hpp
 sdk-root pops/numerics/diffusion/prepared_diffusion.hpp
 sdk-support pops/numerics/diffusion/bernoulli.hpp
 api pops/numerics/elliptic/linear/prepared_vector_metric.hpp
@@ -249,6 +250,7 @@ abi pops/runtime/dynamic/abi_key.hpp
 sdk-support pops/runtime/dynamic/authenticated_native_file.hpp
 sdk-support pops/runtime/dynamic/component_consumers.hpp
 sdk-support pops/runtime/dynamic/component_loader.hpp
+sdk-root pops/runtime/dynamic/physical_support_transfer.hpp
 sdk-support pops/runtime/dynamic/dynlib.hpp
 sdk-support pops/runtime/dynamic/model_registry.hpp
 sdk-support pops/runtime/dynamic/prepared_execution_context.hpp
@@ -275,6 +277,8 @@ sdk-support pops/runtime/program/amr_program_context_field_runtime_definitions.i
 sdk-support pops/runtime/program/amr_program_context_field_runtime_private.inc
 sdk-support pops/runtime/program/amr_program_context_field_runtime_public.inc
 sdk-support pops/runtime/program/amr_program_context_field_runtime_services.inc
+sdk-support pops/runtime/program/amr_program_context_general_field_public.inc
+sdk-support pops/runtime/program/amr_program_context_general_field_services.inc
 sdk-support pops/runtime/program/amr_program_context_field_runtime_solver.inc
 sdk-support pops/runtime/program/amr_program_context_flux_basis.inc
 sdk-support pops/runtime/program/amr_program_context_flux_basis_definitions.inc
@@ -305,6 +309,8 @@ sdk-root pops/runtime/program/external_riemann_brick.hpp
 sdk-support pops/runtime/program/module_metadata.hpp
 sdk-support pops/runtime/program/profiler.hpp
 sdk-root pops/runtime/program/program_context.hpp
+sdk-support pops/runtime/program/prepared_resource_cache.hpp
+sdk-support pops/runtime/program/program_cadence_continuation.inc
 sdk-support pops/runtime/program/prepared_condensed_sampling.hpp
 sdk-support pops/runtime/program/prepared_scalar_boundary_session.hpp
 sdk-support pops/runtime/program/program_owner_field_identity.hpp
@@ -331,6 +337,7 @@ sdk-support pops/runtime/system/exact_field_marshaling.hpp
 sdk-support pops/runtime/system/exact_field_solver_backend.hpp
 api pops/runtime/system/field_topology_report.hpp
 sdk-support pops/runtime/system/provider_storage_binding.hpp
+sdk-support pops/runtime/system/program_field_publication.hpp
 sdk-support pops/runtime/system/prepared_embedded_boundary.hpp
 sdk-support pops/runtime/system/prepared_field_solver_component.hpp
 sdk-support pops/runtime/system/system_block_store.hpp
