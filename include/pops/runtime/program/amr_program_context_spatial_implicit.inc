@@ -213,7 +213,7 @@ SolveReport solve_spatial_hierarchy(PreparedAmrSpatialResidual<Dim>& workspace) 
     for (std::size_t child = q.size(); child-- > 1;)
       ::pops::numerics::time::amr::execute_average_down_collectively(
           *runtime_, child, *workspace.conserved[child], *workspace.conserved[child - 1],
-          prepared_execution_lane());
+          prepared_execution_lane(), &facade_->profiler_handle());
     const field_type* parent = nullptr;
     for (std::size_t level = 0; level < q.size(); ++level)
       with_program_attempt_level(static_cast<int>(level), [&] {

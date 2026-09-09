@@ -7671,6 +7671,7 @@ struct AmrSystem<Dim>::Impl {
                 {invocation.provider, invocation.session, invocation.dependencies});
           GeneratedAmrLevelContext<Dim> context{
               .level = level,
+              .profiler = &program.profiler_,
               .lane = &*candidate->lane,
               .state = &state,
               .geometry = Geometry<Dim>::from_bounds(level_domain, cfg.lower, cfg.upper),
@@ -9318,6 +9319,7 @@ struct AmrSystem<Dim>::Impl {
                      const PreparedHistoryHierarchyImages<Dim>* history_sources = nullptr) {
     if (!prepared_hierarchy || !prepared_hierarchy->lane)
       throw std::logic_error("AMR regrid requires one prepared hierarchy lane");
+    runtime::program::ProfileOperation profile(&program.profiler_, "regrid");
     const ExecutionLane& graph_lane = *prepared_hierarchy->lane;
     const CommunicatorView graph_communicator = graph_lane.communicator();
     std::string request_contract;
@@ -9701,6 +9703,8 @@ struct AmrSystem<Dim>::Impl {
           "AMR continuation receipt preparation failed collectively");
       last_continuation_transition_rows.swap(receipt);
     }
+    if (profile.active())
+      Kokkos::fence();
     return static_cast<std::size_t>(parent_level + 1) < engine->hierarchy().num_levels();
   }
 
@@ -16309,7 +16313,8 @@ void AmrSystem<Dim>::synchronize_bootstrap_state(const std::string& subject_id, 
     numerics::time::amr::execute_average_down_collectively(
         p_->multiblock_hierarchy->topology_runtime(), child_level,
         p_->multiblock_hierarchy->state(block_index, child_level),
-        p_->multiblock_hierarchy->state(block_index, child_level - 1), lane);
+        p_->multiblock_hierarchy->state(block_index, child_level - 1), lane,
+        &p_->program.profiler_);
   } catch (...) {
     execution_error = std::current_exception();
   }

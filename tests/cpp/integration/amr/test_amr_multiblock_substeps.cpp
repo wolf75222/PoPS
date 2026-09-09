@@ -216,6 +216,9 @@ void prove_multiblock_subcycling() {
       {1, 2, {2, 1}, pops::amr::RemainderPolicy::IntegralOnly}};
   Engine<Dim> engine = Engine<Dim>::prepare(
       hierarchy, relations, {{2, {32, 496}}, reflux::FaceFluxLedgerBudget{256, 256, 1}});
+  pops::runtime::program::Profiler profiler;
+  profiler.enable();
+  engine.bind_profiler(&profiler);
 
   std::array<std::array<pops::Real, 3>, 2> initial_mass{};
   for (std::size_t block = 0; block < 2; ++block)
@@ -322,6 +325,10 @@ void prove_multiblock_subcycling() {
   EXPECT_EQ(engine.last_accepted_attempt(), 1U);
   EXPECT_EQ(callback_order.size(), 20U);
   EXPECT_EQ(reflux_order, (std::vector<std::size_t>{1, 1, 1, 1, 1, 1, 0, 0}));
+  EXPECT_EQ(profiler.counter("average_down"), 8);
+  ASSERT_NE(profiler.entry("average_down"), nullptr);
+  EXPECT_EQ(profiler.entry("average_down")->count, 8U);
+  profiler.disable();
   for (std::size_t block = 0; block < 2; ++block) {
     EXPECT_EQ(engine.ledgers(block, 0).size(), 1U);
     EXPECT_EQ(engine.ledgers(block, 1).size(), 3U);
@@ -465,6 +472,9 @@ void prove_synchronized_envelopes() {
       {1, 2, {1, 1}, pops::amr::RemainderPolicy::IntegralOnly}};
   auto engine = Engine<Dim>::prepare(hierarchy, relations,
                                      {{2, {32, 496}}, reflux::FaceFluxLedgerBudget{256, 256, 1}});
+  pops::runtime::program::Profiler profiler;
+  profiler.enable();
+  engine.bind_profiler(&profiler);
   const pops::amr::ClockWindow window{{0, 0, {0, 1}, 0.0}, {0, 0, {1, 1}, 0.2}};
   int callbacks = 0;
   bool inject_failure = true;
@@ -525,6 +535,9 @@ void prove_synchronized_envelopes() {
   inject_failure = false;
   engine.advance(window, advance, reconcile, validate, stage, true);
   EXPECT_EQ(callbacks, 2);
+  EXPECT_EQ(profiler.counter("average_down"), 4);
+  ASSERT_NE(profiler.entry("average_down"), nullptr);
+  EXPECT_EQ(profiler.entry("average_down")->count, 4U);
   EXPECT_EQ(reflux_order, (std::vector<std::size_t>{1, 1, 0, 0}));
   for (std::size_t level = 0; level < 3; ++level) {
     if (hierarchy.state(0, level).local_size() != 0)

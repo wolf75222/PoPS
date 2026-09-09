@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 using pops::runtime::program::Profiler;
@@ -61,6 +62,37 @@ TEST(Profiler, DisabledIsNoop) {
   p.disable();
   p.record("x", 1.0);  // ignored
   EXPECT_TRUE(p.entry("x") != nullptr && p.entry("x")->count == 1) << "reenable_then_disable";
+}
+
+TEST(Profiler, OptionalOperationCountsOnlyCompletedEnabledWork) {
+  using pops::runtime::program::ProfileOperation;
+  static_assert(std::is_nothrow_constructible_v<ProfileOperation, Profiler*, const char*>);
+  static_assert(std::is_nothrow_destructible_v<ProfileOperation>);
+  Profiler profiler;
+  {
+    ProfileOperation absent(nullptr, "average_down");
+    ProfileOperation disabled(&profiler, "average_down");
+    EXPECT_FALSE(absent.active());
+    EXPECT_FALSE(disabled.active());
+  }
+  EXPECT_EQ(profiler.scope_count(), 0U);
+  EXPECT_EQ(profiler.counter("average_down"), 0);
+  profiler.enable();
+  {
+    ProfileOperation completed(&profiler, "average_down");
+    ASSERT_TRUE(completed.active());
+  }
+  ASSERT_NE(profiler.entry("average_down"), nullptr);
+  EXPECT_EQ(profiler.entry("average_down")->count, 1U);
+  EXPECT_EQ(profiler.counter("average_down"), 1);
+  EXPECT_THROW(
+      {
+        ProfileOperation failed(&profiler, "fill_boundary");
+        throw std::runtime_error("operation failed");
+      },
+      std::runtime_error);
+  EXPECT_EQ(profiler.entry("fill_boundary"), nullptr);
+  EXPECT_EQ(profiler.counter("fill_boundary"), 0);
 }
 
 TEST(Profiler, CountersAccumulateAndUnknownReadsZero) {

@@ -856,12 +856,17 @@ TEST(GeneratedAmrSystemBlock, RegridRebuildsExactFineGhostProvidersAndInvalidate
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   (void)system.evaluate_prepared_amr_level(point<Dim>(0));
 
+  EXPECT_EQ(system.profiler_handle().counter("fill_boundary"), 0);
+  system.enable_profiling();
   publish_centered_fine_level(system);
   system.refresh_prepared_amr_levels();
 
   ASSERT_EQ(system.n_levels(), 2);
   EXPECT_THROW((void)system.prepared_amr_level_evaluation(0), std::logic_error);
   const auto& fine = system.evaluate_prepared_amr_level(point<Dim>(1));
+  EXPECT_GT(system.profiler_handle().counter("fill_boundary"), 0);
+  ASSERT_NE(system.profiler_handle().entry("fill_boundary"), nullptr);
+  EXPECT_GT(system.profiler_handle().entry("fill_boundary")->count, 0U);
   EXPECT_EQ(fine.point, point<Dim>(1));
   EXPECT_EQ(fine.spatial_contract, system.engine()->spatial_contract());
   EXPECT_EQ(fine.topology_epoch, system.engine()->topology_epoch());
@@ -918,7 +923,11 @@ TEST(GeneratedAmrSystemBlock, SparseParentRegridRequiresOnlyChildInterpolationSo
 
     // The accepted parent has a genuine hole in its dense domain. Repeating the ordinary
     // transfer must preserve fine values and still prepare all required parent ghost stencils.
+    system.enable_profiling();
     ASSERT_TRUE(system.regrid_from_prepared_tagging(1));
+    EXPECT_EQ(system.profiler_handle().counter("regrid"), 1);
+    ASSERT_NE(system.profiler_handle().entry("regrid"), nullptr);
+    EXPECT_EQ(system.profiler_handle().entry("regrid")->count, 1U);
     const auto& fine = engine->hierarchy().state(2);
     std::size_t checked = 0;
     for (std::size_t local = 0; local < fine.local_size(); ++local) {

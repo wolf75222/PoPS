@@ -164,6 +164,11 @@ class PreparedMultiBlockAmrSubcyclingEngine {
                                                  std::move(map), std::move(exact_contract));
   }
 
+  // The facade owns this diagnostic sink for longer than the prepared engine.
+  void bind_profiler(::pops::runtime::program::Profiler* profiler) noexcept {
+    profiler_ = profiler;
+  }
+
   std::string_view exact_contract() const noexcept { return exact_contract_; }
   std::uint64_t last_accepted_attempt() const noexcept { return last_accepted_attempt_; }
 
@@ -507,7 +512,7 @@ class PreparedMultiBlockAmrSubcyclingEngine {
                              "AMR synchronized reflux failed collectively");
         execute_average_down_collectively(hierarchy_->topology_runtime(), child,
                                           std::as_const(candidates[block][child]),
-                                          candidates[block][parent], hierarchy_->lane());
+                                          candidates[block][parent], hierarchy_->lane(), profiler_);
         invoke_collectively_(
             [&] {
               histories[block][parent]->newer = field_type(candidates[block][parent]);
@@ -608,7 +613,7 @@ class PreparedMultiBlockAmrSubcyclingEngine {
                            "multi-block AMR reflux callback failed collectively");
       execute_average_down_collectively(hierarchy_->topology_runtime(), level + 1,
                                         std::as_const(candidates[block][level + 1]),
-                                        candidates[block][level], hierarchy_->lane());
+                                        candidates[block][level], hierarchy_->lane(), profiler_);
       invoke_collectively_(
           [&] {
             histories[block][level]->newer = field_type(candidates[block][level]);
@@ -618,6 +623,7 @@ class PreparedMultiBlockAmrSubcyclingEngine {
     }
   }
 
+  ::pops::runtime::program::Profiler* profiler_ = nullptr;
   hierarchy_type* hierarchy_ = nullptr;
   std::string hierarchy_contract_;
   std::vector<relation_type> relations_;

@@ -275,6 +275,7 @@ void prepare_multiblock_subcycling_engine_() const {
     budget.flux_ledger = {maximum_entries, maximum_entries, 1};
     prepared = std::make_unique<multiblock_subcycling_type>(
         multiblock_subcycling_type::prepare(hierarchy, relations, budget));
+    prepared->bind_profiler(&facade_->profiler_handle());
   } catch (...) {
     local_error = std::current_exception();
   }

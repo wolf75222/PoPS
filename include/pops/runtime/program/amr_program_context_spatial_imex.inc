@@ -61,7 +61,7 @@ void reconcile_spatial_hierarchy_previous(int identity) const {
     prepare_spatial_collectively([&] { apply_multiblock_reflux_(*context); });
     ::pops::numerics::time::amr::execute_average_down_collectively(
         *runtime_, child, workspace.previous(child), workspace.previous(parent),
-        prepared_execution_lane());
+        prepared_execution_lane(), &facade_->profiler_handle());
     prepare_spatial_collectively([&] {
       if (provisional->published_size() != 0)
         spatial_consumed_flux_.insert_or_assign(

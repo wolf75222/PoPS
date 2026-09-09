@@ -187,6 +187,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/program/prepared_amr_spatial_residual.hpp",
         "pops/runtime/program/prepared_tensor_boundary_session.hpp",
         "pops/runtime/program/program_runtime_state.hpp",
+        "pops/runtime/program/profiler.hpp",
         "pops/runtime/program/same_level_cell_temporal_provider.hpp",
         "pops/runtime/program/step_transaction.hpp",
         "pops/runtime/program/collective_step_rejection.hpp",

@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <pops/runtime/program/profiler.hpp>
+
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
@@ -62,6 +64,8 @@ struct GeneratedAmrLevelContext {
                 "GeneratedAmrLevelContext only supports dimensions 1, 2, and 3");
 
   std::size_t level = 0;
+  /// Optional facade-owned diagnostics; never part of the numerical provider identity.
+  runtime::program::Profiler* profiler = nullptr;
   /// Borrowed exact execution authority for every implicit-source collective. The prepared
   /// hierarchy owns this lane for longer than every generated level block.
   const ExecutionLane* lane = nullptr;
@@ -1127,6 +1131,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
     const auto spatial = spatial_factory(context.geometry);
     runtime::system::AuxiliaryStorageGroups<Dim>* const provider_storage = context.provider_storage;
     const auto* const provider_plan = context.provider_plan;
+    auto* const profiler = context.profiler;
     const auto state_ghost_fill = context.state_ghost_fill;
     const auto provider_ghost_fill = context.provider_ghost_fill;
     const auto root_state_ghost_fill = context.root_state_ghost_fill;
@@ -1207,11 +1212,12 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
       physical_boundary->template require_model_qualified_characteristic_provider<Model>();
 
     auto prepare_state_with_physical =
-        [provider_storage, state_ghost_fill, provider_ghost_fill, root_state_ghost_fill,
+        [profiler, provider_storage, state_ghost_fill, provider_ghost_fill, root_state_ghost_fill,
          root_provider_ghost_fill, physical_boundary, external_ghost_boundary, geometry, level,
          model, lane, evaluation_scratch](const runtime::multiblock::BoundaryEvaluationPoint& point,
                                           MultiFab<Dim>& state, bool physical) {
           std::lock_guard lock(evaluation_scratch->mutex);
+          runtime::program::ProfileOperation profile(profiler, "fill_boundary");
           collective_phase(
               *lane,
               [&] {
@@ -1232,6 +1238,8 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                   external_ghost_boundary(point, state, geometry, *lane);
               },
               "generated AMR ghost/boundary phase failed collectively");
+          if (profile.active())
+            Kokkos::fence();
         };
     auto prepare_state = [prepare_state_with_physical](const auto& point, auto& state) {
       prepare_state_with_physical(point, state, true);
@@ -1786,16 +1794,18 @@ PreparedAmrSystemBlock<Dim> materialize_state_block(Request request) {
     require_level_context(runtime, context, Model::n_vars, provider_count, required_ghosts,
                           staircase_provider_identity, cut_cell_provider_identity, false);
     auto* const provider_storage = context.provider_storage;
+    auto* const profiler = context.profiler;
     const auto state_ghost_fill = context.state_ghost_fill;
     const auto provider_ghost_fill = context.provider_ghost_fill;
     const auto root_state_ghost_fill = context.root_state_ghost_fill;
     const auto root_provider_ghost_fill = context.root_provider_ghost_fill;
     const std::size_t level = context.level;
     const ExecutionLane* const lane = context.lane;
-    auto prepare_state = [provider_storage, state_ghost_fill, provider_ghost_fill,
+    auto prepare_state = [profiler, provider_storage, state_ghost_fill, provider_ghost_fill,
                           root_state_ghost_fill, root_provider_ghost_fill, level,
                           lane](const runtime::multiblock::BoundaryEvaluationPoint& point,
                                 MultiFab<Dim>& state) {
+      runtime::program::ProfileOperation profile(profiler, "fill_boundary");
       collective_phase(
           *lane,
           [&] {
@@ -1810,6 +1820,8 @@ PreparedAmrSystemBlock<Dim> materialize_state_block(Request request) {
             }
           },
           "Program-only AMR state/provider ghost preparation failed collectively");
+      if (profile.active())
+        Kokkos::fence();
     };
     using LevelBlock = PreparedGeneratedAmrLevelBlock<Dim>;
     typename LevelBlock::PhysicalBoundaryPreparation prepare_physical = [](const auto&, auto&) {};

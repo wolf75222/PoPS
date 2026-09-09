@@ -538,9 +538,12 @@ void fill_boundary(field_type& field) const {
 
 void fill_boundary(field_type& field, const ExecutionLane& lane) const {
   require_prepared_lane_(lane, "AMR boundary fill");
+  ProfileOperation profile(&facade_->profiler_handle(), "fill_boundary");
   scalar_boundary_session_type session(geometry(), facade_->prepared_amr_boundary_topology(), field,
                                        lane, next_boundary_generation_());
   session.fill(field);
+  if (profile.active())
+    Kokkos::fence();
 }
 
 void laplacian(field_type& output, field_type& input) const {

@@ -448,7 +448,7 @@ struct ProgramRuntimeState {
   /// PER-NODE / PER-BRICK PROFILER (ADC-459): disabled by default (no hot-path cost when off). On the
   /// uniform runtime System::step / solve_fields wrap themselves in a ProfileScope into it; on AMR the
   /// engine is wired to its address at build. Used by BOTH.
-  Profiler profiler_;
+  mutable Profiler profiler_;
   /// SCHEDULER VALUE CACHE (ADC-458), UNIFORM ONLY. The held-node cache (every(N).hold / accumulate_dt)
   /// keyed by IR node id; the uniform checkpoint serializes it. Empty on AMR (cache seam not wired).
   CacheManager<Dim> cache_;
