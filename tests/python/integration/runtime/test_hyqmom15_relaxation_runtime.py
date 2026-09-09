@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pytest
 
 from pops.domain import Rectangle
@@ -143,7 +144,11 @@ def test_hyqmom15_relaxation_matches_matlab_through_native_program(
 
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
     artifact.verify()
-    simulation = pops.bind(artifact, initial_state={"plasma": initial})
+    simulation = pops.bind(
+        artifact,
+        initial_state={"plasma": initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     report = pops.run(simulation, t_end=DT, max_steps=1)
 
     assert report.accepted_steps == 1
@@ -154,7 +159,11 @@ def test_hyqmom15_relaxation_matches_matlab_through_native_program(
 
     invalid = initial.copy()
     invalid[0, :, :] = 0.0
-    rejected = pops.bind(artifact, initial_state={"plasma": invalid})
+    rejected = pops.bind(
+        artifact,
+        initial_state={"plasma": invalid},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     with pytest.raises(RuntimeError, match="relaxation15|local_transform"):
         pops.run(rejected, t_end=DT, max_steps=1)
     unchanged = np.asarray(

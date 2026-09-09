@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pytest
 from pops.analytic import coordinates
 from pops.amr import (
@@ -217,7 +218,11 @@ def test_public_amr_patch_boxes_are_parallel_to_physical_bounds_and_read_only(
 ):
     del isolated_native_cache, kokkos_root
     for block_count in (1, 2):
-        simulation = pops.bind(pops.compile(_resolved(native_cxx, block_count)))
+        artifact = pops.compile(_resolved(native_cxx, block_count))
+        simulation = pops.bind(
+            artifact,
+            resources={"execution_context": artifact_execution_context(artifact)},
+        )
         if block_count == 2:
             centers = (np.arange(N, dtype=np.float64) + 0.5) / N
             x_coord, y_coord = np.meshgrid(centers, centers, indexing="xy")

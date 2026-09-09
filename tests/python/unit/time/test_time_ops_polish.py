@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pytest
 from pops.codegen import Production
 from pops.codegen.program_codegen import emit_cpp_program
@@ -750,7 +751,11 @@ def test_reductions_execute_through_final_public_runtime(
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.25 * X + 0.25 * Y  # in [1, 1.5), all distinct
     initial = np.ascontiguousarray(np.stack([rho0]))
-    runtime = pops.bind(artifact, initial_state={"blk": initial})
+    runtime = pops.bind(
+        artifact,
+        initial_state={"blk": initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     report = pops.run(runtime, t_end=dt, max_steps=1)
     assert report.accepted_steps == 1, "the public reductions Program must accept one step"
 
@@ -843,7 +848,11 @@ def test_fill_boundary_and_projection_execute_through_final_public_runtime(
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     initial = np.ascontiguousarray(np.stack([rho0]))
-    runtime = pops.bind(artifact, initial_state={"blk": initial})
+    runtime = pops.bind(
+        artifact,
+        initial_state={"blk": initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     report = pops.run(runtime, t_end=dt, max_steps=1)
     assert report.accepted_steps == 1, "the public fill/project Program must accept one step"
     out = np.asarray(runtime.state_global("blk"), dtype=np.float64).reshape(initial.shape)[0]

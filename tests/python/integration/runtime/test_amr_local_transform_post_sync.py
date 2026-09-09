@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pytest
 
 from pops.amr import (
@@ -145,7 +146,10 @@ def test_amr_after_synchronization_applies_transform_on_a_refined_hierarchy(
             compile_options={"include": INCLUDE, "cxx": native_cxx},
         )
     )
-    simulation = pops.bind(artifact)
+    simulation = pops.bind(
+        artifact,
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     assert simulation.n_levels() == 2
     report = pops.run(simulation, t_end=DT, max_steps=1)
     assert report.accepted_steps == 1

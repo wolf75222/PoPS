@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pytest
 from pops.analytic import angle, between, radius, sin, where
 from pops.codegen import Production
@@ -97,7 +98,10 @@ def test_diocotron_profile_is_materialized_natively_without_embedded_boundary(
     )
     artifact = pops.compile(resolved)
     artifact.verify()
-    simulation = pops.bind(artifact)
+    simulation = pops.bind(
+        artifact,
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     materialized = np.asarray(
         simulation.state_global("plasma"), dtype=np.float64
     ).reshape((1, CELLS, CELLS))[0]

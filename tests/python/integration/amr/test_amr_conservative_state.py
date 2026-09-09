@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pytest
 from pops.amr import (
     AMRClockRelation,
@@ -197,8 +198,16 @@ def test_public_amr_bind_preserves_every_conservative_component(
     zero_momentum[1:] = 0.0
     plan, gas_state = _resolved(native_cxx)
     artifact = pops.compile(plan)
-    simulation = pops.bind(artifact, initial_values={gas_state: initial})
-    stationary = pops.bind(artifact, initial_values={gas_state: zero_momentum})
+    simulation = pops.bind(
+        artifact,
+        initial_values={gas_state: initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
+    stationary = pops.bind(
+        artifact,
+        initial_values={gas_state: zero_momentum},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
 
     level_zero = np.asarray(simulation.block_level_state_global("gas", 0), dtype=np.float64)
     np.testing.assert_array_equal(level_zero.reshape(initial.shape), initial)
@@ -249,7 +258,11 @@ def test_public_amr_bind_preserves_every_conservative_component(
     )
     assert initial_report.accepted_steps == simulation.macro_step() == 0
     checkpoint = simulation.checkpoint(tmp_path / "before-first-accepted-step")
-    restarted = pops.bind(artifact, initial_values={gas_state: initial})
+    restarted = pops.bind(
+        artifact,
+        initial_values={gas_state: initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     restarted.restart(checkpoint)
     assert assert_cold_two_level_history(restarted) == history_name
     restarted_levels = [

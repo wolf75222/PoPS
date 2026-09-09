@@ -26,6 +26,7 @@ from pathlib import Path
 
 import numpy as np
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pops.lib.time as libtime
 import pytest
 from pops.lib.initial import BindArray
@@ -139,6 +140,7 @@ def _run(program_fn, tag, native_cxx, refine_thr=1.2, u0=None, nsteps=NSTEPS):
         initial_values={
             bindings[0].subject: np.ascontiguousarray(u0[None, ...], dtype=np.float64),
         },
+        resources={"execution_context": artifact_execution_context(artifact)},
     )
     boxes_before = tuple(runtime.patch_boxes())
     regrids_before = runtime.amr.explain_regrid().regrid_count

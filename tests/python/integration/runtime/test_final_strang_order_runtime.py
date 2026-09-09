@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import numpy as np
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pops.lib.time as libtime
 import pytest
 from pops.domain import Rectangle
@@ -123,7 +124,11 @@ def _run(artifact, step):
     initial_vector = np.array((1.0, 0.3), dtype=np.float64)
     initial = np.broadcast_to(
         initial_vector[:, None, None], (2, CELLS, CELLS)).copy()
-    runtime = pops.bind(artifact, initial_state={"oscillator": initial})
+    runtime = pops.bind(
+        artifact,
+        initial_state={"oscillator": initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     report = pops.run(
         runtime,
         t_end=FINAL_TIME,

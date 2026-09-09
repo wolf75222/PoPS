@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.requirements import (
     default_cxx,
     missing_native_compile_requirement,
@@ -359,6 +360,7 @@ def test_external_krylov_provider_compiles_and_executes_its_native_recurrence(
     public_runtime = pops.bind(
         public_compiled,
         initial_state={"blk": np.stack([initial])},
+        resources={"execution_context": artifact_execution_context(public_compiled)},
     )
     public_report = pops.run(public_runtime, t_end=0.01, max_steps=1)
     public_result = np.asarray(public_runtime.state_global("blk"), dtype=np.float64)[0]

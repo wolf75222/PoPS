@@ -151,7 +151,11 @@ def main():
         # (2) le plan Rusanov/MUSCL authentifie est identique entre le package detache prepare et
         # le lifecycle public bind/run.  C'est la reference supportee depuis le retrait de ModelSpec.
         prod = build_native("minmod", "rusanov", "conservative")
-        public = pops.bind(artifact, initial_state={"gas": np.ascontiguousarray(U)})
+        public = pops.bind(
+            artifact,
+            initial_state={"gas": np.ascontiguousarray(U)},
+            resources={"execution_context": artifact_execution_context(artifact)},
+        )
         dt = 1e-4
         for _ in range(12):
             prod.step(dt)

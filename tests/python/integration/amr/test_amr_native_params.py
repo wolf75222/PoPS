@@ -21,6 +21,7 @@ from pathlib import Path
 
 import numpy as np
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pytest
 from pops.amr import (
     AMRExecution,
@@ -149,7 +150,11 @@ def _resolved_runtime_parameter_case(native_cxx):
 
 
 def _run_bound(artifact, parameter, value):
-    simulation = pops.bind(artifact, params={parameter: value})
+    simulation = pops.bind(
+        artifact,
+        params={parameter: value},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     report = pops.run(simulation, t_end=NSTEPS * DT, max_steps=NSTEPS)
     assert report.accepted_steps == NSTEPS
     values = np.asarray(

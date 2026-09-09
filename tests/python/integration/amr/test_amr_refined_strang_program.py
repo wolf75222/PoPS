@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pops.lib.time as libtime
 import pytest
 from pops.amr import (
@@ -286,6 +287,7 @@ def test_generated_strang_runs_only_through_program_on_refined_amr(
         simulation = pops.bind(
             artifact,
             initial_values={oscillator_state: initial},
+            resources={"execution_context": artifact_execution_context(artifact)},
         )
         assert simulation.n_levels() == 2
         assert simulation.patch_boxes()

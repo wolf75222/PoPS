@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pops.lib.time as libtime
 import pops.model as model
 from pops.amr import (
@@ -298,6 +299,7 @@ def test_split_named_flux_step_matches_whole_named_flux_step_on_public_layouts(
         instance = pops.bind(
             artifact,
             initial_values={bindings[0].subject: np.ascontiguousarray(initial)},
+            resources={"execution_context": artifact_execution_context(artifact)},
         )
         if layout_kind == "amr":
             assert instance.n_levels() == 2

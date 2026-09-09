@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 from pops.amr import (
     AMRExecution,
     AMRHierarchy,
@@ -212,7 +213,11 @@ def test_bound_aux_drives_public_projection_in_a_native_amr_step(
     artifact = pops.compile(_resolve_projection_case(cxx=native_cxx))
     floor = np.full((GRID_CELLS, GRID_CELLS), FLOOR_VALUE, dtype=np.float64)
     peer_floor = np.full((GRID_CELLS, GRID_CELLS), PEER_FLOOR_VALUE, dtype=np.float64)
-    simulation = pops.bind(artifact, aux={"floor": floor, "peer_ceiling": peer_floor})
+    simulation = pops.bind(
+        artifact,
+        aux={"floor": floor, "peer_ceiling": peer_floor},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     assert simulation.spatial_shape() == (GRID_CELLS, GRID_CELLS)
     level_count = simulation.n_levels()
     assert level_count == 2
