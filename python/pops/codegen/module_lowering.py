@@ -546,15 +546,14 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
                 lowering.emit_model,
                 lowering.source_module,
                 resolved_operations,
-                # Module and Board providers nominate a private emitter. The facade provider
-                # nominates itself, so storage specialization must first detach that authoring view.
-                emitter_is_private=lowering.emit_model is not lowering.facade,
+                emitter_is_private=lowering.owns_emitter,
             )
             if emit_model is not lowering.emit_model:
                 lowering = CompilerLowering(
                     emit_model=emit_model,
                     source_module=lowering.source_module,
                     facade=lowering.facade,
+                    owns_emitter=True,
                 )
             object.__setattr__(lowering.emit_model, "_resolved_operations", resolved_operations)
         lowering.bind_component_provider_packs(packs)

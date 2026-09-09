@@ -359,9 +359,17 @@ def test_named_centered_divergence_does_not_poison_a_reused_formula_emitter() ->
     authored_eigenvalues = shared._m._eig
     from pops.codegen.module_lowering import lower_and_validate
 
+    class CachedEmitterProvider:
+        def __pops_compiler_lowering__(self):
+            from pops.codegen import CompilerLowering
+
+            return CompilerLowering(
+                emit_model=shared, source_module=module, facade=self
+            )
+
+    provider = CachedEmitterProvider()
     named_emitter, _ = lower_and_validate(
-        shared,
-        facade=shared,
+        provider,
         state_space=named_block.state_spaces[0],
         resolved_operations=named_block.resolved_operations,
     )
@@ -372,8 +380,7 @@ def test_named_centered_divergence_does_not_poison_a_reused_formula_emitter() ->
     assert shared._m._eig is authored_eigenvalues
 
     finite_volume_emitter, _ = lower_and_validate(
-        shared,
-        facade=shared,
+        provider,
         state_space=finite_volume_block.state_spaces[0],
         resolved_operations=finite_volume_block.resolved_operations,
     )
@@ -381,8 +388,7 @@ def test_named_centered_divergence_does_not_poison_a_reused_formula_emitter() ->
     assert finite_volume_emitter._m._eig is authored_eigenvalues
 
     repeated_named_emitter, _ = lower_and_validate(
-        shared,
-        facade=shared,
+        provider,
         state_space=named_block.state_spaces[0],
         resolved_operations=named_block.resolved_operations,
     )

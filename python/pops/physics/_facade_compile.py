@@ -40,6 +40,7 @@ class _FacadeCompileMixin(_FacadeModel):
             emit_model=self,
             source_module=self.module,
             facade=self,
+            owns_emitter=False,
         )
 
     def __pops_retain_compiler_source__(self, source_module: Any) -> None:

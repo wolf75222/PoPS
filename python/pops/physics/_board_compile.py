@@ -30,6 +30,7 @@ class _BoardCompileMixin(_BoardModel):
             emit_model=emitter,
             source_module=source_module,
             facade=self,
+            owns_emitter=self._multi_module is None,
         )
 
 

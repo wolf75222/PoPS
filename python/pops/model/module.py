@@ -769,6 +769,7 @@ class Module(ModuleFreezable):
             emit_model=native_formula_view(_module_to_model(self), self),
             source_module=self,
             facade=self,
+            owns_emitter=True,
         )
 
     # --- introspection (Spec 2, S2-5) ---
