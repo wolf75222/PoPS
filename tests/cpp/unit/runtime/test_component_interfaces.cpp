@@ -1913,6 +1913,8 @@ TEST(ComponentInterfaces, FieldSolverV2CarriesOneBinaryCoverageMultilevelBatch) 
     metadata[index].upper[0] = static_cast<std::int64_t>(2 * index + 1);
     metadata[index].lower[1] = metadata[index].upper[1] = 0;
     metadata[index].cell_spacing[0] = metadata[index].cell_spacing[1] = index == 0 ? 1.0 : 0.5;
+    metadata[index].physical_lower[0] =
+        static_cast<double>(metadata[index].lower[0]) * metadata[index].cell_spacing[0];
   }
   PopsFieldGlobalTopologyV1 global{sizeof(PopsFieldGlobalTopologyV1),
                                    "multilevel-recipe",
@@ -1925,6 +1927,13 @@ TEST(ComponentInterfaces, FieldSolverV2CarriesOneBinaryCoverageMultilevelBatch) 
                                    metadata.size(),
                                    metadata.data()};
   global.domain_upper[0] = 3;
+  std::vector<pops::component::FieldTopologyLevelGeometryV2> level_geometry(2);
+  for (std::size_t level = 0; level < level_geometry.size(); ++level) {
+    level_geometry[level].upper[0] = level == 0 ? 3 : 7;
+    level_geometry[level].upper[1] = level == 0 ? 0 : 1;
+    level_geometry[level].cell_spacing[0] = level_geometry[level].cell_spacing[1] =
+        level == 0 ? 1.0 : 0.5;
+  }
   std::array<std::uint8_t, 2> coarse_coverage{1, 0};
   std::array<std::uint8_t, 2> fine_coverage{1, 1};
   const std::vector<pops::component::FieldTopologyPatchInputV2> inputs{
@@ -1969,8 +1978,8 @@ TEST(ComponentInterfaces, FieldSolverV2CarriesOneBinaryCoverageMultilevelBatch) 
         result->status = ok_status();
         return 0;
       }};
-  const auto topology =
-      pops::component::prepare_field_topology(topology_api, &calls, global, inputs, execution);
+  const auto topology = pops::component::prepare_field_topology(
+      topology_api, &calls, global, inputs, execution, level_geometry);
   ASSERT_EQ(topology.local_patches().size(), 2u);
   EXPECT_EQ(topology.local_patches()[0].material_mask, (std::vector<std::uint8_t>{1, 0}));
   EXPECT_EQ(topology.local_patches()[1].material_mask, (std::vector<std::uint8_t>{1, 1}));
