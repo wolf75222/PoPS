@@ -11,6 +11,12 @@ from pops.runtime._checkpoint_history_flux_snapshots import (
 )
 
 
+def _consensus(topology, phase, *, error=None, value=None):
+    if error is not None:
+        raise error
+    return tuple({"value": value} for _rank in range(topology.size))
+
+
 def test_ranked_history_flux_snapshot_archive_roundtrips_and_preserves_empty_image(
     monkeypatch,
 ) -> None:
@@ -23,7 +29,7 @@ def test_ranked_history_flux_snapshot_archive_roundtrips_and_preserves_empty_ima
     monkeypatch.setattr(
         _checkpoint_collective,
         "consensus",
-        lambda topology, phase, *, error=None: (_ for _ in ()).throw(error) if error else None,
+        _consensus,
     )
 
     payload = {}
@@ -36,6 +42,36 @@ def test_ranked_history_flux_snapshot_archive_roundtrips_and_preserves_empty_ima
     assert empty[SNAPSHOT_STATE_KEY].tolist() == []
     assert empty[SNAPSHOT_OFFSETS_KEY].tolist() == [0, 0, 0]
     assert prepare_history_flux_snapshots(empty, checkpoint_ranks=2, shard_capacity=0) == (b"", b"")
+
+
+def test_history_flux_snapshot_capture_fences_presence_and_local_capacity_before_gather(
+    monkeypatch,
+) -> None:
+    from pops import _native_collectives
+    from pops.output import _checkpoint_collective
+
+    topology = SimpleNamespace(distributed=True, communicator=object(), size=2)
+    gathers = []
+    monkeypatch.setattr(
+        _native_collectives,
+        "allgather_bytes",
+        lambda communicator, local: gathers.append(local),
+    )
+
+    def mixed_consensus(topology, phase, *, error=None, value=None):
+        if error is not None:
+            raise error
+        return ({"value": value}, {"value": {**value, "present": not value["present"]}})
+
+    monkeypatch.setattr(_checkpoint_collective, "consensus", mixed_consensus)
+    with pytest.raises(RuntimeError, match="plans differ"):
+        capture_history_flux_snapshots(topology, b"POPSHFS1/rank/0", 64, {})
+    assert gathers == []
+
+    monkeypatch.setattr(_checkpoint_collective, "consensus", _consensus)
+    with pytest.raises(ValueError, match="artifact capacity"):
+        capture_history_flux_snapshots(topology, b"oversized", 1, {})
+    assert gathers == []
 
 
 @pytest.mark.parametrize(

@@ -30,15 +30,33 @@ def capture_history_flux_snapshots(
     from pops._native_collectives import allgather_bytes
     from pops.output._checkpoint_collective import consensus
 
-    capacity = _exact_capacity(shard_capacity)
-    if type(local_shard) is not bytes:
-        raise TypeError("history-flux snapshot shard must be exact bytes")
-    if len(local_shard) > capacity:
-        raise ValueError("history-flux snapshot shard exceeds its artifact capacity")
+    capacity = None
+    present = None
+    error = None
+    try:
+        capacity = _exact_capacity(shard_capacity)
+        if type(local_shard) is not bytes:
+            raise TypeError("history-flux snapshot shard must be exact bytes")
+        if len(local_shard) > capacity:
+            raise ValueError("history-flux snapshot shard exceeds its artifact capacity")
+        present = bool(local_shard)
+    except BaseException as exc:
+        error = exc
+    rows = consensus(
+        topology,
+        "history-flux snapshot checkpoint preflight",
+        error=error,
+        value={"capacity": capacity, "present": present},
+    )
+    local_contract = rows[0]["value"]
+    if any(row["value"] != local_contract for row in rows[1:]):
+        raise RuntimeError("history-flux snapshot checkpoint plans differ across ranks")
+    capacity = local_contract["capacity"]
+    present = local_contract["present"]
 
     images = (
         allgather_bytes(topology.communicator, local_shard)
-        if topology.distributed and local_shard
+        if topology.distributed and present
         else (local_shard,) * topology.size
     )
     error = None
@@ -97,12 +115,13 @@ def prepare_history_flux_snapshots(
     elif np.any(offsets):
         raise ValueError("restart empty history-flux snapshot offsets are not canonical")
 
+    widths = offsets[1:] - offsets[:-1]
+    if np.any(widths > capacity):
+        raise ValueError("restart history-flux snapshot shard exceeds its artifact capacity")
     shards = tuple(
         raw[int(first) : int(last)].tobytes()
         for first, last in zip(offsets[:-1], offsets[1:], strict=True)
     )
-    if any(len(shard) > capacity for shard in shards):
-        raise ValueError("restart history-flux snapshot shard exceeds its artifact capacity")
     if any(shards) and any(not shard for shard in shards):
         raise ValueError("restart history-flux snapshot metadata presence differs across ranks")
     return shards
