@@ -726,9 +726,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
         )
         reduced = "transform_failed_%d" % v.id
-        # Composite Q maps are produced and checked collectively one level at a time.
-        # Their sibling statuses do not exist yet (or belong to a previous residual evaluation).
-        status_reduction = "pointwise_level_status_max" if spatial_map else "pointwise_status_max"
+        # AMR transforms (including after-synchronization and composite Q maps) are
+        # produced and checked collectively one level at a time. Sibling statuses
+        # do not exist yet, or belong to a previous invocation of this same node.
+        status_reduction = (
+            "pointwise_level_status_max" if target == "amr_system" else "pointwise_status_max"
+        )
         lines.append(
             "const pops::Real %s = ctx.%s("
             "%d, %s, %s, ctx.prepared_execution_lane());"

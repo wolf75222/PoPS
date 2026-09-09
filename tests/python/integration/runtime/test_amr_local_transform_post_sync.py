@@ -45,7 +45,7 @@ INCLUDE = repo_include()
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 
 
-def _case_and_layout():
+def _case_and_layout(*, validity_threshold=0.0):
     frame = Rectangle(
         "amr_post_sync_square", lower=(0.0, 0.0), upper=(1.0, 1.0)
     ).frame(Cartesian2D())
@@ -67,7 +67,7 @@ def _case_and_layout():
         waves={x_axis: (0.0,), y_axis: (0.0,)},
     )
     rate = model.rate("zero_rate", equation=ddt(state) == -div(flux))
-    shift = model.local_transform("positive_shift", (q + 1.0,), valid_if=q > 0.0)
+    shift = model.local_transform("positive_shift", (q + 1.0,), valid_if=q > validity_threshold)
 
     numerics = DiscretizationPlan()
     numerics.rates.add(
@@ -157,3 +157,31 @@ def test_amr_after_synchronization_applies_transform_on_a_refined_hierarchy(
         simulation.block_level_state_global("field", 0), dtype=np.float64
     ).reshape((1, CELLS, CELLS))
     np.testing.assert_array_equal(actual, np.full((1, CELLS, CELLS), 3.0, dtype=np.float64))
+
+
+def test_amr_after_synchronization_rejects_active_fine_transform_and_rolls_back(
+    isolated_native_cache, native_cxx, kokkos_root,
+) -> None:
+    del isolated_native_cache, kokkos_root
+    # The constant state refines the whole domain: coarse statuses are inactive,
+    # but every fine status violates q > 2. The fine callback must still reject.
+    case, layout = _case_and_layout(validity_threshold=2.0)
+    artifact = pops.compile(pops.resolve(
+        pops.validate(case), layout=layout, backend=Production(),
+        compile_options={"include": INCLUDE, "cxx": native_cxx},
+    ))
+    simulation = pops.bind(
+        artifact, resources={"execution_context": artifact_execution_context(artifact)},
+    )
+    assert simulation.n_levels() == 2
+    before = [np.asarray(simulation.block_level_state_global("field", level)).copy()
+              for level in range(2)]
+    with pytest.raises(RuntimeError, match="local_transform|positive_shift"):
+        pops.run(simulation, t_end=DT, max_steps=1)
+    assert simulation.time() == 0.0
+    assert simulation.macro_step() == 0
+    assert simulation.n_levels() == 2
+    for level, initial in enumerate(before):
+        np.testing.assert_array_equal(
+            np.asarray(simulation.block_level_state_global("field", level)), initial,
+        )

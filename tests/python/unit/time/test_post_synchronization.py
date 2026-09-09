@@ -78,6 +78,9 @@ def test_after_synchronization_emits_after_hierarchy_advance() -> None:
     assert post_sync_lambda.index("ctx.begin_step(dt);") < post_sync_lambda.index("ctx.state(")
     assert "ctx.state(" in post_sync_lambda
     assert "refusing pre-reflux execution" not in source
+    # The callback walks levels sequentially, so no sibling status is live yet.
+    assert "ctx.pointwise_level_status_max(0, transform_status_field_" in post_sync_lambda
+    assert "ctx.pointwise_status_max(" not in post_sync_lambda
 
 
 def test_unqualified_transform_still_emits_the_pre_reflux_guard() -> None:

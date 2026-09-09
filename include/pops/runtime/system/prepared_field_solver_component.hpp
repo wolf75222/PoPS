@@ -162,7 +162,8 @@ class PreparedFieldSolverComponent final {
   /// Bind one immutable hierarchy; the exact adapter owns metadata and borrowed field views.
   void bind_hierarchy(const PopsFieldGlobalTopologyV1& global,
                       const std::vector<component::FieldTopologyPatchInputV2>& local,
-                      const std::vector<component::FieldSolverPatchBindingV2>& bindings) {
+                      const std::vector<component::FieldSolverPatchBindingV2>& bindings,
+                      const std::vector<component::FieldTopologyLevelGeometryV2>& level_geometry) {
     collective_preflight_(
         [&] {
           if (topology_ || solver_request_ || global.dimension != Dim ||
@@ -183,8 +184,8 @@ class PreparedFieldSolverComponent final {
         [&] {
           const auto& api = topology_component_->table<PopsFieldTopologyApiV2>(
               POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2, spec_.topology_interface_version);
-          topology_.emplace(component::prepare_field_topology(api, topology_state_, global, local,
-                                                              spec_.execution->view()));
+          topology_.emplace(component::prepare_field_topology(
+              api, topology_state_, global, local, spec_.execution->view(), level_geometry));
         },
         "external FieldTopology preparation failed collectively");
     collective_preflight_(

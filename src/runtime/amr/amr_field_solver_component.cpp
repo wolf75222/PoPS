@@ -22,9 +22,11 @@ class ComponentExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim> {
         spec_(std::move(spec)),
         component_(spec_, std::move(topology), std::move(solver), true) {
     PopsFieldGlobalTopologyV1 global{};
+    std::vector<component::FieldTopologyLevelGeometryV2> level_geometry;
     std::exception_ptr preparation_error;
     try {
       const auto& levels = request.hierarchy.levels;
+      level_geometry.resize(levels.size());
       rhs_.reserve(levels.size());
       candidates_.reserve(levels.size());
       std::size_t total = 0;
@@ -48,6 +50,13 @@ class ComponentExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim> {
         level_offsets_.push_back(first);
         const auto& level = levels[l];
         const auto& geometry = level.geometry;
+        auto& exact_geometry = level_geometry[l];
+        for (int axis = 0; axis < Dim; ++axis) {
+          exact_geometry.lower[axis] = geometry.domain().lo[axis];
+          exact_geometry.upper[axis] = geometry.domain().hi[axis];
+          exact_geometry.physical_lower[axis] = geometry.lower()[axis];
+          exact_geometry.cell_spacing[axis] = geometry.spacing(axis);
+        }
         for (std::size_t index = 0; index < level.boxes.size(); ++index) {
           const auto& box = level.boxes[index];
           PopsFieldPatchMetadataV1 row{};
@@ -140,7 +149,7 @@ class ComponentExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim> {
         std::rethrow_exception(preparation_error);
       throw std::runtime_error("external AMR field hierarchy preparation failed collectively");
     }
-    component_.bind_hierarchy(global, local_, bindings_);
+    component_.bind_hierarchy(global, local_, bindings_, level_geometry);
   }
 
   std::string_view provider_identity() const noexcept override { return spec_.provider_slot; }

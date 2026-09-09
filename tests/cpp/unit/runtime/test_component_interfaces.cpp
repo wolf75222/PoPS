@@ -2054,4 +2054,90 @@ TEST(ComponentInterfaces, PreparedExecutionContextBindsExactExecutionLaneAuthori
 #endif
 }
 
+TEST(ComponentInterfaces, FieldTopologyAuthenticatesShiftedAnisotropicLevelGeometry) {
+  using pops::component::FieldTopologyLevelGeometryV2;
+  using pops::component::validate_field_global_topology;
+  for (int dimension = 1; dimension <= 3; ++dimension) {
+    SCOPED_TRACE(dimension);
+    std::vector<FieldTopologyLevelGeometryV2> geometry(2);
+    std::array<PopsFieldPatchMetadataV1, 2> patches{};
+    PopsFieldGlobalTopologyV1 topology{};
+    topology.struct_size = sizeof(topology);
+    topology.topology_recipe_identity = "test::hierarchy-recipe";
+    topology.source_layout_identity = "test::hierarchy-layout";
+    topology.materialized_layout_identity = "test::materialized-hierarchy";
+    topology.dimension = dimension;
+    topology.patch_count = patches.size();
+    topology.patches = patches.data();
+    for (int axis = 0; axis < dimension; ++axis) {
+      const int ratio = axis + 2;
+      geometry[0].lower[axis] = -3 * (axis + 1);
+      geometry[0].upper[axis] = geometry[0].lower[axis] + 7;
+      geometry[0].physical_lower[axis] = -2.0 + axis;
+      geometry[0].cell_spacing[axis] = 0.5 * (axis + 1);
+      // Independent level index origins are supported; physical domains still coincide.
+      geometry[1].lower[axis] = 17 - 9 * axis;
+      geometry[1].upper[axis] = geometry[1].lower[axis] + 8 * ratio - 1;
+      geometry[1].physical_lower[axis] = geometry[0].physical_lower[axis];
+      geometry[1].cell_spacing[axis] = geometry[0].cell_spacing[axis] / ratio;
+      topology.domain_lower[axis] = geometry[0].lower[axis];
+      topology.domain_upper[axis] = geometry[0].upper[axis];
+    }
+    for (std::size_t level = 0; level < patches.size(); ++level) {
+      auto& patch = patches[level];
+      patch.struct_size = sizeof(patch);
+      patch.global_patch_index = level;
+      patch.level = static_cast<int>(level);
+      patch.dimension = dimension;
+      patch.centering = POPS_FIELD_CENTERING_CELL_V1;
+      patch.layout_identity = topology.source_layout_identity;
+      patch.patch_identity = level == 0 ? "test::coarse" : "test::fine";
+      for (int axis = 0; axis < dimension; ++axis) {
+        const int ratio = axis + 2;
+        patch.lower[axis] = geometry[level].lower[axis] + (level == 0 ? 0 : 2 * ratio);
+        patch.upper[axis] = geometry[level].upper[axis] - (level == 0 ? 0 : 2 * ratio);
+        patch.cell_spacing[axis] = geometry[level].cell_spacing[axis];
+        patch.physical_lower[axis] = geometry[level].physical_lower[axis] +
+                                     (static_cast<double>(patch.lower[axis]) -
+                                      static_cast<double>(geometry[level].lower[axis])) *
+                                         patch.cell_spacing[axis];
+      }
+    }
+    EXPECT_THROW(validate_field_global_topology(topology), std::invalid_argument);
+    EXPECT_NO_THROW(validate_field_global_topology(topology, geometry));
+    const auto valid_fine = patches[1];
+    const auto reject = [&] {
+      EXPECT_THROW(validate_field_global_topology(topology, geometry), std::invalid_argument);
+      patches[1] = valid_fine;
+    };
+    patches[1].level = 2;
+    reject();
+    patches[1].lower[0] = geometry[1].lower[0] - 1;
+    reject();
+    patches[1].upper[0] = geometry[1].upper[0] + 1;
+    reject();
+    patches[1].lower[0] = std::numeric_limits<std::int64_t>::min();
+    patches[1].upper[0] = std::numeric_limits<std::int64_t>::max();
+    reject();
+    patches[1].physical_lower[0] += patches[1].cell_spacing[0];
+    reject();
+    patches[1].cell_spacing[0] *= 2.0;
+    reject();
+    patches[1].physical_lower[0] = std::numeric_limits<double>::quiet_NaN();
+    reject();
+    auto wrong_geometry = geometry;
+    wrong_geometry.front().lower[0] -= 1;
+    EXPECT_THROW(validate_field_global_topology(topology, wrong_geometry), std::invalid_argument);
+    wrong_geometry = geometry;
+    wrong_geometry.back().cell_spacing[0] = 0.0;
+    EXPECT_THROW(validate_field_global_topology(topology, wrong_geometry), std::invalid_argument);
+    // Missing geometry never turns a valid-looking refined patch into an unqualified flat patch.
+    auto coarse_only = topology;
+    coarse_only.patch_count = 1;
+    EXPECT_NO_THROW(validate_field_global_topology(coarse_only));
+    patches[0].upper[0] = topology.domain_upper[0] + 1;
+    EXPECT_THROW(validate_field_global_topology(coarse_only), std::invalid_argument);
+  }
+}
+
 }  // namespace
