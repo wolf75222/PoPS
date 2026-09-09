@@ -10835,6 +10835,18 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::checkpoint_rank_local_carr
          prefixed_sha256(
              "pops.amr.rank-local-carrier.auxiliary-registry.v1:sha256:",
              p_->prepared_hierarchy->auxiliary_registries[level].collective_contract())});
+    // Accepted points/generations are dynamic provenance, distinct from the sealed
+    // registry schema. Capture them even while providers are dirty: this is a
+    // read-only rollback witness, not permission to persist a dirty checkpoint.
+    const auto accepted_metadata = runtime::system::serialize_auxiliary_checkpoint_state(
+        runtime::system::capture_auxiliary_checkpoint_state(
+            p_->prepared_hierarchy->auxiliary_registries[level]));
+    rows.push_back(
+        {"pops.amr.rank-local-carrier-manifest@1", "auxiliary-accepted-metadata", "",
+         std::to_string(level),
+         prefixed_sha256("pops.amr.rank-local-carrier.auxiliary-accepted-metadata.v1:sha256:",
+                         std::string_view(reinterpret_cast<const char*>(accepted_metadata.data()),
+                                          accepted_metadata.size()))});
     for (const auto& [identity, group] : groups->groups)
       append_rank_local_carrier_rows(rows, "auxiliary", identity, static_cast<int>(level), group);
   }
