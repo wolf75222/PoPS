@@ -600,7 +600,7 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
         return lines
 
     def emit_phase(phase: str) -> str:
-        var = {("hierarchy_retained_bindings",): frozenset(
+        var: dict[Any, Any] = {("hierarchy_retained_bindings",): frozenset(
             value.id for value in program._values[:split] if value.op in binding_ops
         ) if phase in ("solve", "publish") else frozenset()}
         if spatial:
