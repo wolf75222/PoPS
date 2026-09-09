@@ -11,7 +11,7 @@ def prepare_diffusion_carrier(emitter, module, *, quantity_handles=()):
     if not laws:
         return
     if len(module.state_spaces()) != 1:
-        raise ValueError("diffusion requires an explicitly selected scalar state route")
+        raise ValueError("diffusion requires an explicitly selected state route; multiple states require a joint state binding")
     state = next(iter(module.state_spaces().values()))
     impl = getattr(emitter, "_m", emitter)
     native = {}
@@ -21,13 +21,18 @@ def prepare_diffusion_carrier(emitter, module, *, quantity_handles=()):
             raise ValueError("diffusive physical frames differ inside one state route")
         roots = rebind_state_symbols(law.expressions, state, module.state_spaces().values(),
                                      module=module, quantity_handles=quantity_handles)
-        variable = roots[0]
-        derivative = diff(variable, Var(state.components[0], "cons"), impl.prim_defs)
+        count = len(law.variables)
+        variables = roots[:count]
+        derivatives = tuple(diff(variable, Var(component, "cons"), impl.prim_defs)
+                            for variable, component in zip(variables, state.components, strict=True))
         name = next(op.name for op in module.operator_registry()
                     if op.lowering.get("diffusive_law") is law)
-        native[name] = MappingProxyType({"physical": law, "variable": variable,
-            "diagonal": tuple(roots[1+i*law.dimension+i] for i in range(law.dimension)),
-            "derivative": derivative})
+        native[name] = MappingProxyType({"physical": law, "variables": variables,
+            "variable": variables[0],
+            "diagonals": tuple(tuple(roots[count+c*law.dimension**2+i*law.dimension+i]
+                                     for i in range(law.dimension)) for c in range(count)),
+            "diagonal": tuple(roots[count+i*law.dimension+i] for i in range(law.dimension)),
+            "derivatives": derivatives, "derivative": derivatives[0]})
     object.__setattr__(impl, "_diffusive_laws", MappingProxyType(native))
     drift={}
     for operator in module.operator_registry():

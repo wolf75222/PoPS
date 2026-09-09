@@ -415,3 +415,70 @@ TEST(PreparedDiffusion, FailedConstitutiveOutputsStayUnreadAndPreserveExactWorst
   EXPECT_TRUE(context.ledger.records().empty());
   EXPECT_THROW(prepared.explicit_frequency(), std::logic_error);
 }
+
+namespace {
+struct GenericDiffusionContext {
+  Geometry<3> geometry_ = Geometry<3>::from_bounds(
+      Box<3>{Index<3>{0, 0, 0}, Index<3>{7, 7, 7}},
+      RealVector<3>{0, 0, 0}, RealVector<3>{1, 1, 1});
+  BoundaryTopology<3> topology = BoundaryTopology<3>::axis_periodic({true, true, true});
+  ExecutionLane lane = ExecutionLane::world("generic-diffusion-test");
+  const auto& geometry() const { return geometry_; }
+  const auto& prepared_execution_lane() const { return lane; }
+  auto prepare_mesh_boundary_session(MultiFab<3>& field, const ExecutionLane& execution) {
+    return PreparedScalarBoundarySession<3>::prepare(geometry_, topology, field, execution, 1);
+  }
+};
+}
+
+TEST(PreparedDiffusion, ThreeAxesTwoComponentsAndCoupledCoefficientsPreserveEachInventory) {
+  GenericDiffusionContext context;
+  auto layout = mesh::BoxArray<3>::from_domain(context.geometry().domain(), Extent<3>{4, 8, 8});
+  auto distribution = mesh::Distribution<3>::replicated(
+      layout, mesh::RankSpace<3>{Index<3>{0, 0, 0}, Extent<3>{1, 1, 1}});
+  MultiFab<3> q(layout, distribution, Index<3>{0, 0, 0}, 2, Extent<3>{1, 1, 1});
+  MultiFab<3> out(layout, distribution, Index<3>{0, 0, 0}, 2, Extent<3>{1, 1, 1});
+  constexpr Real pi = Real(3.14159265358979323846);
+  for (std::size_t local = 0; local < q.local_size(); ++local) {
+    const auto values = q.fab(local).view();
+    for_each_cell(q.box(local), [=] POPS_HD(const Index<3>& cell) {
+      values(cell, 0) = 2 + Kokkos::cos(2*pi*(cell[0]+Real(.5))/8);
+      values(cell, 1) = 3 + Kokkos::sin(2*pi*(cell[2]+Real(.5))/8);
+    });
+  }
+  PreparedDiffusion<3, 2> prepared(context, q, {});
+  EXPECT_TRUE(prepared.matches_preparation(context, q, {}));
+  Real scale = 1;
+  const auto factory = [&](std::size_t local) {
+    const auto values = std::as_const(q).fab(local).view();
+    const Real factor = scale;
+    return [=] POPS_HD(const Index<3>& cell) {
+      const Real u = values(cell, 0), v = values(cell, 1);
+      const Real a = factor*(Real(.1)+Real(.01)*v), b = factor*(Real(.2)+Real(.02)*u);
+      return std::array<Real, 10>{u, a, a, a, 1, v, b, b, b, 1};
+    };
+  };
+  for (int application = 0; application < 2; ++application) {
+    scale = application + 1;
+    prepared.apply(q, out, factory);
+    Real sums[2] = {0, 0};
+    for (std::size_t local = 0; local < q.local_size(); ++local) {
+      const auto result = std::as_const(out).fab(local).view();
+      const auto values = std::as_const(q).fab(local).view();
+      const Real factor = scale;
+      EXPECT_NEAR(for_each_cell_reduce_max(out.box(local), [=] POPS_HD(const Index<3>& cell) {
+        const Real eigenvalue = -4*64*Kokkos::sin(pi/8)*Kokkos::sin(pi/8);
+        const Real u = values(cell, 0), v = values(cell, 1);
+        const Real first = factor*(Real(.1)+Real(.01)*v)*eigenvalue*(u-2);
+        const Real second = factor*(Real(.2)+Real(.02)*u)*eigenvalue*(v-3);
+        return Kokkos::max(Kokkos::abs(result(cell, 0)-first), Kokkos::abs(result(cell, 1)-second));
+      }), 0, 3e-13);
+      for (int component = 0; component < 2; ++component)
+        sums[component] += for_each_cell_reduce_sum(out.box(local),
+            [=] POPS_HD(const Index<3>& cell) { return result(cell, component); });
+    }
+    EXPECT_NEAR(sums[0], 0, 2e-12);
+    EXPECT_NEAR(sums[1], 0, 2e-12);
+    EXPECT_EQ(prepared.faces()[0].ncomp(), 6);
+  }
+}

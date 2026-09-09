@@ -55,7 +55,7 @@ void attach_diffusive_flux_basis(int program_block, const field_type& rhs, int r
           "AMR diffusive face payload has an invalid coefficient or layout");
     for (int axis = 0; axis < Dim; ++axis) {
       integrated[axis] =
-          field_type(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
+          field_type(rhs.layout(), rhs.distribution(), rhs.local_rank(), rhs.ncomp(), rhs.ghosts());
       integrated[axis].set_val(Real(0));
     }
   } catch (...) {
@@ -68,7 +68,7 @@ void attach_diffusive_flux_basis(int program_block, const field_type& rhs, int r
   }
   long layout_error = 0;
   for (std::size_t local = 0; local < rhs.local_size(); ++local)
-    if (density_faces[local].cell_box() != rhs.box(local) || density_faces[local].ncomp() < 1)
+    if (density_faces[local].cell_box() != rhs.box(local) || density_faces[local].ncomp() != 3 * rhs.ncomp())
       layout_error = 1;
   if (all_reduce_max(layout_error, lane) != 0)
     throw std::invalid_argument(
@@ -78,8 +78,10 @@ void attach_diffusive_flux_basis(int program_block, const field_type& rhs, int r
     for (int axis = 0; axis < Dim; ++axis) {
       const auto destination = integrated[axis].fab(local).view();
       const Real scale = -coefficient;
+      const int components = rhs.ncomp();
       for_each_cell(nd::face_box(rhs.box(local), axis), [=] POPS_HD(const Index<Dim>& face) {
-        destination(face, 0) = scale * density.axes[axis](face, 0);
+        for (int component = 0; component < components; ++component)
+          destination(face, component) = scale * density.axes[axis](face, component);
       });
     }
   }

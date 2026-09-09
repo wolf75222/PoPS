@@ -71,8 +71,8 @@ def declare_drift_flux(model,name,*,state,mobility,potential,boundaries=None):
     name=require_name(name,"drift flux name")
     if not isinstance(state,StateHandle) or model._states.get(state.name)!=state or len(state.components)!=1:
         raise ValueError("drift flux requires this Model's exact scalar state")
-    if model.frame is None or len(model.frame.axes)!=1 or model._multi_module is not None:
-        raise ValueError("the selected drift declaration requires an explicit Cartesian Dim1 scalar route")
+    if model.frame is None:
+        raise ValueError("drift requires an explicit physical Cartesian frame")
     if isinstance(potential,FieldHandle):
         if model._fields.get(potential.name)!=potential:
             raise ValueError("drift potential belongs to a foreign field declaration")
@@ -90,7 +90,7 @@ def declare_drift_flux(model,name,*,state,mobility,potential,boundaries=None):
     if name in existing or name in model._fluxes or name in getattr(model,"_diffusive_fluxes",{}):
         raise ValueError("physical flux name is already declared")
     law=DriftFluxLaw(state,state[0],mobility,potential,tuple(axis.name for axis in model.frame.axes),
-                     tuple(inputs),_physical_boundaries(boundaries,1))
+                     tuple(inputs),_physical_boundaries(boundaries,len(model.frame.axes)))
     handle=DriftFluxHandle(name,law,owner=model.owner_path)
     model._drift_fluxes={**existing,name:handle}
     model._invalidate_authoring_views()

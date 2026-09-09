@@ -81,7 +81,9 @@ def _law_expressions(selected):
     if "fitted" in selected:
         from pops._ir.expr import Const
         return selected["fitted"]["potential"],*selected["diagonal"],Const(0)
-    return selected["variable"],*selected["diagonal"],selected["derivative"]
+    return tuple(expression for variable, diagonal, derivative in zip(
+        selected["variables"], selected["diagonals"], selected["derivatives"], strict=True)
+        for expression in (variable, *diagonal, derivative))
 
 
 def _boundary_cpp(law):
@@ -93,14 +95,20 @@ def _boundary_cpp(law):
     return "std::array<pops::runtime::program::DiffusiveBoundary<pops::kNativeDimension>, 2*pops::kNativeDimension>{{%s}}" % ", ".join(rows)
 
 
+def _prepared_diffusion_type(selected):
+    specialization = "pops::kNativeDimension" + (
+        ", %d" % len(selected["variables"]) if len(selected["variables"]) > 1 else "")
+    return "pops::runtime::program::PreparedDiffusion<%s>" % specialization
+
+
 def _emit_diffusive_preparation(v, state_var, prepared_var, node_model,
                                 provider_plans=None, bidx=0, target="system"):
     if target not in {"system", "amr_system"}:
         raise ValueError("diffusion execution requires a Uniform or AMR native install scope")
     _,selected,_=_selected(v,node_model)
     lines = ["ctx.require_cartesian_generated_operator(%d, \"diffusive_face_evaluation\");" % bidx,
-        "pops::runtime::program::PreparedDiffusion<pops::kNativeDimension> %s(ctx, %s, %s, %s);" % (
-        prepared_var,state_var,_boundary_cpp(selected["physical"]),
+        "%s %s(ctx, %s, %s, %s);" % (
+        _prepared_diffusion_type(selected),prepared_var,state_var,_boundary_cpp(selected["physical"]),
         "true" if target == "amr_system" else "false")]
     if any(row.kind == "flux" for row in v.attrs["physical_balance"].occurrences):
         lines.append("std::vector<pops::nd::FaceField<pops::kNativeDimension>> %s_transport_faces;" % prepared_var)
@@ -157,7 +165,8 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
     if any(function not in captured for function in endpoint.functions):
         raise ValueError("diffusive endpoint native functions differ from the captured physical law")
     lines.extend(endpoint.lines)
-    lines.append("    pops::runtime::program::DiffusiveLawResult<pops::kNativeDimension> result;")
+    specialization = "pops::kNativeDimension" + (", %d" % len(selected["variables"]) if len(selected["variables"]) > 1 else "")
+    lines.append("    pops::runtime::program::DiffusiveLawResult<%s> result;" % specialization)
     lines.append("    result.evaluation_status = %s; result.reason_code = %s;" % (
         endpoint.status, endpoint.reason))
     lines.append("    if (result.evaluation_status == 0) result.values = {%s};" % ", ".join(endpoint.values))

@@ -74,7 +74,7 @@ def test_fitted_selection_refuses_split_or_repeated_occurrences():
 def test_fitted_pair_rejects_foreign_drift_even_with_matching_names():
     *_,foreign_drift,_,_,_=fitted_case()
     _,_,_,_,diffusion,_,_=fitted_case()
-    with pytest.raises(ValueError,match="exact Dim1 scalar state"):
+    with pytest.raises(ValueError,match="exact scalar state"):
         ScharfetterGummel(drift=foreign_drift,flux=diffusion)
 
 

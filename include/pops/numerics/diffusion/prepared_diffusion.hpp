@@ -27,9 +27,9 @@ class DiffusiveEvaluationError final : public std::runtime_error {
   int status() const noexcept { return status_; }
   unsigned reason() const noexcept { return reason_; }
 };
-template <int Dim>
+template <int Dim, int Components = 1>
 struct DiffusiveLawResult {
-  std::array<Real, Dim + 2> values{};
+  std::array<Real, Components * (Dim + 2)> values{};
   int evaluation_status = 0;
   unsigned reason_code = 0;
 };
@@ -51,9 +51,10 @@ struct DiffusiveBoundary {
 /// One preparation per Program evaluation/implicit operator, reused for every trial.
 /// The law factory supplies W(U), positive diagonal A(U,fields), and dW/dU at each cell.
 /// Neighbor differences are taken AFTER evaluating W: no discrete chain rule is substituted.
-template <int Dim>
+template <int Dim, int Components = 1>
 class PreparedDiffusion {
-  static_assert(Dim == 1 || Dim == 2, "selected diffusion matrix is Cartesian Dim1/Dim2");
+  static_assert(Dim >= 1 && Dim <= 3, "Cartesian diffusion requires native dimensions 1 through 3");
+  static_assert(Components > 0, "diffusion requires at least one accumulated component");
   using Field = MultiFab<Dim>;
   using Boundary = PreparedScalarBoundarySession<Dim>;
   Geometry<Dim> geometry_;
@@ -70,7 +71,7 @@ class PreparedDiffusion {
            field.distribution() == variable_.distribution() &&
            field.local_rank() == variable_.local_rank() &&
            field.local_size() == variable_.local_size() && field.ghosts() == variable_.ghosts() &&
-           field.ncomp() == 1;
+           field.ncomp() == Components;
   }
 
   Box<Dim> evaluation_box_(const Field& input, std::size_t local) const {
@@ -100,21 +101,21 @@ class PreparedDiffusion {
       throw std::invalid_argument(
           "selected diffusion face ledger requires host-accessible native storage");
     lane_ = &ctx.prepared_execution_lane();
-    if (all_reduce_max(prototype.ncomp() == 1 ? 0L : 1L, *lane_) != 0)
-      throw std::invalid_argument("diffusion requires one scalar evolved component collectively");
+    if (all_reduce_max(prototype.ncomp() == Components ? 0L : 1L, *lane_) != 0)
+      throw std::invalid_argument("diffusion component count differs from the prepared constitutive signature collectively");
     std::exception_ptr allocation_error;
     try {
-      variable_ = Field(prototype.layout(), prototype.distribution(), prototype.local_rank(), 2,
+      variable_ = Field(prototype.layout(), prototype.distribution(), prototype.local_rank(), 2 * Components,
                         prototype.ghosts());
       coefficients_ = Field(prototype.layout(), prototype.distribution(), prototype.local_rank(),
-                            Dim, prototype.ghosts());
+                            Dim * Components, prototype.ghosts());
       status_ = Field(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
                       prototype.ghosts());
       reason_ = Field(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
                       prototype.ghosts());
       faces_.reserve(prototype.local_size());
       for (std::size_t local = 0; local < prototype.local_size(); ++local)
-        faces_.emplace_back(prototype.box(local), 3);
+        faces_.emplace_back(prototype.box(local), 3 * Components);
     } catch (...) {
       allocation_error = std::current_exception();
     }
@@ -160,7 +161,7 @@ class PreparedDiffusion {
   template <class LawFactory>
   void apply_fitted(Field& input, Field& output, LawFactory factory, Real mobility_over_diffusion,
                     std::array<DiffusiveBoundary<Dim>, 2 * Dim> potential_boundaries) {
-    static_assert(Dim == 1, "selected Scharfetter-Gummel realization requires native Dim1");
+    static_assert(Components == 1, "fitted drift diffusion requires a scalar density law");
     if (!std::isfinite(mobility_over_diffusion) || mobility_over_diffusion < 0)
       throw DiffusiveEvaluationError("fitted drift ratio must be finite and nonnegative");
     for (int face = 0; face < 2 * Dim; ++face) {
@@ -183,7 +184,7 @@ class PreparedDiffusion {
             : 0L;
     if (all_reduce_max(storage_error, *lane_) != 0)
       throw std::invalid_argument(
-          "diffusion input/output do not match prepared scalar storage collectively");
+          "diffusion input/output do not match prepared constitutive storage collectively");
     std::exception_ptr preparation_error;
     try {
       for (std::size_t local = 0; local < input.local_size(); ++local) {
@@ -195,7 +196,7 @@ class PreparedDiffusion {
         const Box<Dim> evaluation_box = evaluation_box_(input, local);
         for_each_cell(evaluation_box, [=] POPS_HD(const Index<Dim>& cell) {
           const auto evaluation = law(cell);
-          std::array<Real, Dim + 2> values;
+          std::array<Real, Components * (Dim + 2)> values;
           if constexpr (requires {
                           evaluation.evaluation_status;
                           evaluation.reason_code;
@@ -214,13 +215,18 @@ class PreparedDiffusion {
             status(cell, 0) = 0;
             reason(cell, 0) = 0;
           }
-          bool valid = Kokkos::isfinite(values[0]) && Kokkos::isfinite(values[Dim + 1]) &&
-                       values[Dim + 1] >= 0;
-          w(cell, 0) = values[0];
-          w(cell, 1) = values[Dim + 1];
-          for (int axis = 0; axis < Dim; ++axis) {
-            a(cell, axis) = values[axis + 1];
-            valid = valid && Kokkos::isfinite(values[axis + 1]) && values[axis + 1] > 0;
+          bool valid = true;
+          for (int component = 0; component < Components; ++component) {
+            const int offset = component * (Dim + 2);
+            valid = valid && Kokkos::isfinite(values[offset]) &&
+                    Kokkos::isfinite(values[offset + Dim + 1]) && values[offset + Dim + 1] >= 0;
+            w(cell, component) = values[offset];
+            w(cell, Components + component) = values[offset + Dim + 1];
+            for (int axis = 0; axis < Dim; ++axis) {
+              a(cell, component * Dim + axis) = values[offset + axis + 1];
+              valid = valid && Kokkos::isfinite(values[offset + axis + 1]) &&
+                      values[offset + axis + 1] > 0;
+            }
           }
           if (!valid) {
             status(cell, 0) = 2;
@@ -320,91 +326,97 @@ class PreparedDiffusion {
             const bool upper = face[axis] == geometry.domain().hi[axis] + 1;
             const auto boundary = physical[2 * axis + (upper ? 1 : 0)];
             const Real h = geometry.spacing(axis);
-            Real flux = Real(0), conductance = Real(0), left_loss = Real(0), right_loss = Real(0);
-            if constexpr (Fitted) {
-              Real left_state, right_state, left_potential, right_potential, coefficient,
-                  distance = h;
-              if ((lower || upper) && boundary.kind != DiffusiveBoundaryKind::periodic) {
-                const Index<Dim> center = lower ? right : left;
-                Index<Dim> inside = center;
-                inside[axis] += lower ? 1 : -1;
-                coefficient = Real(1.5) * a(center, axis) - Real(0.5) * a(inside, axis);
-                distance = h / Real(2);
-                const Real density_trace = boundary.trace(geometry, face, axis);
-                const Real potential_trace =
-                    potential_boundaries[2 * axis + (upper ? 1 : 0)].trace(geometry, face, axis);
-                left_state = lower ? density_trace : q(center, 0);
-                right_state = lower ? q(center, 0) : density_trace;
-                left_potential = lower ? potential_trace : w(center, 0);
-                right_potential = lower ? w(center, 0) : potential_trace;
-              } else {
-                coefficient = Real(0.5) * (a(left, axis) + a(right, axis));
-                left_state = q(left, 0);
-                right_state = q(right, 0);
-                left_potential = w(left, 0);
-                right_potential = w(right, 0);
-              }
-              const Real jump = drift_ratio * (right_potential - left_potential);
-              left_loss = coefficient * scharfetter_gummel_bernoulli(jump) / distance;
-              right_loss = coefficient * scharfetter_gummel_bernoulli(-jump) / distance;
-              flux = right_loss * right_state - left_loss * left_state;
-              if (!(coefficient > 0))
-                flux = std::numeric_limits<Real>::quiet_NaN();
-            } else if ((lower || upper) && boundary.kind != DiffusiveBoundaryKind::periodic) {
-              const Index<Dim> center = lower ? right : left;
-              const Real orientation = lower ? Real(-1) : Real(1);
-              if (boundary.kind == DiffusiveBoundaryKind::conormal)
-                flux = orientation * boundary.trace(geometry, face, axis);
-              else {
-                Index<Dim> inside = center;
-                inside[axis] += lower ? 1 : -1;
-                const Real coefficient = Real(1.5) * a(center, axis) - Real(0.5) * a(inside, axis);
-                flux = orientation * coefficient * Real(2) *
-                       (boundary.trace(geometry, face, axis) - w(center, 0)) / h;
-                conductance = Real(2) * coefficient * w(center, 1) / h;
+            for (int component = 0; component < Components; ++component) {
+              Real flux = Real(0), conductance = Real(0), left_loss = Real(0), right_loss = Real(0);
+              if constexpr (Fitted) {
+                Real left_state, right_state, left_potential, right_potential, coefficient,
+                    distance = h;
+                if ((lower || upper) && boundary.kind != DiffusiveBoundaryKind::periodic) {
+                  const Index<Dim> center = lower ? right : left;
+                  Index<Dim> inside = center;
+                  inside[axis] += lower ? 1 : -1;
+                  coefficient = Real(1.5) * a(center, component * Dim + axis) - Real(0.5) * a(inside, component * Dim + axis);
+                  distance = h / Real(2);
+                  const Real density_trace = boundary.trace(geometry, face, axis);
+                  const Real potential_trace =
+                      potential_boundaries[2 * axis + (upper ? 1 : 0)].trace(geometry, face, axis);
+                  left_state = lower ? density_trace : q(center, component);
+                  right_state = lower ? q(center, component) : density_trace;
+                  left_potential = lower ? potential_trace : w(center, component);
+                  right_potential = lower ? w(center, component) : potential_trace;
+                } else {
+                  coefficient = Real(0.5) * (a(left, component * Dim + axis) + a(right, component * Dim + axis));
+                  left_state = q(left, component);
+                  right_state = q(right, component);
+                  left_potential = w(left, component);
+                  right_potential = w(right, component);
+                }
+                const Real jump = drift_ratio * (right_potential - left_potential);
+                left_loss = coefficient * scharfetter_gummel_bernoulli(jump) / distance;
+                right_loss = coefficient * scharfetter_gummel_bernoulli(-jump) / distance;
+                flux = right_loss * right_state - left_loss * left_state;
                 if (!(coefficient > 0))
                   flux = std::numeric_limits<Real>::quiet_NaN();
+              } else if ((lower || upper) && boundary.kind != DiffusiveBoundaryKind::periodic) {
+                const Index<Dim> center = lower ? right : left;
+                const Real orientation = lower ? Real(-1) : Real(1);
+                if (boundary.kind == DiffusiveBoundaryKind::conormal)
+                  flux = orientation * boundary.trace(geometry, face, axis);
+                else {
+                  Index<Dim> inside = center;
+                  inside[axis] += lower ? 1 : -1;
+                  const Real coefficient = Real(1.5) * a(center, component * Dim + axis) - Real(0.5) * a(inside, component * Dim + axis);
+                  flux = orientation * coefficient * Real(2) *
+                         (boundary.trace(geometry, face, axis) - w(center, component)) / h;
+                  conductance = Real(2) * coefficient * w(center, Components + component) / h;
+                  if (!(coefficient > 0))
+                    flux = std::numeric_limits<Real>::quiet_NaN();
+                }
+              } else {
+                const Real coefficient = Real(0.5) * (a(left, component * Dim + axis) + a(right, component * Dim + axis));
+                flux = coefficient * (w(right, component) - w(left, component)) / h;
+                const Real difference = q(right, component) - q(left, component);
+                const Real secant = difference != 0 ? (w(right, component) - w(left, component)) / difference
+                                                    : Real(0.5) * (w(right, Components + component) + w(left, Components + component));
+                conductance = coefficient * secant / h;
               }
-            } else {
-              const Real coefficient = Real(0.5) * (a(left, axis) + a(right, axis));
-              flux = coefficient * (w(right, 0) - w(left, 0)) / h;
-              const Real difference = q(right, 0) - q(left, 0);
-              const Real secant = difference != 0 ? (w(right, 0) - w(left, 0)) / difference
-                                                  : Real(0.5) * (w(right, 1) + w(left, 1));
-              conductance = coefficient * secant / h;
+              if constexpr (!Fitted)
+                left_loss = right_loss = conductance;
+              face_values(face, component) = flux;
+              face_values(face, Components + component) = left_loss;
+              face_values(face, 2 * Components + component) = right_loss;
             }
-            if constexpr (!Fitted)
-              left_loss = right_loss = conductance;
-            face_values(face, 0) = flux;
-            face_values(face, 1) = left_loss;
-            face_values(face, 2) = right_loss;
           });
         }
         const auto result = output.fab(local).view();
         const auto status = status_.fab(local).view();
         for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-          Real divergence = 0, frequency = 0;
-          bool valid = true;
-          for (int axis = 0; axis < Dim; ++axis) {
-            Index<Dim> upper = cell;
-            ++upper[axis];
-            for (int side = 0; side < 2; ++side) {
-              const auto face = side == 0 ? cell : upper;
-              valid = valid && Kokkos::isfinite(faces.axes[axis](face, 0)) &&
-                      Kokkos::isfinite(faces.axes[axis](face, 1)) &&
-                      faces.axes[axis](face, 1) >= 0 &&
-                      Kokkos::isfinite(faces.axes[axis](face, 2)) && faces.axes[axis](face, 2) >= 0;
+          Real maximum_frequency = 0;
+          for (int component = 0; component < Components; ++component) {
+            Real divergence = 0, frequency = 0;
+            bool valid = true;
+            for (int axis = 0; axis < Dim; ++axis) {
+              Index<Dim> upper = cell;
+              ++upper[axis];
+              for (int side = 0; side < 2; ++side) {
+                const auto face = side == 0 ? cell : upper;
+                valid = valid && Kokkos::isfinite(faces.axes[axis](face, component)) &&
+                        Kokkos::isfinite(faces.axes[axis](face, Components + component)) &&
+                        faces.axes[axis](face, Components + component) >= 0 &&
+                        Kokkos::isfinite(faces.axes[axis](face, 2 * Components + component)) && faces.axes[axis](face, 2 * Components + component) >= 0;
+              }
+              divergence +=
+                  (faces.axes[axis](upper, component) - faces.axes[axis](cell, component)) / geometry.spacing(axis);
+              frequency +=
+                  (faces.axes[axis](upper, Components + component) + faces.axes[axis](cell, 2 * Components + component)) / geometry.spacing(axis);
             }
-            divergence +=
-                (faces.axes[axis](upper, 0) - faces.axes[axis](cell, 0)) / geometry.spacing(axis);
-            frequency +=
-                (faces.axes[axis](upper, 1) + faces.axes[axis](cell, 2)) / geometry.spacing(axis);
+            result(cell, component) = divergence;
+            const Real component_frequency =
+                valid && Kokkos::isfinite(divergence) && Kokkos::isfinite(frequency) && frequency >= 0
+                    ? frequency : std::numeric_limits<Real>::infinity();
+            maximum_frequency = Kokkos::max(maximum_frequency, component_frequency);
           }
-          result(cell, 0) = divergence;
-          status(cell, 0) =
-              valid && Kokkos::isfinite(divergence) && Kokkos::isfinite(frequency) && frequency >= 0
-                  ? frequency
-                  : std::numeric_limits<Real>::infinity();
+          status(cell, 0) = maximum_frequency;
         });
       }
       device_fence();
@@ -439,6 +451,32 @@ class PreparedDiffusion {
   }
 
  public:
+  /// Storage reuse only. Laws and all field/parameter dependencies are reevaluated
+  /// by apply; the owning context additionally keys topology/materialization epochs
+  /// and the Program evaluation identity so live stage face ledgers never alias.
+  template <class Context>
+  bool matches_preparation(Context& ctx, const Field& prototype,
+                           const std::array<DiffusiveBoundary<Dim>, 2 * Dim>& physical,
+                           bool prepared_amr_ghosts = false) const {
+    if (!matches_storage_(prototype) || lane_ != &ctx.prepared_execution_lane() ||
+        prepared_amr_ghosts_ != prepared_amr_ghosts ||
+        geometry_.domain() != ctx.geometry().domain())
+      return false;
+    for (std::size_t local = 0; local < prototype.local_size(); ++local)
+      if (prototype.box(local) != variable_.box(local))
+        return false;
+    for (int axis = 0; axis < Dim; ++axis)
+      if (geometry_.spacing(axis) != ctx.geometry().spacing(axis) ||
+          geometry_.face_coordinate(axis, 0) != ctx.geometry().face_coordinate(axis, 0))
+        return false;
+    for (int face = 0; face < 2 * Dim; ++face)
+      if (physical_[face].kind != physical[face].kind ||
+          physical_[face].value != physical[face].value ||
+          physical_[face].slope != physical[face].slope)
+        return false;
+    return true;
+  }
+
   Real explicit_frequency() const {
     if (!evaluated_)
       throw std::logic_error("diffusive stability requires a completed face evaluation");
@@ -514,8 +552,12 @@ class PreparedDiffusion {
               for (int d = 0; d < Dim; ++d)
                 identity += ":" + std::to_string(cell[d]);
               identity += "/axis:" + std::to_string(axis) + "/side:" + std::to_string(side);
-              stage_exchange({operation, occurrence, evaluation, identity, side == 0 ? -1 : 1,
-                              measure, faces.axes[axis](face, 0), temporal_weight, 1});
+              for (int component = 0; component < Components; ++component) {
+                const auto component_identity = Components == 1 ? identity :
+                    identity + "/component:" + std::to_string(component);
+                stage_exchange({operation, occurrence, evaluation, component_identity, side == 0 ? -1 : 1,
+                                measure, faces.axes[axis](face, component), temporal_weight, 1});
+              }
             }
           }
         }

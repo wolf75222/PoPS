@@ -21,12 +21,16 @@ class ScharfetterGummel(Diffusion):
         from pops._ir.quantity import QuantityRef
 
         super().validate()
-        if self.law.dimension!=1 or self.drift.state!=self.law.state:
-            raise ValueError("fitted drift diffusion requires one exact Dim1 scalar state")
+        if len(self.law.variables)!=1 or self.drift.state!=self.law.state:
+            raise ValueError("fitted drift diffusion requires one exact scalar state")
         density=self.law.variable
         if not isinstance(density,QuantityRef) or density.handle!=self.law.state or density.index!=0:
             raise ValueError("ScharfetterGummel requires diffusion of the conserved scalar density")
         diffusion=self.law.coefficients[0][0]
+        if any(not isinstance(self.law.coefficients[axis][axis], Const) or
+               self.law.coefficients[axis][axis].value != getattr(diffusion, "value", None)
+               for axis in range(self.law.dimension)):
+            raise ValueError("fitted potential drift requires one isotropic constant diffusivity on every axis")
         mobility=self.drift.law.mobility
         if not isinstance(diffusion,Const) or not isinstance(mobility,Const):
             raise ValueError("selected fitted realization requires constant diffusivity and mobility")

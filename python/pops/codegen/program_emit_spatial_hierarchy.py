@@ -38,6 +38,8 @@ def emit_amr_spatial_solve(
             "composite implicit residual cannot yet include transport or fitted drift; retain transport in its explicit IMEX stage"
         )
     _, selected, occurrences = _selected(rate, model_for_node(model, rate))
+    from pops.codegen.program_emit_diffusion import _prepared_diffusion_type
+    diffusion_type = _prepared_diffusion_type(selected)
     owner = block_indices[value.block]
     stem = "spatial_%d" % value.id
     workspace, trial, slot = stem + "_workspace", stem + "_trial", stem + "_diffusion"
@@ -73,11 +75,11 @@ def emit_amr_spatial_solve(
                 controls,
                 scalar_cpp(spatial_scalar(value.attrs["finite_difference_step"])),
             ),
-            "std::shared_ptr<std::optional<pops::runtime::program::PreparedDiffusion<pops::kNativeDimension>>> %s;"
-            % slot,
+            "std::shared_ptr<std::optional<%s>> %s;"
+            % (diffusion_type, slot),
             "ctx.prepare_spatial_collectively([&] {",
-            "  %s = std::make_shared<std::optional<pops::runtime::program::PreparedDiffusion<pops::kNativeDimension>>>();"
-            % slot,
+            "  %s = std::make_shared<std::optional<%s>>();"
+            % (slot, diffusion_type),
             "});",
         ]
         lines += [

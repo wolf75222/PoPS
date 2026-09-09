@@ -71,15 +71,18 @@ def test_foreign_gradient_is_refused_before_registry_changes():
     assert model.module.module_hash() == before
 
 
-def test_diffusion_requires_explicit_frame_and_scalar_target():
+def test_diffusion_requires_explicit_frame_and_component_coverage():
     model = pops.Model("unranked")
     state = model.state("U", components=("u",))
     with pytest.raises(ValueError, match="explicit physical Cartesian frame"):
         model.diffusive_flux("bad", state=state, value=math.grad(state))
     model = pops.Model("vector", frame=Cartesian2D())
     state = model.state("U", components=("u", "v"))
-    with pytest.raises(ValueError, match="scalar evolved state"):
-        model.diffusive_flux("bad", state=state, value=math.grad(state))
+    flux = model.diffusive_flux("vector", state=state, value=math.grad(state))
+    assert len(flux.law.variables) == 2
+    assert len(flux.law.flux_expressions()) == 4
+    with pytest.raises(ValueError, match="one gradient law per evolved component"):
+        model.diffusive_flux("bad", state=state, value=math.grad(state[0]))
 
 
 def test_program_state_brick_has_conversion_without_fabricated_transport():

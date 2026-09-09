@@ -32,24 +32,40 @@ class Diffusion(Descriptor):
             if type(self.transport) is not FiniteVolume:
                 raise TypeError("combined diffusion transport must be an exact FiniteVolume selection")
             self.transport.validate()
-            if self.transport.formal_order != 1 or self.transport.riemann.scheme != "rusanov":
-                raise ValueError("combined explicit diffusion currently selects first-order scalar Rusanov transport")
+            if self.transport.formal_order != 1 or self.transport.riemann.scheme not in {"rusanov", "scalar_upwind"}:
+                raise ValueError("combined explicit diffusion requires a monotone first-order Rusanov or scalar-upwind transport realization")
             if not getattr(self.transport.flux, "is_default", False):
                 raise ValueError("combined diffusion requires the exact default physical transport flux")
         law = self.law
-        if type(law) is not DiffusiveFluxLaw or law.dimension not in (1, 2):
-            raise ValueError("native diffusion currently selects Cartesian Dim1/Dim2 only")
-        for axis, row in enumerate(law.coefficients):
-            for column, value in enumerate(row):
-                if axis != column and not (isinstance(value, Const) and value.value == 0):
-                    raise ValueError("native diffusion selects positive diagonal tensors; off-diagonal unavailable")
-                if axis == column and isinstance(value, Const) and value.value <= 0:
-                    raise ValueError("diffusion coefficients must be strictly positive")
+        if type(law) is not DiffusiveFluxLaw or law.dimension not in (1, 2, 3):
+            raise ValueError("native diffusion requires a Cartesian frame with one through three axes")
+        from pops._ir.quantity import QuantityRef
+        from pops._ir.expr import Var
+        from pops._ir.visitors import _children
+        for component, (variable, tensor) in enumerate(zip(law.variables, law.component_coefficients, strict=True)):
+            # The physical declaration can express cross-gradients. This two-point
+            # monotone realization requires each W_i to depend only on U_i; its
+            # positive coefficients may depend on every component and field.
+            pending = [variable]
+            while pending:
+                node = pending.pop()
+                if isinstance(node, QuantityRef) and node.handle.kind == "state":
+                    if node.handle != law.state or node.index != component:
+                        raise ValueError("two-point monotone diffusion cannot realize cross-component gradient variables; select a coupled matrix realization")
+                if len(law.variables) > 1 and isinstance(node, Var) and node.kind == "prim":
+                    raise ValueError("multicomponent diffusion requires explicit gradient expressions to prove componentwise monotonicity")
+                pending.extend(_children(node))
+            for axis, row in enumerate(tensor):
+                for column, value in enumerate(row):
+                    if axis != column and not (isinstance(value, Const) and value.value == 0):
+                        raise ValueError("two-point monotone diffusion requires diagonal spatial tensors; off-diagonal fluxes require a transverse-gradient realization")
+                    if axis == column and isinstance(value, Const) and value.value <= 0:
+                        raise ValueError("diffusion coefficients must be strictly positive")
         return True
 
     def validate_rate_contract(self, contract):
         if contract["state"] != self.law.state:
-            raise ValueError("Diffusion must discretize its exact scalar state")
+            raise ValueError("Diffusion must discretize its exact accumulated state")
         if self.transport is None:
             if contract.get("flux") not in (None, ()):
                 raise ValueError("a combined transport/diffusion balance requires an explicit transport selection")

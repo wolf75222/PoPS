@@ -82,8 +82,8 @@ class DiffusiveFluxLaw:
     """The physical law Fd=A grad(W), retaining every gradient/coefficient dependency."""
 
     state: Handle
-    variable: Expr
-    coefficients: tuple[tuple[Expr, ...], ...]
+    variable: Expr | tuple[Expr, ...]
+    coefficients: tuple
     axes: tuple[str, ...]
     inputs: tuple[Any, ...]
     boundaries: tuple[DiffusiveBoundary, ...]
@@ -94,8 +94,17 @@ class DiffusiveFluxLaw:
         return len(self.axes)
 
     @property
+    def variables(self) -> tuple[Expr, ...]:
+        return self.variable if isinstance(self.variable, tuple) else (self.variable,)
+
+    @property
+    def component_coefficients(self) -> tuple:
+        return (self.coefficients,) if len(self.variables) == 1 else self.coefficients
+
+    @property
     def expressions(self) -> tuple[Expr, ...]:
-        return (self.variable, *(item for row in self.coefficients for item in row))
+        return (*self.variables, *(item for tensor in self.component_coefficients
+                                  for row in tensor for item in row))
 
     def declaration_references(self) -> tuple[Handle, ...]:
         from pops._ir.expr_references import collect_reference_value
@@ -129,9 +138,10 @@ class DiffusiveFluxLaw:
 
     def flux_expressions(self) -> tuple[Expr, ...]:
         # The typed Expr products and Const seed keep the symbolic sum in Expr.
-        return tuple(cast(Expr, sum((coefficient * Partial(self.variable, axis)
+        return tuple(cast(Expr, sum((coefficient * Partial(variable, axis)
                           for axis, coefficient in enumerate(row)), Const(0)))
-                     for row in self.coefficients)
+                     for variable, tensor in zip(self.variables, self.component_coefficients, strict=True)
+                     for row in tensor)
 
 
 def _gradient_law(value: Any) -> tuple[Any, Any]:
@@ -179,8 +189,6 @@ def _authenticate_expression(model: Any, expression: Expr, state: Any) -> None:
         if isinstance(node, QuantityRef):
             if node.handle.owner_path != model.owner_path:
                 raise ValueError("diffusive law reads a foreign quantity owner")
-            if node.handle.kind == "state" and node.handle != state:
-                raise ValueError("diffusive law reads a different state declaration")
         elif isinstance(node, Var):
             if node.kind == "prim" and node.name in model._dsl._m.prim_defs:
                 if node.name not in primitives:
@@ -201,7 +209,7 @@ def _law_inputs(model,state,expressions):
     pending=list(expressions)
     while pending:
         node=pending.pop()
-        if isinstance(node,QuantityRef) and node.handle.kind=="field" and node.space not in inputs:
+        if isinstance(node,QuantityRef) and node.handle.kind in {"state", "field"} and node.space not in inputs:
             inputs.append(node.space)
         pending.extend(_children(node))
     return tuple(inputs)
@@ -216,22 +224,33 @@ def declare_diffusive_flux(model: Any, name: Any, *, state: Any, value: Any,
     name = require_name(name, "diffusive flux name")
     if not isinstance(state, StateHandle) or model._states.get(state.name) != state:
         raise ValueError("diffusive_flux state must be this Model's exact state declaration")
-    if len(state.components) != 1:
-        raise ValueError("the bounded diffusion declaration requires a scalar evolved state")
-    if model._multi_module is not None:
-        raise ValueError("diffusion of a multi-state Module has no selected native realization")
-    variable, coefficient = _gradient_law(value)
-    if isinstance(variable, StateHandle):
-        if variable != state:
-            raise ValueError("diffusive gradient variable names a foreign state")
-        variable = tuple(variable)[0]
-    if not isinstance(variable, Expr):
-        raise TypeError("diffusive gradient variable must be an explicit scalar expression")
     if model.frame is None:
         raise ValueError("diffusive_flux requires an explicit physical Cartesian frame")
     axes = tuple(axis.name for axis in model.frame.axes)
-    coefficients = _coefficient_tensor(coefficient, len(axes))
-    expressions = (variable, *(item for row in coefficients for item in row))
+    # A tuple supplies one constitutive law per accumulated component. A gradient
+    # of the complete state is the convenient componentwise identity construction.
+    if isinstance(value, (tuple, list)):
+        component_values = tuple(value)
+    else:
+        gradient, coefficient = _gradient_law(value)
+        if isinstance(gradient, StateHandle):
+            if gradient != state:
+                raise ValueError("diffusive gradient variable names a foreign state")
+            component_values = tuple(CoeffGradient(component, coefficient) for component in state)
+        else:
+            component_values = (value,)
+    if len(component_values) != len(state.components):
+        raise ValueError("diffusive flux must supply one gradient law per evolved component")
+    variables, tensors = [], []
+    for component_value in component_values:
+        variable, coefficient = _gradient_law(component_value)
+        if not isinstance(variable, Expr):
+            raise TypeError("diffusive gradient variable must be an explicit scalar expression")
+        variables.append(variable)
+        tensors.append(_coefficient_tensor(coefficient, len(axes)))
+    variable = variables[0] if len(variables) == 1 else tuple(variables)
+    coefficients = tensors[0] if len(tensors) == 1 else tuple(tensors)
+    expressions = (*variables, *(item for tensor in tensors for row in tensor for item in row))
     for expression in expressions:
         _authenticate_expression(model, expression, state)
     inputs = _law_inputs(model,state,expressions)
@@ -256,7 +275,10 @@ def install_diffusive_fluxes(model: Any, module: Any) -> None:
             if previous.lowering.get("diffusive_law") is handle.law:
                 continue
             raise ValueError("diffusive flux collides with a registered operator")
-        output = FieldSpace(handle.name + "_flux", components=handle.law.axes,
+        components = (handle.law.axes if len(handle.law.variables) == 1 else
+                      tuple(component + "_" + axis for component in handle.state.components
+                            for axis in handle.law.axes))
+        output = FieldSpace(handle.name + "_flux", components=components,
                             layout="face", representation="constitutive_flux")
         registry.register(Operator(
             handle.reg_name, "expression", Signature(handle.law.inputs, output),
