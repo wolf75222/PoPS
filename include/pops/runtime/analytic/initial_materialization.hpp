@@ -90,6 +90,10 @@ struct AnalyticCellAverage {
     constexpr int sample_count = 1 << (2 * Dim);  // 4^Dim tensor quadrature points.
     constexpr Real normalization = Real(1) / static_cast<Real>(1 << Dim);
     const RealVector<Dim> center = geometry.cell_center(index);
+    // A validated literal has an exact cell average. Summing rounded quadrature weights
+    // would perturb even an unchanged conserved component during initialization/reprojection.
+    if (program.instruction_count == 1 && program.instructions[0].op == AnalyticOp::Constant)
+      return program.eval(center);
     Real integral = Real(0);
     for (int sample = 0; sample < sample_count; ++sample) {
       int encoded = sample;

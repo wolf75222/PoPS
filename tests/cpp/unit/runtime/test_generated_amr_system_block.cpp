@@ -2844,6 +2844,44 @@ TEST(GeneratedAmrSystemBlock, CflAuthenticatesRequestsAndBoundOrderBeforeCallbac
 
 }  // namespace
 
+TEST(GeneratedAmrSystemBlock, ConstantBootstrapReprojectionPreservesExactValue) {
+  constexpr int Dim = pops::kNativeDimension;
+  constexpr const char* route = "tests.generated-amr/exact-constant/state";
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 3;
+  config.regrid_every = 0;
+  config.explicit_bootstrap = true;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 16;
+    config.periodicity[axis] = true;
+  }
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/exact-constant-runtime");
+  system.install_block_state_route("tracer", route);
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  pops::test::install_prepared_threshold_union(
+      system, {{"tracer", "u", .5, pops::test::PreparedThresholdRelation::Above, route}},
+      "tests.generated-amr/exact-constant-tagging@1");
+  system.bind_bootstrap_subject(route, "tracer", "constant_field");
+  system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                        "conservative_cell_average", {{"constant"}}, {{2.0}});
+  system.begin_bootstrap_plan();
+  system.set_program_block_map({0});
+  for (int level = 0; level < 3; ++level) {
+    if (level)
+      ASSERT_TRUE(system.bootstrap_next_level());
+    const auto count = system.materialize_bootstrap_action(
+        route, level == 0 ? "initialize_level_zero" : "analytic_reprojection", "constant_field",
+        level);
+    const auto state = system.block_level_state("tracer", level);
+    ASSERT_EQ(state.size(), count);
+    ASSERT_FALSE(state.empty());
+    for (double value : state)
+      EXPECT_EQ(value, 2.0);  // The initializer's integral is exact on every level.
+  }
+  system.commit_bootstrap_level();
+}
+
 TEST(GeneratedAmrSystemBlock, GaussianBootstrapReprojectionPreservesExactNeutrality) {
   using Real = pops::Real;
   constexpr int Dim = pops::kNativeDimension;

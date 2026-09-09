@@ -186,21 +186,26 @@ void check_initial_materializers() {
   const pops::Geometry<Dim> geometry = unit_geometry(box);
   auto values = one_patch_field(box, 1);
 
-  {
-    std::vector<pops::analytic::AnalyticProgram> programs;
-    programs.push_back(compile_analytic_expression(AnalyticNode::constant(Real(3.25))));
-    const auto prepared =
-        pops::analytic::prepare_cell_average_materialization(values, geometry, programs);
-    EXPECT_EQ(pops::analytic::materialize_cell_average(prepared, lane.communicator()),
-              box.numPts());
+  const std::array literals{Real(2), Real(.25), Real(-.5), Real(3.25), Real(0), -Real(0)};
+  for (Real literal : literals) {
+    {
+      std::vector<pops::analytic::AnalyticProgram> programs;
+      programs.push_back(compile_analytic_expression(AnalyticNode::constant(literal)));
+      const auto prepared =
+          pops::analytic::prepare_cell_average_materialization(values, geometry, programs);
+      EXPECT_EQ(pops::analytic::materialize_cell_average(prepared, lane.communicator()),
+                box.numPts());
+    }
+    const auto& field = values.fab(0);
+    auto constant_host = field.create_host_mirror();
+    field.copy_to_host(constant_host);
+    for_each_host_index(box, [&](const pops::Index<Dim>& index) {
+      const Real actual = constant_host(host_offset(field.grown_box(), index));
+      EXPECT_EQ(actual, literal);  // No ULP allowance for an exact constant integral.
+      EXPECT_EQ(std::signbit(actual), std::signbit(literal));
+    });
   }
-
   const auto& field = values.fab(0);
-  auto constant_host = field.create_host_mirror();
-  field.copy_to_host(constant_host);
-  for (const pops::Index<Dim>& index : std::array{box.lo, box.hi})
-    EXPECT_DOUBLE_EQ(constant_host(host_offset(field.grown_box(), index)), Real(3.25));
-
   pops::RealVector<Dim> center{};
   for (int axis = 0; axis < Dim; ++axis)
     center[axis] = Real(0.5);
