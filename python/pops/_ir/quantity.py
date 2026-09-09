@@ -139,6 +139,16 @@ class QuantityRef(Expr):
     def to_cpp(self) -> str:
         raise TypeError("QuantityRef requires an authenticated owner-aware native binding")
 
+    def resolve_for_amr_tagging(
+        self, context: Any, *, action: str, comparison: str, threshold: Any,
+    ) -> Any:
+        """Keep the declaration and its selected component coupled during resolution."""
+        resolve = getattr(context, "resolve_value_indicator", None)
+        if not callable(resolve):
+            raise TypeError("AMR tagging context must implement resolve_value_indicator(...)")
+        return resolve(handle=self.handle, component=self.component, action=action,
+                       comparison=comparison, threshold=threshold)
+
     def to_data(self) -> dict[str, Any]:
         handle = ({"kind": self.handle.kind, "local_id": self.handle.local_id}
                   if self.handle.owner_path == _hash_owner.get()

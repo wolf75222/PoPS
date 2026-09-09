@@ -6,7 +6,7 @@ indicator: gradient predicates therefore carry the exact resolved discrete conte
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 import hashlib
 import json
@@ -129,6 +129,7 @@ class TagExpr(ABC):
 class _ThresholdPredicate(TagExpr):
     indicator: Handle
     threshold: ParamHandle
+    component: str | None = field(default=None, kw_only=True)
 
     node_type: ClassVar[str]
     comparison: ClassVar[str]
@@ -139,13 +140,20 @@ class _ThresholdPredicate(TagExpr):
     def __post_init__(self) -> None:
         _indicator(self.indicator, where="%s.indicator" % type(self).__name__)
         _threshold(self.threshold, where=type(self).__name__)
+        if self.component is not None:
+            components = tuple(getattr(getattr(self.indicator, "space", None), "components", ()))
+            if type(self.component) is not str or self.component not in components:
+                raise ValueError("AMR indicator component must belong to its typed Space")
 
     def canonical_identity(self) -> dict[str, Any]:
-        return {"schema_version": _SCHEMA_VERSION, "node_type": self.node_type,
+        result = {"schema_version": _SCHEMA_VERSION, "node_type": self.node_type,
                 "indicator": self.indicator.canonical_identity(),
                 "threshold": self.threshold.canonical_identity(),
                 "comparison": self.comparison, "transform": self.transform,
                 "polarity": self.polarity, "equality_matches": self.equality_matches}
+        if self.component is not None:
+            result["component"] = self.component
+        return result
 
     def operands(self) -> tuple[TagExpr, ...]:
         return ()
@@ -172,7 +180,9 @@ class _ThresholdPredicate(TagExpr):
             "threshold": threshold,
         }
         components = tuple(getattr(getattr(self.indicator, "space", None), "components", ()))
-        if len(components) == 1:
+        if self.component is not None:
+            data["variable"] = self.component
+        elif len(components) == 1:
             data["variable"] = components[0]
         context = getattr(self, "context", None)
         if context is not None:

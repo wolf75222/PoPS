@@ -46,17 +46,18 @@ def test_value_expr_delegates_to_the_open_indicator_context() -> None:
     }]
 
 
-def test_value_indicator_refuses_unresolved_and_foreign_case_handles() -> None:
+@pytest.mark.parametrize("component", [None, "u"])
+def test_value_indicator_refuses_unresolved_and_foreign_case_handles(component) -> None:
     expected_case, unresolved = _state("expected")
     foreign_case, foreign = _state("foreign")
     context = _owner_only_context(expected_case.name)
 
     with pytest.raises(TypeError, match="owner-qualified block-state"):
         context.resolve_value_indicator(
-            handle=unresolved, action="refine", comparison="gt", threshold=None)
+            handle=unresolved, component=component, action="refine", comparison="gt", threshold=None)
 
     foreign_case.freeze()
     resolved_foreign = foreign_case.resolve(foreign)
     with pytest.raises(ValueError, match="different Case owner"):
         context.resolve_value_indicator(
-            handle=resolved_foreign, action="refine", comparison="gt", threshold=None)
+            handle=resolved_foreign, component=component, action="refine", comparison="gt", threshold=None)

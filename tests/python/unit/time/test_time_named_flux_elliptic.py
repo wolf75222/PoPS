@@ -500,7 +500,7 @@ def test_split_named_flux_step_matches_whole_named_flux_step_on_public_layouts(
             hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
             tagging=AMRTagging(
                 rules=(
-                    Tag(ValueExpr(state_instance) > threshold),
+                    Tag(ValueExpr(state_instance)["rho"] > threshold),
                     Buffer(cells=1),
                 ),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
