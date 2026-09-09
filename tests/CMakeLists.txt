@@ -660,6 +660,9 @@ pops_add_gtest_suite(NAME test_amr_program_field_publication SOURCES "${_src}" E
 pops_test_source(_src test_amr_multiblock_compiled)
 pops_add_gtest_suite(NAME test_amr_multiblock_compiled SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
+pops_test_source(_src test_amr_hierarchy_barrier_continuation)
+pops_add_gtest_suite(NAME test_amr_hierarchy_barrier_continuation SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
 pops_test_source(_src test_amr_synchronized_continuation)
 pops_add_gtest_suite(NAME test_amr_synchronized_continuation SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
@@ -865,6 +868,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_amr_program_diffusion 2)
   set(POPS_MPI_RANKS_test_amr_layout_transfer 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_implicit_transaction 2)
+  set(POPS_MPI_RANKS_test_amr_hierarchy_barrier_continuation 2)
   set(POPS_MPI_RANKS_test_amr_synchronized_continuation 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_substeps 2)
   set(POPS_MPI_RANKS_test_collective_step_rejection 2)
@@ -1047,6 +1051,8 @@ if(POPS_HAS_MPI)
     # Independent hierarchy ownership is reversed across ranks; all four cases are collective.
     test_amr_layout_transfer
     test_amr_multiblock_implicit_transaction
+    # Rank-local barrier mismatch/callback failure must reject collectively, then retry.
+    test_amr_hierarchy_barrier_continuation
     test_amr_synchronized_continuation
     test_amr_multiblock_substeps
     test_collective_step_rejection

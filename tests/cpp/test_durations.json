@@ -4,6 +4,7 @@
     "ctest_parallel_jobs": 4,
     "estimate_policy": "new unmeasured targets use a conservative analogous-target estimate, falling back to the catalog median until the next CTest timing refresh",
     "estimated_targets": [
+      "test_amr_hierarchy_barrier_continuation",
       "test_amr_history_flux_snapshot",
       "test_amr_layout_transfer",
       "test_amr_program_diffusion",
@@ -62,12 +63,13 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 189,
+    "target_count": 190,
     "unit_seconds": "aggregate CTest wall time per build target",
     "v12_estimate_source": "The edd85c10f6184e7b14b048ee16d5cc39bc606b62 full CTest diagnostic observed approximately 0.7 s history-snapshot, 0.52 s AMR-transition, and 0.5 s collective-rejection aggregate work. Each is conservatively scheduled at 1 s; these are scheduling estimates, not controlled performance measurements.",
     "v18_estimate_source": "Unmeasured analogous-target scheduling estimates: AMR publication uses test_amr_program_diffusion; general composite field uses test_composite_fac_variable_k; physical support transfer uses test_nd_transfer; prepared resource cache uses test_cache_manager. Replace from the next complete CI timing artifact; no local timing measurements are claimed.",
     "v18_amr_transfer_estimate_source": "Unmeasured scheduling estimate: the four AMR transfer cases compile and load multiple provider DSOs; use the existing 45 s test_program_loader tier. Replace from the next complete CI timing artifact. This is not a measured result.",
-    "v18_amr_continuation_estimate_source": "Unmeasured scheduling estimate copied from test_amr_multiblock_substeps: both instantiate the same prepared AMR subcycling engine and distributed multi-level fixtures in dimensions 1, 2 and 3 without provider DSO compilation. Replace from the next complete CI timing artifact; this is not a measured result for the new target."
+    "v18_amr_continuation_estimate_source": "Unmeasured scheduling estimate copied from test_amr_multiblock_substeps: both instantiate the same prepared AMR subcycling engine and distributed multi-level fixtures in dimensions 1, 2 and 3 without provider DSO compilation. Replace from the next complete CI timing artifact; this is not a measured result for the new target.",
+    "v18_amr_hierarchy_barrier_estimate_source": "Unmeasured scheduling estimate copied from test_amr_synchronized_continuation: real distributed AMR contexts retain multi-level continuations and exercise collective refusal, rollback and retry without provider DSO compilation. Replace from the next complete CI timing artifact; this is not a measured duration."
   },
   "test_amr_compiled_model": 0.01,
   "test_amr_composite_poisson": 1.15,
@@ -257,5 +259,6 @@
   "test_physical_support_transfer": 0.2,
   "test_prepared_resource_cache": 0.04,
   "test_amr_layout_transfer": 45.0,
-  "test_amr_synchronized_continuation": 1.07
+  "test_amr_synchronized_continuation": 1.07,
+  "test_amr_hierarchy_barrier_continuation": 1.07
 }

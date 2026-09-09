@@ -43,6 +43,7 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/amr_program_context_field_runtime_definitions.inc",
         "pops/runtime/program/amr_program_context_flux_expression_services.inc",
         "pops/runtime/program/amr_program_context_cell_temporal_runtime.inc",
+        "pops/runtime/program/amr_program_context_hierarchy_barriers.inc",
         "pops/runtime/program/amr_program_context_mapping_continuation.inc",
         "pops/runtime/program/amr_program_context_subcycling_runtime.inc",
         "pops/runtime/program/amr_program_context_flux_family.inc",
@@ -112,6 +113,7 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
             "pops/runtime/program/amr_program_context_flux_basis_definitions.inc",
         }
     ),
+    "hierarchy_barriers": frozenset({"pops/runtime/program/amr_program_context_hierarchy_barriers.inc"}),
     "mapping_continuation": frozenset(
         {"pops/runtime/program/amr_program_context_mapping_continuation.inc"}
     ),
@@ -142,6 +144,8 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     "flux_basis": 500,
     # Retained per-level map ports and resumable callbacks are counted independently.
     "mapping_continuation": 250,
+    # Authenticate cross-level barrier requests before one collective callback and resume.
+    "hierarchy_barriers": 150,
     "subcycling_runtime": 800,
     "cell_temporal_runtime": 800,
 }
@@ -162,9 +166,11 @@ FLUX_FAMILY_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["flux_family"]
 JOINT_FIELD_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["joint_field_publication"]
 # Resumable per-level map ports have their own authority and aggregate allowance.
 MAPPING_CONTINUATION_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["mapping_continuation"]
+HIERARCHY_BARRIER_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["hierarchy_barriers"]
 PROGRAM_FRAGMENT_BUDGET = (
     7_730 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
     + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
+    + HIERARCHY_BARRIER_FRAGMENT_BUDGET
 )
 # Context-owned cache acquisition and independent field-resource handles extend the
 # existing scaffolding; numerical solve and publication bodies remain counted above.
@@ -179,6 +185,7 @@ PROGRAM_SCAFFOLDING_BUDGET = (
 PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
     9_580 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
     + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
+    + HIERARCHY_BARRIER_FRAGMENT_BUDGET
     + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET + SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET
 )
 SEMANTIC_AUTHORITIES = frozenset(

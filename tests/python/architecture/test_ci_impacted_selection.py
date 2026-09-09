@@ -298,6 +298,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
     assert variant_targets == {
         "test_amr_multiblock_coupled_source": (2,),
         "test_amr_multiblock_implicit_transaction": (2,),
+        "test_amr_hierarchy_barrier_continuation": (2,),
         "test_amr_synchronized_continuation": (2,),
         "test_amr_multiblock_substeps": (2,),
         "test_collective_step_rejection": (2,),
@@ -336,7 +337,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 112
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 113
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4

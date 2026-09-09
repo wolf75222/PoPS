@@ -4,6 +4,7 @@
     "default_parallel_share_seconds": 2.0,
     "estimate_policy": "new unmeasured targets use a conservative analogous-target estimate, falling back to the catalog median until the next cold-CI timing refresh",
     "estimated_targets": [
+      "test_amr_hierarchy_barrier_continuation",
       "test_amr_history_flux_snapshot",
       "test_amr_layout_transfer",
       "test_amr_program_diffusion",
@@ -63,12 +64,13 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 189,
+    "target_count": 190,
     "v12_estimate_source": "No per-target cold-build receipt exists. History snapshot and AMR transition use the 300 s heavy-template tier; collective rejection uses the 2 s parallel-share floor. Replace from the next complete cold-CI build timing artifact.",
     "unit_seconds": "modeled shard wall time: measured serial-pool TU or parallel-share floor",
     "v18_estimate_source": "Unmeasured scheduling estimates: AMR publication and general composite solver use the existing 300 s heavy-template tier; small runtime contracts use the 2 s parallel-share floor. Replace from the next complete CI timing artifact; no local timing measurements are claimed.",
     "v18_amr_transfer_estimate_source": "Unmeasured scheduling estimate: the AMR transfer fixture uses the existing 300 s heavy-template build tier, analogous to test_amr_transfer_properties. Replace from the next complete CI timing artifact. This is not a measured result.",
-    "v18_amr_continuation_estimate_source": "Unmeasured scheduling estimate copied from test_amr_multiblock_substeps: both instantiate the same prepared AMR subcycling engine and distributed multi-level fixtures in dimensions 1, 2 and 3 without provider DSO compilation. Replace from the next complete CI timing artifact; this is not a measured result for the new target."
+    "v18_amr_continuation_estimate_source": "Unmeasured scheduling estimate copied from test_amr_multiblock_substeps: both instantiate the same prepared AMR subcycling engine and distributed multi-level fixtures in dimensions 1, 2 and 3 without provider DSO compilation. Replace from the next complete CI timing artifact; this is not a measured result for the new target.",
+    "v18_amr_hierarchy_barrier_estimate_source": "Unmeasured scheduling estimate copied from test_amr_synchronized_continuation: real distributed AMR contexts retain multi-level continuations and exercise collective refusal, rollback and retry without provider DSO compilation. Replace from the next complete CI timing artifact; this is not a measured duration."
   },
   "test_amr_compiled_model": 2.0,
   "test_amr_composite_poisson": 2.0,
@@ -258,5 +260,6 @@
   "test_physical_support_transfer": 2.0,
   "test_prepared_resource_cache": 2.0,
   "test_amr_layout_transfer": 300.0,
-  "test_amr_synchronized_continuation": 309.79
+  "test_amr_synchronized_continuation": 309.79,
+  "test_amr_hierarchy_barrier_continuation": 309.79
 }
