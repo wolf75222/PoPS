@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/runtime/program/amr_history_flux_snapshot_codec.hpp>
+#include <pops/runtime/program/amr_history_flux_snapshot_execution.hpp>
 
 #include <cmath>
 #include <limits>
@@ -146,6 +147,48 @@ void check_shifted_projection() {
     auto face = child->domain.lo;
     ++face[axis];
     EXPECT_DOUBLE_EQ(evaluate<Dim>(child, {axis, face}), 7.0);
+  }
+}
+
+TEST(AmrHistoryFluxSnapshot, InterfaceMappingWidensIndependentOriginOffsets) {
+  using Layout = pops::amr::hierarchy::LevelLayout<2>;
+  using Patches = pops::mesh::BoxArray<2>;
+  using Distribution = pops::mesh::Distribution<2>;
+  using Ratio = pops::amr::RefinementRatio<2>;
+  struct Interface {
+    int axis;
+    Index<2> coarse_face;
+  };
+  const int lowest = std::numeric_limits<int>::min();
+  const pops::mesh::RankSpace<2> ranks(Index<2>{0, 0}, pops::Extent<2>{1, 1});
+  const pops::mesh::BoxArrayValidationBudget budget{1, 0};
+  const auto layout = [&](int level, const Box<2>& domain, const Ratio& ratio) {
+    const Patches patches(std::vector<Box<2>>{domain});
+    return Layout(level, domain, patches, Distribution::replicated(patches, ranks), ratio, budget);
+  };
+  // No field allocation: only two patch descriptors and two requested tangential faces.
+  for (const bool wide_subtraction : {false, true}) {
+    SCOPED_TRACE(wide_subtraction);
+    const Box<2> parent_domain{Index<2>{wide_subtraction ? lowest : lowest / 2, 0}, Index<2>{0, 1}};
+    const Box<2> child_domain{Index<2>{wide_subtraction ? lowest + 1 : lowest, 0}, Index<2>{1, 3}};
+    const auto parent = layout(0, parent_domain, Ratio{});
+    const auto child = layout(1, child_domain, Ratio{wide_subtraction ? 1 : 2, 2});
+    const auto geometry = pops::Geometry<2>::from_bounds(child_domain, pops::RealVector<2>{0, 0},
+                                                         pops::RealVector<2>{1, 1});
+    const std::vector<Interface> incoming{{0, Index<2>{0, 1}}};
+    const auto faces = hf::execution::interface_faces<2, hf::BasisFace<2>>(
+        geometry, child, &parent, std::vector<Interface>{}, incoming);
+    ASSERT_EQ(faces.size(), 2U);
+    for (std::size_t ordinal = 0; ordinal < faces.size(); ++ordinal) {
+      EXPECT_EQ(faces[ordinal].role, pops::amr::reflux::FaceLedgerRole::Fine);
+      EXPECT_EQ(faces[ordinal].face, (Index<2>{wide_subtraction ? 1 : 0, 2 + int(ordinal)}));
+      EXPECT_EQ(faces[ordinal].coarse_face, (Index<2>{0, 1}));
+      EXPECT_DOUBLE_EQ(faces[ordinal].face_measure, 0.25);
+    }
+    const std::vector<Interface> unrepresentable{{0, Index<2>{std::numeric_limits<int>::max(), 1}}};
+    EXPECT_THROW((hf::execution::interface_faces<2, hf::BasisFace<2>>(
+                     geometry, child, &parent, std::vector<Interface>{}, unrepresentable)),
+                 std::overflow_error);
   }
 }
 

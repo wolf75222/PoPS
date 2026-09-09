@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <map>
 #include <memory>
@@ -273,12 +274,18 @@ std::vector<Face> interface_faces(const Geometry<Dim>& geometry,
       auto remainder = ordinal;
       Index<Dim> face;
       for (int axis = 0; axis < Dim; ++axis) {
-        face[axis] = current.domain().lo[axis] +
-                     (interface.coarse_face[axis] - parent->domain().lo[axis]) * ratio[axis];
+        // Independently shifted domains may have a wide offset even when the final index fits.
+        const std::int64_t relative =
+            static_cast<std::int64_t>(interface.coarse_face[axis]) - parent->domain().lo[axis];
+        std::int64_t coordinate =
+            static_cast<std::int64_t>(current.domain().lo[axis]) + relative * ratio[axis];
         if (axis != interface.axis) {
-          face[axis] += static_cast<int>(remainder % static_cast<std::size_t>(ratio[axis]));
+          coordinate +=
+              static_cast<std::int64_t>(remainder % static_cast<std::size_t>(ratio[axis]));
           remainder /= static_cast<std::size_t>(ratio[axis]);
         }
+        face[axis] = pops::detail::checked_box_index(
+            coordinate, "AMR history interface face exceeds integer coordinates");
       }
       faces.push_back({Role::Fine,
                        interface.axis,
