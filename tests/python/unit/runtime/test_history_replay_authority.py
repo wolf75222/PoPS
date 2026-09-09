@@ -91,19 +91,39 @@ class _RecordingRuntime:
         assert np.array_equal(dt, np.full(3, 0.002 / (2 ** level)))
         self.events.append(("provenance", name, level))
 
+    def restore_history_sample_identity(self, name, level, encoded):
+        # This payload intentionally predates the additive identity member. The typed restore API
+        # must still publish its canonical empty ledger before any selective replay so stale live
+        # publication identities cannot survive the checkpoint import.
+        assert encoded == b""
+        self.events.append(("identity", name, level))
+
     def rebuild_history_slots(self, name, anchors):
         assert anchors == [0, 2]
         self.events.append(("replay", name))
         return 1
 
 
+def _expected_preimport_events():
+    events = []
+    for name in ("first", "second"):
+        for level in (0, 1):
+            events.extend(
+                (
+                    ("anchor", name, level, 0),
+                    ("anchor", name, level, 2),
+                    ("provenance", name, level),
+                    ("identity", name, level),
+                )
+            )
+    return events
+
+
 def test_authenticated_import_follows_all_anchors_and_precedes_every_replay():
     runtime = _RecordingRuntime()
 
     def import_accepted():
-        assert len([row for row in runtime.events if row[0] == "anchor"]) == 8
-        assert len([row for row in runtime.events if row[0] == "provenance"]) == 4
-        assert not any(row[0] == "replay" for row in runtime.events)
+        assert runtime.events == _expected_preimport_events()
         runtime.events.append(("accepted_import",))
 
     report = restore_histories(runtime, _payload(), before_replay=import_accepted)
@@ -119,6 +139,7 @@ def test_failed_authenticated_import_never_executes_replay():
 
     with pytest.raises(ValueError, match="history authority differs"):
         restore_histories(runtime, _payload(), before_replay=reject)
+    assert runtime.events == _expected_preimport_events()
     assert not any(row[0] == "replay" for row in runtime.events)
 
 
