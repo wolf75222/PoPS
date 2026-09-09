@@ -333,6 +333,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 and placement.frame_id != self._frame.canonical_id:
             raise ValueError("state space frame differs from its Model frame")
         metadata = {
+            "name": name,
             "representation": selected_representation.name,
             "centering": "cell" if placement is None else placement.centering,
             "layout": "cell" if placement is None else placement.layout,

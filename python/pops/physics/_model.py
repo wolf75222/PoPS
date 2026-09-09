@@ -107,6 +107,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
         # mutated only by operator_alias(); reading Module/operator_registry never repairs state.
         self._aliases = {}
         self._state_space_metadata = {
+            "name": "U",
             "representation": "conservative",
             "centering": "cell",
             "layout": "cell",

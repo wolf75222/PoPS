@@ -79,14 +79,14 @@ class _OperatorViewMixin(_HyperbolicModel):
                            if expression is not None)
         return expressions
 
-    def state_space(self, name: str = "U") -> Any:
+    def state_space(self, name: str | None = None) -> Any:
         """Typed :class:`pops.model.StateSpace` view of the conservative state: its
         components and canonical physical roles. Derived; carries no data."""
         role_list = roles_for(self.cons_names, self.cons_roles)
         roles = dict(zip(self.cons_names, role_list, strict=True))
         metadata = self._state_space_metadata
         return _model.StateSpace(
-            name=name,
+            name=metadata["name"] if name is None else name,
             components=tuple(self.cons_names),
             roles=roles,
             layout=metadata["layout"],
@@ -112,7 +112,7 @@ class _OperatorViewMixin(_HyperbolicModel):
             name=name, components=tuple(self._provider_components), layout="cell"
         )
 
-    def operator_registry(self, state_name: str = "U") -> Any:
+    def operator_registry(self, state_name: str | None = None) -> Any:
         """Typed :class:`pops.model.OperatorRegistry` derived from this model.
 
         Lowers the PDE shortcuts into typed operators (ids follow registration order):
@@ -123,6 +123,8 @@ class _OperatorViewMixin(_HyperbolicModel):
         ``(State) -> State``. The implicit defaults surface as ``flux_default`` /
         ``source_default`` / ``fields_from_state``. Pure view: no hash / codegen impact.
         """
+        if state_name is None:
+            state_name = self._state_space_metadata["name"]
         cache = self._operator_registry_cache
         cached = cache.get(state_name)
         if cached is not None:

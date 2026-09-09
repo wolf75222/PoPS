@@ -546,7 +546,7 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
     def n_vars(self) -> Any:
         return self._m.n_vars
 
-    def state_space(self, name: str = "U") -> Any:
+    def state_space(self, name: str | None = None) -> Any:
         """Typed pops.model.StateSpace view of the conservative state (Spec 2).
         Delegates to HyperbolicModel.state_space."""
         return self._m.state_space(name)
@@ -556,7 +556,7 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         Delegates to HyperbolicModel.field_space."""
         return self._m.field_space(name)
 
-    def operator_registry(self, state_name: str = "U") -> Any:
+    def operator_registry(self, state_name: str | None = None) -> Any:
         """Typed pops.model.OperatorRegistry derived from this model (Spec 2): the PDE
         shortcuts (source_term / linear_source / elliptic_field / flux) lower into
         typed operators. Pure view -- no hash or codegen impact. Delegates to
