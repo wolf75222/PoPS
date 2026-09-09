@@ -74,6 +74,9 @@ def _compile(native_cxx: str) -> tuple[Any, Any, Any]:
         cxx=native_cxx,
         include=str(ROOT / "include"),
         strict_restart=True,
+        # Refine-only decisions retain and rebuffer old padding on every regrid. Recompute the
+        # blob's footprint so the checkpoint and continuation retain real coarse/fine interfaces.
+        coarsen_below_threshold=True,
     )
     bindings = tuple(plan.initial_condition_plan.bindings)
     thresholds = tuple(
@@ -166,7 +169,7 @@ def _program_accepted_state(path: str | Path) -> tuple[tuple[str, bytes], ...]:
 
 
 def _accepted_state_history_flux(payload: bytes) -> tuple[list[dict[str, Any]], bytes]:
-    """Decode the POPSAND4/5 history-flux envelope, retaining exact byte boundaries.
+    """Decode the POPSAND6/POPSFLX4 history-flux envelope, retaining exact byte boundaries.
 
     This is deliberately a test-side reader: it proves the wire image contains actual retained
     expressions and also catches accidental offset drift before a checkpoint reaches native restore.
@@ -195,7 +198,7 @@ def _accepted_state_history_flux(payload: bytes) -> tuple[list[dict[str, Any]], 
         skip(size)
         return payload[nonlocal_cursor : nonlocal_cursor + size].decode("utf-8")
 
-    assert payload[:8] in (b"POPSAND4", b"POPSAND5")
+    assert payload[:8] == b"POPSAND6"
     cursor = 8 + 8
     skip(read_u64())  # spatial contract
     skip(16)  # topology epoch, materialization generation
@@ -247,8 +250,30 @@ def _accepted_state_history_flux(payload: bytes) -> tuple[list[dict[str, Any]], 
         flux_skip(size)
         return history_flux[start : start + size].decode("utf-8")
 
+    def snapshot_descriptor(depth: int = 0) -> dict[str, Any]:
+        assert depth < 2, "history face projection exceeds this authored two-level profile"
+        kind = flux_u64()
+        assert kind in (1, 2), "every conservative history basis requires a complete source"
+        identity = flux_string()
+        source_identity = flux_string()
+        level = flux_i64()
+        components = flux_i64()
+        assert identity and source_identity and 0 <= level < 2 and components == 1
+        flux_skip(2 * 3 * 8)  # two-dimensional domain and spacing
+        patches = flux_u64()
+        assert patches > 0
+        flux_skip(patches * 2 * 2 * 8)
+        result = {"kind": kind, "identity": identity, "source_identity": source_identity,
+                  "level": level, "components": components}
+        if kind == 2:
+            assert [flux_i64(), flux_i64()] == [2, 2]
+            result["parent"] = snapshot_descriptor(depth + 1)
+            assert result["parent"]["level"] + 1 == level
+        return result
+
     rings: list[dict[str, Any]] = []
     if history_flux:
+        assert flux_u64() == 0x504F5053464C5834
         for _ in range(flux_u64()):
             name = flux_string()
             slots = []
@@ -262,6 +287,7 @@ def _accepted_state_history_flux(payload: bytes) -> tuple[list[dict[str, Any]], 
                     level = flux_i64()
                     flux_i64()  # RHS id
                     flux_skip(8)  # provider
+                    assert flux_string()  # temporal family
                     # point: clock, tick, level/substep/stage, rational, dt/time, three identities
                     flux_string()
                     flux_skip(8 + 3 * 8 + 2 * 8 + 2 * 8)
@@ -276,12 +302,30 @@ def _accepted_state_history_flux(payload: bytes) -> tuple[list[dict[str, Any]], 
                         density_offset = flux_cursor
                         flux_skip(density_count * 8)
                         faces.append((density_count, history_flux[density_offset:flux_cursor]))
+                    assert flux_u64() == 0  # this fixture has no shared-interface providers
+                    snapshot = snapshot_descriptor()
                     bases.append({"identity": identity, "runtime_block": runtime_block,
-                                  "level": level, "faces": faces})
+                                  "level": level, "faces": faces, "snapshot": snapshot})
                 slots.append(bases)
             rings.append({"name": name, "slots": slots})
         assert flux_cursor == len(history_flux), "history-flux parser left trailing bytes"
     return rings, history_flux
+
+
+def _history_face_archive(path: str | Path) -> tuple[bytes, bytes]:
+    with np.load(path, allow_pickle=False) as checkpoint:
+        state = checkpoint["program_history_flux_snapshot_state"]
+        offsets = checkpoint["program_history_flux_snapshot_offsets"]
+        assert state.dtype == np.uint8 and state.ndim == 1 and state.size > 0
+        assert offsets.dtype == np.int64 and offsets.tolist() == [0, state.size]
+        return state.tobytes(), offsets.tobytes()
+
+
+def _require_partial_fine_coverage(runtime: Any) -> None:
+    boxes = [(lower, upper) for level, lower, upper in runtime.patch_boxes() if int(level) == 1]
+    fine_cells = sum(int(np.prod(np.asarray(upper) - np.asarray(lower) + 1))
+                     for lower, upper in boxes)
+    assert 0 < fine_cells < (2 * N) ** 2
 
 
 def _require_reflux_report(runtime: Any, *, require_current_ledger: bool = True) -> None:
@@ -321,11 +365,14 @@ def test_strict_restart_preserves_ab2_history_flux_and_reflux_continuation(
     native_cxx: str,
     isolated_native_cache: Any,
     kokkos_root: Any,
+    record_property: Any,
 ) -> None:
     del isolated_native_cache, kokkos_root
     initial = _blob()
     compiled = _compile(native_cxx)
     uninterrupted = _bind(compiled, initial)
+    initial_boxes = tuple((int(level), tuple(lower), tuple(upper))
+                          for level, lower, upper in uninterrupted.patch_boxes())
     initial_regrids = int(uninterrupted.amr.explain_regrid().regrid_count)
     initial_mass = float(uninterrupted.integral("blk", levels=(0,)))
 
@@ -339,7 +386,9 @@ def test_strict_restart_preserves_ab2_history_flux_and_reflux_continuation(
     assert any(int(row["committed_samples"]) > 0 for row in accepted[0]["consumer_cursors"]["rows"])
     _require_reflux_report(uninterrupted)
 
+    _require_partial_fine_coverage(uninterrupted)
     checkpoint = uninterrupted.checkpoint(tmp_path / "accepted")
+    accepted_archive = _history_face_archive(checkpoint)
     accepted_program_state = _program_accepted_state(checkpoint)
     assert any(payload for _name, payload in accepted_program_state)
     flux_rings, flux_payload = _accepted_state_history_flux(accepted_program_state[0][1])
@@ -356,6 +405,7 @@ def test_strict_restart_preserves_ab2_history_flux_and_reflux_continuation(
 
     roundtrip = restarted.checkpoint(tmp_path / "restored")
     assert _program_accepted_state(roundtrip) == accepted_program_state
+    assert _history_face_archive(roundtrip) == accepted_archive
 
     _advance(
         uninterrupted,
@@ -371,10 +421,23 @@ def test_strict_restart_preserves_ab2_history_flux_and_reflux_continuation(
         tmp_path / "restarted",
     )
     _assert_bit_identical(_capture(uninterrupted), _capture(restarted))
-    _require_reflux_report(uninterrupted, require_current_ledger=False)
-    _require_reflux_report(restarted, require_current_ledger=False)
+    _require_reflux_report(uninterrupted)
+    _require_reflux_report(restarted)
+    _require_partial_fine_coverage(uninterrupted)
+    _require_partial_fine_coverage(restarted)
+    assert _capture(uninterrupted)[0]["patch_boxes"] != initial_boxes
 
+    # Retain final numeric rings, topology, and complete historical face archives even if the
+    # conservation oracle below fails; a green exit alone is not the numerical evidence.
+    final_uninterrupted = uninterrupted.checkpoint(tmp_path / "final_uninterrupted")
+    final_restarted = restarted.checkpoint(tmp_path / "final_restarted")
     uninterrupted_mass = float(uninterrupted.integral("blk", levels=(0,)))
     restarted_mass = float(restarted.integral("blk", levels=(0,)))
+    record_property("ab2_initial_mass", initial_mass)
+    record_property("ab2_uninterrupted_mass", uninterrupted_mass)
+    record_property("ab2_restarted_mass", restarted_mass)
+    record_property("ab2_accepted_checkpoint", str(checkpoint))
+    record_property("ab2_final_uninterrupted_checkpoint", str(final_uninterrupted))
+    record_property("ab2_final_restarted_checkpoint", str(final_restarted))
     assert np.float64(uninterrupted_mass).tobytes() == np.float64(restarted_mass).tobytes()
     assert abs(uninterrupted_mass - initial_mass) < 1.0e-8

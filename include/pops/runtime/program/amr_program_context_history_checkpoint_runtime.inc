@@ -412,6 +412,7 @@ void refresh_accepted_hierarchy_state_(bool prepare_subcycling = true) const {
   requalify_cell_temporal_configuration_();
   if (prepare_subcycling)
     prepare_multiblock_subcycling_engine_();
+  publish_history_flux_snapshots_();
   const auto state = accepted_state_();
   facade_->restore_program_accepted_state(serialize_amr_program_accepted_state(state));
   accepted_state_revision_ = facade_->program_accepted_state_revision();
@@ -804,6 +805,8 @@ void refresh_resources_after_accepted_history_remap_(
   RemappedFluxCandidate remapped = prepare_history_mutation_collectively_(
       [&]() {
         RemappedFluxCandidate staged;
+        std::map<std::pair<std::string, int>, std::shared_ptr<const HistoryFluxSnapshot>>
+            projections;
         std::map<std::string, const AmrProgramHistoryRemapEntry*> plan;
         for (const AmrProgramHistoryRemapEntry& entry : descriptor.history_plan) {
           if (entry.key.empty() || !plan.emplace(entry.key, &entry).second)
@@ -865,7 +868,29 @@ void refresh_resources_after_accepted_history_remap_(
                     "AMR Program aligned state history projection requires equal-clock state "
                     "samples without interface-flux provenance");
             }
-            staged.expressions.emplace(key, parent->second);
+            auto projected_slots = parent->second;
+            for (auto& expression : projected_slots)
+              for (auto& [identity, term] : expression) {
+                (void)identity;
+                if (!term.basis)
+                  throw std::logic_error("AMR parent history projection has no flux basis");
+                auto basis = std::make_shared<FluxBasis>(*term.basis);
+                if (!basis->history_snapshot)
+                  throw std::invalid_argument(
+                      "AMR parent history transfer lacks its authenticated complete face source");
+                const auto projection_key =
+                    std::make_pair(basis->history_snapshot->identity, decoded->first);
+                auto projection = projections.find(projection_key);
+                if (projection == projections.end())
+                  projection =
+                      projections
+                          .emplace(projection_key, project_history_flux_snapshot_(
+                                                       basis->history_snapshot, decoded->first))
+                          .first;
+                basis->history_snapshot = projection->second;
+                term.basis = std::move(basis);
+              }
+            staged.expressions.emplace(key, std::move(projected_slots));
           }
           const auto& slots = staged.expressions.at(key);
           contract.bytes(key).scalar(static_cast<std::uint64_t>(slots.size()));
@@ -916,6 +941,8 @@ void refresh_resources_after_accepted_history_remap_(
   if (active_level_ >= nlev())
     active_level_ = 0;
   static_assert(std::is_nothrow_swappable_v<decltype(history_flux_expressions_)>);
+  prepare_remapped_history_flux_faces_(remapped.expressions);
   history_flux_expressions_.swap(remapped.expressions);
+  publish_history_flux_snapshots_();
   scratches_.clear();
 }

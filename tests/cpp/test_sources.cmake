@@ -234,3 +234,5 @@ set(POPS_CPP_TEST_SOURCE_test_collective_step_rejection "tests/cpp/unit/runtime/
 set(POPS_CPP_TEST_SOURCE_test_mpi_amr_spatial_norm "tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp")
 
 set(POPS_CPP_TEST_SOURCE_test_mpi_exchange_batches "tests/cpp/integration/mpi/test_mpi_exchange_batches.cpp")
+
+set(POPS_CPP_TEST_SOURCE_test_amr_history_flux_snapshot "tests/cpp/unit/runtime/test_amr_history_flux_snapshot.cpp")

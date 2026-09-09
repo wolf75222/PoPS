@@ -17,6 +17,7 @@ from pops.amr import (
     AMRTagging,
     AMRTransfer,
     Buffer,
+    Coarsen,
     ConflictPolicy,
     EqualityPolicy,
     Hysteresis,
@@ -248,6 +249,7 @@ def resolve_periodic_field_program(
     patch_layout: PatchLayout | None = None,
     clustering: Any = None,
     refine_threshold: float = 0.5,
+    coarsen_below_threshold: bool = False,
 ) -> Any:
     """Return the exact public resolved plan consumed by one native integration compile."""
     if target not in {"system", "amr_system"}:
@@ -340,11 +342,12 @@ def resolve_periodic_field_program(
         transfer.state(state_instance, StateTransfer())
         if field_instance is not None:
             transfer.field(field_instance, EllipticRecompute())
+        tagging_rules = [Tag(ValueExpr(state_instance) > case.value(threshold))]
+        if coarsen_below_threshold:
+            tagging_rules.append(Coarsen(ValueExpr(state_instance) < case.value(threshold)))
+        tagging_rules.append(Buffer(cells=1))
         tagging = AMRTagging(
-            rules=(
-                Tag(ValueExpr(state_instance) > case.value(threshold)),
-                Buffer(cells=1),
-            ),
+            rules=tuple(tagging_rules),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,
         )

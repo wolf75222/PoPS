@@ -93,8 +93,9 @@ void prepare_cell_temporal_flux_basis_(int runtime_block, const level_evaluation
                                  {active_level_, active_subcycling_window_.end.macro_step,
                                   active_subcycling_window_.begin.phase + span * local_end,
                                   current_interval_start_time_ + local_end.value() * current_dt_}});
-    temporal_family = std::string("pops.cell-temporal-flux.v1/") +
-                      active_block_identities_.at(static_cast<std::size_t>(runtime_block));
+    temporal_family =
+        std::string("pops.cell-temporal-flux.v1/") +
+        std::string(active_block_identities_.at(static_cast<std::size_t>(runtime_block)));
   } catch (...) {
     local_error = std::current_exception();
   }
@@ -348,12 +349,23 @@ void prepare_active_flux_basis_impl_(
   }
 
   const std::uint64_t identity = candidate_identity + 1;
+  auto history_snapshot = capture_history_flux_snapshot_(
+      block, identity, point, rhs_identity, provider, topology_epoch, materialization_generation,
+      rhs, evaluation, exact_face_fluxes, named_cell_fluxes);
   std::optional<FluxExpression> prepared_expression;
   std::exception_ptr expression_error;
   try {
-    auto basis = std::make_shared<const FluxBasis>(
-        FluxBasis{identity, block, active_level_, point, rhs_identity, provider,
-                  std::move(resolved_temporal_family), interval, std::move(faces)});
+    FluxBasis captured{identity,
+                       block,
+                       active_level_,
+                       point,
+                       rhs_identity,
+                       provider,
+                       std::move(resolved_temporal_family),
+                       interval,
+                       std::move(faces)};
+    captured.history_snapshot = std::move(history_snapshot);
+    auto basis = std::make_shared<const FluxBasis>(std::move(captured));
     FluxExpression expression;
     expression.emplace(identity, FluxExpressionTerm{std::move(basis), {{0, {1, 1}}}});
     require_flux_expression_budget_(expression);

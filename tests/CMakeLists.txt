@@ -418,6 +418,7 @@ if(Python3_Interpreter_FOUND)
 endif()
 
 set(POPS_CPP_STANDARD_TESTS
+  test_amr_history_flux_snapshot
   test_analytic_expression
   test_analytic_level_set
   test_exact_aux_registry_nd

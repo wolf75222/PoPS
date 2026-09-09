@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pops/runtime/program/accepted_exchange.hpp>
+#include <pops/runtime/program/amr_history_flux_snapshot.hpp>
 #include <limits>
 
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
@@ -1076,6 +1077,21 @@ class AmrSystem {
   /// from the dense field/history arrays: it preserves exact level clocks, qualified history-slot
   /// identities and lagged effective-flux publications required for conservative multistep restart.
   POPS_EXPORT std::vector<std::uint8_t> program_accepted_state() const;
+  using ProgramHistoryFluxSnapshot = runtime::program::history_flux::Snapshot<Dim>;
+  using ProgramHistoryFluxSnapshots =
+      std::map<std::string, std::shared_ptr<const ProgramHistoryFluxSnapshot>>;
+  /// Immutable, rank-local physical history samples. These noncollective accessors never gather
+  /// full face fields during a Program step or accepted-state inspection.
+  POPS_EXPORT const ProgramHistoryFluxSnapshots& program_history_flux_snapshots() const;
+  POPS_EXPORT void publish_program_history_flux_snapshots(ProgramHistoryFluxSnapshots snapshots);
+  POPS_EXPORT std::vector<std::uint8_t> program_history_flux_snapshot_shard() const;
+  /// Explicit checkpoint-only compaction; never communicates or mutates the live owned archive.
+  POPS_EXPORT std::vector<std::uint8_t> canonical_program_history_flux_snapshots(
+      const std::vector<std::vector<std::uint8_t>>& shards, int source_rank_count) const;
+  POPS_EXPORT std::size_t checkpoint_program_history_flux_snapshot_capacity() const;
+  /// Called only inside the explicit checkpoint restart transaction, before either context import.
+  POPS_EXPORT void restore_program_history_flux_snapshots(
+      const std::vector<std::vector<std::uint8_t>>& shards, int source_rank_count);
   /// Artifact-authenticated upper bounds for the complete POPSAND4 image and its fixed-size
   /// source-rematerialization digest. The bound covers every configured hierarchy level, temporal
   /// execution, history slot, tagging cell and accepted flux publication.

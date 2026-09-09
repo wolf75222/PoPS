@@ -27,4 +27,7 @@ struct FluxBasis {
   ::pops::amr::ClockWindow window{};
   std::vector<FluxBasisFace> faces;
   std::vector<std::shared_ptr<const runtime::multiblock::InterfaceFluxSample>> shared_samples;
+  // Complete raw source samples remain distributed. Projected nodes are internal conservative
+  // history transport, never evaluated physical fluxes or public whole-face exchange evidence.
+  std::shared_ptr<const history_flux::Snapshot<Dim>> history_snapshot;
 };

@@ -259,12 +259,13 @@ std::pair<FluxExpression, std::uint64_t> rehydrated_history_flux_expression_(
         basis.window.begin.physical_time + basis.point.stage_fraction.value() * current_dt_;
     for (const auto& sample : basis.shared_samples) {
       if (!sample || sample->level != active_level_)
-        throw std::invalid_argument("retained shared flux sample cannot be projected across levels");
+        throw std::invalid_argument(
+            "retained shared flux sample cannot be projected across levels");
       facade_->authenticate_prepared_amr_interface_sample(*sample);
     }
-    // A retained sample can outlive an accepted regrid.  Its numerical history is prolonged by
-    // the native rematerialization transaction, while a new or moved interface receives an exact
-    // zero-mismatch stage.  Unchanged faces retain their authenticated density byte-for-byte.
+    // Accepted regrid preparation has already queried the immutable physical archive for the new
+    // interface geometry. A lag read only rebases clocks/identities; it performs no payload MPI.
+    // Legacy interface-only checkpoints remain usable while every requested face is certified.
     const std::vector<FluxBasisFace>* current_faces = nullptr;
     for (const auto& [field, expression] : current) {
       (void)field;
@@ -285,11 +286,9 @@ std::pair<FluxExpression, std::uint64_t> rehydrated_history_flux_expression_(
             });
         if (historical != basis.faces.end())
           rebound_faces.push_back(*historical);
-        else {
-          FluxBasisFace zero = current_face;
-          std::fill(zero.flux_density.begin(), zero.flux_density.end(), Real(0));
-          rebound_faces.push_back(std::move(zero));
-        }
+        else
+          throw std::invalid_argument(
+              "AMR moved history interface lacks its authenticated physical face archive");
       }
       basis.faces = std::move(rebound_faces);
     }
@@ -328,8 +327,16 @@ std::vector<std::uint8_t> serialize_history_flux_payload_() const {
       });
   if (!any_expression)
     return {};
+  const bool snapshots = std::any_of(
+      history_flux_expressions_.begin(), history_flux_expressions_.end(), [](const auto& ring) {
+        return std::any_of(ring.second.begin(), ring.second.end(), [](const auto& expression) {
+          return std::any_of(expression.begin(), expression.end(), [](const auto& term) {
+            return term.second.basis && term.second.basis->history_snapshot;
+          });
+        });
+      });
   checkpoint_detail::Writer out;
-  out.u64(UINT64_C(0x504f5053464c5833));  // POPSFLX3: typed temporal families are explicit.
+  out.u64(snapshots ? UINT64_C(0x504f5053464c5834) : UINT64_C(0x504f5053464c5833));
   out.size(history_flux_expressions_.size());
   for (const auto& [key, slots] : history_flux_expressions_) {
     out.string(key);
@@ -388,6 +395,9 @@ std::vector<std::uint8_t> serialize_history_flux_payload_() const {
             throw std::logic_error("history shared flux sample is absent");
           write_shared_flux_sample_(out, *sample);
         }
+        if (snapshots)
+          history_flux::write_descriptor(out, basis.history_snapshot,
+                                         facade_->configured_n_levels());
       }
     }
   }
@@ -416,7 +426,8 @@ std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_
   checkpoint_detail::Reader in(bytes);
   const std::uint64_t version = in.u64();
   const bool legacy = version == UINT64_C(0x504f5053464c5832);
-  if (!legacy && version != UINT64_C(0x504f5053464c5833))
+  const bool snapshots = version == UINT64_C(0x504f5053464c5834);
+  if (!legacy && !snapshots && version != UINT64_C(0x504f5053464c5833))
     throw std::invalid_argument("history flux checkpoint lacks explicit shared-sample format");
   constexpr std::size_t coefficient_record_bytes = 3 * checkpoint_detail::kEncodedScalarBytes;
   constexpr std::size_t face_record_bytes =
@@ -528,9 +539,13 @@ std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_
           auto sample = read_shared_flux_sample_(in, basis.runtime_block);
           if (sample->level != basis.level ||
               !shared_identities.insert(shared_flux_source_identity_(*sample)).second)
-            throw std::invalid_argument("history basis repeats or misplaces a shared source sample");
+            throw std::invalid_argument(
+                "history basis repeats or misplaces a shared source sample");
           basis.shared_samples.push_back(std::move(sample));
         }
+        if (snapshots)
+          basis.history_snapshot = history_flux::read_descriptor(
+              in, facade_->program_history_flux_snapshots(), facade_->configured_n_levels());
         // A completely covered level legitimately has no coarse--fine faces.  Archive bytes alone
         // cannot establish that an empty vector is meaningful, so admit it only when the rebuilt,
         // authenticated hierarchy proves that neither adjacent transition exposes an interface for

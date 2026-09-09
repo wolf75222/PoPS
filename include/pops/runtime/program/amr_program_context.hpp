@@ -20,6 +20,7 @@
 #include <pops/runtime/builders/compiled/generated_amr_system_block.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
+#include <pops/runtime/program/amr_history_flux_snapshot_codec.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/prepared_amr_spatial_residual.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
@@ -303,6 +304,7 @@ class AmrProgramContext {
 #include <pops/runtime/program/amr_program_context_cell_temporal_level_runtime.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_definitions.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_services.inc>
+#include <pops/runtime/program/amr_program_context_history_flux_snapshots.inc>
 #include <pops/runtime/program/amr_program_context_cell_temporal_runtime.inc>
 #include <pops/runtime/program/amr_program_context_subcycling_runtime.inc>
 #include <pops/runtime/program/amr_program_context_flux_family.inc>

@@ -2,6 +2,7 @@
 /// @brief Exact compile-time-ranked AMR facade over runtime::amr::AmrRuntime<Dim>.
 
 #include <pops/runtime/amr_system.hpp>
+#include <pops/runtime/program/amr_history_flux_snapshot_codec.hpp>
 
 #include <pops/amr/hierarchy/amr_hierarchy.hpp>
 #include <pops/amr/tagging/berger_rigoutsos.hpp>
@@ -516,6 +517,53 @@ inline std::size_t checked_size_product(std::size_t left, std::size_t right,
   if (right != 0 && left > std::numeric_limits<std::size_t>::max() / right)
     throw std::length_error(operation);
   return left * right;
+}
+
+struct HistoryFluxCheckpointCapacity {
+  std::size_t shard = 0;
+  std::size_t descriptor = 0;
+};
+
+template <int Dim>
+HistoryFluxCheckpointCapacity history_flux_checkpoint_capacity(
+    const std::vector<std::size_t>& level_cells, std::size_t history_depth, std::size_t rhs_basis,
+    std::size_t components) {
+  constexpr auto failure = "AMR history face archive capacity exceeds size_t";
+  const auto add = [&](std::size_t a, std::size_t b) { return checked_size_sum(a, b, failure); };
+  const auto mul = [&](std::size_t a, std::size_t b) {
+    return checked_size_product(a, b, failure);
+  };
+  constexpr std::size_t wire = sizeof(std::uint64_t);
+  constexpr std::size_t source_characters =
+      std::string_view("pops.amr.history-face-source-point.v1:sha256:").size() + 64;
+  constexpr std::size_t raw_characters =
+      std::string_view("pops.amr.history-physical-face-snapshot.v1:sha256:").size() + 64;
+  constexpr std::size_t projection_characters =
+      std::string_view("pops.amr.history-face-projection.v1:sha256:").size() + 64;
+  // Every cell may be a separate patch, and one rank may own them all. A one-cell patch has
+  // exactly two samples per axis/component. Counts below follow the codec's eight-byte primitives.
+  const std::size_t patch_bytes = mul(add(3 * Dim + 2, mul(2 * Dim, components)), wire);
+  const std::size_t raw_fixed = add((9 + 3 * Dim) * wire, add(raw_characters, source_characters));
+  const std::size_t copies_per_level = mul(history_depth, rhs_basis);
+  HistoryFluxCheckpointCapacity result;
+  if (copies_per_level != 0)
+    result.shard = 2 * wire;  // POPSHFX1 and raw-source count.
+  for (std::size_t level = 0; level < level_cells.size(); ++level) {
+    const std::size_t cells = level_cells[level];
+    // A raw leaf can outlive its producer ring through a projected history on any finer level.
+    // Count all possible target rings, rather than assuming source and target rotations coincide.
+    const auto source_copies = mul(copies_per_level, level_cells.size() - level);
+    result.shard =
+        add(result.shard, mul(source_copies, add(raw_fixed, mul(cells, patch_bytes))));
+    // Every ancestor contributes metadata. This includes a source-identity bound even for
+    // projection nodes whose producer leaves it empty, and a ratio on the terminal raw node.
+    const std::size_t node =
+        add((6 + 4 * Dim) * wire,
+            add(add(std::max(raw_characters, projection_characters), source_characters),
+                mul(cells, 2 * Dim * wire)));
+    result.descriptor = add(result.descriptor, node);
+  }
+  return result;
 }
 
 template <int Dim>
@@ -3445,6 +3493,8 @@ struct AmrSystem<Dim>::Impl {
   mutable std::vector<std::uint8_t> program_accepted_bytes;
   mutable std::uint64_t program_accepted_revision = 0;
   mutable bool program_accepted_bytes_runtime_owned = false;
+  ProgramHistoryFluxSnapshots program_history_flux_snapshots;
+  mutable std::optional<std::size_t> checkpoint_history_flux_snapshot_capacity;
   /// Frozen, communicator-authenticated POPSAND6/source-authority resource ceiling.  Python reads
   /// it while bind is still assembling; mark_bound recomputes the exact contract and refuses any
   /// intervening structural mutation before the lifecycle becomes immutable.
@@ -3483,6 +3533,8 @@ struct AmrSystem<Dim>::Impl {
     std::vector<std::uint8_t> program_accepted_bytes;
     std::uint64_t program_accepted_revision = 0;
     bool program_accepted_bytes_runtime_owned = false;
+    ProgramHistoryFluxSnapshots program_history_flux_snapshots;
+    std::optional<std::size_t> checkpoint_history_flux_snapshot_capacity;
     std::map<std::string, std::vector<field_type>> field_potentials;
     std::set<std::string> field_plan_slots;
     std::vector<std::string> dirty_auxiliary_providers;
@@ -3516,6 +3568,9 @@ struct AmrSystem<Dim>::Impl {
           program_accepted_bytes(owner.program_accepted_bytes),
           program_accepted_revision(owner.program_accepted_revision),
           program_accepted_bytes_runtime_owned(owner.program_accepted_bytes_runtime_owned),
+          program_history_flux_snapshots(owner.program_history_flux_snapshots),
+          checkpoint_history_flux_snapshot_capacity(
+              owner.checkpoint_history_flux_snapshot_capacity),
           dirty_auxiliary_providers(owner.dirty_auxiliary_providers),
           last_topology_rematerialization_epoch(owner.last_topology_rematerialization_epoch),
           last_topology_rematerialization_generation(
@@ -3561,6 +3616,8 @@ struct AmrSystem<Dim>::Impl {
       std::vector<std::uint8_t> program_accepted_bytes;
       std::uint64_t program_accepted_revision = 0;
       bool program_accepted_bytes_runtime_owned = false;
+      ProgramHistoryFluxSnapshots program_history_flux_snapshots;
+      std::optional<std::size_t> checkpoint_history_flux_snapshot_capacity;
       std::shared_ptr<const provider_snapshot_type> pending_provider_restore;
       std::shared_ptr<const provider_registry_snapshot_type> pending_provider_registry_restore;
       std::vector<PreparedFieldRestore> fields;
@@ -3591,6 +3648,9 @@ struct AmrSystem<Dim>::Impl {
             program_accepted_bytes(snapshot.program_accepted_bytes),
             program_accepted_revision(snapshot.program_accepted_revision),
             program_accepted_bytes_runtime_owned(snapshot.program_accepted_bytes_runtime_owned),
+            program_history_flux_snapshots(snapshot.program_history_flux_snapshots),
+            checkpoint_history_flux_snapshot_capacity(
+                snapshot.checkpoint_history_flux_snapshot_capacity),
             pending_provider_restore(snapshot.provider_storage),
             pending_provider_registry_restore(snapshot.provider_registries),
             dirty_auxiliary_providers(snapshot.dirty_auxiliary_providers),
@@ -3682,6 +3742,7 @@ struct AmrSystem<Dim>::Impl {
       static_assert(std::is_nothrow_swappable_v<decltype(owner.temporal_relations)>);
       static_assert(std::is_nothrow_swappable_v<decltype(owner.last_replay_regrid_steps)>);
       static_assert(std::is_nothrow_swappable_v<decltype(owner.program_accepted_bytes)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(owner.program_history_flux_snapshots)>);
       static_assert(std::is_nothrow_swappable_v<decltype(owner.tagging_state)>);
       static_assert(std::is_nothrow_swappable_v<decltype(owner.bootstrap_materialized_actions)>);
       static_assert(std::is_nothrow_swappable_v<decltype(owner.pending_provider_restore)>);
@@ -3717,6 +3778,9 @@ struct AmrSystem<Dim>::Impl {
       owner.checkpoint_regrid_count_value = prepared.checkpoint_regrid_count_value;
       owner.last_replay_regrid_steps.swap(prepared.last_replay_regrid_steps);
       owner.program_accepted_bytes.swap(prepared.program_accepted_bytes);
+      owner.program_history_flux_snapshots.swap(prepared.program_history_flux_snapshots);
+      owner.checkpoint_history_flux_snapshot_capacity =
+          prepared.checkpoint_history_flux_snapshot_capacity;
       owner.program_accepted_revision = prepared.program_accepted_revision;
       owner.program_accepted_bytes_runtime_owned = prepared.program_accepted_bytes_runtime_owned;
       owner.pending_provider_restore.swap(prepared.pending_provider_restore);
@@ -4777,6 +4841,105 @@ struct AmrSystem<Dim>::Impl {
     if (bytes > checkpoint_program_state_capacity_value->first)
       throw std::length_error(std::string(operation) +
                               " exceeds its artifact-authenticated Program byte capacity");
+  }
+
+  HistoryFluxCheckpointCapacity derived_history_flux_checkpoint_capacity() const {
+    if (cfg.level_count <= 0 ||
+        cfg.transition_ratios.size() + 1 != static_cast<std::size_t>(cfg.level_count))
+      throw std::logic_error("AMR history face archive lacks its configured level domains");
+    std::map<std::string, int> depths;
+    if (program.artifact_backed_) {
+      for (const auto& history : program.checkpoint_metadata_.histories)
+        if (!depths.emplace(history.name, history.depth).second)
+          throw std::logic_error("AMR history face archive repeats an authored history");
+    } else {
+      // Direct native contexts declare the same logical ring once per materialized level. Count
+      // logical names only, then extend their declared depths over all configured levels.
+      for (const auto& [key, depth] : program.hist_.depth) {
+        const auto qualified = decode_exact_amr_history_key(key);
+        const auto& name = qualified ? qualified->second : key;
+        auto [entry, inserted] = depths.emplace(name, depth);
+        if (!inserted && entry->second != depth)
+          throw std::logic_error("AMR native history face archive has inconsistent logical depths");
+      }
+    }
+    std::size_t history_depth = 0;
+    for (const auto& [name, depth] : depths) {
+      (void)name;
+      if (depth <= 0)
+        throw std::logic_error("AMR history face archive requires declared positive ring depths");
+      history_depth = checked_size_sum(history_depth, static_cast<std::size_t>(depth),
+                                       "AMR history face archive depth exceeds size_t");
+    }
+    std::vector<std::size_t> level_cells;
+    Box<Dim> domain = cfg.index_domain();
+    for (int level = 0; level < cfg.level_count; ++level) {
+      if (level != 0)
+        domain =
+            amr::hierarchy::refine_box(domain, refinement_ratio(cfg.transition_ratios[level - 1]));
+      level_cells.push_back(checked_cells(domain));
+    }
+    std::size_t rhs_basis = 0, components = 1;
+    if (history_depth != 0) {
+      const auto& expression = require_prepared_program_flux_expression_budget();
+      for (std::size_t block = 0; block < expression.blocks.size(); ++block) {
+        rhs_basis = checked_size_sum(rhs_basis, expression.blocks[block].rhs_basis_bound,
+                                     "AMR history face archive basis exceeds size_t");
+        const auto native = expression.program_block_map.canonical_indices.at(block);
+        components = std::max(components, static_cast<std::size_t>(blocks.at(native).ncomp));
+      }
+    }
+    return history_flux_checkpoint_capacity<Dim>(level_cells, history_depth, rhs_basis, components);
+  }
+
+  std::size_t validate_history_flux_snapshot_map(const ProgramHistoryFluxSnapshots& snapshots,
+                                                 int ranks, int rank) const {
+    if (snapshots.empty())
+      return 0;
+    runtime::program::checkpoint_detail::CountingWriter out;
+    out.u64(0);
+    out.size(snapshots.size());
+    constexpr std::string_view source_prefix = "pops.amr.history-face-source-point.v1:sha256:";
+    constexpr std::string_view raw_prefix = "pops.amr.history-physical-face-snapshot.v1:sha256:";
+    std::size_t maximum_components = 1;
+    for (const auto& block : blocks)
+      maximum_components = std::max(maximum_components, static_cast<std::size_t>(block.ncomp));
+    for (const auto& [token, snapshot] : snapshots) {
+      if (!snapshot || snapshot->parent || snapshot->identity != token ||
+          !token.starts_with(raw_prefix) || token.size() != raw_prefix.size() + 64 ||
+          !snapshot->source_identity.starts_with(source_prefix) ||
+          snapshot->source_identity.size() != source_prefix.size() + 64 ||
+          snapshot->rank_count != ranks || snapshot->local_rank != rank || snapshot->level < 0 ||
+          snapshot->level >= cfg.level_count || snapshot->components <= 0 ||
+          static_cast<std::size_t>(snapshot->components) > maximum_components)
+        throw std::invalid_argument(
+            "AMR history face archive differs from its native source authority");
+      Box<Dim> domain = cfg.index_domain();
+      for (int level = 0; level < snapshot->level; ++level)
+        domain = amr::hierarchy::refine_box(domain, refinement_ratio(cfg.transition_ratios[level]));
+      if (snapshot->domain.lo != domain.lo || snapshot->domain.hi != domain.hi)
+        throw std::invalid_argument("AMR history face archive has a foreign configured domain");
+      const auto geometry = Geometry<Dim>::from_bounds(domain, cfg.lower, cfg.upper);
+      for (int axis = 0; axis < Dim; ++axis)
+        if (snapshot->cell_size[axis] != static_cast<double>(geometry.spacing(axis)))
+          throw std::invalid_argument("AMR history face archive has a foreign configured metric");
+      runtime::program::history_flux::validate_snapshot(*snapshot, cfg.level_count);
+      out.string(token);
+      runtime::program::history_flux::write_physical_metadata(out, *snapshot);
+      out.i32(ranks);
+      out.i32(rank);
+      out.size(snapshot->owners.size());
+      out.repeated_bytes(snapshot->owners.size(), sizeof(std::uint64_t));
+      out.size(snapshot->owned.size());
+      for (const auto& patch : snapshot->owned) {
+        out.u64(patch.global_patch);
+        for (const auto& axis : patch.density) {
+          out.size(axis.size());
+          out.repeated_bytes(axis.size(), sizeof(double));
+        }
+      }
+    }
+    return out.count();
   }
 
   void require_program_source_authority_capacity(std::size_t bytes,
@@ -12393,9 +12556,11 @@ void AmrSystem<Dim>::install_prepared_amr_interface_flux_provider(
   const ExecutionLane& lane = p_->multiblock_hierarchy->lane();
   std::unique_ptr<runtime::program::AcceptedProgramContextSnapshot> accepted_context;
   std::vector<std::uint8_t> accepted_bytes;
+  ProgramHistoryFluxSnapshots accepted_history_flux_snapshots;
   std::string accepted_capacity_contract;
   std::function<void()> refresh_accepted;
   const auto accepted_capacity = p_->checkpoint_program_state_capacity_value;
+  const auto accepted_history_flux_capacity = p_->checkpoint_history_flux_snapshot_capacity;
   const bool accepted_provisional = p_->checkpoint_program_state_capacity_provisional;
   const auto accepted_revision = p_->program_accepted_revision;
   const bool accepted_runtime_owned = p_->program_accepted_bytes_runtime_owned;
@@ -12406,6 +12571,7 @@ void AmrSystem<Dim>::install_prepared_amr_interface_flux_provider(
     if (p_->program_flux_expression_budget) {
       accepted_context = p_->program.capture_accepted_context_snapshot("AMR interface publication");
       accepted_bytes = p_->program_accepted_bytes;
+      accepted_history_flux_snapshots = p_->program_history_flux_snapshots;
       accepted_capacity_contract = p_->checkpoint_program_state_capacity_contract;
       refresh_accepted = [this]() {
         // The new prefix determines the exact configured capacity. Prepare it from the new
@@ -12434,9 +12600,11 @@ void AmrSystem<Dim>::install_prepared_amr_interface_flux_provider(
       if (accepted_context)
         accepted_context->publish_restore();
       p_->program_accepted_bytes.swap(accepted_bytes);
+      p_->program_history_flux_snapshots.swap(accepted_history_flux_snapshots);
       p_->program_accepted_revision = accepted_revision;
       p_->program_accepted_bytes_runtime_owned = accepted_runtime_owned;
       p_->checkpoint_program_state_capacity_value = accepted_capacity;
+      p_->checkpoint_history_flux_snapshot_capacity = accepted_history_flux_capacity;
       p_->checkpoint_program_state_capacity_contract.swap(accepted_capacity_contract);
       p_->checkpoint_program_state_capacity_provisional = accepted_provisional;
     }
@@ -17342,6 +17510,20 @@ void AmrSystem<Dim>::begin_restart_transaction() {
     throw std::logic_error(
         "AmrSystem restart transaction cannot overlap another restart or step transaction");
 
+  std::exception_ptr history_capacity_error;
+  try {
+    if (!p_->checkpoint_history_flux_snapshot_capacity &&
+        (!p_->program.checkpoint_metadata_.histories.empty() || !p_->program.hist_.depth.empty()))
+      (void)checkpoint_program_history_flux_snapshot_capacity();
+  } catch (...) {
+    history_capacity_error = std::current_exception();
+  }
+  if (all_reduce_max(history_capacity_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && history_capacity_error)
+      std::rethrow_exception(history_capacity_error);
+    throw std::runtime_error("AMR history face restart capacity failed collectively");
+  }
+
   // Freeze one complete all-provider warm-start image before any restart mutation.  The detached
   // materializations are prepared collectively and published as one no-throw cache transaction,
   // so rollback never depends on a same-epoch live solver surviving a topology publication.
@@ -19645,6 +19827,111 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
 }
 
 template <int Dim>
+const typename AmrSystem<Dim>::ProgramHistoryFluxSnapshots&
+AmrSystem<Dim>::program_history_flux_snapshots() const {
+  return p_->program_history_flux_snapshots;
+}
+
+template <int Dim>
+std::size_t AmrSystem<Dim>::checkpoint_program_history_flux_snapshot_capacity() const {
+  if (p_->checkpoint_history_flux_snapshot_capacity)
+    return *p_->checkpoint_history_flux_snapshot_capacity;
+  if (p_->restart_transaction)
+    throw std::logic_error("AMR history face restore lacks its pre-restart capacity seal");
+  const auto candidate = p_->derived_history_flux_checkpoint_capacity();
+  // This bound comes only from configured domains and declared history/expression metadata.
+  // It never observes the size, payload, or source-rank count of an incoming checkpoint.
+  p_->checkpoint_history_flux_snapshot_capacity = candidate.shard;
+  return candidate.shard;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::publish_program_history_flux_snapshots(ProgramHistoryFluxSnapshots snapshots) {
+  if (snapshots.empty()) {
+    p_->program_history_flux_snapshots.clear();
+    return;
+  }
+  if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
+    throw std::logic_error("AMR history face publication requires its already prepared lane");
+  const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
+  const std::size_t bytes =
+      p_->validate_history_flux_snapshot_map(snapshots, lane.size(), lane.rank());
+  const std::size_t capacity = checkpoint_program_history_flux_snapshot_capacity();
+  if (bytes > capacity)
+    throw std::length_error(
+        "AMR history face publication exceeds its metadata-sealed shard capacity");
+  p_->program_history_flux_snapshots.swap(snapshots);
+}
+
+template <int Dim>
+std::vector<std::uint8_t> AmrSystem<Dim>::program_history_flux_snapshot_shard() const {
+  if (p_->program_history_flux_snapshots.empty())
+    return {};
+  if (!p_->checkpoint_history_flux_snapshot_capacity)
+    throw std::logic_error("AMR history face export lacks its metadata-sealed shard capacity");
+  auto result = runtime::program::history_flux::encode_shard<Dim>(
+      p_->program_history_flux_snapshots, p_->cfg.level_count);
+  if (result.size() > *p_->checkpoint_history_flux_snapshot_capacity)
+    throw std::length_error("AMR history face export exceeds its metadata-sealed shard capacity");
+  return result;
+}
+
+template <int Dim>
+std::vector<std::uint8_t> AmrSystem<Dim>::canonical_program_history_flux_snapshots(
+    const std::vector<std::vector<std::uint8_t>>& shards, int source_rank_count) const {
+  if (!p_->checkpoint_history_flux_snapshot_capacity)
+    throw std::logic_error("AMR history face compaction lacks its metadata-sealed shard capacity");
+  const std::size_t capacity = *p_->checkpoint_history_flux_snapshot_capacity;
+  const auto canonical = runtime::program::history_flux::decode_shards<Dim>(
+      shards, source_rank_count, 1, 0, p_->cfg.level_count, capacity);
+  if (p_->validate_history_flux_snapshot_map(canonical, 1, 0) > capacity)
+    throw std::length_error("AMR canonical history face archive exceeds its metadata capacity");
+  auto result = runtime::program::history_flux::encode_shard<Dim>(canonical, p_->cfg.level_count);
+  if (result.size() > capacity)
+    throw std::length_error("AMR canonical history face image exceeds its metadata capacity");
+  return result;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::restore_program_history_flux_snapshots(
+    const std::vector<std::vector<std::uint8_t>>& shards, int source_rank_count) {
+  const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR history face restore");
+  ProgramHistoryFluxSnapshots candidate;
+  std::string request_contract;
+  std::exception_ptr local_error;
+  try {
+    if (!p_->restart_transaction || p_->restart_transaction_committed)
+      throw std::logic_error("AMR history face restore requires an active restart transaction");
+    const bool absent =
+        std::all_of(shards.begin(), shards.end(), [](const auto& row) { return row.empty(); });
+    if (!absent && !p_->checkpoint_history_flux_snapshot_capacity)
+      throw std::logic_error("AMR history face restore lacks its pre-restart metadata capacity");
+    const std::size_t capacity = p_->checkpoint_history_flux_snapshot_capacity.value_or(0);
+    candidate = runtime::program::history_flux::decode_shards<Dim>(
+        shards, source_rank_count, lane.size(), lane.rank(), p_->cfg.level_count, capacity);
+    if (p_->validate_history_flux_snapshot_map(candidate, lane.size(), lane.rank()) > capacity)
+      throw std::length_error("AMR restored history face shard exceeds its metadata capacity");
+    ExactContractBuilder exact;
+    exact.text("pops.amr.history-face-restore.v1").scalar(std::int32_t{source_rank_count});
+    for (const auto& shard : shards)
+      exact.text(identity::sha256_hex(shard));
+    request_contract = std::move(exact).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR history face archive restore failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-history-face-restore"), std::string_view(request_contract)}},
+          lane))
+    throw std::invalid_argument("AMR history face restore sources differ between prepared ranks");
+  p_->program_history_flux_snapshots.swap(candidate);
+}
+
+template <int Dim>
 std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_capacity_(
     const std::vector<std::uint8_t>* interface_candidate) const {
   if (interface_candidate) {
@@ -19658,6 +19945,7 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
         "AMR Program checkpoint capacity requires its already prepared hierarchy lane");
   const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
   std::optional<std::pair<std::size_t, std::size_t>> candidate;
+  std::size_t candidate_history_flux_capacity = 0;
   std::string candidate_contract;
   std::exception_ptr local_error;
   try {
@@ -19981,7 +20269,17 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
                                                "AMR shared density capacity exceeds size_t"),
                          "AMR shared history capacity exceeds size_t"),
         "AMR shared history capacity exceeds size_t");
-    const std::size_t history_flux_basis = checked_size_sum(
+    std::size_t history_depth = 0;
+    for (const auto& history : shape.histories) {
+      if (history.depth <= 0)
+        throw std::logic_error("AMR history face archive has a nonpositive authored depth");
+      history_depth = checked_size_sum(history_depth, static_cast<std::size_t>(history.depth),
+                                       "AMR history face archive depth exceeds size_t");
+    }
+    const auto history_archive = history_flux_checkpoint_capacity<Dim>(
+        level_cells, history_depth, rhs_basis, maximum_components);
+    candidate_history_flux_capacity = history_archive.shard;
+    const std::size_t history_flux_basis_without_snapshot = checked_size_sum(
         checked_size_sum(2 * sizeof(std::uint64_t), shared_samples_bytes,
                          "AMR history shared basis capacity exceeds size_t"),
         checked_size_sum(
@@ -19992,7 +20290,10 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
                              "AMR history-flux basis capacity exceeds size_t"),
             "AMR history-flux basis capacity exceeds size_t"),
         "AMR history-flux basis capacity exceeds size_t");
-    shape.history_flux_payload_bytes = 2 * sizeof(std::uint64_t);  // POPSFLX3 tag and ring count
+    const std::size_t history_flux_basis =
+        checked_size_sum(history_flux_basis_without_snapshot, history_archive.descriptor,
+                         "AMR FLX4 history descriptor lineage capacity exceeds size_t");
+    shape.history_flux_payload_bytes = 2 * sizeof(std::uint64_t);  // POPSFLX4 tag and ring count
     constexpr std::string_view history_key_prefix = "pops.amr.level-history.v1/";
     for (const auto& history : shape.histories) {
       const std::string history_length = std::to_string(history.name.size());
@@ -20088,6 +20389,7 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
         .scalar(static_cast<std::uint64_t>(configured_levels))
         .scalar(static_cast<std::uint64_t>(accepted))
         .scalar(static_cast<std::uint64_t>(source_authority_bytes))
+        .scalar(static_cast<std::uint64_t>(candidate_history_flux_capacity))
         .sequence(
             metadata.logical_clock_identities,
             [](ExactContractBuilder& row, const std::string& identity) { row.text(identity); })
@@ -20134,16 +20436,19 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
     // Normal restores keep the existing ceiling; the final resource/bind read seals its contract.
     if (p_->checkpoint_program_state_capacity_value && p_->cfg.explicit_bootstrap &&
         (p_->bootstrap_transaction || p_->automatic_bootstrap_complete) &&
-        *p_->checkpoint_program_state_capacity_value != *candidate)
+        (*p_->checkpoint_program_state_capacity_value != *candidate ||
+         p_->checkpoint_history_flux_snapshot_capacity != candidate_history_flux_capacity))
       throw std::logic_error(
           "AMR interface checkpoint byte capacity changed after bootstrap began");
     p_->checkpoint_program_state_capacity_value = candidate;
+    p_->checkpoint_history_flux_snapshot_capacity = candidate_history_flux_capacity;
     p_->checkpoint_program_state_capacity_contract.swap(candidate_contract);
     p_->checkpoint_program_state_capacity_provisional = true;
     return *candidate;
   }
   if (p_->checkpoint_program_state_capacity_value) {
-    if (*p_->checkpoint_program_state_capacity_value != *candidate)
+    if (*p_->checkpoint_program_state_capacity_value != *candidate ||
+        p_->checkpoint_history_flux_snapshot_capacity != candidate_history_flux_capacity)
       throw std::logic_error(
           "AMR Program checkpoint byte capacity changed after its bind-time seal");
     if (p_->checkpoint_program_state_capacity_provisional) {
@@ -20160,6 +20465,7 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
   static_assert(std::is_nothrow_constructible_v<std::pair<std::size_t, std::size_t>,
                                                 std::pair<std::size_t, std::size_t>>);
   p_->checkpoint_program_state_capacity_value.emplace(*candidate);
+  p_->checkpoint_history_flux_snapshot_capacity = candidate_history_flux_capacity;
   p_->checkpoint_program_state_capacity_contract.swap(candidate_contract);
   return *candidate;
 }
@@ -21348,6 +21654,19 @@ template std::vector<double> AmrSystem<kNativeDimension>::density();
 template std::vector<double> AmrSystem<kNativeDimension>::density(const std::string&);
 template std::vector<double> AmrSystem<kNativeDimension>::potential();
 template std::vector<std::uint8_t> AmrSystem<kNativeDimension>::program_accepted_state() const;
+template const AmrSystem<kNativeDimension>::ProgramHistoryFluxSnapshots&
+AmrSystem<kNativeDimension>::program_history_flux_snapshots() const;
+template void AmrSystem<kNativeDimension>::publish_program_history_flux_snapshots(
+    AmrSystem<kNativeDimension>::ProgramHistoryFluxSnapshots);
+template std::vector<std::uint8_t>
+AmrSystem<kNativeDimension>::program_history_flux_snapshot_shard() const;
+template std::vector<std::uint8_t>
+AmrSystem<kNativeDimension>::canonical_program_history_flux_snapshots(
+    const std::vector<std::vector<std::uint8_t>>&, int) const;
+template std::size_t
+AmrSystem<kNativeDimension>::checkpoint_program_history_flux_snapshot_capacity() const;
+template void AmrSystem<kNativeDimension>::restore_program_history_flux_snapshots(
+    const std::vector<std::vector<std::uint8_t>>&, int);
 template std::pair<std::size_t, std::size_t>
 AmrSystem<kNativeDimension>::checkpoint_program_state_capacity() const;
 template void AmrSystem<kNativeDimension>::copy_program_accepted_state_into(
