@@ -260,15 +260,22 @@ def test_native_amr_internal_maps_preserve_stages_and_restart(tmp_path):
 
 @pytest.mark.compiler
 @pytest.mark.native_loader
-def test_amr_internal_map_failure_then_shorter_step_reuses_same_instance(tmp_path):
+def test_amr_internal_map_failure_then_shorter_step_reuses_same_instance(tmp_path, record_property):
     import numpy as np
     from tests.python.integration.runtime.test_interstage_physical_maps import resolve_interstage_maps
     from tests.python.support.native_execution_context import artifact_execution_context
     artifact = pops.compile(resolve_interstage_maps(tmp_path, adaptive=True, retry_by_dt=True))
     instance = pops.bind(artifact, resources={"execution_context": artifact_execution_context(artifact)})
     before = _internal_map_image(instance)
-    with pytest.raises(RuntimeError, match="finite|[Ii]ntegral|[Tt]ransfer"):
+    # Reject the actual non-finite native transfer; serial source packing preserves
+    # invalid_argument as ValueError, while collective transfer failures use RuntimeError.
+    with pytest.raises((ValueError, RuntimeError), match=(
+            "AMR active physical source is non-finite|"
+            "physical transfer produced a non-finite value|"
+            "AMR physical candidate is non-finite|"
+            "AMR transfer (?:source packing|intersection integrals) failed on a lane rank")) as failed:
         pops.run(instance, t_end=0.01, max_steps=1)
+    record_property("native_map_failure", str(failed.value))
     assert instance.time() == 0. and instance.macro_step() == 0
     for key, value in _internal_map_image(instance).items():
         np.testing.assert_array_equal(value, before[key])
