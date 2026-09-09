@@ -688,13 +688,17 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
                                          return slot.name == key_name &&
                                                 slot.level == pending.child_level && slot.slot == 1;
                                        });
+    // fill_count counts committed stores, not allocated slots.  After the first cold store and
+    // rotation, lag one already holds the accepted source sample even though fill_count is one.
+    // The deferred reader requires a fresh current-slot store before interpolating that sample;
+    // it never treats the cold-start duplicate in slot zero as a second earned time sample.
     if (pending.key.empty() || (!previous_pending.empty() && previous_pending >= pending.key) ||
         pending.parent_level < 0 || pending.parent_level == std::numeric_limits<int>::max() ||
         pending.child_level != pending.parent_level + 1 ||
         pending.child_level >= static_cast<int>(state.level_clocks.size()) || pending.consumed ||
         key_level != pending.child_level || history == state.histories.end() ||
         history->depth != 2 || lag_slot == state.history_slots.end() || !lag_slot->initialized ||
-        lag_slot->fill_count != 2 || lag_slot->outgoing_dt != pending.source_dt ||
+        lag_slot->outgoing_dt != pending.source_dt ||
         pending.accepted_macro_step !=
             state.level_clocks[static_cast<std::size_t>(pending.child_level)].macro_step ||
         pending.prior_topology_epoch == std::numeric_limits<std::uint64_t>::max() ||

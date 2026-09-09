@@ -122,6 +122,9 @@ def _amr(n, L, branch, refine=1.2):
     rho += 1.0 - float(rho.mean())
     s.set_density("gas", rho)
     install_forward_euler_program(s)
+    # This advanced-runtime fixture assembles the native hierarchy directly, without pops.bind.
+    # Seal its installed Program checkpoint budget before the first accepted-state publication.
+    s._s.mark_bound()
     return s
 
 
@@ -330,6 +333,7 @@ def main():
         install_prepared_threshold_union(E, (("gas", "rho", 1.2),))
         E.set_density("gas", _bubble(n))
         install_forward_euler_program(E)
+        E._s.mark_bound()
         for _ in range(4):
             E.step(dt)
         assert np.isfinite(np.array(E.density())).all() and E.mass() > 1e-6

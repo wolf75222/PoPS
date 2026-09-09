@@ -273,9 +273,61 @@ def test_public_amr_bind_preserves_every_conservative_component(
     restart_report = pops.run(restarted, t_end=DT, max_steps=1)
     assert restart_report.accepted_steps == restarted.macro_step() == 1
     assert restarted.n_levels() == 2
+    # One committed parent store is an earned lag even though cold-start materialization copied
+    # it into both allocated slots. Checkpoint that first accepted remap before a fresh store can
+    # consume it, then require the same next-step result after a second exact restart.
+    assert restarted._executor.history_fill_count(history_name, 0) == 1
+    first_checkpoint = restarted.checkpoint(tmp_path / "after-first-accepted-step")
+    first_restored = pops.bind(
+        artifact,
+        initial_values={gas_state: initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
+    first_restored.restart(first_checkpoint)
+    first_roundtrip = first_restored.checkpoint(tmp_path / "first-step-roundtrip")
+    with np.load(first_checkpoint, allow_pickle=False) as expected, np.load(
+        first_roundtrip, allow_pickle=False
+    ) as actual:
+        np.testing.assert_array_equal(
+            actual["program_accepted_state"], expected["program_accepted_state"]
+        )
+
+    def assert_same_bytes(left, right):
+        left = np.asarray(left)
+        right = np.asarray(right)
+        assert left.shape == right.shape
+        assert left.dtype == right.dtype
+        assert left.tobytes(order="C") == right.tobytes(order="C")
+
+    def assert_accepted_equal(left, right):
+        assert left.time() == right.time()
+        assert left.macro_step() == right.macro_step()
+        assert left.patch_boxes() == right.patch_boxes()
+        assert left._executor.program_clock_manifest() == right._executor.program_clock_manifest()
+        assert (
+            left._executor.program_accepted_state_manifest()
+            == right._executor.program_accepted_state_manifest()
+        )
+        for level in (0, 1):
+            for block in ("gas", "marker"):
+                assert_same_bytes(
+                    left.block_level_state_global(block, level),
+                    right.block_level_state_global(block, level),
+                )
+            for lag in (0, 1):
+                assert_same_bytes(
+                    left.history_global(history_name, level, lag),
+                    right.history_global(history_name, level, lag),
+                )
+
+    assert_accepted_equal(restarted, first_restored)
 
     report = pops.run(simulation, t_end=2.0 * DT, max_steps=2)
     stationary_report = pops.run(stationary, t_end=2.0 * DT, max_steps=2)
+    for continued in (restarted, first_restored):
+        continued_report = pops.run(continued, t_end=2.0 * DT, max_steps=1)
+        assert continued_report.accepted_steps == 1
+        assert_accepted_equal(simulation, continued)
     evolved = np.asarray(simulation.block_level_state_global("gas", 0), dtype=np.float64)
     stationary_evolved = np.asarray(
         stationary.block_level_state_global("gas", 0), dtype=np.float64).reshape(initial.shape)

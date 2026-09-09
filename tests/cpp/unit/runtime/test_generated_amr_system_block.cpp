@@ -2226,7 +2226,7 @@ TEST(GeneratedAmrSystemBlock, AlignedFourSlotHistoryProjectsEarnedSamplesAtomica
 }
 
 TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
-  const auto exercise_deferred_ratio = [](std::int64_t temporal_numerator) {
+  const auto exercise_deferred_ratio = [](std::int64_t temporal_numerator, bool cold_start) {
     constexpr int Dim = pops::kNativeDimension;
     pops::AmrSystemConfig<Dim> config;
     for (int axis = 0; axis < Dim; ++axis) {
@@ -2270,6 +2270,8 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
                                 "clock.macro", "dense.linear");
     });
     for (const double dt : {0.1, 0.2, 0.3}) {
+      if (cold_start)
+        break;
       context->advance_hierarchy(dt, [&](double) {
         auto& stage = context->state(0);
         auto sample = context->rhs_scratch_like(stage);
@@ -2348,6 +2350,9 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
     const auto pending_after_regrid =
         pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
             system.program_accepted_state());
+    // In the startup profile the partial-child step above is the parent's first committed
+    // history store. The allocated ring has two slots but only one earned source sample.
+    EXPECT_EQ(system.history_fill_count("tracer.rate", 0), cold_start ? 1 : 2);
     ASSERT_EQ(pending_after_regrid.pending_history_remaps.size(), 1u);
     EXPECT_EQ(pending_after_regrid.pending_history_remaps.front().temporal_numerator,
               temporal_numerator);
@@ -2356,6 +2361,9 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
               pending_after_regrid.pending_history_remaps.front().source_dt /
                   static_cast<double>(temporal_numerator));
     context->with_program_resource_level(1, [&]() {
+      // Even a valid startup marker cannot read its lag until the next step stores a fresh
+      // current sample; otherwise the allocated cold-start duplicate would masquerade as time t1.
+      EXPECT_THROW((void)context->history("tracer.rate", 1, 0), std::runtime_error);
       auto interpolated = context->rhs_scratch_like(context->state(0));
       interpolated.set_val(pops::Real(-17));
       EXPECT_THROW(
@@ -2368,6 +2376,15 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
     const auto pending_bytes = system.program_accepted_state();
     EXPECT_NO_THROW(system.restore_checkpoint_accepted_state(pending_bytes));
     EXPECT_EQ(system.program_accepted_state(), pending_bytes);
+    auto unearned_lag = pending_after_regrid;
+    for (auto& slot : unearned_lag.history_slots)
+      if (slot.level == 1) {
+        slot.initialized = false;
+        slot.fill_count = 0;
+        slot.outgoing_dt = 0.0;
+      }
+    EXPECT_THROW(pops::runtime::program::serialize_amr_program_accepted_state(unearned_lag),
+                 std::invalid_argument);
     // Cursor-walk POPSAND4 to its pending section.  The history key also occurs in earlier slot
     // payloads, so searching raw bytes would mutate the wrong record.
     const std::string& pending_key = pending_after_regrid.pending_history_remaps.front().key;
@@ -2471,7 +2488,7 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
     EXPECT_EQ(system.history_names(), (std::vector<std::string>{"tracer.rate"}));
     for (const int level : {0, 1}) {
       EXPECT_TRUE(system.history_initialized("tracer.rate", level));
-      EXPECT_EQ(system.history_fill_count("tracer.rate", level), 2);
+      EXPECT_EQ(system.history_fill_count("tracer.rate", level), cold_start ? 1 : 2);
       EXPECT_GT(system.history_slot_dt("tracer.rate", level, 0), 0.0);
       EXPECT_GT(system.history_slot_dt("tracer.rate", level, 1), 0.0);
     }
@@ -2538,8 +2555,10 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
     EXPECT_TRUE(published_after_rotation.pending_history_remaps.empty());
   };
 
-  exercise_deferred_ratio(1);
-  exercise_deferred_ratio(2);
+  for (const bool cold_start : {false, true}) {
+    exercise_deferred_ratio(1, cold_start);
+    exercise_deferred_ratio(2, cold_start);
+  }
 }
 
 TEST(GeneratedAmrSystemBlock, NoopPreparedRegridPreservesInitializedHistory) {
