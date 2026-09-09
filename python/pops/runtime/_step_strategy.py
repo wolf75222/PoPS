@@ -286,6 +286,7 @@ def _record_failure(engine: Any, error: BaseException, attempts: int) -> None:
 
 def _native_attempt(
     engine: Any, native: Any, advance: Any, *, queued_event: Any = None,
+    fixed_dt_grid: Any = None,
 ) -> Any:
     temporal = getattr(engine, "_temporal_restart_state", None)
     before_time, before_step = native.time(), native.macro_step()
@@ -318,6 +319,7 @@ def _native_attempt(
             before_time=before_time, before_step=before_step,
             time=native.time(), macro_step=native.macro_step(),
             consumed_event=queued_event,
+            **({"fixed_dt_grid": fixed_dt_grid} if fixed_dt_grid is not None else {}),
         )
     return result
 
@@ -467,15 +469,41 @@ def _execute_prepared_attempts(sequence: _PreparedStepAttempts) -> int:
 
 
 class FixedDtController(StepController[FixedDt]):
+    def __init__(self, strategy: FixedDt) -> None:
+        super().__init__(strategy)
+        self.grid: dict[str, Any] | None = None
+
+    def restore_temporal_state(self, temporal: Any) -> None:
+        grid = None if temporal is None else temporal.controller_state.get("fixed_dt_grid")
+        self.grid = None if grid is None else dict(grid)
+
     def prepare_attempts(
         self, engine: Any, native: Any, *, t_end: float,
     ) -> _PreparedStepAttempts:
         now = float(native.time())
+        step = int(native.macro_step())
         remaining = t_end - now
         if not remaining > 0.0:
             raise RuntimeError("FixedDt has no positive interval left before the final time")
+        temporal = getattr(engine, "_temporal_restart_state", None)
+        grid = self.grid if temporal is None else temporal.controller_state.get("fixed_dt_grid")
+        if grid is None:
+            origin, count = now, 0
+        else:
+            if grid["time"] != now.hex() or grid["macro_step"] != step:
+                raise RuntimeError("FixedDt grid differs from the accepted native cursor")
+            origin, count = float.fromhex(grid["origin"]), grid["steps"]
+        # Repeated native additions can accumulate many ULPs. Only an exact rounded endpoint
+        # on this authenticated uninterrupted fixed-step segment permits absorbing that drift.
+        # This accumulated-drift fallback does not broaden the existing local landing policy.
+        try:
+            endpoint = origin + (count + 1) * self.strategy.dt
+        except OverflowError:
+            endpoint = math.inf
         if now + self.strategy.dt == t_end:
             dt = self.strategy.dt
+        elif endpoint == t_end:
+            dt = remaining
         else:
             dt = min(self.strategy.dt, remaining)
             if math.isclose(
@@ -490,13 +518,34 @@ class FixedDtController(StepController[FixedDt]):
         if not now + dt > now:
             raise RuntimeError("FixedDt interval does not advance binary64 time")
 
+        # Any altered interval closes the old segment, including a clipped consumer deadline
+        # and an endpoint roundoff correction. The next authored interval starts here.
+        continuous = dt == self.strategy.dt
+        accepted_grid = {
+            "schema_version": 1,
+            "origin": origin.hex() if continuous else (now + dt).hex(),
+            "steps": count + 1 if continuous else 0,
+            "time": (now + dt).hex(),
+            "macro_step": step + 1,
+        }
+
         def attempt() -> None:
-            _native_attempt(engine, native, lambda: native.step(dt))
+            _native_attempt(engine, native, lambda: native.step(dt), fixed_dt_grid=accepted_grid)
+
+        def accept(attempts: int) -> None:
+            current = getattr(engine, "_step_controller", None) or self
+            if type(current) is not FixedDtController or current.strategy is not self.strategy:
+                raise RuntimeError("FixedDt accepted through a different controller authority")
+            if float(native.time()) != now + dt or int(native.macro_step()) != step + 1:
+                raise RuntimeError("FixedDt acceptance differs from its prepared native interval")
+            current.grid = dict(accepted_grid)
+            current.attempts = attempts
 
         return _PreparedStepAttempts(
             engine=engine,
             controller=self,
             attempt=attempt,
+            accept=accept,
         )
 
     def execute(self, engine: Any, native: Any, *, t_end: float) -> int:

@@ -2435,6 +2435,36 @@ def test_every_dt_threshold_one_ulp_after_run_end_is_not_due(tmp_path):
     assert runtime.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples == 2
 
 
+@pytest.mark.parametrize("count", (13, 52, 208))
+def test_fixed_grid_endpoint_fires_at_end_once_without_an_extra_step(tmp_path, count):
+    plan, _, manifest = _with_graph(
+        tmp_path, schedule=lambda clock: Schedule(AtEnd(AcceptedStep(clock)))
+    )
+    executor = _Executor(plan)
+    executor._step_strategy = FixedDt(0.05 / count)
+    runtime = RuntimeInstance(plan, executor=executor)
+    report = runtime._run(0.05, max_steps=count, console=False)
+    assert report.accepted_steps == count
+    assert runtime.time() == 0.05 and runtime.macro_step() == count
+    assert _published_times(tmp_path) == [0.05]
+    assert runtime.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples == 1
+
+
+def test_fixed_grid_real_remainder_still_exhausts_max_steps_without_at_end(tmp_path):
+    plan, _, manifest = _with_graph(
+        tmp_path, schedule=lambda clock: Schedule(AtEnd(AcceptedStep(clock)))
+    )
+    executor = _Executor(plan)
+    executor._step_strategy = FixedDt(0.05 / 52)
+    runtime = RuntimeInstance(plan, executor=executor)
+    target = np.nextafter(0.05, np.inf).item()
+    with pytest.raises(RuntimeError, match="max_steps exhausted before t_end"):
+        runtime._run(target, max_steps=52, console=False)
+    assert runtime.time() < target and runtime.macro_step() == 52
+    assert runtime.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples == 0
+    assert _published_times(tmp_path) == []
+
+
 def test_run_fails_explicitly_when_max_steps_cannot_reach_t_end(tmp_path):
     plan, _, manifest = _with_graph(
         tmp_path, schedule=lambda clock: Schedule(AtEnd(AcceptedStep(clock)))

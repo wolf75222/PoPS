@@ -209,6 +209,149 @@ def test_fixed_dt_merges_a_roundoff_equivalent_final_landing():
     assert native.calls[-1] == ("step", remaining)
 
 
+@pytest.mark.parametrize("count", (13, 52, 208))
+def test_fixed_dt_grid_lands_after_accumulated_roundoff_and_strict_resume(count):
+    dt = 0.05 / count
+    owner = _TemporalOwner(FixedDt(dt))
+    prepared = prepare_program_run(owner)
+    prepared.begin(owner._temporal_restart_state, time=0.0, macro_step=0)
+    for _ in range(count // 2):
+        prepared.run_step(owner.raw, t_end=0.05)
+    checkpoint = owner._temporal_restart_state.checkpoint_json(
+        time=owner.time(), macro_step=owner.macro_step())
+    restored = _TemporalOwner(owner._step_strategy)
+    restored.raw.t, restored.raw.cursor = owner.time(), owner.macro_step()
+    restored._temporal_restart_state = TemporalRestartState.from_json(
+        checkpoint, time=restored.time(), macro_step=restored.macro_step())
+    continued = prepare_program_run(restored)
+    continued.begin(restored._temporal_restart_state,
+                    time=restored.time(), macro_step=restored.macro_step())
+    first_calls = len(owner.raw.calls)
+    for _ in range(count - count // 2):
+        prepared.run_step(owner.raw, t_end=0.05)
+        # Rebuilding the immutable run wrapper is a split invocation, not a controller reset.
+        continued = prepare_program_run(restored)
+        continued.begin(restored._temporal_restart_state,
+                        time=restored.time(), macro_step=restored.macro_step())
+        continued.run_step(restored.raw, t_end=0.05)
+    assert owner.time() == restored.time() == 0.05
+    assert owner.macro_step() == restored.macro_step() == count
+    assert owner.raw.calls[:count - 1] == [("step", dt)] * (count - 1)
+    assert restored.raw.calls == owner.raw.calls[first_calls:]
+    assert restored._temporal_restart_state.checkpoint_json(
+        time=restored.time(), macro_step=restored.macro_step()) == (
+            owner._temporal_restart_state.checkpoint_json(
+                time=owner.time(), macro_step=owner.macro_step()))
+
+
+def test_fixed_dt_grid_does_not_absorb_a_genuine_future_remainder():
+    import math
+
+    dt = 0.05 / 52
+    target = math.nextafter(0.05, math.inf)
+    native = _Native()
+    prepared = prepare_program_run(_Engine(FixedDt(dt)))
+    for _ in range(52):
+        prepared.run_step(native, t_end=target)
+    assert native.time() < target
+    assert native.calls == [("step", dt)] * 52
+    prepared.run_step(native, t_end=target)
+    assert native.time() == target and native.macro_step() == 53
+
+
+def test_fixed_dt_grid_resets_after_clipping_and_does_not_publish_on_rejection():
+    owner = _TemporalOwner(FixedDt(0.01))
+    prepared = prepare_program_run(owner)
+    prepared.begin(owner._temporal_restart_state, time=0.0, macro_step=0)
+    prepared.run_step(owner.raw, t_end=0.015)
+    before = deepcopy(owner._step_controller.grid)
+    owner.raw.reject = 1
+    with pytest.raises(StepAttemptRejected):
+        prepared.run_step(owner.raw, t_end=0.015)
+    assert owner._step_controller.grid == before
+    assert owner._temporal_restart_state.controller_state["fixed_dt_grid"] == before
+    prepared.run_step(owner.raw, t_end=0.015)
+    grid = owner._temporal_restart_state.controller_state["fixed_dt_grid"]
+    assert grid["origin"] == grid["time"] == (0.015).hex()
+    assert grid["steps"] == 0 and grid["macro_step"] == 2
+
+
+@pytest.mark.parametrize("change", (
+    {"time": (0.02).hex()}, {"macro_step": 2}, {"steps": -1},
+    {"origin": (0.5).hex()}, {"origin": (0.005).hex()}, {"schema_version": 2},
+))
+def test_fixed_dt_grid_rejects_mismatched_restart_metadata(change):
+    owner = _TemporalOwner(FixedDt(0.01))
+    prepared = prepare_program_run(owner)
+    prepared.begin(owner._temporal_restart_state, time=0.0, macro_step=0)
+    prepared.run_step(owner.raw, t_end=0.1)
+    data = owner._temporal_restart_state.to_data()
+    data["controller_state"]["fixed_dt_grid"].update(change)
+    with pytest.raises(ValueError, match="FixedDt grid"):
+        TemporalRestartState.from_json(json.dumps(data), time=owner.time(), macro_step=owner.macro_step())
+
+
+def test_fixed_dt_grid_is_broadcast_and_resets_on_strategy_change():
+    owner = _TemporalOwner(FixedDt(0.01))
+    children = (TemporalRestartState(), TemporalRestartState())
+    owner._temporal_restart_state = _CompositeTemporalRestartState(children)
+    prepared = prepare_program_run(owner)
+    prepared.begin(owner._temporal_restart_state, time=0.0, macro_step=0)
+    prepared.run_step(owner.raw, t_end=0.1)
+    assert children[0].controller_state == children[1].controller_state
+    assert children[0].controller_state["fixed_dt_grid"]["steps"] == 1
+    owner._step_strategy = FixedDt(0.02)
+    prepared = prepare_program_run(owner)
+    prepared.begin(owner._temporal_restart_state, time=owner.time(), macro_step=owner.macro_step())
+    assert all("fixed_dt_grid" not in child.controller_state for child in children)
+    prepared.run_step(owner.raw, t_end=0.1)
+    assert children[0].controller_state == children[1].controller_state
+    assert children[0].controller_state["fixed_dt_grid"]["origin"] == (0.01).hex()
+
+
+def test_fixed_dt_legacy_envelope_starts_at_the_authenticated_restored_boundary():
+    owner = _TemporalOwner(FixedDt(0.01))
+    prepared = prepare_program_run(owner)
+    prepared.begin(owner._temporal_restart_state, time=0.0, macro_step=0)
+    prepared.run_step(owner.raw, t_end=0.1)
+    data = owner._temporal_restart_state.to_data()
+    del data["controller_state"]["fixed_dt_grid"]
+    owner._temporal_restart_state = TemporalRestartState.from_json(
+        json.dumps(data), time=owner.time(), macro_step=owner.macro_step())
+    owner._step_controller = None
+    prepared.begin(owner._temporal_restart_state, time=owner.time(), macro_step=owner.macro_step())
+    prepared.run_step(owner.raw, t_end=0.1)
+    grid = owner._temporal_restart_state.controller_state["fixed_dt_grid"]
+    assert grid["origin"] == (0.01).hex() and grid["steps"] == 1
+
+
+def test_fixed_dt_malformed_acceptance_does_not_consume_a_queued_event():
+    owner = _TemporalOwner(FixedDt(0.01))
+    prepared = prepare_program_run(owner)
+    prepared.begin(owner._temporal_restart_state, time=0.0, macro_step=0)
+    prepared.run_step(owner.raw, t_end=0.1)
+    state = owner._temporal_restart_state
+    event = {"kind": "test.event", "time": (0.02).hex(), "cursor": 2, "payload": {}}
+    state.event_queue.append(event)
+    before = state.to_data()
+    malformed = dict(state.controller_state["fixed_dt_grid"],
+                     origin=(0.005).hex(), time=(0.02).hex(), macro_step=2, steps=2)
+    with pytest.raises(ValueError, match="FixedDt grid origin/count"):
+        state.accept(before_time=0.01, before_step=1, time=0.02, macro_step=2,
+                     consumed_event=event, fixed_dt_grid=malformed)
+    assert state.to_data() == before
+
+
+def test_fixed_dt_grid_large_count_is_rejected_without_floating_overflow():
+    from pops.runtime._temporal_restart import _validate_fixed_grid_clock
+
+    count = 1 << 2000
+    grid = {"schema_version": 1, "origin": (0.0).hex(), "steps": count,
+            "time": (1.0).hex(), "macro_step": count}
+    with pytest.raises(ValueError, match="FixedDt grid origin/count"):
+        _validate_fixed_grid_clock(grid, FixedDt(0.01).to_data(), (1.0).hex(), count)
+
+
 def test_fixed_dt_preserves_authored_interval_when_binary64_sum_lands_exactly():
     native = _Native()
     native.step(0.01)

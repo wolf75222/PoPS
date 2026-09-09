@@ -11,6 +11,7 @@ import json
 import math
 import operator
 from dataclasses import dataclass, field
+from fractions import Fraction
 from typing import Any
 
 from pops._manifest_protocol import strict_json_loads
@@ -243,7 +244,9 @@ def _validate_program_schedule(value: Any) -> dict[str, Any]:
 
 
 def _validate_controller_state(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict) or set(value) != {"last_accepted_dt"}:
+    if not isinstance(value, dict) or set(value) not in (
+        {"last_accepted_dt"}, {"last_accepted_dt", "fixed_dt_grid"},
+    ):
         raise ValueError("temporal controller state has incomplete keys")
     last_dt = value["last_accepted_dt"]
     if last_dt is not None:
@@ -255,7 +258,48 @@ def _validate_controller_state(value: Any) -> dict[str, Any]:
             raise ValueError("last_accepted_dt is not a hexadecimal float") from None
         if not math.isfinite(dt) or dt <= 0.0 or dt.hex() != last_dt:
             raise ValueError("last_accepted_dt must be a canonical finite positive hexadecimal float")
-    return dict(value)
+    if "fixed_dt_grid" in value:
+        grid = value["fixed_dt_grid"]
+        if not isinstance(grid, dict) or set(grid) != {
+            "schema_version", "origin", "steps", "time", "macro_step",
+        } or type(grid["schema_version"]) is not int or grid["schema_version"] != 1:
+            raise ValueError("FixedDt grid has an invalid version or incomplete keys")
+        for name in ("origin", "time"):
+            try:
+                number = float.fromhex(grid[name])
+            except (TypeError, ValueError):
+                raise ValueError("FixedDt grid times must be canonical hexadecimal floats") from None
+            if not math.isfinite(number) or number.hex() != grid[name]:
+                raise ValueError("FixedDt grid times must be canonical finite hexadecimal floats")
+        for name in ("steps", "macro_step"):
+            if type(grid[name]) is not int or grid[name] < 0:
+                raise ValueError("FixedDt grid cursors must be nonnegative integers")
+        if grid["steps"] > grid["macro_step"] or (
+            (grid["steps"] == 0) != (grid["origin"] == grid["time"])
+        ) or float.fromhex(grid["origin"]) > float.fromhex(grid["time"]):
+            raise ValueError("FixedDt grid origin and accepted cursor are inconsistent")
+    return _json_copy(value, where="temporal controller state")
+
+
+def _validate_fixed_grid_clock(
+    grid: dict[str, Any], descriptor: dict[str, Any], time_hex: str, macro_step: int,
+) -> None:
+    if descriptor["kind"] != "fixed_dt":
+        raise ValueError("only FixedDt owns the fixed-grid controller envelope")
+    if grid["time"] != time_hex or grid["macro_step"] != macro_step:
+        raise ValueError("FixedDt grid differs from the accepted temporal clock")
+    from pops.time._step.strategy import FixedDt
+
+    dt = FixedDt.from_data(descriptor).dt
+    origin, reached = float.fromhex(grid["origin"]), float.fromhex(time_hex)
+    count = grid["steps"]
+    # Every accepted addition is monotone and lies between origin and reached. Its rounding
+    # error is at most half the largest ULP in that interval. Exact rational arithmetic avoids
+    # overflow and underflow in both the authored sum and this accumulated-error certificate.
+    expected = Fraction(origin) + count * Fraction(dt)
+    bound = count * Fraction(max(math.ulp(origin), math.ulp(reached))) / 2
+    if abs(Fraction(reached) - expected) > bound:
+        raise ValueError("FixedDt grid origin/count disagree with the authored intervals")
 
 
 def _validate_event_queue(value: Any) -> list[dict[str, Any]]:
@@ -326,6 +370,9 @@ def _validate_controller_events(
             "temporal controller state lacks the last accepted dt")
 
     descriptor = strategy["strategy"]
+    grid = controller.get("fixed_dt_grid")
+    if grid is not None:
+        _validate_fixed_grid_clock(grid, descriptor, time_hex, macro_step)
     if descriptor["kind"] != "error_controlled_dt":
         if events:
             raise ValueError(
@@ -497,6 +544,8 @@ class TemporalRestartState:
             raise RuntimeError(
                 "restart requires the checkpointed step strategy for the exact next attempt")
         if not self._restored_pending:
+            if candidate != self.strategy:
+                self.controller_state.pop("fixed_dt_grid", None)
             self.strategy = candidate
             if (candidate["strategy"]["kind"] == "error_controlled_dt"
                     and step == 0
@@ -567,12 +616,21 @@ class TemporalRestartState:
             raise RuntimeError("native attempt does not match the queued temporal event")
 
     def accept(self, *, before_time: Any, before_step: Any,
-               time: Any, macro_step: Any, consumed_event: Any = None) -> None:
+               time: Any, macro_step: Any, consumed_event: Any = None,
+               fixed_dt_grid: Any = None) -> None:
         before, old_step = _clock(before_time, before_step)
         now, step = _clock(time, macro_step)
         if step != old_step + 1 or float.fromhex(now) <= float.fromhex(before):
             raise RuntimeError(
                 "accepted temporal attempt must advance time and macro_step exactly once")
+        controller = _validate_controller_state({
+            "last_accepted_dt": (float.fromhex(now) - float.fromhex(before)).hex(),
+            **({"fixed_dt_grid": fixed_dt_grid} if fixed_dt_grid is not None else {}),
+        })
+        if fixed_dt_grid is not None:
+            if self.strategy is None or self.strategy["strategy"]["kind"] != "fixed_dt":
+                raise ValueError("only FixedDt may publish an accepted fixed-grid envelope")
+            _validate_fixed_grid_clock(fixed_dt_grid, self.strategy["strategy"], now, step)
         if consumed_event is not None:
             candidate = _validate_event_queue([consumed_event])[0]
             if not self.event_queue or candidate != self.event_queue[0]:
@@ -586,9 +644,7 @@ class TemporalRestartState:
         (self.clock_cursors, self.schedule_cursors, self.synchronization_cursors,
          self.history_cursors, self.cache_cursors) = _boundary_cursors(
              self.program_schedule, time_hex=now, macro_step=step)
-        self.controller_state = {
-            "last_accepted_dt": (float.fromhex(now) - float.fromhex(before)).hex(),
-        }
+        self.controller_state = controller
         self.transaction_stats["accepted"] += 1
         self.status = "accepted"
         self.synchronized = True
@@ -665,7 +721,7 @@ class TemporalRestartState:
                 self.synchronization_cursors, where="synchronization cursors"),
             "history_cursors": _json_copy(self.history_cursors, where="history cursors"),
             "cache_cursors": _json_copy(self.cache_cursors, where="cache cursors"),
-            "controller_state": dict(self.controller_state),
+            "controller_state": _json_copy(self.controller_state, where="temporal controller state"),
             "event_queue": _json_copy(self.event_queue, where="event queue"),
             "transaction_stats": dict(self.transaction_stats),
             "status": self.status,
