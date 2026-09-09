@@ -531,12 +531,14 @@
   "tests/python/unit/initial/test_cell_integral_authoring.py": 5.0,
   "tests/python/unit/physics/test_named_state_binding.py": 5.0,
   "tests/python/unit/time/test_implicit_stage_request.py": 5.0,
+  "tests/python/integration/runtime/test_interstage_physical_maps.py": 600.0,
+  "tests/python/unit/codegen/test_program_mapping_regions.py": 5.0,
   "_meta": {
     "adc": "ADC-623",
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact. Migration additions use explicit 5/120/300/600 s estimates recorded in migration_estimates. Local source/native qualification timings are not substituted for CI per-file measurements.",
-    "estimated_count": 364,
+    "estimated_count": 366,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_scalar_advection_final_example.py",
@@ -596,6 +598,7 @@
       "tests/python/integration/runtime/test_hyqmom15_relaxation_runtime.py",
       "tests/python/integration/runtime/test_implicit_diffusion_lifecycle.py",
       "tests/python/integration/runtime/test_interface_boundary_flux_ownership.py",
+      "tests/python/integration/runtime/test_interstage_physical_maps.py",
       "tests/python/integration/runtime/test_local_transform_runtime.py",
       "tests/python/integration/runtime/test_multi_layout_runtime.py",
       "tests/python/integration/runtime/test_multicomponent_diffusion_exchange_ledger.py",
@@ -707,6 +710,7 @@
       "tests/python/unit/codegen/test_program_field_plan.py",
       "tests/python/unit/codegen/test_program_graph_lowering.py",
       "tests/python/unit/codegen/test_program_input_fields.py",
+      "tests/python/unit/codegen/test_program_mapping_regions.py",
       "tests/python/unit/codegen/test_program_model_graph.py",
       "tests/python/unit/codegen/test_program_source_kernel_reuse.py",
       "tests/python/unit/codegen/test_projection_auxiliary_preparation.py",
@@ -903,7 +907,7 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 533,
+    "total_files": 535,
     "migration_estimates": {
       "basis": "Unmeasured CI scheduling estimates: symbolic/source-only modules 5 s; native-loader module 120 s; unit modules containing native compilation/execution 300 s; complete runtime science modules 600 s. Local CPU/OMP qualification wall times are not CI measurements. Retain existing rows until measured by a full CI timing artifact.",
       "files": [
@@ -1006,6 +1010,7 @@
         "tests/python/integration/runtime/test_amr_tensor_diffusion.py",
         "tests/python/integration/runtime/test_exact_analytic_initial.py",
         "tests/python/integration/runtime/test_generic_physical_maps.py",
+        "tests/python/integration/runtime/test_interstage_physical_maps.py",
         "tests/python/integration/runtime/test_multicomponent_diffusion_exchange_ledger.py",
         "tests/python/integration/runtime/test_public_composite_field.py",
         "tests/python/integration/runtime/test_public_tensor_diffusion.py",
@@ -1015,6 +1020,7 @@
         "tests/python/unit/codegen/test_generic_physical_map_contracts.py",
         "tests/python/unit/codegen/test_independent_block_schedule.py",
         "tests/python/unit/codegen/test_migration_public_workflows.py",
+        "tests/python/unit/codegen/test_program_mapping_regions.py",
         "tests/python/unit/codegen/test_scalar_commit_publication.py",
         "tests/python/unit/initial/test_cell_integral_authoring.py",
         "tests/python/unit/physics/test_named_state_binding.py",

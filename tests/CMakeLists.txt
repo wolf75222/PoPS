@@ -853,6 +853,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_coupled_fieldsolve 2)
   set(POPS_MPI_RANKS_test_composite_general_field 2)
   set(POPS_MPI_RANKS_test_prepared_resource_cache 2)
+  set(POPS_MPI_RANKS_test_amr_program_diffusion 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_implicit_transaction 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_substeps 2)
   set(POPS_MPI_RANKS_test_collective_step_rejection 2)
@@ -1030,6 +1031,8 @@ if(POPS_HAS_MPI)
     # Only rank zero invalidates preparation or throws during preflight; every
     # rank must reconstruct/refuse together without corrupting the cached entry.
     test_prepared_resource_cache
+    # Run only the real AMR cache collective preflight witness under MPI.
+    test_amr_program_diffusion
     test_amr_multiblock_implicit_transaction
     test_amr_multiblock_substeps
     test_collective_step_rejection
@@ -1093,6 +1096,11 @@ if(POPS_HAS_MPI)
           ${_test} ${_np}
           GTEST_FILTER
             "test_prepared_hyperbolic_boundary.characteristic_rank_local_rejection_rolls_back_collectively_and_retry_publishes")
+      elseif(_test STREQUAL "test_amr_program_diffusion")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "test_amr_program_diffusion.PreparedCacheHandlesRankLocalMissAndInvalidGhostsCollectively")
       elseif(_test STREQUAL "test_krylov_workspace_reentrancy")
         pops_add_mpi_rank_test(
           ${_test} ${_np}
@@ -1137,6 +1145,9 @@ if(POPS_HAS_MPI)
       endif()
     endforeach()
   endforeach()
+  set_tests_properties(test_amr_program_diffusion_np2 PROPERTIES
+    ENVIRONMENT "OMP_NUM_THREADS=1"
+    TIMEOUT 60)
   set_tests_properties(test_coupled_fieldsolve_np2 PROPERTIES
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
     TIMEOUT 30)
