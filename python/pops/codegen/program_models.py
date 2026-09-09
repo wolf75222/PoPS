@@ -40,6 +40,7 @@ class ProgramModelGraph:
         "_owners_by_block",
         "_authorities_by_owner",
         "_models_by_block",
+        "_rhs_coherence_neighbours",
     )
 
     def __init__(
@@ -50,6 +51,7 @@ class ProgramModelGraph:
         owners_by_block: Mapping[str, Any],
         authorities_by_owner: Mapping[Any, Any],
         models_by_block: Mapping[str, Any] | None = None,
+        rhs_coherence_neighbours: Mapping[str, frozenset[str]] | None = None,
     ) -> None:
         if not models_by_owner:
             raise ValueError("ProgramModelGraph requires at least one model owner")
@@ -84,6 +86,14 @@ class ProgramModelGraph:
         if set(routed_models) != set(owners_by_block):
             raise ValueError("ProgramModelGraph block model routes must match owner block routes")
         self._models_by_block = MappingProxyType(routed_models)
+        if rhs_coherence_neighbours is not None:
+            if set(rhs_coherence_neighbours) != set(owners_by_block):
+                raise ValueError("ProgramModelGraph RHS connectivity must cover exactly its blocks")
+            if any(peer not in rhs_coherence_neighbours or name not in rhs_coherence_neighbours[peer]
+                   for name, peers in rhs_coherence_neighbours.items() for peer in peers):
+                raise ValueError("ProgramModelGraph RHS connectivity must be complete and symmetric")
+        self._rhs_coherence_neighbours = (None if rhs_coherence_neighbours is None else
+            MappingProxyType({name: frozenset(peers) for name, peers in rhs_coherence_neighbours.items()}))
 
     @classmethod
     def from_resolved_blocks(cls, blocks: Any) -> ProgramModelGraph:
@@ -152,13 +162,20 @@ class ProgramModelGraph:
             authorities[canonical] = owner
             routes[block.name] = canonical
             block_models[block.name] = emit_model
+        from pops.codegen._rhs_coherence import resolved_rhs_neighbours
         return cls(
             models_by_owner=models,
             source_modules_by_owner=modules,
             owners_by_block=routes,
             authorities_by_owner=authorities,
             models_by_block=block_models,
+            rhs_coherence_neighbours=resolved_rhs_neighbours(blocks),
         )
+
+    @property
+    def rhs_coherence_neighbours(self) -> Mapping[str, frozenset[str]] | None:
+        """Resolved boundary connectivity; None retains conservative unknown semantics."""
+        return self._rhs_coherence_neighbours
 
     @property
     def models_by_owner(self) -> Mapping[Any, Any]:

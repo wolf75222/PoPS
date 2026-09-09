@@ -398,7 +398,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     # deterministic, cannot alias a rate node, and keep BoundaryEvaluationPoint.stage faithful to
     # the atomic group while every RhsGroupRequest retains its own exact rate identity.
     next_group_identity = int(program._next_id)
-    rhs_plan = plan_rhs_coherence(program, values)
+    rhs_plan = plan_rhs_coherence(program, values, model=model)
     rhs_schedule = rhs_plan.schedule
     rhs_grouped = rhs_plan.grouped_ids
     while index < len(values):

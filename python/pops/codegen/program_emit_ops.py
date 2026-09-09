@@ -1188,7 +1188,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # rhs_jacvec apply (ADC-431) also captures persistent jac_uk / jac_r0 scratch the lambda
         # dereferences; the step body refreshes them from the live iterate / rhs(U^k) here (@p lines).
         _emit_matrix_free_operator(
-            program, v, var, prelude, lines, field_plans=field_plans, target=target,
+            program, v, var, prelude, lines, field_plans=field_plans, target=target, model=model,
             has_shared_interface_implicit_jacvec=(
                 has_shared_interface_implicit_jacvec
             ))

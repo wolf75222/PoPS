@@ -242,11 +242,11 @@ def _rhs_stage_fraction(value: Any) -> Fraction:
     return evaluation_stage_fraction(value, ark_partition="explicit")
 
 
-def _rhs_evaluation_identity(program: Any, value: Any) -> int:
+def _rhs_evaluation_identity(program: Any, value: Any, model: Any = None) -> int:
     """Return the exact rate or compiler-reserved atomic-group identity for one RHS."""
     grouped = sorted(
         (round_.barrier_index, round_.values)
-        for round_ in plan_rhs_coherence(program, list(program._values)).rounds
+        for round_ in plan_rhs_coherence(program, list(program._values), model=model).rounds
         if len(round_.values) > 1
     )
     for offset, (_barrier, values) in enumerate(grouped):
@@ -335,7 +335,7 @@ def _coupled_interface_jacvec_plan(
 
 
 def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
-                               lines: Any = None, *, field_plans: Any = None,
+                               lines: Any = None, *, field_plans: Any = None, model: Any = None,
                                target: str = "system",
                                has_shared_interface_implicit_jacvec: bool = False) -> None:
     """Lower a matrix_free_operator to an authenticated factory of C++ execution sessions. Each
@@ -623,7 +623,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         stage = _rhs_stage_fraction(r0_in)
         if coupled_pair is None or w is coupled_pair[0]:
             evaluation_identity = (
-                _rhs_evaluation_identity(program, r0_in)
+                _rhs_evaluation_identity(program, r0_in, model=model)
                 if coupled_pair is not None else int(r0_in.id)
             )
             prepare_refresh.append(
