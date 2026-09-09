@@ -39,7 +39,8 @@ def prepare_arithmetic(work_dir: Path) -> PreparedNativeComponent:
     )
 
 
-def build_case(cells: int, component: PreparedNativeComponent, *, imported: bool = True):
+def build_case(cells: int, component: PreparedNativeComponent, *, imported: bool = True,
+               intermediates: bool = False):
     domain = Rectangle("native_arithmetic_square", lower=(0, 0), upper=(1, 1))
     frame = domain.frame(Cartesian2D())
     x_axis, y_axis = frame.axes
@@ -65,6 +66,9 @@ def build_case(cells: int, component: PreparedNativeComponent, *, imported: bool
     ax, ay = 1.0, -0.25
     flux_x = multiply((u,), (ax,)).value[0] if imported else ax * u
     flux_y = multiply((u,), (ay,)).value[0] if imported else ay * u
+    if intermediates:
+        flux_x = model.primitive("transport_x", flux_x)
+        flux_y = model.primitive("transport_y", flux_y)
     flux = model.flux(
         "advection",
         frame=frame,
@@ -117,7 +121,7 @@ def build_case(cells: int, component: PreparedNativeComponent, *, imported: bool
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     component = prepare_arithmetic(args.work_dir / "native-arithmetic")
-    case, layout, initial, dt = build_case(args.cells, component)
+    case, layout, initial, dt = build_case(args.cells, component, intermediates=True)
     validated = pops.validate(case)
     resolved = pops.resolve(validated, layout=layout)
     artifact = pops.compile(resolved)

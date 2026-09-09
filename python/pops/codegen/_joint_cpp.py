@@ -9,6 +9,11 @@ def joint_kind(expression):
     return isinstance(expression, (OperatorApplication, NativeCall))
 
 
+def joint_neutral(expression, real):
+    width = sum(len(values) for values in expression.outputs.values())
+    return "Kokkos::Array<%s, %d>{}" % (real, width)
+
+
 def joint_expand(expression, render):
     if isinstance(expression, ApplicationProjection):
         offset = 0
@@ -24,7 +29,7 @@ def joint_expand(expression, render):
     return None
 
 
-def native_declaration(expression, name, render, indent):
+def native_declaration(expression, name, render, indent, *, prerequisite=None):
     """Return direct native call statements, guarded before entering the external target."""
     function = expression.function
     selected = (None if function.reads is None else
@@ -43,10 +48,21 @@ def native_declaration(expression, name, render, indent):
     result = "pops::NativeCallResult<%d>" % function.output_width
     support = (str("host" in function.execution_domains).lower(),
                str("device" in function.execution_domains).lower())
-    return [indent + "static_assert(pops::native_call_execution_supported<%s, %s>, "
+    lines = [indent + "static_assert(pops::native_call_execution_supported<%s, %s>, "
             '"native function has no declared route for the selected Kokkos execution target");' % support,
-            indent + result + " " + name + " = " + result + "::rejected();",
-            indent + "if (%s) { %s = %s; }" % (" && ".join(predicates) or "true", name, call)]
+            indent + result + " " + name + " = " + result + "::rejected();"]
+    if prerequisite is not None:
+        # A failed dependency owns the failure. Skipping its consumer must not
+        # manufacture a domain rejection that overrides a retryable status.
+        lines += [indent + name + ".status = pops::EvaluationStatus::kOk;",
+                  indent + name + ".reason = 0;",
+                  indent + "if (%s) {" % prerequisite,
+                  indent + "  %s = %s::rejected();" % (name, result)]
+    lines.append(indent + "if (%s) { %s = %s; }" % (
+        " && ".join(predicates) or "true", name, call))
+    if prerequisite is not None:
+        lines.append(indent + "}")
+    return lines
 
 
 def instantiated_body(operator, application):

@@ -135,11 +135,26 @@ def _cse_emit(
     historical re-walk: same counts, same sizes, same key INSERTION ORDER
     (post-order of the first visit) -> emitted C++ is bit-identical."""
     from pops._ir.native_call import NativeCall
-    from ._joint_cpp import joint_kind, native_declaration
+    from ._joint_cpp import joint_kind, joint_neutral, native_declaration
     key_memo, _, _ = _dag_key_ids(roots)
     declarations, observed_names, native_statuses = [], [], []
     next_scope = 0
     full_sizes = {}
+    dependency_calls = {}
+
+    def native_dependencies(expression):
+        cached = dependency_calls.get(id(expression))
+        if cached is not None:
+            return cached
+        found = {}
+        for child in _children(expression):
+            if isinstance(child, NativeCall):
+                found[id(child)] = child
+            for call in native_dependencies(child):
+                found[id(call)] = call
+        result = tuple(found.values())
+        dependency_calls[id(expression)] = result
+        return result
 
     def full_size(e):
         if id(e) not in full_sizes:
@@ -188,6 +203,17 @@ def _cse_emit(
         )
         cse_map, lines = dict(inherited), []
 
+        def native_prerequisite(expression):
+            if not return_native_statuses:
+                return None
+            names = []
+            for call in native_dependencies(expression):
+                name = cse_map.get(_key(call, key_memo))
+                if name is not None and name not in names:
+                    names.append(name)
+            return " && ".join(
+                name + ".status == pops::EvaluationStatus::kOk" for name in names) or None
+
         def guarded(right, available):
             nonlocal next_scope
             next_scope += 1
@@ -197,9 +223,11 @@ def _cse_emit(
         for i, k in enumerate(cand):
             name = "%scse%d_" % (prefix, i)
             expression = rep[k]
+            prerequisite = native_prerequisite(expression)
             if isinstance(expression, NativeCall):
                 rendered = native_declaration(expression, name,
-                    lambda value: _cpp_cse(value, cse_map, key_memo, guarded), indent)
+                    lambda value: _cpp_cse(value, cse_map, key_memo, guarded), indent,
+                    prerequisite=prerequisite)
                 if conditional:
                     # Only neutral storage is outside the branch; external code and argument
                     # evaluation remain inside it. Inactive branches contribute kOk/no reason.
@@ -211,6 +239,10 @@ def _cse_emit(
                 native_statuses.append(name)
             else:
                 value = _cpp_expand(expression, cse_map, key_memo, guarded)
+                if prerequisite is not None:
+                    neutral = (joint_neutral(expression, real) if joint_kind(expression)
+                               else "std::numeric_limits<%s>::quiet_NaN()" % real)
+                    value = "((%s) ? (%s) : %s)" % (prerequisite, value, neutral)
                 if conditional and return_names and not joint_kind(expression):
                     declarations.append("%s%s %s = 0;" % (indent, real, name))
                     lines.append("%s%s = %s;" % (indent, name, value))

@@ -11,7 +11,7 @@ import pytest
 from pops._ir.expr import Var
 from pops._ir.lowering import diff
 from pops.codegen.cpp_writer import _cse_emit
-from pops.model import Module, Signature
+from pops.model import FieldSpace, Module, Signature
 from pops.model.bundles import ProductSpace
 from pops.native_calls import NativeDerivative, NativeFunction, NativeInputDomain
 from pops.native_components import (PreparedNativeComponent, compiler_include_roots,
@@ -46,6 +46,55 @@ struct Exchange {
 '''
 
 
+FAILURE_HEADER = r'''
+namespace arithmetic_probe {
+inline int calls = 0;
+inline int dependent_calls = 0;
+inline pops::NativeCallResult<1> first(double value) {
+  ++calls;
+  pops::NativeCallResult<1> result;
+  result.status = value < 0 ? pops::EvaluationStatus::kRetry : pops::EvaluationStatus::kOk;
+  result.reason = value < 0 ? 37 : 0;
+  result.values[0] = value < 0 ? 1024 : value;
+  return result;
+}
+inline pops::NativeCallResult<1> second(double value) {
+  ++dependent_calls;
+  pops::NativeCallResult<1> result;
+  result.status = pops::EvaluationStatus::kOk;
+  result.values[0] = value;
+  return result;
+}
+}
+'''
+
+
+def _failure_probe_source(component):
+    scalar = FieldSpace("probe_scalar", components=("value",))
+    first = NativeFunction(component, "arithmetic_probe::first", Signature((scalar,), scalar))
+    second = NativeFunction(component, "arithmetic_probe::second", Signature((scalar,), scalar))
+    value, enabled = Var("value", "cons"), Var("enabled", "cons")
+    projection = first((value,)).value[0]
+    shared = projection * projection
+    dependent = second((shared,)).value[0]
+    expressions = {
+        "dependent_probe": shared + dependent,
+        "guarded_probe": (enabled > 0) & (dependent > 1),
+    }
+    source = ""
+    for symbol, expression in expressions.items():
+        lines, (output,), statuses = _cse_emit(
+            (expression,), "pops::Real", "  ", return_native_statuses=True)
+        source += 'extern "C" int %s(double value, double enabled, double* output) {\n' % symbol
+        source += "\n".join(lines) + "\n  int status = 0;\n"
+        for name in statuses:
+            source += "  if (static_cast<int>(%s.status) > status) status = static_cast<int>(%s.status);\n" % (name, name)
+        source += "  if (status) return status;\n  output[0] = %s;\n  return 0;\n}\n" % output
+    source += 'extern "C" int failure_probe_calls() { return arithmetic_probe::calls; }\n'
+    source += 'extern "C" int failure_probe_dependents() { return arithmetic_probe::dependent_calls; }\n'
+    return source
+
+
 @pytest.mark.compiler
 @pytest.mark.native_loader
 def test_imported_native_function_executes_shared_projections_and_exact_derivative(tmp_path, record_property):
@@ -53,7 +102,7 @@ def test_imported_native_function_executes_shared_projections_and_exact_derivati
     root = Path(__file__).resolve().parents[4]
     library = tmp_path / "library"
     library.mkdir()
-    (library / "exchange.hpp").write_text(HEADER)
+    (library / "exchange.hpp").write_text(HEADER + FAILURE_HEADER)
     component = PreparedNativeComponent.header_only("imported.exchange", include_root=library,
                                                    entry_headers=("exchange.hpp",))
     module = Module("external_exchange")
@@ -81,6 +130,7 @@ def test_imported_native_function_executes_shared_projections_and_exact_derivati
     source += "\n".join(derivative_lines) + '\n  if (static_cast<int>(%s.status) != 0) return 2;\n' % derivative_statuses[0]
     source += "\n".join("  output[%d] = %s;" % (i, value) for i, value in enumerate(derivatives))
     source += "\nreturn 0;\n}\n"
+    source += _failure_probe_source(component)
     source_path, binary, depfile = tmp_path / "kernel.cpp", tmp_path / "kernel.so", tmp_path / "kernel.d"
     source_path.write_text(source)
     staged = component.stage_verified(tmp_path / "staged")
@@ -110,6 +160,27 @@ def test_imported_native_function_executes_shared_projections_and_exact_derivati
     before = tuple(output)
     assert loaded.evaluate(1, 2, -1, 3, -1, output) == 2
     assert tuple(output) == before and loaded.count() == 1
+    for symbol in ("dependent_probe", "guarded_probe"):
+        function_probe = getattr(loaded, symbol)
+        function_probe.argtypes = [ctypes.c_double, ctypes.c_double,
+                                   ctypes.POINTER(ctypes.c_double)]
+        function_probe.restype = ctypes.c_int
+    for symbol in ("failure_probe_calls", "failure_probe_dependents"):
+        getattr(loaded, symbol).restype = ctypes.c_int
+    probe_output = (ctypes.c_double * 1)(77)
+    assert loaded.dependent_probe(-1, 1, probe_output) == 1
+    assert probe_output[0] == 77
+    assert loaded.failure_probe_calls() == 1 and loaded.failure_probe_dependents() == 0
+    assert loaded.guarded_probe(-1, 0, probe_output) == 0
+    assert probe_output[0] == 0
+    assert loaded.failure_probe_calls() == 1 and loaded.failure_probe_dependents() == 0
+    probe_output[0] = 77
+    assert loaded.guarded_probe(-1, 1, probe_output) == 1
+    assert probe_output[0] == 77
+    assert loaded.failure_probe_calls() == 2 and loaded.failure_probe_dependents() == 0
+    assert loaded.dependent_probe(2, 1, probe_output) == 0
+    assert probe_output[0] == 8
+    assert loaded.failure_probe_calls() == 3 and loaded.failure_probe_dependents() == 1
     record_property("native_joint_calls", 1)
     record_property("mathematical_first_projection_uses", 2)
     record_property("native_domain_rejections", 1)

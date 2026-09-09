@@ -379,8 +379,14 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         S.append("  static constexpr int n_aux = %d;" % model._total_n_aux())
     if not program_only:
         from pops._ir.native_call import native_functions
-        all_fluxes = axis_values(model._flux, "physical flux")
+        from pops._ir.primitive_expansion import expand_primitive_recipes
+        physical_fluxes = expand_primitive_recipes(model._flux, model.prim_defs)
+        all_fluxes = axis_values(physical_fluxes, "physical flux")
         fallible_flux = bool(native_functions(all_fluxes))
+        # Keep legacy primitive locals for pure laws. Fallible recipes belong inside
+        # the selected axis's joint evaluation and must not execute before its guard.
+        if not fallible_flux:
+            physical_fluxes = model._flux
         flux_signature = (
             "  POPS_HD pops::FluxDensity<State> flux_evaluation(const State& U, %s) const {"
             if fallible_flux else "  POPS_HD State flux(const State& U, %s) const {"
@@ -391,11 +397,13 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             flux_signature % aux_param,
             axis_guard("physical-flux"),
         ]
-        S += cons_locals() + aux_locals() + prim_locals(_live_prims(model, all_fluxes))
+        S += cons_locals() + aux_locals()
+        if not fallible_flux:
+            S += prim_locals(_live_prims(model, axis_values(model._flux, "physical flux")))
         S.append("    State F{};")
         for ordinal, axis in enumerate(axes):
             S.append(axis_branch(ordinal))
-            emitted = _codegen_exprs(model, model._flux[axis], cse, indent="      ",
+            emitted = _codegen_exprs(model, physical_fluxes[axis], cse, indent="      ",
                                      return_native_statuses=fallible_flux)
             ftl, fcpps = emitted[:2]
             S += ftl

@@ -49,9 +49,11 @@ def test_inline_and_imported_user_method_have_identical_temporal_graph():
     assert first.time._ir_hash() == second.time._ir_hash()
 
 
-def test_native_physical_flux_captures_authenticated_provider_and_real_call(tmp_path):
+@pytest.mark.parametrize("intermediates", [False, True])
+def test_native_physical_flux_captures_authenticated_provider_and_real_call(tmp_path, intermediates):
     component = imported_native_primitive.prepare_arithmetic(tmp_path / "native")
-    case, layout, _, _ = imported_native_primitive.build_case(8, component)
+    case, layout, _, _ = imported_native_primitive.build_case(
+        8, component, intermediates=intermediates)
     resolved = pops.resolve(pops.validate(case), layout=layout)
     assert _prepared_native_components(resolved.time) == (component,)
     graph = build_program_model_graph(resolved)
@@ -86,6 +88,165 @@ def test_native_flux_arithmetic_remains_joint_with_cse_disabled(tmp_path):
     )
     assert "\n".join(lines).count("migration_arithmetic::multiply(") == 1
     assert len(outputs) == 2 and len(statuses) == 1
+
+
+def test_failed_native_dependencies_guard_shared_arithmetic_and_dependent_calls(tmp_path):
+    from pops.codegen.cpp_writer import _cse_emit
+    from pops.math import Var
+    from pops.model import FieldSpace, Signature
+    from pops.native_calls import NativeFunction
+
+    component = imported_native_primitive.prepare_arithmetic(tmp_path / "native")
+    scalar = FieldSpace("scalar", components=("value",))
+    multiply = NativeFunction(component, "migration_arithmetic::multiply",
+                              Signature((scalar, scalar), scalar))
+    first = multiply((Var("u", "cons"),), (2,)).value[0]
+    shared = first * first
+    second = multiply((shared,), (3,)).value[0]
+    lines, _, statuses = _cse_emit(
+        (shared, shared + second), "pops::Real", "  ", return_native_statuses=True)
+    source = "\n".join(lines)
+    assert len(statuses) == 2
+    # Reusing a failed projection cannot execute its arithmetic or external consumer.
+    assert "%s.status == pops::EvaluationStatus::kOk) ?" % statuses[0] in source
+    dependent_guard = "if (%s.status == pops::EvaluationStatus::kOk) {" % statuses[0]
+    assert dependent_guard in source
+    assert source.index(dependent_guard) < source.rindex("migration_arithmetic::multiply(")
+    assert "%s.status = pops::EvaluationStatus::kOk;" % statuses[1] in source
+
+
+def test_guarded_native_dependency_remains_inside_its_selected_branch(tmp_path):
+    from pops.codegen.cpp_writer import _cse_emit
+    from pops.math import Var
+    from pops.model import FieldSpace, Signature
+    from pops.native_calls import NativeFunction
+
+    component = imported_native_primitive.prepare_arithmetic(tmp_path / "native")
+    scalar = FieldSpace("scalar", components=("value",))
+    multiply = NativeFunction(component, "migration_arithmetic::multiply",
+                              Signature((scalar, scalar), scalar))
+    u = Var("u", "cons")
+    first = multiply((u,), (2,)).value[0]
+    second = multiply((first * first,), (3,)).value[0]
+    predicate = (u > 0) & (second > 1)
+    lines, _, statuses = _cse_emit((predicate,), "pops::Real", "  ",
+                                  return_native_statuses=True)
+    source = "\n".join(lines)
+    assert len(statuses) == 2
+    branch = source.index("&& ([&]()")
+    assert source.index("migration_arithmetic::multiply(") > branch
+    assert all(source.index(name + ".status = pops::EvaluationStatus::kOk;") < branch
+               for name in statuses)
+    assert "if (%s.status == pops::EvaluationStatus::kOk) {" % statuses[0] in source
+
+
+@pytest.mark.parametrize("difference", ["argument", "target", "contract", "header"])
+def test_native_model_hash_authenticates_formula_and_source(tmp_path, difference):
+    from dataclasses import replace
+    from pops.codegen._compile_emit import model_hash
+    from pops.codegen.module_lowering import _module_to_model
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    from pops.math import Const
+    from pops.model import FieldSpace, Signature
+    from pops.native_calls import NativeFunction
+    from pops.native_components import PreparedNativeComponent
+
+    component = imported_native_primitive.prepare_arithmetic(tmp_path / "native")
+    alternate = component
+    if difference == "header":
+        root = tmp_path / "alternate"
+        root.mkdir()
+        (root / "arithmetic.hpp").write_text(
+            (tmp_path / "native" / "arithmetic.hpp").read_text() + "\n// changed source authority\n")
+        alternate = PreparedNativeComponent.header_only(
+            "migration.arithmetic", include_root=root, entry_headers=("arithmetic.hpp",))
+    hashes = []
+    for changed in (False, True):
+        frame = Rectangle("square", lower=(0, 0), upper=(1, 1)).frame(Cartesian2D())
+        model = pops.Model("same_model", frame=frame)
+        state = model.state("U", components=("u",))
+        scalar = FieldSpace("scalar", components=("value",))
+        function = NativeFunction(alternate if changed else component,
+                                  "migration_arithmetic::multiply",
+                                  Signature((state.space, scalar), scalar))
+        if changed and difference == "target":
+            function = replace(function, target="migration_arithmetic::other")
+        if changed and difference == "contract":
+            function = replace(function, execution_domains=("host", "device"))
+        value = function(tuple(state), (3 if changed and difference == "argument" else 2,)).value[0]
+        # Exercise the historically repr-only primitive route as well as the flux inventory.
+        recipe = model.primitive("recipe", value)
+        primitive = model.primitive("constitutive", recipe)
+        model.flux("advection", state=state, frame=frame,
+                   components={axis: (primitive,) for axis in frame.axes},
+                   waves={axis: (1,) for axis in frame.axes})
+        module = model.module
+        module.eigenvalues(**{axis.name: (Const(1),) for axis in frame.axes})
+        lowered = _module_to_model(module)._m
+        assert {"recipe", "constitutive"} <= set(lowered.prim_defs)
+        assert "flux_evaluation" in lowered.emit_cpp_brick()
+        hashes.append(model_hash(lowered))
+    assert hashes[0] != hashes[1]
+
+
+def test_primitive_expansion_preserves_sharing_and_rejects_cycles():
+    from pops._ir.primitive_expansion import expand_primitive_recipes
+    from pops.math import Var
+
+    a, b, u = Var("a", "prim"), Var("b", "prim"), Var("u", "cons")
+    expanded = expand_primitive_recipes((a, a), {"a": b, "b": u * u})
+    assert expanded[0] is expanded[1]
+    assert expanded[0].deps() == {"u"}
+    with pytest.raises(ValueError, match="primitive recipe cycle: a -> b -> a"):
+        expand_primitive_recipes((a,), {"a": b, "b": a})
+
+
+def test_public_module_composed_rate_captures_native_primitive_recipe(tmp_path):
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    from pops.layouts import Uniform
+    from pops.math import Const
+    from pops.mesh import CartesianGrid, PeriodicAxes
+    from pops.model import FieldSpace, Signature
+    from pops.native_calls import NativeFunction
+    from pops.numerics import DiscretizationPlan, FiniteVolume, reconstruction, riemann, variables
+    from pops.time import FixedDt
+
+    component = imported_native_primitive.prepare_arithmetic(tmp_path / "native")
+    frame = Rectangle("domain", lower=(0, 0), upper=(1, 1)).frame(Cartesian2D())
+    model = pops.Model("module_physics", frame=frame)
+    state = model.state("U", components=("u",))
+    scalar = FieldSpace("scalar", components=("value",))
+    function = NativeFunction(component, "migration_arithmetic::multiply",
+                              Signature((state.space, scalar), scalar))
+    primitive = model.primitive("transported", function(tuple(state), (1,)).value[0])
+    flux = model.flux("advection", state=state, frame=frame,
+                      components={axis: (primitive,) for axis in frame.axes},
+                      waves={axis: (1,) for axis in frame.axes})
+    module = model.module
+    module.eigenvalues(**{axis.name: (Const(1),) for axis in frame.axes})
+    state = module.state_handle(module.state_spaces()["U"])
+    flux = module.operator_handle(flux.reg_name)
+    rate = module.rate_operator("transport", state, fluxes=(flux,), default_flux=flux)
+    case = pops.Case("module_native")
+    block = case.block("fluid", module)
+    plan = DiscretizationPlan()
+    plan.rates.add(rate, FiniteVolume(
+        flux=(flux,), variables=variables.Conservative(state),
+        reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov()))
+    case.numerics(plan, block=block)
+    program = pops.Program("advance")
+    q = program.state(block[state])
+    updated = program.value("updated", q.n + program.dt * rate(q.n), at=q.next.point)
+    program.commit(q.next, updated)
+    program.step_strategy(FixedDt(.001))
+    case.program(program)
+    resolved = pops.resolve(pops.validate(case), layout=Uniform(CartesianGrid(
+        frame=frame, cells=(8, 8), periodic=PeriodicAxes(frame.axes))))
+    assert _prepared_native_components(resolved.time) == (component,)
+    graph = build_program_model_graph(resolved)
+    assert "flux_evaluation" in graph.model_for_block("fluid")._m.emit_cpp_brick()
 
 
 def test_native_primitive_missing_exact_derivative_is_refused(tmp_path):

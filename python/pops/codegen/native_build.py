@@ -8,10 +8,10 @@ from pathlib import Path
 from pops._ir.native_call import native_functions
 
 
-def model_native_components(model):
-    """Discover source providers from emitted physical formula roots, never from names."""
-    roots = [
-        getattr(model, name, None)
+def model_native_roots(model):
+    """One formula inventory for native source discovery and artifact authentication."""
+    return {
+        name: getattr(model, name, None)
         for name in (
             "_flux",
             "_eig",
@@ -23,10 +23,25 @@ def model_native_components(model):
             "_flux_terms",
             "_proj",
             "cons_from",
+            "_linear_sources",
+            "_local_transforms",
+            "_stab_speed",
+            "_stab_dt",
+            "_src_freq",
+            "_src_jac",
+            "_roe_rows",
+            "_roe_jacobian",
+            "_riemann_hook_forms",
+            "_elliptic",
+            "_elliptic_fields",
         )
-    ]
+    }
+
+
+def model_native_components(model):
+    """Discover source providers from emitted physical formula roots, never from names."""
     components = {}
-    for function in native_functions(roots):
+    for function in native_functions(model_native_roots(model)):
         components.setdefault(function.component.manifest_sha256, function.component)
     return tuple(components.values())
 

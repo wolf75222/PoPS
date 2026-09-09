@@ -421,6 +421,44 @@ def _module_to_model(module: Any, state_space: Any = None,
             _reject(source, "operator_lowering_failed", str(exc))
         coverage_rows.append(LoweringCoverageRow(
             source, "lowered", (builder_targets[op.kind],)))
+    # A Module owns named constitutive recipes as well as operator bodies. Retain
+    # the transitive recipes read by this selected state route; another state's
+    # unused recipe must never be rebound into this block's local coordinates.
+    from pops._ir.expr import Expr, Var
+    from pops._ir.visitors import _children
+    from pops.codegen.native_build import model_native_roots
+    recipes = module.primitive_recipes()
+    visited, active, retained = set(), [], set()
+
+    def retain_recipes(value):
+        if isinstance(value, Var) and value.kind == "prim" and value.name in recipes:
+            name = value.name
+            if name in active:
+                raise ValueError("primitive recipe cycle: " + " -> ".join((*active, name)))
+            if name not in retained:
+                active.append(name)
+                body = _body_for_state(recipes[name])
+                retain_recipes(body)
+                active.pop()
+                m.primitive(name, body)
+                retained.add(name)
+                coverage_rows.append(LoweringCoverageRow(
+                    "primitive_recipe:%s" % name, "lowered", ("dsl:primitive:%s" % name,)))
+            return
+        if id(value) in visited:
+            return
+        visited.add(id(value))
+        if isinstance(value, Expr):
+            for child in _children(value):
+                retain_recipes(child)
+        elif isinstance(value, Mapping):
+            for child in value.values():
+                retain_recipes(child)
+        elif isinstance(value, (tuple, list)):
+            for child in value:
+                retain_recipes(child)
+
+    retain_recipes(model_native_roots(m._m))
     from pops.codegen.diffusion_lowering import prepare_diffusion_carrier
     prepare_diffusion_carrier(m, module)
     from pops.codegen.state_storage_lowering import prepare_source_storage_carrier
@@ -439,6 +477,7 @@ def _module_to_model(module: Any, state_space: Any = None,
     else:
         coverage_rows.append(LoweringCoverageRow(
             "module:%s:eigenvalues" % module.name, "documentary"))
+    retain_recipes(m._m._eig)
     from pops.codegen.state_storage_lowering import prepare_named_flux_storage_carrier
     prepare_named_flux_storage_carrier(
         m, module, resolved_operations, emitter_is_private=True

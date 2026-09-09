@@ -212,6 +212,16 @@ def model_hash(model: Any, params: Any = None) -> str:
 
     m = model
     parts = []
+    from pops.codegen.native_build import model_native_roots
+    from pops._ir.native_call import native_functions
+    native_roots = model_native_roots(m)
+    if native_functions(native_roots):
+        from pops.model.hash_data import canonical_hash_data
+        # repr(Expr) is diagnostic text: extension nodes may render as '?'. The
+        # complete typed DAG authenticates targets, arguments, footprints and the
+        # source manifest included in every NativeFunction's structural identity.
+        parts.append("native_formula_graph=" + json.dumps(
+            canonical_hash_data(native_roots), sort_keys=True, separators=(",", ":")))
     parts.append("name=%s" % m.name)
     parts.append("cons=%s" % ",".join(m.cons_names))
     parts.append("croles=%s" % ",".join(_roles_for(m.cons_names, m.cons_roles)))
