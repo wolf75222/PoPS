@@ -26,7 +26,7 @@ from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import AMR, Uniform
 from pops.lib.amr import StateTransfer
-from pops.lib.initial import Gaussian
+from pops.lib.initial import Analytic, Gaussian
 from pops.math import ValueExpr, CoeffGradient, ddt, div, sqrt
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import Diffusion, DiscretizationPlan
@@ -60,6 +60,7 @@ def build(
     failure_action=None,
     newton_iterations=20,
     step_dt=DT,
+    periodic_witness=False,
 ):
     from pops.physics.diffusion import DiffusiveBoundary
 
@@ -156,25 +157,36 @@ def build(
     program.commit(temporal.next, candidate)
     program.step_strategy(FixedDt(step_dt))
     case.program(program)
-    case.initials.add(
-        InitialCondition(
-            state=block[state],
-            value=Gaussian(
-                frame=frame,
-                center={frame.x: 0.37, frame.y: 0.43},
-                background=1.0,
-                amplitude=0.3,
-                inverse_width=40.0,
+    if periodic_witness:
+        from pops.analytic import cos, x, y
+
+        initial = Analytic(
+            frame=frame,
+            components=(
+                1 + 0.3 * cos(2 * np.pi * (x(frame) - 0.5)) * (1 + 0.1 * cos(2 * np.pi * y(frame))),
             ),
-            projection=ConservativeCellAverage(),
         )
+    else:
+        initial = Gaussian(
+            frame=frame,
+            center={frame.x: 0.37, frame.y: 0.43},
+            background=1.0,
+            amplitude=0.3,
+            inverse_width=40.0,
+        )
+    case.initials.add(
+        InitialCondition(state=block[state], value=initial, projection=ConservativeCellAverage())
     )
     grid = CartesianGrid(
         frame=frame, cells=(n, n), periodic=None if boundary else PeriodicAxes(frame.axes)
     )
     if not refined:
         return case, Uniform(grid)
-    threshold = case.param(RuntimeParam("refine-threshold", default=1.12))
+    threshold = case.param(
+        RuntimeParam(
+            "refine-threshold", default=1 + 0.3 * 1.1 / np.sqrt(2) if periodic_witness else 1.12
+        )
+    )
     transfer = AMRTransfer()
     transfer.state(block[state], StateTransfer())
     execution = (
@@ -186,7 +198,12 @@ def build(
         grid=grid,
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
-            rules=(Tag(ValueExpr(block[state]) > case.value(threshold)), Buffer(cells=1)),
+            rules=(
+                Tag(ValueExpr(block[state]) > case.value(threshold)),
+                # Existing transfer contributes one lookahead cell. Scale the authored buffer
+                # to keep its total physical padding exactly 3/16 at every N.
+                Buffer(cells=3 * n // 16 - 1 if periodic_witness else 1),
+            ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,
         ),
@@ -219,20 +236,55 @@ def assert_no_second_reflux(runtime):
     )
 
 
-@pytest.mark.parametrize("imex", [False, True])
-@pytest.mark.parametrize("kind", ["constant", "variable", "diagonal", "nonlinear_accumulation"])
-def test_composite_implicit_matches_conservative_reference_and_converges(
-    kind, imex, isolated_native_cache, native_cxx, kokkos_root, record_property
-):
+def _periodic_cell_averages(n):
+    centers = (np.arange(n) + 0.5) / n
+    cx = np.cos(2 * np.pi * (centers - 0.5)) * np.sinc(1 / n)
+    cy = np.cos(2 * np.pi * centers) * np.sinc(1 / n)
+    return 1 + 0.3 * cx[None, :] * (1 + 0.1 * cy[:, None])
+
+
+def _conservative_reference_errors(kind, imex, *, periodic_witness):
     errors = []
     for n in (16, 32, 64):
         amr, reference = (
-            bind(n, kind=kind, imex=imex),
-            bind(2 * n, kind=kind, refined=False, imex=imex),
+            bind(n, kind=kind, imex=imex, periodic_witness=periodic_witness),
+            bind(2 * n, kind=kind, refined=False, imex=imex, periodic_witness=periodic_witness),
         )
         assert amr.n_levels() == 2
         mask0 = composite_active_mask(amr, 0, refinement_ratio=2)
         assert mask0.any() and (~mask0).any(), "the matrix requires an actual coarse/fine interface"
+        if periodic_witness:
+            expected_mask = np.ones((n, n), dtype=bool)
+            expected_mask[:, 3 * n // 16 : 13 * n // 16] = False
+            np.testing.assert_array_equal(mask0, expected_mask)
+            fine_mask = composite_active_mask(amr, 1, refinement_ratio=2)
+            np.testing.assert_array_equal(fine_mask, (~expected_mask).repeat(2, 0).repeat(2, 1))
+            for level in range(amr.n_levels()):
+                exact = _periodic_cell_averages(n * 2**level)
+                mask = composite_active_mask(amr, level, refinement_ratio=2)
+                actual = np.asarray(amr.block_level_state_global("heat", level)).reshape(
+                    exact.shape
+                )
+                np.testing.assert_allclose(actual[mask], exact[mask], rtol=0, atol=2e-11)
+        reference_initial = np.asarray(reference.state_global("heat")).reshape(2 * n, 2 * n).copy()
+        if periodic_witness:
+            np.testing.assert_allclose(
+                reference_initial, _periodic_cell_averages(2 * n), rtol=0, atol=2e-11
+            )
+        if not periodic_witness:
+            from math import erf
+
+            # The legacy Uniform Gaussian producer integrates this profile analytically.
+            edges = np.arange(2 * n + 1) / (2 * n)
+            integrals = [
+                np.diff([erf(np.sqrt(40) * (edge - center)) for edge in edges])
+                * np.sqrt(np.pi)
+                / (2 * np.sqrt(40))
+                * (2 * n)
+                for center in (0.37, 0.43)
+            ]
+            exact = 1 + 0.3 * integrals[1][:, None] * integrals[0][None, :]
+            np.testing.assert_allclose(reference_initial, exact, rtol=0, atol=2e-14)
         before = mass(amr, n)
         for runtime in (amr, reference):
             report = pops.run(runtime, t_end=4 * DT, max_steps=4, console=False)
@@ -249,6 +301,13 @@ def test_composite_implicit_matches_conservative_reference_and_converges(
         else:
             assert_no_second_reflux(amr)
         fine = np.asarray(reference.state_global("heat")).reshape(2 * n, 2 * n)
+        if kind == "constant" and not imex:
+            # An independent periodic centered-Laplacian diagonalization authenticates the
+            # complete four-step Uniform BE reference, including the nonperiodic-data transient.
+            eigenvalues = 4 * (2 * n) ** 2 * np.sin(np.pi * np.fft.fftfreq(2 * n)) ** 2
+            multiplier = (1 + DT * 0.1 * (eigenvalues[:, None] + eigenvalues[None, :])) ** -4
+            exact_final = np.fft.ifft2(np.fft.fft2(reference_initial) * multiplier).real
+            np.testing.assert_allclose(fine, exact_final, rtol=0, atol=2e-11)
         coarse = fine.reshape(n, 2, n, 2).mean(axis=(1, 3))
         squared = 0.0
         for level, expected in ((0, coarse), (1, fine)):
@@ -256,8 +315,30 @@ def test_composite_implicit_matches_conservative_reference_and_converges(
             actual = np.asarray(amr.block_level_state_global("heat", level)).reshape(expected.shape)
             squared += float(np.sum((actual[mask] - expected[mask]) ** 2)) / (n * 2**level) ** 2
         errors.append(squared**0.5)
-    assert errors[1] < errors[0] / 1.5 and errors[2] < errors[1] / 1.5
+    return errors
+
+
+@pytest.mark.parametrize("imex", [False, True])
+@pytest.mark.parametrize("kind", ["constant", "variable", "diagonal", "nonlinear_accumulation"])
+def test_composite_implicit_matches_conservative_reference_and_converges(
+    kind, imex, isolated_native_cache, native_cxx, kokkos_root, record_property
+):
+    # A periodic smooth solution and a fixed physical interface define this refinement sequence.
+    # The former unperiodized Gaussian plus fixed-cell padding changed both seam resolution and
+    # interface location with N; its N16→N32 discrepancy was not an asymptotic order witness.
+    errors = _conservative_reference_errors(kind, imex, periodic_witness=True)
     record_property(kind + ("_imex" if imex else "") + "_conservative_reference_l2_errors", errors)
+    assert errors[1] < errors[0] / 1.5 and errors[2] < errors[1] / 1.5
+
+
+def test_unperiodized_gaussian_conserves_against_reference_without_an_order_claim(
+    isolated_native_cache, native_cxx, kokkos_root, record_property
+):
+    # Preserve the original six-instance adversarial lifecycle: the Gaussian has a periodic-seam
+    # jump, so finite-grid monotonicity is not an appropriate accuracy oracle for this profile.
+    errors = _conservative_reference_errors("constant", False, periodic_witness=False)
+    record_property("unperiodized_gaussian_conservative_reference_l2_errors", errors)
+    assert np.isfinite(errors).all()
 
 
 def test_composite_implicit_physical_boundary_inventory(
