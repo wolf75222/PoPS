@@ -487,9 +487,11 @@ python scripts/ci_select_tests.py cpp \
   --explain-file build/m0-cpp-explain.txt
 ```
 
-The README also documents the scientific planner, but its source directory is absent at this
-baseline. Do not report these commands as a successful normative run until that availability gap
-is resolved:
+At the frozen baseline, the README also documented the scientific planner, but its source directory
+and planner/checker scripts were absent. The command block below is retained as historical M0
+evidence of the unavailable campaign interface; it is not a runnable current workflow or an
+execution result. Do not report these commands as a successful normative run until that
+availability gap is resolved:
 
 ```bash
 python scripts/check_verification_manifest.py
