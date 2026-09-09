@@ -851,6 +851,8 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_pure_field_algebra_extreme_dot 2)
   set(POPS_MPI_RANKS_test_geometric_mg 2)
   set(POPS_MPI_RANKS_test_coupled_fieldsolve 2)
+  set(POPS_MPI_RANKS_test_composite_general_field 2)
+  set(POPS_MPI_RANKS_test_prepared_resource_cache 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_implicit_transaction 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_substeps 2)
   set(POPS_MPI_RANKS_test_collective_step_rejection 2)
@@ -1022,6 +1024,12 @@ if(POPS_HAS_MPI)
     test_pure_field_algebra_extreme_dot
     test_geometric_mg
     test_coupled_fieldsolve
+    # Two real patches per level are partitioned over ranks 0/1, including
+    # coarse/fine flux replacement and collective incompatible-RHS refusal.
+    test_composite_general_field
+    # Only rank zero invalidates preparation or throws during preflight; every
+    # rank must reconstruct/refuse together without corrupting the cached entry.
+    test_prepared_resource_cache
     test_amr_multiblock_implicit_transaction
     test_amr_multiblock_substeps
     test_collective_step_rejection

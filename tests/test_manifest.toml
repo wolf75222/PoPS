@@ -69,6 +69,11 @@ sources = ["tests/cpp/integration/amr/test_amr_program_diffusion.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
+name = "test_amr_program_field_publication"
+sources = ["tests/cpp/integration/amr/test_amr_program_field_publication.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
 name = "test_amr_program_embedded_boundary"
 sources = ["tests/cpp/integration/amr/test_amr_program_embedded_boundary.cpp"]
 labels = ["integration", "amr", "medium"]
@@ -608,6 +613,12 @@ labels = ["unit", "elliptic", "fast"]
 [[cpp.suite]]
 name = "test_coupled_fieldsolve"
 sources = ["tests/cpp/unit/elliptic/test_coupled_fieldsolve.cpp"]
+labels = ["unit", "elliptic", "fast"]
+mpi_variants = [2]
+
+[[cpp.suite]]
+name = "test_composite_general_field"
+sources = ["tests/cpp/unit/elliptic/test_composite_general_field.cpp"]
 labels = ["unit", "elliptic", "fast"]
 mpi_variants = [2]
 
@@ -1185,6 +1196,17 @@ mpi_variants = [2]
 name = "test_prepared_stream_executor"
 sources = ["tests/cpp/unit/runtime/test_prepared_stream_executor.cpp"]
 labels = ["unit", "runtime", "accelerator", "fast"]
+
+[[cpp.suite]]
+name = "test_prepared_resource_cache"
+sources = ["tests/cpp/unit/runtime/test_prepared_resource_cache.cpp"]
+labels = ["unit", "runtime", "fast"]
+mpi_variants = [2]
+
+[[cpp.suite]]
+name = "test_physical_support_transfer"
+sources = ["tests/cpp/unit/runtime/test_physical_support_transfer.cpp"]
+labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]
 name = "test_program_reflux_ledger"

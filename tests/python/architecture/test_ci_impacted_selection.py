@@ -304,6 +304,8 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_amr_synthetic_program_loader_transaction": (2,),
         "test_copy_schedule_cache": (1, 2, 4),
         "test_coupled_fieldsolve": (2,),
+        "test_composite_general_field": (2,),
+        "test_prepared_resource_cache": (2,),
         "test_fill_boundary_cache": (1, 2, 4),
         "test_generated_amr_system_block": (2,),
         "test_generated_stability_speed": (2,),
@@ -331,7 +333,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 107
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 109
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
@@ -1325,7 +1327,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "Save prewarm ccache" not in python_prewarm_block
     assert "CCACHE_CACHE_KEY" not in python_prewarm_block
     assert "timeout-minutes: 50" in python_shards_block
-    assert "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]" in python_shards_block
+    assert "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]" in python_shards_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_shards_block
     assert "timeout-minutes: 30" in python_cache_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_cache_block
