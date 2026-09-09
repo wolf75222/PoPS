@@ -7,7 +7,7 @@ from pops.analytic import CellBounds, constant, coordinates, input, param
 from pops.frames import Cartesian
 from pops.lib.initial import Analytic, Gaussian
 from pops.runtime._analytic_expression_lowering import lower_analytic_components
-from pops.runtime._initial_source_lowering import validate_cell_integral_contract
+from pops.analytic._cell_bounds import validate_cell_integral_contract
 
 
 def evaluate(expression, frame, bounds):

@@ -5,7 +5,6 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pops.identity.scalar import native_binary64
-from pops.analytic._cell_bounds import validate_cell_integral_contract
 
 
 _PROJECTION_KEYS = {
@@ -102,6 +101,7 @@ def validate_initial_source(source: Any, *, where: str) -> str:
             if expression.input_references() or expression.time_clocks():
                 raise ValueError("initial point expressions cannot read discrete inputs or clocks")
         if "cell_integrals" in source:
+            from pops.analytic._cell_bounds import validate_cell_integral_contract
             validate_cell_integral_contract(source["cell_integrals"], frame_id=source["frame_id"],
                                             component_count=len(components))
     elif route == "field_mapped_analytic_expression":
@@ -155,4 +155,4 @@ def validate_initial_source(source: Any, *, where: str) -> str:
     return route
 
 
-__all__ = ["native_binary64", "ranked_gaussian_center", "validate_cell_integral_contract", "validate_initial_source"]
+__all__ = ["native_binary64", "ranked_gaussian_center", "validate_initial_source"]

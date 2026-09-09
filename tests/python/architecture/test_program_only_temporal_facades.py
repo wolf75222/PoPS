@@ -472,8 +472,18 @@ def test_amr_regrid_is_an_explicit_prepared_program_operation():
     )
     publish = _function_body(context, "void publish_regrid(")
     assert "runtime_->prepare_regrid(" in prepare
-    assert 'require_history_free_for_topology_change_("regrid")' in publish
-    assert "runtime_->publish_regrid(" in publish
+    assert "all_reduce_max(history_levels_.empty() ? 0L : 1L" in publish
+    assert "prepared_execution_lane()" in publish
+    assert "facade_->publish_prepared_amr_program_regrid_(" in publish
+    assert "runtime_->publish_regrid(" not in publish
+    system = AMR_SYSTEM_CPP.read_text(encoding="utf-8")
+    facade = _function_body(system, "void AmrSystem<Dim>::publish_prepared_amr_program_regrid_(")
+    assert "p_->publish_program_topology(" in facade
+    assert "p_->multiblock_hierarchy->publish_regrid(" in facade
+    authority = _function_body(system, "void publish_program_topology(")
+    assert "!program.hist_.histories.empty()" in authority
+    assert "rethrow_collective_failure(" in authority
+    assert "execute_transaction(" in authority
 
 
 def test_amr_blocks_expose_program_spatial_primitives_without_hidden_step_closures():
