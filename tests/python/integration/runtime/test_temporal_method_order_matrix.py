@@ -168,20 +168,36 @@ def test_split_native_failure_restores_complete_accepted_envelope(
     record_property("failure", str(failed.value))
 
 
+@pytest.mark.parametrize("profile", ("m6_supplemental", "m5_original"))
 def test_spatial_backward_euler_temporal_order_at_fixed_mesh(
-        isolated_native_cache, native_cxx, kokkos_root, record_property):
-    from tests.python.integration.runtime.test_implicit_diffusion_lifecycle import mode, run_case
-    n, final_time, counts = 16, 0.04, (4, 8, 16, 32)
-    wave = mode(n)
+        profile, isolated_native_cache, native_cxx, kokkos_root, record_property):
+    from tests.python.integration.runtime.test_implicit_diffusion_lifecycle import (
+        M5_SOLVER_CONTROLS, cell_average_mode, m5_qualification_solver, mode, run_case,
+    )
+    original = profile == "m5_original"
+    n, final_time, counts, mean = (32, 0.1, (4, 8, 16), 2.0) if original else (
+        16, 0.04, (4, 8, 16, 32), 1.0)
+    wave = cell_average_mode(n) if original else mode(n)
     eigenvalue = 8 * 0.1 * math.sin(math.pi / n) ** 2 * n ** 2
-    exact = 1 + math.exp(-eigenvalue * final_time) * wave
-    errors = []
+    exact = mean + math.exp(-eigenvalue * final_time) * wave
+    errors, constant_errors = [], []
     for count in counts:
-        actual, _ = run_case(n, 1 + wave, method="backward_euler", dt=final_time / count, steps=count)
+        actual, _ = run_case(n, mean + wave, method="backward_euler", dt=final_time / count,
+                             steps=count, solver=m5_qualification_solver() if original else None)
         errors.append(float(np.sqrt(np.mean((actual - exact) ** 2))))
-        assert abs(float(np.mean(actual)) - 1.0) < 1e-10
+        constant_errors.append(abs(float(np.mean(actual)) - mean))
+        if original:
+            assert constant_errors[-1] <= 2e-11
+        else:
+            assert constant_errors[-1] < 1e-10
     orders = [math.log2(a / b) for a, b in zip(errors[:-1], errors[1:], strict=True)]
-    record_property("spatial_implicit_temporal_matrix", json.dumps({"cells": [n, n],
-        "step_counts": counts, "final_time": final_time, "errors_l2": errors,
-        "orders": orders, "reference": "exact_semidiscrete_fourier_mode_with_nonzero_mean"}))
-    assert all(0.85 < order < 1.15 for order in orders), (errors, orders)
+    record_property("spatial_implicit_temporal_matrix", json.dumps({"profile": profile,
+        "cells": [n, n], "step_counts": counts, "dt": [final_time/count for count in counts],
+        "final_time": final_time, "mean": mean, "errors_l2": errors,
+        "constant_mode_errors": constant_errors, "orders": orders,
+        "solver": M5_SOLVER_CONTROLS if original else {"tolerance": 1e-12, "linear_tolerance": 1e-8},
+        "reference": "exact_semidiscrete_fourier_mode_with_nonzero_mean"}))
+    if original:
+        assert all(order >= 0.9 for order in orders), (errors, orders)
+    else:
+        assert all(0.85 < order < 1.15 for order in orders), (errors, orders)

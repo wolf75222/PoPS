@@ -27,7 +27,7 @@ pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 
 def make_case(n, *, method="backward_euler", dt=0.0001, nonlinear=False, invalid=False,
               tau_scale=1, derivative_route="finite_difference", commit_mode="solved",
-              failure_action=None):
+              failure_action=None, solver=None):
     from pops.numerics import Diffusion
 
     frame = Rectangle("implicit_heat_square", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
@@ -68,7 +68,7 @@ def make_case(n, *, method="backward_euler", dt=0.0001, nonlinear=False, invalid
         stage = ImplicitDiffusionStage(rate, temporal.n, tau_scale * program.dt, accumulation=accumulation)
         request = stage.request(unknown=SolveUnknown("temperature" if nonlinear else "state", coordinates),
                                 seed=seed, derivative=DerivativeStrategy(derivative_route))
-        solved = program.solve(request, solver=Newton(
+        solved = program.solve(request, solver=solver if solver is not None else Newton(
             tolerance=1e-12, max_iterations=20, linear_tolerance=1e-8,
             linear_max_iterations=100, restart=30)).consume(
                 action=FailRun() if failure_action is None else failure_action)[0]
@@ -149,10 +149,11 @@ def test_shifted_operator_retains_nonzero_constant(isolated_native_cache, native
 
 def test_nonlinear_accumulation_preserves_energy(isolated_native_cache, native_cxx, kokkos_root,
                                                record_property):
-    energy, runtime = run_case(16, np.zeros((16, 16)), dt=1.0, nonlinear=True)
+    energy, runtime = run_case(16, np.zeros((16, 16)), dt=1.0, nonlinear=True,
+                               solver=m5_qualification_solver())
     temperature = (np.sqrt(1 + 4 * energy) - 1) / 2
-    np.testing.assert_allclose(energy, 1.0, rtol=0, atol=1e-10)
-    np.testing.assert_allclose(temperature, (-1 + math.sqrt(5)) / 2, rtol=0, atol=1e-10)
+    np.testing.assert_allclose(energy, 1.0, rtol=0, atol=2e-11)
+    np.testing.assert_allclose(temperature, (-1 + math.sqrt(5)) / 2, rtol=0, atol=2e-11)
     assert float(np.min(temperature)) > 0.6
     diagnostics = runtime._executor.program_diagnostics()
     evaluations = [value for key, value in diagnostics.items() if key.endswith(".full_residual_evaluations")]
@@ -161,6 +162,10 @@ def test_nonlinear_accumulation_preserves_energy(isolated_native_cache, native_c
     assert evaluations[0] > 2 * derivatives[0] > 0
     record_property("temperature_min_max", json.dumps([float(np.min(temperature)), float(np.max(temperature))]))
     record_property("energy_max_error", float(np.max(np.abs(energy - 1))))
+    accumulation_residual = float(np.max(np.abs(temperature + temperature**2 - 1)))
+    assert accumulation_residual <= 2e-11
+    record_property("accumulation_residual_linf", accumulation_residual)
+    record_property("solver", json.dumps(M5_SOLVER_CONTROLS))
     record_property("full_residual_evaluations", evaluations[0])
     record_property("finite_difference_jvps", derivatives[0])
 
@@ -194,3 +199,142 @@ def test_invalid_nonlinear_domain_leaves_accepted_state_unchanged(isolated_nativ
     np.testing.assert_array_equal(np.asarray(runtime.state_global("material")).reshape(initial.shape), initial)
     assert envelope() == before
     assert native.history_fill_count("prior_energy") == 0
+
+
+# Newton exposes a hybrid outer tolerance and a relative inner tolerance, not
+# separate absolute/relative pairs. These original M5 profiles use a stricter
+# outer relative target than the plan; existing M6 helper defaults stay intact.
+M5_SOLVER_CONTROLS = {
+    "outer_stop": "1e-13 * max(1, initial_residual_euclidean_norm)",
+    "inner_stop": "1e-12 * current_residual_euclidean_norm",
+    "outer_max_iterations": 20, "inner_max_iterations": 100, "restart": 30,
+    "derivative": "finite_difference",
+    "native_final_norm": "not exposed by the public spatial solve diagnostics",
+}
+
+
+def m5_qualification_solver(*, max_iterations=20):
+    return Newton(tolerance=1e-13, max_iterations=max_iterations,
+                  linear_tolerance=1e-12, linear_max_iterations=100, restart=30)
+
+
+def cell_average_mode(n):
+    """Exact unit-cell averages of sin(2*pi*x)*sin(2*pi*y)."""
+    return np.sinc(1 / n)**2 * mode(n)
+
+
+def test_original_m5_backward_euler_spatial_matrix(
+        isolated_native_cache, native_cxx, kokkos_root, record_property):
+    final_time, nu = 0.05, 0.1
+    rows = []
+    for n in (16, 32, 64):
+        steps = 13 * (n // 16)**2
+        dt = final_time / steps
+        assert dt <= 0.1 / (nu * n*n)
+        wave = cell_average_mode(n)
+        initial = 2 + wave
+        actual, runtime = run_case(n, initial, dt=dt, steps=steps,
+                                   solver=m5_qualification_solver())
+        exact = 2 + math.exp(-8 * math.pi**2 * nu * final_time) * wave
+        error = np.abs(actual - exact)
+        assert np.isfinite(actual).all()
+        assert abs(runtime.time() - final_time) <= 2e-14
+        mass_error = abs(float(np.mean(actual) - np.mean(initial))) / abs(float(np.mean(initial)))
+        assert mass_error <= 2e-11
+        row = {"n": n, "steps": steps, "dt": dt, "final_time": final_time,
+               "l1": float(np.mean(error)), "l2": float(np.sqrt(np.mean(error**2))),
+               "linf": float(np.max(error)), "relative_mass_error": mass_error,
+               "solver": M5_SOLVER_CONTROLS}
+        rows.append(row)
+        record_property(f"original_m5_be_spatial_N{n}", json.dumps(row))
+    orders = {}
+    for norm in ("l1", "l2", "linf"):
+        errors = [row[norm] for row in rows]
+        assert all(a > b > 0 for a, b in zip(errors[:-1], errors[1:], strict=True)), rows
+        orders[norm] = [math.log2(a / b) for a, b in zip(errors[:-1], errors[1:], strict=True)]
+        assert orders[norm][-1] >= 1.75, (rows, orders)
+    record_property("original_m5_be_spatial_orders", json.dumps(orders))
+
+
+def test_uniform_implicit_iteration_budget_rolls_back_state_clock_and_exchanges(
+        isolated_native_cache, native_cxx, kokkos_root, record_property):
+    n = 16
+    case, layout = make_case(n, dt=1.0, nonlinear=True,
+                             solver=m5_qualification_solver(max_iterations=1))
+    artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
+    subject = artifact.plan.initial_condition_plan.bindings[0].subject
+    initial = np.zeros((1, n, n))
+    runtime = pops.bind(artifact, initial_values={subject: initial.copy()},
+                        resources={"execution_context": artifact_execution_context(artifact)})
+
+    def accepted_envelope():
+        return (runtime.time(), runtime.macro_step(),
+                runtime._executor._program_exchange_records(),
+                np.asarray(runtime.state_global("material")).tobytes())
+
+    before = accepted_envelope()
+    # The valid seed T=.2 has Q(T)=.24. One Newton correction cannot solve
+    # Q(T)=1 to tolerance; this exercises numerical exhaustion, not invalid input.
+    with pytest.raises(RuntimeError, match="field_newton_iteration_limit") as failed:
+        pops.run(runtime, t_end=1.0, max_steps=1)
+    assert "action=fail_run" in str(failed.value)
+    assert accepted_envelope() == before
+    np.testing.assert_array_equal(np.asarray(runtime.state_global("material")).reshape(initial.shape), initial)
+    record_property("failure_reason", str(failed.value))
+    record_property("outer_iteration_budget", 1)
+    record_property("accepted_exchange_count_after_failure", len(before[2]))
+
+
+def test_uniform_backward_euler_accepted_face_quadrature(
+        isolated_native_cache, native_cxx, kokkos_root, record_property):
+    nu = 0.1
+    for n in (16, 32, 64):
+        initial = 2 + 0.4 * cell_average_mode(n)
+        dt = 0.05 / (nu * n*n)
+        actual, runtime = run_case(n, initial, dt=dt, solver=m5_qualification_solver())
+        records = runtime._executor._program_exchange_records()
+        assert len(records) == 4*n*n
+        assert len({row["evaluation_context"] for row in records}) == 1
+        assert len({row["occurrence_identity"] for row in records}) == 1
+        incidences = set()
+        delta = np.zeros_like(initial)
+        flux_defect = 0.0
+        for row in records:
+            cell_token, axis_token, side_token = row["quadrature_identity"].split("/")
+            i, j = map(int, cell_token.split(":")[1:])
+            axis, side = int(axis_token.split(":")[1]), int(side_token.split(":")[1])
+            assert 0 <= i < n and 0 <= j < n and axis in (0, 1) and side in (0, 1)
+            incidence = (i, j, axis, side)
+            assert incidence not in incidences
+            incidences.add(incidence)
+            assert row["face_measure"] == 1/n and row["multiplicity"] == 1
+            assert row["temporal_weight"] == dt
+            assert row["orientation"] == (1 if side else -1)
+            other = [j, i]
+            other[1-axis] = (other[1-axis] + (1 if side else -1)) % n
+            neighbor = actual[tuple(other)]
+            left, right = (actual[j, i], neighbor) if side else (neighbor, actual[j, i])
+            flux_defect = max(flux_defect, abs(row["numerical_flux"] - nu*n*(right-left)))
+            expected_amount = row["orientation"] * row["numerical_flux"] * dt/n
+            assert abs(row["integrated_amount"] - expected_amount) <= 2e-15
+            delta[j, i] += row["integrated_amount"]
+        assert flux_defect <= 2e-11
+        state_delta = (actual - initial) / n**2
+        np.testing.assert_allclose(delta, state_delta, rtol=0, atol=2e-11)
+        laplacian = nu*n*n * sum(np.roll(actual, 1, axis) + np.roll(actual, -1, axis)
+                                - 2*actual for axis in (0, 1))
+        residual = actual - initial - dt*laplacian
+        assert float(np.max(np.abs(residual))) <= 2e-11
+        diagnostics = runtime._executor.program_diagnostics()
+        evaluations = [v for k, v in diagnostics.items() if k.endswith(".full_residual_evaluations")]
+        derivatives = [v for k, v in diagnostics.items() if k.endswith(".finite_difference_jvps")]
+        assert len(evaluations) == len(derivatives) == 1
+        assert evaluations[0] > derivatives[0] > 0
+        record_property(f"original_m5_implicit_exchanges_N{n}", json.dumps({
+            "n": n, "dt": dt, "records": len(records), "accepted_contexts": 1,
+            "face_flux_linf_defect": flux_defect,
+            "cell_exchange_linf_defect": float(np.max(np.abs(delta-state_delta))),
+            "independent_final_residual_l2": float(np.sqrt(np.mean(residual**2))),
+            "independent_final_residual_linf": float(np.max(np.abs(residual))),
+            "full_residual_evaluations": evaluations[0], "finite_difference_jvps": derivatives[0],
+            "solver": M5_SOLVER_CONTROLS}))
