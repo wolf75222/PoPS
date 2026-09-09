@@ -236,6 +236,7 @@ TEST(test_prepared_hyperbolic_boundary, three_dimensional_slip_uses_axis_static_
 
 TEST(test_prepared_hyperbolic_boundary,
      two_dimensional_slip_preserves_out_of_plane_axial_reflection_parity) {
+  using hyperbolic_boundary_detail::transform_from_semantic;
   const auto transform = transform_from_semantic<2>(VariableSemantic::axial(2));
   EXPECT_EQ(transform.parity, HyperbolicComponentParity::AxialVector);
   EXPECT_EQ(transform.axis, 2);
