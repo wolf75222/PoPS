@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import re
 
 import numpy as np
 import pytest
@@ -126,7 +127,17 @@ def test_local_transform_program_emits_one_collective_fail_closed_kernel() -> No
 
     amr_source = emit_cpp_program(program, model=emit_model, target="amr_system")
     assert "ctx.pointwise_active_mask(0," in amr_source
-    assert "ctx.pointwise_status_max(0," in amr_source
+    # AMR produces and validates one level at a time; sibling scratch statuses can belong to
+    # a prior invocation. The current level still requires the exact collective lane reduction.
+    assert amr_source.count("ctx.pointwise_level_status_max(") == 1
+    assert re.search(
+        r"ctx\.pointwise_level_status_max\(0, transform_status_field_(\d+), "
+        r"transform_active_mask_\1, ctx\.prepared_execution_lane\(\)\)",
+        amr_source,
+    )
+    assert "ctx.pointwise_status_max(" not in amr_source
+    assert "StepAttemptRejected" in amr_source
+    assert "Kokkos::isfinite" in amr_source
     assert "inherit_state_metadata" not in amr_source
     amr_install = amr_source.split('extern "C" void pops_install_program_amr', 1)[1]
     resources, callbacks = amr_install.split("return _PopsAmrLevelProgram{", 1)

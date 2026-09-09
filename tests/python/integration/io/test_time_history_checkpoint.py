@@ -796,6 +796,51 @@ def _run_section_b(t):
             if source_history not in key and key not in {MANIFEST_KEY, IDENTITY_KEY}
         }
         renamed_payload["history_names"] = np.asarray(["poison"])
+        # The sample ledger authenticates its ring name inside POPSHID1 as well as in its NPZ key.
+        # Rebind that exact inner name so this remains a well-formed one-ring checkpoint and reaches
+        # the independent installed-Program history-schema guard below.
+        import struct
+
+        from pops.runtime._history_sample_identity import identity_key, validate_identity_bytes
+
+        renamed_identity_key = identity_key("poison", None)
+        renamed_identity = np.asarray(
+            renamed_payload[renamed_identity_key],
+            dtype=np.uint8,
+        ).tobytes()
+        depth = int(np.asarray(renamed_payload["history_depth_poison"]).item())
+        initialized = bool(np.asarray(renamed_payload["history_init_poison"]).item())
+        slot_dt = tuple(float(value) for value in renamed_payload["history_slot_dt_poison"])
+        validate_identity_bytes(
+            renamed_identity,
+            source_history,
+            None,
+            depth,
+            initialized=initialized,
+            slot_dt=slot_dt,
+        )
+        encoded_source = source_history.encode("utf-8")
+        encoded_target = b"poison"
+        source_header = b"POPSHID1" + struct.pack("<Q", len(encoded_source)) + encoded_source
+        assert renamed_identity.startswith(source_header)
+        renamed_identity = (
+            b"POPSHID1"
+            + struct.pack("<Q", len(encoded_target))
+            + encoded_target
+            + renamed_identity[len(source_header) :]
+        )
+        validate_identity_bytes(
+            renamed_identity,
+            "poison",
+            None,
+            depth,
+            initialized=initialized,
+            slot_dt=slot_dt,
+        )
+        renamed_payload[renamed_identity_key] = np.frombuffer(
+            renamed_identity,
+            dtype=np.uint8,
+        ).copy()
         seal_checkpoint_payload(sim1, renamed_payload, runtime_kind="uniform")
         renamed_ckpt = os.path.join(tmp, "ab2_renamed_history.npz")
         with open(renamed_ckpt, "wb") as stream:

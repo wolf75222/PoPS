@@ -734,7 +734,9 @@ pops_add_gtest_suite(NAME test_checkpoint_history SOURCES "${_src}" EXTRA_LIBS $
 # native ramp step closure and calls rebuild_history_slots), so it links the heavy runtime object
 # library like test_checkpoint_history above.
 pops_test_source(_src test_checkpoint_history_policy)
-pops_add_gtest_suite(NAME test_checkpoint_history_policy SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
+# CMake's static TEST parser also matches authored comments in this suite.
+# Discover its actual compiled bodies without changing those comments or test workloads.
+pops_add_gtest_suite(NAME test_checkpoint_history_policy SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system RUNTIME_DISCOVERY)
 
 pops_test_source(_src test_program_loader)
 pops_native_loader_definitions(_native_defs)
@@ -989,8 +991,10 @@ if(POPS_HAS_MPI)
     TIMEOUT 30)
   # This regression consumes two MPI processor slots and exercises transport, not on-node
   # threading. Keep one Kokkos worker per rank so the CTest PROCESSORS=2 accounting is honest.
-  set_tests_properties(test_mpi_amr_program_reflux_np2 test_mpi_amr_program_reflux_np4 PROPERTIES
-    ENVIRONMENT "OMP_NUM_THREADS=1")
+  set_tests_properties(test_mpi_amr_program_reflux_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1")
+  set_tests_properties(test_mpi_amr_program_reflux_np4 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=4;OMP_NUM_THREADS=1")
   set_property(
     TEST test_mpi_amr_program_reflux_np2 test_mpi_amr_program_reflux_np4
          test_mpi_amr_rebalance_migration_np2 test_mpi_amr_rebalance_migration_np4
@@ -999,7 +1003,7 @@ if(POPS_HAS_MPI)
   # threading.  One Kokkos worker per rank avoids OpenMP oversubscription and matches CTest's
   # PROCESSORS=2 accounting.
   set_tests_properties(test_mpi_multiblock_interface_scheduler_np2 PROPERTIES
-    ENVIRONMENT "OMP_NUM_THREADS=1")
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1")
 
   # These are ordinary serial suites with additional MPI launch variants. Their rank sets are
   # declared authoritatively as `mpi_variants` in tests/test_manifest.toml; the source-only
@@ -1121,7 +1125,7 @@ if(POPS_HAS_MPI)
     endforeach()
   endforeach()
   set_tests_properties(test_coupled_fieldsolve_np2 PROPERTIES
-    ENVIRONMENT "OMP_NUM_THREADS=1"
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
     TIMEOUT 30)
   set_tests_properties(test_amr_program_positivity_floor_np2 PROPERTIES
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
