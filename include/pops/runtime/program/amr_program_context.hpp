@@ -23,9 +23,11 @@
 #include <pops/runtime/program/amr_history_flux_snapshot_execution.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/prepared_amr_spatial_residual.hpp>
+#include <pops/runtime/program/prepared_condensed_sampling.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/prepared_tensor_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
+#include <pops/runtime/program/program_owner_field_identity.hpp>
 #include <pops/runtime/program/source_mask.hpp>
 #include <pops/runtime/program/same_level_cell_temporal_provider.hpp>
 #include <pops/runtime/system/provider_storage_binding.hpp>
@@ -363,6 +365,7 @@ class AmrProgramContext {
   mutable PreparedVectorDistribution<Dim> vector_distribution_ =
       PreparedVectorDistribution<Dim>::distributed();
   mutable std::map<int, LevelAttemptEnvelope> synchronized_level_envelopes_;
+  mutable bool synchronized_field_gather_ = false;
   mutable std::vector<field_type*> active_attempt_states_;
   mutable std::vector<const field_type*> active_staged_parents_;
   mutable std::vector<multiblock_flux_ledger_type*> active_incoming_flux_;

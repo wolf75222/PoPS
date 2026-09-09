@@ -13475,6 +13475,64 @@ void AmrSystem<Dim>::prepare_generated_amr_level_state(
 }
 
 template <int Dim>
+void AmrSystem<Dim>::prepare_generated_amr_scalar_parent(int fine_level,
+                                                         const MultiFab<Dim>& parent,
+                                                         MultiFab<Dim>& fine,
+                                                         std::string_view family_identity) {
+  p_->ensure_engine();
+  std::lock_guard execution_lock(p_->prepared_hierarchy->execution_mutex);
+  const auto& lane = *p_->prepared_hierarchy->lane;
+  std::optional<runtime::amr::AmrGhostFillPreparation<Dim>> request;
+  std::exception_ptr error;
+  try {
+    if (fine_level < 1 ||
+        static_cast<std::size_t>(fine_level) >= p_->engine->hierarchy().num_levels() ||
+        parent.ncomp() != 1 || fine.ncomp() != 1 || family_identity.empty())
+      throw std::invalid_argument(
+          "prepared AMR parent sampling requires an exact adjacent scalar pair");
+    const auto& coarse_layout =
+        p_->engine->hierarchy().layout(static_cast<std::size_t>(fine_level - 1));
+    const auto& fine_layout = p_->engine->hierarchy().layout(static_cast<std::size_t>(fine_level));
+    const auto topology = prepared_amr_boundary_topology();
+    const auto& coarse_state =
+        p_->engine->hierarchy().state(static_cast<std::size_t>(fine_level - 1));
+    const auto& fine_state = p_->engine->hierarchy().state(static_cast<std::size_t>(fine_level));
+    if (parent.layout() != coarse_state.layout() ||
+        parent.distribution() != coarse_state.distribution() ||
+        parent.local_rank() != coarse_state.local_rank() || fine.layout() != fine_state.layout() ||
+        fine.distribution() != fine_state.distribution() ||
+        fine.local_rank() != fine_state.local_rank())
+      throw std::invalid_argument(
+          "prepared AMR scalar parent differs from the live level ownership");
+    request.emplace(runtime::amr::AmrGhostFillPreparation<Dim>{
+        .fine_level = fine_level,
+        .coarse_domain = coarse_layout.domain(),
+        .fine_domain = fine_layout.domain(),
+        .ratio = fine_layout.ratio_from_parent(),
+        .interpolation_kind = amr::transfer::TransferKind::CoarseFineGhostInterpolation,
+        .topology = topology,
+        .topology_generation = p_->engine->topology_epoch(),
+        .materialization_generation = p_->engine->materialization_generation(),
+        .field_identity = std::string(family_identity),
+        .budget = exact_amr_ghost_budget(parent, fine, coarse_layout.domain(), fine_layout.domain(),
+                                         topology)});
+  } catch (...) {
+    error = std::current_exception();
+  }
+  if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
+    throw std::runtime_error("prepared AMR scalar parent request failed collectively");
+  }
+  const auto epoch = request->topology_generation;
+  const auto generation = request->materialization_generation;
+  // The prepared transfer borrows this parent only for this call; each gather observes fresh
+  // valid values, including periodic parent images, without retaining a prior-attempt pointer.
+  auto transfer = runtime::amr::prepare_amr_ghost_fill(parent, fine, std::move(*request), lane);
+  transfer.execute(fine, epoch, generation, lane);
+}
+
+template <int Dim>
 void AmrSystem<Dim>::prepare_generated_amr_block_level_state(
     int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
     MultiFab<Dim>& state) {
@@ -21210,6 +21268,8 @@ template void AmrSystem<kNativeDimension>::prepare_generated_amr_level_state(
 template const PreparedAmrLevelEvaluation<kNativeDimension>&
 AmrSystem<kNativeDimension>::evaluate_prepared_amr_level_at(
     const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&);
+template void AmrSystem<kNativeDimension>::prepare_generated_amr_scalar_parent(
+    int, const MultiFab<kNativeDimension>&, MultiFab<kNativeDimension>&, std::string_view);
 template void AmrSystem<kNativeDimension>::prepare_generated_amr_block_level_state(
     int, const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&);
 template const PreparedAmrLevelEvaluation<kNativeDimension>&

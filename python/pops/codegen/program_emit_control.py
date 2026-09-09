@@ -600,7 +600,9 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
         return lines
 
     def emit_phase(phase: str) -> str:
-        var = {}
+        var = {("hierarchy_retained_bindings",): frozenset(
+            value.id for value in program._values[:split] if value.op in binding_ops
+        ) if phase in ("solve", "publish") else frozenset()}
         if spatial:
             var[("spatial_hierarchy_phase",)] = phase
         if provider_plans is not None:

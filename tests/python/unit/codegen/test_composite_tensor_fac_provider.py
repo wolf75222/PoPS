@@ -999,6 +999,65 @@ def test_public_hierarchy_fixture_declares_one_synchronized_physical_stage(max_l
     assert len([value for value in resolved.time._values if value.op == "solve_linear"]) == 1
 
 
+def test_condensed_hierarchy_prepares_prior_and_grown_inputs_without_retaining_scratch_pointers():
+    from test_hierarchy_scoped_solve_emit import _build
+
+    program, source = _build(CompositeTensorFAC())
+    scalar = next(value for value in program._values if value.op == "scalar_field")
+    rhs = next(value for value in program._values if value.op == "condensed_rhs")
+    assert "ctx.with_synchronized_field_gather([&]()" in source
+    assert "ctx.prepare_condensed_prior(" in source
+    assert source.index("ctx.prepare_condensed_prior(") < source.index("ctx.laplacian(cond%d_lap" % rhs.id)
+    assert "ctx.prepare_condensed_sampling<" in source
+    assert ".fab(li).grown_box()" in source
+    assert "auto sf%d = std::make_shared" % scalar.id not in source
+    assert "ctx.retained_scalar(%d," % scalar.id in source
+    assert "1, true);" in source
+    assert "1, false);" in source
+
+
+def test_scalar_first_produced_after_hierarchy_solve_is_not_a_gather_rebinding():
+    from pops.codegen.program_codegen import emit_cpp_program
+    from test_hierarchy_scoped_solve_emit import _build
+
+    program, _, model = _build(CompositeTensorFAC(), _return_model=True)
+    history = next(value for value in program._values if value.op == "history")
+    scalar = program.scalar_field("post_solve_laplacian")
+    program.laplacian(scalar, history)
+    source = emit_cpp_program(program, model=model, target="amr_system")
+    declarations = [line for line in source.splitlines()
+                    if "ctx.retained_scalar(%d," % scalar.id in line]
+    assert len(declarations) == 2  # ordinary fallback and the publish producer
+    assert all(line.rstrip().endswith("1, true);") for line in declarations)
+
+
+def test_amr_scalar_storage_preserves_unqualified_detached_compatibility():
+    from pops.codegen.program_emit_ops import _emit_op
+
+    program = Program("unqualified_scalar_storage")
+    scalar = program.scalar_field("buffer")
+    variables, lines, prelude = {}, [], []
+    _emit_op(program, scalar, None, frozenset(), variables, None, lines, prelude,
+             block_idx={}, target="amr_system")
+    assert variables[scalar.id] == "(*sf%d)" % scalar.id
+    assert any("ctx.alloc_scalar_field(1, 1)" in line for line in prelude)
+    assert not any("retained_scalar" in line for line in lines)
+
+
+def test_amr_scalar_storage_refuses_conflicting_qualified_consumers():
+    from pops.codegen.program_emit_ops import _unique_dataflow_owner_block
+    from test_hierarchy_scoped_solve_emit import _build
+
+    program, _ = _build(CompositeTensorFAC())
+    scalar = next(value for value in program._values if value.op == "scalar_field")
+    states = [value for value in program._values if value.op == "state"]
+    assert len({state.block for state in states}) == 2
+    consumers = tuple(SimpleNamespace(id=10000 + index, block=state.block, inputs=(scalar, state))
+                      for index, state in enumerate(states))
+    with pytest.raises(ValueError, match="conflicting owner blocks"):
+        _unique_dataflow_owner_block(scalar, where="scalar storage", additional_values=consumers)
+
+
 def test_header_only_hierarchy_extension_compiles_its_own_generic_provider_identity(
     tmp_path,
     isolated_native_cache,

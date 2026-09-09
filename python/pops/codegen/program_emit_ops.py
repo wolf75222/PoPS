@@ -98,7 +98,8 @@ def _value_owner_block(value: Any) -> Any:
     return getattr(state_ref, "block_ref", None)
 
 
-def _unique_dataflow_owner_block(value: Any, *, where: str) -> Any:
+def _unique_dataflow_owner_block(value: Any, *, where: str,
+                                 additional_values: Any = (), allow_unqualified: bool = False) -> Any:
     """Return the single authenticated block on ``value``'s producer dataflow.
 
     Top-level generated Cartesian ops may themselves be unqualified. Their owner is
@@ -120,9 +121,13 @@ def _unique_dataflow_owner_block(value: Any, *, where: str) -> Any:
             visit(item)
 
     visit(value)
+    for additional in additional_values:
+        visit(additional)
     if len(owners) == 1:
         return owners[0]
     if not owners:
+        if allow_unqualified:
+            return None
         raise ValueError(
             "%s: generated Cartesian operator has no unique authenticated owner block"
             % where)
@@ -1051,8 +1056,25 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         sp = "sf%d" % v.id
         var[v.id] = "(*%s)" % sp
         ncomp = int(v.attrs.get("ncomp", 1))
-        prelude.append("auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.alloc_scalar_field(%d, 1));"
-                       % (sp, ncomp))
+        owner = None
+        if target == "amr_system":
+            # Scalar storage has no intrinsic block. Its exact authored consumers
+            # qualify it; an unrelated same-shaped block is never a prototype.
+            owner = _unique_dataflow_owner_block(
+                v, where="AMR scalar field %r" % v.name,
+                additional_values=(value for value in program._values
+                                   if any(item is v for item in value.inputs)),
+                allow_unqualified=True)
+        if owner is not None:
+            owner_index = _required_block_index(block_idx, owner, "AMR scalar field")
+            rebound = v.id in var.get(("hierarchy_retained_bindings",), ())
+            produce = "false" if rebound else "true"
+            lines.append(
+                "auto* %s = &ctx.retained_scalar(%d, %d, %d, %s);"
+                % (sp, v.id, owner_index, ncomp, produce))
+        else:
+            prelude.append("auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.alloc_scalar_field(%d, 1));"
+                           % (sp, ncomp))
     elif v.op == "vector_field":
         if prelude is None:
             raise NotImplementedError(

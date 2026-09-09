@@ -187,6 +187,8 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/program/clock_schedule.hpp",
         "pops/runtime/program/source_mask.hpp",
         "pops/runtime/program/prepared_scalar_boundary_session.hpp",
+        "pops/runtime/program/prepared_condensed_sampling.hpp",
+        "pops/runtime/program/program_owner_field_identity.hpp",
         "pops/runtime/program/prepared_amr_spatial_residual.hpp",
         "pops/runtime/program/prepared_tensor_boundary_session.hpp",
         "pops/runtime/program/program_runtime_state.hpp",
@@ -306,6 +308,21 @@ def test_amr_consumer_closures_are_explicit_bounded_and_acyclic() -> None:
     assert len(_source(closures["program"]).splitlines()) <= PROGRAM_SEMANTIC_CLOSURE_BUDGET
     shallow_roots = (*UNCHANGED_CONSUMERS, *ROOTS.values())
     assert len(_source(shallow_roots).splitlines()) < 1_000
+
+
+def test_condensed_sampling_utilities_remain_stateless_and_independently_bounded() -> None:
+    utilities = {
+        "pops/runtime/program/program_owner_field_identity.hpp": (190, frozenset()),
+        "pops/runtime/program/prepared_condensed_sampling.hpp": (
+            60, frozenset({"pops/mesh/storage/multifab.hpp"})),
+    }
+    for path, (budget, dependencies) in utilities.items():
+        source = (INCLUDE / path).read_text(encoding="utf-8")
+        assert len(source.splitlines()) <= budget, (path, budget)
+        assert frozenset(_local_includes(source)) == dependencies
+        for forbidden in ("AmrProgramContext", "AmrSystem", "mutable ", "static std::map",
+                          "prepare_amr_ghost_fill", "SolveOutcome", "MPI_"):
+            assert forbidden not in source, (path, forbidden)
 
 
 def test_local_include_parser_authenticates_both_delimiters_and_hidden_fragments() -> None:

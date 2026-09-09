@@ -476,6 +476,12 @@ class AmrSystem {
   POPS_EXPORT void unbind_program_block_hierarchy_candidates(
       int runtime_block, const std::vector<MultiFab<Dim>>* candidates) const noexcept;
 
+  /// Transfer-only scalar ghost preparation; the Program authenticates same-family time ancestry.
+  /// Reads this invocation's parent valid values, preserves fine valid cells, and retains no cache.
+  POPS_EXPORT void prepare_generated_amr_scalar_parent(int fine_level, const MultiFab<Dim>& parent,
+                                                       MultiFab<Dim>& fine,
+                                                       std::string_view family_identity);
+
   /// Exact level geometry/topology and model speed retained by the prepared hierarchy graph.
   POPS_EXPORT Geometry<Dim> prepared_amr_level_geometry(int level) const;
   POPS_EXPORT BoundaryTopology<Dim> prepared_amr_boundary_topology() const;

@@ -875,6 +875,147 @@ TEST(GeneratedAmrSystemBlock, RegridRebuildsExactFineGhostProvidersAndInvalidate
   EXPECT_EQ(fine.integrated_face_fluxes.size(), system.engine()->hierarchy().state(1).local_size());
 }
 
+TEST(GeneratedAmrSystemBlock, ScalarParentPreparationRefreshesSparsePeriodicGhosts) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  config.regrid_every = 0;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 8;
+    config.periodicity[axis] = true;
+  }
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/scalar-parent");
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  auto* engine = system.engine();
+  ASSERT_NE(engine, nullptr);
+  auto cluster = centered_cluster(engine->hierarchy().layout(0));
+  pops::Index<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis)
+    upper[axis] = 1;
+  cluster.boxes = pops::mesh::BoxArray<Dim>(
+      std::vector<pops::Box<Dim>>{pops::Box<Dim>{pops::Index<Dim>{}, upper}});
+  cluster.identity.boxes = cluster.boxes.boxes();
+  std::array<int, Dim> ratios{};
+  ratios.fill(2);
+  const pops::amr::regridding::RegridPreparationBudget budget{
+      .clustered_parent_layout = {16, 120},
+      .fine_layout = {16, 120},
+      .load_balance = {16, 16, std::numeric_limits<std::int64_t>::max()},
+  };
+  auto regrid = engine->prepare_regrid(0, pops::amr::RefinementRatio<Dim>(ratios), cluster, budget);
+  ASSERT_TRUE(regrid.fine_layout().has_value());
+  const auto& coarse_live = engine->hierarchy().state(0);
+  pops::MultiFab<Dim> child(regrid.fine_layout()->patches(), regrid.fine_layout()->distribution(),
+                            coarse_live.local_rank(), coarse_live.ncomp(), coarse_live.ghosts());
+  child.set_val(pops::Real(1));
+  engine->publish_regrid(0, std::move(regrid), std::move(child));
+  system.refresh_prepared_amr_levels();
+  ASSERT_EQ(system.n_levels(), 2);
+  const auto& coarse_after_regrid = engine->hierarchy().state(0);
+  const auto& fine_live = engine->hierarchy().state(1);
+  pops::Extent<Dim> one_ghost{};
+  for (int axis = 0; axis < Dim; ++axis)
+    one_ghost[axis] = 1;
+  // Detached scalar fields use the exact adjacent ownership, independently of block state.
+  pops::MultiFab<Dim> parent(coarse_after_regrid.layout(), coarse_after_regrid.distribution(),
+                             coarse_after_regrid.local_rank(), 1, pops::Extent<Dim>{});
+  pops::MultiFab<Dim> fine(fine_live.layout(), fine_live.distribution(), fine_live.local_rank(), 1,
+                           one_ghost);
+  for (const pops::Real shift : {pops::Real(0), pops::Real(11)}) {
+    SCOPED_TRACE(shift);
+    parent.set_val(pops::Real(-999));
+    for (std::size_t local = 0; local < parent.local_size(); ++local) {
+      const auto values = parent.fab(local).view();
+      pops::for_each_cell(parent.box(local), [=] POPS_HD(const pops::Index<Dim>& index) {
+        values(index, 0) = shift + (index[0] < 4 ? pops::Real(2) : pops::Real(7));
+      });
+    }
+    fine.set_val(pops::Real(-999));
+    for (std::size_t local = 0; local < fine.local_size(); ++local) {
+      const auto values = fine.fab(local).view();
+      pops::for_each_cell(fine.box(local), [=] POPS_HD(const pops::Index<Dim>& index) {
+        values(index, 0) = pops::Real(123);
+      });
+    }
+    system.prepare_generated_amr_scalar_parent(1, parent, fine, "tests.scalar-prior");
+    std::size_t periodic_images = 0;
+    std::size_t interior_ghosts = 0;
+    for (std::size_t local = 0; local < fine.local_size(); ++local) {
+      const auto& fab = fine.fab(local);
+      auto host = fab.create_host_mirror();
+      fab.copy_to_host(host);
+      const auto grown = fab.grown_box();
+      for (std::size_t cell = 0; cell < static_cast<std::size_t>(grown.numPts()); ++cell) {
+        pops::Index<Dim> index{};
+        std::size_t remaining = cell;
+        bool periodic = false;
+        for (int axis = 0; axis < Dim; ++axis) {
+          index[axis] = grown.lo[axis] + static_cast<int>(remaining % grown.length(axis));
+          remaining /= grown.length(axis);
+          periodic = periodic || index[axis] < 0;
+        }
+        if (fab.box().contains(index)) {
+          EXPECT_EQ(host(cell), pops::Real(123));
+          continue;
+        }
+        // MC slopes vanish on each plateau, including both periodic discontinuities.
+        // A negative x ghost wraps to coarse cell 7; all other queried x map below cell 4.
+        EXPECT_EQ(host(cell), shift + (index[0] < 0 ? pops::Real(7) : pops::Real(2)));
+        periodic_images += periodic;
+        interior_ghosts += !periodic;
+      }
+    }
+    EXPECT_GT(pops::all_reduce_sum(static_cast<long>(periodic_images)), 0);
+    EXPECT_GT(pops::all_reduce_sum(static_cast<long>(interior_ghosts)), 0);
+  }
+  pops::MultiFab<Dim> vector_parent(parent.layout(), parent.distribution(), parent.local_rank(), 2,
+                                    parent.ghosts());
+  EXPECT_ANY_THROW(
+      system.prepare_generated_amr_scalar_parent(1, vector_parent, fine, "tests.scalar-prior"));
+  EXPECT_ANY_THROW(
+      system.prepare_generated_amr_scalar_parent(0, parent, fine, "tests.scalar-prior"));
+  EXPECT_ANY_THROW(
+      system.prepare_generated_amr_scalar_parent(1, parent, parent, "tests.scalar-prior"));
+  if (pops::n_ranks() > 1)
+    EXPECT_ANY_THROW(system.prepare_generated_amr_scalar_parent(
+        1, parent, fine, pops::my_rank() == 1 ? "tests.foreign-prior" : "tests.scalar-prior"));
+  // Refused width/level/ownership contracts must not poison the next exact preparation.
+  EXPECT_NO_THROW(
+      system.prepare_generated_amr_scalar_parent(1, parent, fine, "tests.scalar-prior"));
+
+  system.set_program_block_map({0});
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("clock.macro");
+  for (int level = 0; level < 2; ++level)
+    context->with_program_resource_level(level, [&] {
+      context->register_history("tracer.prior", 1, 1, 0, "tracer.U", "cell.scalar", "clock.macro",
+                                "dense.linear");
+      for (int sample = 0; sample < 3; ++sample) {
+        context->begin_step(0.25);
+        auto value = context->scratch_state_like(context->state(0));
+        value.set_val(pops::Real(7));
+        context->store_history("tracer.prior", value, 0);
+        context->rotate_histories("clock.macro");
+      }
+    });
+  // A parent-only publication leaves saturated counts and constant dt prefixes equal, but
+  // advances the parent's actual sample. Metadata equality cannot create a gather authority.
+  context->with_program_resource_level(0, [&] {
+    context->begin_step(0.25);
+    auto value = context->scratch_state_like(context->state(0));
+    value.set_val(pops::Real(19));
+    context->store_history("tracer.prior", value, 0);
+    context->rotate_histories("clock.macro");
+  });
+  context->with_program_resource_level(1, [&] {
+    auto& prior = context->history("tracer.prior", 1, 0);
+    EXPECT_ANY_THROW(context->prepare_condensed_prior(0, prior));
+    EXPECT_ANY_THROW(context->with_synchronized_field_gather([&] {}));
+  });
+}
+
 TEST(GeneratedAmrSystemBlock, SparseParentRegridRequiresOnlyChildInterpolationSources) {
   constexpr int Dim = pops::kNativeDimension;
   for (const bool injection : {false, true}) {

@@ -1114,7 +1114,7 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance:GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords:GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically:GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry")
+            "GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance:GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords:GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically:GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry:GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts")
       else()
         pops_add_mpi_rank_test(${_test} ${_np})
       endif()

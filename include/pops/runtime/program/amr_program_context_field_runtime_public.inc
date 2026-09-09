@@ -52,6 +52,12 @@ field_type& scalar_scratch(std::int64_t value_id, int subslot, const field_type&
                              uniform_ghosts_(ghost_depth));
 }
 
+field_type& retained_scalar(std::int64_t value_id, int program_block, int ncomp,
+                            bool produce) const {
+  return persistent_scratch_(ScratchKind::Scalar, value_id, 0, state(program_block), ncomp,
+                             uniform_ghosts_(1), produce);
+}
+
 field_type alloc_scalar_field(int ncomp = 1, int ghost_depth = 1) const {
   if (ncomp < 1 || ghost_depth < 0)
     throw std::invalid_argument("AMR Program scalar allocation has an invalid shape");

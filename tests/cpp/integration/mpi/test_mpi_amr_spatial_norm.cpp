@@ -156,6 +156,27 @@ TEST(AmrSpatialNorm, PreparedNewtonProjectsCompositeOwnershipAcrossGmresRestarts
   }
 }
 
+TEST(AmrSpatialNorm, CondensedSamplingRequiresEveryGrownProviderCell) {
+  auto base = field(false, false);
+  MultiFab<2> output(base.layout(), base.distribution(), base.local_rank(), 1, Extent<2>{1, 1});
+  MultiFab<2> state(base.layout(), base.distribution(), base.local_rank(), 3, Extent<2>{1, 1});
+  MultiFab<2> narrow(base.layout(), base.distribution(), base.local_rank(), 1, Extent<2>{0, 0});
+  const auto views = [&](std::size_t local) {
+    ProviderStorageView<2, 1> provider;
+    provider.storage[0] = std::as_const(output).fab(local).view();
+    return provider;
+  };
+  EXPECT_NO_THROW(runtime::program::require_condensed_sampling_footprint(output, state, views));
+  const auto missing = [&](std::size_t local) {
+    ProviderStorageView<2, 1> provider;
+    provider.storage[0] = std::as_const(narrow).fab(local).view();
+    return provider;
+  };
+  if (output.local_size())
+    EXPECT_THROW(runtime::program::require_condensed_sampling_footprint(output, state, missing),
+                 std::invalid_argument);
+}
+
 // This facade fixture matches the Dim2 public implicit qualification matrix.
 #if POPS_NATIVE_DIM == 2
 namespace pops::runtime::program {
@@ -168,6 +189,12 @@ struct AmrSpatialReconciliationTestAccess {
     auto checkpoint = ctx.capture_accepted_context_snapshot_();
     const auto& accepted = ctx.state(0);
     const int owner = ctx.scratch_prototype_owner_(accepted);
+    auto& scalar = ctx.retained_scalar(905, 0, 1, true);
+    scalar.set_val(Real(17));
+    EXPECT_EQ(&ctx.retained_scalar(905, 0, 1, false), &scalar);
+    EXPECT_EQ(norm_inf(scalar), scalar.local_size() ? Real(17) : Real(0));
+    EXPECT_THROW(ctx.retained_scalar(905, 0, 2, false), std::runtime_error);
+    EXPECT_THROW(ctx.retained_scalar(906, 0, 1, false), std::logic_error);
     auto& trial = ctx.scratch_state(900, 1, accepted);
     auto& solved = ctx.scratch_state(900, 0, accepted);
     auto& mapped = ctx.scratch_state(901, 0, accepted);
@@ -198,6 +225,11 @@ struct AmrSpatialReconciliationTestAccess {
     // pointers captured before the rejected attempt.
     auto restored = checkpoint->prepare_restore();
     restored->publish_restore();
+    EXPECT_THROW(ctx.retained_scalar(905, 0, 1, false), std::logic_error);
+    auto& retry_scalar = ctx.retained_scalar(905, 0, 1, true);
+    retry_scalar.set_val(Real(19));
+    EXPECT_EQ(&ctx.retained_scalar(905, 0, 1, false), &retry_scalar);
+    EXPECT_EQ(norm_inf(retry_scalar), retry_scalar.local_size() ? Real(19) : Real(0));
     EXPECT_THROW(ctx.rhs_scratch(903, 0, trial), std::invalid_argument);
     auto& next_trial = ctx.scratch_state(900, 1, ctx.state(0));
     auto& next_mapped = ctx.scratch_state(901, 0, ctx.state(0));

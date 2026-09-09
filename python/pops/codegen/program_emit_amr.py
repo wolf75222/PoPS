@@ -767,11 +767,13 @@ def _emit_amr_install(
             "        }\n"
             "      } else {\n"
             "        // Gather every level before the unique hierarchy-scoped solve.\n"
+            "        ctx.with_synchronized_field_gather([&]() {\n"
             "        for (int _k = 0; _k < _nlev; ++_k) {\n"
             "          ctx.with_program_attempt_level(_k, [&]() {\n"
             "            _level_programs->at(static_cast<std::size_t>(_k)).gather(hierarchy_dt);\n"
             "          });\n"
             "        }\n"
+            "        });\n"
             + hierarchy_solve_driver +
             "        // The composite solution is complete before any level reconstructs or commits.\n"
             "        for (int _k = 0; _k < _nlev; ++_k) {\n"

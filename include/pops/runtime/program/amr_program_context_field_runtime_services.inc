@@ -408,22 +408,28 @@ CoupledJacvecLevelScratch& require_coupled_jacvec_scratch_(
 }
 
 field_type& persistent_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
-                                const field_type& prototype, int ncomp, Extent<Dim> ghosts) const {
+                                const field_type& prototype, int ncomp, Extent<Dim> ghosts,
+                                bool reset = true) const {
   if (value_id < 0 || subslot < 0)
     throw std::invalid_argument("AMR Program scratch identity must be non-negative");
   refresh_resources_();
   const int runtime_owner = scratch_prototype_owner_(prototype);
   const ScratchKey key{kind, active_level_, runtime_owner, value_id, subslot};
   auto found = scratches_.find(key);
-  if (found == scratches_.end())
+  if (found == scratches_.end()) {
+    if (!reset)
+      throw std::logic_error("AMR Program retained scalar has no live producer in this attempt");
     found = scratches_.emplace(key, make_scratch_(prototype, ncomp, ghosts)).first;
+  }
   field_type& result = found->second;
   if (result.layout() != prototype.layout() || result.distribution() != prototype.distribution() ||
       result.local_rank() != prototype.local_rank() || result.ncomp() != ncomp ||
       result.ghosts() != ghosts)
     throw std::runtime_error("AMR Program scratch identity changed its exact field contract");
-  result.set_val(Real(0));
-  clear_active_flux_expression_(result);
+  if (reset) {
+    result.set_val(Real(0));
+    clear_active_flux_expression_(result);
+  }
   return result;
 }
 
