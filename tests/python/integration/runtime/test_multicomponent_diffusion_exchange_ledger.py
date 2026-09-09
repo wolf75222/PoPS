@@ -5,6 +5,7 @@ import numpy as np
 import pops
 import pytest
 from pops import math
+from pops._native_collectives import allgather_value
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
@@ -52,8 +53,20 @@ def component_case(n, dt, scheme):
 def _bind(n, dt, scheme, initial):
     case, layout = component_case(n, dt, scheme)
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
-    return pops.bind(artifact, initial_state={"mixture": np.ascontiguousarray(initial)},
-        resources={"execution_context": artifact_execution_context(artifact)})
+    context = artifact_execution_context(artifact)
+    runtime = pops.bind(artifact, initial_state={"mixture": np.ascontiguousarray(initial)},
+        resources={"execution_context": context})
+    return runtime, context
+
+
+def _global_exchange_records(runtime, context):
+    local = runtime._executor._program_exchange_records()
+    if context.communicator.identity == "serial":
+        return local
+    # The ledger stores owned-cell incidences, including an empty list on ranks with
+    # no boxes. Keep every record so the global uniqueness checks detect duplicate owners.
+    return [record for records in allgather_value(context.communicator.handle, local)
+            for record in records]
 
 
 def _initial(n):
@@ -73,12 +86,12 @@ def test_component_signed_values_exact_multiplicity_and_accepted_stages(
         predictor = initial+dt*np.stack([sum(row) for row in first_rates])
         last_rates = tuple(_rates(q, SPEEDS, nu) for q,nu in zip(predictor,DIFFUSIVITIES,strict=True))
         expected = .5*(initial+predictor+dt*np.stack([sum(row) for row in last_rates]))
-        runtime = _bind(n, dt, scheme, initial)
+        runtime, context = _bind(n, dt, scheme, initial)
         report = pops.run(runtime, t_end=dt, max_steps=1, console=False)
         assert report.accepted_steps == 1
         actual = np.asarray(runtime.state_global("mixture")).reshape(initial.shape)
         np.testing.assert_allclose(actual, expected, rtol=2e-12, atol=2e-13)
-        records = runtime._executor._program_exchange_records()
+        records = _global_exchange_records(runtime, context)
         assert len(records) == 2*2*8*n*n  # components, stages, two fluxes with four incidences
         contexts = tuple(dict.fromkeys(row["evaluation_context"] for row in records))
         assert len(contexts)==2
@@ -119,7 +132,7 @@ def test_component_rejection_publishes_no_quadrature(isolated_native_cache, nati
     n = 16
     dt = 2/(4*max(DIFFUSIVITIES)*n*n+sum(map(abs,SPEEDS))*n)
     initial = _initial(n)
-    runtime = _bind(n,dt,scheme,initial)
+    runtime, _ = _bind(n,dt,scheme,initial)
     before = (runtime.time(),runtime.macro_step(),runtime._executor._program_exchange_records(),
               runtime.program_report().diagnostics)
     with pytest.raises(RuntimeError,match="combined_transport_diffusion_stability|rejected"):
