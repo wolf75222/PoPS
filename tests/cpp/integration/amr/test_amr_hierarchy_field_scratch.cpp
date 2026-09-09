@@ -284,6 +284,9 @@ Fixture prepare_fixture(const std::string& artifact = {}) {
   system->set_conservative_state("scalar", std::vector<double>(cells, 7.0));
   system->register_program_hierarchy_tensor_solver_provider(
       pops::elliptic::nd::make_composite_general_field_provider<Dim>());
+  // Topology refresh restores accepted Program state, whose capacity is sealed at bind.
+  if (!artifact.empty())
+    system->mark_bound();
   Fixture fixture{std::move(system), std::move(context)};
   replace_child(fixture, 1);
   pops::PreparedProviderOptions options;
