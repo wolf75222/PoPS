@@ -1134,12 +1134,12 @@ jobs:
         # SHARD_TOTAL=strategy.job-total. ADC-623: files are packed by recorded duration weights
         # (scripts/ci_shard_binpack.py, greedy LPT over tests/python/test_durations.json), not by a
         # modulo of the file list, so the slowest shard -- the gate critical path -- is minimized.
-        # 17 shards: the 536-file catalog, including explicit unmeasured migration estimates,
-        # models a 34.7-minute maximum test load (16 shards exceed the 35-minute budget).
+        # 18 shards: the 537-file catalog, including explicit unmeasured migration estimates,
+        # models a 33.3-minute maximum test load (17 shards exceed the 35-minute budget).
         # This is a scheduling estimate, not an executed CI timing qualification; retain the
         # unchanged 50-minute watchdog. To rebalance, update this count and the source budget
         # gate. Job names stay "... shard N"; the required `gate` aggregates the matrix in `needs`.
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
 
     env:
       POPS_NATIVE_DIM: "2"

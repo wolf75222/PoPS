@@ -538,7 +538,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact. Migration additions use explicit 5/120/300/600 s estimates recorded in migration_estimates. Local source/native qualification timings are not substituted for CI per-file measurements.",
-    "estimated_count": 367,
+    "estimated_count": 368,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_scalar_advection_final_example.py",
@@ -580,6 +580,7 @@
       "tests/python/integration/native_loader/test_prepared_preconditioner_component.py",
       "tests/python/integration/native_loader/test_ssprk3_production.py",
       "tests/python/integration/native_loader/test_uniform_restart_missing_history.py",
+      "tests/python/integration/runtime/test_amr_field_map_continuations.py",
       "tests/python/integration/runtime/test_amr_implicit_diffusion.py",
       "tests/python/integration/runtime/test_amr_local_transform_post_sync.py",
       "tests/python/integration/runtime/test_amr_physical_maps.py",
@@ -908,7 +909,7 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 536,
+    "total_files": 537,
     "migration_estimates": {
       "basis": "Unmeasured CI scheduling estimates: symbolic/source-only modules 5 s; native-loader module 120 s; unit modules containing native compilation/execution 300 s; complete runtime science modules 600 s. Local CPU/OMP qualification wall times are not CI measurements. Retain existing rows until measured by a full CI timing artifact.",
       "files": [
@@ -1008,6 +1009,7 @@
     "v18_estimates": {
       "basis": "Unmeasured scheduling estimates using the existing migration tiers: complete native runtime modules 600 s, unit modules containing native compilation 300 s, symbolic/source-only contracts 5 s. No CI timing measurements are claimed.",
       "files": [
+        "tests/python/integration/runtime/test_amr_field_map_continuations.py",
         "tests/python/integration/runtime/test_amr_physical_maps.py",
         "tests/python/integration/runtime/test_amr_tensor_diffusion.py",
         "tests/python/integration/runtime/test_exact_analytic_initial.py",
@@ -1030,8 +1032,10 @@
       ],
       "refresh": "Replace from complete CI per-file timing artifacts; preserve every test case."
     },
-    "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed."
+    "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
+    "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration."
   },
   "tests/python/integration/runtime/test_interface_boundary_flux_ownership.py": 120.0,
-  "tests/python/integration/runtime/test_amr_physical_maps.py": 600.0
+  "tests/python/integration/runtime/test_amr_physical_maps.py": 600.0,
+  "tests/python/integration/runtime/test_amr_field_map_continuations.py": 600.0
 }
