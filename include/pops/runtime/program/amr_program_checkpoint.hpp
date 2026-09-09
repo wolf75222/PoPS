@@ -143,6 +143,100 @@ struct AmrProgramAcceptedState {
 
 namespace checkpoint_detail {
 
+// Pure accepted-history wire metadata: no ring mutation, active clock, or publication authority.
+inline std::optional<std::pair<int, std::string>> decode_history_key(std::string_view key) {
+  constexpr std::string_view prefix = "pops.amr.level-history.v1/";
+  if (!key.starts_with(prefix))
+    return std::nullopt;
+  key.remove_prefix(prefix.size());
+  const std::size_t slash = key.find('/');
+  const std::size_t colon = key.find(':', slash == std::string_view::npos ? 0 : slash);
+  if (slash == std::string_view::npos || colon == std::string_view::npos)
+    throw std::invalid_argument("AMR Program history storage key is malformed");
+  std::size_t consumed = 0;
+  const int level = std::stoi(std::string(key.substr(0, slash)), &consumed);
+  if (level < 0 || consumed != slash)
+    throw std::invalid_argument("AMR Program history storage key has an invalid level");
+  const std::string length_text(key.substr(slash + 1, colon - slash - 1));
+  consumed = 0;
+  const std::size_t length = std::stoull(length_text, &consumed);
+  const std::string name(key.substr(colon + 1));
+  if (consumed != length_text.size() || name.empty() || name.size() != length)
+    throw std::invalid_argument("AMR Program history storage key has an invalid name");
+  return std::pair<int, std::string>{level, name};
+}
+
+struct HistoryMetadata {
+  std::vector<AmrProgramHistoryDescriptor> histories;
+  std::vector<AmrProgramHistorySlotProvenance> history_slots;
+};
+
+template <class Manager, class BlockMap>
+HistoryMetadata history_metadata(const Manager& manager, const BlockMap& block_map,
+                                 std::size_t level_count) {
+  HistoryMetadata result;
+  struct AccumulatedHistory {
+    AmrProgramHistoryDescriptor descriptor;
+    std::set<int> levels;
+  };
+  std::map<std::string, AccumulatedHistory> histories;
+  for (const auto& [key, ring] : manager.histories) {
+    const auto decoded = decode_history_key(key);
+    if (!decoded || ring.empty())
+      throw std::runtime_error("AMR Program accepted history registry is malformed");
+    const auto& [level, name] = *decoded;
+    const int runtime_owner = manager.owner.at(key);
+    int program_owner = -1;
+    for (std::size_t program = 0; program < block_map.size(); ++program)
+      if (block_map[program] == runtime_owner) {
+        program_owner = static_cast<int>(program);
+        break;
+      }
+    if (program_owner < 0)
+      throw std::runtime_error("AMR Program history lost its authenticated block owner");
+    AmrProgramHistoryDescriptor descriptor{name,
+                                           program_owner,
+                                           manager.state_identity.at(key),
+                                           manager.space_identity.at(key),
+                                           manager.clock_identity.at(key),
+                                           manager.interpolation_identity.at(key),
+                                           manager.depth.at(key),
+                                           ring.front().ncomp()};
+    auto [entry, inserted] =
+        histories.try_emplace(name, AccumulatedHistory{descriptor, std::set<int>{level}});
+    if (!inserted) {
+      const auto& retained = entry->second.descriptor;
+      if (retained.program_owner != descriptor.program_owner ||
+          retained.state_identity != descriptor.state_identity ||
+          retained.space_identity != descriptor.space_identity ||
+          retained.clock_identity != descriptor.clock_identity ||
+          retained.interpolation_identity != descriptor.interpolation_identity ||
+          retained.depth != descriptor.depth || retained.components != descriptor.components ||
+          !entry->second.levels.insert(level).second)
+        throw std::runtime_error("AMR Program history differs between active levels");
+    }
+    const auto& dts = manager.slot_dt.at(key);
+    if (dts.size() != ring.size())
+      throw std::runtime_error("AMR Program history dt provenance has the wrong depth");
+    for (std::size_t slot = 0; slot < ring.size(); ++slot)
+      result.history_slots.push_back({name, level, static_cast<int>(slot),
+                                      static_cast<double>(dts[slot]), manager.initialized.at(key),
+                                      manager.fill_count.at(key)});
+  }
+  for (auto& [name, accumulated] : histories) {
+    (void)name;
+    if (accumulated.levels.size() != level_count)
+      throw std::runtime_error("AMR Program history omits an active hierarchy level");
+    result.histories.push_back(std::move(accumulated.descriptor));
+  }
+  std::sort(result.history_slots.begin(), result.history_slots.end(),
+            [](const auto& left, const auto& right) {
+              return std::tie(left.name, left.level, left.slot) <
+                     std::tie(right.name, right.level, right.slot);
+            });
+  return result;
+}
+
 inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '6'};
 inline constexpr std::array<std::uint8_t, 8> kLegacyMagic5{'P', 'O', 'P', 'S', 'A', 'N', 'D', '5'};
 inline constexpr std::array<std::uint8_t, 8> kLegacyMagic4{'P', 'O', 'P', 'S', 'A', 'N', 'D', '4'};

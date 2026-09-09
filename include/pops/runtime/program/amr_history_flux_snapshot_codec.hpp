@@ -3,8 +3,48 @@
 #include <pops/core/identity/sha256.hpp>
 #include <pops/runtime/program/amr_history_flux_snapshot.hpp>
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
+#include <pops/runtime/multiblock/evaluation_point.hpp>
+
+namespace pops::runtime::multiblock {
+struct InterfaceFluxSample;
+}
 
 namespace pops::runtime::program::history_flux {
+
+template <int Dim>
+struct BasisFace {
+  ::pops::amr::reflux::FaceLedgerRole role = ::pops::amr::reflux::FaceLedgerRole::Coarse;
+  int axis = 0;
+  Index<Dim> face{};
+  Index<Dim> coarse_face{};
+  double face_measure = 0.0;
+  std::vector<Real> flux_density;
+};
+
+enum class BasisProvider : std::uint8_t {
+  PreparedResidual = 0,
+  PreparedDefaultFlux = 1,
+  ExactFace = 2,
+  NamedCell = 3,
+  DiffusiveFace = 4,
+};
+
+template <int Dim>
+struct Basis {
+  std::uint64_t identity = 0;
+  std::size_t runtime_block = 0;
+  int level = 0;
+  runtime::multiblock::BoundaryEvaluationPoint point{};
+  int rhs_identity = -1;
+  BasisProvider provider = BasisProvider::PreparedResidual;
+  std::string temporal_family;
+  ::pops::amr::ClockWindow window{};
+  std::vector<BasisFace<Dim>> faces;
+  std::vector<std::shared_ptr<const runtime::multiblock::InterfaceFluxSample>> shared_samples;
+  // Complete raw source samples remain distributed. Projected nodes are internal conservative
+  // history transport, never evaluated physical fluxes or public whole-face exchange evidence.
+  std::shared_ptr<const Snapshot<Dim>> history_snapshot;
+};
 
 template <int Dim>
 using SnapshotMap = std::map<std::string, std::shared_ptr<const Snapshot<Dim>>>;
@@ -302,6 +342,182 @@ SnapshotMap<Dim> decode_shards(const std::vector<std::vector<std::uint8_t>>& sha
     result.emplace(token, std::make_shared<const Snapshot<Dim>>(std::move(source)));
   }
   return result;
+}
+
+// These read-only graph operations neither own a history registry nor publish accepted state.
+template <class Expression, class Bounds>
+void require_expression_budget(const Expression& expression, const Bounds& rhs_bounds,
+                               const Bounds& coefficient_bounds) {
+  std::map<std::size_t, std::size_t> bases_by_block;
+  for (const auto& [identity, term] : expression) {
+    (void)identity;
+    if (!term.basis || term.basis->runtime_block >= rhs_bounds.size() ||
+        term.basis->runtime_block >= coefficient_bounds.size())
+      throw std::logic_error("AMR Program flux expression has a foreign basis identity");
+    const std::size_t block = term.basis->runtime_block;
+    if (++bases_by_block[block] > rhs_bounds[block] ||
+        term.coefficient.size() > coefficient_bounds[block])
+      throw std::length_error(
+          "AMR Program flux expression exceeds its authenticated artifact budget");
+  }
+}
+
+template <int Dim, class Registry>
+SnapshotMap<Dim> reachable_sources(const Registry& expressions, int max_levels) {
+  SnapshotMap<Dim> raw;
+  for (const auto& [key, slots] : expressions) {
+    (void)key;
+    for (const auto& expression : slots)
+      for (const auto& [identity, term] : expression) {
+        (void)identity;
+        auto snapshot = term.basis ? term.basis->history_snapshot : nullptr;
+        int remaining = max_levels;
+        while (snapshot && snapshot->parent) {
+          if (--remaining <= 0)
+            throw std::logic_error("AMR history snapshot lineage exceeds authored levels");
+          snapshot = snapshot->parent;
+        }
+        if (snapshot) {
+          const auto source_identity = snapshot->identity;
+          raw.emplace(source_identity, std::move(snapshot));
+        }
+      }
+  }
+  return raw;
+}
+
+template <class Face>
+std::vector<Face> certified_legacy_faces(const std::vector<Face>& retained,
+                                         const std::vector<Face>& geometry) {
+  std::vector<Face> result;
+  for (const auto& face : geometry) {
+    const auto old = std::find_if(retained.begin(), retained.end(), [&](const auto& previous) {
+      return face.role == previous.role && face.axis == previous.axis &&
+             face.face == previous.face && face.coarse_face == previous.coarse_face &&
+             face.face_measure == previous.face_measure;
+    });
+    if (old == retained.end())
+      throw std::invalid_argument(
+          "AMR moved legacy history interface lacks authenticated source samples");
+    result.push_back(*old);
+  }
+  return result;
+}
+
+// Bind raw payload identity to the immutable evaluation point supplied by its producer.
+template <class Point, class Provider>
+std::string source_point_identity(std::size_t block, std::uint64_t basis_identity,
+                                  const Point& point, int rhs_identity, Provider provider,
+                                  std::uint64_t topology_epoch, std::uint64_t generation) {
+  checkpoint_detail::Writer source;
+  source.string("pops.amr.history-face-source-point.v1");
+  source.u64(block);
+  source.u64(basis_identity);
+  source.i32(rhs_identity);
+  source.u64(static_cast<std::uint64_t>(provider));
+  source.u64(topology_epoch);
+  source.u64(generation);
+  source.string(point.clock);
+  source.i64(point.tick);
+  source.i32(point.level);
+  source.i32(point.substep);
+  source.i32(point.stage);
+  source.i64(point.stage_fraction.numerator);
+  source.i64(point.stage_fraction.denominator);
+  source.real(point.dt);
+  source.real(point.physical_time);
+  source.string(point.graph_identity);
+  source.string(point.rate_identity);
+  source.string(point.application_identity);
+  return "pops.amr.history-face-source-point.v1:sha256:" +
+         identity::sha256_hex(std::move(source).take());
+}
+
+// Encode immutable history expressions. The caller supplies only its shared-source wire writer;
+// this routine has no registry ownership, active clock, or publication side effects.
+template <int Dim, class Registry, class SharedWriter>
+std::vector<std::uint8_t> serialize_expressions(const Registry& histories, int max_levels,
+                                                SharedWriter&& write_shared) {
+  const bool any_expression =
+      std::any_of(histories.begin(), histories.end(), [](const auto& entry) {
+        return std::any_of(entry.second.begin(), entry.second.end(),
+                           [](const auto& expression) { return !expression.empty(); });
+      });
+  if (!any_expression)
+    return {};
+  const bool snapshots = std::any_of(histories.begin(), histories.end(), [](const auto& ring) {
+    return std::any_of(ring.second.begin(), ring.second.end(), [](const auto& expression) {
+      return std::any_of(expression.begin(), expression.end(), [](const auto& term) {
+        return term.second.basis && term.second.basis->history_snapshot;
+      });
+    });
+  });
+  checkpoint_detail::Writer out;
+  out.u64(snapshots ? UINT64_C(0x504f5053464c5834) : UINT64_C(0x504f5053464c5833));
+  out.size(histories.size());
+  for (const auto& [key, slots] : histories) {
+    out.string(key);
+    out.size(slots.size());
+    for (const auto& expression : slots) {
+      out.size(expression.size());
+      for (const auto& [identity, term] : expression) {
+        if (!term.basis || term.basis->identity != identity)
+          throw std::logic_error("AMR Program history flux payload has an unauthenticated basis");
+        out.u64(identity);
+        out.size(term.coefficient.size());
+        for (const auto& [power, coefficient] : term.coefficient) {
+          out.i32(power);
+          out.i64(coefficient.numerator);
+          out.i64(coefficient.denominator);
+        }
+        const auto& basis = *term.basis;
+        out.u64(basis.runtime_block);
+        out.i32(basis.level);
+        out.i32(basis.rhs_identity);
+        out.u64(static_cast<std::uint64_t>(basis.provider));
+        out.string(basis.temporal_family);
+        const auto write_point = [&](const auto& point) {
+          out.string(point.clock);
+          out.i64(point.tick);
+          out.i32(point.level);
+          out.i32(point.substep);
+          out.i32(point.stage);
+          out.i64(point.stage_fraction.numerator);
+          out.i64(point.stage_fraction.denominator);
+          out.real(point.dt);
+          out.real(point.physical_time);
+          out.string(point.graph_identity);
+          out.string(point.rate_identity);
+          out.string(point.application_identity);
+        };
+        write_point(basis.point);
+        checkpoint_detail::write_clock(out, basis.window.begin);
+        checkpoint_detail::write_clock(out, basis.window.end);
+        out.size(basis.faces.size());
+        for (const auto& face : basis.faces) {
+          out.u64(static_cast<std::uint64_t>(face.role));
+          out.i32(face.axis);
+          for (int axis = 0; axis < Dim; ++axis) {
+            out.i32(face.face[axis]);
+            out.i32(face.coarse_face[axis]);
+          }
+          out.real(face.face_measure);
+          out.size(face.flux_density.size());
+          for (const Real value : face.flux_density)
+            out.real(static_cast<double>(value));
+        }
+        out.size(basis.shared_samples.size());
+        for (const auto& sample : basis.shared_samples) {
+          if (!sample)
+            throw std::logic_error("history shared flux sample is absent");
+          write_shared(out, *sample);
+        }
+        if (snapshots)
+          history_flux::write_descriptor(out, basis.history_snapshot, max_levels);
+      }
+    }
+  }
+  return std::move(out).take();
 }
 
 }  // namespace pops::runtime::program::history_flux

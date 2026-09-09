@@ -181,6 +181,9 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/builders/compiled/generated_amr_system_block.hpp",
         "pops/runtime/multiblock/evaluation_point.hpp",
         "pops/runtime/program/amr_program_checkpoint.hpp",
+        "pops/runtime/program/amr_history_flux_snapshot.hpp",
+        "pops/runtime/program/amr_history_flux_snapshot_codec.hpp",
+        "pops/runtime/program/amr_history_flux_snapshot_execution.hpp",
         "pops/runtime/program/clock_schedule.hpp",
         "pops/runtime/program/source_mask.hpp",
         "pops/runtime/program/prepared_scalar_boundary_session.hpp",
@@ -447,3 +450,41 @@ def test_composite_temporal_workspace_has_one_bounded_authority() -> None:
     assert "no_gauge" in source
     assert "stage_accepted_exchanges" not in source
     assert "FluxBasis" not in source
+
+
+# Independent upstream utilities contain immutable data/math/wire operations, not an alternate
+# Program context. Their bodies retain explicit bounds instead of exempting context fragments.
+HISTORY_FLUX_UTILITY_BUDGETS = {
+    "pops/runtime/program/amr_history_flux_snapshot.hpp": 400,
+    "pops/runtime/program/amr_history_flux_snapshot_codec.hpp": 550,
+    "pops/runtime/program/amr_history_flux_snapshot_execution.hpp": 350,
+}
+
+
+def test_history_flux_utilities_are_bounded_stateless_upstream_authorities() -> None:
+    forbidden_owners = re.compile(
+        r"\b(?:AmrProgramContext|AmrSystem|ProgramRuntimeState|HistoryManager)\b"
+        r"|\b(?:facade_|runtime_|history_flux_expressions_|accepted_state_revision_)\b"
+        r"|\b(?:publish_program_accepted_state|restore_program_accepted_state)\b"
+    )
+    forbidden_dependencies = {
+        "pops/runtime/amr_system.hpp",
+        "pops/runtime/program/program_runtime_state.hpp",
+        "pops/runtime/program/amr_program_context.hpp",
+    }
+    for path, budget in HISTORY_FLUX_UTILITY_BUDGETS.items():
+        source = (INCLUDE / path).read_text(encoding="utf-8")
+        assert len(source.splitlines()) <= budget, path
+        assert not forbidden_owners.search(source), path
+        for dependency in _local_includes(source):
+            assert dependency not in forbidden_dependencies, (path, dependency)
+            assert "amr_program_context_" not in dependency, (path, dependency)
+    context = (INCLUDE / ROOTS["program"]).read_text(encoding="utf-8")
+    assert (
+        "pops/runtime/program/amr_history_flux_snapshot_execution.hpp" in _local_includes(context)
+    )
+    # History maps and publication remain in the counted context closure.
+    counted = _source(_semantic_closure(ROOTS["program"]))
+    assert "history_flux_expressions_" in counted
+    assert "publish_history_flux_snapshots_" in counted
+    assert "prepare_remapped_history_flux_faces_" in counted

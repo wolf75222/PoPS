@@ -320,88 +320,9 @@ void rehydrate_history_flux_expression_(const std::string& key, int lag,
 }
 
 std::vector<std::uint8_t> serialize_history_flux_payload_() const {
-  const bool any_expression = std::any_of(
-      history_flux_expressions_.begin(), history_flux_expressions_.end(), [](const auto& entry) {
-        return std::any_of(entry.second.begin(), entry.second.end(),
-                           [](const FluxExpression& expression) { return !expression.empty(); });
-      });
-  if (!any_expression)
-    return {};
-  const bool snapshots = std::any_of(
-      history_flux_expressions_.begin(), history_flux_expressions_.end(), [](const auto& ring) {
-        return std::any_of(ring.second.begin(), ring.second.end(), [](const auto& expression) {
-          return std::any_of(expression.begin(), expression.end(), [](const auto& term) {
-            return term.second.basis && term.second.basis->history_snapshot;
-          });
-        });
-      });
-  checkpoint_detail::Writer out;
-  out.u64(snapshots ? UINT64_C(0x504f5053464c5834) : UINT64_C(0x504f5053464c5833));
-  out.size(history_flux_expressions_.size());
-  for (const auto& [key, slots] : history_flux_expressions_) {
-    out.string(key);
-    out.size(slots.size());
-    for (const FluxExpression& expression : slots) {
-      out.size(expression.size());
-      for (const auto& [identity, term] : expression) {
-        if (!term.basis || term.basis->identity != identity)
-          throw std::logic_error("AMR Program history flux payload has an unauthenticated basis");
-        out.u64(identity);
-        out.size(term.coefficient.size());
-        for (const auto& [power, coefficient] : term.coefficient) {
-          out.i32(power);
-          out.i64(coefficient.numerator);
-          out.i64(coefficient.denominator);
-        }
-        const FluxBasis& basis = *term.basis;
-        out.u64(basis.runtime_block);
-        out.i32(basis.level);
-        out.i32(basis.rhs_identity);
-        out.u64(static_cast<std::uint64_t>(basis.provider));
-        out.string(basis.temporal_family);
-        const auto write_point = [&](const auto& point) {
-          out.string(point.clock);
-          out.i64(point.tick);
-          out.i32(point.level);
-          out.i32(point.substep);
-          out.i32(point.stage);
-          out.i64(point.stage_fraction.numerator);
-          out.i64(point.stage_fraction.denominator);
-          out.real(point.dt);
-          out.real(point.physical_time);
-          out.string(point.graph_identity);
-          out.string(point.rate_identity);
-          out.string(point.application_identity);
-        };
-        write_point(basis.point);
-        checkpoint_detail::write_clock(out, basis.window.begin);
-        checkpoint_detail::write_clock(out, basis.window.end);
-        out.size(basis.faces.size());
-        for (const FluxBasisFace& face : basis.faces) {
-          out.u64(static_cast<std::uint64_t>(face.role));
-          out.i32(face.axis);
-          for (int axis = 0; axis < Dim; ++axis) {
-            out.i32(face.face[axis]);
-            out.i32(face.coarse_face[axis]);
-          }
-          out.real(face.face_measure);
-          out.size(face.flux_density.size());
-          for (const Real value : face.flux_density)
-            out.real(static_cast<double>(value));
-        }
-        out.size(basis.shared_samples.size());
-        for (const auto& sample : basis.shared_samples) {
-          if (!sample)
-            throw std::logic_error("history shared flux sample is absent");
-          write_shared_flux_sample_(out, *sample);
-        }
-        if (snapshots)
-          history_flux::write_descriptor(out, basis.history_snapshot,
-                                         facade_->configured_n_levels());
-      }
-    }
-  }
-  return std::move(out).take();
+  return history_flux::serialize_expressions<Dim>(
+      history_flux_expressions_, facade_->configured_n_levels(),
+      [&](auto& out, const auto& sample) { write_shared_flux_sample_(out, sample); });
 }
 
 std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_restore_(
@@ -583,18 +504,8 @@ std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_
 }
 
 void require_flux_expression_budget_(const FluxExpression& expression) const {
-  std::map<std::size_t, std::size_t> bases_by_block;
-  for (const auto& [identity, term] : expression) {
-    (void)identity;
-    if (!term.basis || term.basis->runtime_block >= prepared_rhs_basis_bounds_.size() ||
-        term.basis->runtime_block >= prepared_coefficient_term_bounds_.size())
-      throw std::logic_error("AMR Program flux expression has a foreign basis identity");
-    const std::size_t block = term.basis->runtime_block;
-    if (++bases_by_block[block] > prepared_rhs_basis_bounds_[block] ||
-        term.coefficient.size() > prepared_coefficient_term_bounds_[block])
-      throw std::length_error(
-          "AMR Program flux expression exceeds its authenticated artifact budget");
-  }
+  history_flux::require_expression_budget(expression, prepared_rhs_basis_bounds_,
+                                          prepared_coefficient_term_bounds_);
 }
 
 static FluxExpression scaled_flux_expression_(const FluxExpression& expression,
@@ -677,4 +588,50 @@ void copy_active_flux_expression_(const field_type& source, field_type& destinat
       },
       "AMR Program flux-expression copy failed collectively");
   active_flux_expressions_.swap(candidate);
+}
+
+// Called only at the accepted regrid boundary. Every query plan is agreed before payload MPI;
+// history reads themselves merely consume this precomputed current-interface view.
+void prepare_remapped_history_flux_faces_(
+    std::map<std::string, std::vector<FluxExpression>>& expressions) const {
+  using CacheKey = std::pair<std::string, int>;
+  std::map<CacheKey, std::vector<FluxBasisFace>> views;
+  for (auto& [key, slots] : expressions) {
+    const int level = decode_history_key_(key)->first;
+    std::vector<FluxBasisFace> geometry;
+    prepare_spatial_collectively([&] { geometry = current_history_interface_geometry_(level); });
+    for (auto& expression : slots)
+      for (auto& [identity, term] : expression) {
+        (void)identity;
+        std::shared_ptr<FluxBasis> candidate;
+        prepare_spatial_collectively([&] {
+          if (!term.basis)
+            throw std::logic_error("AMR history remap has an absent flux basis");
+          candidate = std::make_shared<FluxBasis>(*term.basis);
+          candidate->level = level;
+          for (const auto& sample : candidate->shared_samples)
+            if (!sample || sample->level != level)
+              throw std::invalid_argument("AMR shared history flux cannot transfer across levels");
+        });
+        if (candidate->history_snapshot) {
+          const CacheKey cache{candidate->history_snapshot->identity, level};
+          auto found = views.find(cache);
+          if (found == views.end()) {
+            auto faces = history_flux::execution::query_faces<Dim>(
+                candidate->history_snapshot, geometry, prepared_execution_lane(),
+                facade_->configured_n_levels());
+            prepare_spatial_collectively(
+                [&] { found = views.emplace(cache, std::move(faces)).first; });
+          }
+          prepare_spatial_collectively([&] { candidate->faces = found->second; });
+        } else {
+          // Legacy archives authenticate only their old interface view. Static interfaces may
+          // continue until these slots rotate out; moved or parent-projected faces must refuse.
+          prepare_spatial_collectively([&] {
+            candidate->faces = history_flux::certified_legacy_faces(candidate->faces, geometry);
+          });
+        }
+        term.basis = std::move(candidate);
+      }
+  }
 }

@@ -392,3 +392,43 @@ void prepare_active_flux_basis_impl_(
     throw std::runtime_error("AMR Program flux-expression registry failed collectively");
   }
 }
+
+std::shared_ptr<const HistoryFluxSnapshot> capture_history_flux_snapshot_(
+    std::size_t block, std::uint64_t basis_identity,
+    const runtime::multiblock::BoundaryEvaluationPoint& point, int rhs_identity,
+    FluxBasisProvider provider, std::uint64_t topology_epoch, std::uint64_t generation,
+    const field_type& rhs, const level_evaluation_type* evaluation,
+    const std::array<field_type, Dim>* exact, const std::array<field_type*, Dim>* named) const {
+  const auto& owners = runtime_state().hist_.owner;
+  if (std::none_of(owners.begin(), owners.end(),
+                   [&](const auto& entry) { return entry.second == static_cast<int>(block); }))
+    return {};
+  std::string source;
+  std::optional<Geometry<Dim>> geometry;
+  prepare_spatial_collectively([&] {
+    source = history_flux::source_point_identity(block, basis_identity, point, rhs_identity,
+                                                 provider, topology_epoch, generation);
+    geometry = facade_->prepared_amr_level_geometry(active_level_);
+  });
+  return history_flux::execution::capture_owned_snapshot<Dim>(
+      source, rhs, evaluation, exact, named, *geometry,
+      runtime_->hierarchy().layout(static_cast<std::size_t>(active_level_)),
+      prepared_execution_lane(), facade_->configured_n_levels(),
+      named == nullptr && provider != FluxBasisProvider::DiffusiveFace);
+}
+
+std::vector<FluxBasisFace> current_history_interface_geometry_(int level) const {
+  const auto& hierarchy = runtime_->hierarchy();
+  return history_flux::execution::interface_faces<Dim, FluxBasisFace>(
+      facade_->prepared_amr_level_geometry(level), hierarchy.layout(level),
+      level > 0 ? &hierarchy.layout(level - 1) : nullptr,
+      level + 1 < nlev() ? program_interface_faces_(level) : std::vector<ProgramInterfaceFace>{},
+      level > 0 ? program_interface_faces_(level - 1) : std::vector<ProgramInterfaceFace>{});
+}
+
+std::shared_ptr<const HistoryFluxSnapshot> project_history_flux_snapshot_(
+    const std::shared_ptr<const HistoryFluxSnapshot>& parent, int level) const {
+  return history_flux::execution::project_snapshot<Dim>(parent, runtime_->hierarchy().layout(level),
+                                                        facade_->prepared_amr_level_geometry(level),
+                                                        facade_->configured_n_levels());
+}

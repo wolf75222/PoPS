@@ -1,33 +1,4 @@
-
-struct FluxBasisFace {
-  ::pops::amr::reflux::FaceLedgerRole role = ::pops::amr::reflux::FaceLedgerRole::Coarse;
-  int axis = 0;
-  Index<Dim> face{};
-  Index<Dim> coarse_face{};
-  double face_measure = 0.0;
-  std::vector<Real> flux_density;
-};
-
-enum class FluxBasisProvider : std::uint8_t {
-  PreparedResidual = 0,
-  PreparedDefaultFlux = 1,
-  ExactFace = 2,
-  NamedCell = 3,
-  DiffusiveFace = 4,
-};
-
-struct FluxBasis {
-  std::uint64_t identity = 0;
-  std::size_t runtime_block = 0;
-  int level = 0;
-  runtime::multiblock::BoundaryEvaluationPoint point{};
-  int rhs_identity = -1;
-  FluxBasisProvider provider = FluxBasisProvider::PreparedResidual;
-  std::string temporal_family;
-  ::pops::amr::ClockWindow window{};
-  std::vector<FluxBasisFace> faces;
-  std::vector<std::shared_ptr<const runtime::multiblock::InterfaceFluxSample>> shared_samples;
-  // Complete raw source samples remain distributed. Projected nodes are internal conservative
-  // history transport, never evaluated physical fluxes or public whole-face exchange evidence.
-  std::shared_ptr<const history_flux::Snapshot<Dim>> history_snapshot;
-};
+using FluxBasisFace = history_flux::BasisFace<Dim>;
+using FluxBasisProvider = history_flux::BasisProvider;
+using FluxBasis = history_flux::Basis<Dim>;
+using HistoryFluxSnapshot = history_flux::Snapshot<Dim>;
