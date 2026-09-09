@@ -32,7 +32,7 @@ def _field_topology_rematerializer_validated(
 
     if not isinstance(field_subjects, Mapping):
         raise TypeError("field topology rematerializer subjects must be a mapping")
-    for name, plan in field_plans.items():
+    for name in field_plans:
         subject = field_subjects.get(name)
         if subject is None:
             return False

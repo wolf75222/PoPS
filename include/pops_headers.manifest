@@ -280,6 +280,7 @@ sdk-support pops/runtime/program/amr_program_context_flux_expression_polynomial.
 sdk-support pops/runtime/program/amr_program_context_flux_expression_public.inc
 sdk-support pops/runtime/program/amr_program_context_flux_expression_runtime.inc
 sdk-support pops/runtime/program/amr_program_context_flux_expression_services.inc
+sdk-support pops/runtime/program/amr_program_context_flux_family.inc
 sdk-support pops/runtime/program/amr_program_context_shared_flux.inc
 sdk-support pops/runtime/program/amr_program_context_history_checkpoint_public.inc
 sdk-support pops/runtime/program/amr_program_context_history_checkpoint_definitions.inc
