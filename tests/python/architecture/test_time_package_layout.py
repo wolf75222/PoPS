@@ -60,7 +60,7 @@ PUBLIC = (
     "Program", "ProgramValue", "StageStateSet", "StencilAccess", "ResidualSolution",
     "CoupledImplicitEuler", "LocalLinear", "LocalResidual",
     "DerivativeStrategy", "SolveRequest", "SolveRequestError", "SolveUnknown",
-    "ImplicitDiffusionStage",
+    "ImplicitStage", "ImplicitDiffusionStage",
     "SolveOutcome", "FieldSolveOutcome", "SolveAction", "FailRun", "RejectAttempt",
     "SOLVE_STATUSES", "Schedule",
     "StepStrategy", "FixedDt", "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid",

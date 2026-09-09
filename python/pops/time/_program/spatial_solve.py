@@ -1,4 +1,4 @@
-"""The exact request-to-Program adapter for scalar spatial implicit stages."""
+"""The exact request-to-Program adapter for ordered vector spatial implicit stages."""
 from __future__ import annotations
 
 import math
@@ -94,7 +94,7 @@ def validate_spatial_request(program: Any, token: Any) -> None:
     actual = _json_ready(token.attrs["solve_request"])
     unknowns = actual.get("unknowns")
     if not isinstance(unknowns, list) or len(unknowns) != 1:
-        raise SolveRequestError("invalid_unknown", "spatial request requires one scalar unknown")
+        raise SolveRequestError("invalid_unknown", "spatial request requires one ordered vector unknown")
     unknown = SolveUnknown(unknowns[0]["name"], token)
     expected = _request_data(program, token, unknown, actual.get("physical_problem"))
     if actual != _json_ready(expected):
@@ -166,26 +166,31 @@ def build_spatial_request(program: Any, request: Any, prepared: Any, *, name: An
     )
     from pops.time._program.serialization import _json_ready
     from pops.time.solve_outcome import ResidualSolution, SolveOutcome
-    from pops.time.implicit_diffusion import ImplicitDiffusionStage
+    from pops.time.implicit_stage import ImplicitStage
     from pops.time.references import handle_data
     from pops.identity.scalar import scalar_data
 
     stage = request.problem
-    if type(stage) is not ImplicitDiffusionStage or type(prepared) is not PreparedSpatialNewton:
-        raise SolveRequestError("unsupported_lowering", "implicit diffusion requires spatial Newton")
+    if type(stage) is not ImplicitStage or type(prepared) is not PreparedSpatialNewton:
+        raise SolveRequestError("unsupported_lowering", "implicit stage requires spatial Newton")
     if len(request.unknowns) != 1:
-        raise SolveRequestError("unsupported_unknown_product", "spatial adapter is scalar")
+        raise SolveRequestError("unsupported_unknown_product", "spatial adapter requires one vector unknown from one block")
     if request.derivative.route != "finite_difference":
         raise SolveRequestError("unsupported_derivative", "select full-residual finite_difference explicitly")
     if program._recording:
         raise SolveRequestError("unsupported_scope", "spatial solve recording requires a top-level region")
     unknown = request.unknowns[0]
     previous, seed = stage.previous, request.seeds[unknown.name]
+    if not isinstance(previous, ProgramValue) or previous.vtype != "state":
+        raise SolveRequestError("invalid_binding", "previous must be one typed State value")
+    components = getattr(previous.space, "components", None)
+    if not isinstance(components, tuple) or not components:
+        raise SolveRequestError("invalid_binding", "spatial stage requires an explicit component space")
     for value in (previous, unknown.template, *(() if seed is None else (seed,))):
         if not isinstance(value, ProgramValue) or value.vtype != "state":
-            raise SolveRequestError("invalid_binding", "spatial stage requires typed scalar State values")
+            raise SolveRequestError("invalid_binding", "spatial stage requires typed State values")
         require_top_level(program, value, "spatial solve binding")
-        if value.block != previous.block or value.logical_shape.get("n_comp", 1) != 1:
+        if value.block != previous.block or len(getattr(value.space, "components", ())) != len(components):
             raise SolveRequestError("unknown_type_mismatch", "spatial stage owner/components differ")
         require_compatible_spaces(previous.space, value.space, "spatial solve binding", typed_pair=True)
     expected_inputs = {"previous": previous, "rate": stage.rate,
@@ -211,8 +216,6 @@ def build_spatial_request(program: Any, request: Any, prepared: Any, *, name: An
                                  at=iterate.point)
     finally:
         program._recording.pop()
-    if not any(node.op == "diffusive_rhs" for node in sub):
-        raise SolveRequestError("unsupported_lowering", "stage rate has no selected physical diffusion")
     allowed = {"state", "diffusive_rhs", "local_transform", "linear_combine", "source"}
     if any(node.op not in allowed for node in sub):
         raise SolveRequestError("unsupported_residual_operation", "residual has an unprepared operation")

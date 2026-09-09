@@ -174,6 +174,7 @@ class _RateAuthoringMixin(_BoardModel):
         """Populate the typed Module with authoritative equations and derived adapters."""
         from pops.model.operators import Operator
         from .interactions import joint_balance_supported
+        from pops._ir.balance import source_balance_supported
         from pops.provenance import ProvenanceRecord, source_span
         registry = module.operator_registry()
         from .diffusion import install_diffusive_fluxes
@@ -183,8 +184,7 @@ class _RateAuthoringMixin(_BoardModel):
         for handle, view in getattr(self, "_retained_rates", {}).items():
             reason = view.legacy_incompatibility()
             storage = {}
-            if (self.frame is not None and view.accumulation.is_identity and view.occurrences
-                    and all(row.kind == "source" for row in view.occurrences)):
+            if self.frame is not None and source_balance_supported(view):
                 storage = {"storage_axes": tuple(axis.name for axis in self.frame.axes),
                            "storage_frame": self.frame.canonical_id}
             if handle.registered_operator_name in registry.names():
@@ -200,7 +200,7 @@ class _RateAuthoringMixin(_BoardModel):
                 lowering = {"physical_balance": view}
                 if joint_balance_supported(view):
                     lowering["joint_balance"] = True
-                elif reason is not None:
+                elif reason is not None and not source_balance_supported(view):
                     lowering["native_unsupported"] = {
                         "code": "unsupported_balance_realization", "phase": "resolve",
                         "reason": reason,

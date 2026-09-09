@@ -25,6 +25,9 @@ _LEGACY_ROUTES = {
 
 def native_route(module: Any, operator: Any) -> tuple[str | None, str | None]:
     """Current checked adapter vocabulary; no capability follows from a type name alone."""
+    from pops._ir.balance import source_balance_supported
+    if source_balance_supported(operator.lowering.get("physical_balance")):
+        return "program:source_balance", None
     from pops.numerics.diffusion import diffusion_balance_supported
     from pops.numerics.scharfetter_gummel import fitted_balance_supported
     if diffusion_balance_supported(operator.lowering.get("physical_balance")) or fitted_balance_supported(operator.lowering.get("physical_balance")):

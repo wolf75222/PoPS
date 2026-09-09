@@ -361,6 +361,10 @@ def _module_to_model(module: Any, state_space: Any = None,
         from pops.numerics.diffusion import diffusion_balance_supported
         from pops.numerics.scharfetter_gummel import fitted_balance_supported
         diffusion_view = op.lowering.get("physical_balance")
+        from pops._ir.balance import source_balance_supported
+        if source_balance_supported(diffusion_view):
+            coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:source_balance",)))
+            continue
         if diffusion_balance_supported(diffusion_view) or fitted_balance_supported(diffusion_view):
             coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:diffusive_rhs",)))
             continue

@@ -7,7 +7,7 @@
 
 namespace pops::runtime::program {
 
-/// One scalar spatial residual in solver coordinates. The callable evaluates the complete
+/// One ordered vector spatial residual in solver coordinates. The callable evaluates the complete
 /// F(q)=Q(q)-U_n-tau R(Q(q)); U_n and tau are frozen captures, never inferred from the seed.
 /// The existing field Newton workspace is only a numerical algorithm here: no physical field
 /// registration, nullspace compatibility projection or gauge is introduced by this adapter.
@@ -18,18 +18,20 @@ class PreparedSpatialResidual final {
 
   PreparedSpatialResidual(const field_type& prototype, FieldNewtonOptions options,
                           Real difference_step)
-      : newton_(prototype.layout(), prototype.distribution(), prototype.local_rank(), options),
-        candidate_(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
-                   Extent<Dim>{}),
-        perturbed_(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
-                   Extent<Dim>{}),
-        plus_(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
-              Extent<Dim>{}),
-        minus_(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
-               Extent<Dim>{}),
+      : newton_(prototype.layout(), prototype.distribution(), prototype.local_rank(), options,
+                prototype.ncomp()),
+        candidate_(prototype.layout(), prototype.distribution(), prototype.local_rank(),
+                   prototype.ncomp(), Extent<Dim>{}),
+        perturbed_(prototype.layout(), prototype.distribution(), prototype.local_rank(),
+                   prototype.ncomp(), Extent<Dim>{}),
+        plus_(prototype.layout(), prototype.distribution(), prototype.local_rank(),
+              prototype.ncomp(), Extent<Dim>{}),
+        minus_(prototype.layout(), prototype.distribution(), prototype.local_rank(),
+               prototype.ncomp(), Extent<Dim>{}),
         difference_step_(difference_step) {
-    if (prototype.ncomp() != 1 || !std::isfinite(difference_step_) || difference_step_ <= Real(0))
-      throw std::invalid_argument("spatial residual requires scalar storage and a finite FD step");
+    if (prototype.ncomp() <= 0 || !std::isfinite(difference_step_) || difference_step_ <= Real(0))
+      throw std::invalid_argument(
+          "spatial residual requires nonempty component storage and a finite FD step");
   }
 
   template <class Residual>
@@ -55,8 +57,8 @@ class PreparedSpatialResidual final {
     auto derivative = [&](const field_type& q, const field_type& direction, field_type& result,
                           int evaluation) {
       increment_(derivative_evaluations_);
-      const Real norm_q = std::sqrt(all_reduce_sum(dot_local(q, q), lane));
-      const Real norm_v = std::sqrt(all_reduce_sum(dot_local(direction, direction), lane));
+      const Real norm_q = std::sqrt(all_reduce_sum(dot_all_local(q, q), lane));
+      const Real norm_v = std::sqrt(all_reduce_sum(dot_all_local(direction, direction), lane));
       if (norm_v == Real(0)) {
         result.set_val(Real(0));
         return;
@@ -92,8 +94,9 @@ class PreparedSpatialResidual final {
   void authenticate_(const field_type& value) const {
     if (value.layout() != candidate_.layout() ||
         value.distribution() != candidate_.distribution() ||
-        value.local_rank() != candidate_.local_rank() || value.ncomp() != 1)
-      throw std::invalid_argument("spatial residual seed differs from its prepared scalar layout");
+        value.local_rank() != candidate_.local_rank() || value.ncomp() != candidate_.ncomp())
+      throw std::invalid_argument(
+          "spatial residual seed differs from its prepared component layout");
   }
   FieldNewtonKrylovWorkspace<Dim> newton_;
   field_type candidate_, perturbed_, plus_, minus_;

@@ -1,17 +1,19 @@
 #include <gtest/gtest.h>
+#include <array>
 #include <pops/runtime/program/prepared_spatial_residual.hpp>
+#include <pops/runtime/program/prepared_amr_spatial_residual.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 
 using namespace pops;
 
 namespace {
 
-MultiFab<2> scalar_field() {
-  const Box<2> domain{Index<2>{0, 0}, Index<2>{15, 15}};
-  const auto layout = mesh::BoxArray<2>::from_domain(domain, Extent<2>{16, 16});
+MultiFab<2> scalar_field(int components = 1, int width = 16) {
+  const Box<2> domain{Index<2>{0, 0}, Index<2>{width - 1, width - 1}};
+  const auto layout = mesh::BoxArray<2>::from_domain(domain, Extent<2>{width, width});
   const auto distribution =
       mesh::Distribution<2>::replicated(layout, mesh::RankSpace<2>{Index<2>{}, Extent<2>{1, 1}});
-  return MultiFab<2>(layout, distribution, Index<2>{}, 1, Extent<2>{});
+  return MultiFab<2>(layout, distribution, Index<2>{}, components, Extent<2>{});
 }
 
 struct AccumulationResidual {
@@ -151,4 +153,100 @@ TEST(PreparedSpatialResidual, NewtonCorrectionCouplesPeriodicNeighborDegreesOfFr
   const Real mode_max = std::pow(std::cos(std::acos(Real(-1)) / Real(16)), 2);
   EXPECT_NEAR(reduce_max(solve.candidate()), Real(1) + amplitude * mode_max, 1e-10);
   EXPECT_NEAR(reduce_min(solve.candidate()), Real(1) - amplitude * mode_max, 1e-10);
+}
+
+namespace {
+void set_pair(MultiFab<2>& field, Real first, Real second) {
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const auto values = field.fab(local).view();
+    for_each_cell(field.box(local), [=] POPS_HD(const Index<2>& cell) {
+      values(cell, 0) = first;
+      values(cell, 1) = second;
+    });
+  }
+}
+
+// Pure algebraic coupled vector residual: the first component can already be solved while
+// the second is not, so a scalar-only norm would falsely report success.
+void evaluate_pair(const MultiFab<2>& coordinate, const MultiFab<2>& previous,
+                   MultiFab<2>& result) {
+  for (std::size_t local = 0; local < coordinate.local_size(); ++local) {
+    const auto q = coordinate.fab(local).view();
+    const auto old = previous.fab(local).view();
+    const auto out = result.fab(local).view();
+    for_each_cell(coordinate.box(local), [=] POPS_HD(const Index<2>& cell) {
+      out(cell, 0) = q(cell, 0) + q(cell, 0) * q(cell, 0) - old(cell, 0);
+      out(cell, 1) = q(cell, 1) + q(cell, 0) * q(cell, 1) - old(cell, 1);
+    });
+  }
+}
+}  // namespace
+
+TEST(PreparedSpatialResidual, CoupledVectorAccumulationMeasuresEveryComponent) {
+  auto seed = scalar_field(2);
+  auto previous = scalar_field(2);
+  set_pair(seed, Real(1), Real(0));
+  set_pair(previous, Real(2), Real(4));
+  runtime::program::PreparedSpatialResidual<2> solve(seed, options(), Real(6e-6));
+  const auto report = solve.solve(
+      &seed, [&](const auto& q, auto& result, int) { evaluate_pair(q, previous, result); },
+      ExecutionLane::world("test.vector-spatial-accumulation"));
+  ASSERT_TRUE(report.solved_value_available()) << report.reason;
+  EXPECT_GT(solve.derivative_evaluations(), 0);
+  ASSERT_EQ(solve.candidate().ncomp(), 2);
+  EXPECT_NEAR(reduce_min(solve.candidate(), 0), Real(1), 1e-10);
+  EXPECT_NEAR(reduce_max(solve.candidate(), 0), Real(1), 1e-10);
+  EXPECT_NEAR(reduce_min(solve.candidate(), 1), Real(2), 1e-10);
+  EXPECT_NEAR(reduce_max(solve.candidate(), 1), Real(2), 1e-10);
+  EXPECT_EQ(reduce_max(seed, 1), Real(0));
+  auto wrong = scalar_field();
+  EXPECT_THROW(
+      solve.solve(
+          &wrong, [&](const auto& q, auto& result, int) { evaluate_pair(q, previous, result); },
+          ExecutionLane::world("test.vector-wrong-width")),
+      std::invalid_argument);
+}
+
+TEST(PreparedSpatialResidual, CompositeVectorNormAndCoveredProjectionRetainEveryComponent) {
+  auto coarse = scalar_field(2, 4), fine = scalar_field(2, 8);
+  auto coarse_mask = scalar_field(1, 4), fine_mask = scalar_field(1, 8);
+  coarse_mask.set_val(Real(0));  // Entire parent is covered by the refined representation.
+  fine_mask.set_val(Real(1));
+  set_pair(coarse, Real(7), Real(9));
+  set_pair(fine, Real(1), Real(0));
+  const std::array<const MultiFab<2>*, 2> layouts{&coarse, &fine};
+  const std::array<const MultiFab<2>*, 2> masks{&coarse_mask, &fine_mask};
+  const std::array<Real, 2> measures{Real(1) / 16, Real(1) / 64};
+  runtime::program::PreparedAmrSpatialResidual<2> solve(layouts, masks, measures, options(),
+                                                        Real(6e-6));
+  auto coarse_previous = scalar_field(2, 4), fine_previous = scalar_field(2, 8);
+  set_pair(coarse_previous, Real(2), Real(4));
+  set_pair(fine_previous, Real(2), Real(4));
+  solve.stage(0, coarse_previous, &coarse);
+  solve.stage(1, fine_previous, &fine);
+  const auto report = solve.solve(
+      [&](const auto& q, const auto& previous, auto& result, int) {
+        for (std::size_t level = 0; level < q.size(); ++level)
+          evaluate_pair(q[level], previous[level], result[level]);
+      },
+      ExecutionLane::world("test.vector-amr-accumulation"));
+  ASSERT_TRUE(report.solved_value_available()) << report.reason;
+  EXPECT_GT(solve.derivative_evaluations(), 0);
+  EXPECT_NEAR(reduce_min(solve.candidate(1), 0), Real(1), 1e-10);
+  EXPECT_NEAR(reduce_max(solve.candidate(1), 0), Real(1), 1e-10);
+  EXPECT_NEAR(reduce_min(solve.candidate(1), 1), Real(2), 1e-10);
+  EXPECT_NEAR(reduce_max(solve.candidate(1), 1), Real(2), 1e-10);
+  EXPECT_EQ(reduce_min(solve.candidate(0), 0), Real(7));
+  EXPECT_EQ(reduce_max(solve.candidate(0), 0), Real(7));
+  EXPECT_EQ(reduce_min(solve.candidate(0), 1), Real(9));
+  EXPECT_EQ(reduce_max(solve.candidate(0), 1), Real(9));
+  auto wrong = scalar_field(1, 8);
+  set_pair(fine_previous, Real(22), Real(44));
+  EXPECT_THROW(solve.stage(1, fine_previous, &wrong), std::invalid_argument);
+  EXPECT_EQ(reduce_max(solve.previous(1), 0), Real(2));
+  EXPECT_EQ(reduce_max(solve.previous(1), 1), Real(4));
+  const std::array<const MultiFab<2>*, 2> mixed_width{&coarse, &wrong};
+  EXPECT_THROW((runtime::program::PreparedAmrSpatialResidual<2>(mixed_width, masks, measures,
+                                                                options(), Real(6e-6))),
+               std::invalid_argument);
 }

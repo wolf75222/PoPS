@@ -301,3 +301,9 @@ def accumulation(state: Handle, *, coordinates: Any, law: Any,
 
 __all__ = ["Accumulation", "Balance", "BalanceOccurrence", "BalanceView",
            "DiscreteAccumulationEquation", "accumulation"]
+
+
+def source_balance_supported(view: Any) -> bool:
+    """Identity accumulation with exactly source occurrences, including the zero rate."""
+    return (isinstance(view, BalanceView) and view.accumulation.is_identity
+            and all(row.kind == "source" for row in view.occurrences))

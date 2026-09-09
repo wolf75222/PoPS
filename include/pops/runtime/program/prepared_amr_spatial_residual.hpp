@@ -23,12 +23,17 @@ class PreparedAmrSpatialResidual final {
         difference_step_(difference_step) {
     if (!std::isfinite(difference_step_) || !(difference_step_ > Real(0)))
       throw std::invalid_argument("composite spatial residual requires a finite positive FD step");
-    if (masks_.size() != layouts.size() || (!coverage.empty() && coverage.size() != layouts.size()))
+    if (layouts.empty() || measures_.size() != layouts.size() || masks_.size() != layouts.size() ||
+        (!coverage.empty() && coverage.size() != layouts.size()))
       throw std::invalid_argument("composite spatial residual has an incomplete mask hierarchy");
+    const int components = layouts.front() ? layouts.front()->ncomp() : 0;
+    for (const auto* layout : layouts)
+      if (!layout || components <= 0 || layout->ncomp() != components)
+        throw std::invalid_argument("composite spatial levels require one exact vector width");
     for (const auto* layout : layouts)
       for (auto* tower : {&candidate_, &previous_, &perturbed_, &plus_, &minus_})
-        tower->emplace_back(layout->layout(), layout->distribution(), layout->local_rank(), 1,
-                            layout->ghosts());
+        tower->emplace_back(layout->layout(), layout->distribution(), layout->local_rank(),
+                            components, layout->ghosts());
     owned_masks_.reserve(layouts.size());
     for (std::size_t level = 0; level < layouts.size(); ++level) {
       const auto& prototype = *layouts[level];
@@ -69,9 +74,10 @@ class PreparedAmrSpatialResidual final {
   }
   void stage(std::size_t level, const field_type& previous, const field_type* seed) {
     authenticate_(previous, level);
+    if (seed)
+      authenticate_(*seed, level);
     lincomb(previous_[level], Real(1), previous, Real(0), previous);
     if (seed) {
-      authenticate_(*seed, level);
       lincomb(candidate_[level], Real(1), *seed, Real(0), *seed);
     } else
       candidate_[level].set_val(Real(0));
@@ -163,7 +169,7 @@ class PreparedAmrSpatialResidual final {
   }
   void authenticate_(const field_type& field, std::size_t level) const {
     const auto& expected = candidate_.at(level);
-    if (field.ncomp() != 1 || field.layout() != expected.layout() ||
+    if (field.ncomp() != expected.ncomp() || field.layout() != expected.layout() ||
         field.distribution() != expected.distribution() ||
         field.local_rank() != expected.local_rank())
       throw std::invalid_argument("composite spatial input differs from its exact-ranked layout");
@@ -174,16 +180,9 @@ class PreparedAmrSpatialResidual final {
       if (values[level].distribution().replicated() &&
           values[level].local_rank() != values[level].rank_space().coordinate(0))
         continue;
-      for (std::size_t local = 0; local < values[level].local_size(); ++local)
+      for (int component = 0; component < values[level].ncomp(); ++component)
         local_sum += measures_[level] *
-                     for_each_cell_reduce_sum(
-                         values[level].box(local),
-                         mf_arith_detail::MeasuredDotKernel<Dim>{values[level].fab(local).view(),
-                                                                 values[level].fab(local).view(),
-                                                                 masks_[level]->fab(local).view(),
-                                                                 {},
-                                                                 0,
-                                                                 false});
+                     dot_active_local(values[level], values[level], component, masks_[level]);
     }
     return std::sqrt(all_reduce_sum(local_sum, lane));
   }

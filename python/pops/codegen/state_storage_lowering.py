@@ -21,7 +21,7 @@ def prepare_source_storage_carrier(emitter, module, *, state_space=None):
     frames = set()
     for operator in operators:
         view = operator.lowering.get("physical_balance")
-        if (view is None or not view.accumulation.is_identity or not view.occurrences
+        if (view is None or not view.accumulation.is_identity
                 or any(row.kind != "source" for row in view.occurrences)
                 or operator.signature.inputs[0] != state):
             continue

@@ -116,9 +116,9 @@ def build_solve_request(program: Any, request: Any, prepared: Any, *, name: Any)
         raise SolveRequestError(native["code"], native["detail"])
     if any(unknown.interval is not None for unknown in request.unknowns):
         raise SolveRequestError("unsupported_interval_unknown", "point-native adapters cannot realize interval unknowns")
-    from pops.time.implicit_diffusion import ImplicitDiffusionStage
+    from pops.time.implicit_stage import ImplicitStage
 
-    if type(request.problem) is ImplicitDiffusionStage:
+    if type(request.problem) is ImplicitStage:
         from pops.time._program.spatial_solve import build_spatial_request
 
         return build_spatial_request(program, request, prepared, name=name)

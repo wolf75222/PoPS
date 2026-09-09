@@ -27,6 +27,11 @@ class StateStorage(Descriptor):
             raise ValueError("StateStorage cannot discretize a physical hyperbolic flux")
         return True
 
+    def validate_balance_view(self, view: Any) -> bool:
+        from pops._ir.balance import source_balance_supported
+
+        return source_balance_supported(view)
+
     def resolve_references(self, resolver: Any) -> StateStorage:
         if not callable(resolver):
             raise TypeError("StateStorage.resolve_references requires a resolver")
