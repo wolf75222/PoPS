@@ -2739,3 +2739,80 @@ TEST(GeneratedAmrSystemBlock, GaussianBootstrapReprojectionPreservesExactNeutral
   }
   system.commit_bootstrap_level();
 }
+
+TEST(GeneratedAmrSystemBlock, GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry) {
+  if (pops::n_ranks() != 2)
+    GTEST_SKIP() << "requires the registered two-rank Gaussian metadata consensus control";
+  using Real = pops::Real;
+  constexpr int Dim = pops::kNativeDimension;
+  constexpr const char* route = "tests.generated-amr/mpi-gaussian/state";
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 1;
+  config.transition_ratios.clear();
+  config.transition_buffers.clear();
+  config.transition_lookaheads.clear();
+  config.regrid_every = 0;
+  config.explicit_bootstrap = true;
+  config.distribute_coarse = true;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 16;
+    config.coarse_max_grid[axis] = 8;
+    config.periodicity[axis] = true;
+  }
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/mpi-gaussian-runtime");
+  system.install_block_state_route("tracer", route);
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  pops::test::install_prepared_threshold_union(
+      system, {{"tracer", "u", .5, pops::test::PreparedThresholdRelation::Above, route}},
+      "tests.generated-amr/mpi-gaussian-tagging@1");
+  system.bind_bootstrap_subject(route, "tracer", "gaussian_field");
+  pops::analytic::GaussianCellAverageProfile<Dim> profile;
+  profile.inverse_width = Real(80);
+  const Real root = std::sqrt(profile.inverse_width);
+  Real integral = Real(1);
+  for (int axis = 0; axis < Dim; ++axis) {
+    const Real center = axis == 0 ? Real(.35) : Real(.55);
+    profile.center[axis] = center;
+    integral *= std::sqrt(std::acos(Real(-1))) / (Real(2) * root) *
+                (std::erf(root * (Real(1) - center)) + std::erf(root * center));
+  }
+  profile.background = Real(1) - integral;
+  const auto stage = [&](const auto& source) {
+    system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                          "conservative_cell_average", source);
+  };
+  const auto collectively_refused = [&](const auto& source, const char* expected) {
+    std::string reason;
+    try {
+      stage(source);
+    } catch (const std::exception& error) {
+      reason = error.what();
+    }
+    EXPECT_NE(reason.find(expected), std::string::npos) << reason;
+    EXPECT_EQ(pops::all_reduce_sum(reason.empty() ? 0L : 1L), 2L);
+  };
+  auto divergent = profile;
+  if (pops::my_rank() == 1)
+    divergent.center[0] += Real(.125);
+  collectively_refused(divergent, "analytic request differs across MPI ranks");
+  auto invalid = profile;
+  if (pops::my_rank() == 1)
+    invalid.inverse_width = Real(0);
+  collectively_refused(invalid, "rank-local analytic validation failed collectively on 1 rank(s)");
+  // Both refusals precede source publication: the same subject remains available for valid staging.
+  EXPECT_NO_THROW(stage(profile));
+  system.begin_bootstrap_plan();
+  system.set_program_block_map({0});
+  EXPECT_EQ(
+      system.materialize_bootstrap_action(route, "initialize_level_zero", "gaussian_field", 0),
+      cell_count(config.shape));
+  const auto state = system.block_level_state("tracer", 0);
+  ASSERT_EQ(state.size(), cell_count(config.shape));
+  long double moment = 0;
+  for (double value : state) {
+    ASSERT_TRUE(std::isfinite(value));
+    moment += static_cast<long double>(value) - 1;
+  }
+  EXPECT_LE(std::abs(moment / state.size()), Real(128) * std::numeric_limits<Real>::epsilon());
+}

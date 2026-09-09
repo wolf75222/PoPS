@@ -456,8 +456,10 @@ TEST(AnalyticExpression, ExactGaussianProjectionRetainsNeutralityAcrossRefinemen
     const auto generic =
         pops::analytic::prepare_cell_average_materialization(values, geometry, programs);
     (void)pops::analytic::materialize_cell_average(generic, lane.communicator());
-    if (n == 16)
-      EXPECT_GT(std::abs(moment()), tolerance);  // Original Gaussian bootstrap counterexample.
+    // The original quadrature defect exceeds the compatibility tolerance in binary64;
+    // it is below the supported float tolerance. Exact projection is checked for every Real.
+    if (n == 16 && std::numeric_limits<Real>::digits >= 53)
+      EXPECT_GT(std::abs(moment()), tolerance);
     const auto exact =
         pops::analytic::prepare_cell_average_materialization(values, geometry, programs, &profile);
     EXPECT_EQ(pops::analytic::materialize_cell_average(exact, lane.communicator()), box.numPts());
