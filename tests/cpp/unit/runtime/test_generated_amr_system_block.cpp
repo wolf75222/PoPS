@@ -990,6 +990,10 @@ TEST(GeneratedAmrSystemBlock, ScalarParentPreparationRefreshesSparsePeriodicGhos
   context->install([](double) {}, context);
   system.set_program_block_map({0});
   ASSERT_EQ(system.program_block_map(), std::vector<int>{0});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  // Scalar prior samples carry no RHS flux basis or shared-interface coupling.
+  system.install_prepared_amr_program_flux_expression_budget(
+      "tests.generated-amr/scalar-prior@1", std::vector<FluxBudget>(1, FluxBudget{0, 0}), 0, 0);
   context->configure_primary_clock("clock.macro");
   for (int level = 0; level < 2; ++level)
     context->with_program_resource_level(level, [&] {
@@ -3034,6 +3038,7 @@ TEST(GeneratedAmrSystemBlock, GaussianBootstrapRejectsMpiProfileMismatchBeforeVa
   using Real = pops::Real;
   constexpr int Dim = pops::kNativeDimension;
   constexpr const char* route = "tests.generated-amr/mpi-gaussian/state";
+  constexpr const char* array_route = "tests.generated-amr/mpi-gaussian/array-state";
   pops::AmrSystemConfig<Dim> config;
   config.level_count = 1;
   config.transition_ratios.clear();
@@ -3050,12 +3055,11 @@ TEST(GeneratedAmrSystemBlock, GaussianBootstrapRejectsMpiProfileMismatchBeforeVa
   pops::AmrSystem<Dim> system(config);
   pops::test::install_amr_runtime_authority(system, "tests.generated-amr/mpi-gaussian-runtime");
   system.install_block_state_route("tracer", route);
+  system.install_block_state_route("array-tracer", array_route);
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   pops::test::install_prepared_threshold_union(
       system, {{"tracer", "u", .5, pops::test::PreparedThresholdRelation::Above, route}},
       "tests.generated-amr/mpi-gaussian-tagging@1");
-  constexpr const char* array_route = "tests.generated-amr/mpi-gaussian/array-state";
-  system.install_block_state_route("array-tracer", array_route);
   pops::add_compiled_model<Dim>(system, "array-tracer", advection_model<Dim>());
   system.bind_bootstrap_subject(array_route, "array-tracer", "array_field");
   std::vector<double> array_values(cell_count(config.shape), 2.0);
