@@ -1045,10 +1045,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
 
         emit_field_problem_value(v, var, lines, prelude, target=target)
     elif v.op == "scalar_field":
-        # A step-body scratch scalar field (e.g. the explicit-flux buffer the RHS assembly fills):
-        # a persistent shared_ptr (prelude, alloc-once) reused every step. Inside an apply sub-block
-        # the scalar_field is handled by _emit_matrix_free_operator instead (this branch is the
-        # top-level / step-body path -- prelude is not None there).
+        # Qualified AMR scalars bind current-attempt storage; uniform and unqualified scalars
+        # retain their layout-bound install lifetime. Matrix-free apply sub-blocks manage their
+        # own session-private scalar storage in _emit_matrix_free_operator. This branch handles
+        # top-level / step-body declarations, where prelude is available.
         if prelude is None:
             raise NotImplementedError(
                 "scalar_field is only lowerable at the top level / step body or inside a "
