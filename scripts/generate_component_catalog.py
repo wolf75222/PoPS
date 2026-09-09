@@ -1200,6 +1200,7 @@ typedef struct PopsFieldPatchMetadataV1 {{
   int32_t owner_rank;
   int32_t level;
   int32_t dimension;
+  // Bounds use this patch level's index space, not the coarse global-domain indices.
   int64_t lower[3];
   int64_t upper[3];
   // Physical coordinate of the lower face at `lower`, not the global-domain origin.
@@ -1228,6 +1229,7 @@ typedef struct PopsFieldGlobalTopologyV1 {{
   // Exact runtime materialization identity: source layout + geometry + boxes + owners + topology.
   const char* materialized_layout_identity;
   int32_t dimension;
+  // Domain bounds in level-zero index space; refined patches carry their own level indices.
   int64_t domain_lower[3];
   int64_t domain_upper[3];
   uint32_t periodic_axes;

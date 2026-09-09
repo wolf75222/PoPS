@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import MutableMapping
 from hashlib import sha256
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -92,10 +92,12 @@ def capture_history_flux_snapshots(
     )
     if any(row["value"] != digest for row in rows):
         raise RuntimeError("canonical history-flux snapshot differs across ranks")
+    # Successful consensus has rethrown every failed exact-bytes validation above.
+    canonical_image = cast(bytes, canonical)
     error = None
     try:
-        state = np.frombuffer(canonical, dtype=np.uint8).copy()
-        offsets = np.asarray((0, len(canonical)), dtype=np.int64)
+        state = np.frombuffer(canonical_image, dtype=np.uint8).copy()
+        offsets = np.asarray((0, len(canonical_image)), dtype=np.int64)
         payload[SNAPSHOT_STATE_KEY] = state
         payload[SNAPSHOT_OFFSETS_KEY] = offsets
     except BaseException as exc:
@@ -116,7 +118,7 @@ def stage_history_flux_snapshots(sim: Any, shards: tuple[bytes, ...] | None) -> 
 def prepare_history_flux_snapshots(
     payload: Any,
     *,
-    shard_capacity: int,
+    shard_capacity: object,
 ) -> tuple[bytes, ...] | None:
     """Validate one canonical rank-independent archive before restart mutation."""
     capacity = _exact_capacity(shard_capacity)
