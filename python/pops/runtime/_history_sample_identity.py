@@ -18,8 +18,9 @@ def identity_key(name, level):
 
 def native_real_bytes():
     """Read actual C++ Real width; the report's precision label and static fallback are insufficient."""
-    from pops import _pops
+    from pops._native_selector import selected_native_module
 
+    _pops = selected_native_module(required=True)
     provider = getattr(_pops, "runtime_environment_report", None)
     if not callable(provider):
         raise RuntimeError("history sample validation requires native Real width")

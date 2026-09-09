@@ -8,6 +8,7 @@
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/program/cell_temporal_partition.hpp>
+#include <pops/runtime/program/program_runtime_state.hpp>
 
 #include <algorithm>
 #include <array>
