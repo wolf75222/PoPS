@@ -100,7 +100,9 @@ std::string advance_cadence_region(double& physical_time_cursor, int& macro_step
       } else {
         if (!frame.next)
           throw std::logic_error(runtime + " suspended Program has no continuation");
-        auto next = std::move(frame.next);
+        // Moving a std::function leaves its source valid but otherwise unspecified.
+        // Clear the slot before execution so only a newly suspended region can refill it.
+        auto next = std::exchange(frame.next, std::function<void()>{});
         next();
       }
       frame.executing = false;
