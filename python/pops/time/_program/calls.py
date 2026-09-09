@@ -50,8 +50,8 @@ class _ProgramCall(_ProgramBase):
         if schedule is not None:
             self._validate_schedule(op, schedule, args)
         result = self._lower_call(op, operator_handle, operator_name, args, name)
-        from pops._ir.native_call import native_functions
-        native_calls = native_functions(op.body)
+        from .native_flux import physical_rate_native_functions
+        native_calls = physical_rate_native_functions(op, args)
         # A coupled_rate has no single output ProgramValue (it returns a _CoupledResult): its per-block
         # spaces are tagged inside _lower_coupled_rate, and a schedule on the whole bundle is not
         # meaningful yet -- reject it with a clear message rather than leaking an AttributeError.

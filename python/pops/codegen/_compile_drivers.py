@@ -77,6 +77,12 @@ def compile_native(
         include = pops_include()
     sig = _check_headers_match_module(include)
     _warn_kokkos_parity()
+    from pops.codegen.native_build import model_native_components, stage_native_components
+    native_components = model_native_components(model)
+    if native_components and sys.platform == "win32":
+        raise NotImplementedError(
+            "native physical source providers require authenticated compiler dependencies; "
+            "the MSVC dependency route is not implemented")
     src = emit_cpp_native_loader(
         model,
         name=name,
@@ -96,6 +102,9 @@ def compile_native(
     std = _probe_cxx_std(cc, std or loader_cxx_std())
     with tempfile.TemporaryDirectory() as tmp:
         cpp = os.path.join(tmp, "model_native.cpp")
+        dependency_file = os.path.join(tmp, "model_native.d")
+        component_flags, _, staged_authorities = stage_native_components(
+            native_components, os.path.join(tmp, "prepared-native-components"), include)
         src_eff = ('#define POPS_HEADER_SIG "%s"\n' % sig + src) if sys.platform == "win32" else src
         with open(cpp, "w") as f:
             f.write(src_eff)
@@ -138,8 +147,16 @@ def compile_native(
                 '-DPOPS_HEADER_SIG="%s"' % sig,
                 *native_compile_flags,
             ]
-            cmd = [cc, *flags, "-I", include, cpp, "-o", so_path, *native_link_flags]
+            dependency_flags = ["-MMD", "-MF", dependency_file] if native_components else []
+            cmd = [cc, *flags, *dependency_flags, "-I", include, *component_flags,
+                   cpp, "-o", so_path, *native_link_flags]
         _run_compile(cmd, "backend production, compile_native")
+        if native_components:
+            from pops.native_components import compiler_include_roots, verify_prepared_native_dependencies
+            verify_prepared_native_dependencies(
+                dependency_file, generated_source=cpp, pops_include_root=include,
+                staged_components=staged_authorities,
+                toolchain_include_roots=compiler_include_roots(native_compile_flags))
     return so_path
 
 
@@ -606,31 +623,10 @@ def _compile_problem_impl(
             with tempfile.TemporaryDirectory() as tmp:
                 cpp = os.path.join(tmp, "problem.cpp")
                 dependency_file = os.path.join(tmp, "problem.d")
-                component_include_flags = []
-                component_header_owners = {}
-                staged_component_roots = {}
-                staged_component_authorities = []
-                for component in native_components:
-                    for header_file in component.files:
-                        prior = component_header_owners.get(header_file.path)
-                        if prior is not None and prior != header_file.sha256:
-                            raise ValueError(
-                                "prepared native components provide conflicting header %r"
-                                % header_file.path
-                            )
-                        if os.path.isfile(os.path.join(include, header_file.path)):
-                            raise ValueError(
-                                "prepared native component %r shadows PoPS SDK header %r"
-                                % (component.component_id, header_file.path)
-                            )
-                        component_header_owners[header_file.path] = header_file.sha256
-                    staged_root = component.stage_verified(
-                        os.path.join(tmp, "prepared-native-components", component.manifest_sha256)
-                    )
-                    if staged_root is not None:
-                        component_include_flags.extend(("-I", staged_root))
-                        staged_component_roots[staged_root] = component.component_id
-                        staged_component_authorities.append((component, staged_root))
+                from pops.codegen.native_build import stage_native_components
+                component_include_flags, staged_component_roots, staged_component_authorities = (
+                    stage_native_components(
+                        native_components, os.path.join(tmp, "prepared-native-components"), include))
                 # The compiler ALWAYS reads the banner-free src. The retained source and failure
                 # diagnostics use the logical final path, never the private staging name.
                 with open(cpp, "w") as f:

@@ -5,6 +5,7 @@
 #include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/core/state/variables.hpp>
+#include <pops/numerics/fv/flux_interfaces.hpp>
 #include <pops/physics/composition/exact_brick_contract.hpp>
 
 #include <concepts>
@@ -324,6 +325,20 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic>,
   template <class Providers>
   POPS_HD State flux(const State& state, const Providers& providers, int axis) const {
     return flux_at_runtime_axis(state, providers, axis);
+  }
+
+  template <int Axis = 0, class Providers>
+  POPS_HD FluxDensity<State> flux_evaluation(const State& state, const Providers& providers,
+                                             int axis) const {
+    if (axis == Axis) {
+      if constexpr (requires { hyp.template flux_evaluation<Axis>(state, providers); })
+        return hyp.template flux_evaluation<Axis>(state, providers);
+      else
+        return {flux<Axis>(state, providers)};
+    }
+    if constexpr (Axis + 1 < dimension)
+      return flux_evaluation<Axis + 1>(state, providers, axis);
+    return {composite_detail::invalid_state<State>(), EvaluationStatus::kFailed, 1};
   }
 
   template <int Axis, class Providers>

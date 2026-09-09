@@ -306,6 +306,10 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     ]
     if rt_member:  # RuntimeParams header only if a formula reads a runtime param
         S.append("#include <pops/runtime/config/runtime_params.hpp>")
+    from pops.codegen.native_build import model_native_components
+    for header in dict.fromkeys(header for component in model_native_components(model)
+                                for header in component.entry_headers):
+        S.append("#include <%s>" % header)
     # dense_eig.hpp : eigenvalues of dense blocks (exact wave_speeds) OU temoin de VP dans la
     # projection (m.projection + dsl.eig_max_im, ADC-289). Sans l'un ou l'autre : non inclus.
     eig_pairs = _collect_eig_witnesses(model._proj or [])
@@ -374,22 +378,71 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     if model._total_n_aux():
         S.append("  static constexpr int n_aux = %d;" % model._total_n_aux())
     if not program_only:
+        from pops._ir.native_call import native_functions
+        all_fluxes = axis_values(model._flux, "physical flux")
+        fallible_flux = bool(native_functions(all_fluxes))
+        flux_signature = (
+            "  POPS_HD pops::FluxDensity<State> flux_evaluation(const State& U, %s) const {"
+            if fallible_flux else "  POPS_HD State flux(const State& U, %s) const {"
+        )
         S += [
             "",
             "  template <int Axis>",
-            "  POPS_HD State flux(const State& U, %s) const {" % aux_param,
+            flux_signature % aux_param,
             axis_guard("physical-flux"),
         ]
-        all_fluxes = axis_values(model._flux, "physical flux")
         S += cons_locals() + aux_locals() + prim_locals(_live_prims(model, all_fluxes))
         S.append("    State F{};")
         for ordinal, axis in enumerate(axes):
             S.append(axis_branch(ordinal))
-            ftl, fcpps = _codegen_exprs(model, model._flux[axis], cse, indent="      ")
+            emitted = _codegen_exprs(model, model._flux[axis], cse, indent="      ",
+                                     return_native_statuses=fallible_flux)
+            ftl, fcpps = emitted[:2]
             S += ftl
+            if fallible_flux:
+                S += ["      pops::EvaluationStatus native_status_ = pops::EvaluationStatus::kOk;",
+                      "      std::uint32_t native_reason_ = 0;"]
+                for result in emitted[2]:
+                    S += [
+                        "      if (static_cast<int>(%s.status) > static_cast<int>(native_status_) ||"
+                        % result,
+                        "          (%s.status == native_status_ && %s.reason > native_reason_)) {"
+                        % (result, result),
+                        "        native_status_ = %s.status; native_reason_ = %s.reason;"
+                        % (result, result),
+                        "      }",
+                    ]
+                S += ["      if (native_status_ != pops::EvaluationStatus::kOk)",
+                      "        return {F, native_status_, native_reason_};"]
             S += ["      F[%d] = %s;" % (i, cpp) for i, cpp in enumerate(fcpps)]
+            if fallible_flux:
+                S += ["      for (int component = 0; component < State::size(); ++component)",
+                      "        if (!Kokkos::isfinite(F[component]))",
+                      "          return {F, pops::EvaluationStatus::kFailed,",
+                      "            pops::riemann_reason_code(pops::RiemannFailureCause::kNonFinitePhysicalFlux)};"]
             S.append("    }")
-        S += ["    return F;", "  }", ""]
+        S += ["    return {F};" if fallible_flux else "    return F;", "  }", ""]
+        if fallible_flux:
+            S += [
+                "  template <int Axis, class Providers>",
+                "  POPS_HD State flux(const State& U, const Providers& a) const {",
+                "    const auto evaluated = flux_evaluation<Axis>(U, a);",
+                "    if (evaluated.status == pops::EvaluationStatus::kOk) return evaluated.value;",
+                "    State invalid{};",
+                "    for (int i = 0; i < State::size(); ++i)",
+                "      invalid[i] = std::numeric_limits<pops::Real>::quiet_NaN();",
+                "    return invalid;",
+                "  }",
+                "  template <int Axis = 0, class Providers>",
+                "  POPS_HD pops::FluxDensity<State> flux_evaluation(",
+                "      const State& U, const Providers& a, int axis) const {",
+                "    if (axis == Axis) return flux_evaluation<Axis>(U, a);",
+                "    if constexpr (Axis + 1 < dimension)",
+                "      return flux_evaluation<Axis + 1>(U, a, axis);",
+                "    return {State{}, pops::EvaluationStatus::kFailed, 1};",
+                "  }",
+                "",
+            ]
 
         # Project the compile-time physical flux formula onto the runtime-axis contract expected by
         # PhysicalModel/HyperbolicModel.  This is deliberately a recursive exact-rank traversal: every

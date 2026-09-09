@@ -20,6 +20,7 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/state/variables.hpp>  // VariableSet: SourceFreeModel::conservative_vars forwarding
 #include <pops/mesh/storage/field_view.hpp>
+#include <pops/numerics/fv/flux_interfaces.hpp>
 
 #include <concepts>
 #include <array>
@@ -52,12 +53,20 @@ concept DiffusiveModel = requires(const M m) {
 template <class M>
 struct SourceFreeModel {
   using State = typename M::State;
+  static constexpr int dimension = physical_model_dimension<M>;
   static constexpr int n_vars = M::n_vars;
   static constexpr int n_providers = provider_count_for<M, kNativeDimension>();
   M m;
   template <class Providers>
   POPS_HD State flux(const State& u, const Providers& providers, int dir) const {
     return m.flux(u, providers, dir);
+  }
+  template <class Providers>
+  POPS_HD FluxDensity<State> flux_evaluation(const State& u, const Providers& providers,
+                                             int dir) const
+    requires requires { m.flux_evaluation(u, providers, dir); }
+  {
+    return m.flux_evaluation(u, providers, dir);
   }
   template <class Providers>
   POPS_HD Real max_wave_speed(const State& u, const Providers& providers, int dir) const {

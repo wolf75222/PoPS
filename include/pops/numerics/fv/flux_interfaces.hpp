@@ -129,6 +129,7 @@ enum class RiemannSolverId : std::uint8_t {
 /// this enum instead of scattering untyped literals through face kernels, so one rejected candidate
 /// remains attributable after device/MPI reduction and step-transaction rollback.
 enum class RiemannFailureCause : std::uint32_t {
+  kNonFinitePhysicalFlux = UINT32_C(0x50485901),
   kRusanovInvalidStability = UINT32_C(0x53544201),
   kHllInvalidWaveInterval = UINT32_C(0x484c4c01),
   kHllInvalidStability = UINT32_C(0x53544202),
@@ -325,6 +326,10 @@ POPS_HD FaceTrace<typename Model::State, BoundFluxProviders<Model>> make_face_tr
 template <class State>
 struct FluxDensity {
   State value{};
+  // Physical constitutive evaluation retains the same transactional status
+  // vocabulary as the numerical face result. Legacy State laws adapt as kOk.
+  EvaluationStatus status = EvaluationStatus::kOk;
+  std::uint32_t reason_code = 0;
 };
 
 template <class State>
@@ -775,14 +780,23 @@ struct PhysicalFluxView {
   Model physical;
 
   POPS_HD FluxDensity<State> evaluate(const Trace& trace, const FaceContext& face) const {
-    State result =
-        detail::model_flux_at_runtime_axis(physical, trace.state, trace.providers, face.axis);
+    FluxDensity<State> result{};
+    if constexpr (requires {
+                    physical.flux_evaluation(trace.state, trace.providers, face.axis);
+                  }) {
+      result = physical.flux_evaluation(trace.state, trace.providers, face.axis);
+    } else {
+      result.value =
+          detail::model_flux_at_runtime_axis(physical, trace.state, trace.providers, face.axis);
+    }
+    if (result.status != EvaluationStatus::kOk)
+      return result;
     const Real sign = face.orientation_sign();
     if (sign < Real(0)) {
       for (int component = 0; component < n_vars; ++component)
-        result[component] = -result[component];
+        result.value[component] = -result.value[component];
     }
-    return {result};
+    return result;
   }
 
   POPS_HD StabilityBound stability(const Trace& trace, const FaceContext& face) const {
