@@ -432,6 +432,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_world_communicator
   test_residual_operator
   test_prepared_spatial_residual
+  test_prepared_resource_cache
   test_capability_report
   test_canonical_identity
   test_box

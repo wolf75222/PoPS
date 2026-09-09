@@ -15,6 +15,7 @@
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
+#include <pops/runtime/program/prepared_resource_cache.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/source_mask.hpp>
 #include <pops/runtime/system.hpp>
@@ -385,6 +386,14 @@ class ProgramContext {
   field_type& rhs_scratch(std::int64_t value_id, int subslot, const field_type& prototype) const {
     return persistent_scratch_(ScratchKind::Rhs, value_id, subslot, prototype, prototype.ncomp(),
                                prototype.ghosts());
+  }
+
+  template <class Resource, class Matches, class... Args>
+  Resource& prepared_resource(std::int64_t node, int block, Matches&& matches,
+                              Args&&... args) const {
+    return prepared_resources_.template acquire<Resource>(
+        node, block, 0, prepared_execution_lane(), std::forward<Matches>(matches),
+        std::forward<Args>(args)...);
   }
 
   field_type& scratch_state(std::int64_t value_id, int subslot, const field_type& prototype) const {
@@ -2016,6 +2025,7 @@ class ProgramContext {
   mutable std::string primary_clock_;
   mutable ClockScheduleState clock_schedule_;
   mutable std::map<ScratchKey, field_type> scratch_;
+  mutable PreparedResourceCache prepared_resources_;
   mutable std::map<std::int64_t, GeneratedFieldRoute> generated_field_routes_;
 };
 

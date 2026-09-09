@@ -106,10 +106,13 @@ def _emit_diffusive_preparation(v, state_var, prepared_var, node_model,
     if target not in {"system", "amr_system"}:
         raise ValueError("diffusion execution requires a Uniform or AMR native install scope")
     _,selected,_=_selected(v,node_model)
+    arguments = "ctx, %s, %s, %s" % (
+        state_var, _boundary_cpp(selected["physical"]),
+        "true" if target == "amr_system" else "false")
     lines = ["ctx.require_cartesian_generated_operator(%d, \"diffusive_face_evaluation\");" % bidx,
-        "%s %s(ctx, %s, %s, %s);" % (
-        _prepared_diffusion_type(selected),prepared_var,state_var,_boundary_cpp(selected["physical"]),
-        "true" if target == "amr_system" else "false")]
+        "auto& %s = ctx.prepared_resource<%s>(%d, %d, "
+        "[&](const auto& resource) { return resource.matches_preparation(%s); }, %s);" % (
+            prepared_var, _prepared_diffusion_type(selected), v.id, bidx, arguments, arguments)]
     if any(row.kind == "flux" for row in v.attrs["physical_balance"].occurrences):
         lines.append("std::vector<pops::nd::FaceField<pops::kNativeDimension>> %s_transport_faces;" % prepared_var)
     return lines

@@ -25,6 +25,7 @@
 #include <pops/runtime/program/prepared_amr_spatial_residual.hpp>
 #include <pops/runtime/program/prepared_condensed_sampling.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
+#include <pops/runtime/program/prepared_resource_cache.hpp>
 #include <pops/runtime/program/prepared_tensor_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/program_owner_field_identity.hpp>
@@ -286,6 +287,15 @@ class AmrProgramContext {
     synchronize_resource_generation_();
   }
 
+  template <class Resource, class Matches, class... Args>
+  Resource& prepared_resource(std::int64_t node, int block, Matches&& matches,
+                              Args&&... args) const {
+    refresh_resources_();
+    return prepared_resources_.template acquire<Resource>(
+        node, block, active_level_, prepared_execution_lane(), std::forward<Matches>(matches),
+        std::forward<Args>(args)...);
+  }
+
   // Class-scope responsibility fragments preserve the public nested-type identities and member
   // layout of AmrProgramContext while making each semantic authority independently auditable.
 #include <pops/runtime/program/amr_program_context_spatial.inc>
@@ -342,6 +352,7 @@ class AmrProgramContext {
   mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;
   mutable std::map<std::string, int> history_levels_;
   mutable std::map<ScratchKey, field_type> scratches_;
+  mutable PreparedResourceCache prepared_resources_;
   struct SpatialHierarchyResource {
     std::uint64_t epoch, generation;
     int block;
