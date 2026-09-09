@@ -46,7 +46,15 @@ def test_layout_transfer_retains_the_resolved_context_for_every_hot_collective()
     assert "CommunicatorView world;" not in implementation
     assert "p_->world" not in hot_path
     assert "world_communicator_view()" not in hot_path
-    assert "parallel_copy(p_->source_snapshot, p_->source_state(), *p_->source_copy_schedule)" in hot_path
+    assert "p_->capture_source();" in hot_path
+    capture = _function(implementation, "void capture_source()")
+    assert "parallel_copy(source_snapshot, source_state(), *source_copy_schedule)" in capture
+    assert "source_transport->execute(" in capture
+    preparation = _function(implementation, "void prepare_transport_collectively()")
+    assert "ExecutionCommunicator::borrowed(execution.communicator_identity," in preparation
+    assert "communicator.native_handle()" in preparation
+    assert "ExecutionLane::duplicate_collectively(authority, spec.mapping_identity)" in preparation
+    assert "source_transport->prepare_collectively(*source_lane)" in preparation
     assert "source_copy_schedule" in implementation
     assert "collective_elements(local_source_elements, p_->communicator)" in hot_path
     assert "collective_elements(local_target_elements, p_->communicator)" in hot_path

@@ -462,6 +462,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_route_ids
   test_brick_catalog
   test_component_interfaces
+  test_physical_support_transfer
   test_fill_boundary
   test_fill_boundary_cache
   test_copy_schedule_cache

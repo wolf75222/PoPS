@@ -39,7 +39,7 @@ def _zero_transport(model, state, frame):
     return numerics
 
 
-def author_physical_case(nx=16, nv=12, *, reject_field=False):
+def author_physical_case(nx=16, nv=12, *, reject_field=False, field_stage=0):
     phase_frame = Rectangle("phase storage", (0, -2), (1, 2)).frame(Cartesian2D())
     field_frame = Rectangle("field storage", (0, 0), (1, 1)).frame(Cartesian2D())
     phase_model = pops.Model("phase population", frame=phase_frame)
@@ -80,14 +80,21 @@ def author_physical_case(nx=16, nv=12, *, reject_field=False):
         solver=CG(max_iter=1 if reject_field else 4000, rel_tol=1e-12, abs_tol=1e-13)))
     program = pops.Program("moment solve pullback evolve")
     current = {name: program.state(state) for name, state in states.items()}
-    at = program.stage("accepted moment field", c=0)
-    solved = field.observe(program.solve(field, values={states["density"]: current["density"].n},
+    at = program.stage("moment field stage", c=field_stage)
+    density_stage = current["density"].n
+    observation_stage = current["field_observation"].n
+    if field_stage:
+        density_stage = program.value("predicted moment", current["density"].n + field_stage * program.dt *
+            program.rhs(state=current["density"].n, terms=[Flux()]), at=at)
+        observation_stage = program.value("predicted observation", current["field_observation"].n +
+            field_stage * program.dt * program.rhs(state=current["field_observation"].n, terms=[Flux()]), at=at)
+    solved = field.observe(program.solve(field, values={states["density"]: density_stage},
         at=at).consume(action=RejectAttempt() if reject_field else FailRun()))
     module = observer_model.module
     carrier = blocks["field_observation"][module.field_handle(module.field_spaces()["fields"])]
     context = solved.publish({(carrier, "sample_grad_x"): (solved.gradient(field[potential], dimension=2), 0)},
-                             states={states["field_observation"]: current["field_observation"].n})
-    sample = program.rhs(state=current["field_observation"].n, fields=context,
+                             states={states["field_observation"]: observation_stage})
+    sample = program.rhs(state=observation_stage, fields=context,
                          terms=[SourceTerm(blocks["field_observation"][module.operator_handle("sample_field")])])
     program.commit(current["field_observation"].next,
         program.value("observe current field", Fraction(1) * sample,
@@ -108,8 +115,8 @@ def author_physical_case(nx=16, nv=12, *, reject_field=False):
     return case, phase_layout, field_layout
 
 
-def resolve_physical_case(directory, nx=16, nv=12, *, reject_field=False):
-    case, phase_descriptor, field_descriptor = author_physical_case(nx, nv, reject_field=reject_field)
+def resolve_physical_case(directory, nx=16, nv=12, *, reject_field=False, field_stage=0):
+    case, phase_descriptor, field_descriptor = author_physical_case(nx, nv, reject_field=reject_field, field_stage=field_stage)
     validated = pops.validate(case)
     subjects = validated.layout_subjects()
     builder = LayoutPlanBuilder(validated.owner_path.canonical())

@@ -789,13 +789,16 @@ inline int apply_transfer(const PopsTransferApiV1& api, void* state,
     const auto destination_interior = request.destination.extents[axis] -
                                       request.destination.ghost_lower[axis] -
                                       request.destination.ghost_upper[axis];
-    const bool pullback = request.operation == POPS_TRANSFER_OPERATION_PHYSICAL_PULLBACK_V1;
-    const auto fine = pullback ? destination_interior : source_interior;
-    const auto coarse = pullback ? source_interior : destination_interior;
-    if (ratio <= 0 ||
-        coarse > std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(ratio) ||
-        fine != coarse * static_cast<std::size_t>(ratio))
-      throw std::invalid_argument("transfer refinement ratio must be positive");
+    if (request.operation == POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1) {
+      if (ratio <= 0 || destination_interior >
+                            std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(ratio) ||
+          source_interior != destination_interior * static_cast<std::size_t>(ratio))
+        throw std::invalid_argument("transfer refinement ratio must authenticate aligned extents");
+    } else if (ratio != 1) {
+      // Physical axes may be permuted, eliminated or extended. Their exact domain
+      // relation is authenticated by the prepared support contract and provider.
+      throw std::invalid_argument("physical support transfer requires unit mesh refinement ratios");
+    }
   }
   return api.apply(state, &request, &status);
 }

@@ -321,13 +321,37 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
         raise ValueError("layout transfer names an unknown layout") from None
     source_shape = tuple(int(value) for value in source_engine.spatial_shape())
     target_shape = tuple(int(value) for value in target_engine.spatial_shape())
-    fine, coarse = ((target_shape, source_shape) if transfer.operation_abi == 3 else
-                    (source_shape, target_shape))
-    if len(fine) != len(coarse) or any(
-        a < b or a % b for a, b in zip(fine, coarse, strict=True)
-    ):
-        raise ValueError("native layout Transfer requires exactly aligned integer extents")
-    ratio = tuple(a // b for a, b in zip(fine, coarse, strict=True))
+    dimension = len(source_shape)
+    contract = {"physical_contract": False, "physical_source_to_target": (-1,) * dimension,
+                "physical_source_active": (0,) * dimension, "physical_target_active": (0,) * dimension}
+    source_cells = math.prod(source_shape)
+    if transfer.operation_abi in (2, 3):
+        requirement = next(row.requirement for row in plan.artifact.layout_plan.mappings
+                           if row.requirement.qualified_id == transfer.mapping_id)
+        physical = requirement.physical_map
+        if physical is None:
+            raise ValueError("native physical Transfer lost its resolved support/axis contract")
+        source = plan.artifact.native_layouts[transfer.source_layout_id]
+        target = plan.artifact.native_layouts[transfer.target_layout_id]
+        from pops.runtime._physical_mapping import validate_physical_geometry
+        validate_physical_geometry(requirement, source, target)
+        if source_shape != tuple(source.shape) or target_shape != tuple(target.shape):
+            raise ValueError("native physical Transfer storage differs from its resolved geometry")
+        contract = physical.native_contract()
+        ratio = (1,) * dimension
+        # Capture storage is indexed by destination patch. A broadcast may duplicate
+        # source regions; authenticate the actual native carrier inventory.
+        source_cells = 0
+        for box in target.decomposition["boxes"]:
+            extent = tuple(upper - lower for lower, upper in
+                           zip(box["lower"], box["upper_exclusive"], strict=True))
+            source_cells += math.prod(extent[target_axis] if target_axis >= 0 else source_shape[axis]
+                                      for axis, target_axis in enumerate(physical.source_to_target))
+    else:
+        if dimension != len(target_shape) or any(
+                a < b or a % b for a, b in zip(source_shape, target_shape, strict=True)):
+            raise ValueError("native layout Transfer requires exactly aligned integer extents")
+        ratio = tuple(a // b for a, b in zip(source_shape, target_shape, strict=True))
     component = plan.components.get(transfer.component_id)
     if getattr(component, "native_handle", None) is None:
         raise TypeError("mapping Transfer component has no authenticated native handle")
@@ -356,8 +380,9 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
             "synchronization_identity": transfer.synchronization_uri,
             "refinement_ratio": ratio,
             "operation": transfer.operation_abi,
+            **contract,
         },
-        source_element_count=source_components * math.prod(source_shape),
+        source_element_count=source_components * source_cells,
         destination_element_count=target_components * math.prod(target_shape),
     )
 
@@ -656,6 +681,9 @@ class _MultiLayoutUniformExecutor:
             self._engines = dict(engines)
             self._block_layouts = dict(blocks)
             self._transfer_routes = tuple(transfer_routes)
+            from pops.runtime._physical_mapping import physical_mapping_schedule
+            self._physical_mapping_schedule = physical_mapping_schedule(
+                (route.transfer for route in self._transfer_routes), self._engines)
             self._mapping_evaluations = {
                 row.mapping_id: 0 for row in runtime_plan.communication.transfers
             }
@@ -1091,12 +1119,15 @@ class _MultiLayoutUniformExecutor:
             raise RuntimeError("multi-layout native step requires an active transfer transaction")
         self._transfer_attempt += 1
         attempt = self._transfer_attempt
-        from pops.runtime._physical_mapping import physical_mapping_order
-        order = physical_mapping_order(route.transfer for route in self._transfer_routes)
+        from pops.runtime._physical_mapping import physical_mapping_schedule
+        if not hasattr(self, "_physical_mapping_schedule"):
+            self._physical_mapping_schedule = physical_mapping_schedule(
+                (route.transfer for route in self._transfer_routes), self._engines)
+        schedule = self._physical_mapping_schedule
         receipts = []
         captured_routes = []
         try:
-            if order is None:
+            if schedule is None:
                 # Ordinary mappings retain simultaneous pre-step snapshot semantics.
                 for route in self._transfer_routes:
                     route.session.capture(generation, attempt)
@@ -1109,16 +1140,24 @@ class _MultiLayoutUniformExecutor:
                 for engine in self._engines.values():
                     native_step_target(engine).step(dt)
             else:
-                for operation, layout_id in zip((2, 3), order, strict=True):
-                    route = next(row for row in self._transfer_routes
-                                 if row.transfer.operation_abi == operation)
+                routes = {row.transfer.mapping_id: row for row in self._transfer_routes}
+                accepted = set(schedule.accepted_captures)
+                for mapping_id in schedule.accepted_captures:
+                    route = routes[mapping_id]
                     route.session.capture(generation, attempt)
                     captured_routes.append(route)
+                for kind, identity in schedule.events:
+                    if kind == "step":
+                        native_step_target(self._engines[identity]).step(dt)
+                        continue
+                    route = routes[identity]
+                    if identity not in accepted:
+                        route.session.capture(generation, attempt)
+                        captured_routes.append(route)
                     receipt = route.session.apply(generation, attempt)
                     self._authenticate_mapping_receipt(
                         route, receipt, generation=generation, attempt=attempt)
                     receipts.append(receipt)
-                    native_step_target(self._engines[layout_id]).step(dt)
         except StepAttemptRejected:
             self._restore_rejected_native_attempt(generation, attempt, captured_routes)
             raise
@@ -1646,10 +1685,8 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
         row.requirement.qualified_id for row in plan.artifact.layout_plan.mappings
     }:
         raise ValueError("runtime transfer plan differs from the resolved LayoutPlan")
-    from pops.runtime._physical_mapping import physical_mapping_order, validate_physical_geometry
-    physical_order = physical_mapping_order(transfer_rows.values())
-    if physical_order is not None and set(physical_order) != set(configs):
-        raise NotImplementedError("physical coupling requires exactly its two declared layouts")
+    from pops.runtime._physical_mapping import physical_mapping_schedule, validate_physical_geometry
+    physical_mapping_schedule(transfer_rows.values(), configs)
     requirements = {row.requirement.qualified_id: row.requirement
                     for row in plan.artifact.layout_plan.mappings}
     for transfer in transfer_rows.values():

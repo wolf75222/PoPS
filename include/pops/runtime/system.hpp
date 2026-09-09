@@ -136,6 +136,15 @@ struct SystemLayoutTransferSpec {
     return value;
   }();
   std::int32_t operation = 0;
+  // Explicit physical support in native storage-axis order. Unmatched axes use -1.
+  bool physical_contract = false;
+  std::array<std::int32_t, Dim> physical_source_to_target = [] {
+    std::array<std::int32_t, Dim> value{};
+    value.fill(-1);
+    return value;
+  }();
+  std::array<std::int32_t, Dim> physical_source_active{};
+  std::array<std::int32_t, Dim> physical_target_active{};
 };
 
 /// Owned projection of PopsExecutionContextV1. Strings are values, never borrowed Python pointers.

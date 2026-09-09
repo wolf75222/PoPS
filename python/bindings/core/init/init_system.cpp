@@ -53,7 +53,8 @@ SystemLayoutTransferSpec layout_transfer_spec_from_python(const py::dict& row) {
       {"mapping_identity", "provider_identity", "provider_component_identity",
        "provider_manifest_identity", "source_layout_identity", "target_layout_identity",
        "source_block", "target_block", "source_representation", "target_representation",
-       "synchronization_identity", "refinement_ratio", "operation"},
+       "synchronization_identity", "refinement_ratio", "operation", "physical_contract",
+       "physical_source_to_target", "physical_source_active", "physical_target_active"},
       "prepared layout-transfer spec");
   return {py::cast<std::string>(row["mapping_identity"]),
           py::cast<std::string>(row["provider_identity"]),
@@ -67,7 +68,12 @@ SystemLayoutTransferSpec layout_transfer_spec_from_python(const py::dict& row) {
           py::cast<std::string>(row["target_representation"]),
           py::cast<std::string>(row["synchronization_identity"]),
           py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["refinement_ratio"]),
-          py::cast<std::int32_t>(row["operation"])};
+          py::cast<std::int32_t>(row["operation"]),
+          py::cast<bool>(row["physical_contract"]),
+          py::cast<std::array<std::int32_t, pops::kNativeDimension>>(
+              row["physical_source_to_target"]),
+          py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["physical_source_active"]),
+          py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["physical_target_active"])};
 }
 
 SystemLayoutTransferExecution layout_transfer_execution_from_python(const py::dict& row) {

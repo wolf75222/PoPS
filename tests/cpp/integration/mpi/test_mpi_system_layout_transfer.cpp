@@ -87,6 +87,40 @@ std::string transfer_component_source(int dimension) {
           request->destination.dimension != kDimension || request->source.data == nullptr ||
           request->destination.data == nullptr || request->refinement_ratio == nullptr)
         return fail(status, 12, "transfer field views are incomplete");
+      if (request->operation == POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1 ||
+          request->operation == POPS_TRANSFER_OPERATION_PHYSICAL_PULLBACK_V1) {
+        const bool reduction = request->operation == POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1;
+        const auto* input = static_cast<const double*>(request->source.data);
+        auto* output = static_cast<double*>(request->destination.data);
+        std::size_t cells = 1;
+        for (std::size_t axis = 0; axis < kDimension; ++axis)
+          cells *= request->destination.extents[axis];
+        for (std::size_t cell = 0; cell < cells; ++cell) {
+          std::array<std::size_t, kDimension> index{};
+          std::size_t remaining = cell;
+          std::ptrdiff_t target_offset = 0;
+          for (std::size_t axis = 0; axis < kDimension; ++axis) {
+            index[axis] = remaining % request->destination.extents[axis];
+            remaining /= request->destination.extents[axis];
+            target_offset += index[axis] * request->destination.axis_strides[axis];
+          }
+          if (reduction) {
+            const std::size_t reduced_axis = kDimension == 1 ? 0 : 1;
+            const std::ptrdiff_t retained_offset =
+                kDimension == 1 ? 0 : index[kDimension - 1] * request->source.axis_strides[0];
+            double sum = 0;
+            for (std::size_t sample = 0; sample < request->source.extents[reduced_axis]; ++sample)
+              sum += input[retained_offset + sample * request->source.axis_strides[reduced_axis]];
+            output[target_offset] = sum;
+          } else {
+            const std::ptrdiff_t retained_offset =
+                kDimension == 1 ? 0 : index[0] * request->source.axis_strides[kDimension - 1];
+            output[target_offset] = input[retained_offset];
+          }
+        }
+        *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
+        return 0;
+      }
       if (request->source.scalar_type != POPS_SCALAR_FLOAT64_V1 ||
           request->destination.scalar_type != POPS_SCALAR_FLOAT64_V1 ||
           request->source.component_count != request->destination.component_count ||
@@ -357,10 +391,8 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
   constexpr int Dim = pops::kNativeDimension;
   using NativeSystem = pops::System<Dim>;
   using NativeSystemConfig = pops::SystemConfig<Dim>;
-  // Uniform System owns one global box on rank zero.  This is therefore a direct proof of the
-  // collective contract, exact world authorities, global receipts, zero-owner participation and
-  // transaction retry/rollback.  It deliberately does not claim distributed multi-box payload
-  // movement; that belongs to the AMR/multi-box transfer coverage.
+  // Exercise conservative single-owner transactions and physical multi-patch transport on the
+  // same explicit communicator, including empty peers, axis permutations and repeated carriers.
   pops::comm_init(&argc, &argv);
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard(argc, argv);
@@ -588,6 +620,150 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
               "whole rollback restores the source owner");
         check(coarse->get_state("coarse") == (rank == 0 ? coarse_retry : std::vector<double>{}),
               "whole rollback restores the target owner");
+      });
+    }
+
+    if (healthy) {
+      healthy = phase("physical permuted supports and distributed repeated carriers", [&] {
+        NativeSystemConfig high_config = uniform_config<Dim>(1);
+        NativeSystemConfig low_config = uniform_config<Dim>(1);
+        high_config.shape[0] = 4;
+        if constexpr (Dim > 1) {
+          high_config.shape[1] = 4;
+          low_config.shape[Dim - 1] = 4;
+        }
+        pops::Extent<Dim> high_tile = high_config.shape;
+        high_tile[0] = 2;
+        if constexpr (Dim > 1)
+          high_tile[1] = 2;
+        pops::Extent<Dim> low_tile = low_config.shape;
+        low_tile[Dim - 1] = 1;
+        high_config.boxes = pops::mesh::BoxArray<Dim>::from_domain(
+                                pops::Box<Dim>::from_extents(high_config.shape), high_tile)
+                                .boxes();
+        low_config.boxes = pops::mesh::BoxArray<Dim>::from_domain(
+                               pops::Box<Dim>::from_extents(low_config.shape), low_tile)
+                               .boxes();
+        NativeSystem high(high_config);
+        NativeSystem low(low_config);
+        install_scalar(high, "fine");
+        install_scalar(low, "coarse");
+        std::vector<double> initial(Dim == 1 ? 4 : 16);
+        for (std::size_t x = 0; x < 4; ++x) {
+          if constexpr (Dim == 1) {
+            initial[x] = static_cast<double>(x + 1);
+          } else {
+            for (std::size_t velocity = 0; velocity < 4; ++velocity)
+              initial[4 * x + velocity] = static_cast<double>(x + 10 * velocity);
+          }
+        }
+        high.set_state("fine", initial);
+        low.set_state("coarse", std::vector<double>(Dim == 1 ? 1 : 4, -7));
+        high.mark_bound();
+        low.mark_bound();
+        auto reduction_spec = transfer_spec<Dim>();
+        reduction_spec.operation = POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1;
+        reduction_spec.refinement_ratio.fill(1);
+        reduction_spec.physical_contract = true;
+        reduction_spec.physical_source_active[0] = 1;
+        if constexpr (Dim > 1) {
+          reduction_spec.physical_source_active[1] = 1;
+          reduction_spec.physical_target_active[Dim - 1] = 1;
+          reduction_spec.physical_source_to_target[0] = Dim - 1;
+        }
+        // Physical synchronization is a declared ordering, independent of the operation opcode.
+        reduction_spec.synchronization_identity = "pops://synchronization/after-source-step@1";
+        auto bad_spec = reduction_spec;
+        if (rank == 0)
+          bad_spec.physical_source_to_target[0] = Dim;
+        bool refused = false;
+        try {
+          (void)pops::PreparedSystemLayoutTransfer<Dim>::prepare(
+              high, low, component, bad_spec, transfer_execution(transfer_lane.get()));
+        } catch (const std::exception&) {
+          refused = true;
+        }
+        check(refused, "invalid physical axis metadata is collectively refused before transport");
+        auto divergent_spec = reduction_spec;
+        if (rank == 0)
+          divergent_spec.synchronization_identity = kBeforeStep;
+        refused = false;
+        try {
+          (void)pops::PreparedSystemLayoutTransfer<Dim>::prepare(
+              high, low, component, divergent_spec, transfer_execution(transfer_lane.get()));
+        } catch (const std::exception&) {
+          refused = true;
+        }
+        check(refused, "locally valid but divergent physical metadata fails exact consensus");
+        auto reduction = pops::PreparedSystemLayoutTransfer<Dim>::prepare(
+            high, low, component, reduction_spec, transfer_execution(transfer_lane.get()));
+        high.begin_step_transaction();
+        low.begin_step_transaction();
+        reduction->begin_transaction(1);
+        reduction->capture(1, 1);
+        auto receipt = reduction->apply(1, 1);
+        check(receipt.source_element_count == initial.size() &&
+                  receipt.destination_element_count == (Dim == 1 ? 1u : 4u),
+              "physical reduction counts its full source exactly once");
+        auto check_values = [&](NativeSystem& system, const char* block, bool high_support) {
+          const auto boxes = system.local_boxes(block);
+          for (std::size_t patch = 0; patch < boxes.size(); ++patch) {
+            const auto values = system.local_state(block, static_cast<int>(patch));
+            for (std::size_t linear = 0; linear < values.size(); ++linear) {
+              std::size_t remainder = linear;
+              pops::Index<Dim> index{};
+              for (int axis = Dim - 1; axis >= 0; --axis) {
+                index[axis] =
+                    boxes[patch].lo[axis] + static_cast<int>(remainder % boxes[patch].length(axis));
+                remainder /= boxes[patch].length(axis);
+              }
+              const double expected =
+                  Dim == 1 ? 10.0 : 60.0 + 4.0 * index[high_support ? 0 : Dim - 1];
+              check(values[linear] == expected,
+                    "physical carrier preserves permuted shared coordinates");
+            }
+          }
+        };
+        check_values(low, "coarse", false);
+        high.commit_step_transaction();
+        low.commit_step_transaction();
+        high.finalize_step_transaction();
+        low.finalize_step_transaction();
+        reduction->finalize_transaction(1);
+
+        auto broadcast_spec = reduction_spec;
+        broadcast_spec.operation = POPS_TRANSFER_OPERATION_PHYSICAL_PULLBACK_V1;
+        broadcast_spec.synchronization_identity = kBeforeStep;
+        std::swap(broadcast_spec.source_layout_identity, broadcast_spec.target_layout_identity);
+        std::swap(broadcast_spec.source_block, broadcast_spec.target_block);
+        std::swap(broadcast_spec.physical_source_active, broadcast_spec.physical_target_active);
+        broadcast_spec.physical_source_to_target.fill(-1);
+        if constexpr (Dim > 1)
+          broadcast_spec.physical_source_to_target[Dim - 1] = 0;
+        auto broadcast = pops::PreparedSystemLayoutTransfer<Dim>::prepare(
+            low, high, component, broadcast_spec, transfer_execution(transfer_lane.get()));
+        high.begin_step_transaction();
+        low.begin_step_transaction();
+        broadcast->begin_transaction(1);
+        broadcast->capture(1, 1);
+        receipt = broadcast->apply(1, 1);
+        check(receipt.source_element_count == (Dim == 1 ? 2u : 8u) &&
+                  receipt.destination_element_count == initial.size(),
+              "physical broadcast receipt counts repeated source carriers per target patch");
+        check_values(high, "fine", true);
+        high.rollback_step_transaction();
+        low.rollback_step_transaction();
+        broadcast->rollback_transaction(1);
+        // A prepared lane can be reused after a complete transaction rollback.
+        high.begin_step_transaction();
+        low.begin_step_transaction();
+        broadcast->begin_transaction(2);
+        broadcast->capture(2, 1);
+        (void)broadcast->apply(2, 1);
+        check_values(high, "fine", true);
+        high.rollback_step_transaction();
+        low.rollback_step_transaction();
+        broadcast->rollback_transaction(2);
       });
     }
 

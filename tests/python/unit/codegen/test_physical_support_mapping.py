@@ -69,7 +69,7 @@ def test_actual_field_and_coupling_partitions_emit_natively(physical_resolved):
             model_graph=ProgramModelGraph.from_resolved_blocks(selected), target="system", field_plans={})
         sources.append(source)
     assert sum("publish_field_components" in source for source in sources) == 1
-    assert sum(any(b"pops_explicit_physical_map" in payload.content
+    assert sum(any(b"<pops/runtime/dynamic/physical_support_transfer.hpp>" in payload.content
                        for payload in row.component_type.package.payloads)
                for row in plan.component_inputs) == 2
     assert plan.resolved_dimension == 2

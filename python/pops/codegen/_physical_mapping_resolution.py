@@ -1,5 +1,6 @@
-"""Resolve the bounded physical-map chain against actual Program dataflow."""
+"""Resolve physical support maps against actual Program reads, commits and timing."""
 from __future__ import annotations
+from types import SimpleNamespace
 from typing import Any
 
 
@@ -17,47 +18,46 @@ def validate_physical_mapping_geometry(plan: Any) -> None:
         source = plan.normalized(requirement.source_layout).native_spatial_layout
         target = plan.normalized(requirement.target_layout).native_spatial_layout
         validate_physical_geometry(requirement, source, target)
-        if any(len(layout.decomposition["boxes"]) != 1 for layout in (source, target)):
-            raise NotImplementedError("bounded physical maps require one native patch per layout")
 
 
 def validate_physical_mapping_program(plan: Any, program: Any, field_plans: Any,
                                       *, resolve: Any) -> None:
-    from pops.codegen.program_field_plan import _nodes, _reachable, _solve_nodes
-    mappings = tuple(row.requirement for row in plan.mappings if row.requirement.physical_map)
-    if not mappings:
+    from pops.codegen.program_field_plan import _nodes, _reachable
+    from pops.runtime._physical_mapping import physical_mapping_schedule
+    mappings = tuple(row.requirement for row in plan.mappings)
+    if not any(row.physical_map is not None for row in mappings):
         return
-    if len(mappings) != 2 or sorted(int(row.operation) for row in mappings) != [2, 3]:
-        raise ValueError("physical coupling requires exactly one explicit moment and pullback")
-    moment = next(row for row in mappings if int(row.operation) == 2)
-    pullback = next(row for row in mappings if int(row.operation) == 3)
-    if (moment.source_layout, moment.target_layout) != (pullback.target_layout, pullback.source_layout):
-        raise ValueError("physical coupling maps do not close their declared layout pair")
-    if moment.source_port.subject == pullback.target_port.subject:
-        raise ValueError("physical pullback cannot reconstruct or overwrite a distribution")
-    if len(field_plans) != 1:
-        raise ValueError("bounded physical coupling requires one explicit generic field solve")
-    field_plan = next(iter(field_plans.values()))
-    if field_plan.storage.layout != moment.target_layout:
-        raise ValueError("physical field solve belongs to a different mapped field layout")
-    solves = _solve_nodes(program, field_plan.handle)
-    if len(solves) != 1:
-        raise ValueError("bounded physical coupling requires one accepted-state field solve per step")
-    solve = solves[0]
-    coordinates = solve.point.to_data()
-    coordinates = tuple(coordinates.get("partitions", {"main": coordinates}).values())
-    if any(row["step"] != 0 or row["offset"] != {"kind": "integer", "value": "0"}
-           for row in coordinates):
-        raise ValueError("physical mapping field solve requires accepted-state time c=0")
+    # Field solve count and stage points are properties of the authored Program.
+    # The field resolver authenticates each solve and its consumed publication.
+    # A support map has no reason to prescribe either a field equation or c=0.
+    del field_plans
     all_nodes = _nodes(program)
-    reads = {resolve(row.state_ref) for row in _reachable(solve, all_nodes) if row.op == "state"}
-    if reads != {moment.target_port.subject}:
-        raise ValueError("physical field equation must read its explicitly mapped moment quantity")
-    commits = tuple(value for state, value in program._commits.items()
-                    if resolve(state) == pullback.source_port.subject)
-    if len(commits) != 1:
-        raise ValueError("physical pullback source requires one committed field observation")
-    closure = _reachable(commits[0], all_nodes)
-    if solve.id not in {row.id for row in closure} or not any(
-            row.op == "field_publication" for row in closure):
-        raise ValueError("physical pullback source is not a consumed fresh field observation")
+    commits = {}
+    readers = {}
+    for state, value in program._commits.items():
+        subject = resolve(state)
+        commits.setdefault(subject, []).append(value)
+        for node in _reachable(value, all_nodes):
+            if node.op == "state":
+                readers.setdefault(resolve(node.state_ref), set()).add(subject)
+    assignments = {row.subject: row.layout for row in plan.assignments
+                   if row.subject_kind == "state"}
+    transfers = []
+    for requirement in mappings:
+        source = requirement.source_port.subject
+        target = requirement.target_port.subject
+        if requirement.physical_map is not None:
+            consumers = readers.get(target, set())
+            if not consumers:
+                raise ValueError("physical mapping target is not read by any committed Program value")
+            if any(assignments.get(consumer) != requirement.target_layout for consumer in consumers):
+                raise ValueError("physical map target is consumed outside its declared native layout")
+            if requirement.synchronization.value == "pops://synchronization/after-source-step@1":
+                if len(commits.get(source, ())) != 1:
+                    raise ValueError("after-source-step physical mapping requires one committed source value")
+        transfers.append(SimpleNamespace(mapping_id=requirement.qualified_id,
+            operation_abi=int(requirement.operation), source_layout_id=requirement.source_layout.qualified_id,
+            target_layout_id=requirement.target_layout.qualified_id,
+            source_subject_id=source.qualified_id, target_subject_id=target.qualified_id,
+            synchronization_uri=requirement.synchronization.value))
+    physical_mapping_schedule(transfers, (row.handle.qualified_id for row in plan.layouts))

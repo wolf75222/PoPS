@@ -51,7 +51,7 @@ __all__ = [
     "geometry", "masks", "boundaries",
 ]
 
-from .physical_mapping import PhysicalSupportMap, VelocityQuadrature
-__all__ += ["PhysicalSupportMap", "VelocityQuadrature"]
+from .physical_mapping import AxisQuadrature, PhysicalSupportMap, VelocityQuadrature
+__all__ += ["AxisQuadrature", "PhysicalSupportMap", "VelocityQuadrature"]
 from .native_physical_mapping import native_physical_mapping
 __all__ += ["native_physical_mapping"]

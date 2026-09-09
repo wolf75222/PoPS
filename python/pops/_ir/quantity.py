@@ -42,13 +42,17 @@ class PhysicalDimension:
 
 @dataclass(frozen=True, slots=True)
 class PhysicalSupport:
-    """Mathematical coordinate domains, independent of array shape and layout."""
+    """Mathematical coordinate domains, independent of array shape and layout.
+
+    The explicit empty tuple denotes scalar support (no remaining coordinates).
+    It is distinct from an absent or inferred support declaration.
+    """
     coordinates: tuple[tuple[str, str], ...]
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
         values = tuple(tuple(item) for item in self.coordinates)
-        if not values or any(len(item) != 2 or any(
+        if any(len(item) != 2 or any(
                 not isinstance(value, str) or not value for value in item) for item in values):
             raise TypeError("support coordinates require (name, domain) pairs")
         if len({name for name, _ in values}) != len(values):

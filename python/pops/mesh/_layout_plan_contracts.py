@@ -788,10 +788,8 @@ class LayoutMappingRequirement:
             if self.physical_map.operation_abi != int(self.operation):
                 raise ValueError("physical mapping direction disagrees with operation")
             self.physical_map.validate_ports(self.source_port, self.target_port)
-            expected = (LayoutSynchronization.BEFORE_STEP_V1 if int(self.operation) == 2 else
-                        LayoutSynchronization.AFTER_SOURCE_STEP_V1)
-            if self.synchronization is not expected or self.reverse_of is not None:
-                raise ValueError("physical maps require explicit ordered timing and no inverse closure")
+            if self.reverse_of is not None:
+                raise ValueError("physical maps require independently authored timing and no inverse closure")
         elif self.physical_map is not None:
             raise ValueError("conservative averaging cannot carry a physical map")
         if self.reverse_of is not None and (
