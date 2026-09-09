@@ -357,13 +357,16 @@ void prove_collective_identity_and_sequence() {
   engine.begin_synchronized(window);
   engine.resume_synchronized([](auto) {});
   std::vector<std::string> identities;
-  std::vector<pops::MultiFab<1>*> accepted;
+  std::vector<pops::MultiFab<1>> republished;
+  republished.reserve(hierarchy.block_count());
+  std::vector<pops::MultiFab<1>*> candidates;
   for (std::size_t block = 0; block < hierarchy.block_count(); ++block) {
     identities.push_back(hierarchy.block_identity(block));
-    accepted.push_back(&hierarchy.state(block, 0));
+    republished.emplace_back(hierarchy.state(block, 0));
+    candidates.push_back(&republished.back());
   }
   const auto map = hierarchy.prepare_program_block_map(identities);
-  hierarchy.publish_program_candidates(map, 0, accepted);
+  hierarchy.publish_program_candidates(map, 0, candidates);
   EXPECT_THROW(engine.resume_synchronized([](auto) {}), std::exception);
   engine.abort_synchronized();
   const std::vector<pops::amr::ParentChildClockRelation> asynchronous{

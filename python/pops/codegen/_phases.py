@@ -387,9 +387,9 @@ def resolve(
             for layout_id, row in layout_amr_authorities.items()}
         amr_capabilities = {layout_id: row.authorities.bootstrap.inspect()
                             for layout_id, row in layout_amr_authorities.items()}
-    if len(layout_amr_authorities) == 1:
-        amr_requirements = next(iter(amr_requirements.values()))
-        amr_capabilities = next(iter(amr_capabilities.values()))
+        if len(layout_amr_authorities) == 1:
+            amr_requirements = next(iter(amr_requirements.values()))
+            amr_capabilities = next(iter(amr_capabilities.values()))
     consumer_graph = (
         None if problem._consumers is None
         else problem._consumers.resolve(
