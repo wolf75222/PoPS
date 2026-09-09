@@ -1,6 +1,8 @@
 """Repeated public moment/field/pullback barriers on independent composite hierarchies."""
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pops
 import pytest
@@ -102,7 +104,7 @@ def test_native_repeated_amr_field_maps_consume_current_stage_and_restart(tmp_pa
 
 @pytest.mark.compiler
 @pytest.mark.native_loader
-def test_native_failed_field_map_attempt_rolls_back_then_reuses_context(tmp_path):
+def test_native_failed_field_map_attempt_rolls_back_then_reuses_context(tmp_path, record_property):
     from tests.python.support.native_execution_context import artifact_execution_context
 
     artifact = pops.compile(resolve_interstage_maps(tmp_path, adaptive=True, with_fields=True,
@@ -110,8 +112,19 @@ def test_native_failed_field_map_attempt_rolls_back_then_reuses_context(tmp_path
     instance = pops.bind(artifact, resources={"execution_context": artifact_execution_context(artifact)})
     before = _internal_map_image(instance)
     before_histories = _history_image(instance)
-    with pytest.raises(RuntimeError, match="finite|field|[Ss]olve|[Tt]ransfer|[Ii]ntegral"):
+    # The first solve has already published into provisional storage when the pullback
+    # rejects its non-finite source. Serial native invalid_argument becomes ValueError;
+    # MPI reports the same source-packing failure collectively as RuntimeError.
+    with pytest.raises((ValueError, RuntimeError), match=(
+            "AMR active physical source is non-finite|"
+            "AMR transfer source packing failed on a lane rank")) as failed:
         pops.run(instance, t_end=0.01, max_steps=1)
+    report = instance._executor._last_step_transaction_report
+    assert report.status == "failed" and report.phase == "solve"
+    assert report.action == "fail_run" and report.attempts == 1
+    assert report.rolled_back_effects == report.staged_effects
+    record_property("native_map_failure", str(failed.value))
+    record_property("failed_transaction", json.dumps(report.to_data()))
     assert instance.time() == 0. and instance.macro_step() == 0
     for key, actual in _internal_map_image(instance).items():
         np.testing.assert_array_equal(actual, before[key])

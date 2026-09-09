@@ -30,6 +30,7 @@ def resolve_interstage_maps(directory, *, reverse=False, adaptive=False, retry_b
     states = {}
     block_states = {}
     physical_field_inputs = None
+    retry_amplifier = None
     if adaptive:
         from pops.params import RuntimeParam
         threshold = case.param(RuntimeParam("refine", default=-100.))
@@ -40,6 +41,11 @@ def resolve_interstage_maps(directory, *, reverse=False, adaptive=False, retry_b
         components = ("first", "second")
         state = model.state("U", components=components, support=support,
                             units=(UNIT,) * len(components), sampling="cell_average")
+        if retry_by_dt and name == ("integral" if with_fields else "population"):
+            # This is an ordinary finite model coefficient, not an exact temporal-ledger
+            # coefficient. Its pointwise native evaluation amplifies the dt-scaled state.
+            model.source("retry_amplification", on=state,
+                         value=tuple(1e307 * state[index] for index in range(len(components))))
         flux = model.flux("zero_flux", frame=frame, state=state,
                           components={axis: tuple(0 * state[index] for index in range(len(components))) for axis in frame.axes},
                           waves={axis: (Const(0),) * len(components) for axis in frame.axes})
@@ -55,6 +61,8 @@ def resolve_interstage_maps(directory, *, reverse=False, adaptive=False, retry_b
         block = case.block(name, model)
         case.numerics(numerics, block=block)
         states[name] = program.state(block[state])
+        if retry_by_dt and name == ("integral" if with_fields else "population"):
+            retry_amplifier = block[model.module.operator_handle("retry_amplification")]
         block_states[name] = block[state]
         if name == "integral" and with_fields:
             physical_field_inputs = (model, state, block, source)
@@ -101,15 +109,32 @@ def resolve_interstage_maps(directory, *, reverse=False, adaptive=False, retry_b
         driven = program.value(name, moment + program.dt * rhs, at=moment.point)
         program.store_history(name + " history", driven, depth=1)
         return driven
+    def amplify_for_retry(value):
+        from pops.numerics.terms import SourceTerm
+        return program.rhs(state=value, terms=[SourceTerm(retry_amplifier)])
+
     first = states["population"].stage("half", point=program.stage("half", c=Fraction(1, 2)))
-    scale = (200 * program.dt) * 1e307 if retry_by_dt and not with_fields else 2
-    program.value(first, scale * states["population"].n)
+    if retry_by_dt and not with_fields:
+        # Keep Program coefficients (200*dt, then 1) within the exact AMR ledger.
+        # Folding 200*1e307 would instead reject a non-finite literal at authoring.
+        scaled_population = program.value("dt scaled population",
+            (200 * program.dt) * states["population"].n, at=first.point)
+        program.value(first, 1 * amplify_for_retry(scaled_population))
+    else:
+        program.value(first, 2 * states["population"].n)
     moment = states["integral"].stage("half moment", point=program.stage("half moment", c=Fraction(1, 2)))
     imported_moment = program.map(reduction, source=first, target=moment)
     driven_moment = consume_fields(imported_moment, "half driven moment")
-    transfer_scale = (200 * program.dt) * 1e307 if retry_by_dt and with_fields else 1
-    transformed = program.value("three times intermediate moment", (3 * transfer_scale) * driven_moment,
-                                at=moment.point)
+    if retry_by_dt and with_fields:
+        # The field solve/publication precede amplification by the native source term.
+        # dt=.01 overflows the pullback source; dt=1e-5 keeps the same trajectory finite.
+        scaled_moment = program.value("dt scaled driven moment",
+            (200 * program.dt) * driven_moment, at=moment.point)
+        transformed = program.value("three times intermediate moment", 3 * amplify_for_retry(scaled_moment),
+                                    at=moment.point)
+    else:
+        transformed = program.value("three times intermediate moment", 3 * driven_moment,
+                                    at=moment.point)
     back = states["extended"].stage("half extension", point=program.stage("half extension", c=Fraction(1, 2)))
     program.map(extension, source=transformed, target=back)
     late = states["population"].stage("late", point=program.stage("late", c=Fraction(3, 4)))
