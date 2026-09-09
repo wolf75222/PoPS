@@ -266,7 +266,7 @@ def test_empty_change_selects_none(tmp_path):
 # --------------------------------------------------------------------------- #
 # Duration-balanced C++ matrix partition                                      #
 # --------------------------------------------------------------------------- #
-def _run_plan_cpp_shard(tmp_path, changed_lines, shard_index, shard_total=8):
+def _run_plan_cpp_shard(tmp_path, changed_lines, shard_index, shard_total=9):
     changed = tmp_path / f"changed-{shard_index}.txt"
     changed.write_text("".join(f"{c}\n" for c in changed_lines), encoding="utf-8")
     out = tmp_path / f"gh-out-{shard_index}.txt"
@@ -315,12 +315,12 @@ def test_cpp_target_shards_are_deterministic_duration_balanced_exact_cover():
 
 def test_cpp_duration_catalog_verifier_authenticates_full_inventory(capsys):
     class Args:
-        shard_total = 8
+        shard_total = 9
 
     assert sel.verify_cpp_duration_catalogs(Args()) == 0
     output = capsys.readouterr().out
     assert "C++ targets in both duration catalogs" in output
-    assert "8 shards form an exact cover" in output
+    assert "9 shards form an exact cover" in output
 
 
 @pytest.mark.parametrize(
@@ -425,17 +425,17 @@ def test_cpp_cold_build_catalog_separates_five_minute_template_targets():
     very_heavy = sorted(target for target, seconds in build.items() if seconds >= 240.0)
     assert len(very_heavy) >= 7, "cold-CI catalog lost the known five-minute AMR TUs"
 
-    shards = sel.cpp_target_shards(very_heavy, 8)
+    shards = sel.cpp_target_shards(very_heavy, 9)
     sel.ci_shard_binpack.verify_partition(very_heavy, shards, excluded=())
     targets_per_shard, larger_shards = divmod(len(very_heavy), len(shards))
     expected_counts = [targets_per_shard] * (len(shards) - larger_shards)
     expected_counts += [targets_per_shard + 1] * larger_shards
     assert sorted(map(len, shards)) == expected_counts
 
-    # The heavy-template inventory assigns two or three targets across the eight CI workers.
+    # The heavy-template inventory assigns two or three targets across the nine CI workers.
     # LPT plus deterministic exchanges stays below 15.1 modeled minutes, leaving at least 2.9
     # minutes inside the workflow's 18 min build watchdog. CTest alone remains below its 7 min watchdog.
-    full_shards = sel.cpp_target_shards(sorted(build), 8)
+    full_shards = sel.cpp_target_shards(sorted(build), 9)
     weights = sel.cpp_target_weights(sorted(build))
     modeled_loads = [
         sum(weights[target] for target in shard) for shard in full_shards
@@ -471,15 +471,24 @@ def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
     )
     assert "DISCOVERY_MODE PRE_TEST" not in cmake
 
-    # Only a conditionally compiled serial suite opts into the one-include-per-executable
-    # escape hatch.  MPI-only executables are not discovered: their explicit rank launch runs the
-    # whole executable, so source scanning cannot create a stale per-test CTest entry.
+    # The dimension-conditional diffusion suite and the checkpoint suite whose comments
+    # confuse CMake's TEST parser are the two explicit discovery exceptions. MPI-only
+    # executables use rank launches, so source scanning cannot create stale CTest entries.
     registrations = cmake.split("function(pops_add_test name)", maxsplit=1)[1]
-    assert registrations.count("RUNTIME_DISCOVERY") == 1
+    assert registrations.count("RUNTIME_DISCOVERY") == 2
     assert re.search(
         r"pops_add_gtest_suite\(NAME test_amr_program_diffusion\b[^\n]*RUNTIME_DISCOVERY\)",
         registrations,
     )
+
+    assert re.search(
+        r"pops_add_gtest_suite\(NAME test_checkpoint_history_policy\b[^\n]*RUNTIME_DISCOVERY\)",
+        registrations,
+    )
+    checkpoint_source = (
+        REPO_ROOT / "tests/cpp/integration/runtime/test_checkpoint_history_policy.cpp"
+    ).read_text(encoding="utf-8")
+    assert "TEST (a second ScopeGuard" in checkpoint_source
 
     runtime_only = re.compile(
         r"\b(?:TEST_P|TYPED_TEST|TYPED_TEST_P|INSTANTIATE_TEST_SUITE_P)\s*\("
@@ -508,7 +517,7 @@ def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
         + ", ".join(offenders)
     )
     assert conditional_sources == [
-        ("tests/cpp/integration/amr/test_amr_program_diffusion.cpp", 431),
+        ("tests/cpp/integration/amr/test_amr_program_diffusion.cpp", 515),
         ("tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp", 325),
     ]
     assert "test_mpi_amr_spatial_norm" in re.search(
@@ -521,10 +530,10 @@ def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
     ).group("body")
 
 
-def test_full_cpp_plan_eight_shards_preserves_every_cpp_target(tmp_path):
+def test_full_cpp_plan_nine_shards_preserves_every_cpp_target(tmp_path):
     outputs = [
         _run_plan_cpp_shard(tmp_path, ["CMakeLists.txt"], shard_index)
-        for shard_index in range(8)
+        for shard_index in range(9)
     ]
     selected = set(outputs[0]["cpp_targets"].split())
     sharded = [output["cpp_shard_targets"].split() for output in outputs]
@@ -545,11 +554,11 @@ def test_full_cpp_plan_eight_shards_preserves_every_cpp_target(tmp_path):
     ), "the generated catalog is a pure-Python architecture test, not a C++ shard"
 
 
-def test_subset_cpp_plan_eight_shards_preserves_selected_union(tmp_path):
+def test_subset_cpp_plan_nine_shards_preserves_selected_union(tmp_path):
     changed = ["include/pops/numerics/time/schemes/splitting.hpp"]
     outputs = [
         _run_plan_cpp_shard(tmp_path, changed, shard_index)
-        for shard_index in range(8)
+        for shard_index in range(9)
     ]
     selected = set(outputs[0]["cpp_targets"].split())
     flat = [

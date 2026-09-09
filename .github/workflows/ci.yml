@@ -412,19 +412,21 @@ jobs:
   # GATE C++ (ADC-171). Les cibles selectionnees sont partitionnees en huit shards deterministes
   # dont l'union est verifiee par ci_select_tests.py avant exposition au workflow. Chaque shard
   # authentifie et reutilise le socle prechauffe, construit ses cibles explicites puis applique la
-  # regex CTest du meme shard : aucune compilation runtime commune n'est multipliee huit fois.
+  # regex CTest du meme shard : aucune compilation runtime commune n'est multipliee neuf fois.
   gate-cpp-shards:
     name: ubuntu-latest / Kokkos Serial (C++) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     # Runtime objects are prewarmed in parallel above. Keep an 18-minute bounded final build for
     # contract verification, ccache hits, shard-owned test executables and links, then seven minutes
-    # for tests. A cold common runtime can no longer consume this watchdog independently eight times.
+    # for tests. A cold common runtime can no longer consume this watchdog independently nine times.
+    # Nine shards are the minimum for the expanded catalog: 900.3 modeled seconds versus
+    # 943.1 with eight, preserving the 906-second budget. These are scheduling estimates.
     timeout-minutes: 40
     needs: [changes, set-mode, gate-cpp-prewarm]
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8]
     # Tout evenement non-PR (push master / nightly / dispatch) lance le gate ; sur pull_request,
     # uniquement si un chemin C++ a bouge, ou si un label force explicitement Kokkos.
     if: needs.set-mode.outputs.cpp_required == 'true'
@@ -479,7 +481,7 @@ jobs:
             --explain-file "$RUNNER_TEMP/cpp-test-plan.json" \
             --github-output "$GITHUB_OUTPUT" \
             --shard-index "${{ matrix.shard }}" \
-            --shard-total 8 \
+            --shard-total 9 \
             "${force_args[@]}"
           cpp_summary=$(grep '^cpp_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
           cpp_shard_summary=$(grep '^cpp_shard_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
@@ -2236,7 +2238,7 @@ jobs:
           retention-days: 1
 
   kokkos-openmp:
-    # The OpenMP C++ proof is the same exact eight-way target partition as the Serial gate:
+    # The OpenMP C++ proof is the same exact nine-way target partition as the Serial gate:
     # every non-MPI target belongs to exactly one shard and every built target must expose
     # an authenticated CTest label before its cases can run.  The independent Python/native-ABI
     # proof stays in its own lane because it builds one module rather than the C++ test graph.
@@ -2254,42 +2256,47 @@ jobs:
           - lane: cpp-0
             kind: cpp
             shard: 0
-            shard_total: 8
+            shard_total: 9
             ccache_maxsize: 2G
           - lane: cpp-1
             kind: cpp
             shard: 1
-            shard_total: 8
+            shard_total: 9
             ccache_maxsize: 2G
           - lane: cpp-2
             kind: cpp
             shard: 2
-            shard_total: 8
+            shard_total: 9
             ccache_maxsize: 2G
           - lane: cpp-3
             kind: cpp
             shard: 3
-            shard_total: 8
+            shard_total: 9
             ccache_maxsize: 2G
           - lane: cpp-4
             kind: cpp
             shard: 4
-            shard_total: 8
+            shard_total: 9
             ccache_maxsize: 2G
           - lane: cpp-5
             kind: cpp
             shard: 5
-            shard_total: 8
+            shard_total: 9
             ccache_maxsize: 2G
           - lane: cpp-6
             kind: cpp
             shard: 6
-            shard_total: 8
+            shard_total: 9
             ccache_maxsize: 2G
           - lane: cpp-7
             kind: cpp
             shard: 7
-            shard_total: 8
+            shard_total: 9
+            ccache_maxsize: 2G
+          - lane: cpp-8
+            kind: cpp
+            shard: 8
+            shard_total: 9
             ccache_maxsize: 2G
           - lane: python
             kind: python
