@@ -147,6 +147,37 @@ def _named_centered_plan(module, *rates):
     return plan
 
 
+def test_named_centered_amr_accuracy_uses_the_exact_resolved_rate_target() -> None:
+    from types import SimpleNamespace
+    from pops.mesh._amr.transfer import AMRTransfer
+    from pops.model import Handle
+
+    module, state, _, whole, split = _named_flux_module()
+    numerics = _named_centered_plan(module, whole, split)
+    case, _, instance = _program(module, state, whole, name="named-amr-accuracy", numerics=numerics)
+    plan = numerics.resolve_for(case, instance.block_ref)
+    subject = case.resolve(instance)
+    accuracy = AMRTransfer._resolved_spatial_accuracy
+    # Both independent named sums target the same storage and carry order two / one ghost.
+    assert accuracy(subject, (plan,), 2) == (2, (1, 1))
+    assert accuracy(subject, (replace(plan, rates=plan.rates[:1]),), 2) == (2, (1, 1))
+    other_state = Handle("other", kind="state", owner=subject.owner_path)
+    assert accuracy(other_state, (plan,), 2) is None
+    foreign_case, _, foreign_instance = _program(
+        module, state, whole, name="foreign-named-amr-accuracy", numerics=numerics)
+    assert accuracy(foreign_case.resolve(foreign_instance), (plan,), 2) is None
+    # Missing typed targets must refuse; a matching spelling cannot manufacture ownership.
+    operator = plan.rates[0].rate
+    absent = type(operator)(operator.local_id, kind=operator.kind, owner=operator.owner_path)
+    malformed = replace(plan.rates[0], rate=absent)
+    with pytest.raises(ValueError, match=r"exact Rate\(State\) target"):
+        accuracy(subject, (SimpleNamespace(rates=(malformed,)),), 2)
+    foreign_plan = numerics.resolve_for(foreign_case, foreign_instance.block_ref)
+    wrong_method = replace(plan.rates[0], method=foreign_plan.rates[0].method)
+    with pytest.raises(ValueError, match="fluxes disagree"):
+        accuracy(subject, (SimpleNamespace(rates=(wrong_method,)),), 2)
+
+
 def test_default_flux_route_does_not_reclassify_named_flux_operators() -> None:
     module, state, default_flux, whole_rate, _ = _named_flux_module()
     default_rate = module.rate_operator(

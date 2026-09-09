@@ -393,6 +393,10 @@ class AMRTransfer:
         subject: Handle, numerics: tuple[Any, ...], dimension: int
     ) -> tuple[int, tuple[int, ...]] | None:
         from pops.numerics.diffusion import Diffusion
+        from pops.numerics.named_flux import NamedCenteredDivergence
+        from pops.numerics.plan import ResolvedRateMethod
+        from pops.model.signatures import Signature
+        from pops.model.spaces import RateSpace, StateSpace
 
         methods = []
         for plan in numerics:
@@ -410,6 +414,28 @@ class AMRTransfer:
                                 "combined diffusion transport must authenticate the exact "
                                 "constitutive state"
                             )
+                if type(method) is NamedCenteredDivergence:
+                    # This storage-only method has no reconstruction.variables. Its resolved
+                    # rate retains the registered Rate(State) target and exact block owner.
+                    if type(rate) is not ResolvedRateMethod:
+                        raise TypeError("named centered AMR accuracy requires a resolved rate")
+                    operator = rate.rate
+                    signature = operator.signature
+                    if (not isinstance(signature, Signature)
+                            or not isinstance(signature.output, RateSpace)
+                            or not isinstance(signature.output.base_space, StateSpace)
+                            or not signature.inputs
+                            or signature.inputs[0] != signature.output.base_space):
+                        raise ValueError("named centered AMR rate has no exact Rate(State) target")
+                    base = signature.output.base_space
+                    if any(flux.owner_path != operator.owner_path
+                           or not isinstance(flux.signature, Signature)
+                           or flux.signature.output != signature.output
+                           or not flux.signature.inputs or flux.signature.inputs[0] != base
+                           for flux in method.flux):
+                        raise ValueError("named centered AMR fluxes disagree with their rate target")
+                    state = subject if (subject.owner_path == operator.owner_path
+                                        and subject.local_id == base.name) else None
                 if isinstance(state, Handle) and state.qualified_id == subject.qualified_id:
                     methods.append(method)
         if not methods:

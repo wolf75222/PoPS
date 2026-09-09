@@ -150,6 +150,30 @@ void check_shifted_projection() {
   }
 }
 
+TEST(AmrHistoryFluxSnapshot, ZeroTermRegistryRetainsItsWireShape) {
+  struct Term {
+    std::shared_ptr<const hf::Basis<2>> basis;
+    std::map<int, Rational> coefficient;
+  };
+  using Expression = std::map<std::uint64_t, Term>;
+  std::map<std::string, std::vector<Expression>> histories;
+  const auto no_shared_samples = [](auto&, const auto&) {
+    throw std::logic_error("zero-term history must not serialize a physical sample");
+  };
+  EXPECT_TRUE(hf::serialize_expressions<2>(histories, 2, no_shared_samples).empty());
+  histories.emplace("0:tracer.prior", std::vector<Expression>(2));
+  const auto bytes = hf::serialize_expressions<2>(histories, 2, no_shared_samples);
+  ASSERT_FALSE(bytes.empty());
+  pops::runtime::program::checkpoint_detail::Reader in(bytes);
+  EXPECT_EQ(in.u64(), UINT64_C(0x504f5053464c5833));
+  EXPECT_EQ(in.size(), 1U);
+  EXPECT_EQ(in.string(), "0:tracer.prior");
+  EXPECT_EQ(in.size(), 2U);
+  EXPECT_EQ(in.size(), 0U);
+  EXPECT_EQ(in.size(), 0U);
+  EXPECT_NO_THROW(in.finish());
+}
+
 TEST(AmrHistoryFluxSnapshot, InterfaceMappingWidensIndependentOriginOffsets) {
   using Layout = pops::amr::hierarchy::LevelLayout<2>;
   using Patches = pops::mesh::BoxArray<2>;

@@ -127,14 +127,17 @@ def _projection_case() -> tuple[pops.Case, AMR]:
     program = pops.Program("project_after_step")
     temporal = program.state(state_instance)
     peer_temporal = program.state(peer_state_instance)
+    # State bindings are lazy: both old states and sibling residuals must precede consumers.
+    old, peer_old = temporal.n, peer_temporal.n
+    residual, peer_residual = rate(old), peer_rate(peer_old)
     candidate = program.value(
         "candidate",
-        temporal.n + program.dt * rate(temporal.n),
+        old + program.dt * residual,
         at=temporal.next.point,
     )
     peer_candidate = program.value(
         "peer_candidate",
-        peer_temporal.n + program.dt * peer_rate(peer_temporal.n),
+        peer_old + program.dt * peer_residual,
         at=peer_temporal.next.point,
     )
     # Both sibling residuals belong to one coherent evaluation round.  Materialize them before

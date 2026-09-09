@@ -137,6 +137,24 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
     return context.serialize_history_flux_payload_();
   }
 
+  static std::vector<std::uint8_t> serialize_flux_registry(const context_type& context) {
+    return context.serialize_history_flux_payload_();
+  }
+
+  static std::vector<std::size_t> restored_flux_slot_sizes(const context_type& context,
+                                                           std::string_view name,
+                                                           std::span<const std::uint8_t> bytes) {
+    // The real accepted-state importer prepares this same authenticated budget
+    // before invoking the payload reader; do not seed test-only owner bounds.
+    context.prepare_multiblock_subcycling_engine_();
+    const auto restored = context.prepare_history_flux_payload_restore_(bytes);
+    const auto& slots = restored.at(context.history_key_(std::string(name), 0));
+    std::vector<std::size_t> sizes;
+    for (const auto& slot : slots)
+      sizes.push_back(slot.size());
+    return sizes;
+  }
+
   static std::string restored_flux_family(const context_type& context, std::string_view name,
                                           std::span<const std::uint8_t> bytes) {
     const auto restored = context.prepare_history_flux_payload_restore_(bytes);
@@ -2203,6 +2221,49 @@ TEST(GeneratedAmrSystemBlock, FluxHistoryMigratesDeclaredFamiliesAndPreservesNat
   };
   exercise(true);
   exercise(false);
+}
+
+TEST(GeneratedAmrSystemBlock, EmptyStateHistoryFluxRegistryIsExplicitAndMissingProvenanceRefuses) {
+  constexpr int Dim = pops::kNativeDimension;
+  using Access = pops::runtime::program::detail::AmrProgramHistoryRemapCollectiveTestAccess<Dim>;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/empty-state-history-flux");
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 7.0));
+  ASSERT_NE(system.engine(), nullptr);
+  auto context = pops::test::install_forward_euler_program_context(system, false);
+  EXPECT_TRUE(Access::serialize_flux_registry(*context).empty());
+  context->register_history("tracer.prior", 1, 1, 0, "tracer.U", "cell.conservative",
+                            "test.clock.macro", "dense.linear");
+  const std::vector<std::size_t> empty_slots{0, 0};
+  // Legacy absence is still supported for a genuinely cold registry.
+  EXPECT_EQ(Access::restored_flux_slot_sizes(*context, "tracer.prior", {}), empty_slots);
+  context->begin_step(0.1);
+  context->store_history("tracer.prior", context->state(0), 0);
+  context->rotate_histories("test.clock.macro");
+  ASSERT_TRUE(system.history_initialized("tracer.prior", 0));
+  ASSERT_EQ(system.history_fill_count("tracer.prior", 0), 1);
+  const auto accepted = Access::serialize_flux_registry(*context);
+  ASSERT_FALSE(accepted.empty());
+  EXPECT_EQ(history_flux_tag(accepted), UINT64_C(0x504f5053464c5833));
+  EXPECT_EQ(Access::restored_flux_slot_sizes(*context, "tracer.prior", accepted), empty_slots);
+  // Missing provenance is not equivalent to the authenticated zero-term slots.
+  EXPECT_THROW((void)Access::restored_flux_slot_sizes(*context, "tracer.prior", {}),
+               std::invalid_argument);
+  pops::runtime::program::checkpoint_detail::Writer missing_ring;
+  missing_ring.u64(UINT64_C(0x504f5053464c5833));
+  missing_ring.size(0);
+  const auto malformed = std::move(missing_ring).take();
+  EXPECT_THROW((void)Access::restored_flux_slot_sizes(*context, "tracer.prior", malformed),
+               std::invalid_argument);
+  EXPECT_EQ(Access::serialize_flux_registry(*context), accepted);
+  EXPECT_EQ(pops::reduce_min_local(context->history("tracer.prior", 1, 0)), pops::Real(7));
+  EXPECT_EQ(pops::reduce_max_local(context->history("tracer.prior", 1, 0)), pops::Real(7));
+  EXPECT_EQ(Access::restored_flux_slot_sizes(*context, "tracer.prior", accepted), empty_slots);
 }
 
 TEST(GeneratedAmrSystemBlock, ProgramContextRefusesHistoryRegridBeforeTopologyMutation) {

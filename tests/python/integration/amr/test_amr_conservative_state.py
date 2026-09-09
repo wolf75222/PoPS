@@ -291,6 +291,22 @@ def test_public_amr_bind_preserves_every_conservative_component(
         np.testing.assert_array_equal(
             actual["program_accepted_state"], expected["program_accepted_state"]
         )
+        # The first state-only store has an earned numeric sample but no
+        # evaluated RHS contribution. Its explicit empty flux registry must
+        # roundtrip together with the exact numeric/sample-identity archive.
+        history_keys = {
+            key for key in expected.files
+            if key.startswith(("history_", "program_history_flux_snapshot_"))
+        }
+        assert history_keys
+        assert history_keys == {
+            key for key in actual.files
+            if key.startswith(("history_", "program_history_flux_snapshot_"))
+        }
+        for key in sorted(history_keys):
+            assert actual[key].shape == expected[key].shape, key
+            assert actual[key].dtype == expected[key].dtype, key
+            assert actual[key].tobytes() == expected[key].tobytes(), key
 
     def assert_same_bytes(left, right):
         left = np.asarray(left)

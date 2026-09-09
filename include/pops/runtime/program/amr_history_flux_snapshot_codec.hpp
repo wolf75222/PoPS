@@ -438,12 +438,11 @@ std::string source_point_identity(std::size_t block, std::uint64_t basis_identit
 template <int Dim, class Registry, class SharedWriter>
 std::vector<std::uint8_t> serialize_expressions(const Registry& histories, int max_levels,
                                                 SharedWriter&& write_shared) {
-  const bool any_expression =
-      std::any_of(histories.begin(), histories.end(), [](const auto& entry) {
-        return std::any_of(entry.second.begin(), entry.second.end(),
-                           [](const auto& expression) { return !expression.empty(); });
-      });
-  if (!any_expression)
+  // A retained state sample can have no evaluated flux contribution. Preserve
+  // its explicit ring/slot registry: empty bytes mean absent provenance to the
+  // restore validator, not an authenticated collection of zero-term samples.
+  // Keep the no-history wire representation compatible with existing readers.
+  if (histories.empty())
     return {};
   const bool snapshots = std::any_of(histories.begin(), histories.end(), [](const auto& ring) {
     return std::any_of(ring.second.begin(), ring.second.end(), [](const auto& expression) {
