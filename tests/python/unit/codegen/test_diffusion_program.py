@@ -16,7 +16,7 @@ from pops.projection import ConservativeCellAverage
 
 
 def resolved_heat(*, n=16, coefficient=0.1, method="euler", variable=None, transport=None,
-                  runtime_coefficient=False):
+                  runtime_coefficient=False, transport_riemann="rusanov"):
     frame=Rectangle("diffusion_domain",lower=(0.,0.),upper=(1.,1.)).frame(Cartesian2D())
     model=pops.Model("heat",frame=frame)
     state=model.state("U",components=("u",))
@@ -35,7 +35,8 @@ def resolved_heat(*, n=16, coefficient=0.1, method="euler", variable=None, trans
             waves={axis:(speed,) for axis,speed in zip(frame.axes,transport,strict=True)})
         rhs=-math.div(adv)+rhs
         transport_method=FiniteVolume(flux=adv,variables=variables.Conservative(state),
-            reconstruction=reconstruction.FirstOrder(),riemann=riemann.Rusanov())
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov() if transport_riemann=="rusanov" else riemann.HLL())
     rate=model.rate("heat_rate",equation=math.ddt(state)==rhs)
     case=pops.Case("heat_case")
     block=case.block("heat",model,states=(state,))
@@ -76,10 +77,11 @@ def test_diffusion_accepted_quadrature_does_not_count_predictor_ancestry(method,
     assert len({value.id for value,_ in rows})==len(weights)
 
 
-def test_combined_transport_retains_native_riemann_and_adds_stability_frequencies():
+@pytest.mark.parametrize("transport_riemann", ["rusanov", "hll"])
+def test_combined_transport_retains_native_riemann_and_adds_stability_frequencies(transport_riemann):
     from pops.codegen.module_lowering import lower_and_validate
     from pops.codegen.program_codegen import emit_cpp_program
-    resolved,_,model=resolved_heat(transport=(.2,.2))
+    resolved,_,model=resolved_heat(transport=(.2,.2), transport_riemann=transport_riemann)
     code=emit_cpp_program(resolved.time,model=lower_and_validate(model)[0])
     assert code.count("ctx.neg_div_flux_default_with_faces_into(") == 1
     assert "ctx.prepare_provider_values(" not in code  # field-free native flux stays field-free

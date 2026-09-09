@@ -63,10 +63,14 @@ def emit_transport_exchanges(
         "        for (int dimension = 0; dimension < pops::kNativeDimension; ++dimension)",
         '          quadrature += ":" + std::to_string(cell[dimension]);',
         '        quadrature += "/axis:" + std::to_string(axis) + "/side:" + std::to_string(side);',
-        "        stage_exchange(pops::runtime::program::ExchangeRecord{%s, %s, %s, quadrature,"
+        "        for (int component = 0; component < accepted_faces.ncomp(); ++component) {",
+        "        const auto component_quadrature = accepted_faces.ncomp() == 1 ? quadrature",
+        '            : quadrature + "/component:" + std::to_string(component);',
+        "        stage_exchange(pops::runtime::program::ExchangeRecord{%s, %s, %s, component_quadrature,"
         % (json.dumps(operation), json.dumps(occurrence), json.dumps(evaluation)),
-        "            side == 0 ? 1 : -1, measure, face_values.axes[axis](face, 0)/measure, %s, 1});"
+        "            side == 0 ? 1 : -1, measure, face_values.axes[axis](face, component)/measure, %s, 1});"
         % weight,
+        "        }",
         "      }",
         "    }",
         "  }",

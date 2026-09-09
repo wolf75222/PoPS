@@ -68,7 +68,8 @@ void attach_diffusive_flux_basis(int program_block, const field_type& rhs, int r
   }
   long layout_error = 0;
   for (std::size_t local = 0; local < rhs.local_size(); ++local)
-    if (density_faces[local].cell_box() != rhs.box(local) || density_faces[local].ncomp() != 3 * rhs.ncomp())
+    if (density_faces[local].cell_box() != rhs.box(local) ||
+        density_faces[local].ncomp() != 3 * rhs.ncomp())
       layout_error = 1;
   if (all_reduce_max(layout_error, lane) != 0)
     throw std::invalid_argument(

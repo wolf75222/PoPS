@@ -25,9 +25,14 @@ def prepare_diffusion_carrier(emitter, module, *, quantity_handles=()):
         variables = roots[:count]
         derivatives = tuple(diff(variable, Var(component, "cons"), impl.prim_defs)
                             for variable, component in zip(variables, state.components, strict=True))
+        tensors = tuple(tuple(tuple(roots[count+c*law.dimension**2+i*law.dimension+j]
+                                  for j in range(law.dimension)) for i in range(law.dimension))
+                        for c in range(count))
+        jacobian = tuple(tuple(diff(variable, Var(component, "cons"), impl.prim_defs)
+                              for component in state.components) for variable in variables)
         name = next(op.name for op in module.operator_registry()
                     if op.lowering.get("diffusive_law") is law)
-        native[name] = MappingProxyType({"physical": law, "variables": variables,
+        native[name] = MappingProxyType({"physical": law, "variables": variables, "tensors": tensors, "jacobian": jacobian,
             "variable": variables[0],
             "diagonals": tuple(tuple(roots[count+c*law.dimension**2+i*law.dimension+i]
                                      for i in range(law.dimension)) for c in range(count)),

@@ -392,7 +392,7 @@ class AMRTransfer:
     def _resolved_spatial_accuracy(
         subject: Handle, numerics: tuple[Any, ...], dimension: int
     ) -> tuple[int, tuple[int, ...]] | None:
-        from pops.numerics.diffusion import Diffusion
+        from pops.numerics.diffusion import Diffusion, TensorDiffusion
         from pops.numerics.named_flux import NamedCenteredDivergence
         from pops.numerics.plan import ResolvedRateMethod
         from pops.model.signatures import Signature
@@ -405,7 +405,7 @@ class AMRTransfer:
                 variables = getattr(method, "variables", None)
                 state = getattr(variables, "options", {}).get("state") \
                     if variables is not None else None
-                if type(method) is Diffusion:
+                if type(method) in (Diffusion, TensorDiffusion):
                     state = method.law.state
                     if method.transport is not None:
                         transport_state = method.transport.variables.options.get("state")

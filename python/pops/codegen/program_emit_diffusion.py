@@ -35,7 +35,7 @@ def _diffusive_flux_families(v):
     return constitutive, transport_family
 
 
-def _selected(v, node_model):
+def _selected(v, node_model, *, require_realization=True):
     view=v.attrs["physical_balance"]
     rows=tuple(row for row in view.occurrences if row.kind=="diffusion")
     if not rows or any(row.payload != rows[0].payload or row.coefficient<=0 for row in rows):
@@ -45,6 +45,20 @@ def _selected(v, node_model):
         selected=impl._diffusive_laws[rows[0].payload.reg_name]
     except (AttributeError,KeyError):
         raise ValueError("diffusive Program has no authenticated native constitutive law") from None
+    plan = getattr(node_model, "_resolved_operations", getattr(impl, "_resolved_operations", None))
+    if plan is not None:
+        from pops.codegen._resolved_operation_inputs import _reference
+        identity = "operation:" + _reference(view.balance.handle)
+        methods = [operation.guarantees.get("numerical_method") for operation in plan.operations
+                   if operation.identity == identity or
+                   operation.guarantees.get("declaration_operation") == identity]
+        if any(method is not None and method.get("method") == "tensor_diffusion" for method in methods):
+            selected = {**selected, "tensor": True}
+    if require_realization and not selected.get("tensor"):
+        # A bare emitter may use the ordinary monotone construction, but must
+        # never discard physical off-diagonal entries or cross-gradient reads.
+        from pops.numerics.diffusion import Diffusion
+        Diffusion(flux=rows[0].payload)
     if v.attrs.get("fitted",False):
         drift=tuple(row for row in view.occurrences if row.kind=="drift")
         if len(drift)!=1 or drift[0].coefficient!=-1 or len(rows)!=1 or rows[0].coefficient!=1:
@@ -78,6 +92,10 @@ def diffusive_flux_basis_count(v):
 
 
 def _law_expressions(selected):
+    if selected.get("tensor"):
+        return tuple(expression for variable, tensor, jacobian in zip(
+            selected["variables"], selected["tensors"], selected["jacobian"], strict=True)
+            for expression in (variable, *(entry for row in tensor for entry in row), *jacobian))
     if "fitted" in selected:
         from pops._ir.expr import Const
         return selected["fitted"]["potential"],*selected["diagonal"],Const(0)
@@ -92,12 +110,16 @@ def _boundary_cpp(law):
         slope=row.slope or (0,)*law.dimension
         rows.append("{pops::runtime::program::DiffusiveBoundaryKind::%s, %s, {%s}}" % (
             row.kind,scalar_cpp(row.value),", ".join(scalar_cpp(x) for x in slope)))
-    return "std::array<pops::runtime::program::DiffusiveBoundary<pops::kNativeDimension>, 2*pops::kNativeDimension>{{%s}}" % ", ".join(rows)
+    count = len(law.boundaries) // (2 * law.dimension)
+    extent = "2*pops::kNativeDimension" + ("*%d" % count if count > 1 else "")
+    return "std::array<pops::runtime::program::DiffusiveBoundary<pops::kNativeDimension>, %s>{{%s}}" % (extent, ", ".join(rows))
 
 
 def _prepared_diffusion_type(selected):
     specialization = "pops::kNativeDimension" + (
         ", %d" % len(selected["variables"]) if len(selected["variables"]) > 1 else "")
+    if selected.get("tensor"):
+        specialization = "pops::kNativeDimension, %d, true" % len(selected["variables"])
     return "pops::runtime::program::PreparedDiffusion<%s>" % specialization
 
 
@@ -131,6 +153,19 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
     out="diffusive_rhs_%d" % v.id
     var[v.id]=out
     explicit = prepared_var is None
+    if explicit and selected.get("tensor"):
+        if target == "amr_system":
+            raise ValueError("explicit tensor diffusion on AMR requires a proven composite stability bound; select the synchronized implicit realization")
+        from pops._ir.expr import Var
+        from pops._ir.visitors import _children
+        frozen = [entry for tensor in selected["tensors"] for row in tensor for entry in row]
+        frozen += [entry for row in selected["jacobian"] for entry in row]
+        pending = list(frozen)
+        while pending:
+            node = pending.pop()
+            if isinstance(node, Var) and node.kind in {"cons", "prim"}:
+                raise ValueError("explicit TensorDiffusion requires affine gradient variables and state-independent tensors; use an implicit spatial stage for nonlinear laws")
+            pending.extend(_children(node))
     constitutive_family, transport_family = _diffusive_flux_families(v)
     if prepared_var is None:
         prepared_var="diffusion_prepared_%d" % v.id
@@ -169,6 +204,8 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
         raise ValueError("diffusive endpoint native functions differ from the captured physical law")
     lines.extend(endpoint.lines)
     specialization = "pops::kNativeDimension" + (", %d" % len(selected["variables"]) if len(selected["variables"]) > 1 else "")
+    if selected.get("tensor"):
+        specialization = "pops::kNativeDimension, %d, true" % len(selected["variables"])
     lines.append("    pops::runtime::program::DiffusiveLawResult<%s> result;" % specialization)
     lines.append("    result.evaluation_status = %s; result.reason_code = %s;" % (
         endpoint.status, endpoint.reason))

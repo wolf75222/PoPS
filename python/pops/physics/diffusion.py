@@ -257,8 +257,15 @@ def declare_diffusive_flux(model: Any, name: Any, *, state: Any, value: Any,
     existing = getattr(model, "_diffusive_fluxes", {})
     if name in existing or name in model._fluxes:
         raise ValueError("physical flux %r is already declared" % name)
-    law = DiffusiveFluxLaw(state, variable, coefficients, axes, tuple(inputs),
-                           _physical_boundaries(boundaries, len(axes)))
+    from collections.abc import Mapping
+    if isinstance(boundaries, Mapping):
+        if set(boundaries) != set(state.components):
+            raise ValueError("component diffusive boundaries must cover every exact state component")
+        physical = tuple(row for component in state.components
+                         for row in _physical_boundaries(boundaries[component], len(axes)))
+    else:
+        physical = _physical_boundaries(boundaries, len(axes)) * len(state.components)
+    law = DiffusiveFluxLaw(state, variable, coefficients, axes, tuple(inputs), physical)
     handle = DiffusiveFluxHandle(name, law, owner=model.owner_path)
     model._diffusive_fluxes = {**existing, name: handle}
     model._invalidate_authoring_views()

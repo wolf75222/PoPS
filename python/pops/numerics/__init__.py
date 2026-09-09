@@ -22,12 +22,12 @@ from .spatial import FiniteVolume
 from .state_storage import StateStorage
 from .named_flux import NamedCenteredDivergence
 from .interactions import JointEvaluation
-from .diffusion import Diffusion
+from .diffusion import Diffusion, TensorDiffusion
 from .scharfetter_gummel import ScharfetterGummel
 from .indicator_stencils import DiscreteGradientStencil, LinearAxisStencil
 from .plan import DiscretizationPlan
 
 __all__ = ["riemann", "reconstruction", "limiters", "variables", "projections", "terms",
-           "spatial", "FiniteVolume", "StateStorage", "NamedCenteredDivergence", "Diffusion",
+           "spatial", "FiniteVolume", "StateStorage", "NamedCenteredDivergence", "Diffusion", "TensorDiffusion",
            "ScharfetterGummel",
            "DiscreteGradientStencil", "LinearAxisStencil", "DiscretizationPlan", "JointEvaluation"]

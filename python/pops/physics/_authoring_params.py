@@ -51,8 +51,8 @@ class _RuntimeParamsMixin(_HyperbolicModel):
             out.append(_wrap(transform["valid_if"]))
         for law in (getattr(self, "_diffusive_laws", {}) or {}).values():
             out.extend(law["variables"])
-            out.extend(expression for diagonal in law["diagonals"] for expression in diagonal)
-            out.extend(law["derivatives"])
+            out.extend(expression for tensor in law["tensors"] for row in tensor for expression in row)
+            out.extend(expression for row in law["jacobian"] for expression in row)
         for law in (getattr(self,"_drift_laws",{}) or {}).values():
             out.extend((law["density"],law["mobility"],law["potential"]))
         for term in (getattr(self, "_flux_terms", {}) or {}).values():

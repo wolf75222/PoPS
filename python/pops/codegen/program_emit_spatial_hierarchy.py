@@ -30,7 +30,7 @@ def emit_amr_spatial_solve(
     rates = [node for node in value.attrs["residual_block"] if node.op == "diffusive_rhs"]
     if len(rates) != 1:
         raise NotImplementedError(
-            "composite spatial stage requires exactly one scalar diffusive residual"
+            "composite spatial stage requires exactly one diffusive face provider in its composite residual"
         )
     rate = rates[0]
     if any(row.kind in {"flux", "drift"} for row in rate.attrs["physical_balance"].occurrences):
@@ -244,6 +244,10 @@ def emit_amr_spatial_solve(
         _append_solve_report_guard(
             program, value, outcome, lines, label="spatial_implicit", phase="solve"
         )
+        lines.append("ctx.publish_newton_report(%d,%s.report());" % (owner,outcome))
+        for member in ("residual_norm", "reference_residual_norm", "rel_residual"):
+            lines.append("ctx.record_scalar(%s,%s.report().%s);" % (
+                json.dumps(stem+"."+member),outcome,member))
         return
     if phase != "publish":
         raise ValueError("unknown composite spatial lowering phase")

@@ -9,6 +9,12 @@ from typing import Any, ClassVar
 class StateStorageSpatial:
     """Carry the storage ABI without manufacturing a finite-volume/Riemann authority."""
 
+    ghost_depth: int = 1
+
+    def __post_init__(self):
+        if type(self.ghost_depth) is not int or self.ghost_depth < 1:
+            raise ValueError("state storage halo depth must be a positive integer")
+
     limiter: ClassVar[str] = "state_storage"
     flux: ClassVar[str] = "unavailable"
     recon: ClassVar[str] = "conservative"
@@ -25,7 +31,7 @@ class StateStorageSpatial:
             "limiter": self.limiter,
             "flux": self.flux,
             "recon": self.recon,
-            "ghost_depth": 1,
+            "ghost_depth": self.ghost_depth,
         }
 
     def identity(self) -> Any:
@@ -37,8 +43,8 @@ class StateStorageSpatial:
         return {"storage": self.to_data()}
 
     def validate(self, ghost_depth: Any = None, block: Any = None) -> bool:
-        if ghost_depth is not None and (type(ghost_depth) is not int or ghost_depth < 1):
-            raise ValueError("StateStorage requires at least one ghost cell for block %r" % block)
+        if ghost_depth is not None and (type(ghost_depth) is not int or ghost_depth < self.ghost_depth):
+            raise ValueError("StateStorage requires at least %d ghost cells for block %r" % (self.ghost_depth, block))
         return True
 
 

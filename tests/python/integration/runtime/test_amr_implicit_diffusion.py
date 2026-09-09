@@ -30,7 +30,7 @@ from pops.lib.amr import StateTransfer
 from pops.lib.initial import Analytic, Gaussian
 from pops.math import ValueExpr, CoeffGradient, ddt, div, sqrt
 from pops.mesh import CartesianGrid, PeriodicAxes
-from pops.numerics import Diffusion, DiscretizationPlan
+from pops.numerics import Diffusion, TensorDiffusion, DiscretizationPlan
 from pops.projection import ConservativeCellAverage
 from pops.params import RuntimeParam
 from pops.solvers import Newton
@@ -62,6 +62,7 @@ def build(
     newton_iterations=20,
     step_dt=DT,
     periodic_witness=False,
+    components=1,
 ):
     from pops.physics.diffusion import DiffusiveBoundary
 
@@ -69,12 +70,16 @@ def build(
         Cartesian2D()
     )
     model = pops.Model("composite-implicit-heat", frame=frame)
-    state = model.state("U", components=("energy",))
+    state = model.state("U" if components == 1 else "inventory",
+                        components=("energy",) if components == 1 else ("energy", "species"))
     u = state[0]
     variable = (sqrt(1 + 4 * u) - 1) / 2 if kind == "nonlinear_accumulation" else u
     coefficient = 0.1 * (1 + 0.2 * u) if kind == "variable" else 0.1
     if kind == "diagonal":
         coefficient = ((0.1 * (1 + 0.2 * u), 0), (0, 0.07 * (1 + 0.1 * u)))
+    if kind in {"tensor", "tensor_mms"}:
+        factor = .1 * (1 + .2 * u)
+        coefficient = ((2*factor, .3*factor), (.3*factor, factor))
     if invalid:
         coefficient = 0.1 * (1.1 - u)
     physical = (
@@ -86,8 +91,16 @@ def build(
         if boundary
         else None
     )
+    law = CoeffGradient(variable, coefficient)
+    if components == 2:
+        if kind != "tensor" or imex:
+            raise ValueError("the multicomponent fixture uses its declared coupled tensor profile")
+        v = state[1]
+        factor = .1*(1+.1*u+.1*v)
+        tensor = ((2*factor,.3*factor),(.3*factor,factor))
+        law = (CoeffGradient(2*u+.25*v,tensor), CoeffGradient(.25*u+1.5*v,tensor))
     flux = model.diffusive_flux(
-        "conduction", state=state, value=CoeffGradient(variable, coefficient), boundaries=physical
+        "conduction", state=state, value=law, boundaries=physical
     )
     transport_rate = None
     transport_method = None
@@ -111,7 +124,14 @@ def build(
             riemann=riemann.Rusanov(),
         )
     if not imex:
-        rate = model.rate("heat", equation=ddt(state) == div(flux))
+        rhs = div(flux)
+        if kind == "tensor_mms":
+            # Stationary U=1+.3 cos(2pi x). This source is authored from the PDE,
+            # independently of the G/H stencil and its O(h^2) stabilization.
+            displacement = u - 1
+            forcing = .1*(2*np.pi)**2*2*((1+.2*u)*displacement - .2*(.09-displacement**2))
+            rhs = rhs + model.source("manufactured", on=state, value=(forcing,))
+        rate = model.rate("heat", equation=ddt(state) == rhs)
     accumulation = (
         model.local_transform("temperature_to_energy", (u + u * u,), valid_if=u > -0.5)
         if kind == "nonlinear_accumulation"
@@ -123,7 +143,7 @@ def build(
     if imex:
         numerics.rates.add(balance, Diffusion(flux=flux, transport=transport_method))
     else:
-        numerics.rates.add(rate, Diffusion(flux=flux))
+        numerics.rates.add(rate, (TensorDiffusion if kind in {"tensor", "tensor_mms"} else Diffusion)(flux=flux))
     case.numerics(numerics, block=block)
     program = pops.Program("composite-implicit-stage")
     temporal = program.state(block[state])
@@ -158,7 +178,15 @@ def build(
     program.commit(temporal.next, candidate)
     program.step_strategy(FixedDt(step_dt))
     case.program(program)
-    if periodic_witness:
+    if components == 2:
+        from pops.analytic import cos, sin, x, y
+        initial = Analytic(frame=frame, components=(
+            1+.3*cos(2*np.pi*(x(frame)-.5))*(1+.1*cos(2*np.pi*y(frame))),
+            1.5+.1*sin(2*np.pi*(x(frame)+2*y(frame)))))
+    elif kind == "tensor_mms":
+        from pops.analytic import cos, x
+        initial = Analytic(frame=frame, components=(1+.3*cos(2*np.pi*(x(frame)-.5)),))
+    elif periodic_witness:
         from pops.analytic import cos, x, y
 
         initial = Analytic(
@@ -200,7 +228,7 @@ def build(
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
             rules=(
-                Tag(ValueExpr(block[state]) > case.value(threshold)),
+                Tag((ValueExpr(block[state]) if components == 1 else ValueExpr(block[state])["energy"]) > case.value(threshold)),
                 # Existing transfer contributes one lookahead cell. Scale the authored buffer
                 # to keep its total physical padding exactly 3/16 at every N.
                 Buffer(cells=3 * n // 16 - 1 if periodic_witness else 1),

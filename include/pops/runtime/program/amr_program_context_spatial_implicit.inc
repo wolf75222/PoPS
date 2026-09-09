@@ -126,10 +126,14 @@ std::shared_ptr<PreparedAmrSpatialResidual<Dim>> prepare_spatial_hierarchy(
         decltype(workspace->face_gather)("composite_spatial_face_gather", count);
     workspace->face_gather_host =
         decltype(workspace->face_gather_host)("composite_spatial_face_gather_host", count);
+    // One geometric face owner is retained; its values carry every accumulated component.
+    const auto values =
+        checked_product_(count, static_cast<std::size_t>(workspace->candidate(0).ncomp()),
+                         "composite diffusion face components");
     workspace->face_values =
-        decltype(workspace->face_values)("composite_spatial_face_values", count);
+        decltype(workspace->face_values)("composite_spatial_face_values", values);
     workspace->face_values_host =
-        decltype(workspace->face_values_host)("composite_spatial_face_values_host", count);
+        decltype(workspace->face_values_host)("composite_spatial_face_values_host", values);
   });
   // Publish the provisional cache node without allocating or copying its prepared resource.
   decltype(spatial_hierarchy_resources_) pending;
@@ -178,6 +182,9 @@ void prepare_spatial_face_gather(PreparedAmrSpatialResidual<Dim>& workspace) con
       const auto& faces = *workspace.faces.at(sample.level);
       if (sample.local_patch >= faces.size())
         throw std::logic_error("composite diffusion lost a prepared field-owned face buffer");
+      if (faces[sample.local_patch].ncomp() != 3 * workspace.candidate(sample.level).ncomp())
+        throw std::logic_error(
+            "composite diffusion face signature differs from its state components");
       entry.density = faces[sample.local_patch].view().axes[sample.axis];
     }
     Kokkos::deep_copy(workspace.face_gather, workspace.face_gather_host);
@@ -188,11 +195,12 @@ void gather_spatial_face_densities(PreparedAmrSpatialResidual<Dim>& workspace) c
   prepare_spatial_collectively([&] {
     const auto entries = workspace.face_gather;
     const auto values = workspace.face_values;
+    const int components = workspace.candidate(0).ncomp();
     Kokkos::parallel_for(
-        "pops_composite_diffusion_faces", Kokkos::RangePolicy<>(0, entries.extent(0)),
+        "pops_composite_diffusion_faces", Kokkos::RangePolicy<>(0, values.extent(0)),
         KOKKOS_LAMBDA(const std::size_t index) {
-          const auto entry = entries(index);
-          values(index) = entry.owned ? entry.density(entry.face, 0) : Real(0);
+          const auto entry = entries(index / components);
+          values(index) = entry.owned ? entry.density(entry.face, index % components) : Real(0);
         });
     Kokkos::deep_copy(workspace.face_values_host, values);
   });
@@ -225,20 +233,24 @@ SolveReport solve_spatial_hierarchy(PreparedAmrSpatialResidual<Dim>& workspace) 
     gather_spatial_face_densities(workspace);
     for (const auto& face : workspace.interfaces) {
       const auto level = face.parent;
-      const Real coarse = workspace.face_values_host(face.coarse_sample);
-      Real fine = Real(0);
-      for (const auto index : face.fine_samples)
-        fine += workspace.face_values_host(index);
-      const Real correction = workspace.residual_face_weight * face.divergence_sign *
-                              face.inverse_volume *
-                              (face.fine_area * fine - face.coarse_area * coarse);
-      for (std::size_t local = 0; local < result[level].local_size(); ++local)
-        if (result[level].box(local).contains(face.coarse_cell)) {
-          const auto destination = result[level].fab(local).view();
-          for_each_cell(
-              Box<Dim>{face.coarse_cell, face.coarse_cell},
-              [=] POPS_HD(const Index<Dim>& cell) { destination(cell, 0) += correction; });
-        }
+      const int components = result[level].ncomp();
+      for (int component = 0; component < components; ++component) {
+        const Real coarse = workspace.face_values_host(face.coarse_sample * components + component);
+        Real fine = Real(0);
+        for (const auto index : face.fine_samples)
+          fine += workspace.face_values_host(index * components + component);
+        const Real correction = workspace.residual_face_weight * face.divergence_sign *
+                                face.inverse_volume *
+                                (face.fine_area * fine - face.coarse_area * coarse);
+        for (std::size_t local = 0; local < result[level].local_size(); ++local)
+          if (result[level].box(local).contains(face.coarse_cell)) {
+            const auto destination = result[level].fab(local).view();
+            for_each_cell(Box<Dim>{face.coarse_cell, face.coarse_cell},
+                          [=] POPS_HD(const Index<Dim>& cell) {
+                            destination(cell, component) += correction;
+                          });
+          }
+      }
     }
     device_fence();
   };

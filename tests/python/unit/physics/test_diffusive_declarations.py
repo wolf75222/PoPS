@@ -103,3 +103,34 @@ def test_program_state_brick_has_conversion_without_fabricated_transport():
     assert "Prim to_primitive(" in body
     assert "State to_conservative(" in body
     assert not model.module.operator_registry().names()
+
+
+def test_component_boundary_data_preserves_distinct_physical_traces():
+    from pops.physics.diffusion import DiffusiveBoundary
+    from pops.numerics import Diffusion
+    from pops.codegen.program_emit_diffusion import _boundary_cpp
+    model = pops.Model("mixture", frame=Cartesian2D())
+    state = model.state("inventory", components=("solute", "temperature"))
+    boundaries = {name: tuple(DiffusiveBoundary(axis, side, "value", value)
+                              for axis in range(2) for side in ("lower", "upper"))
+                  for name, value in (("solute", 1.), ("temperature", 7.))}
+    flux = model.diffusive_flux("physical", state=state, value=math.grad(state), boundaries=boundaries)
+    assert [row.value for row in flux.law.boundaries] == [1.]*4+[7.]*4
+    assert "2*pops::kNativeDimension*2" in _boundary_cpp(flux.law)
+    assert Diffusion(flux=flux).validate()
+    with pytest.raises(ValueError, match="every exact state component"):
+        model.diffusive_flux("missing", state=state, value=math.grad(state), boundaries={"solute": boundaries["solute"]})
+
+
+def test_tensor_boundary_choice_does_not_restrict_the_physical_equation():
+    from pops.physics.diffusion import DiffusiveBoundary
+    from pops.numerics import TensorDiffusion
+    model = pops.Model("tensor_wall", frame=Cartesian2D())
+    state = model.state("inventory", components=("energy",))
+    boundary = tuple(DiffusiveBoundary(axis, side, "conormal")
+                     for axis in range(2) for side in ("lower", "upper"))
+    flux = model.diffusive_flux("physical", state=state,
+        value=math.CoeffGradient(state[0], ((2., .3), (.3, 1.))), boundaries=boundary)
+    assert len(flux.law.flux_expressions()) == 2
+    with pytest.raises(ValueError, match="boundary-adjoint realization"):
+        TensorDiffusion(flux=flux)

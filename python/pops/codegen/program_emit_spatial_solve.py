@@ -1,4 +1,4 @@
-"""Execute an authenticated scalar spatial residual through native Newton/GMRES."""
+"""Execute an authenticated implicit state residual through native Newton/GMRES."""
 from __future__ import annotations
 
 import json
@@ -47,7 +47,7 @@ def emit_spatial_solve(program: Any, value: Any, base: Any, variables: Any, mode
         "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
         "ctx.scratch_state_like(ctx.state(%d)));" % (trial, owner),
     ]
-    lines.append("ctx.require_cartesian_generated_operator(%d, \"spatial_implicit_diffusion\");" % owner)
+    lines.append("ctx.require_cartesian_generated_operator(%d, \"implicit_stage\");" % owner)
     stage = _solve_stage_fraction(value)
     lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
     subvars = dict(variables)
@@ -112,6 +112,10 @@ def emit_spatial_solve(program: Any, value: Any, base: Any, variables: Any, mode
         "std::move(%s), ctx.prepared_execution_lane());" % (outcome, report),
     ]
     _append_solve_report_guard(program, value, outcome, lines, label="spatial_implicit", phase="solve")
+    lines.append("ctx.publish_newton_report(%d,%s.report());" % (owner,outcome))
+    for member in ("residual_norm", "reference_residual_norm", "rel_residual"):
+        lines.append("ctx.record_scalar(%s,%s.report().%s);" % (
+            json.dumps(stem+"."+member),outcome,member))
     # A solved Newton report follows the residual of its accepted iterate. Its retained faces
     # therefore belong to that iterate; rejected line-search/FD evaluations never reach this hook.
     for node in value.attrs["residual_block"]:

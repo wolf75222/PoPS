@@ -24,9 +24,10 @@ def lower_diffusive_rate(program, op, args, name):
         if row.kind in {"diffusion", "drift"}:
             roots.extend(row.payload.law.expressions)
             if row.kind == "diffusion" and not fitted:
-                for variable, component in zip(row.payload.law.variables, state.space.components, strict=True):
-                    target = QuantityRef(view.target, component, space=state.space)
-                    roots.append(diff(variable, target, module.primitive_recipes()))
+                for variable in row.payload.law.variables:
+                    for component in state.space.components:
+                        target = QuantityRef(view.target, component, space=state.space)
+                        roots.append(diff(variable, target, module.primitive_recipes()))
         elif row.kind == "source":
             roots.append(module.operator_registry().get(row.payload.reg_name).body)
     attrs = {"physical_balance": view, "fitted": fitted}
