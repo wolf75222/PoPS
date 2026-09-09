@@ -54,26 +54,28 @@ SystemLayoutTransferSpec layout_transfer_spec_from_python(const py::dict& row) {
        "provider_manifest_identity", "source_layout_identity", "target_layout_identity",
        "source_block", "target_block", "source_representation", "target_representation",
        "synchronization_identity", "refinement_ratio", "operation", "physical_contract",
-       "physical_source_to_target", "physical_source_active", "physical_target_active"},
+       "physical_source_to_target", "physical_source_active", "physical_target_active",
+       "program_invocation"},
       "prepared layout-transfer spec");
-  return {py::cast<std::string>(row["mapping_identity"]),
-          py::cast<std::string>(row["provider_identity"]),
-          py::cast<std::string>(row["provider_component_identity"]),
-          py::cast<std::string>(row["provider_manifest_identity"]),
-          py::cast<std::string>(row["source_layout_identity"]),
-          py::cast<std::string>(row["target_layout_identity"]),
-          py::cast<std::string>(row["source_block"]),
-          py::cast<std::string>(row["target_block"]),
-          py::cast<std::string>(row["source_representation"]),
-          py::cast<std::string>(row["target_representation"]),
-          py::cast<std::string>(row["synchronization_identity"]),
-          py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["refinement_ratio"]),
-          py::cast<std::int32_t>(row["operation"]),
-          py::cast<bool>(row["physical_contract"]),
-          py::cast<std::array<std::int32_t, pops::kNativeDimension>>(
-              row["physical_source_to_target"]),
-          py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["physical_source_active"]),
-          py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["physical_target_active"])};
+  return {
+      py::cast<std::string>(row["mapping_identity"]),
+      py::cast<std::string>(row["provider_identity"]),
+      py::cast<std::string>(row["provider_component_identity"]),
+      py::cast<std::string>(row["provider_manifest_identity"]),
+      py::cast<std::string>(row["source_layout_identity"]),
+      py::cast<std::string>(row["target_layout_identity"]),
+      py::cast<std::string>(row["source_block"]),
+      py::cast<std::string>(row["target_block"]),
+      py::cast<std::string>(row["source_representation"]),
+      py::cast<std::string>(row["target_representation"]),
+      py::cast<std::string>(row["synchronization_identity"]),
+      py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["refinement_ratio"]),
+      py::cast<std::int32_t>(row["operation"]),
+      py::cast<bool>(row["physical_contract"]),
+      py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["physical_source_to_target"]),
+      py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["physical_source_active"]),
+      py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["physical_target_active"]),
+      py::cast<std::string>(row["program_invocation"])};
 }
 
 SystemLayoutTransferExecution layout_transfer_execution_from_python(const py::dict& row) {
@@ -1136,6 +1138,7 @@ void bind_system_stepping(py::class_<System>& cls) {
   cls.def("solve_fields",
           [](System& system) { return consume_solve_outcome(system.solve_fields()); })
       .def("step", &System::step, py::arg("dt"))
+      .def("_advance_program_region", &System::advance_program_region, py::arg("dt"))
       .def("advance", &System::advance, py::arg("dt"), py::arg("nsteps"))
       .def("_begin_step_transaction", &System::begin_step_transaction)
       .def("_begin_nested_step_transaction", &System::begin_nested_step_transaction)
@@ -1500,6 +1503,7 @@ void init_system(py::module_& m) {
   using NativeSystem = pops::System<pops::kNativeDimension>;
   py::class_<SystemLayoutTransferReceipt>(m, "_SystemLayoutTransferReceipt")
       .def_readonly("applied", &SystemLayoutTransferReceipt::applied)
+      .def_readonly("program_invocation", &SystemLayoutTransferReceipt::program_invocation)
       .def_readonly("mapping_identity", &SystemLayoutTransferReceipt::mapping_identity)
       .def_readonly("provider_identity", &SystemLayoutTransferReceipt::provider_identity)
       .def_readonly("provider_component_identity",

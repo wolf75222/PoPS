@@ -30,6 +30,7 @@ class _NativeTransferRoute:
     session: Any
     source_element_count: int
     destination_element_count: int
+    program_invocation: str = ""
 
 
 def _common_exact(values: Any, *, where: str) -> Any:
@@ -103,6 +104,8 @@ def _require_unique_transfer_targets(transfers: Any) -> None:
     """Defend install against order-dependent overwrite transfers in a forged runtime plan."""
     writers: dict[tuple[str, str, str], str] = {}
     for transfer in transfers:
+        if transfer.synchronization_uri == "pops://synchronization/program-point@1":
+            continue
         key = (transfer.target_layout_id, transfer.target_subject_id, transfer.synchronization_uri)
         previous = writers.get(key)
         if previous is not None:
@@ -311,7 +314,8 @@ def _release_layout_engines(engines: list[Any]) -> None:
         ) from None
 
 
-def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]) -> Any:
+def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any],
+                               program_invocation: str = "") -> Any:
     """Authenticate every fallible route field before a native session exists."""
     source_block, target_block = _mapping_blocks(plan, transfer)
     try:
@@ -380,6 +384,7 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
             "synchronization_identity": transfer.synchronization_uri,
             "refinement_ratio": ratio,
             "operation": transfer.operation_abi,
+            "program_invocation": program_invocation,
             **contract,
         },
         source_element_count=source_components * source_cells,
@@ -408,6 +413,7 @@ def _prepare_layout_transfer_route(prepared: Any, execution: Any) -> tuple[Any, 
             session=session,
             source_element_count=prepared.source_element_count,
             destination_element_count=prepared.destination_element_count,
+            program_invocation=prepared.spec["program_invocation"],
         )
         published = (source_native, target_native)
         session = None
@@ -437,6 +443,7 @@ def _publish_layout_transfer_route(
     transfer: Any,
     engines: dict[str, Any],
     execution: Any,
+    program_invocation: str = "",
 ) -> None:
     """Prepare one route and publish it; the caller never owns last-route locals."""
     prepared = None
@@ -444,7 +451,7 @@ def _publish_layout_transfer_route(
     handles = None
     native_start = None
     try:
-        prepared = _validated_layout_transfer(plan, transfer, engines)
+        prepared = _validated_layout_transfer(plan, transfer, engines, program_invocation)
         route, handles = _prepare_layout_transfer_route(prepared, execution)
         prepared = None
         routes.append(route)
@@ -683,7 +690,9 @@ class _MultiLayoutUniformExecutor:
             self._transfer_routes = tuple(transfer_routes)
             from pops.runtime._physical_mapping import physical_mapping_schedule
             self._physical_mapping_schedule = physical_mapping_schedule(
-                (route.transfer for route in self._transfer_routes), self._engines)
+                (route.transfer for route in self._transfer_routes
+                 if not route.program_invocation), self._engines)
+            self._has_program_maps = any(route.program_invocation for route in self._transfer_routes)
             self._mapping_evaluations = {
                 row.mapping_id: 0 for row in runtime_plan.communication.transfers
             }
@@ -1065,6 +1074,8 @@ class _MultiLayoutUniformExecutor:
             "source_element_count": route.source_element_count,
             "destination_element_count": route.destination_element_count,
         }
+        if route.program_invocation:
+            expected["program_invocation"] = route.program_invocation
         for name, value in expected.items():
             if getattr(receipt, name, object()) != value:
                 raise RuntimeError(
@@ -1127,7 +1138,10 @@ class _MultiLayoutUniformExecutor:
         receipts = []
         captured_routes = []
         try:
-            if schedule is None:
+            if getattr(self, "_has_program_maps", False):
+                from pops.runtime._program_mapping_executor import execute_program_maps
+                execute_program_maps(self, dt, generation, attempt, receipts, captured_routes)
+            elif schedule is None:
                 # Ordinary mappings retain simultaneous pre-step snapshot semantics.
                 for route in self._transfer_routes:
                     route.session.capture(generation, attempt)
@@ -1161,8 +1175,12 @@ class _MultiLayoutUniformExecutor:
         except StepAttemptRejected:
             self._restore_rejected_native_attempt(generation, attempt, captured_routes)
             raise
-        for route in self._transfer_routes:
-            self._mapping_evaluations[route.transfer.mapping_id] += 1
+        if getattr(self, "_has_program_maps", False):
+            for receipt in receipts:
+                self._mapping_evaluations[receipt.mapping_identity] += 1
+        else:
+            for route in self._transfer_routes:
+                self._mapping_evaluations[route.transfer.mapping_id] += 1
         self._last_mapping_receipts = tuple(receipts)
         self._common_clock("time")
         self._common_clock("macro_step")
@@ -1686,7 +1704,8 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
     }:
         raise ValueError("runtime transfer plan differs from the resolved LayoutPlan")
     from pops.runtime._physical_mapping import physical_mapping_schedule, validate_physical_geometry
-    physical_mapping_schedule(transfer_rows.values(), configs)
+    physical_mapping_schedule((row for row in transfer_rows.values()
+        if row.synchronization_uri != "pops://synchronization/program-point@1"), configs)
     requirements = {row.requirement.qualified_id: row.requirement
                     for row in plan.artifact.layout_plan.mappings}
     for transfer in transfer_rows.values():
@@ -1756,10 +1775,17 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
             engines[layout_id] = engine
 
         execution = component_execution_data(plan.execution_context)
+        from pops.codegen.program_mapping_regions import compiled_program_map_invocations
+        invocations = compiled_program_map_invocations(plan.artifact) if any(
+            row.synchronization_uri == "pops://synchronization/program-point@1"
+            for row in runtime_plan.communication.transfers) else ()
         for transfer in runtime_plan.communication.transfers:
-            _publish_layout_transfer_route(
-                transfer_routes, native_handles, plan, transfer, engines, execution
-            )
+            ports = tuple(row.identity for row in invocations
+                          if row.requirement.qualified_id == transfer.mapping_id)
+            for invocation in ports or ("",):
+                _publish_layout_transfer_route(
+                    transfer_routes, native_handles, plan, transfer, engines, execution, invocation)
+
         execution = None
         return _build_multi_layout_executor(
             plan, runtime_plan, engines, blocks, transfer_routes

@@ -43,6 +43,8 @@ _MODEL_OPS = (
 _ALLOWED_OPS = frozenset(
     {
         "state",
+        "layout_map_export",
+        "layout_map_import",
         "solve_fields",
         "solve_fields_from_blocks",
         "rhs",

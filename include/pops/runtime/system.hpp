@@ -145,6 +145,7 @@ struct SystemLayoutTransferSpec {
   }();
   std::array<std::int32_t, Dim> physical_source_active{};
   std::array<std::int32_t, Dim> physical_target_active{};
+  std::string program_invocation;
 };
 
 /// Owned projection of PopsExecutionContextV1. Strings are values, never borrowed Python pointers.
@@ -184,6 +185,7 @@ struct SystemLayoutTransferReceipt {
   std::uint64_t attempt = 0;
   std::uint64_t source_element_count = 0;
   std::uint64_t destination_element_count = 0;
+  std::string program_invocation;
 };
 
 namespace runtime::program {
@@ -841,6 +843,7 @@ class System {
   void step(double dt);  ///< solve_fields, then advances each block according to its scheme
   void advance(double dt, int nsteps);
   /// RuntimeInstance-only outer transaction spanning native advancement and prepared consumers.
+  POPS_EXPORT std::string advance_program_region(double dt);
   void begin_step_transaction();
   /// Open an explicit child scope; child publication remains provisional in its parent.
   POPS_EXPORT void begin_nested_step_transaction();

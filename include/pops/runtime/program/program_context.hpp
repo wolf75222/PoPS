@@ -204,6 +204,12 @@ class ProgramContext {
     system_->install_program_step(std::move(step));
   }
 
+  void suspend_map(std::string identity, bool target, field_type& field,
+                   std::function<void()> continuation) const {
+    runtime_state().suspend_program_map(std::move(identity), target, {&field},
+                                        std::move(continuation));
+  }
+
   void begin_step(double dt) const {
     (void)prepared_execution_lane();
     if (!std::isfinite(dt) || dt <= 0.0)

@@ -377,6 +377,22 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
 
   field_type& source_state() { return source->sp[static_cast<std::size_t>(source_block_index)].U; }
   field_type& target_state() { return target->sp[static_cast<std::size_t>(target_block_index)].U; }
+  field_type& source_transfer_state() {
+    if (spec.program_invocation.empty())
+      return source_state();
+    const auto& fields = source->program_.program_map_fields(spec.program_invocation, false);
+    if (fields.size() != 1)
+      throw std::logic_error("Uniform source map port has multiple levels");
+    return *fields.front();
+  }
+  field_type& target_transfer_state() {
+    if (spec.program_invocation.empty())
+      return target_state();
+    const auto& fields = target->program_.program_map_fields(spec.program_invocation, true);
+    if (fields.size() != 1)
+      throw std::logic_error("Uniform target map port has multiple levels");
+    return *fields.front();
+  }
 
   void validate_static_contract() const {
     if (source_owner == target_owner || source == nullptr || target == nullptr)
@@ -400,12 +416,16 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
     const bool physical = moment || pullback;
     const bool known_synchronization =
         spec.synchronization_identity == kBeforeStepSynchronization ||
-        spec.synchronization_identity == "pops://synchronization/after-source-step@1";
+        spec.synchronization_identity == "pops://synchronization/after-source-step@1" ||
+        spec.synchronization_identity == "pops://synchronization/program-point@1";
     if (!known_synchronization ||
         (!physical && spec.synchronization_identity != kBeforeStepSynchronization))
       throw std::invalid_argument("prepared System transfer synchronization is unsupported");
     if (!physical && spec.operation != POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1)
       throw std::invalid_argument("prepared System transfer operation is unsupported");
+    if ((spec.synchronization_identity == "pops://synchronization/program-point@1") !=
+        !spec.program_invocation.empty())
+      throw std::invalid_argument("Program-point mapping requires its exact invocation identity");
     if (physical != spec.physical_contract)
       throw std::invalid_argument("prepared physical transfer requires explicit support metadata");
     if (physical) {
@@ -558,13 +578,14 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
 
   void capture_source() {
     if (!spec.physical_contract) {
-      parallel_copy(source_snapshot, source_state(), *source_copy_schedule);
+      parallel_copy(source_snapshot, source_transfer_state(), *source_copy_schedule);
       return;
     }
     if (source_lane) {
       source_transport->execute(
           [this](const auto& job) {
-            return FieldView<const Real, Dim>(source_state().fab_global(job.source_patch).view());
+            return FieldView<const Real, Dim>(
+                source_transfer_state().fab_global(job.source_patch).view());
           },
           [this](const auto& job) {
             return source_snapshot.fab_global(job.destination_patch).view();
@@ -575,7 +596,7 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
     // carrier independently, including carriers that repeat a source region for a broadcast.
     device_fence();
     for (const auto& job : source_region_jobs) {
-      const auto input = source_state().fab_global(job.source_patch).view();
+      const auto input = source_transfer_state().fab_global(job.source_patch).view();
       const auto output = source_snapshot.fab_global(job.destination_patch).view();
       const int width = components;
       for_each_cell(
@@ -593,7 +614,8 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
          {&spec.mapping_identity, &spec.provider_identity, &spec.provider_component_identity,
           &spec.provider_manifest_identity, &spec.source_layout_identity,
           &spec.target_layout_identity, &spec.source_block, &spec.target_block,
-          &spec.source_representation, &spec.target_representation, &spec.synchronization_identity})
+          &spec.source_representation, &spec.target_representation, &spec.synchronization_identity,
+          &spec.program_invocation})
       append_text(bytes, *field);
     for (const std::int32_t ratio : spec.refinement_ratio)
       append_i32(bytes, ratio);
@@ -722,15 +744,25 @@ template <int Dim>
 void PreparedSystemLayoutTransfer<Dim>::capture(std::uint64_t generation, std::uint64_t attempt) {
   collectively_validate(p_->communicator, "layout-transfer capture", [&] {
     p_->validate_active(generation, attempt, "layout-transfer capture");
-    if (p_->applied)
+    if (p_->applied && p_->spec.program_invocation.empty())
       throw std::logic_error(
           "layout-transfer retry requires rollback of the enclosing transaction");
+    if (!p_->spec.program_invocation.empty()) {
+      (void)p_->source_transfer_state();
+      (void)p_->target_transfer_state();
+      const auto& a = *p_->source->program_.cadence_continuation_;
+      const auto& b = *p_->target->program_.cadence_continuation_;
+      if (a.partition.start != b.partition.start || a.partition.end != b.partition.end ||
+          a.accepted_macro_step != b.accepted_macro_step)
+        throw std::logic_error("Program map peers have different exact temporal windows");
+    }
     if (p_->captured_attempt != 0 && p_->captured_attempt != attempt)
       throw std::logic_error("layout-transfer source was already captured for another attempt");
   });
   collectively_validate(p_->communicator, "layout-transfer source capture",
                         [&] { p_->capture_source(); });
   p_->captured_attempt = attempt;
+  p_->applied = false;
 }
 
 template <int Dim>
@@ -747,7 +779,7 @@ SystemLayoutTransferReceipt PreparedSystemLayoutTransfer<Dim>::apply(std::uint64
   std::uint64_t local_source_elements = 0;
   std::uint64_t local_target_elements = 0;
   collectively_validate(p_->communicator, "native Transfer apply", [&] {
-    MultiFab<Dim>& destination = p_->target_state();
+    MultiFab<Dim>& destination = p_->target_transfer_state();
     try {
       for (std::size_t local = 0; local < p_->source_snapshot.local_size(); ++local) {
         const std::size_t global = p_->source_snapshot.global_index(local);
@@ -797,9 +829,14 @@ SystemLayoutTransferReceipt PreparedSystemLayoutTransfer<Dim>::apply(std::uint64
     }
   });
   p_->applied = true;
+  if (!p_->spec.program_invocation.empty()) {
+    p_->source->program_.release_program_map(p_->spec.program_invocation, false);
+    p_->target->program_.release_program_map(p_->spec.program_invocation, true);
+  }
 
   SystemLayoutTransferReceipt receipt;
   receipt.applied = true;
+  receipt.program_invocation = p_->spec.program_invocation;
   receipt.mapping_identity = p_->spec.mapping_identity;
   receipt.provider_identity = p_->spec.provider_identity;
   receipt.provider_component_identity = p_->spec.provider_component_identity;

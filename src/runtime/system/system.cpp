@@ -7,6 +7,7 @@
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/program/profiler.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
+#include <pops/runtime/program/collective_step_rejection.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -59,6 +60,30 @@ void System<Dim>::step(double dt) {
   p_->program_.profiler_.count("steps");
   p_->execute_step_transaction(
       [&] { p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, dt, "System"); });
+}
+
+template <int Dim>
+std::string System<Dim>::advance_program_region(double dt) {
+  const auto& lane = prepared_boundary_execution_lane();
+  runtime::program::require_step_transaction_control(
+      lane, 8, static_cast<long>(step_transaction_depth()),
+      p_->external_step_transaction_ && !p_->external_step_transaction_committed_,
+      "System::advance_program_region");
+  std::string port;
+  try {
+    runtime::program::collective_step_rejection_phase(
+        lane.communicator(),
+        {"pops.program-region.rejection.v1", "pops.program-region.rejection", false, false},
+        "System Program region failed collectively",
+        [&] { port = p_->program_.advance_cadence_region(p_->t, p_->macro_step_, dt, "System"); });
+  } catch (...) {
+    p_->program_.cancel_cadence_continuation();
+    throw;
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("system-program-region-port"), port}}, lane))
+    throw std::runtime_error("System Program region reached different map ports between ranks");
+  return port;
 }
 
 template <int Dim>
@@ -147,8 +172,8 @@ void System<Dim>::stage_program_exchange(runtime::program::ExchangeRecord record
 
 template <int Dim>
 void System<Dim>::stage_program_exchanges(std::span<runtime::program::ExchangeRecord> records) {
-  runtime::program::stage_exchange_batch_collectively(
-      p_->program_.accepted_exchanges_, records, prepared_boundary_execution_lane());
+  runtime::program::stage_exchange_batch_collectively(p_->program_.accepted_exchanges_, records,
+                                                      prepared_boundary_execution_lane());
 }
 
 template <int Dim>
@@ -234,6 +259,7 @@ void System<Dim>::rollback_step_transaction() {
       prepared_boundary_execution_lane(), 4, static_cast<long>(step_transaction_depth()),
       static_cast<bool>(p_->external_step_transaction_), "System::rollback_step_transaction");
   Kokkos::fence();
+  p_->program_.cancel_cadence_continuation();
   p_->external_step_transaction_->restore(*p_);
   p_->external_step_transaction_.reset();
   if (!p_->parent_step_transactions_.empty()) {
@@ -664,6 +690,7 @@ template System<kNativeDimension>::System(System&&) noexcept;
 template System<kNativeDimension>& System<kNativeDimension>::operator=(System&&) noexcept;
 template void System<kNativeDimension>::step(double);
 template void System<kNativeDimension>::advance(double, int);
+template std::string System<kNativeDimension>::advance_program_region(double);
 template void System<kNativeDimension>::begin_step_transaction();
 template void System<kNativeDimension>::begin_nested_step_transaction();
 template std::size_t System<kNativeDimension>::step_transaction_depth() const noexcept;

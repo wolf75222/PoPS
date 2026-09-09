@@ -408,6 +408,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
     if v.op == "post_synchronization":
         var[v.id] = "/* post_synchronization */"
+    elif v.op in ("layout_map_export", "layout_map_import"):
+        from pops.codegen.program_emit_mapping_regions import emit_map_port
+        emit_map_port(v, var, lines, block_idx)
     elif v.op == "state":
         var[v.id] = "u%d" % v.id
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.state(%d);" % (var[v.id], bidx))

@@ -393,7 +393,12 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         lines,
     )
     values = list(program._values)
+    if target == "amr_system" and any(
+            value.op in ("layout_map_export", "layout_map_import") for value in values):
+        raise NotImplementedError(
+            "Program.map on AMR requires the hierarchy region continuation dispatcher")
     index = 0
+    mapping_continuations = 0
     # Group identities occupy compiler-reserved slots after the authored SSA namespace.  They are
     # deterministic, cannot alias a rate node, and keep BoundaryEvaluationPoint.stage faithful to
     # the atomic group while every RhsGroupRequest retains its own exact rate identity.
@@ -423,6 +428,10 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                  has_shared_interface_implicit_jacvec=(
                      has_shared_interface_implicit_jacvec
                  ))
+        if v.op in ("layout_map_export", "layout_map_import"):
+            from pops.codegen.program_emit_mapping_regions import open_map_continuation
+            open_map_continuation(v, values[:index + 1], var, lines)
+            mapping_continuations += 1
         index += 1
     from .program_interaction_exchanges import emit_accepted_interaction_exchanges
     lines += emit_accepted_interaction_exchanges(program, var, block_idx, target=target)
@@ -435,6 +444,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     # reads lag k as the value k stores ago. Only emitted when the Program uses histories.
     if any(row["clock"] == program.clock.qualified_id for row in temporal["histories"]):
         lines.append("ctx.rotate_histories(%s);" % json.dumps(program.clock.qualified_id))
+    from pops.codegen.program_emit_mapping_regions import close_map_continuations
+    close_map_continuations(mapping_continuations, lines)
     post_sync_lines = _emit_post_synchronization_phase(
         program,
         model,

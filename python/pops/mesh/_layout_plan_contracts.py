@@ -55,6 +55,7 @@ class LayoutSynchronization(Enum):
 
     BEFORE_STEP_V1 = "pops://synchronization/before-step@1"
     AFTER_SOURCE_STEP_V1 = "pops://synchronization/after-source-step@1"
+    PROGRAM_POINT_V1 = "pops://synchronization/program-point@1"
 
     def to_data(self) -> dict[str, Any]:
         return {"uri": self.value}
@@ -847,6 +848,8 @@ def reject_concurrent_overwrite_mappings(requirements: Any) -> None:
     """Require one writer per target storage/synchronization for overwrite operations."""
     writers: dict[tuple[str, str, str], str] = {}
     for requirement in requirements:
+        if requirement.synchronization is LayoutSynchronization.PROGRAM_POINT_V1:
+            continue  # Each Program.map writes its own SSA scratch, verified at resolution.
         key = (
             requirement.target_layout.qualified_id,
             requirement.target_port.subject.qualified_id,

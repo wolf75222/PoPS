@@ -31,6 +31,14 @@ def validate_physical_mapping_program(plan: Any, program: Any, field_plans: Any,
     # The field resolver authenticates each solve and its consumed publication.
     # A support map has no reason to prescribe either a field equation or c=0.
     del field_plans
+    from pops.codegen.program_mapping_regions import (
+        resolve_program_map_invocations, plan_program_mapping_regions)
+    from pops.mesh import LayoutSynchronization
+    invocations = resolve_program_map_invocations(program, plan, resolve=resolve)
+    if invocations:
+        plan_program_mapping_regions(program, {
+            row.subject.local_id: row.layout.qualified_id for row in plan.assignments
+            if row.subject_kind == "block"})
     all_nodes = _nodes(program)
     commits = {}
     readers = {}
@@ -44,6 +52,8 @@ def validate_physical_mapping_program(plan: Any, program: Any, field_plans: Any,
                    if row.subject_kind == "state"}
     transfers = []
     for requirement in mappings:
+        if requirement.synchronization is LayoutSynchronization.PROGRAM_POINT_V1:
+            continue
         source = requirement.source_port.subject
         target = requirement.target_port.subject
         if requirement.physical_map is not None:

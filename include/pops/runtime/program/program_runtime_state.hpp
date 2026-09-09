@@ -693,6 +693,7 @@ struct ProgramRuntimeState {
     static_assert(noexcept(block_params_.swap(prepared.block_params_)));
     static_assert(std::is_nothrow_swappable_v<CacheManager<Dim>>);
     static_assert(std::is_nothrow_swappable_v<HistoryManager<Dim>>);
+    cancel_cadence_continuation();
     cadence_window_dt_ = prepared.cadence_window_dt_;
     cadence_window_steps_ = prepared.cadence_window_steps_;
     cadence_window_start_time_ = prepared.cadence_window_start_time_;
@@ -1125,65 +1126,7 @@ struct ProgramRuntimeState {
     }
   }
 
-  /// Execute one accepted facade step through the single Uniform/AMR cadence dispatcher.
-  ///
-  /// The owning runtime lends its exact accepted cursor by reference. The dispatcher publishes each
-  /// numerical substep's start coordinate while invoking the installed Program, restores the entry
-  /// cursor after every failure, commits the held/due cadence image once, then advances the public
-  /// cursor exactly once. Grid and hierarchy work remain inside the installed provider closure.
-  void dispatch_cadence_step(double& physical_time_cursor, int& macro_step_cursor, double dt,
-                             const std::string& runtime) {
-    if (cadence_dispatch_active_)
-      throw std::logic_error(runtime + " Program cadence dispatch is non-reentrant");
-    if (!step_)
-      throw std::logic_error(
-          runtime + " Program cadence dispatch requires an installed whole-system Program");
-
-    cadence_dispatch_active_ = true;
-    struct CadenceDispatchLease {
-      bool& active;
-      ~CadenceDispatchLease() { active = false; }
-    } dispatch_lease{cadence_dispatch_active_};
-
-    const double accepted_time = physical_time_cursor;
-    const int accepted_macro_step = macro_step_cursor;
-    const PreparedCadenceStep cadence =
-        prepare_cadence_step(accepted_time, accepted_macro_step, dt, runtime);
-    if (accepted_macro_step == std::numeric_limits<int>::max())
-      throw std::overflow_error(runtime + " Program cadence macro-step counter overflow");
-
-    try {
-      if (cadence.due) {
-        validate_cadence_partition(cadence, substeps_, runtime);
-        const int held_before_due = cadence.window_steps - 1;
-        if (accepted_macro_step < held_before_due)
-          throw std::logic_error(runtime + " Program cadence window starts before macro-step zero");
-        const int window_start_macro_step = accepted_macro_step - held_before_due;
-        run_balance_due_window(accepted_macro_step, runtime, [&] {
-          for (int substep = 0; substep < substeps_; ++substep) {
-            const PreparedCadenceSubstep partition =
-                prepare_cadence_substep(cadence, substep, substeps_, runtime);
-            physical_time_cursor = partition.start;
-            macro_step_cursor = window_start_macro_step;
-            last_dt_ = static_cast<Real>(partition.dt);
-            step_(partition.dt);
-            physical_time_cursor = partition.end;
-          }
-        });
-        physical_time_cursor = accepted_time;
-        macro_step_cursor = accepted_macro_step;
-      }
-
-      commit_cadence_step(cadence, runtime);
-      physical_time_cursor = cadence.window_end;
-      complete_balance_step(cadence.due);
-      ++macro_step_cursor;
-    } catch (...) {
-      physical_time_cursor = accepted_time;
-      macro_step_cursor = accepted_macro_step;
-      throw;
-    }
-  }
+#include <pops/runtime/program/program_cadence_continuation.inc>
 
   /// Stage an authenticated checkpoint window for one exact set_clock transaction. The accepted
   /// window is not mutated until the matching clock pair is consumed, and no historical duration is
