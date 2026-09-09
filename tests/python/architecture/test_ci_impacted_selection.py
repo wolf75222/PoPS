@@ -299,6 +299,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_amr_multiblock_coupled_source": (2,),
         "test_amr_multiblock_implicit_transaction": (2,),
         "test_amr_multiblock_substeps": (2,),
+        "test_collective_step_rejection": (2,),
         "test_amr_program_positivity_floor": (2,),
         "test_amr_synthetic_program_loader_transaction": (2,),
         "test_copy_schedule_cache": (1, 2, 4),
@@ -309,6 +310,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_geometric_mg": (2,),
         "test_krylov_workspace_reentrancy": (2,),
         "test_prepared_embedded_boundary_nd": (2,),
+        "test_prepared_hyperbolic_boundary": (2,),
         "test_program_context_contract": (2,),
         "test_program_runtime": (2,),
         "test_pure_field_algebra_extreme_dot": (2,),
@@ -329,7 +331,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 101
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 107
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
@@ -911,8 +913,8 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     )
     assert "timeout-minutes: 40" in cpp_shards_block
     assert "timeout-minutes: 30" in cpp_shards_block
-    assert "shard: [0, 1, 2, 3, 4, 5, 6]" in cpp_shards_block
-    assert "--shard-total 7" in cpp_shards_block
+    assert "shard: [0, 1, 2, 3, 4, 5, 6, 7]" in cpp_shards_block
+    assert "--shard-total 8" in cpp_shards_block
     assert "needs: [changes, set-mode, gate-cpp-prewarm]" in cpp_shards_block
     assert "actions/download-artifact@v8" in cpp_shards_block
     assert "test \"${#cache_archives[@]}\" -eq 3" in cpp_shards_block
@@ -1090,13 +1092,13 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 70" in openmp_block
     assert "needs: [set-mode, gate-openmp-prewarm]" in openmp_block
     assert "fail-fast: false" in openmp_block
-    assert openmp_block.count("- lane: cpp-") == 7
-    for shard in range(7):
+    assert openmp_block.count("- lane: cpp-") == 8
+    for shard in range(8):
         assert (
             f"- lane: cpp-{shard}\n"
             "            kind: cpp\n"
             f"            shard: {shard}\n"
-            "            shard_total: 7\n"
+            "            shard_total: 8\n"
             "            ccache_maxsize: 2G"
         ) in openmp_block
     assert (
@@ -1323,7 +1325,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "Save prewarm ccache" not in python_prewarm_block
     assert "CCACHE_CACHE_KEY" not in python_prewarm_block
     assert "timeout-minutes: 50" in python_shards_block
-    assert "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]" in python_shards_block
+    assert "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]" in python_shards_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_shards_block
     assert "timeout-minutes: 30" in python_cache_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_cache_block

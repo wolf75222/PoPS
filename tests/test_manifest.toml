@@ -1388,6 +1388,11 @@ sources = ["tests/cpp/integration/amr/test_amr_transition_invariants.cpp"]
 labels = ["integration", "amr", "nd", "medium"]
 
 [[cpp.suite]]
+name = "test_amr_history_flux_snapshot"
+sources = ["tests/cpp/unit/runtime/test_amr_history_flux_snapshot.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
 name = "test_mpi_transition_invariants"
 sources = ["tests/cpp/integration/mpi/test_mpi_transition_invariants.cpp"]
 labels = ["backend", "mpi", "amr", "nd", "medium"]

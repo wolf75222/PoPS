@@ -124,7 +124,7 @@ function(pops_add_gtest_suite)
 
   if(NOT ARG_NO_DISCOVER)
     if(ARG_RUNTIME_DISCOVERY)
-      # Runtime discovery is an explicit escape hatch for a future suite whose
+      # Runtime discovery is an explicit escape hatch for a suite whose
       # parameterized or generated names cannot be recovered from its sources.
       # Keep it POST_BUILD: PRE_TEST would enumerate every executable on each
       # CTest inventory and again on execution, which is especially costly for
@@ -161,7 +161,7 @@ endforeach()
       set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
         "${_pops_list_properties_file}")
     else()
-      # All current PoPS suites use ordinary TEST/TEST_F declarations.  Register
+      # Ordinary PoPS suites use TEST/TEST_F declarations.  Register
       # them at configure time so CTest reads one CTestTestfile.cmake instead of
       # two generated include scripts per executable on every inventory/run.
       # Omitting SKIP_DEPENDENCY intentionally makes CMake reconfigure whenever
@@ -613,7 +613,7 @@ pops_test_source(_src test_amr_potential)
 pops_add_gtest_suite(NAME test_amr_potential SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
 
 pops_test_source(_src test_amr_program_diffusion)
-pops_add_gtest_suite(NAME test_amr_program_diffusion SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+pops_add_gtest_suite(NAME test_amr_program_diffusion SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr RUNTIME_DISCOVERY)
 
 pops_test_source(_src test_amr_program_embedded_boundary)
 pops_add_gtest_suite(NAME test_amr_program_embedded_boundary SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
