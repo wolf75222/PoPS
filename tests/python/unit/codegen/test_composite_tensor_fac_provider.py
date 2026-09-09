@@ -1582,6 +1582,15 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
                 "depth": 2,
                 "ncomp": 1,
                 "initialized": True,
+                "levels": [
+                    {
+                        "level": level,
+                        "fill_count": 2,
+                        "initialized": True,
+                        "slot_dt": [_HIERARCHY_DT, _HIERARCHY_DT],
+                    }
+                    for level in range(max_levels)
+                ],
             }
             for level in range(max_levels):
                 actual = np.asarray(
