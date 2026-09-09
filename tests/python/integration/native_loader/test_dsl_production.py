@@ -18,7 +18,6 @@ import pops.runtime._engine_descriptors as engine
 from pops.codegen.loader import CompiledModel
 from test_dsl_coupled import build_euler, compile_euler_artifact, GAMMA, INCLUDE
 from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
-from tests.python.support.explicit_program import install_forward_euler_program
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.requirements import (
     default_cxx,
@@ -110,7 +109,10 @@ def main():
                 sys._s._finalize_native_packages()
                 sys._pending_native_packages = 0
             sys.set_state("gas", np.asarray(initial).reshape(-1).tolist())
-            install_forward_euler_program(sys)
+            # Exercise the exact compiled Program carried by the public artifact.  The generic
+            # low-level Forward-Euler bridge uses a different (though mathematically equivalent)
+            # lincomb kernel sequence, so it cannot support a bitwise public-package parity claim.
+            sys.install_program(artifact.program.so_path)
             return sys
 
         def compare(limiter, riemann, recon):
@@ -155,6 +157,11 @@ def main():
             artifact,
             initial_state={"gas": np.ascontiguousarray(U)},
             resources={"execution_context": artifact_execution_context(artifact)},
+        )
+        assert (
+            prod.program_report().program_hash
+            == artifact.program_hash
+            == public.program_report().program_hash
         )
         dt = 1e-4
         for _ in range(12):
