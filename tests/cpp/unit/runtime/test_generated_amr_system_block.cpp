@@ -347,13 +347,24 @@ std::size_t cell_count(const pops::Extent<Dim>& shape) {
 
 std::vector<std::uint8_t> as_legacy_flux2(std::vector<std::uint8_t> bytes,
                                           std::string_view temporal_family) {
+  if (bytes.size() < 8 || bytes.front() != static_cast<std::uint8_t>('3'))
+    throw std::logic_error("typed history fixture lacks its POPSFLX3 tag");
   const auto first =
       std::search(bytes.begin(), bytes.end(), temporal_family.begin(), temporal_family.end());
   if (first == bytes.end() || std::distance(bytes.begin(), first) < 8)
     throw std::logic_error("typed history fixture lacks its temporal family");
   bytes.erase(first - 8, first + static_cast<std::ptrdiff_t>(temporal_family.size()));
-  bytes.at(7) = static_cast<std::uint8_t>('2');
+  bytes.front() = static_cast<std::uint8_t>('2');
   return bytes;
+}
+
+std::uint64_t history_flux_tag(std::span<const std::uint8_t> bytes) {
+  if (bytes.size() < 8)
+    throw std::logic_error("history flux fixture has no wire tag");
+  std::uint64_t tag = 0;
+  for (int byte = 0; byte < 8; ++byte)
+    tag |= static_cast<std::uint64_t>(bytes[static_cast<std::size_t>(byte)]) << (8 * byte);
+  return tag;
 }
 
 void require_two_substep_ab2_reflux(std::string migrated_family, std::string fresh_family) {
@@ -1948,14 +1959,20 @@ TEST(GeneratedAmrSystemBlock, FluxHistoryMigratesDeclaredFamiliesAndPreservesNat
       context->install_flux_temporal_families({{0, 3000, 0, family}});
     const auto current =
         Access::seed_and_serialize_flux_history(*context, "tracer.rate", 3000, 0, family);
+    EXPECT_EQ(history_flux_tag(current), UINT64_C(0x504f5053464c5833));
     EXPECT_EQ(Access::restored_flux_family(*context, "tracer.rate", current), family);
     if (!declared)
       return;
 
     const auto legacy = as_legacy_flux2(current, family);
+    EXPECT_EQ(history_flux_tag(legacy), UINT64_C(0x504f5053464c5832));
     const auto migrated = Access::restored_flux_family(*context, "tracer.rate", legacy);
     EXPECT_EQ(migrated, family);
     EXPECT_NO_THROW(require_two_substep_ab2_reflux(migrated, family));
+    auto falsely_current = legacy;
+    falsely_current.front() = static_cast<std::uint8_t>('3');
+    EXPECT_THROW((void)Access::restored_flux_family(*context, "tracer.rate", falsely_current),
+                 std::invalid_argument);
     EXPECT_THROW((void)Access::restore_declared_family(*context, 0, 3001, 0, true),
                  std::invalid_argument);
     EXPECT_THROW((void)Access::restore_declared_family(*context, 0, 3000, 1, false),
