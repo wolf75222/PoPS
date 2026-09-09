@@ -282,26 +282,81 @@ def test_model_and_program_native_staging_use_verified_copies(tmp_path):
 
 @pytest.mark.compiler
 @pytest.mark.native_loader
-def test_native_advection_matches_python_law_on_two_distinct_profiles(tmp_path):
+def test_native_advection_matches_python_law_on_two_distinct_profiles(tmp_path, record_property):
+    import hashlib
+    import json
+
     import numpy as np
     from scientific.runtime import _execution_resources
 
+    def file_evidence(path):
+        return {"path": str(path), "bytes": path.stat().st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
     component = imported_native_primitive.prepare_arithmetic(tmp_path / "native")
-    outputs = []
+    outputs, routes = [], []
     for imported in (True, False):
         case, layout, initial, dt = imported_native_primitive.build_case(
             16, component, imported=imported
         )
+        initial_image = {name: np.array(value, copy=True) for name, value in initial.items()}
         artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
         runtime = pops.bind(
             artifact, initial_state=initial, resources=_execution_resources(artifact)
         )
         report = pops.run(runtime, t_end=3 * dt, max_steps=3, console=False)
         assert report.accepted_steps == 3
-        values = {name: np.asarray(runtime.state_global(name)) for name in initial}
+        # The next bind may release/reuse native storage: evidence and comparison own their arrays.
+        values = {name: np.array(runtime.state_global(name), copy=True) for name in initial}
         for name, state in values.items():
             assert np.max(np.abs(state - initial[name])) > 1e-6
             assert abs(float(np.mean(state)) - float(np.mean(initial[name]))) < 2e-12
         outputs.append(values)
+        arrays = {**{"initial_" + name: value for name, value in initial_image.items()},
+                  **{"final_" + name: value for name, value in values.items()}}
+        array_path = tmp_path / ("imported-arrays.npz" if imported else "python-arrays.npz")
+        np.savez(array_path, **arrays)
+        lower, upper = layout.mesh.extent
+        cell_volume = float(np.prod((np.asarray(upper) - np.asarray(lower)) / layout.mesh.cells))
+        routes.append({
+            "imported": imported,
+            "artifact_identity": artifact.artifact_identity.token,
+            "plan_identity": artifact.plan.plan_identity.token,
+            "platform": artifact.platform_manifest.to_data(),
+            "model_binaries": {block.name: file_evidence(Path(block.model.so_path))
+                               for block in artifact.blocks},
+            "configuration": {"cells": list(layout.mesh.cells), "extent": [list(lower), list(upper)],
+                              "periodic_axes": [axis.name for axis in layout.mesh.periodic.axes],
+                              "dt": dt, "requested_steps": 3, "accepted_steps": report.accepted_steps,
+                              "final_time": float(runtime.time()), "cell_volume": cell_volume,
+                              "intermediates": False},
+            "arrays": file_evidence(array_path),
+            "array_members": {name: {"shape": list(value.shape), "dtype": value.dtype.str}
+                              for name, value in arrays.items()},
+            "block_checks": {
+                name: {"initial_mean": float(np.mean(initial_image[name])),
+                       "final_mean": float(np.mean(state)),
+                       "mean_weight_per_cell": 1.0 / state.size,
+                       "maximum_change": float(np.max(np.abs(state - initial_image[name])))}
+                for name, state in values.items()},
+        })
     for name in outputs[0]:
         np.testing.assert_array_equal(outputs[0][name], outputs[1][name])
+    workflow_source = Path(imported_native_primitive.__file__).resolve()
+    evidence = {
+        "schema": "pops.imported-primitive-conformance.v1",
+        "scope": "Existing 16-cell, three-step native/Python conformance; not full R1 science or legacy interface equivalence.",
+        "source_files": [file_evidence(path) for path in
+                         (Path(__file__).resolve(), workflow_source,
+                          workflow_source.with_name("arithmetic.hpp"),
+                          workflow_source.with_name("runtime.py"))],
+        "prepared_component": {"manifest": component.manifest(),
+                               "manifest_sha256": component.manifest_sha256},
+        "routes": routes,
+        "checks": {"cross_route_full_state": "array_equal",
+                   "mean_conservation_absolute_bound": 2e-12,
+                   "nonzero_change_lower_bound": 1e-6, "passed": True},
+    }
+    manifest = tmp_path / "imported-primitive-conformance.json"
+    manifest.write_text(json.dumps(evidence, indent=2, sort_keys=True, allow_nan=False) + "\n")
+    record_property("imported_primitive_conformance", json.dumps(file_evidence(manifest), sort_keys=True))
