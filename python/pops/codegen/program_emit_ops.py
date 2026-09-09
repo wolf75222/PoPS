@@ -15,7 +15,7 @@ from fractions import Fraction
 from typing import Any
 
 from pops.identity.scalar import scalar_cpp
-from pops.time.references import block_name
+from pops.time.references import block_name, state_name
 from pops.codegen.program_emit_kernels import (
     _PROFILE_SKIP_OPS,
     _coeff_cpp,
@@ -55,6 +55,40 @@ from pops.codegen.program_emit_solve import (
 from pops.codegen.program_emit_schedule import _emit_schedule_wrap
 from pops.codegen.program_emit_field_routes import field_point_cpp, resolved_field_route
 from pops.identity import make_identity
+
+
+def _child_history_store_is_delegated(program: Any, value: Any, *, target: str) -> bool:
+    """Bind an automatic child-state store to its unique child-tick publication site."""
+    if target != "system":
+        # AMR retains its explicit composed-clock capability refusal in _emit_subcycle.
+        return False
+    states = [state for state, store in program._time_history_stores.items()
+              if store.id == value.id and state.clock != program.clock]
+    if not states:
+        return False
+    if len(states) != 1:
+        raise ValueError("automatic child history store has ambiguous state ownership")
+    (state,) = states
+    from pops.time._program.temporal_manifest import _walk
+
+    sites = [node for node in _walk(program._values)
+             if node.op == "subcycle" and node.clock == state.clock
+             and node.inputs[0].block == state.block
+             and node.inputs[0].state_ref == state.state]
+    if len(sites) != 1:
+        raise ValueError("automatic child history requires exactly one matching subcycle")
+    if (state not in program._time_history_configs
+            or not any(node is value for node in program._values)
+            or value.inputs[0].block != state.block
+            or value.inputs[0].state_ref != state.state
+            or value.inputs[0].clock != state.clock or value.clock != state.clock
+            or value.attrs["history"] != "%s.%s" % (block_name(state.block), state_name(state.state))
+            or sites[0].inputs[0].clock != state.clock):
+        raise ValueError("automatic child history has an unsupported publication binding")
+    # _emit_subcycle publishes the loop input inside LogicalEvaluationScope, then rotates this
+    # clock's rings at the tick tail. The authored macro-level marker retains its SSA alias only;
+    # publishing here as well would leave a pending macro-dt sample before the first child tick.
+    return True
 
 
 def _rhs_flux_temporal_family(value: Any, named_fluxes: Any = None) -> str:
@@ -645,7 +679,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # the first store happens System-side). store_history is a State-typed node but carries no
         # readable value -- nothing combines it. Its var maps to the stored value (a harmless alias).
         (value_in,) = v.inputs
-        if target == "amr_system" and bidx is not None:
+        if _child_history_store_is_delegated(program, v, target=target):
+            pass
+        elif target == "amr_system" and bidx is not None:
             lines.append("ctx.store_history(%s, %s, %d);"
                          % (json.dumps(v.attrs["history"]), var[value_in.id], bidx))
         else:

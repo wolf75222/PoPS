@@ -1039,7 +1039,10 @@ def test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart(
     native_cxx,
     tmp_path,
 ):
+    import struct
+
     import pops
+    from pops.runtime._history_sample_identity import prepare_identity_payload
 
     artifact = _linear_history_artifact(native_cxx, child_owned=True)
 
@@ -1062,9 +1065,31 @@ def test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart(
             stored["history_slot_dt_%s" % name],
             np.full(3, 0.05, dtype=np.float64),
         )
+        identities = prepare_identity_payload(
+            stored, name, None, 3, initialized=True,
+            slot_dt=stored["history_slot_dt_%s" % name],
+        )
+        # Four child stores and rotations leave the recycled .05 sample in slot zero,
+        # the .15 sample in lag one and the .1 sample in lag two. These are actual
+        # child windows, not macro windows or inferred identities after restart.
+        rows = list(struct.iter_unpack("<QQQQ", identities[-3 * 32:]))
+        def bits(value):
+            return struct.unpack("<Q", struct.pack("<d", value))[0]
+
+        assert rows == [(2, bits(start), bits(0.05), 1)
+                        for start in (0.05, 0.1 + 0.05, 0.1)]
+        retained_history = {
+            key: stored[key].copy() for key in stored.files if key.startswith("history_")
+        }
 
     resumed = fresh()
     resumed.restart(checkpoint)
+    restored_checkpoint = Path(resumed.checkpoint(tmp_path / "child-linear-restored"))
+    with np.load(restored_checkpoint, allow_pickle=False) as restored:
+        for key, values in retained_history.items():
+            assert restored[key].dtype == values.dtype
+            assert restored[key].shape == values.shape
+            assert restored[key].tobytes() == values.tobytes(), key
     pops.run(split, t_end=0.3, max_steps=1, console=False)
     pops.run(resumed, t_end=0.3, max_steps=1, console=False)
     assert np.array_equal(
@@ -1075,6 +1100,21 @@ def test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart(
         np.asarray(resumed.state_global("blk")),
         np.asarray(reference.state_global("blk")),
     )
+
+    # Compare the complete native ledgers after the original third macro step, including
+    # its endpoint-adjusted child dt, on uninterrupted, split and strict-resumed routes.
+    final_histories = []
+    for label, runtime in (("reference", reference), ("split", split), ("resumed", resumed)):
+        path = Path(runtime.checkpoint(tmp_path / ("child-linear-final-" + label)))
+        with np.load(path, allow_pickle=False) as stored:
+            final_histories.append({key: stored[key].copy() for key in stored.files
+                                    if key.startswith("history_")})
+    for actual in final_histories[1:]:
+        assert actual.keys() == final_histories[0].keys()
+        for key, expected in final_histories[0].items():
+            assert actual[key].dtype == expected.dtype
+            assert actual[key].shape == expected.shape
+            assert actual[key].tobytes() == expected.tobytes(), key
 
 
 def test_strict_temporal_manifest_refuses_missing_or_unsynchronized_state():
