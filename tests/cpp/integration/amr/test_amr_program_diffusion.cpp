@@ -9,10 +9,12 @@
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/layout/refinement.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/numerics/diffusion/prepared_diffusion.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -210,7 +212,55 @@ void materialize_conservative_bootstrap(pops::AmrSystem<Dim>& system,
   system.commit_bootstrap_level();
 }
 
+// Exercise the same constitutive face -> conservative reflux adapter as generated Programs.
+// The older default-provider path below has its own physical flux and cannot detect a reversed
+// sign when +div(G) constitutive faces enter the shared -div(F) reflux ledger.
 template <int Dim>
+void install_prepared_constitutive_program(pops::AmrSystem<Dim>& system) {
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("tests.amr.prepared-diffusion/macro");
+  context->install(
+      [context](double macro_dt) {
+        context->advance_hierarchy(macro_dt, [context](double level_dt) {
+          context->set_stage_time(0, 1);
+          auto& state = context->state(0);
+          auto& rhs = context->rhs_scratch(1000, 0, state);
+          pops::runtime::program::PreparedDiffusion<Dim> prepared(*context, state, {}, true);
+          context->prepare_generated_state(0, state, 3000);
+          prepared.apply(state, rhs, [&](std::size_t local) {
+            const auto values = std::as_const(state).fab(local).view();
+            return [=] POPS_HD(const pops::Index<Dim>& cell) {
+              std::array<pops::Real, Dim + 2> law{};
+              law[0] = values(cell, 0);
+              for (int axis = 0; axis < Dim; ++axis)
+                law[axis + 1] = pops::Real(0.05);
+              law[Dim + 1] = pops::Real(1);
+              return law;
+            };
+          });
+          context->attach_diffusive_flux_basis(0, rhs, 3000, prepared.faces(), pops::Real(1),
+                                               "tests.amr.prepared-diffusion/constitutive");
+          auto& transport = context->rhs_scratch(1000, 1, state);
+          std::vector<pops::nd::FaceField<Dim>> transport_faces;
+          context->neg_div_flux_default_with_faces_into(0, state, transport, 3000, transport_faces,
+                                                        "tests.amr.prepared-diffusion/transport");
+          context->axpy(rhs, pops::Real(1), transport, level_dt, {{0, 1, 1}});
+          context->axpy(state, pops::Real(level_dt), rhs);
+        });
+      },
+      context);
+  system.set_program_block_map({0});
+  // Declare the exact (block, RHS identity, provider) tuples before either producer runs.
+  // The shared RHS has distinct constitutive and transport temporal families, as in codegen.
+  context->install_flux_temporal_families(
+      {{0, 3000, 1, "tests.amr.prepared-diffusion/transport"},
+       {0, 3000, 4, "tests.amr.prepared-diffusion/constitutive"}});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "tests.amr.prepared-diffusion/forward-euler@1", {FluxBudget{2, 2}}, 0, 0);
+}
+
+template <int Dim, bool PreparedConstitutive = false>
 void verify_refined_program_diffusion() {
   const pops::AmrSystemConfig<Dim> config = refined_config<Dim>();
   const std::vector<double> initial = periodic_mode(config.shape);
@@ -221,7 +271,10 @@ void verify_refined_program_diffusion() {
   pops::RealVector<Dim> velocity{};
   for (int axis = 0; axis < Dim; ++axis)
     velocity[axis] = axis == 0 ? pops::Real(0.35) : pops::Real(-0.2);
-  pops::add_compiled_model<Dim>(system, "heat", DiffusiveScalar<Dim>{pops::Real(0.05), velocity},
+  // The default spatial provider includes its model's Fickian flux. In the constitutive
+  // branch, PreparedDiffusion supplies that term once and the default provider supplies transport.
+  constexpr pops::Real model_diffusivity = PreparedConstitutive ? pops::Real(0) : pops::Real(0.05);
+  pops::add_compiled_model<Dim>(system, "heat", DiffusiveScalar<Dim>{model_diffusivity, velocity},
                                 "none", "rusanov", "conservative", "explicit",
                                 static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
                                 static_cast<double>(pops::kWenoEpsilon), false,
@@ -248,7 +301,10 @@ void verify_refined_program_diffusion() {
   ASSERT_EQ(coarse.ncomp(), 1);
   ASSERT_EQ(fine.ncomp(), 1);
 
-  pops::test::install_forward_euler_program(system, false);
+  if constexpr (PreparedConstitutive)
+    install_prepared_constitutive_program(system);
+  else
+    pops::test::install_forward_euler_program(system, false);
   EXPECT_TRUE(system.program_interface_flux_ledger_manifest().empty());
   const auto accepted_flux_before = system.program_flux_ledger_manifest();
   EXPECT_TRUE(accepted_flux_before.empty());
@@ -269,14 +325,23 @@ void verify_refined_program_diffusion() {
   const auto trial_flux = system.program_flux_ledger_manifest();
   bool saw_coarse_flux = false;
   bool saw_fine_flux = false;
+  bool saw_constitutive_flux = false;
+  bool saw_transport_flux = false;
   for (const auto& row : trial_flux) {
     ASSERT_EQ(row.size(), 17u);
     EXPECT_FALSE(row[13].empty());  // Exact accepted face-evidence space.
     saw_coarse_flux = saw_coarse_flux || row[10].ends_with("_coarse");
     saw_fine_flux = saw_fine_flux || row[10].ends_with("_fine");
+    saw_constitutive_flux =
+        saw_constitutive_flux || row[2].find("/provider/4/") != std::string::npos;
+    saw_transport_flux = saw_transport_flux || row[2].find("/provider/1/") != std::string::npos;
   }
   EXPECT_TRUE(saw_coarse_flux);
   EXPECT_TRUE(saw_fine_flux);
+  if constexpr (PreparedConstitutive) {
+    EXPECT_TRUE(saw_constitutive_flux);
+    EXPECT_TRUE(saw_transport_flux);
+  }
   system.rollback_step_transaction();
 
   EXPECT_EQ(pops::difference_sum_sq_all(system.prepared_amr_block_state(0, 0), coarse_before),
@@ -308,5 +373,16 @@ TEST(test_amr_program_diffusion,
 #endif
   verify_refined_program_diffusion<pops::kNativeDimension>();
 }
+
+// Prepared scalar diffusion is supported in Dim1/Dim2; the provider test above also covers Dim3.
+#if POPS_NATIVE_DIM <= 2
+TEST(test_amr_program_diffusion,
+     PreparedConstitutiveFacesConserveAcrossPartialRefinementAndRollback) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  verify_refined_program_diffusion<pops::kNativeDimension, true>();
+}
+#endif
 
 }  // namespace

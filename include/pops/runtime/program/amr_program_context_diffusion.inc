@@ -34,8 +34,9 @@ void neg_div_flux_default_with_faces_into(int program_block, field_type& stage_s
   count_kernel_();
 }
 
-/// Register constitutive density as another basis in the same expression. The existing AMR ledger
-/// applies its metric face measure once when it materializes the accepted reflux payload.
+/// Register the conservative flux corresponding to the prepared constitutive rate. Prepared
+/// diffusion supplies G in RHS = +div(G), while the shared reflux ledger represents RHS = -div(F);
+/// hence F = -coefficient * G. The ledger applies the metric face measure exactly once.
 void attach_diffusive_flux_basis(int program_block, const field_type& rhs, int rate_id,
                                  const std::vector<nd::FaceField<Dim>>& density_faces,
                                  Real coefficient, std::string_view temporal_family = {}) const {
@@ -76,7 +77,7 @@ void attach_diffusive_flux_basis(int program_block, const field_type& rhs, int r
     const auto density = density_faces[local].view();
     for (int axis = 0; axis < Dim; ++axis) {
       const auto destination = integrated[axis].fab(local).view();
-      const Real scale = coefficient;
+      const Real scale = -coefficient;
       for_each_cell(nd::face_box(rhs.box(local), axis), [=] POPS_HD(const Index<Dim>& face) {
         destination(face, 0) = scale * density.axes[axis](face, 0);
       });
