@@ -12,6 +12,7 @@ struct CadenceContinuation {
   std::function<void()> next;
   std::string port_identity;
   bool target_port = false;
+  std::uint64_t port_stage_generation = 0;
   std::vector<MultiFab<Dim>*> port_fields;
 };
 // Accepted-state copies deliberately omit transient callbacks and borrowed stage buffers.
@@ -27,7 +28,7 @@ struct EphemeralCadenceContinuation : std::optional<CadenceContinuation> {
 EphemeralCadenceContinuation cadence_continuation_;
 
 void suspend_program_map(std::string identity, bool target, std::vector<MultiFab<Dim>*> fields,
-                         std::function<void()> next) {
+                         std::function<void()> next, std::uint64_t stage_generation = 0) {
   if (!cadence_continuation_ || !cadence_continuation_->executing ||
       !cadence_continuation_->port_identity.empty() || !next || identity.empty() ||
       fields.empty() ||
@@ -37,6 +38,7 @@ void suspend_program_map(std::string identity, bool target, std::vector<MultiFab
   auto& frame = *cadence_continuation_;
   frame.port_identity = std::move(identity);
   frame.target_port = target;
+  frame.port_stage_generation = stage_generation;
   frame.port_fields = std::move(fields);
   frame.next = std::move(next);
 }
@@ -48,6 +50,11 @@ const std::vector<MultiFab<Dim>*>& program_map_fields(const std::string& identit
       cadence_continuation_->target_port != target || cadence_continuation_->port_fields.empty())
     throw std::logic_error("Program map read/write does not match its suspended qualified port");
   return cadence_continuation_->port_fields;
+}
+
+std::uint64_t program_map_stage_generation(const std::string& identity, bool target) const {
+  (void)program_map_fields(identity, target);
+  return cadence_continuation_->port_stage_generation;
 }
 
 void release_program_map(const std::string& identity, bool target) {

@@ -50,6 +50,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
   }
 
   void publish_restore() noexcept override {
+    owner_->cancel_mapping_hierarchy_();
     static_assert(std::is_nothrow_swappable_v<ClockScheduleState>);
     static_assert(std::is_nothrow_swappable_v<decltype(history_levels_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(history_flux_expressions_)>);

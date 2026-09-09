@@ -22,21 +22,26 @@ PHYSICAL = PhysicalSupport((("position", "periodic-position"),))
 ROOT = Path(__file__).resolve().parents[4]
 
 
-def resolve_interstage_maps(directory, *, reverse=False):
+def resolve_interstage_maps(directory, *, reverse=False, adaptive=False, retry_by_dt=False, adaptive_execution=None):
     phase_frame = Rectangle("phase axes v then x", (-2, 0), (2, 1)).frame(Cartesian2D())
     physical_frame = Rectangle("physical x then hidden", (0, 0), (1, 1)).frame(Cartesian2D())
     case = pops.Case("independent weighted moments and explicit extension")
     program = pops.Program("intermediate moment twice and pullback")
     states = {}
+    block_states = {}
+    if adaptive:
+        from pops.params import RuntimeParam
+        threshold = case.param(RuntimeParam("refine", default=-100.))
     for name, frame, support in (("population", phase_frame, PHASE),
                                   ("integral", physical_frame, PHYSICAL),
                                   ("extended", phase_frame, PHASE)):
         model = pops.Model(name + " model", frame=frame)
-        state = model.state("U", components=("first", "second"), support=support,
-                            units=(UNIT, UNIT), sampling="cell_average")
+        components = ("first", "second")
+        state = model.state("U", components=components, support=support,
+                            units=(UNIT,) * len(components), sampling="cell_average")
         flux = model.flux("zero_flux", frame=frame, state=state,
-                          components={axis: tuple(0 * state[index] for index in range(2)) for axis in frame.axes},
-                          waves={axis: (Const(0), Const(0)) for axis in frame.axes})
+                          components={axis: tuple(0 * state[index] for index in range(len(components))) for axis in frame.axes},
+                          waves={axis: (Const(0),) * len(components) for axis in frame.axes})
         rate = model.rate("retain", equation=ddt(state) == -div(flux))
         numerics = DiscretizationPlan()
         numerics.rates.add(rate, FiniteVolume(flux=flux, variables=variables.Conservative(state),
@@ -44,11 +49,19 @@ def resolve_interstage_maps(directory, *, reverse=False):
         block = case.block(name, model)
         case.numerics(numerics, block=block)
         states[name] = program.state(block[state])
+        block_states[name] = block[state]
+        if adaptive:
+            from pops.initial import InitialCondition
+            from pops.lib.initial import Constant
+            from pops.projection import ConservativeCellAverage
+            case.initials.add(InitialCondition(state=block[state], value=Constant((2., 3.)),
+                                               projection=ConservativeCellAverage()))
     reduction = PhysicalSupportMap(PHASE, PHYSICAL,
-        reductions=(AxisQuadrature(0, -2, 2, 4, UNIT, weights=(-3, -1, 1, 3)),))
+        reductions=(AxisQuadrature(0, -2, 2, 4, UNIT, weights=(-3, -1, 1, 5 if adaptive else 3)),))
     extension = PhysicalSupportMap(PHYSICAL, PHASE)
     first = states["population"].stage("half", point=program.stage("half", c=Fraction(1, 2)))
-    program.value(first, 2 * states["population"].n)
+    scale = (200 * program.dt) * 1e307 if retry_by_dt else 2
+    program.value(first, scale * states["population"].n)
     moment = states["integral"].stage("half moment", point=program.stage("half moment", c=Fraction(1, 2)))
     program.map(reduction, source=first, target=moment)
     transformed = program.value("three times intermediate moment", 3 * moment, at=moment.point)
@@ -65,11 +78,27 @@ def resolve_interstage_maps(directory, *, reverse=False):
     validated = pops.validate(case)
     subjects = validated.layout_subjects()
     builder = LayoutPlanBuilder(validated.owner_path.canonical())
-    phase_grid = Uniform(CartesianGrid(frame=phase_frame, cells=(4, 7), periodic=PeriodicAxes(phase_frame.axes)))
-    physical_grid = Uniform(CartesianGrid(frame=physical_frame, cells=(7, 1), periodic=PeriodicAxes(physical_frame.axes)))
-    layouts = {"population": builder.layout("source", phase_grid),
-               "integral": builder.layout("moments", physical_grid),
-               "extended": builder.layout("extension", phase_grid)}
+    position_cells = 8 if adaptive else 7
+    phase_mesh = CartesianGrid(frame=phase_frame, cells=(4, position_cells), periodic=PeriodicAxes(phase_frame.axes))
+    physical_mesh = CartesianGrid(frame=physical_frame, cells=(position_cells, 1), periodic=PeriodicAxes(physical_frame.axes))
+    phase_grid, physical_grid = Uniform(phase_mesh), Uniform(physical_mesh)
+    descriptors = {"population": phase_grid, "integral": physical_grid, "extended": phase_grid}
+    if adaptive:
+        from pops.amr import (AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging, AMRTransfer,
+                              ConflictPolicy, EqualityPolicy, Hysteresis, Tag, Buffer)
+        from pops.layouts import AMR
+        from pops.lib.amr import StateTransfer
+        from pops.math import ValueExpr
+        for name, grid in tuple(descriptors.items()):
+            transfer = AMRTransfer()
+            transfer.state(block_states[name], StateTransfer())
+            descriptors[name] = AMR(grid=physical_mesh if name == "integral" else phase_mesh,
+                hierarchy=AMRHierarchy(max_levels=2, ratios=((2, 1) if name == "integral" else (2, 2),)),
+                tagging=AMRTagging(rules=(Tag(ValueExpr(block_states[name])["first"] > case.value(threshold)), Buffer(cells=0)),
+                    hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
+                regrid=AMRRegrid.frozen(), transfer=transfer,
+                execution=adaptive_execution or AMRExecution.synchronous()).resolve_for_case(validated.resolve)
+    layouts = {name: builder.layout(name, descriptor) for name, descriptor in descriptors.items()}
     resolved_states = {row.block_ref.local_id: row for row in subjects.states}
     for block in subjects.blocks:
         builder.assign_block(block, layouts[block.local_id])
@@ -88,8 +117,7 @@ def resolve_interstage_maps(directory, *, reverse=False):
     providers = tuple(native_physical_mapping(row, directory) for row in requirements)
     layout = builder.resolve(**subjects.to_dict(), providers=providers)
     resolved = pops.resolve(validated, layout=layout,
-        layout_providers={layouts["population"]: phase_grid, layouts["integral"]: physical_grid,
-                          layouts["extended"]: phase_grid},
+        layout_providers={layouts[name]: descriptor for name, descriptor in descriptors.items()},
         components=tuple(provider.component for provider in providers),
         compile_options={"include": str(ROOT / "include")})
     return resolved
@@ -121,8 +149,10 @@ def test_interstage_maps_resolve_and_emit_native_continuations(tmp_path):
             assert source.count("ctx.suspend_map(") == sum(node.op.startswith("layout_map_") for node in child._values)
             assert source.rindex("ctx.commit_many(") > source.rindex("ctx.suspend_map(")
             assert source.count("ctx.begin_step(dt)") == 1
-            with pytest.raises(NotImplementedError, match="hierarchy region continuation"):
-                emit_cpp_program(authored, model_graph=graph, target="amr_system")
+            amr_source = emit_cpp_program(authored, model_graph=graph, target="amr_system")
+            assert "ctx.advance_mapping_hierarchy(dt" in amr_source
+            assert amr_source.count("ctx.suspend_map(") == sum(
+                node.op.startswith("layout_map_") for node in child._values)
     from types import SimpleNamespace
     from pops.codegen.program_mapping_regions import compiled_program_map_invocations
     artifact = SimpleNamespace(layout_plan=resolved.layout_plan, layout_programs=tuple(

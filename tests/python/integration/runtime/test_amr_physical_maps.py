@@ -206,3 +206,90 @@ def test_amr_integral_failure_restores_all_hierarchies_and_retries(tmp_path):
         for key, value in _hierarchy_image(instance).items():
             np.testing.assert_array_equal(value, before[key])
         assert set(instance._executor.mapping_report().values()) == {0}
+
+
+def test_amr_internal_maps_resolve_to_native_hierarchy_continuations(tmp_path):
+    from tests.python.integration.runtime.test_interstage_physical_maps import resolve_interstage_maps
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.codegen.program_models import ProgramModelGraph
+    from pops.codegen.program_slicing import slice_program
+    plan = resolve_interstage_maps(tmp_path, adaptive=True)
+    assert len(plan.layout_amr_authorities) == 3
+    for row in plan.layout_plan.layouts:
+        names = tuple(assignment.subject.local_id for assignment in plan.layout_plan.assignments
+                      if assignment.subject_kind == "block" and assignment.layout == row.handle)
+        child = slice_program(plan.time, names)
+        graph = ProgramModelGraph.from_resolved_blocks(tuple(block for block in plan.blocks if block.name in names))
+        source = emit_cpp_program(child, model_graph=graph, target="amr_system")
+        assert "ctx.advance_mapping_hierarchy(dt" in source
+        assert "ctx.suspend_map(" in source
+        assert "ctx.advance_hierarchy(dt, _advance_level)" not in source
+
+
+def _internal_map_image(instance):
+    import numpy as np
+    return {(name, level): np.asarray(instance.block_level_state_global(name, level)).copy()
+            for name in ("population", "integral", "extended")
+            for level in range(instance._executor.executor_for_block(name).n_levels())}
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_native_amr_internal_maps_preserve_stages_and_restart(tmp_path):
+    import numpy as np
+    from tests.python.integration.runtime.test_interstage_physical_maps import resolve_interstage_maps
+    from tests.python.support.native_execution_context import artifact_execution_context
+    artifact = pops.compile(resolve_interstage_maps(tmp_path, adaptive=True))
+    instance = pops.bind(artifact, resources={"execution_context": artifact_execution_context(artifact)})
+    assert len(_internal_map_image(instance)) == 6
+    pops.run(instance, t_end=0.01, max_steps=1)
+    factors = {"population": 10., "integral": 20., "extended": 12.}
+    for (name, _), value in _internal_map_image(instance).items():
+        expected = np.array((2., 3.))[:, None, None] * factors[name]
+        np.testing.assert_array_equal(value, np.broadcast_to(expected, value.shape))
+    assert sorted(instance._executor.mapping_report().values()) == [1, 2]
+    checkpoint = instance.checkpoint(tmp_path / "amr-internal-stage-checkpoint")
+    pops.run(instance, t_end=0.02, max_steps=1)
+    accepted = _internal_map_image(instance)
+    instance.restart(checkpoint)
+    pops.run(instance, t_end=0.02, max_steps=1)
+    for key, value in _internal_map_image(instance).items():
+        np.testing.assert_array_equal(value, accepted[key])
+    assert sorted(instance._executor.mapping_report().values()) == [2, 4]
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_amr_internal_map_failure_then_shorter_step_reuses_same_instance(tmp_path):
+    import numpy as np
+    from tests.python.integration.runtime.test_interstage_physical_maps import resolve_interstage_maps
+    from tests.python.support.native_execution_context import artifact_execution_context
+    artifact = pops.compile(resolve_interstage_maps(tmp_path, adaptive=True, retry_by_dt=True))
+    instance = pops.bind(artifact, resources={"execution_context": artifact_execution_context(artifact)})
+    before = _internal_map_image(instance)
+    with pytest.raises(RuntimeError, match="finite|[Ii]ntegral|[Tt]ransfer"):
+        pops.run(instance, t_end=0.01, max_steps=1)
+    assert instance.time() == 0. and instance.macro_step() == 0
+    for key, value in _internal_map_image(instance).items():
+        np.testing.assert_array_equal(value, before[key])
+    assert set(instance._executor.mapping_report().values()) == {0}
+    # FixedDt clips the final step at this public run boundary. The smaller dt makes
+    # the same authored intermediate states finite, exercising real failure→success.
+    step = 1e-5
+    pops.run(instance, t_end=step, max_steps=1)
+    assert instance.time() == step and instance.macro_step() == 1
+    scale = (200 * step) * 1e307
+    factors = {"population": 5., "integral": 10., "extended": 6.}
+    for (name, _), value in _internal_map_image(instance).items():
+        expected = np.array((2., 3.))[:, None, None] * scale * factors[name]
+        assert np.all(np.isfinite(value))
+        np.testing.assert_allclose(value, np.broadcast_to(expected, value.shape), rtol=2e-14, atol=0.)
+    assert sorted(instance._executor.mapping_report().values()) == [1, 2]
+
+
+def test_amr_internal_maps_refuse_recursive_timing_before_compile(tmp_path):
+    from pops.amr import AMRExecution
+    from tests.python.integration.runtime.test_interstage_physical_maps import resolve_interstage_maps
+    with pytest.raises(ValueError, match="qualified stage map.*synchronous.*subcycled"):
+        resolve_interstage_maps(tmp_path, adaptive=True,
+                               adaptive_execution=AMRExecution.subcycled())

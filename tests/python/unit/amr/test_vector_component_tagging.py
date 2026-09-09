@@ -23,13 +23,14 @@ from pops.projection import ConservativeCellAverage
 from pops.time import FixedDt, every
 
 
-def _case(*, component="mx", gradient=False, layout_frame=None):
+def _case(*, component="mx", gradient=False, layout_frame=None,
+          components=("rho", "mx", "my"), units=None):
     frame = Rectangle("domain", lower=(0., 0.), upper=(1., 1.)).frame(Cartesian2D())
     model = pops.Model("transport", frame=frame)
-    state = model.state("U", components=("rho", "mx", "my"))
+    state = model.state("U", components=components, units=units)
     flux = model.flux("advection", frame=frame, state=state,
                       components={axis: tuple(q for q in state) for axis in frame.axes},
-                      waves={axis: (1., 1., 1.) for axis in frame.axes})
+                      waves={axis: (1.,) * len(components) for axis in frame.axes})
     rate = model.rate("transport", equation=ddt(state) == -div(flux))
     case = pops.Case("vector_tags")
     block = case.block("fluid", model)
@@ -96,6 +97,20 @@ def test_selected_component_reaches_resolved_graph_and_native_vm(gradient, compo
     assert native.args[5] == ([4, 5] if gradient else [1, 2])
     assert native.args[6] == [1.2, .8]
     assert native.args[7] == ([0, 0] if gradient else [-1, -1])
+
+
+@pytest.mark.parametrize("gradient", [False, True])
+def test_two_component_state_with_explicit_units_resolves_its_selected_indicator(gradient):
+    from pops._ir.quantity import PhysicalDimension
+
+    case, subject, high, low, layout = _case(
+        component="second", gradient=gradient, components=("first", "second"),
+        units=(PhysicalDimension(()),) * 2)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    data = resolved.bootstrap_plan.tagging.runtime_tagging_data(
+        {case.resolve(high): 1.2, case.resolve(low): .8})
+    assert data["refine"]["variable"] == data["coarsen"]["variable"] == "second"
+    assert data["refine"]["indicator"]["qualified_id"] == case.resolve(subject).qualified_id
 
 
 def test_component_selection_changes_the_authenticated_graph_identity():

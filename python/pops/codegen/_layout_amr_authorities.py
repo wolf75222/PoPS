@@ -74,6 +74,7 @@ class AMRAuthorityValidationContext:
 
 
 def validate_layout_amr_authorities(layout_plan, authorities):
+    from pops.mesh import LayoutSynchronization
     if not isinstance(authorities, Mapping):
         raise TypeError("layout_amr_authorities must be a mapping")
     if not authorities:
@@ -89,3 +90,10 @@ def validate_layout_amr_authorities(layout_plan, authorities):
         projected = layout_plan.project(handle)
         if value.layout_id != layout_id or value.layout_plan != projected:
             raise ValueError("layout AMR authority does not authenticate the parent projection")
+        stage_maps = tuple(row.requirement for row in layout_plan.mappings
+                           if row.requirement.synchronization is LayoutSynchronization.PROGRAM_POINT_V1
+                           and handle in (row.requirement.source_layout, row.requirement.target_layout))
+        if stage_maps and value.authorities.execution.mode != "synchronous":
+            raise ValueError(
+                "qualified stage map on AMR layout %r requires synchronous level timing; "
+                "subcycled maps lack a declared common-time interpolation policy" % layout_id)

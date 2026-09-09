@@ -992,6 +992,9 @@ class AmrSystem {
 
   void step(double dt);  ///< one AMR macro-step (periodic regrid included)
   void advance(double dt, int nsteps);
+  std::string advance_program_region(double dt);
+  void suspend_program_map(std::string identity, bool target, std::vector<MultiFab<Dim>*> fields,
+                           std::function<void()> continuation, std::uint64_t stage_generation);
   void begin_step_transaction();
   /// Open an explicit child scope; child publication remains provisional in its parent.
   POPS_EXPORT void begin_nested_step_transaction();
@@ -1522,6 +1525,7 @@ class AmrSystem {
       const std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>& state,
       const ExecutionLane& lane);
   POPS_EXPORT SolveOutcome solve_program_default_field(int active_level);
+  void complete_program_step_();
   struct Impl;
   std::unique_ptr<Impl> p_;
 };

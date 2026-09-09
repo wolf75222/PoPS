@@ -997,6 +997,7 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
 void bind_amr_stepping(py::class_<AmrSystem>& cls) {
   cls.def("step", &AmrSystem::step, py::arg("dt"))
       .def("advance", &AmrSystem::advance, py::arg("dt"), py::arg("nsteps"))
+      .def("_advance_program_region", &AmrSystem::advance_program_region)
       .def("_begin_step_transaction", &AmrSystem::begin_step_transaction)
       .def("_begin_nested_step_transaction", &AmrSystem::begin_nested_step_transaction)
       .def("_step_transaction_depth", &AmrSystem::step_transaction_depth)

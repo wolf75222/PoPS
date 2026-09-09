@@ -694,6 +694,10 @@ def _emit_amr_install(
             "  _require_local_transform_level_contract();\n"
         )
         transform_refresh_guard = "    _require_local_transform_level_contract();\n"
+    has_maps = any(value.op in ("layout_map_export", "layout_map_import")
+                   for value in program._values)
+    if has_maps and hierarchy_bodies is not None:
+        raise NotImplementedError("AMR mapping and field barriers require one combined region schedule")
     if hierarchy_bodies is None:
         phase_fields = "    std::function<void(double)> step;\n" + post_sync_field
         phase_initializers = (
@@ -703,14 +707,30 @@ def _emit_amr_install(
             "      }\n"
             + post_sync_initializer
         )
-        installed_driver = (
-            "    auto _advance_level = [&](double level_dt) {\n"
-            "      _refresh_level_programs();\n"
-            "      _level_programs->at(static_cast<std::size_t>(ctx.level())).step(level_dt);\n"
-            "    };\n"
-            "    ctx.advance_hierarchy(dt, _advance_level);\n"
-            + post_sync_driver
-        )
+        if has_maps:
+            installed_driver = (
+                "    ctx.advance_mapping_hierarchy(dt, [=](double level_dt) {\n"
+                "      auto& ctx = *ctx_owner;\n"
+                "      const auto topology = ctx.program_resource_topology();\n"
+                "      if (*_level_program_epoch != topology.epoch ||\n"
+                "          *_level_program_generation != topology.generation ||\n"
+                "          _level_programs->size() != static_cast<std::size_t>(topology.levels))\n"
+                '        throw std::logic_error("AMR mapping level resources lost their exact hierarchy generation");\n'
+                "      _level_programs->at(static_cast<std::size_t>(ctx.level())).step(level_dt);\n"
+                "    }, ctx_owner, [=]() {\n"
+                "      auto& ctx = *ctx_owner;\n"
+                + post_sync_driver +
+                "    });\n"
+            )
+        else:
+            installed_driver = (
+                "    auto _advance_level = [&](double level_dt) {\n"
+                "      _refresh_level_programs();\n"
+                "      _level_programs->at(static_cast<std::size_t>(ctx.level())).step(level_dt);\n"
+                "    };\n"
+                "    ctx.advance_hierarchy(dt, _advance_level);\n"
+                + post_sync_driver
+            )
     else:
         if len(hierarchy_bodies) == 4:
             gather, solve, observe, publish = hierarchy_bodies
@@ -858,7 +878,9 @@ def _emit_amr_install(
         + level_resources
         + "\n  ctx.install([=](double dt) {\n"
         "    auto& ctx = *ctx_owner;\n"
-        "    _refresh_level_programs();\n"
+        # Map continuations use the bundles materialized at install/regrid/restart.
+        # Their collective level region checks the exact generation before use.
+        + ("" if has_maps else "    _refresh_level_programs();\n")
         + installed_driver
         + "  }, ctx_owner, _refresh_level_programs);\n"
         "}\n"

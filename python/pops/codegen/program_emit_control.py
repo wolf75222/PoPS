@@ -393,10 +393,6 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         lines,
     )
     values = list(program._values)
-    if target == "amr_system" and any(
-            value.op in ("layout_map_export", "layout_map_import") for value in values):
-        raise NotImplementedError(
-            "Program.map on AMR requires the hierarchy region continuation dispatcher")
     index = 0
     mapping_continuations = 0
     # Group identities occupy compiler-reserved slots after the authored SSA namespace.  They are

@@ -17154,34 +17154,81 @@ void AmrSystem<Dim>::step(double dt) {
       p_->program.begin_step_projection_report();
     }
     p_->program.dispatch_cadence_step(p_->accepted_time, p_->macro_step, dt, "AmrSystem");
-    p_->program.refresh_hierarchy_state("AmrSystem::step");
-    if (!p_->tagging_spec || p_->cfg.regrid_every == 0 ||
-        p_->macro_step % p_->cfg.regrid_every != 0)
-      return;
-    const auto history_sources = p_->prepare_history_hierarchy_images();
-    // Freeze every block endpoint before a parent replacement truncates its descendants.
-    // execute_transaction remains the sole accepted-state publication/rollback authority.
-    const auto state_sources = p_->prepare_regrid_state_images();
-    runtime::amr::PersistentTaggingState<Dim> staged_state = p_->tagging_state;
-    staged_state.begin_cycle(p_->tagging_spec->min_cycles);
-    p_->multiblock_hierarchy->begin_interface_topology_replacement_();
-    p_->regrid_sequence_state_sources = state_sources;
-    try {
-      for (int parent_level = 0; parent_level < p_->cfg.level_count - 1; ++parent_level)
-        if (!p_->regrid_parent(parent_level, std::nullopt, &staged_state, history_sources.get()))
-          break;
-      p_->multiblock_hierarchy->finish_interface_topology_replacement_();
-      p_->regrid_sequence_state_sources.reset();
-    } catch (...) {
-      // Restore the complete interface recipe before the accepted snapshot restores old levels.
-      p_->multiblock_hierarchy->abort_interface_topology_replacement_();
-      p_->regrid_sequence_state_sources.reset();
-      throw;
-    }
-    p_->tagging_state = std::move(staged_state);
-    p_->publish_tagging_checkpoint();
+    complete_program_step_();
   });
   p_->discard_level_evaluations();
+}
+
+template <int Dim>
+void AmrSystem<Dim>::complete_program_step_() {
+  p_->program.refresh_hierarchy_state("AmrSystem::step");
+  if (!p_->tagging_spec || p_->cfg.regrid_every == 0 || p_->macro_step % p_->cfg.regrid_every != 0)
+    return;
+  const auto history_sources = p_->prepare_history_hierarchy_images();
+  // Freeze every block endpoint before a parent replacement truncates its descendants.
+  // execute_transaction remains the sole accepted-state publication/rollback authority.
+  const auto state_sources = p_->prepare_regrid_state_images();
+  runtime::amr::PersistentTaggingState<Dim> staged_state = p_->tagging_state;
+  staged_state.begin_cycle(p_->tagging_spec->min_cycles);
+  p_->multiblock_hierarchy->begin_interface_topology_replacement_();
+  p_->regrid_sequence_state_sources = state_sources;
+  try {
+    for (int parent_level = 0; parent_level < p_->cfg.level_count - 1; ++parent_level)
+      if (!p_->regrid_parent(parent_level, std::nullopt, &staged_state, history_sources.get()))
+        break;
+    p_->multiblock_hierarchy->finish_interface_topology_replacement_();
+    p_->regrid_sequence_state_sources.reset();
+  } catch (...) {
+    // Restore the complete interface recipe before the accepted snapshot restores old levels.
+    p_->multiblock_hierarchy->abort_interface_topology_replacement_();
+    p_->regrid_sequence_state_sources.reset();
+    throw;
+  }
+  p_->tagging_state = std::move(staged_state);
+  p_->publish_tagging_checkpoint();
+}
+
+template <int Dim>
+void AmrSystem<Dim>::suspend_program_map(std::string identity, bool target,
+                                      std::vector<MultiFab<Dim>*> fields,
+                                      std::function<void()> continuation,
+                                      std::uint64_t stage_generation) {
+  if (stage_generation == 0)
+    throw std::invalid_argument("AMR map port requires a native attempt generation");
+  p_->program.suspend_program_map(std::move(identity), target, std::move(fields),
+                                 std::move(continuation), stage_generation);
+}
+
+template <int Dim>
+std::string AmrSystem<Dim>::advance_program_region(double dt) {
+  const auto& lane = p_->require_prepared_engine_lane("AMR Program region");
+  runtime::program::require_step_transaction_control(
+      lane, 8, static_cast<long>(step_transaction_depth()),
+      p_->external_step_transaction && !p_->external_step_committed,
+      "AmrSystem::advance_program_region");
+  std::string port;
+  try {
+    runtime::program::collective_step_rejection_phase(
+        lane.communicator(),
+        {"pops.program-region.rejection.v1", "pops.program-region.rejection", false, false},
+        "AMR Program region failed collectively", [&] {
+          port = p_->program.advance_cadence_region(p_->accepted_time, p_->macro_step, dt,
+                                                   "AmrSystem");
+        });
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("amr-program-region-port"), port}}, lane))
+      throw std::runtime_error("AMR Program region reached different map ports between ranks");
+    if (port.empty())
+      runtime::program::collective_step_rejection_phase(
+          lane.communicator(),
+          {"pops.program-region-complete.v1", "pops.program-region-complete", false, false},
+          "AMR Program completion failed collectively", [&] { complete_program_step_(); });
+  } catch (...) {
+    p_->program.cancel_cadence_continuation();
+    throw;
+  }
+  p_->discard_level_evaluations();
+  return port;
 }
 
 template <int Dim>
@@ -21794,6 +21841,10 @@ template void AmrSystem<kNativeDimension>::add_dt_bound(const std::string&,
                                                         std::function<double()>);
 template std::string AmrSystem<kNativeDimension>::last_dt_bound() const;
 template void AmrSystem<kNativeDimension>::step(double);
+template std::string AmrSystem<kNativeDimension>::advance_program_region(double);
+template void AmrSystem<kNativeDimension>::suspend_program_map(
+    std::string, bool, std::vector<MultiFab<kNativeDimension>*>, std::function<void()>,
+    std::uint64_t);
 template void AmrSystem<kNativeDimension>::advance(double, int);
 template double AmrSystem<kNativeDimension>::step_cfl(double, double, double, double);
 template void AmrSystem<kNativeDimension>::begin_step_transaction();

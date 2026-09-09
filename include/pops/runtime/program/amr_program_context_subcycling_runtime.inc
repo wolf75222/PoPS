@@ -1,3 +1,53 @@
+void begin_interface_flux_attempt_() const {
+  const auto& lane = facade_->prepared_amr_multiblock_hierarchy_().lane();
+  std::optional<typename interface_flux_ledger_type::PreparedBegin> prepared_begin;
+  std::exception_ptr ledger_error;
+  try {
+    prepared_begin.emplace(interface_flux_ledger_->prepare_begin());
+  } catch (...) {
+    ledger_error = std::current_exception();
+  }
+  if (all_reduce_max(ledger_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && ledger_error)
+      std::rethrow_exception(ledger_error);
+    throw std::runtime_error("AMR Program interface-ledger begin preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-program-interface-ledger-begin"),
+            prepared_begin->exact_contract()}},
+          lane))
+    throw std::runtime_error(
+        "AMR Program interface-ledger begin contract differs between MPI ranks");
+  interface_flux_ledger_->publish_prepared_begin(*prepared_begin);
+}
+
+void commit_interface_flux_attempt_() const {
+  const auto& lane = facade_->prepared_amr_multiblock_hierarchy_().lane();
+  std::optional<typename interface_flux_ledger_type::PreparedCommit> prepared_commit;
+  std::exception_ptr ledger_error;
+  try {
+    prepared_commit.emplace(interface_flux_ledger_->prepare_commit());
+  } catch (...) {
+    ledger_error = std::current_exception();
+  }
+  if (all_reduce_max(ledger_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && ledger_error)
+      std::rethrow_exception(ledger_error);
+    throw std::runtime_error("AMR Program interface-ledger commit preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-program-interface-ledger-commit"),
+            prepared_commit->exact_contract()}},
+          lane))
+    throw std::runtime_error(
+        "AMR Program interface-ledger commit contract differs between MPI ranks");
+  static_assert(
+      std::is_nothrow_move_constructible_v<typename interface_flux_ledger_type::PreparedCommit>);
+  static_assert(noexcept(interface_flux_commit_guard_.swap(prepared_commit)));
+  interface_flux_commit_guard_.swap(prepared_commit);
+  interface_flux_ledger_->publish_prepared_commit(*interface_flux_commit_guard_);
+}
+
 void clear_active_flux_expression_(const field_type& field) const noexcept {
   if (!active_attempt_states_.empty())
     active_flux_expressions_.erase(&field);
@@ -28,27 +78,7 @@ void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operat
     const ::pops::amr::ClockWindow root{
         {0, static_cast<std::int64_t>(facade_->macro_step()), {0, 1}, facade_->time()},
         {0, static_cast<std::int64_t>(facade_->macro_step()), {1, 1}, facade_->time() + dt}};
-    const auto& lane = facade_->prepared_amr_multiblock_hierarchy_().lane();
-    std::optional<typename interface_flux_ledger_type::PreparedBegin> prepared_begin;
-    std::exception_ptr ledger_error;
-    try {
-      prepared_begin.emplace(interface_flux_ledger_->prepare_begin());
-    } catch (...) {
-      ledger_error = std::current_exception();
-    }
-    if (all_reduce_max(ledger_error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && ledger_error)
-        std::rethrow_exception(ledger_error);
-      throw std::runtime_error(
-          "AMR Program interface-ledger begin preparation failed collectively");
-    }
-    if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("amr-program-interface-ledger-begin"),
-              prepared_begin->exact_contract()}},
-            lane))
-      throw std::runtime_error(
-          "AMR Program interface-ledger begin contract differs between MPI ranks");
-    interface_flux_ledger_->publish_prepared_begin(*prepared_begin);
+    begin_interface_flux_attempt_();
     multiblock_subcycling_->advance(
         root,
         [&](multiblock_level_group_type group) {
@@ -63,30 +93,7 @@ void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operat
           stage_prepared_publication_candidates_(level, pack);
         },
         operation == "advance_composite_hierarchy");
-    std::optional<typename interface_flux_ledger_type::PreparedCommit> prepared_commit;
-    ledger_error = nullptr;
-    try {
-      prepared_commit.emplace(interface_flux_ledger_->prepare_commit());
-    } catch (...) {
-      ledger_error = std::current_exception();
-    }
-    if (all_reduce_max(ledger_error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && ledger_error)
-        std::rethrow_exception(ledger_error);
-      throw std::runtime_error(
-          "AMR Program interface-ledger commit preparation failed collectively");
-    }
-    if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("amr-program-interface-ledger-commit"),
-              prepared_commit->exact_contract()}},
-            lane))
-      throw std::runtime_error(
-          "AMR Program interface-ledger commit contract differs between MPI ranks");
-    static_assert(
-        std::is_nothrow_move_constructible_v<typename interface_flux_ledger_type::PreparedCommit>);
-    static_assert(noexcept(interface_flux_commit_guard_.swap(prepared_commit)));
-    interface_flux_commit_guard_.swap(prepared_commit);
-    interface_flux_ledger_->publish_prepared_commit(*interface_flux_commit_guard_);
+    commit_interface_flux_attempt_();
     multiblock_subcycling_has_accepted_step_ = true;
   } catch (...) {
     if (interface_flux_ledger_ && interface_flux_ledger_->in_transaction())
@@ -346,30 +353,35 @@ void activate_multiblock_level_group_(multiblock_level_group_type group, double 
   stage_time_ = {0, 1};
 }
 
+void prepare_synchronized_level_envelopes_(multiblock_level_group_type group,
+                                           double macro_dt) const {
+  activate_multiblock_level_group_(group, macro_dt);
+  synchronized_level_envelopes_.clear();
+  if (multiblock_subcycling_->has_synchronized_groups()) {
+    LevelAttemptEnvelope prior;
+    swap_level_attempt_envelope_(prior);
+    try {
+      for (int level = 0; level < nlev(); ++level) {
+        auto& envelope = synchronized_level_envelopes_[level];
+        activate_multiblock_level_group_(
+            multiblock_subcycling_->synchronized_level_group(static_cast<std::size_t>(level)),
+            macro_dt);
+        swap_level_attempt_envelope_(envelope);
+      }
+    } catch (...) {
+      swap_level_attempt_envelope_(prior);
+      throw;
+    }
+    swap_level_attempt_envelope_(prior);
+  }
+}
+
 template <class Body>
 void advance_multiblock_level_group_(multiblock_level_group_type group, double macro_dt,
                                      Body& body) const {
   std::exception_ptr preparation_error;
   try {
-    activate_multiblock_level_group_(group, macro_dt);
-    synchronized_level_envelopes_.clear();
-    if (multiblock_subcycling_->has_synchronized_groups()) {
-      LevelAttemptEnvelope prior;
-      swap_level_attempt_envelope_(prior);
-      try {
-        for (int level = 0; level < nlev(); ++level) {
-          auto& envelope = synchronized_level_envelopes_[level];
-          activate_multiblock_level_group_(
-              multiblock_subcycling_->synchronized_level_group(static_cast<std::size_t>(level)),
-              macro_dt);
-          swap_level_attempt_envelope_(envelope);
-        }
-      } catch (...) {
-        swap_level_attempt_envelope_(prior);
-        throw;
-      }
-      swap_level_attempt_envelope_(prior);
-    }
+    prepare_synchronized_level_envelopes_(group, macro_dt);
   } catch (...) {
     preparation_error = std::current_exception();
   }
