@@ -804,6 +804,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_composite_fac_fft_coarse 2)
   set(POPS_MPI_RANKS_test_mpi_composite_fac_replicated_coarse 2)
   set(POPS_MPI_RANKS_test_mpi_tensor_fac_provider_nd 2)
+  set(POPS_MPI_RANKS_test_prepared_hyperbolic_boundary 2)
   set(POPS_MPI_RANKS_test_prepared_embedded_boundary_nd 2)
   set(POPS_MPI_RANKS_test_amr_regrid_mpi_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_dynamic_active_depth 1 2 4)
@@ -1003,6 +1004,7 @@ if(POPS_HAS_MPI)
   # declared authoritatively as `mpi_variants` in tests/test_manifest.toml; the source-only
   # architecture gate compares this projection and these CMake registrations exactly.
   set(POPS_CPP_MPI_VARIANT_TESTS
+    test_prepared_hyperbolic_boundary
     test_prepared_embedded_boundary_nd
     test_amr_program_positivity_floor
     test_amr_multiblock_coupled_source
@@ -1068,7 +1070,12 @@ if(POPS_HAS_MPI)
   )
   foreach(_test IN LISTS POPS_CPP_MPI_VARIANT_TESTS)
     foreach(_np IN LISTS POPS_MPI_RANKS_${_test})
-      if(_test STREQUAL "test_krylov_workspace_reentrancy")
+      if(_test STREQUAL "test_prepared_hyperbolic_boundary")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "test_prepared_hyperbolic_boundary.characteristic_rank_local_rejection_rolls_back_collectively_and_retry_publishes")
+      elseif(_test STREQUAL "test_krylov_workspace_reentrancy")
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER

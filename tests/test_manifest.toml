@@ -1179,6 +1179,7 @@ labels = ["integration", "runtime", "medium"]
 name = "test_prepared_hyperbolic_boundary"
 sources = ["tests/cpp/unit/mesh/test_prepared_hyperbolic_boundary.cpp"]
 labels = ["unit", "mesh", "fast"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_prepared_stream_executor"
