@@ -222,13 +222,18 @@ def main():
                            transport=engine.CompressibleFlux(), source=engine.GravityForce(),
                            elliptic=engine.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
 
-        def poisson(s):
-            s.set_poisson("charge_density", "geometric_mg")
-
-        C = _amr(n, L, lambda s: (_install_compiled_amr(s, cm_p), poisson(s)))
-        D = _amr(n, L, lambda s: (s.add_equation(
+        C = _amr(n, L, lambda s: _install_compiled_amr(s, cm_p))
+        D = _amr(n, L, lambda s: s.add_equation(
             "gas", spec_p, spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
-            time=engine.Explicit()), poisson(s)))
+            time=engine.Explicit()))
+        # Both authored producers install their own exact default-field authority. Authenticate
+        # the registered slot and solver used by the comparison without configuring them again.
+        for coupled in (C, D):
+            slots = tuple(coupled._s.field_provider_slots())
+            assert slots == ("pops.amr.default-field",)
+            configuration = coupled._s.field_solver_configuration(slots[0])
+            assert configuration["provider_slot"] == slots[0]
+            assert configuration["solver"] == "geometric_mg"
         assert C.n_patches() == D.n_patches()
         m0c, m0d = C.mass(), D.mass()
         assert abs(m0c - m0d) < 1e-12 * (abs(m0d) + 1.0), "masse initiale production != add_block"

@@ -164,12 +164,14 @@ def main():
             == public.program_report().program_hash
         )
         dt = 1e-4
-        for _ in range(12):
-            prod.step(dt)
+        # Both sides must consume the same authenticated FixedDt segment.  Reopening twelve
+        # one-step intervals would make every local endpoint ``time + dt`` and bypass the final
+        # accumulated-roundoff correction exercised by the public run.
+        prod_steps = prod.run(12 * dt, max_steps=12)
         report = pops.run(public, t_end=12 * dt, max_steps=12)
         Up = np.array(prod.get_state("gas")).reshape(4, n, n)
         Ur = np.array(public.state_global("gas")).reshape(4, n, n)
-        assert report.accepted_steps == 12
+        assert prod_steps == report.accepted_steps == 12
         assert np.isfinite(Up).all() and Up[0].min() > 0, "etat de production non physique"
         assert float(np.abs(Up[1]).max()) > 1e-4, "le transport Euler est reste trivial"
         assert np.array_equal(Up, Ur), "package prepare != public bind apres 12 pas"

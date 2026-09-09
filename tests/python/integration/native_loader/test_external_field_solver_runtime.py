@@ -574,7 +574,11 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
         "dirty": tuple(simulation._executor._s.dirty_auxiliary_provider_identities()),
     }
     fault_marker.write_text("fail the topology rematerialization solve", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="field"):
+    with pytest.raises(
+        RuntimeError,
+        match="prepared solve failed: status=invalid_evaluation action=fail_run "
+        "reason=native FieldSolver v2 marked a non-finite active solution as solved",
+    ):
         pops.run(simulation, t_end=1.6e-1, max_steps=1)
     assert simulation.time() == accepted_before_fault["time"]
     assert simulation.macro_step() == accepted_before_fault["step"]
