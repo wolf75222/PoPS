@@ -1,74 +1,74 @@
-# PoPS M3-M8 and R1 current results
+# PoPS M3-M8 and R1 results — Latest executed frozen candidate: v22
 
-**Evidence refresh: 2026-09-09.** This is the concise current ledger for the
-candidate-v6 evidence set. It is a qualification record, not a final-HEAD claim:
-the integrated source/native candidate is `9164272546e0074d825603a1ea299990b5ee9ace`,
-M0-M2 remain preserved, M3-M7/R1 remain in progress, and M8 remains backlog.
+**Evidence snapshot: 2026-09-10.** The latest executed frozen candidate is v22 at source
+`75636f29fe01d96af8a2d49a12a58418b257c16f`. This page records implementation, source/static checks,
+package checks, native execution, numerical qualification, and performance separately. It is not a
+closure claim: M3-M7 and R1 remain in progress and M8 remains backlog. The prior v21 candidate at
+`50b7953e45edb959b3fdcf17244db4d3a543d2ca` remains a bounded record with a failed five-test
+critical group (2 PASS, 3 FAIL), not the latest executed frozen candidate.
 
-The preserved M0-M2 index is [`migration_m0_m2_results.md`](migration_m0_m2_results.md),
-with the machine-readable [M0 index](migration_evidence/m0/index.json) and
-[M1-M2 index](migration_evidence/m1_m2/index.json). The older
-[`migration_m3_m6_progress.md`](migration_m3_m6_progress.md) and its
-[foundation ledger](migration_evidence/m3_m6_foundation/index.json) retain historical
-receipts; this page does not relabel those ledgers as current closure.
+The v22 freeze receipt `candidate-final-v22-source-freeze.json` has SHA-256
+`1e4ab000ae6587443dc97f2719a7795e54f6f5c95d24131ddd478ade20fd411c` over 2,376 byte-identical
+tracked files; its primary review SHA-256 is
+`6e0432b3653c05b75853c0d46da7147476a203afb4d69f8954a1f0b2e1f84ae1`.
 
-Every claim below keeps `validate -> resolve -> compile -> bind -> run` separate
-from numerical checking and performance characterization. The full declared
-matrices remain required. No smoke or reduced case, tolerance relaxation, timeout
-increase, loaded test duration, or source-level pass is a substitute for them.
+The former v6 ledger is preserved verbatim in
+[`migration_m3_m8_results_v6_historical.md`](migration_m3_m8_results_v6_historical.md). Its receipts
+remain historical and are not relabeled as v22 evidence. The M0-M2 indexes are unchanged:
+[`migration_m0_m2_results.md`](migration_m0_m2_results.md),
+[`migration_evidence/m0/index.json`](migration_evidence/m0/index.json), and
+[`migration_evidence/m1_m2/index.json`](migration_evidence/m1_m2/index.json).
 
-## Frozen candidate and execution configuration
+## How to read this ledger
 
-| Item | Current receipt |
-| --- | --- |
-| Source and freeze | `9164272546e0074d825603a1ea299990b5ee9ace`; clean MAIN/FROZEN equality is recorded in [candidate-final-v6-source-freeze.json](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-source-freeze.json). |
-| Native CMake cache | Release, `POPS_NATIVE_DIM=2`, MPI and HDF5 enabled, tests enabled, Python build disabled; exact configure/build commands are [configure](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-native-current-configure-command.json) and [build](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-native-current-build-command.json). |
-| Host/toolchain | Python 3.12, AppleClang 21, Kokkos 5.2.1, OpenMP plus Serial, MPICH 4.1.2, parallel HDF5 1.14.3, 8 CPU/16 GiB, `OMP_NUM_THREADS=2`, CMake parallelism 2. |
-| Native execution | Exact [CTest command](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-native-current-ctest-command.json), [summary](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-native-current-summary.json), and [JUnit](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-native-current-ctest.xml). |
-| Python source contract batch | Exact [command](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-source-repair-batch-command.json), [result](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-source-repair-batch-result.json), and [JUnit](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-source-repair-batch.xml). |
+Source contracts and static inventories establish represented interfaces. A build or installed-wheel
+proof does not establish native runtime behavior; native execution does not establish numerical
+qualification or performance. Every accepted claim requires the declared configuration, exact
+command, source and artifact identity, retained output, and the original oracle. No smoke case,
+tolerance relaxation, timeout increase, or loaded test duration substitutes for the declared matrix.
 
-## Current verified results
+## v22 evidence
 
-| Evidence | Result and limit |
-| --- | --- |
-| Full native candidate | `1143` inventory cases: `1124` passed, `19` conditional skips, `0` failures, `0` errors; CTest wall time `1463.6758 s`. Source and native artifacts were unchanged before/after. This is structural/native execution evidence, not full scientific qualification. |
-| Skip disposition | The [exact skip review](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-ctest-skip-disposition.json) identifies `17` duplicate serial discoveries covered by exact named MPI2 registrations and `2` required cells that did not execute: the hyperbolic-boundary MPI2 registration and the Dim1 `PreparedBz` control. They remain open rows. |
-| Static and private wheels | [Static gates](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-static-gates.json) pass M2/M3/M4 check-only, catalog, packaging, Ruff, and Pyright (`662` files, `0` errors, `2` warnings). The [Dim1](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-dim1-private-proof.json) and [Dim2](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-dim2-private-proof.json) private proofs pass. These establish artifacts and contracts, not numerical science. |
-| Source contract batch | The exact rebuilt-package batch contains `169` passing tests with no failure/error/skip in its JUnit. The [result](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-source-repair-batch-result.json) proves source/native proof integrity; it is not an M3-M8 scientific matrix. |
-| Original tutorials | [Tutorial conformance](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-launcher-fixed-tutorial-conformance/summary.json) passes both unchanged profiles: OpenMP at one rank and MPI at two ranks. The private [MPI launcher repair](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-private-prefix-mpiexec-repair.json) only links the selected private prefix to the installed MPICH launcher; it changes no production or wheel bytes. Tutorial completion does not establish convergence, performance, portability, or accuracy beyond tutorial assertions. |
-| PMPI inventory | The [v6 review](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-pmpi-inventory-review.md) and [receipt](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-pmpi-inventory-receipt.json) find `14` wrapped communication APIs, `20` explicit non-payload APIs, and `0` unknown/unclassified APIs. This is static inventory only: no new PMPI measurement or MPI replay was performed. |
-| Baseline boundary | The [M0 report](migration_m0_m2_results.md) and [baseline index](migration_evidence/m0/index.json) retain the five original example failures before accepted science. No old/new accepted numerical comparison is inferred from them. |
+| Area | Established evidence | Current boundary |
+| --- | --- | --- |
+| Frozen source | The v22 freeze and primary-review receipts above pin clean source `75636f29fe01d96af8a2d49a12a58418b257c16f` and byte equality for 2,376 tracked files. | This is provenance for the candidate, not numerical or performance qualification. |
+| v22 Dim2 package | `candidate-final-v22-wheel-dim2-result.json` records a 16.7805265 s wheel build. The prefix receipt `candidate-final-v22-prefix-dim2.json` (SHA-256 `22dde1c4f8694041c00adcb1b6daec39f3b33f448fff52fa24736749710393f0`) records source `75636f29fe01d96af8a2d49a12a58418b257c16f`; its venv, install, prove, and doctor result files exit 0. The private proof `candidate-final-v22-dim2-private-proof.json` (SHA-256 `73bc3d09271de6019db54b993eca8c75d1e6bff6012ab51f2fe0517b2c452a0b`) authenticates wheel SHA-256 `65ea922fab30182e75f889655eb938b33e3633775d7b7c07dce7c741ca1617ae`, native leaf SHA-256 `d998bb11673dfd2d5dd6b444f391d6f2bff1fa1c7cf76af9c4ca4e59aa08ec60`, and headers SHA-256 `aa341ffbb9ea819052cc560b31a2b80f777c6db89a4aabfbcaf0230949ebe6fc`. | Only Dim2 is packaged. These checks do not qualify changed Python runtime behavior; Dim1/Dim3 packaging and science remain open. |
+| Prior v21 Dim2 package | `candidate-final-v21-wheel-dim2-result.json` records the prior v21 wheel build in 117.970 s. | This package receipt belongs to source `50b7953e45edb959b3fdcf17244db4d3a543d2ca` and is not v22 evidence. |
+| Focused v22 AMR transfer gate | At source `75636f29fe01d96af8a2d49a12a58418b257c16f`, configure completes in 11.126 s and the `test_amr_layout_transfer` target builds in 93.885 s. `generic-amr-sync-75636f2-r1-ctest.result.json` records 7 selectors, 0 failures, and 0 skips in 30.341075 s: six serial cases plus one two-rank MPI suite with six cases per rank; source HEAD and clean status are unchanged before and after. | This focused C++ execution is not the full v22 matrix. The v22 collection is not execution credit, and full native map/AMR groups remain open. |
+| v22 default native build | `generic-v22-full-native-build-r1.result.json` reports a successful default native build in 268.0126235 s at source `75636f29fe01d96af8a2d49a12a58418b257c16f`, with clean source status before and after. | This is build evidence only. It does not substitute for the focused CTest, the matrix groups, or numerical qualification. |
+| v22 critical AMR field-map group | The five-test serial group reports 2 PASS and 3 FAIL in 250.864989 s. Binding completes; all three failures occur before the first time step with `RuntimeError: per-layout temporal state diverged at program_schedule`, so no update or rollback assertion is reached. The runner result `candidate-final-v22-matrix-v18-amr-field-map-continuations-dim2-result.json` has SHA-256 `10d08b016016fbbd0a5a30a028dc08853268c98f071c3aaf23f2824069fb7b7a`; its group receipt has SHA-256 `51d7985d440a54437b5d2dd15d382d51c9594e00e3d8d68cb8b185e9a1f5cb24`. | This is incomplete v22 native coverage. The remaining declared groups, including the critical physical-map and MPI lanes, remain unexecuted. |
+| v22 declared and collected matrix | The 35-group manifest spans the generic migration, including M7: 25 serial and 10 MPI groups. R1 is tracked separately as eight workflows. Collection records enumerate 20 Dim2 serial groups (170 cases) and 10 MPI groups (67 cases per rank). | Collection is not execution credit. Full field/map, AMR, MPI, restart, numerical, failure/retry, and performance qualification remains open. |
+| Prior v21 source/static control | At source `50b7953e45edb959b3fdcf17244db4d3a543d2ca`, `generic-v21-source-integrated-r1.result.json` reports 790 PASS, 0 failures, 0 errors, and 0 skips in 166.709654 s with unchanged source; Pyright reports 0 errors and 2 existing warnings. Its external-import census found 47 unique PoPS imports across 6 generated DSOs and no missing imports. | This is a v21 control, not a v22 source gate or runtime qualification. |
+| Prior v21 critical execution | The v21 five-test serial group reports 2 PASS and 3 FAIL in 252.263385 s. All three failures stop during bind with `ValueError: AMR physical synchronization identity is unknown`; no update or rollback assertion executes after bind. Group receipt SHA-256 is `730f161888cf72d3d8b219fb4f3a3b5eda746176a8ba4eaef4e8d1f65edf489c`; runner result SHA-256 is `c2d599a19d76e3b9f8008bb5cc9384a2206a8bc3dc109e5a4038c7e1a3e0bcce`. | This failed v21 group is retained as prior-candidate evidence; it is not a v22 result. |
+| Prior native controls | The v19 full C++ gate at `13dc8bb` reports 1,212 PASS, 0 FAIL, and 21 unchanged conditional SKIP across 1,233 entries. The old v17 uniform-map comparator covered one module with nine tests: 9 PASS/0 FAIL/0 SKIP in 158.857867625 s, with six native and nine reference arrays captured. | These controls do not qualify the changed v22 Python runtime; current-candidate Gaussian and generic-map replacement comparisons remain incomplete. |
+
+## Preserved M0-M2 and M8 boundaries
+
+The M0 report retains the five original public profiles that failed before accepted science; no old
+R1 arrays are inferred from them. Seven retained verification test files are present at both baseline
+and the v22 source; their campaign assets were already absent at baseline. This is pre-existing
+infrastructure debt and does not establish replacement equivalence.
+
+The M8 decision in `generic-v19-m8-equivalence-next-actions.json` is 8 retained-needed, 2
+replacement-qualification-pending, and 1 baseline-orphan group. Legacy interfaces remain retained;
+v22 replacement comparisons for Gaussian and generic maps are incomplete. No M8
+removal or equivalence claim follows from these receipts; removal remains conditional on a qualified
+replacement and review.
 
 ## Phase ledger
 
-The issue links below are the complete remaining M3-M8/R1 set from the pinned
-[migration manifest](/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json).
-
-| Scope | Linear issues | Current disposition and remaining boundary |
+| Phase | Represented in the v22 source | Qualification boundary |
 | --- | --- | --- |
-| M3: unify field problems and solve results | [ADC-903](https://linear.app/romain7522/issue/ADC-903); M3.1 [ADC-925](https://linear.app/romain7522/issue/ADC-925), M3.2 [ADC-926](https://linear.app/romain7522/issue/ADC-926), M3.3 [ADC-927](https://linear.app/romain7522/issue/ADC-927), M3.4 [ADC-928](https://linear.app/romain7522/issue/ADC-928) | Static/source contracts and the 169-test batch are recorded. Field accuracy, invalidation, and complete variable/joint field numerical rows remain open. The 21-file/27-site bind-context inventory is preflight only; see [bind preflight](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-bind-context-preflight.json). |
-| M4: interactions and typed native calls | [ADC-904](https://linear.app/romain7522/issue/ADC-904); M4.1 [ADC-929](https://linear.app/romain7522/issue/ADC-929), M4.2 [ADC-930](https://linear.app/romain7522/issue/ADC-930), M4.3 [ADC-931](https://linear.app/romain7522/issue/ADC-931), M4.4 [ADC-932](https://linear.app/romain7522/issue/ADC-932) | Native inventory and typed-contract evidence are present. Complete heterogeneous interaction, derivative/failure-domain, MPI, and cost qualification remains open. |
-| M5: transport-diffusion execution paths | [ADC-905](https://linear.app/romain7522/issue/ADC-905); M5.1 [ADC-933](https://linear.app/romain7522/issue/ADC-933), M5.2 [ADC-934](https://linear.app/romain7522/issue/ADC-934), M5.3 [ADC-935](https://linear.app/romain7522/issue/ADC-935), M5.4 [ADC-936](https://linear.app/romain7522/issue/ADC-936), M5.5 [ADC-937](https://linear.app/romain7522/issue/ADC-937) | The complete M5 plan is declared in the [diffusion qualification plan](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-qualification-plan.md), but current full numerical rows are not complete. Test-only additions are pending for mean-preserving BE `N=16/32/64` at `t=0.05`, the `N=32` temporal row, nonlinear accumulation at `2e-11`, insufficient-budget rollback, and accepted implicit exchanges. |
-| M6: temporal problems and accepted continuation | [ADC-906](https://linear.app/romain7522/issue/ADC-906); M6.1 [ADC-938](https://linear.app/romain7522/issue/ADC-938), M6.2 [ADC-939](https://linear.app/romain7522/issue/ADC-939), M6.3 [ADC-940](https://linear.app/romain7522/issue/ADC-940), M6.4 [ADC-941](https://linear.app/romain7522/issue/ADC-941) | Solve/result and transaction contracts have source evidence. Complete explicit, implicit, IMEX, splitting, history, dense-output, restart, and topology-transition matrices remain open; no current temporal result is promoted from an older candidate. |
-| M7: coupled supports, layouts, and AMR | [ADC-907](https://linear.app/romain7522/issue/ADC-907); M7.1 [ADC-942](https://linear.app/romain7522/issue/ADC-942), M7.2 [ADC-943](https://linear.app/romain7522/issue/ADC-943), M7.3 [ADC-944](https://linear.app/romain7522/issue/ADC-944), M7.4 [ADC-945](https://linear.app/romain7522/issue/ADC-945) | AMR and support controls are present in the current native inventory, but complete AMR transport/diffusion, composite field, distributed exchange, and transition qualification is open. Physical mapping is bounded to the host Dim2 one-rank `1x1v-to-1x` patch; different mapping extensions refuse. |
-| R1: first integrated release | [ADC-921](https://linear.app/romain7522/issue/ADC-921) | The eight-path release matrix and its complete numerical, restart/output, collective, and failure/retry evidence are not complete. Passing tutorials and contract batches do not close R1. |
-| M8: retire obsolete routes | [ADC-908](https://linear.app/romain7522/issue/ADC-908); M8.1 [ADC-922](https://linear.app/romain7522/issue/ADC-922), M8.2 [ADC-923](https://linear.app/romain7522/issue/ADC-923), M8.3 [ADC-924](https://linear.app/romain7522/issue/ADC-924) | M8 has no closure. M8.1 replacement-specific equivalence is pending. M8.2 deletion is deferred for exactly seven orphan verification tests in the [current inventory](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/m8-orphan-campaign-current-inventory.json); active `FieldOperator`/`_b_field_operator`, `PhysicalModelFor`, and `HierarchyTensorSolverProvider` consumers remain retained. M8.3 diagnostics and completion documentation wait on the preceding evidence. |
+| M3 — ADC-903, ADC-925–928 | Public Python arbitrary-N fields, cross-component modes, axes/support/state contracts, and one solve/publication authority are represented. | Field accuracy, invalidation, joint-field numerics, MPI behavior, and reuse remain unqualified. |
+| M4 — ADC-904, ADC-929–932 | Generic reactions/kernels, typed calls, and DSO-backed component routes are represented. | Complete heterogeneous interaction, derivative/failure-domain, MPI, and cost evidence remains open. |
+| M5 — ADC-905, ADC-933–937 | Dim1/2/3 full-spatial-SPD diffusion and reusable RHS/resource contracts are represented; only Dim2 has a package proof. | No v22 numerical diffusion matrix or convergence/oracle run is qualified. |
+| M6 — ADC-906, ADC-938–941 | Inline/imported schemes, lifecycle barriers, retry/rollback, and interstage state contracts are represented. | The v22 critical group fails before its first step on per-layout `program_schedule` state divergence. Native continuation, restart, topology transition, and numerical time matrices remain open; unsupported asynchronous coupling may be an explicit refusal. |
+| M7 — ADC-907, ADC-942–945 | Generic axes, domains, measures, cardinality, support/state contracts, field maps, and interstage AMR requirements are represented. | Full v22 serial/MPI map and AMR qualification remains open after the focused transfer check above. |
+| R1 — ADC-921 | Eight R1 workflows are tracked separately from the 35-group migration manifest; R1 does not require M7 closure. | Complete native, numerical, restart/output, collective, and failure/retry evidence is absent. M8 requires both R1 and M7 evidence, without imposing an ordering between them. |
+| M8 — ADC-908, ADC-922–924 | Retention and replacement decisions are recorded above. | The two replacement comparisons and any removal review remain pending. |
 
-## Pending rows for root integration
+The temporal Python patch sequence `dd931464` then `ba95dd3f` is integrated as commits
+`37f7c40854b922f0357dce4201c5ec984a17db14` and `faeeee3dfa67601b7e8b7dbc27d0d020470f3d88`
+after root diff review. Native execution for this change remains pending.
 
-These rows are intentionally explicit so later execution can replace the status
-without rewriting historical receipts:
-
-| Row | Required update |
-| --- | --- |
-| Native conditional coverage | Execute the two required cells identified by the [skip disposition](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v6-ctest-skip-disposition.md), or preserve an evidence-backed refusal/unavailable disposition. Reconcile the full CTest count after any registration change. |
-| M3 field accuracy/reuse | Finish the declared [field plan](/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-qualification-plan.json), including accuracy and invalidation cases, with one exact source/artifact/configuration pin. |
-| M5 normative matrix | Add and run the full original rows and report norms, rates, mass, nonlinear residual, rollback, and accepted-exchange oracles. The plan's tolerances remain fixed. |
-| M6/M7/R1 science | Run the complete temporal, AMR, distributed, restart/output, and eight-path matrices. Classify unavailable GPU, public Dim3, and multinode cells explicitly. |
-| Performance | Run the prepared paired protocols in a quiet window with device completion and raw metrics; do not derive performance from loaded test times or contract batches. |
-| M8 equivalence/deletion | Complete M3/M5/M7/R1 prerequisites, record row-by-row M8.1 equivalence, then review the seven-file M8.2 candidate separately. No deletion is authorized by the inventory. |
-
-No tests or builds were run for this documentation-only change. The source,
-configuration, command, artifact, and evidence paths above are retained for the
-root agent to update after the remaining qualification work and before any final
-commit or Linear closure.
+This documentation change runs no tests or builds and changes no CI, Linear, or PR state.
