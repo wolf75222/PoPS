@@ -44,7 +44,14 @@ def test_public_amr_maps_and_repeated_field_solves_share_one_region_driver(tmp_p
         coefficients = solve.inputs[0].attrs["apply_result"].inputs[2]
         assert hierarchy_field_solve(coefficients) is solve
         assert "hierarchy_field_coefficients" not in solve.attrs
-    assert set(program._histories) == {"half driven moment history", "late driven moment history"}
+    history_names = {"half driven moment history", "late driven moment history"}
+    assert program._histories == dict.fromkeys(history_names, 1)
+    assert {(row["name"], row["depth"], row["ring_slots"])
+            for row in program.temporal_manifest()["histories"]} == {
+                (name, 1, 2) for name in history_names}
+    for name in history_names:
+        assert source.count("ctx.store_history(%s," % json.dumps(name)) == 1
+    assert source.count("ctx.rotate_histories(") == 1
     assert all(canonical_handle(state).block_ref.local_id == "integral"
                for state in program._history_state_refs.values())
     for other in ("population", "extended"):
@@ -88,13 +95,19 @@ def test_native_repeated_amr_field_maps_consume_current_stage_and_restart(tmp_pa
         np.testing.assert_allclose(actual, np.broadcast_to(base * factors[name], actual.shape),
                                    rtol=2e-11, atol=2e-12)
     assert sorted(instance._executor.mapping_report().values()) == [1, 2]
+    first_histories = _history_image(instance)
+    assert len(first_histories) == 4
+    # depth=1 declares the maximum lag: each physical ring contains two slots, and
+    # fill_count counts accepted stores, saturating at that two-slot capacity.
+    assert all(row[2] and row[3] == 1 and len(row[4]) == 2 for row in first_histories)
     checkpoint = instance.checkpoint(tmp_path / "field-map-continuation")
     pops.run(instance, t_end=0.02, max_steps=1)
     uninterrupted = _internal_map_image(instance)
     uninterrupted_histories = _history_image(instance)
     assert len(uninterrupted_histories) == 4
-    assert all(row[2] and row[3] == 1 for row in uninterrupted_histories)
+    assert all(row[2] and row[3] == 2 and len(row[4]) == 2 for row in uninterrupted_histories)
     instance.restart(checkpoint)
+    assert _history_image(instance) == first_histories
     pops.run(instance, t_end=0.02, max_steps=1)
     for key, actual in _internal_map_image(instance).items():
         np.testing.assert_array_equal(actual, uninterrupted[key])
@@ -144,4 +157,4 @@ def test_native_failed_field_map_attempt_rolls_back_then_reuses_context(tmp_path
                                    rtol=2e-10, atol=0.)
     assert sorted(instance._executor.mapping_report().values()) == [1, 2]
     assert len(_history_image(instance)) == 4
-    assert all(row[2] and row[3] == 1 for row in _history_image(instance))
+    assert all(row[2] and row[3] == 1 and len(row[4]) == 2 for row in _history_image(instance))
