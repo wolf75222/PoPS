@@ -7,6 +7,8 @@ import math
 import os
 import shutil
 import tempfile
+from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +22,7 @@ class _PreparedMultiLayoutRestart:
     restart_identity: Any
     mapping: dict[str, int]
     children: tuple[Any, ...]
+    temporal_state: _CompositeTemporalRestartState
 
 
 @dataclass(frozen=True, slots=True)
@@ -595,18 +598,86 @@ def _require_runtime_plan_bundle(plan: Any, runtime_plan: Any) -> None:
 
 
 class _CompositeTemporalRestartState:
-    """Broadcast temporal mutations and prove every layout clock stays identical."""
+    """One controller envelope with immutable, layout-qualified Program schedules."""
 
-    def __init__(self, states: Any) -> None:
-        self.states = tuple(states)
-        if not self.states:
-            raise ValueError("composite temporal state requires one state per layout")
+    def __init__(self, states: Mapping[str, Any]) -> None:
+        from pops.runtime._temporal_restart import TemporalRestartState
+
+        if not isinstance(states, Mapping) or not states:
+            raise TypeError("composite temporal state requires a nonempty layout mapping")
+        self._layout_states = tuple(states.items())
+        if any(type(key) is not str or not key for key, _state in self._layout_states):
+            raise TypeError("composite temporal state requires exact layout identities")
+        if any(type(state) is not TemporalRestartState for state in self.states):
+            raise TypeError("composite temporal state requires exact temporal leaves")
+        if len({id(state) for state in self.states}) != len(self.states):
+            raise ValueError("each layout must own a distinct temporal state")
+        self._schedule_json = self._current_schedule_json()
+        self._require_shared()
+
+    @property
+    def layout_ids(self) -> tuple[str, ...]:
+        return tuple(key for key, _state in self._layout_states)
+
+    @property
+    def states(self) -> tuple[Any, ...]:
+        # Accepted-attempt snapshots and rollback statistics use this canonical leaf order.
+        return tuple(state for _key, state in self._layout_states)
+
+    def _current_schedule_json(self) -> str:
+        from pops.runtime._temporal_restart import _validate_program_schedule
+
+        schedules = {}
+        clocks = {}
+        parents = {}
+        for layout_id, state in self._layout_states:
+            schedule = (None if state.program_schedule is None
+                        else _validate_program_schedule(state.program_schedule))
+            schedules[layout_id] = schedule
+            if schedule is None:
+                continue
+            for row in schedule["clocks"]:
+                if row["id"] in clocks and clocks[row["id"]] != row:
+                    raise RuntimeError("per-layout temporal clock contracts diverged")
+                clocks[row["id"]] = row
+            for row in schedule["subcycles"]:
+                relation = (row["parent_clock"], row["count"])
+                if row["child_clock"] in parents and parents[row["child_clock"]] != relation:
+                    raise RuntimeError("per-layout temporal clock parent contracts diverged")
+                parents[row["child_clock"]] = relation
+        if any(row is None for row in schedules.values()) and any(
+                row is not None for row in schedules.values()):
+            raise RuntimeError("per-layout temporal Program installation is incomplete")
+        return json.dumps({
+            "schema_version": 1,
+            "kind": "pops.multi-layout-temporal-program-schedule",
+            "layout_ids": list(self.layout_ids),
+            "layouts": schedules,
+        }, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
     def _same_attribute(self, name: str) -> Any:
         values = tuple(getattr(state, name) for state in self.states)
         if any(value != values[0] for value in values[1:]):
             raise RuntimeError("per-layout temporal state diverged at %s" % name)
         return values[0]
+
+    def _require_shared(self) -> None:
+        for name in ("_restored_pending", "strategy", "time_hex", "macro_step",
+                     "controller_state", "event_queue", "transaction_stats", "status",
+                     "synchronized"):
+            self._same_attribute(name)
+        cursors = {}
+        for state in self.states:
+            for clock_id, cursor in state.clock_cursors.items():
+                if clock_id in cursors and cursor != cursors[clock_id]:
+                    raise RuntimeError("per-layout temporal cursors diverged")
+                cursors[clock_id] = cursor
+
+    def require_bindings(self, trusted: _CompositeTemporalRestartState) -> None:
+        if self.layout_ids != trusted.layout_ids:
+            raise RuntimeError("composite temporal layout identities or order differ")
+        if self.program_schedule != trusted._installed_schedule():
+            raise RuntimeError("composite temporal schedules differ from installed layouts")
 
     @property
     def _restored_pending(self) -> Any:
@@ -629,21 +700,55 @@ class _CompositeTemporalRestartState:
         return self._same_attribute("macro_step")
 
     @property
-    def program_schedule(self) -> Any:
-        return self._same_attribute("program_schedule")
+    def program_schedule(self) -> dict[str, Any]:
+        self._require_shared()
+        return self._installed_schedule()
+
+    def _installed_schedule(self) -> dict[str, Any]:
+        # Rollback may inspect the trusted binding while its live attempt envelope has diverged.
+        if self._current_schedule_json() != self._schedule_json:
+            raise RuntimeError("temporal schedule changed its installed layout binding")
+        return json.loads(self._schedule_json)
 
     def to_data(self) -> dict[str, Any]:
-        """Project one temporal report only after proving every layout is identical."""
-        rows = tuple(state.to_data() for state in self.states)
-        return _common_exact(rows, where="multi-layout temporal report")
+        schedule = self.program_schedule
+        rows = {key: deepcopy(state.to_data()) for key, state in self._layout_states}
+        first = rows[self.layout_ids[0]]
+        return {
+            "schema_version": 1,
+            "kind": "pops.multi-layout-temporal-state",
+            "program_schedule": schedule,
+            **{key: first[key] for key in (
+                "strategy", "clock", "controller_state", "event_queue",
+                "transaction_stats", "status", "synchronized")},
+            "layouts": rows,
+        }
 
     def _broadcast(self, name: str, **kwargs: Any) -> None:
+        self._require_shared()
         for state in self.states:
             getattr(state, name)(**kwargs)
 
     def begin_run(self, strategy: Any, *, time: Any, macro_step: Any) -> None:
-        for state in self.states:
-            state.begin_run(strategy, time=time, macro_step=macro_step)
+        schedule = self.program_schedule
+        if isinstance(strategy, dict) and set(strategy) == {"strategy", "program_schedule"}:
+            if json.dumps(strategy["program_schedule"], sort_keys=True,
+                          separators=(",", ":"), allow_nan=False) != self._schedule_json:
+                raise RuntimeError("prepared run schedule differs from installed layout schedules")
+            control = strategy["strategy"]
+        else:
+            control = strategy
+        # Validate every local binding and controller transition before publishing any leaf.
+        # Copies own all allocations; the final dict swaps preserve references held by engines.
+        candidate = deepcopy(self)
+        for layout_id, state in candidate._layout_states:
+            state.begin_run({"strategy": control,
+                             "program_schedule": schedule["layouts"][layout_id]},
+                            time=time, macro_step=macro_step)
+        candidate._require_shared()
+        publications = tuple(zip(self.states, candidate.states, strict=True))
+        for state, prepared in publications:
+            state.__dict__ = prepared.__dict__
 
     def before_attempt(self, *, time: Any, macro_step: Any) -> None:
         self._broadcast("before_attempt", time=time, macro_step=macro_step)
@@ -680,10 +785,17 @@ class _CompositeTemporalRestartState:
         self._broadcast("fail", **kwargs)
 
     def cursor_for_clock(self, clock: Any) -> Any:
-        values = tuple(state.cursor_for_clock(clock) for state in self.states)
-        if any(value != values[0] for value in values[1:]):
-            raise RuntimeError("per-layout temporal cursors diverged")
-        return values[0]
+        from pops.time import Clock
+
+        if type(clock) is not Clock:
+            raise TypeError("temporal cursor requires an exact Clock descriptor")
+        _ = self.program_schedule
+        owners = tuple(state for state in self.states
+                       if clock.qualified_id in state.clock_cursors)
+        if not owners:
+            raise ValueError("temporal clock is not declared in any installed layout")
+        return _common_exact((state.cursor_for_clock(clock) for state in owners),
+                             where="multi-layout temporal clock cursor")
 
 
 class _MultiLayoutUniformExecutor:
@@ -735,7 +847,7 @@ class _MultiLayoutUniformExecutor:
                 where="multi-layout transaction plan",
             )
             self._temporal_restart_state = _CompositeTemporalRestartState(
-                engine._temporal_restart_state for engine in self._engines.values()
+                {key: engine._temporal_restart_state for key, engine in self._engines.items()}
             )
             self._step_controller = None
             self._last_step_transaction_report = None
@@ -1008,10 +1120,7 @@ class _MultiLayoutUniformExecutor:
                 (report.temporal_partition for _row, _blocks, report in children),
                 where="multi-layout Program temporal-partition report",
             ),
-            temporal=_common_exact(
-                (report.temporal for _row, _blocks, report in children),
-                where="multi-layout Program temporal report",
-            ),
+            temporal=self._temporal_restart_state.to_data(),
         )
 
     def installed_program_hash(self) -> str:
@@ -1293,26 +1402,52 @@ class _MultiLayoutUniformExecutor:
     def checkpoint_topology_epoch(self) -> int:
         return 0
 
+    def _require_temporal_layouts(self, state: Any) -> None:
+        if type(state) is not _CompositeTemporalRestartState:
+            raise TypeError("multi-layout temporal restore requires a composite state")
+        if state.layout_ids != tuple(self._engines):
+            raise RuntimeError("composite temporal layout identities or order differ from engines")
+        state.require_bindings(self._temporal_restart_state)
+
     def _synchronize_child_temporal_states(self) -> None:
-        states = tuple(self._temporal_restart_state.states)
-        if len(states) != len(self._engines):
-            raise RuntimeError("composite temporal state count differs from native layouts")
-        for engine, state in zip(self._engines.values(), states, strict=True):
-            engine._temporal_restart_state = state
+        state = self._temporal_restart_state
+        self._require_temporal_layouts(state)
+        for layout_id, leaf in state._layout_states:
+            self._engines[layout_id]._temporal_restart_state = leaf
 
     def _restore_temporal_restart_state(self, state: Any) -> None:
-        """Restore the coordinator envelope and every child authority atomically."""
-        if not isinstance(state, _CompositeTemporalRestartState):
-            raise TypeError("multi-layout temporal restore requires a composite state")
+        """Validate every binding before replacing coordinator or child authorities."""
+        self._require_temporal_layouts(state)
+        for layout_id, leaf in state._layout_states:
+            self._engines[layout_id]._temporal_restart_state = leaf
         self._temporal_restart_state = state
-        self._synchronize_child_temporal_states()
 
     def _rebuild_composite_temporal_state(self) -> None:
-        self._temporal_restart_state = _CompositeTemporalRestartState(
-            engine._temporal_restart_state for engine in self._engines.values()
-        )
-        self._common_clock("time")
-        self._common_clock("macro_step")
+        state = _CompositeTemporalRestartState(
+            {key: engine._temporal_restart_state for key, engine in self._engines.items()})
+        self._require_temporal_layouts(state)
+        if (state.time_hex != float(self._common_clock("time")).hex()
+                or state.macro_step != self._common_clock("macro_step")):
+            raise RuntimeError("composite temporal state differs from native layout clocks")
+        self._restore_temporal_restart_state(state)
+
+    def _prepared_temporal_state(self, children: tuple[Any, ...]) -> _CompositeTemporalRestartState:
+        from pops.runtime._amr_system_io import _PreparedAMRSystemRestart
+        from pops.runtime._system_io import _PreparedUniformRestart
+
+        if len(children) != len(self._engines):
+            raise RuntimeError("multi-layout prepared child count is incomplete")
+        states = {}
+        for layout_id, child in zip(self._engines, children, strict=True):
+            if type(child) is _PreparedUniformRestart:
+                states[layout_id] = child.temporal_state
+            elif type(child) is _PreparedAMRSystemRestart:
+                states[layout_id] = child.codec.temporal_state
+            else:
+                raise TypeError("multi-layout restart requires exact prepared native children")
+        state = _CompositeTemporalRestartState(states)
+        self._require_temporal_layouts(state)
+        return state
 
     @staticmethod
     def _result_evidence(result: Any) -> Any:
@@ -1575,7 +1710,14 @@ class _MultiLayoutUniformExecutor:
                 )
             child_bytes = np.asarray(stored[name], dtype=np.uint8).tobytes()
             prepared_children.append(prepare(child_bytes, bit_identical=policy))
-        return _PreparedMultiLayoutRestart(identity, dict(mapping), tuple(prepared_children))
+        children = tuple(prepared_children)
+        temporal = self._prepared_temporal_state(children)
+        from pops.runtime._temporal_restart import _clock
+
+        now, step = _clock(stored["t"].item(), stored["macro_step"].item())
+        if temporal.time_hex != now or temporal.macro_step != step:
+            raise ValueError("checkpoint temporal state differs from composite checkpoint clock")
+        return _PreparedMultiLayoutRestart(identity, dict(mapping), children, deepcopy(temporal))
 
     def _begin_checkpoint_restart(self) -> None:
         if "_checkpoint_restart_snapshot" in self.__dict__:
@@ -1615,8 +1757,10 @@ class _MultiLayoutUniformExecutor:
     def _apply_checkpoint_restart(self, prepared: _PreparedMultiLayoutRestart) -> Any:
         if type(prepared) is not _PreparedMultiLayoutRestart:
             raise TypeError("multi-layout restart requires its exact prepared payload")
-        if len(prepared.children) != len(self._engines):
-            raise RuntimeError("multi-layout prepared child count is incomplete")
+        temporal = self._prepared_temporal_state(prepared.children)
+        self._require_temporal_layouts(prepared.temporal_state)
+        if temporal.to_data() != prepared.temporal_state.to_data():
+            raise RuntimeError("prepared checkpoint temporal state changed after preflight")
         for engine, child in zip(self._engines.values(), prepared.children, strict=True):
             engine._apply_checkpoint_restart(child)
         self._mapping_evaluations = dict(prepared.mapping)

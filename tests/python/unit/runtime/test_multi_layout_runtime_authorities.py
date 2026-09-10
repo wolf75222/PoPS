@@ -796,7 +796,9 @@ def _retaining_transfer_system(events, *, fail_prepare=None, fail_close=False):
             self._bound_snapshot = "child-%s" % config.name
             self._step_strategy = "shared"
             self._step_transaction_plan = "shared"
-            self._temporal_restart_state = SimpleNamespace()
+            from pops.runtime._temporal_restart import TemporalRestartState
+
+            self._temporal_restart_state = TemporalRestartState()
 
         @property
         def bound_snapshot(self):

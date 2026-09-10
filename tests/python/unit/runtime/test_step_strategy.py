@@ -294,7 +294,7 @@ def test_fixed_dt_grid_rejects_mismatched_restart_metadata(change):
 def test_fixed_dt_grid_is_broadcast_and_resets_on_strategy_change():
     owner = _TemporalOwner(FixedDt(0.01))
     children = (TemporalRestartState(), TemporalRestartState())
-    owner._temporal_restart_state = _CompositeTemporalRestartState(children)
+    owner._temporal_restart_state = _CompositeTemporalRestartState(dict(zip(("layout-a", "layout-b"), children, strict=True)))
     prepared = prepare_program_run(owner)
     prepared.begin(owner._temporal_restart_state, time=0.0, macro_step=0)
     prepared.run_step(owner.raw, t_end=0.1)
@@ -812,7 +812,7 @@ def test_multi_layout_attempt_advances_child_raw_targets_and_accepts_once():
     executor._step_controller = None
     executor._last_step_transaction_report = None
     executor._temporal_restart_state = _CompositeTemporalRestartState(
-        child._temporal_restart_state for child in children.values())
+        {key: child._temporal_restart_state for key, child in children.items()})
 
     payload = run_control_payload(strategy)
     executor._temporal_restart_state.begin_run(payload, time=0.0, macro_step=0)
@@ -939,3 +939,235 @@ def test_runtime_instance_keeps_error_controller_and_strategy_across_macro_steps
         state.checkpoint_json(time=owner.time(), macro_step=owner.macro_step())
     )
     assert checkpoint["strategy"] == run_control_payload(strategy)
+
+
+def _layout_temporal_schedule(name, *, depth=1, local_clock=False):
+    from pops.time import Clock, TimePoint
+
+    clock = Clock("macro")
+    state = {"kind": "state", "qualified_id": "case/%s/U" % name,
+             "block_ref": {"kind": "block", "qualified_id": "case/%s" % name}}
+    schedule = {
+        "schema_version": 1, "kind": "pops.temporal-program-schedule",
+        "primary_clock": clock.qualified_id,
+        "clocks": [{"id": clock.qualified_id, "descriptor": clock.to_data(),
+                    "ticks_per_macro": 1}],
+        "subcycles": [], "synchronizations": [], "schedules": [],
+        "histories": [{
+            "name": "%s.U" % name, "owner": state["block_ref"], "state": state,
+            "space": {"kind": "state", "name": "U", "components": ["rho"]},
+            "clock": clock.qualified_id, "depth": depth, "ring_slots": depth + 1,
+            "ncomp": 1,
+            "validity": {"schema_version": 1,
+                         "oldest": TimePoint(clock, step=-depth).to_data(),
+                         "newest": TimePoint(clock).to_data()},
+            "interpolation": {"kind": "linear", "schema_version": 1, "minimum_samples": 2},
+            "checkpoint_policy": None,
+        }],
+    }
+    if local_clock:
+        child = Clock("local")
+        schedule["clocks"].append({"id": child.qualified_id, "descriptor": child.to_data(),
+                                   "ticks_per_macro": 3})
+        schedule["subcycles"].append({"node_id": 0, "parent_clock": clock.qualified_id,
+                                     "child_clock": child.qualified_id, "count": 3})
+    return schedule
+
+
+def _layout_temporal_owner():
+    owner = _TemporalOwner(FixedDt(0.01))
+    states = {}
+    for key, depth, local in (("layout-a", 1, False), ("layout-b", 2, True)):
+        state = TemporalRestartState()
+        state.configure_program(_layout_temporal_schedule(key, depth=depth, local_clock=local),
+                                time=0.0, macro_step=0)
+        states[key] = state
+    owner._temporal_restart_state = _CompositeTemporalRestartState(states)
+    return owner
+
+
+def _layout_temporal_executor(temporal):
+    executor = object.__new__(_MultiLayoutUniformExecutor)
+    executor._temporal_restart_state = temporal
+    executor._engines = {key: SimpleNamespace(_temporal_restart_state=state)
+                         for key, state in temporal._layout_states}
+    return executor
+
+
+def test_prepared_multi_layout_run_preserves_local_histories_through_checkpoint_and_restart():
+    from pops.time import Clock
+
+    owner = _layout_temporal_owner()
+    temporal = owner._temporal_restart_state
+    prepared = prepare_program_run(owner)
+    assert prepared.restart_payload["program_schedule"] == temporal.program_schedule
+    assert temporal.states[0].program_schedule != temporal.states[1].program_schedule
+    prepared.begin(temporal, time=0.0, macro_step=0)
+    prepared.run_step(owner.raw, t_end=0.03)
+    assert temporal.cursor_for_clock(Clock("local"))["tick"] == 3
+    assert temporal.cursor_for_clock(Clock("macro"))["tick"] == 1
+    with pytest.raises(ValueError, match="not declared"):
+        temporal.cursor_for_clock(Clock("missing"))
+    checkpoint = {key: state.checkpoint_json(time=owner.time(), macro_step=owner.macro_step())
+                  for key, state in temporal._layout_states}
+    restored = _CompositeTemporalRestartState({
+        key: TemporalRestartState.from_json(checkpoint[key], time=owner.time(),
+                                            macro_step=owner.macro_step(),
+                                            program_schedule=state.program_schedule)
+        for key, state in temporal._layout_states})
+    prepared.run_step(owner.raw, t_end=0.03)
+    uninterrupted = temporal.to_data()
+    owner.raw.t, owner.raw.cursor = 0.01, 1
+    owner._temporal_restart_state = restored
+    owner._step_controller = None
+    rerun = prepare_program_run(owner)
+    rerun.begin(restored, time=owner.time(), macro_step=owner.macro_step())
+    rerun.run_step(owner.raw, t_end=0.03)
+    assert restored.to_data() == uninterrupted
+    report = restored.to_data()
+    assert report["clock"] == {"time": (0.02).hex(), "macro_step": 2}
+    assert set(report["layouts"]["layout-a"]["history_cursors"]) == {"layout-a.U"}
+    assert set(report["layouts"]["layout-b"]["history_cursors"]) == {"layout-b.U"}
+    report["layouts"]["layout-a"]["program_schedule"]["histories"].clear()
+    assert restored.states[0].program_schedule["histories"]
+
+
+@pytest.mark.parametrize("forgery", ("missing", "swapped", "modified-live", "schema-type"))
+def test_prepared_multi_layout_run_refuses_forged_schedule_before_begin(forgery):
+    owner = _layout_temporal_owner()
+    temporal = owner._temporal_restart_state
+    payload = prepare_program_run(owner).restart_payload
+    if forgery == "missing":
+        del payload["program_schedule"]["layouts"]["layout-b"]
+    elif forgery == "swapped":
+        rows = payload["program_schedule"]["layouts"]
+        rows["layout-a"], rows["layout-b"] = rows["layout-b"], rows["layout-a"]
+    elif forgery == "modified-live":
+        temporal.states[1].program_schedule["histories"][0]["name"] = "forged"
+    else:
+        payload["program_schedule"]["schema_version"] = True
+    before = deepcopy(tuple(state.to_data() for state in temporal.states))
+    with pytest.raises(RuntimeError, match="schedule"):
+        temporal.begin_run(payload, time=0.0, macro_step=0)
+    assert tuple(state.to_data() for state in temporal.states) == before
+
+
+def test_prepared_multi_layout_begin_allocation_failure_keeps_all_original_leaves(monkeypatch):
+    owner = _layout_temporal_owner()
+    temporal = owner._temporal_restart_state
+    prepared = prepare_program_run(owner)
+    before = deepcopy(temporal.to_data())
+    leaves = temporal.states
+    original = TemporalRestartState.begin_run
+    calls = []
+
+    def fail_later(state, *args, **kwargs):
+        original(state, *args, **kwargs)
+        calls.append(state.program_schedule["histories"][0]["name"])
+        if len(calls) == 2:
+            raise MemoryError("second layout begin allocation")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(TemporalRestartState, "begin_run", fail_later)
+        with pytest.raises(MemoryError, match="second layout"):
+            prepared.begin(temporal, time=0.0, macro_step=0)
+    assert calls == ["layout-a.U", "layout-b.U"]
+    assert temporal.to_data() == before
+    assert all(left is right for left, right in zip(leaves, temporal.states, strict=True))
+    prepared.begin(temporal, time=0.0, macro_step=0)
+    assert all(state.strategy is not None for state in leaves)
+
+
+@pytest.mark.parametrize("attribute,value", (
+    ("controller_state", {"last_accepted_dt": (0.01).hex()}),
+    ("event_queue", [{"kind": "forged"}]),
+    ("transaction_stats", {"accepted": 1, "rejected": 0, "failed": 0}),
+    ("time_hex", (0.01).hex()),
+))
+def test_composite_temporal_shared_authority_refuses_real_divergence(attribute, value):
+    owner = _layout_temporal_owner()
+    temporal = owner._temporal_restart_state
+    prepared = prepare_program_run(owner)
+    setattr(temporal.states[1], attribute, value)
+    before = deepcopy(tuple(state.to_data() for state in temporal.states))
+    for action in (temporal.to_data,
+                   lambda: prepared.begin(temporal, time=0.0, macro_step=0)):
+        with pytest.raises(RuntimeError, match="diverged"):
+            action()
+    assert tuple(state.to_data() for state in temporal.states) == before
+
+
+@pytest.mark.parametrize("forgery", ("truncated", "reordered", "swapped"))
+def test_composite_temporal_restore_authenticates_layout_bindings_before_publication(forgery):
+    temporal = _layout_temporal_owner()._temporal_restart_state
+    executor = _layout_temporal_executor(temporal)
+    rows = deepcopy(temporal._layout_states)
+    if forgery == "truncated":
+        rows = rows[:1]
+    elif forgery == "reordered":
+        rows = tuple(reversed(rows))
+    else:
+        rows = ((rows[0][0], rows[1][1]), (rows[1][0], rows[0][1]))
+    candidate = _CompositeTemporalRestartState(dict(rows))
+    before = tuple(child._temporal_restart_state for child in executor._engines.values())
+    with pytest.raises(RuntimeError, match="layout"):
+        executor._restore_temporal_restart_state(candidate)
+    assert executor._temporal_restart_state is temporal
+    assert all(child._temporal_restart_state is leaf
+               for child, leaf in zip(executor._engines.values(), before, strict=True))
+    valid = deepcopy(temporal)
+    # A failed attempt may have changed one leaf's live counters; the installed schedules remain
+    # the authority against which the accepted snapshot is authenticated.
+    temporal.states[1].transaction_stats["failed"] += 1
+    executor._restore_temporal_restart_state(valid)
+    assert executor._temporal_restart_state is valid
+    assert valid.layout_ids == ("layout-a", "layout-b")
+    assert all(child._temporal_restart_state is leaf
+               for child, leaf in zip(executor._engines.values(), valid.states, strict=True))
+
+
+def test_composite_temporal_rejects_conflicting_shared_clock_rates():
+    states = {}
+    for key, count in (("layout-a", 3), ("layout-b", 2)):
+        schedule = _layout_temporal_schedule(key, local_clock=True)
+        schedule["clocks"][1]["ticks_per_macro"] = count
+        schedule["subcycles"][0]["count"] = count
+        state = TemporalRestartState()
+        state.configure_program(schedule, time=0.0, macro_step=0)
+        states[key] = state
+    with pytest.raises(RuntimeError, match="clock contracts diverged"):
+        _CompositeTemporalRestartState(states)
+
+
+def test_composite_checkpoint_preflight_authenticates_uniform_and_amr_temporal_envelopes():
+    from pops.runtime._amr_system_io import _PreparedAMRSystemRestart
+    from pops.runtime._system_io import _PreparedUniformRestart
+    from pops.runtime._multi_layout_executor import _PreparedMultiLayoutRestart
+
+    owner = _layout_temporal_owner()
+    temporal = owner._temporal_restart_state
+    prepared = prepare_program_run(owner)
+    prepared.begin(temporal, time=0.0, macro_step=0)
+    prepared.run_step(owner.raw, t_end=0.03)
+    executor = _layout_temporal_executor(temporal)
+    leaves = [TemporalRestartState.from_json(
+        state.checkpoint_json(time=0.01, macro_step=1), time=0.01, macro_step=1,
+        program_schedule=state.program_schedule) for state in temporal.states]
+    children = (_PreparedUniformRestart(None, None, leaves[0], None, b"", b""),
+                _PreparedAMRSystemRestart(None, SimpleNamespace(temporal_state=leaves[1])))
+    candidate = executor._prepared_temporal_state(children)
+    assert candidate.layout_ids == temporal.layout_ids
+    snapshot = deepcopy(candidate)
+    applied = []
+    for child in executor._engines.values():
+        child._apply_checkpoint_restart = lambda _prepared: applied.append(True)
+    leaves[1].transaction_stats["rejected"] += 1
+    with pytest.raises(RuntimeError, match="transaction_stats"):
+        executor._prepared_temporal_state(children)
+    with pytest.raises(RuntimeError, match="transaction_stats"):
+        executor._apply_checkpoint_restart(_PreparedMultiLayoutRestart(None, {}, children, snapshot))
+    assert applied == []
+    leaves[0].transaction_stats["rejected"] += 1
+    with pytest.raises(RuntimeError, match="changed after preflight"):
+        executor._apply_checkpoint_restart(_PreparedMultiLayoutRestart(None, {}, children, snapshot))
+    assert applied == []

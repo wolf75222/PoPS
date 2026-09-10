@@ -393,7 +393,7 @@ def test_error_controlled_retry_preserves_composite_temporal_attempt_stats():
             super().__init__()
             self.native_attempts = 0
             self._temporal_restart_state = _CompositeTemporalRestartState(
-                (TemporalRestartState(), TemporalRestartState())
+                {"layout-a": TemporalRestartState(), "layout-b": TemporalRestartState()}
             )
 
         def step(self, dt):

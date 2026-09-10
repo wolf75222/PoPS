@@ -222,6 +222,22 @@ def test_report_serialization_is_array_free_and_detached():
 
 
 def test_multi_layout_report_preserves_the_common_temporal_partition():
+    from pops.runtime._multi_layout_executor import _CompositeTemporalRestartState
+    from pops.runtime._temporal_restart import TemporalRestartState
+    from pops.time import Clock
+
+    states = {}
+    for layout_id in ("layout-a", "layout-b"):
+        clock = Clock(layout_id)
+        state = TemporalRestartState()
+        state.configure_program({
+            "schema_version": 1, "kind": "pops.temporal-program-schedule",
+            "primary_clock": clock.qualified_id,
+            "clocks": [{"id": clock.qualified_id, "descriptor": clock.to_data(),
+                        "ticks_per_macro": 1}],
+            "subcycles": [], "synchronizations": [], "schedules": [], "histories": [],
+        }, time=0.0, macro_step=0)
+        states[layout_id] = state
     partition = {
         "kind": "global",
         "provider_identity": "pops.temporal-partition.global.v1",
@@ -247,7 +263,7 @@ def test_multi_layout_report_preserves_the_common_temporal_partition():
             flux_ledger=[],
             synchronization=[],
             temporal_partition=partition,
-            temporal={"schema_version": 1, "accepted_step": 0},
+            temporal=states[layout_id].to_data(),
         )
         return layout_program, (block,), report
 
@@ -257,10 +273,14 @@ def test_multi_layout_report_preserves_the_common_temporal_partition():
         child("layout-b", "field"),
     )
     executor.block_names = lambda: ("fluid", "field")
+    executor._temporal_restart_state = _CompositeTemporalRestartState(states)
 
     report = executor.program_report()
 
     assert report.temporal_partition == partition
+    assert tuple(report.temporal["layouts"]) == ("layout-a", "layout-b")
+    assert report.temporal["layouts"] == {key: state.to_data() for key, state in states.items()}
+    assert report.temporal["layouts"]["layout-a"] != report.temporal["layouts"]["layout-b"]
 
 
 if __name__ == "__main__":
