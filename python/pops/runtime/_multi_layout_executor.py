@@ -676,7 +676,10 @@ class _CompositeTemporalRestartState:
     def require_bindings(self, trusted: _CompositeTemporalRestartState) -> None:
         if self.layout_ids != trusted.layout_ids:
             raise RuntimeError("composite temporal layout identities or order differ")
-        if self.program_schedule != trusted._installed_schedule():
+        self._require_shared()
+        self._installed_schedule()
+        trusted._installed_schedule()
+        if self._schedule_json != trusted._schedule_json:
             raise RuntimeError("composite temporal schedules differ from installed layouts")
 
     @property
@@ -1759,7 +1762,11 @@ class _MultiLayoutUniformExecutor:
             raise TypeError("multi-layout restart requires its exact prepared payload")
         temporal = self._prepared_temporal_state(prepared.children)
         self._require_temporal_layouts(prepared.temporal_state)
-        if temporal.to_data() != prepared.temporal_state.to_data():
+        actual_json = json.dumps(temporal.to_data(), sort_keys=True,
+                                 separators=(",", ":"), allow_nan=False)
+        expected_json = json.dumps(prepared.temporal_state.to_data(), sort_keys=True,
+                                   separators=(",", ":"), allow_nan=False)
+        if actual_json != expected_json:
             raise RuntimeError("prepared checkpoint temporal state changed after preflight")
         for engine, child in zip(self._engines.values(), prepared.children, strict=True):
             engine._apply_checkpoint_restart(child)

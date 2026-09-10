@@ -1097,7 +1097,7 @@ def test_composite_temporal_shared_authority_refuses_real_divergence(attribute, 
     assert tuple(state.to_data() for state in temporal.states) == before
 
 
-@pytest.mark.parametrize("forgery", ("truncated", "reordered", "swapped"))
+@pytest.mark.parametrize("forgery", ("truncated", "reordered", "swapped", "schema-type"))
 def test_composite_temporal_restore_authenticates_layout_bindings_before_publication(forgery):
     temporal = _layout_temporal_owner()._temporal_restart_state
     executor = _layout_temporal_executor(temporal)
@@ -1106,8 +1106,10 @@ def test_composite_temporal_restore_authenticates_layout_bindings_before_publica
         rows = rows[:1]
     elif forgery == "reordered":
         rows = tuple(reversed(rows))
-    else:
+    elif forgery == "swapped":
         rows = ((rows[0][0], rows[1][1]), (rows[1][0], rows[0][1]))
+    else:
+        rows[0][1].program_schedule["schema_version"] = True
     candidate = _CompositeTemporalRestartState(dict(rows))
     before = tuple(child._temporal_restart_state for child in executor._engines.values())
     with pytest.raises(RuntimeError, match="layout"):
@@ -1168,6 +1170,13 @@ def test_composite_checkpoint_preflight_authenticates_uniform_and_amr_temporal_e
         executor._apply_checkpoint_restart(_PreparedMultiLayoutRestart(None, {}, children, snapshot))
     assert applied == []
     leaves[0].transaction_stats["rejected"] += 1
+    with pytest.raises(RuntimeError, match="changed after preflight"):
+        executor._apply_checkpoint_restart(_PreparedMultiLayoutRestart(None, {}, children, snapshot))
+    assert applied == []
+
+    for state in leaves:
+        state.transaction_stats["rejected"] = 0
+        state.transaction_stats["accepted"] = True
     with pytest.raises(RuntimeError, match="changed after preflight"):
         executor._apply_checkpoint_restart(_PreparedMultiLayoutRestart(None, {}, children, snapshot))
     assert applied == []
