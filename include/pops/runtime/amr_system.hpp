@@ -1047,6 +1047,9 @@ class AmrSystem {
   /// explicit bootstrap commits a hierarchy level. Generated artifacts own this seam; direct
   /// low-level steps may omit it because they have no authenticated checkpoint context.
   POPS_EXPORT void install_program_hierarchy_refresh(std::function<void()> refresh);
+  /// Reconstruct derived artifact captures after restore without publishing accepted state.
+  /// The hook must invalidate stale captures before allocation and publish only complete resources.
+  POPS_EXPORT void install_program_resource_refresh(std::function<void()> refresh);
   /// Install the artifact-owned restart preflight, transform, forced resynchronization and
   /// phase-safe accepted-context snapshot hooks.
   POPS_EXPORT void install_program_restart_hooks(

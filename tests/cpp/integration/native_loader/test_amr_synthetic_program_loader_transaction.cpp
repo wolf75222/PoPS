@@ -311,34 +311,76 @@ static bool reject_interface_refresh = false;
 extern "C" void pops_test_reject_interface_refresh(bool reject) {
   reject_interface_refresh = reject;
 }
+static bool reject_history_resource_refresh = false;
+extern "C" void pops_test_reject_history_resource_refresh(bool reject) {
+  reject_history_resource_refresh = reject;
+}
 extern "C" void pops_install_program_amr(
     pops::AmrSystem<pops::kNativeDimension>* system) {
   auto context = pops::runtime::program::make_program_execution_provider(system);
   auto inject_retry = std::make_shared<bool>(true);
   context->configure_primary_clock("tests.synthetic-loader.clock");
 #if POPS_TEST_HISTORIES
-  // Match the generated installer: materialize the frozen history descriptors before bind seals
-  // checkpoint capacity, and refresh all level-qualified rings whenever the hierarchy changes.
-  const auto register_histories = [context] {
+  // Cache actual scratch borrows per level, like the generated CPS installer. A restart must
+  // rebuild them through the resource hook; the step intentionally never refreshes this cache.
+  using LevelBody = std::function<void()>;
+  auto level_bodies = std::make_shared<std::vector<LevelBody>>();
+  auto epoch = std::make_shared<std::uint64_t>(std::numeric_limits<std::uint64_t>::max());
+  auto generation = std::make_shared<std::uint64_t>(std::numeric_limits<std::uint64_t>::max());
+  const auto refresh_resources = [context, level_bodies, epoch, generation](bool force = false) {
+    if (force)
+      *epoch = *generation = std::numeric_limits<std::uint64_t>::max();
+    const auto topology = context->program_resource_topology();
+    const auto& lane = context->prepared_execution_lane();
+    const bool stale = force || *epoch != topology.epoch || *generation != topology.generation ||
+                       level_bodies->size() != static_cast<std::size_t>(topology.levels);
+    if (pops::all_reduce_max(stale ? 1L : 0L, lane) == 0)
+      return;
+    *epoch = *generation = std::numeric_limits<std::uint64_t>::max();
+    std::vector<LevelBody> next;
+    std::exception_ptr error;
+    try { next.reserve(static_cast<std::size_t>(topology.levels)); }
+    catch (...) { error = std::current_exception(); }
+    pops::collectively_rethrow_exception(error, lane, "fixture resource allocation failed");
     context->for_each_program_resource_level([&](int) {
-      for (const char* name : {"tracer.first", "tracer.second"})
-        context->register_history(name, 1, 1, 0, "tests.synthetic-loader/state/tracer",
-                                  "cell.conservative", "tests.synthetic-loader.clock", "none");
+      error = {};
+      try {
+        for (const char* name : {"tracer.first", "tracer.second"})
+          context->register_history(name, 1, 1, 0, "tests.synthetic-loader/state/tracer",
+                                    "cell.conservative", "tests.synthetic-loader.clock", "none");
+        auto* candidate = &context->scratch_state(1000, 0, context->state(0));
+        next.emplace_back([context, candidate] {
+          auto& accepted = context->state(0);
+          context->lincomb(*candidate, pops::Real(2), accepted, pops::Real(0), accepted);
+          context->store_history("tracer.first", accepted, 0);
+          context->store_history("tracer.second", *candidate, 0);
+          context->rotate_histories("tests.synthetic-loader.clock");
+          context->commit_many({{&accepted, candidate}});
+        });
+      } catch (...) { error = std::current_exception(); }
+      pops::collectively_rethrow_exception(error, lane, "fixture resource capture failed");
     });
+    error = {};
+    try {
+      if (std::exchange(reject_history_resource_refresh, false))
+        throw std::runtime_error("injected history resource refresh");
+    } catch (...) { error = std::current_exception(); }
+    pops::collectively_rethrow_exception(error, lane, "fixture resource publication failed");
+    level_bodies->swap(next);
+    *epoch = topology.epoch;
+    *generation = topology.generation;
   };
-  register_histories();
-  context->install([context, register_histories](double dt) {
-    register_histories();
-    context->advance_hierarchy(dt, [context](double) {
-      auto& accepted = context->state(0);
-      auto& candidate = context->scratch_state(1000, 0, accepted);
-      context->lincomb(candidate, pops::Real(2), accepted, pops::Real(0), accepted);
-      context->store_history("tracer.first", accepted, 0);
-      context->store_history("tracer.second", candidate, 0);
-      context->rotate_histories("tests.synthetic-loader.clock");
-      context->commit_many({{&accepted, &candidate}});
-    });
-  }, context, register_histories);
+  refresh_resources();
+  context->install([context, level_bodies, epoch, generation](double dt) {
+    context->advance_mapping_hierarchy(dt, [=](double) {
+      const auto topology = context->program_resource_topology();
+      if (*epoch != topology.epoch || *generation != topology.generation ||
+          level_bodies->size() != static_cast<std::size_t>(topology.levels))
+        throw std::logic_error("fixture continuation resources lost their exact hierarchy generation");
+      level_bodies->at(static_cast<std::size_t>(context->level()))();
+    }, context, [] {});
+  }, context, [=] { refresh_resources(); }, [=] { refresh_resources(true); });
+
 #else
   context->install(
       [context, inject_retry](double macro_dt) {
@@ -893,6 +935,12 @@ TEST(test_amr_synthetic_program_loader_transaction,
         build_refined_system(system, shared_object, initial_state(settings.shape), true));
   }
   ASSERT_EQ(system.installed_program_hash(), "tests.synthetic-loader/program/history-restart-v1");
+  const auto handle = pops::dynlib::open(shared_object);
+  ASSERT_NE(handle, nullptr);
+  using RejectRefresh = void (*)(bool);
+  auto reject_refresh = reinterpret_cast<RejectRefresh>(
+      pops::dynlib::sym(handle, "pops_test_reject_history_resource_refresh"));
+  ASSERT_NE(reject_refresh, nullptr);
   ASSERT_EQ(system.n_levels(), 2);
   const std::vector<std::string> names{"tracer.first", "tracer.second"};
   ASSERT_EQ(system.history_names(), names);
@@ -1048,6 +1096,41 @@ TEST(test_amr_synthetic_program_loader_transaction,
   system.finalize_restart_transaction();
   ASSERT_NO_THROW(system.rollback_restart_transaction());
   EXPECT_EQ(capture(), uninterrupted);
+
+  {
+    SCOPED_TRACE("failed resource publication restores the previous CPS captures");
+    system.begin_restart_transaction();
+    ASSERT_NO_THROW(materialize());
+    ASSERT_NO_THROW(restore(false));
+    reject_refresh(pops::my_rank() == 0);
+    EXPECT_THROW(restore(false), std::exception);
+    EXPECT_THROW(system.preflight_regrid_on_restart(), std::exception);
+    EXPECT_THROW(system.regrid_on_restart(), std::exception);
+    EXPECT_THROW(system.commit_restart_transaction(), std::exception);
+    // Failure while recapturing the rollback image must retain its snapshot and block execution.
+    reject_refresh(pops::my_rank() == 0);
+    EXPECT_THROW(system.rollback_restart_transaction(), std::exception);
+    EXPECT_THROW(system.step(second_dt), std::logic_error);
+    ASSERT_NO_THROW(system.rollback_restart_transaction());
+    EXPECT_EQ(capture(), uninterrupted);
+    // The outer step transaction restores the same physical generation but destroys scratches.
+    // Its rollback must force fresh captures before the following continuation can use them.
+    system.begin_step_transaction();
+    ASSERT_NO_THROW(system.step(second_dt));
+    ASSERT_NO_THROW(system.commit_step_transaction());
+    reject_refresh(pops::my_rank() == 0);
+    EXPECT_THROW(system.rollback_step_transaction(), std::exception);
+    EXPECT_TRUE(system.has_active_step_transaction());
+    EXPECT_THROW(system.step(second_dt), std::logic_error);
+    EXPECT_THROW(system.commit_step_transaction(), std::exception);
+    EXPECT_THROW(system.finalize_step_transaction(), std::exception);
+    ASSERT_NO_THROW(system.rollback_step_transaction());
+    EXPECT_EQ(capture(), uninterrupted);
+    system.begin_step_transaction();
+    ASSERT_NO_THROW(system.step(second_dt));
+    ASSERT_NO_THROW(system.rollback_step_transaction());
+    EXPECT_EQ(capture(), uninterrupted);
+  }
 
   system.begin_restart_transaction();
   ASSERT_NO_THROW(materialize());

@@ -408,6 +408,10 @@ struct ProgramRuntimeState {
   /// closure lets the facade ask that persistent context to republish its level-qualified clocks and
   /// histories before committing each hierarchy transition. Uniform leaves it empty.
   std::function<void()> hierarchy_refresh_;
+  /// Rebuild derived artifact captures after restored storage replaces their borrows, even when
+  /// the restored physical epoch/generation is unchanged. Never publishes accepted state.
+  std::function<void()> resource_refresh_;
+  bool resource_refresh_pending_ = false;
   /// AMR-only, artifact-owned remap boundary. Unlike hierarchy_refresh_, this callback is reached
   /// only after AmrSystem published a topology and atomically exchanged a prepared history manager.
   /// Keeping it distinct prevents a generic hierarchy refresh from accepting stale history storage.
@@ -587,6 +591,8 @@ struct ProgramRuntimeState {
   struct ArtifactStepInstallSnapshot {
     std::function<void(double)> step;
     std::function<void()> hierarchy_refresh;
+    std::function<void()> resource_refresh;
+    bool resource_refresh_pending = false;
     std::function<void(const AmrProgramHistoryRemapDescriptor&)> history_remap_accepted;
     std::function<void()> restart_regrid_preflight;
     std::function<void()> restart_regrid;
@@ -736,6 +742,9 @@ struct ProgramRuntimeState {
     if (!step_)
       throw std::logic_error(std::string(operation) +
                              " requires an installed whole-system Program");
+    if (resource_refresh_pending_)
+      throw std::logic_error(std::string(operation) +
+                             " requires complete restored Program resources");
   }
 
   /// Install an ordinary native step without granting artifact-only replay authority.
@@ -751,6 +760,8 @@ struct ProgramRuntimeState {
       throw std::overflow_error("Program step-install generation overflow");
     step_ = std::move(step);
     hierarchy_refresh_ = nullptr;
+    resource_refresh_ = nullptr;
+    resource_refresh_pending_ = false;
     history_remap_accepted_ = nullptr;
     restart_regrid_preflight_ = nullptr;
     restart_regrid_ = nullptr;
@@ -770,6 +781,8 @@ struct ProgramRuntimeState {
   ArtifactStepInstallSnapshot capture_artifact_step_install() const {
     return ArtifactStepInstallSnapshot{step_,
                                        hierarchy_refresh_,
+                                       resource_refresh_,
+                                       resource_refresh_pending_,
                                        history_remap_accepted_,
                                        restart_regrid_preflight_,
                                        restart_regrid_,
@@ -803,6 +816,8 @@ struct ProgramRuntimeState {
   void rollback_artifact_step_install(ArtifactStepInstallSnapshot&& snapshot) noexcept {
     step_ = std::move(snapshot.step);
     hierarchy_refresh_ = std::move(snapshot.hierarchy_refresh);
+    resource_refresh_ = std::move(snapshot.resource_refresh);
+    resource_refresh_pending_ = snapshot.resource_refresh_pending;
     history_remap_accepted_ = std::move(snapshot.history_remap_accepted);
     restart_regrid_preflight_ = std::move(snapshot.restart_regrid_preflight);
     restart_regrid_ = std::move(snapshot.restart_regrid);
@@ -841,6 +856,24 @@ struct ProgramRuntimeState {
       throw std::invalid_argument(runtime +
                                   "::install_program_hierarchy_refresh requires a non-empty hook");
     hierarchy_refresh_ = std::move(refresh);
+  }
+
+  /// The same installer owns both this derived-resource hook and the step that borrows it.
+  void install_resource_refresh(std::function<void()> refresh, const std::string& runtime) {
+    if (!step_ || !refresh)
+      throw std::invalid_argument(runtime +
+                                  " resource refresh requires an installed Program and hook");
+    resource_refresh_ = std::move(refresh);
+    resource_refresh_pending_ = false;
+  }
+
+  void invalidate_resources() noexcept {
+    resource_refresh_pending_ = static_cast<bool>(resource_refresh_);
+  }
+
+  void refresh_resources() const {
+    if (resource_refresh_)
+      resource_refresh_();
   }
 
   /// Attach the exact post-publication history-remap callback emitted beside an AMR Program.

@@ -112,7 +112,17 @@ def test_nonlinear_coordinate_maps_preserve_bootstrap_and_refresh_phase_contract
     # Bootstrap refreshes the installed level closures as the hierarchy grows.
     # Its phase predicate must recognize the very same Q maps as resolution.
     assert "_refresh_level_programs" in install
-    assert "ctx_owner, _refresh_level_programs" in install
+    assert "ctx_owner, [=]() { _refresh_level_programs(); }" in install
+    assert "[=]() { _refresh_level_programs(true); }" in install
+    invalidation = install.index(
+        "*_level_program_epoch = std::numeric_limits<std::uint64_t>::max();"
+    )
+    reserve = install.index("next.reserve", invalidation)
+    fence = install.index("pops::collectively_rethrow_exception(allocation_error", reserve)
+    traversal = install.index("ctx.for_each_program_resource_level", fence)
+    publish = install.index("_level_programs->swap(next)", traversal)
+    assert invalidation < reserve < fence < traversal < publish
+    assert install.index("*_level_program_epoch = epoch;", publish) > publish
     assert "_require_local_transform_level_contract" not in install
     assert "refusing pre-reflux execution" not in install
     assert "temperature_to_energy" in source

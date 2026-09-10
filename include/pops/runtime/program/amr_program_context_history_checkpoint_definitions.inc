@@ -50,6 +50,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
   }
 
   void publish_restore() noexcept override {
+    owner_->runtime_state().invalidate_resources();
     owner_->cancel_mapping_hierarchy_();
     owner_->staged_field_publications_.clear();
     static_assert(std::is_nothrow_swappable_v<ClockScheduleState>);

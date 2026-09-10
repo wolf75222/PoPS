@@ -146,11 +146,14 @@ void install(std::function<void(double)> step) const {
 }
 
 void install(std::function<void(double)> step, std::shared_ptr<AmrProgramContext> keep_alive,
-             std::function<void()> hierarchy_refresh = {}) const {
+             std::function<void()> hierarchy_refresh = {},
+             std::function<void()> resource_refresh = {}) const {
   require_facade_execution_();
   if (!step || !keep_alive || keep_alive.get() != this)
     throw std::invalid_argument("AMR Program install requires its exact owning context");
   facade_->install_program_step([step = std::move(step), keep_alive](double dt) { step(dt); });
+  if (resource_refresh)
+    facade_->install_program_resource_refresh(std::move(resource_refresh));
   if (hierarchy_refresh)
     facade_->install_program_hierarchy_refresh(
         [owner = keep_alive, refresh = std::move(hierarchy_refresh)]() mutable {

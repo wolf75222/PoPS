@@ -842,22 +842,41 @@ def _emit_amr_install(
         "      std::numeric_limits<std::uint64_t>::max());\n"
         "  auto _level_program_generation = std::make_shared<std::uint64_t>(\n"
         "      std::numeric_limits<std::uint64_t>::max());\n"
-        "  auto _refresh_level_programs = [=]() {\n"
+        "  auto _refresh_level_programs = [=](bool force = false) {\n"
+        "    if (force) {\n"
+        "      *_level_program_epoch = std::numeric_limits<std::uint64_t>::max();\n"
+        "      *_level_program_generation = std::numeric_limits<std::uint64_t>::max();\n"
+        "    }\n"
         "    auto& ctx = *ctx_owner;\n"
         "    const auto topology = ctx.program_resource_topology();\n"
         "    const std::uint64_t epoch = topology.epoch;\n"
         "    const std::uint64_t generation = topology.generation;\n"
         "    const int levels = topology.levels;\n"
         + transform_refresh_guard
-        + "    if (*_level_program_epoch == epoch &&\n"
-        "        *_level_program_generation == generation &&\n"
-        "        _level_programs->size() == static_cast<std::size_t>(levels))\n"
+        + "    const auto& lane = ctx.prepared_execution_lane();\n"
+        "    const bool stale = force || *_level_program_epoch != epoch ||\n"
+        "        *_level_program_generation != generation ||\n"
+        "        _level_programs->size() != static_cast<std::size_t>(levels);\n"
+        "    if (pops::all_reduce_max(stale ? 1L : 0L, lane) == 0)\n"
         "      return;\n"
-        "    _level_programs->clear();\n"
-        "    _level_programs->reserve(static_cast<std::size_t>(levels));\n"
+        # Same-generation restore destroys scratch borrows too. Invalidate before any throwing
+        # preparation so a failed restore cannot execute the previous, now dangling captures.
+        "    *_level_program_epoch = std::numeric_limits<std::uint64_t>::max();\n"
+        "    *_level_program_generation = std::numeric_limits<std::uint64_t>::max();\n"
+        "    std::vector<_PopsAmrLevelProgram> next;\n"
+        "    std::exception_ptr allocation_error;\n"
+        "    try { next.reserve(static_cast<std::size_t>(levels)); }\n"
+        "    catch (...) { allocation_error = std::current_exception(); }\n"
+        "    pops::collectively_rethrow_exception(allocation_error, lane,\n"
+        '        "AMR Program level resource allocation failed collectively");\n'
         "    ctx.for_each_program_resource_level([&](int) {\n"
-        "      _level_programs->emplace_back(_make_level_program());\n"
+        "      std::exception_ptr level_error;\n"
+        "      try { next.emplace_back(_make_level_program()); }\n"
+        "      catch (...) { level_error = std::current_exception(); }\n"
+        "      pops::collectively_rethrow_exception(level_error, lane,\n"
+        '          "AMR Program level resource capture failed collectively");\n'
         "    });\n"
+        "    _level_programs->swap(next);\n"
         "    *_level_program_epoch = epoch;\n"
         "    *_level_program_generation = generation;\n"
         "  };\n"
@@ -885,6 +904,7 @@ def _emit_amr_install(
         # Their collective level region checks the exact generation before use.
         + ("" if has_continuations else "    _refresh_level_programs();\n")
         + installed_driver
-        + "  }, ctx_owner, _refresh_level_programs);\n"
+        + "  }, ctx_owner, [=]() { _refresh_level_programs(); },\n"
+        "     [=]() { _refresh_level_programs(true); });\n"
         "}\n"
     )

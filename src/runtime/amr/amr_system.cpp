@@ -3865,8 +3865,30 @@ struct AmrSystem<Dim>::Impl {
       owner.refresh_prepared_hierarchy();
       if (!field_potentials.empty())
         owner.restore_field_potential_image_atomically(field_potentials);
+      // Context publication discarded scratch storage, even for an identical restored generation.
+      // Rebind the artifact's derived captures only after every native authority is live again.
+      owner.refresh_program_resources_collectively();
     }
   };
+
+  void refresh_program_resources_collectively() {
+    program.invalidate_resources();
+    if (!multiblock_hierarchy)
+      return;
+    const ExecutionLane& lane = multiblock_hierarchy->lane();
+    std::exception_ptr error;
+    try {
+      program.refresh_resources();
+    } catch (...) {
+      error = std::current_exception();
+    }
+    if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && error)
+        std::rethrow_exception(error);
+      throw std::runtime_error("AMR Program resource restoration failed collectively");
+    }
+    program.resource_refresh_pending_ = false;
+  }
 
   std::unique_ptr<AcceptedSnapshot> prepare_accepted_snapshot_collectively(
       std::string_view phase) const {
@@ -8415,6 +8437,8 @@ struct AmrSystem<Dim>::Impl {
   void require_restart_history_restoration(const ExecutionLane& lane) const {
     std::exception_ptr history_error;
     try {
+      if (program.resource_refresh_pending_)
+        throw std::logic_error("AMR restart requires complete restored Program resources");
       if (restart_history_replacement_pending) {
         if (!restart_history_authority_restored || restart_history_authority.empty() ||
             program_accepted_bytes_runtime_owned ||
@@ -12783,6 +12807,7 @@ void AmrSystem<Dim>::install_prepared_amr_interface_flux_provider(
       p_->checkpoint_history_flux_snapshot_capacity = accepted_history_flux_capacity;
       p_->checkpoint_program_state_capacity_contract.swap(accepted_capacity_contract);
       p_->checkpoint_program_state_capacity_provisional = accepted_provisional;
+      p_->refresh_program_resources_collectively();
     }
     throw;
   }
@@ -17268,6 +17293,7 @@ std::string AmrSystem<Dim>::advance_program_region(double dt) {
         lane.communicator(),
         {"pops.program-region.rejection.v1", "pops.program-region.rejection", false, false},
         "AMR Program region failed collectively", [&] {
+          p_->program.require_step_installed("AmrSystem::advance_program_region");
           port = p_->program.advance_cadence_region(p_->accepted_time, p_->macro_step, dt,
                                                    "AmrSystem");
         });
@@ -17699,7 +17725,8 @@ void AmrSystem<Dim>::commit_step_transaction() {
   runtime::program::require_step_transaction_control(
       p_->require_prepared_engine_lane("AMR commit step transaction"), 2,
       static_cast<long>(step_transaction_depth()),
-      p_->external_step_transaction && !p_->external_step_committed,
+      p_->external_step_transaction && !p_->external_step_committed &&
+          !p_->program.resource_refresh_pending_,
       "AmrSystem::commit_step_transaction");
   Kokkos::fence();
   p_->external_step_committed = true;
@@ -17710,7 +17737,8 @@ void AmrSystem<Dim>::finalize_step_transaction() {
   runtime::program::require_step_transaction_control(
       p_->require_prepared_engine_lane("AMR finalize step transaction"), 3,
       static_cast<long>(step_transaction_depth()),
-      p_->external_step_transaction && p_->external_step_committed,
+      p_->external_step_transaction && p_->external_step_committed &&
+          !p_->program.resource_refresh_pending_,
       "AmrSystem::finalize_step_transaction");
   Kokkos::fence();
   p_->external_step_transaction.reset();
@@ -17728,6 +17756,7 @@ void AmrSystem<Dim>::rollback_step_transaction() {
       static_cast<long>(step_transaction_depth()), static_cast<bool>(p_->external_step_transaction),
       "AmrSystem::rollback_step_transaction");
   Kokkos::fence();
+  p_->external_step_committed = false;
   p_->external_step_transaction->restore(*p_);
   p_->external_step_transaction.reset();
   if (!p_->parent_step_transactions.empty()) {
@@ -17880,7 +17909,7 @@ void AmrSystem<Dim>::commit_restart_transaction() {
 template <int Dim>
 void AmrSystem<Dim>::finalize_restart_transaction() noexcept {
   if (p_->native_package_phase != Impl::NativePackagePhase::idle ||
-      !p_->restart_transaction_committed)
+      !p_->restart_transaction_committed || p_->program.resource_refresh_pending_)
     return;
   p_->restart_transaction.reset();
   p_->restart_transaction_committed = false;
@@ -17899,7 +17928,7 @@ void AmrSystem<Dim>::rollback_restart_transaction() {
   if (all_reduce_max(inactive, lane) != 0)
     throw std::logic_error("AmrSystem has no collective restart transaction to roll back");
 
-  std::unique_ptr<typename Impl::AcceptedSnapshot> snapshot = std::move(p_->restart_transaction);
+  // Keep the original snapshot available if rebuilding derived resources fails during rollback.
   p_->restart_transaction_committed = false;
   p_->restart_history_replacement_pending = false;
   p_->restart_history_authority_restored = false;
@@ -17907,7 +17936,7 @@ void AmrSystem<Dim>::rollback_restart_transaction() {
   p_->restart_history_restored_slots.clear();
   std::exception_ptr restore_error;
   try {
-    snapshot->restore(*p_);
+    p_->restart_transaction->restore(*p_);
   } catch (...) {
     restore_error = std::current_exception();
   }
@@ -17919,6 +17948,7 @@ void AmrSystem<Dim>::rollback_restart_transaction() {
       std::rethrow_exception(restore_error);
     throw std::runtime_error("AMR restart rollback failed on at least one MPI rank");
   }
+  p_->restart_transaction.reset();
 }
 
 template <int Dim>
@@ -18068,6 +18098,12 @@ template <int Dim>
 void AmrSystem<Dim>::install_program_hierarchy_refresh(std::function<void()> refresh) {
   p_->require_no_native_package_callback("install_program_hierarchy_refresh");
   p_->program.install_hierarchy_refresh(std::move(refresh), "AmrSystem");
+}
+
+template <int Dim>
+void AmrSystem<Dim>::install_program_resource_refresh(std::function<void()> refresh) {
+  p_->require_no_native_package_callback("install_program_resource_refresh");
+  p_->program.install_resource_refresh(std::move(refresh), "AmrSystem");
 }
 
 template <int Dim>
@@ -21138,11 +21174,21 @@ void AmrSystem<Dim>::restore_checkpoint_accepted_state(const std::vector<std::ui
   // failure deliberately escapes to the outer transaction, whose AcceptedSnapshot restores the
   // hierarchy, carriers, bytes, graph and context together.  Its *inner rollback* still performs
   // no early resync while those authorities are in flight.
+  p_->program.invalidate_resources();
   std::exception_ptr resync_error;
   try {
     p_->program.resync_after_restart("AmrSystem::restore_checkpoint_accepted_state");
   } catch (...) {
     resync_error = std::current_exception();
+  }
+  // A rank-local resync failure must converge before any peer starts the resource callback,
+  // whose generated prelude may itself enter prepared hierarchy collectives.
+  if (all_reduce_max(resync_error ? 1L : 0L, lane.communicator()) == 0) {
+    try {
+      p_->refresh_program_resources_collectively();
+    } catch (...) {
+      resync_error = std::current_exception();
+    }
   }
   if (all_reduce_max(resync_error ? 1L : 0L, lane.communicator()) == 0) {
     if (p_->restart_history_replacement_pending)
@@ -21166,6 +21212,13 @@ void AmrSystem<Dim>::restore_checkpoint_accepted_state(const std::vector<std::ui
     p_->program.resync_after_restart("AmrSystem::restore_checkpoint_accepted_state rollback");
   } catch (...) {
     rollback_resync_error = std::current_exception();
+  }
+  if (all_reduce_max(rollback_resync_error ? 1L : 0L, lane.communicator()) == 0) {
+    try {
+      p_->refresh_program_resources_collectively();
+    } catch (...) {
+      rollback_resync_error = std::current_exception();
+    }
   }
   if (all_reduce_max(rollback_resync_error ? 1L : 0L, lane.communicator()) != 0) {
     const auto describe = [](const std::exception_ptr& error) {
@@ -22024,6 +22077,7 @@ template void AmrSystem<kNativeDimension>::restore_checkpoint_counters(int, std:
 template void AmrSystem<kNativeDimension>::install_program(const std::string&);
 template void AmrSystem<kNativeDimension>::install_program_step(std::function<void(double)>);
 template void AmrSystem<kNativeDimension>::install_program_hierarchy_refresh(std::function<void()>);
+template void AmrSystem<kNativeDimension>::install_program_resource_refresh(std::function<void()>);
 template void AmrSystem<kNativeDimension>::install_program_history_remap_accepted(
     std::function<void(const runtime::program::AmrProgramHistoryRemapDescriptor&)>);
 template void AmrSystem<kNativeDimension>::install_program_restart_hooks(
