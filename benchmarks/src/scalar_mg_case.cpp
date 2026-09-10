@@ -6,6 +6,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <Kokkos_Core.hpp>
 
@@ -124,7 +125,8 @@ void run_scalar_mg_case(const BenchmarkConfig& config, const RuntimeMetadata& me
   options.absolute_tolerance = static_cast<Real>(config.mg_abs_tol);
   options.maximum_cycles = config.mg_max_cycles;
   options.bottom_sweeps = 60;
-  Solver solver(build_request(config), options);
+  const auto lane = ExecutionLane::duplicate_world_collectively("pops.benchmark.scalar-mg");
+  Solver solver(build_request(config), lane, options);
   solver.install_nullspace(FieldNullspacePlan<kDim>{},
                            PreparedVectorDistribution<kDim>::distributed());
   fill_manufactured_rhs(solver);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pops/runtime/program/accepted_exchange.hpp>
 #include <limits>
 
 #include <pops/core/state/variables.hpp>  // VariableSet (role-bearing descriptor carried by each block)
@@ -135,6 +136,16 @@ struct SystemLayoutTransferSpec {
     return value;
   }();
   std::int32_t operation = 0;
+  // Explicit physical support in native storage-axis order. Unmatched axes use -1.
+  bool physical_contract = false;
+  std::array<std::int32_t, Dim> physical_source_to_target = [] {
+    std::array<std::int32_t, Dim> value{};
+    value.fill(-1);
+    return value;
+  }();
+  std::array<std::int32_t, Dim> physical_source_active{};
+  std::array<std::int32_t, Dim> physical_target_active{};
+  std::string program_invocation;
 };
 
 /// Owned projection of PopsExecutionContextV1. Strings are values, never borrowed Python pointers.
@@ -174,6 +185,7 @@ struct SystemLayoutTransferReceipt {
   std::uint64_t attempt = 0;
   std::uint64_t source_element_count = 0;
   std::uint64_t destination_element_count = 0;
+  std::string program_invocation;
 };
 
 namespace runtime::program {
@@ -235,6 +247,14 @@ class System {
  public:
   static constexpr int dimension = Dim;
   using HyperbolicBoundary = PreparedHyperbolicBoundary<Dim>;
+
+  /// One explicitly consumed Program observation and its sealed field-output destination.
+  struct ProgramFieldComponent {
+    runtime::system::AuxiliaryComponentKey key;
+    std::string expected_provider_identity;
+    const MultiFab<Dim>* values = nullptr;
+    int component = 0;
+  };
 
   explicit System(const SystemConfig<Dim>& cfg);
   ~System();
@@ -475,6 +495,27 @@ class System {
   /// finiteness, then the complete candidate carrier and registry generation are published together.
   /// Any failure leaves the accepted carrier and accepted provider points unchanged.
   POPS_EXPORT void refresh_auxiliary(const runtime::system::AuxiliaryEvaluationPoint& point);
+
+  /// Publish only the exact prerequisites of one Uniform Program consumer before its local
+  /// traversal. The complete Program point and selected SSA layout are checked collectively;
+  /// unrelated dirty providers remain pending and field-output providers are never solved here.
+  POPS_EXPORT void prepare_program_auxiliary_consumer(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
+      int block, const MultiFab<Dim>& stage_state, int evaluation_sequence);
+  /// Checked numerical variant for a local solve. No candidate is published on non-finite data;
+  /// the consuming solve owns the selected failure action. Contract failures still throw.
+  [[nodiscard]] POPS_EXPORT runtime::system::AuxiliaryPublicationStatus
+  prepare_program_auxiliary_consumer_for_solve(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
+      int block, const MultiFab<Dim>& stage_state, int evaluation_sequence);
+
+  /// Publish a complete tuple of consumed field observations into existing provider storage.
+  /// Every destination must already be an exact sealed field-output provider; this never solves
+  /// or registers a field, and publication remains provisional inside the current step scope.
+  POPS_EXPORT void publish_program_field_components(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      const std::string& publication_identity,
+      const std::vector<ProgramFieldComponent>& components);
 
   /// Compact slot of a sealed component key and the corresponding accepted scalar field.  The key,
   /// rather than a legacy physical label or a raw component number, is the public authority.
@@ -802,7 +843,16 @@ class System {
   void step(double dt);  ///< solve_fields, then advances each block according to its scheme
   void advance(double dt, int nsteps);
   /// RuntimeInstance-only outer transaction spanning native advancement and prepared consumers.
+  POPS_EXPORT std::string advance_program_region(double dt);
   void begin_step_transaction();
+  /// Open an explicit child scope; child publication remains provisional in its parent.
+  POPS_EXPORT void begin_nested_step_transaction();
+  POPS_EXPORT std::size_t step_transaction_depth() const noexcept;
+  POPS_EXPORT void stage_program_exchange(runtime::program::ExchangeRecord record);
+  POPS_EXPORT void stage_program_exchanges(std::span<runtime::program::ExchangeRecord> records);
+  POPS_EXPORT std::vector<runtime::program::ExchangeRecord> program_exchange_records() const;
+  POPS_EXPORT std::vector<std::uint8_t> checkpoint_program_exchanges() const;
+  POPS_EXPORT void restore_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes);
   /// Seal the native state while retaining its accepted snapshot until external effects publish.
   void commit_step_transaction();
   /// Release the accepted snapshot after every external effect has published successfully.
@@ -984,6 +1034,12 @@ class System {
       MultiFab<Dim>& R, const System* prepared_system, int prepared_block,
       const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
       const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
+  /// Flux-only twin retaining the actual boundary-qualified faces in the supplied session.
+  POPS_EXPORT void block_neg_div_flux_into_at_prepared(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
+      MultiFab<Dim>& R, const System* prepared_system, int prepared_block,
+      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
+      const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
   /// Whether ordinary Program RHS evaluation must use a standalone prepared boundary session.
   /// This reports retained boundary state rather than closure completeness so an incomplete
   /// boundary authority fails loudly instead of falling back to the legacy no-lane route.
@@ -1159,6 +1215,11 @@ class System {
   /// Program. The per-slot outgoing dt is exposed so the checkpoint records the exact interval
   /// between adjacent state samples and replay reproduces a variable-dt history bit-for-bit.
   /// @{
+  /// Canonical noncollective typed ledger. Empty restore bytes explicitly mark legacy unknowns.
+  POPS_EXPORT std::vector<std::uint8_t> history_sample_identity(const std::string& name) const;
+  POPS_EXPORT void restore_history_sample_identity(const std::string& name,
+                                                   const std::vector<std::uint8_t>& bytes);
+
   /// The outgoing dt from slot @p slot toward its newer neighbour (HistoryManager::slot_dt). 0 for a
   /// slot that was never stored (a never-stepped ring). @throws if @p name is unknown or @p slot out
   /// of range.
@@ -1354,6 +1415,9 @@ class System {
   /// same exact-ranked flattened layout as potential().
   void set_potential(const std::vector<double>& phi);
   std::vector<std::string> field_provider_slots() const;
+  /// Whether the exact registered field provider owns its complete prepared backend. This query is
+  /// collective-free and never constructs a field provider.
+  bool field_provider_materialized(const std::string& provider_slot) const;
   /// Read-only restart authority. Named identities match ``field_provider_slots`` exactly and in
   /// order. The default slot is included when the installed prepared RHS/configuration can
   /// materialize that exact field, even if it has not been instantiated yet. This query never
@@ -1424,6 +1488,8 @@ class System {
                                                   /// @}
 
  private:
+  typename SystemInterfaceProvider<Dim>::CoreEvaluator prepare_interface_core_evaluator_();
+  void prepare_bound_physical_group_();
   friend class runtime::program::ProgramContext<Dim>;
   friend class PreparedSystemLayoutTransfer<Dim>;
   /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains
@@ -1475,7 +1541,8 @@ class System {
   [[nodiscard]] POPS_EXPORT bool field_publication_transaction_active_() const noexcept;
   POPS_EXPORT void begin_field_publication_outcome_();
   POPS_EXPORT SolveOutcome stage_field_publication_outcome_(SolveReport report);
-  SolveOutcome run_field_publication_outcome_(const std::function<SolveReport()>& solve);
+  POPS_EXPORT SolveOutcome
+  run_field_publication_outcome_(const std::function<SolveReport()>& solve);
   enum class NativePackageKind { generic, prepared_boundary };
   void stage_native_package_(
       std::string identity, std::function<void()> route_registrar, std::function<void()> installer,
@@ -1483,6 +1550,9 @@ class System {
       std::shared_ptr<runtime::system::NativePackageCapabilityState<Dim>> capability,
       NativePackageKind kind);
   void seal_auxiliary_providers_(const CommunicatorView& communicator);
+  runtime::system::AuxiliaryPublicationStatus refresh_auxiliary_(
+      const runtime::system::AuxiliaryEvaluationPoint& point,
+      const std::vector<std::string>& consumer_qids);
   /// Read-only compiled-artifact capability check.  Kept private so only ProgramContext can issue
   /// an authenticated apply token; installation writes Impl directly and no public setter exists.
   POPS_EXPORT bool program_owns_operator_authority(

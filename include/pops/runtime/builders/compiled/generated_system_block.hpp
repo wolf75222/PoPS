@@ -86,17 +86,10 @@ void publish_conservative_state(const Model& model, const double* primitive, dou
 }
 
 template <int Dim, class Model>
-concept GeneratedSourceModel =
-    requires(const Model& model, const typename Model::State& state,
-             const ProviderValues<provider_count_for<Model, Dim>()>& providers) {
-      { model.source(state, providers) } -> std::same_as<typename Model::State>;
-    };
+concept GeneratedSourceModel = PhysicalSourceFor<Model, Dim>;
 
-template <class Model>
-concept GeneratedEllipticRhsModel =
-    requires(const Model& model, const typename Model::State& state) {
-      { model.elliptic_rhs(state) } -> std::convertible_to<Real>;
-    };
+template <int Dim, class Model>
+concept GeneratedEllipticRhsModel = PhysicalEllipticRhsFor<Model, Dim>;
 
 template <int Dim>
 struct CopyValidField {
@@ -111,6 +104,7 @@ struct CopyValidField {
 };
 
 template <int Dim, class Model>
+  requires PhysicalSourceFor<Model, Dim>
 struct MaterializeSource {
   static constexpr int provider_count = provider_count_for<Model, Dim>();
   Model model;
@@ -171,6 +165,7 @@ struct MaterializePointwiseProjection {
 };
 
 template <int Dim, class Model>
+  requires PhysicalEllipticRhsFor<Model, Dim>
 struct MaterializePoissonRhs {
   Model model;
   FieldView<const Real, Dim> state{};
@@ -187,7 +182,26 @@ struct MaterializePoissonRhs {
 template <int Axis, int Dim, class Model>
 POPS_HD Real maximum_axis_speed(const Model& model, const typename Model::State& state,
                                 const BoundFluxProviders<Model>& providers) {
-  const Real local = detail::model_max_wave_speed_at<Axis>(model, state, providers);
+  // This reduction selects the timestep bound, not the physical Riemann wave speed.
+  // Retain the exact model-qualified provider pack used by the selected physical component.
+  Real local;
+  if constexpr (requires {
+                  {
+                    model.template stability_speed<Axis>(state, providers)
+                  } -> std::convertible_to<Real>;
+                })
+    local = model.template stability_speed<Axis>(state, providers);
+  else if constexpr (requires {
+                       {
+                         model.stability_speed(state, providers, Axis)
+                       } -> std::convertible_to<Real>;
+                     })
+    local = model.stability_speed(state, providers, Axis);
+  else
+    local = detail::model_max_wave_speed_at<Axis>(model, state, providers);
+  // An invalid axis must survive both the axis maximum and the later cell/rank reduction.
+  if (!Kokkos::isfinite(local) || local < Real(0))
+    return std::numeric_limits<Real>::infinity();
   if constexpr (Axis + 1 < Dim) {
     const Real remainder = maximum_axis_speed<Axis + 1, Dim>(model, state, providers);
     return local > remainder ? local : remainder;
@@ -591,15 +605,15 @@ void apply_pointwise_projection(
                           state.ghosts());
         status.emplace(state.layout(), state.distribution(), state.local_rank(), 1, state.ghosts());
         for (std::size_t local = 0; local < state.local_size(); ++local)
-          for_each_cell(state.box(local),
-                        MaterializePointwiseProjection<Dim, Model>{
-                            model, std::as_const(state).fab(local).view(),
-                            candidate->fab(local).view(),
-                            runtime::system::bind_provider_storage_view<Dim, provider_count>(
-                                plan, provider_storage, local),
-                            active_cells == nullptr ? FieldView<const Real, Dim>{}
-                                                    : active_cells->fab(local).view(),
-                            status->fab(local).view(), active_cells != nullptr});
+          for_each_cell(
+              state.box(local),
+              MaterializePointwiseProjection<Dim, Model>{
+                  model, std::as_const(state).fab(local).view(), candidate->fab(local).view(),
+                  runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                      plan, provider_storage, local),
+                  active_cells == nullptr ? FieldView<const Real, Dim>{}
+                                          : active_cells->fab(local).view(),
+                  status->fab(local).view(), active_cells != nullptr});
         device_fence();
         if (state.local_size() != 0)
           local_status = reduce_max_local(*status);
@@ -624,7 +638,11 @@ void add_poisson_rhs(const Model& model, const MultiFab<Dim>& state, MultiFab<Di
   if (rhs.ncomp() != 1)
     throw std::invalid_argument("generated Poisson RHS destination must have one component");
   require_same_layout(state, rhs, 1, "generated Poisson RHS");
-  if constexpr (GeneratedEllipticRhsModel<Model>) {
+  if constexpr (requires(const Model& provider, const typename Model::State& value) {
+                  provider.elliptic_rhs(value);
+                }) {
+    static_assert(GeneratedEllipticRhsModel<Dim, Model>,
+                  "declared elliptic RHS requires its exact physical rank and scalar result");
     MultiFab<Dim> candidate(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
     MultiFab<Dim> status(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
     for (std::size_t local = 0; local < state.local_size(); ++local)
@@ -736,16 +754,18 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     require_same_layout(state, residual, Model::n_vars, "generated flux residual");
     prepare_state(state, boundary);
 
+    const auto omitted_faces =
+        boundary == nullptr ? std::array<bool, 2 * Dim>{} : boundary->omitted_interface_faces();
     auto faces = nd::make_face_flux_workspace(state);
     for (std::size_t local = 0; local < state.local_size(); ++local) {
       if constexpr (flux_provider_count<Model> == 0)
-        spatial.materialize_face_fluxes(state.fab(local), faces[local]);
+        spatial.materialize_face_fluxes(state.fab(local), faces[local], omitted_faces);
       else
         spatial.materialize_face_fluxes(
             state.fab(local),
             runtime::system::bind_provider_storage_view<Dim, flux_provider_count<Model>>(
                 provider_plan, provider_storage, local),
-            faces[local]);
+            faces[local], omitted_faces);
       if (boundary != nullptr)
         boundary->apply_physical_flux_conditions(faces[local], geometry.domain());
     }
@@ -795,6 +815,8 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     prepare_state_with_external(point, state, boundary, lane, transport);
     transport.with_boundary_scratch(state, [&](auto& scratch) {
       auto& faces = scratch.generated_faces;
+      const auto omitted_faces =
+          boundary == nullptr ? std::array<bool, 2 * Dim>{} : boundary->omitted_interface_faces();
       prepared_boundary_collective_phase(
           lane,
           [&] {
@@ -802,14 +824,15 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
               if constexpr (flux_provider_count<Model> == 0)
                 spatial.materialize_face_fluxes(state.fab(local), faces[local],
                                                 scratch.cartesian_operator.face_candidate(local),
-                                                scratch.cartesian_operator.face_status(local));
+                                                scratch.cartesian_operator.face_status(local),
+                                                omitted_faces);
               else
                 spatial.materialize_face_fluxes(
                     state.fab(local),
                     runtime::system::bind_provider_storage_view<Dim, flux_provider_count<Model>>(
                         provider_plan, provider_storage, local),
                     faces[local], scratch.cartesian_operator.face_candidate(local),
-                    scratch.cartesian_operator.face_status(local));
+                    scratch.cartesian_operator.face_status(local), omitted_faces);
               if (boundary != nullptr)
                 boundary->apply_physical_flux_conditions(faces[local], geometry.domain());
             }
@@ -978,6 +1001,12 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
                             const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
         flux_with_transport(point, state, residual, nullptr, lane, transport);
       };
+  result.closures.periodic_flux_at_point_prepared =
+      [flux_with_transport](const auto& point, MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                            const ExecutionLane& lane,
+                            const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        flux_with_transport(point, state, residual, nullptr, lane, transport);
+      };
   auto compiled_boundary_residual =
       make_prepared_boundary_residual<Dim>(result.closures.boundary_full_at_point_prepared,
                                            result.closures.boundary_core_at_point_prepared);
@@ -1098,6 +1127,89 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   return result;
 }
 
+/// Storage and conversion support for a Program-owned spatial operator. No transport law
+/// is installed by this adapter: selecting a legacy residual is a capability error.
+template <int Dim, class Request>
+PreparedSystemBlock<Dim> materialize_state_block(Request request) {
+  using Model = std::remove_cvref_t<decltype(request.model)>;
+  static_assert(PhysicalStateFor<Model, Dim>);
+  if (request.routes.limiter != "state_storage" || request.routes.riemann != "unavailable" ||
+      request.routes.reconstruction != "conservative")
+    throw std::invalid_argument("Program-only model requires the exact state-storage route");
+  constexpr int provider_count = provider_count_for<Model, Dim>();
+  if constexpr (provider_count > 0) {
+    if (!request.provider_plan || !request.provider_storage ||
+        request.provider_plan->value_count() != static_cast<std::size_t>(provider_count))
+      throw std::invalid_argument("state-storage model requires its exact provider plan");
+  } else if (request.provider_plan || request.provider_storage) {
+    throw std::invalid_argument("provider-free state storage cannot retain provider state");
+  }
+  const auto model = request.model;
+  const auto geometry = request.geometry;
+  const auto topology = request.topology;
+  Extent<Dim> ghosts{};
+  for (int axis = 0; axis < Dim; ++axis)
+    ghosts[axis] = 1;
+  auto prepare = [geometry, topology, ghosts](MultiFab<Dim>& state) {
+    const HaloSchedule<Dim> schedule(state.layout(), state.distribution(), state.local_rank(),
+                                     geometry.domain(), ghosts, topology, state.ncomp(),
+                                     halo_budget(state, geometry.domain(), topology, ghosts));
+    fill_boundary(state, schedule);
+  };
+  PreparedSystemBlock<Dim> result;
+  result.provider_identity = "pops.generated.program-state.nd/" + std::to_string(Dim);
+  result.provider_components = provider_count;
+  result.ghosts = ghosts;
+  auto unavailable = [](auto&&...) -> void {
+    throw std::logic_error("state-storage block has no selected legacy spatial residual");
+  };
+  result.closures.rhs_into = unavailable;
+  result.closures.rhs_flux_only = unavailable;
+  result.closures.source_only = unavailable;
+  result.closures.source_only_masked = unavailable;
+  result.closures.rhs_at_point = unavailable;
+  result.closures.rhs_flux_only_at_point = unavailable;
+  result.closures.rhs_core_at_point = unavailable;
+  result.closures.rhs_flux_only_core_at_point = unavailable;
+  result.closures.rhs_without_prepared_interfaces = unavailable;
+  result.closures.rhs_flux_only_without_prepared_interfaces = unavailable;
+  result.closures.rhs_core_at_point_prepared = unavailable;
+  result.closures.rhs_flux_only_core_at_point_prepared = unavailable;
+  result.closures.prepare_generated_state_at_point = [prepare](const auto&, MultiFab<Dim>& state) {
+    prepare(state);
+  };
+  result.closures.prepare_generated_state_at_point_prepared =
+      [](const auto&, MultiFab<Dim>&, const PreparedHyperbolicBoundary<Dim>&) {
+        throw std::logic_error("state storage cannot consume a hyperbolic boundary law");
+      };
+  result.closures.prepare_generated_state_with_transport_prepared = unavailable;
+  result.closures.external_ghost_boundary =
+      std::make_shared<typename SystemBlockClosures<Dim>::ExternalGhostBoundary>();
+  result.maximum_speed = [](const MultiFab<Dim>&, const ExecutionLane&) -> Real {
+    throw std::logic_error("state storage has no hyperbolic wave-speed provider");
+  };
+  result.poisson_rhs = [](const MultiFab<Dim>&, MultiFab<Dim>&) {
+    throw std::logic_error("state storage has no implicit default Poisson source");
+  };
+  result.primitive_to_conservative = [model](const double* primitive, double* conservative) {
+    publish_conservative_state(model, primitive, conservative);
+  };
+  auto recovery = std::make_shared<PreparedModelVariableInversionRecovery<Model>>(model);
+  result.conservative_to_primitive = [recovery](const double* conservative, double* primitive) {
+    Real input[Model::n_vars]{};
+    for (int component = 0; component < Model::n_vars; ++component)
+      input[component] = static_cast<Real>(conservative[component]);
+    const auto prepared = recovery->recover(input);
+    const RecoveryOutcome<Model::n_vars>& outcome = prepared.outcome;
+    if (outcome.publication_permitted())
+      for (int component = 0; component < Model::n_vars; ++component)
+        primitive[component] = static_cast<double>(outcome.value[component]);
+    return recovery_report(outcome);
+  };
+  result.batch_conservative_to_primitive = make_uniform_variable_inversion_consumer(recovery);
+  return result;
+}
+
 template <int Dim, nd::ReconstructionVariables Variables, class Request, class Reconstruction>
 PreparedSystemBlock<Dim> select_riemann(Request request, Reconstruction reconstruction) {
   using Model = std::remove_cvref_t<decltype(request.model)>;
@@ -1154,6 +1266,7 @@ PreparedSystemBlock<Dim> select_reconstruction(Request request) {
 /// Materialize the exact-ranked elliptic RHS closure owned by one bound generated model. Native
 /// System and AMR packages use the same typed closure; only the host field layout differs.
 template <class Model>
+  requires PhysicalEllipticRhsFor<Model, kNativeDimension>
 auto make_poisson_rhs(Model model) {
   return [model = std::move(model)](const MultiFab<kNativeDimension>& state,
                                     MultiFab<kNativeDimension>& rhs) {
@@ -1168,16 +1281,24 @@ auto prepare_generated_system_block(Request request) -> PreparedSystemBlock<Requ
   using Model = std::remove_cvref_t<decltype(request.model)>;
   static_assert(Model::dimension == Dim,
                 "generated System request and physical model have different ranks");
-  switch (parse_recon_route(request.routes.reconstruction, "generated System block")) {
-    case ReconRouteId::kConservative:
-      return generated_system_detail::select_reconstruction<
-          Dim, nd::ReconstructionVariables::Conservative>(std::move(request));
-    case ReconRouteId::kPrimitive:
-      return generated_system_detail::select_reconstruction<Dim,
-                                                            nd::ReconstructionVariables::Primitive>(
-          std::move(request));
+  constexpr bool storage_only = [] {
+    if constexpr (requires { Model::program_only_storage; })
+      return static_cast<bool>(Model::program_only_storage);
+    return false;
+  }();
+  if constexpr (storage_only) {
+    return generated_system_detail::materialize_state_block<Dim>(std::move(request));
+  } else {
+    switch (parse_recon_route(request.routes.reconstruction, "generated System block")) {
+      case ReconRouteId::kConservative:
+        return generated_system_detail::select_reconstruction<
+            Dim, nd::ReconstructionVariables::Conservative>(std::move(request));
+      case ReconRouteId::kPrimitive:
+        return generated_system_detail::select_reconstruction<
+            Dim, nd::ReconstructionVariables::Primitive>(std::move(request));
+    }
+    throw std::logic_error("generated reconstruction route escaped its exhaustive selector");
   }
-  throw std::logic_error("generated reconstruction route escaped its exhaustive selector");
 }
 
 }  // namespace pops

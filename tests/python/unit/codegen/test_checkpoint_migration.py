@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import struct
 
 import numpy as np
 import pytest
@@ -139,7 +140,7 @@ def _migration_provenance(mapping=None):
 
 
 def _strict_uniform_preflight_payload():
-    return {
+    payload = {
         "t": np.asarray(0.0, dtype=np.float64),
         "macro_step": np.asarray(0, dtype=np.int64),
         "pops_spatial_contract": np.asarray("{}"),
@@ -156,6 +157,14 @@ def _strict_uniform_preflight_payload():
         "program_cadence_window_start_time": np.asarray(0.0, dtype=np.float64),
         "program_last_dt": np.asarray(0.0, dtype=np.float64),
     }
+    # The continuation members are captured through the production checkpoint writer.  They are
+    # native-owned accepted-state bytes and the resolved transition plan, so this fixture cannot
+    # silently drift by hand-recreating a now-required wire contract.
+    from pops.runtime._checkpoint_exchanges import capture_checkpoint_continuation
+    from tests.python.unit.runtime.test_continuation_transitions import _owner
+
+    capture_checkpoint_continuation(_owner(), payload)
+    return payload
 
 
 def test_checkpoint_migration_provenance_is_consumed_by_producer_and_restart():
@@ -196,6 +205,20 @@ def test_checkpoint_migration_provenance_is_consumed_by_producer_and_restart():
     payload["unreviewed_archive_member"] = np.asarray("forbidden")
     with pytest.raises(ValueError, match="unknown archive members"):
         preflight_uniform_restart(payload)
+
+
+def test_uniform_v2_authority_requires_an_empty_native_exchange_mailbox():
+    from pops.codegen._checkpoint_migration_uniform_v2 import (
+        _attest_empty_accepted_exchange_authority,
+    )
+
+    payload = _strict_uniform_preflight_payload()
+    _attest_empty_accepted_exchange_authority(payload)
+    state = np.asarray(payload["program_exchange_state"]).copy()
+    state[8] = 1  # POPSEX01's exact little-endian accepted-record count.
+    payload["program_exchange_state"] = state
+    with pytest.raises(ValueError, match="non-empty accepted exchange mailbox"):
+        _attest_empty_accepted_exchange_authority(payload)
 
 
 def _write_source(tmp_path):
@@ -241,7 +264,31 @@ def _write_authority(tmp_path, native_cxx, *, history_slot_dt=(0.01, 0.01)):
             }
         history = tuple(str(name) for name in payload["history_names"])
         assert len(history) == 1
-        payload["history_slot_dt_" + history[0]] = np.asarray(history_slot_dt, dtype=np.float64)
+        history_name = history[0]
+        payload["history_slot_dt_" + history_name] = np.asarray(
+            history_slot_dt, dtype=np.float64
+        )
+        from pops.runtime._history_sample_identity import (
+            identity_key,
+            validate_identity_bytes,
+        )
+
+        sample_key = identity_key(history_name, None)
+        sample_identity = bytearray(np.asarray(payload[sample_key]).tobytes())
+        depth = int(payload["history_depth_" + history_name])
+        row_offset = 8 + 8 + len(history_name.encode("utf-8")) + 8 + 8
+        assert len(sample_identity) == row_offset + 32 * depth
+        for slot, interval in enumerate(history_slot_dt):
+            struct.pack_into("<d", sample_identity, row_offset + 32 * slot + 16, interval)
+        validate_identity_bytes(
+            sample_identity,
+            history_name,
+            None,
+            depth,
+            initialized=bool(payload["history_init_" + history_name]),
+            slot_dt=history_slot_dt,
+        )
+        payload[sample_key] = np.frombuffer(sample_identity, dtype=np.uint8).copy()
         restart = seal_checkpoint_payload(runtime, payload, runtime_kind="uniform")
         np.savez_compressed(path, **payload)
     else:
@@ -409,6 +456,18 @@ def test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts(tmp_path, na
     assert int(migrated["pops_checkpoint_version"]) == UNIFORM_CHECKPOINT_PAYLOAD_VERSION
     authority_payload = decode_checkpoint_bytes(authority_bytes, owner._checkpoint_resource_budget)
     assert str(migrated["program_hash"]) == str(authority_payload["program_hash"])
+    from pops.runtime._checkpoint_exchanges import CONTINUATION_CHECKPOINT_KEYS
+    from pops.runtime._history_sample_identity import identity_key
+    assert UNIFORM_V2_AUTHORITY_TRANSFERS[-2:] == (
+        "accepted_exchange_mailbox",
+        "continuation_transition_plan",
+    )
+    assert "history_sample_identity_unknown_provenance" in UNIFORM_V2_AUTHORITY_TRANSFERS
+    for key in CONTINUATION_CHECKPOINT_KEYS:
+        assert np.array_equal(migrated[key], authority_payload[key])
+    for history in tuple(str(name) for name in migrated["history_names"]):
+        assert identity_key(history, None) in authority_payload
+        assert identity_key(history, None) not in migrated
     assert np.array_equal(
         migrated["auxiliary_checkpoint"], authority_payload["auxiliary_checkpoint"]
     )

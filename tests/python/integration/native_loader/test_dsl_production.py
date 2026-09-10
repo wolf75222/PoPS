@@ -18,7 +18,6 @@ import pops.runtime._engine_descriptors as engine
 from pops.codegen.loader import CompiledModel
 from test_dsl_coupled import build_euler, compile_euler_artifact, GAMMA, INCLUDE
 from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
-from tests.python.support.explicit_program import install_forward_euler_program
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.requirements import (
     default_cxx,
@@ -110,7 +109,10 @@ def main():
                 sys._s._finalize_native_packages()
                 sys._pending_native_packages = 0
             sys.set_state("gas", np.asarray(initial).reshape(-1).tolist())
-            install_forward_euler_program(sys)
+            # Exercise the exact compiled Program carried by the public artifact.  The generic
+            # low-level Forward-Euler bridge uses a different (though mathematically equivalent)
+            # lincomb kernel sequence, so it cannot support a bitwise public-package parity claim.
+            sys.install_program(artifact.program.so_path)
             return sys
 
         def compare(limiter, riemann, recon):
@@ -151,14 +153,25 @@ def main():
         # (2) le plan Rusanov/MUSCL authentifie est identique entre le package detache prepare et
         # le lifecycle public bind/run.  C'est la reference supportee depuis le retrait de ModelSpec.
         prod = build_native("minmod", "rusanov", "conservative")
-        public = pops.bind(artifact, initial_state={"gas": np.ascontiguousarray(U)})
+        public = pops.bind(
+            artifact,
+            initial_state={"gas": np.ascontiguousarray(U)},
+            resources={"execution_context": artifact_execution_context(artifact)},
+        )
+        assert (
+            prod.program_report().program_hash
+            == artifact.program_hash
+            == public.program_report().program_hash
+        )
         dt = 1e-4
-        for _ in range(12):
-            prod.step(dt)
+        # Both sides must consume the same authenticated FixedDt segment.  Reopening twelve
+        # one-step intervals would make every local endpoint ``time + dt`` and bypass the final
+        # accumulated-roundoff correction exercised by the public run.
+        prod_steps = prod.run(12 * dt, max_steps=12)
         report = pops.run(public, t_end=12 * dt, max_steps=12)
         Up = np.array(prod.get_state("gas")).reshape(4, n, n)
         Ur = np.array(public.state_global("gas")).reshape(4, n, n)
-        assert report.accepted_steps == 12
+        assert prod_steps == report.accepted_steps == 12
         assert np.isfinite(Up).all() and Up[0].min() > 0, "etat de production non physique"
         assert float(np.abs(Up[1]).max()) > 1e-4, "le transport Euler est reste trivial"
         assert np.array_equal(Up, Ur), "package prepare != public bind apres 12 pas"

@@ -86,10 +86,8 @@ def _emit_local_transform_kernel(
     temporaries, rendered, temporary_names = _cse_emit(
         roots, "pops::Real", "    ", materialize_all=True, return_names=True)
     body.append("    pops::Real transform_failed_ = pops::Real(0);")
-    for declaration_line, temporary_name in zip(
-        temporaries, temporary_names, strict=True,
-    ):
-        body.append(declaration_line)
+    body.extend(temporaries)
+    for temporary_name in temporary_names:
         body.append(
             "    if (!Kokkos::isfinite(%s)) transform_failed_ = pops::Real(1);"
             % temporary_name)
@@ -133,6 +131,13 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
     provider_binding = _provider_binding(
         impl, exprs if plan_exprs is None else plan_exprs, provider_plans, consumer_qid)
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
+    helpers = getattr(provider_plans, "source_kernel_helpers", None)
+    if helpers is not None:
+        shared_call = helpers.call(
+            impl, exprs, binding=provider_binding, state_var=state_var,
+            out_var=out_var, block_index=block_idx)
+        if shared_call is not None:
+            return shared_call
     params_block = block_idx if _has_runtime_param(exprs) else None
     body = _kernel_open(out_var, state_var, params_block, provider_binding=provider_binding,
                         program_block=block_idx)
@@ -164,9 +169,14 @@ def _component_sources(
             "multi-state operator references ambiguous bare component(s) %s; obtain exact "
             "coordinates with module.state_symbols(state_space)" % ambiguous)
     sources = {}
-    for state in states:
+    from pops.model.state_symbols import native_input_state_component_symbols
+    coordinates = native_input_state_component_symbols(state.space for state in states)
+    for ordinal, state in enumerate(states):
         for index, component in enumerate(state.space.components):
             source = source_for_state(state, index)
+            bound = coordinates[ordinal][index]
+            if bound in referenced:
+                sources[bound] = source
             qualified = state_component_symbol(state.space, component)
             if qualified in referenced:
                 sources[qualified] = source
@@ -180,7 +190,9 @@ def _component_sources(
     return sources
 
 
-def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch: Any) -> list:
+def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch: Any, *,
+                              status: str | None = None, active_mask: str | None = None,
+                              reason: str | None = None) -> list:
     """Lower a ``coupled_rate`` (Spec 3 criterion 27, ADC-457) to ONE multi-state for_each_cell kernel
     filling every participating block's rate scratch at once.
 
@@ -219,6 +231,14 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
             "  const pops::FieldView<pops::Real, pops::kNativeDimension> %sA = "
             "%s.fab(li).view();" % (scratch[blk], scratch[blk])
         )
+    if status is not None:
+        lines.append("  const auto native_status_view = %s.fab(li).view();" % status)
+        if reason is not None:
+            lines.append("  const auto native_reason_view = %s.fab(li).view();" % reason)
+        lines.append("  const bool native_has_active_mask = %s != nullptr;" % active_mask)
+        lines.append("  const pops::FieldView<const pops::Real, pops::kNativeDimension> "
+                     "native_active_view = native_has_active_mask ? %s->fab(li).view() : "
+                     "pops::FieldView<const pops::Real, pops::kNativeDimension>{};" % active_mask)
     read_tokens = {src[0] for src in cons_source.values()}
     seen_states = []
     for st in by_block.values():                 # input order (v.inputs); deterministic
@@ -233,12 +253,48 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
         "  pops::for_each_cell(%s.box(li), [=] POPS_HD("
         "const pops::CellIndex<pops::kNativeDimension>& index) {" % driver
     )
+    if status is not None:
+        lines.append("    native_status_view(index, 0) = pops::Real(0);")
+        if reason is not None:
+            lines.append("    native_reason_view(index, 0) = pops::Real(0);")
+        lines.append("    if (native_has_active_mask && native_active_view(index, 0) == pops::Real(0)) return;")
     for c in sorted(cons_source):                # bind only the referenced cons (no unused locals)
         tok, idx = cons_source[c]
         lines.append("    const pops::Real %s = %s(index, %d);" % (c, state_handle(tok), idx))
+    from .cpp_writer import _cse_emit
+    roots = [e for blk in blocks for e in components[blk]]
+    declarations, rendered, native_results = _cse_emit(
+        roots, "pops::Real", "    ", return_native_statuses=True)
+    if native_results and status is None:
+        raise ValueError("native interaction requires its planned collective status boundary")
+    lines += declarations
+    if status is not None:
+        lines.append("    int native_status = 0;")
+        if reason is not None:
+            lines.append("    unsigned native_reason = 0;")
+        for result in native_results:
+            lines.append("    const int native_category_%s = static_cast<int>(%s.status);" % (result, result))
+            lines.append("    const int native_checked_%s = native_category_%s >= 0 && "
+                         "native_category_%s <= 3 ? native_category_%s : 3;" % ((result,) * 4))
+            if reason is not None:
+                lines.append("    if (native_checked_%s > native_status) native_reason = %s.reason;" % (result, result))
+                lines.append("    else if (native_checked_%s == native_status) "
+                             "native_reason = Kokkos::max(native_reason, %s.reason);" % (result, result))
+            lines.append("    native_status = Kokkos::max(native_status, native_checked_%s);" % result)
+        for expression in rendered:
+            lines.append("    if (native_status == 0 && !Kokkos::isfinite(%s)) native_status = 2;" % expression)
+        lines.append("    native_status_view(index, 0) = static_cast<pops::Real>(native_status);")
+        if reason is not None:
+            # Binary64 exactly represents this 34-bit category/reason diagnostic. Reduction
+            # selects the highest category first, then a deterministic native reason code.
+            lines.append("    native_reason_view(index, 0) = static_cast<pops::Real>(native_status) * "
+                         "pops::Real(4294967296.0) + static_cast<pops::Real>(native_reason);")
+        lines.append("    if (native_status != 0) return;")
+    offset = 0
     for blk in blocks:
-        for comp, e in enumerate(components[blk]):
-            lines.append("    %sA(index, %d) = %s;" % (scratch[blk], comp, e.to_cpp()))
+        for comp in range(len(components[blk])):
+            lines.append("    %sA(index, %d) = %s;" % (scratch[blk], comp, rendered[offset]))
+            offset += 1
     lines += ["  });", "}"]
     return lines
 
@@ -330,27 +386,48 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
     lines.append(
         "    auto residual_eval = [&](const pops::Real (&Ueval)[%d], pops::Real (&rout)[%d]) {"
         % (total, total))
+    binding_lines = []
     for component in sorted(referenced):
         source = sources[component]
         if source[0] == "unknown":
-            lines.append("      const pops::Real %s = Ueval[%d];" % (component, source[1]))
+            binding_lines.append("      const pops::Real %s = Ueval[%d];" % (component, source[1]))
         else:
-            lines.append("      const pops::Real %s = %sA(index, %d);"
-                         % (component, source[1], source[2]))
-    for block in blocks:
-        for index, expr in enumerate(components[block]):
-            slot = offsets[block] + index
-            lines.append(
-                "      rout[%d] = Ueval[%d] - G_[%d] - "
-                "static_cast<pops::Real>(%s) * dt * (%s);"
-                % (slot, slot, slot, coefficient_cpp, expr.to_cpp()))
+            binding_lines.append("      const pops::Real %s = %sA(index, %d);"
+                                 % (component, source[1], source[2]))
+    lines += binding_lines
+    from ._native_solve_cpp import evaluate_residual_expressions, coupled_jacobian_expressions
+    expressions = [expr for rows in components.values() for expr in rows]
+    residual_lines, residual_values = evaluate_residual_expressions(expressions)
+    lines += residual_lines
+    for slot, value in enumerate(residual_values):
+        lines.append(
+            "      rout[%d] = Ueval[%d] - G_[%d] - "
+            "static_cast<pops::Real>(%s) * dt * (%s);"
+            % (slot, slot, slot, coefficient_cpp, value))
+    lines.append("      return pops::LocalNonlinearEvaluationResult::ok();")
     lines.append("    };")
     lines += _prepared_local_control_lines(controls)
+    route = controls.get("derivative_contract", {}).get("route", "finite_difference")
+    jacobian = "pops::FiniteDifferenceLocalJacobian<%d>{}" % total
+    if route in ("exact", "approximate"):
+        derivatives = coupled_jacobian_expressions(components, sources, total, route=route)
+        lines.append("    auto jacobian_eval = [&](const pops::Real (&Ueval)[%d], pops::Real (&Jout)[%d][%d]) {" % (total, total, total))
+        lines += binding_lines
+        derivative_lines, derivative_values = evaluate_residual_expressions(derivatives)
+        lines += derivative_lines
+        for slot, value in enumerate(derivative_values):
+            row, column = divmod(slot, total)
+            lines.append("      Jout[%d][%d] = pops::Real(%d) - static_cast<pops::Real>(%s) * dt * (%s);" %
+                (row, column, int(row == column), coefficient_cpp, value))
+        lines += ["      return pops::LocalNonlinearEvaluationResult::ok();", "    };"]
+        jacobian = "pops::AnalyticLocalJacobian<%d, decltype(jacobian_eval)>{jacobian_eval}" % total
+    elif route != "finite_difference":
+        raise ValueError("coupled implicit selected derivative has no native realization")
     lines.append(
         "    const auto prepared_ = pops::prepare_local_nonlinear_problem<%d>("
-        "residual_eval, pops::FiniteDifferenceLocalJacobian<%d>{}, "
+        "residual_eval, %s, "
         "pops::AcceptAllLocalCandidates<%d>{}, controls_);"
-        % (total, total, total))
+        % (total, jacobian, total))
     lines.append(
         "    const pops::LocalNonlinearCellResult<%d> solved_ = "
         "pops::solve_prepared_local_nonlinear(prepared_, G_);" % total)
@@ -503,7 +580,7 @@ def _emit_solve_local_linear_kernel(model: Any, name: Any, a_coeff: Any, rhs_var
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
     params_block = block_idx if _has_runtime_param(flat) else None
     body = _kernel_open(out_var, rhs_var, params_block, provider_binding=provider_binding,
-                        program_block=block_idx)
+                        program_block=block_idx, prepare_providers=False)
     lambda_index = next(
         index for index, line in enumerate(body) if "pops::for_each_cell" in line)
     body[lambda_index:lambda_index] = [
@@ -651,7 +728,7 @@ def _emit_solve_local_nonlinear_kernel(
     impl.assign_runtime_indices()
     params_block = block_idx if _has_runtime_param(term_exprs) else None
     body = _kernel_open(out_var, guess_var, params_block, provider_binding=provider_binding,
-                        program_block=block_idx)
+                        program_block=block_idx, prepare_providers=False)
     lambda_index = next(index for index, line in enumerate(body) if "pops::for_each_cell" in line)
     body[lambda_index:lambda_index] = [
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> solve_statusA = "

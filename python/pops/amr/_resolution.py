@@ -6,9 +6,10 @@ extension is invoked through a narrow protocol; there is no class-name or string
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
+from types import MappingProxyType
 
 from pops.identity import make_identity
 from pops.identity.semantic import semantic_value
@@ -31,6 +32,17 @@ class ResolvedAMRAuthorities:
     bootstrap: Any
     execution: Any
     providers: Any
+
+    def __post_init__(self):
+        def freeze(value):
+            if isinstance(value, Mapping):
+                return MappingProxyType({key: freeze(item) for key, item in value.items()})
+            if isinstance(value, (tuple, list)):
+                return tuple(freeze(item) for item in value)
+            if isinstance(value, (set, frozenset)):
+                return frozenset(freeze(item) for item in value)
+            return value
+        object.__setattr__(self, "providers", freeze(self.providers))
 
     def canonical_identity(self) -> dict[str, Any]:
         return {
@@ -150,6 +162,13 @@ class AMRTaggingResolutionContext:
             raise TypeError("AMR tagging resolve must be callable")
         object.__setattr__(self, "numerics", rows)
 
+    def _indicator_layout(self, state: Handle) -> Any:
+        layout = self.layout_plan.layout_for(state)
+        frame = getattr(getattr(state, "space", None), "frame", "model")
+        if frame != "model" and frame != self.layout_plan.normalized(layout).geometry.frame_id:
+            raise ValueError("AMR indicator state frame differs from its assigned layout frame")
+        return layout
+
     def _discrete_context(self, state: Handle) -> Any:
         from pops.mesh._amr import DiscreteIndicatorContext
 
@@ -157,6 +176,8 @@ class AMRTaggingResolutionContext:
             raise TypeError(
                 "AMR discrete indicators require an owner-qualified block-state Handle"
             )
+        if state.owner_path.nodes[0] != self.owner.nodes[0]:
+            raise ValueError("AMR gradient indicator belongs to a different Case owner")
         matches = []
         for plan in self.numerics:
             for rate in plan.rates:
@@ -177,7 +198,7 @@ class AMRTaggingResolutionContext:
                 "state-to-discretization authority" % state.qualified_id
             )
         plan, method = matches[0]
-        layout = self.layout_plan.layout_for(state)
+        layout = self._indicator_layout(state)
         lower_stencil = getattr(method, "amr_indicator_stencil", None)
         if not callable(lower_stencil):
             raise NotImplementedError(
@@ -214,6 +235,7 @@ class AMRTaggingResolutionContext:
         action: str,
         comparison: str,
         threshold: ParamHandle,
+        component: str | None = None,
     ) -> Any:
         """Bind a direct block-state value to strict Above/Below tagging leaves."""
         from pops.mesh._amr import Above, Below
@@ -225,17 +247,19 @@ class AMRTaggingResolutionContext:
             raise ValueError(
                 "AMR value indicator %s belongs to a different Case owner"
                 % handle.qualified_id)
-        self.layout_plan.layout_for(handle)
+        self._indicator_layout(handle)
         components = tuple(getattr(getattr(handle, "space", None), "components", ()))
-        if len(components) != 1:
+        if component is not None and (type(component) is not str or component not in components):
+            raise ValueError("AMR indicator component must belong to its typed Space")
+        if component is None and len(components) != 1:
             raise ValueError(
                 "AMR direct state indicators require a scalar state; state %s has components %s. "
                 "Select a typed component indicator explicitly."
                 % (handle.qualified_id, components))
         if action == "refine" and comparison == "gt":
-            return Above(handle, threshold)
+            return Above(handle, threshold, component=component)
         if action == "coarsen" and comparison == "lt":
-            return Below(handle, threshold)
+            return Below(handle, threshold, component=component)
         expected = "strict >" if action == "refine" else "strict <"
         raise ValueError("AMR %s value rule requires %s threshold" % (action, expected))
 
@@ -250,6 +274,7 @@ class AMRTaggingResolutionContext:
     ) -> Any:
         """Bind ``norm(grad(state))`` to the exact selected FV layout and stencil."""
         from pops.mesh._amr import GradientAbove, GradientBelow
+        from pops._ir.quantity import QuantityRef
 
         if isinstance(scale, bool) or scale != 1:
             raise NotImplementedError(
@@ -260,20 +285,25 @@ class AMRTaggingResolutionContext:
         state = getattr(field, "handle", None)
         if len(refs) != 1 or state is not refs[0] or not isinstance(state, Handle):
             raise TypeError(
-                "norm(grad(...)) AMR tagging requires exactly ValueExpr(block[state]); "
+                "norm(grad(...)) AMR tagging requires ValueExpr(block[state]) or its typed component; "
                 "compound indicators need their own resolve_for_amr_tagging protocol"
             )
         context = self._discrete_context(state)
+        component = field.component if isinstance(field, QuantityRef) else None
         components = tuple(getattr(getattr(state, "space", None), "components", ()))
-        if len(components) != 1:
+        if isinstance(field, QuantityRef) and field.space != getattr(state, "space", None):
+            raise ValueError("AMR indicator cannot change the declaration's physical type")
+        if component is not None and (type(component) is not str or component not in components):
+            raise ValueError("AMR indicator component must belong to its typed Space")
+        if component is None and len(components) != 1:
             raise ValueError(
                 "AMR gradient indicators require a scalar state; state %s has components %s. "
                 "Select a typed component indicator explicitly."
                 % (state.qualified_id, components))
         if action == "refine" and comparison == "gt":
-            return GradientAbove(state, threshold, context)
+            return GradientAbove(state, threshold, context, component=component)
         if action == "coarsen" and comparison == "lt":
-            return GradientBelow(state, threshold, context)
+            return GradientBelow(state, threshold, context, component=component)
         expected = "strict >" if action == "refine" else "strict <"
         raise ValueError("AMR %s gradient rule requires %s threshold" % (action, expected))
 

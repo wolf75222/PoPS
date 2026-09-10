@@ -107,7 +107,10 @@ def build_temporal_manifest(program: Any) -> dict[str, Any]:
                 "node_id": value.id,
                 "schedule": schedule.to_data(),
                 "cache_required": native_schedule_cache_required(
-                    schedule, where=where
+                    schedule, where=where,
+                    # These operations publish retained ProviderPack fields. Their
+                    # STORE/RESTORE actions emit no raw scheduler cache traffic.
+                    retained_output=value.op in ("solve_fields", "solve_fields_from_blocks"),
                 ),
             })
 

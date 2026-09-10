@@ -605,7 +605,8 @@ def aggregate_bind_refusals(groups: Any) -> Any:
 
 
 def collect_missing_arguments(
-    args: Any, provided_blocks: Any, provided_params: Any, provided_aux: Any
+    args: Any, provided_blocks: Any, provided_params: Any, provided_aux: Any,
+    *, check_reported_aux: bool = True,
 ) -> Any:
     """Pure core of the early bind-input check (Spec 5 sec.10); no engine call -> host-testable.
 
@@ -630,7 +631,7 @@ def collect_missing_arguments(
             missing.append(
                 "runtime param %r; pass pops.bind(params={block[param_handle]: <value>})" % name
             )
-    for name, spec in sorted(getattr(args, "aux", {}).items()):
+    for name, spec in sorted(getattr(args, "aux", {}).items()) if check_reported_aux else ():
         if spec.get("required") and name not in provided_aux:
             missing.append("auxiliary input %r; pass pops.bind(aux={ComponentKey(...): <array>})" % name)
     return missing
@@ -654,11 +655,19 @@ def validate_install_arguments(
         raise TypeError("pops.bind: runtime engine must expose callable block_names()")
     provided_blocks |= set(cast(Iterable[Any], block_names()))
     provided_param_ids = {getattr(handle, "qualified_id", handle) for handle in params}
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+    from pops.runtime._auxiliary_bind import validate_auxiliary_bind_inputs
+
+    exact_aux = type(compiled) is CompiledSimulationArtifact and all(
+        block.resolved_operations is not None for block in compiled.plan.blocks)
+    if exact_aux:
+        validate_auxiliary_bind_inputs(compiled, aux)
     missing = collect_missing_arguments(
         args,
         provided_blocks,
         provided_param_ids,
         set(aux) | set(field_plan_produced_aux(field_plans)),
+        check_reported_aux=not exact_aux,
     )
     if missing:
         raise ValueError(
@@ -700,6 +709,13 @@ def run_bind_gates(
         raise ValueError(
             "pops.bind: compiled artifact returned incomplete manifest/arguments metadata"
         )
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+    from pops.runtime._auxiliary_bind import validate_auxiliary_bind_inputs
+
+    exact_aux = type(compiled) is CompiledSimulationArtifact and all(
+        block.resolved_operations is not None for block in compiled.plan.blocks)
+    if exact_aux:
+        validate_auxiliary_bind_inputs(compiled, aux)
     runtime_facts = loaded_runtime_facts()
     from pops.runtime._platform_validation import validate_platform_bind
 
@@ -723,7 +739,8 @@ def run_bind_gates(
     groups += [
         (
             "aux-required-by-operator",
-            validate_operator_aux(manifest, aux, provided_field_outputs=field_produced_aux(compiled)),
+            [] if exact_aux else validate_operator_aux(
+                manifest, aux, provided_field_outputs=field_produced_aux(compiled)),
         ),
         ("manifest-abi", validate_bind_manifest(manifest, runtime_facts)),
         ("layout-runtime", validate_layout_runtime_requirements(arguments, runtime_facts)),

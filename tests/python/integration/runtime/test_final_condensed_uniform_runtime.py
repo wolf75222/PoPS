@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pytest
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
@@ -207,7 +208,11 @@ def test_uniform_condensed_implicit_matches_discrete_fourier_oracle(
     east = 1.5 + 0.25 * np.sin(2.0 * np.pi * x) + 0.10 * np.cos(2.0 * np.pi * y)
     north = -0.5 + 0.20 * np.cos(2.0 * np.pi * x) - 0.15 * np.sin(2.0 * np.pi * y)
     initial = np.stack((density, east, north))
-    runtime = pops.bind(artifact, initial_state={"packet": initial})
+    runtime = pops.bind(
+        artifact,
+        initial_state={"packet": initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     report = pops.run(runtime, t_end=DT, max_steps=1)
     assert report.accepted_steps == 1
 

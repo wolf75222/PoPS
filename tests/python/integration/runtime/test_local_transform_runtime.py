@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pytest
 
 from pops.boundary import ZeroFlux
@@ -103,14 +104,22 @@ def test_local_transform_executes_natively_and_rejects_before_publication(
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
 
     initial = np.full((1, CELLS, CELLS), 2.0, dtype=np.float64)
-    accepted = pops.bind(artifact, initial_state={"field": initial})
+    accepted = pops.bind(
+        artifact,
+        initial_state={"field": initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     report = pops.run(accepted, t_end=DT, max_steps=1)
     assert report.accepted_steps == 1
     actual = np.asarray(accepted.state_global("field"), dtype=np.float64).reshape(initial.shape)
     np.testing.assert_array_equal(actual, initial + 1.0)
 
     invalid = np.full((1, CELLS, CELLS), -1.0, dtype=np.float64)
-    rejected = pops.bind(artifact, initial_state={"field": invalid})
+    rejected = pops.bind(
+        artifact,
+        initial_state={"field": invalid},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     with pytest.raises(RuntimeError, match="local_transform|positive_shift"):
         pops.run(rejected, t_end=DT, max_steps=1)
     unchanged = np.asarray(rejected.state_global("field"), dtype=np.float64).reshape(invalid.shape)
@@ -130,7 +139,11 @@ def test_local_transform_preserves_and_does_not_validate_inactive_cells(
     x, y = np.meshgrid(coordinate, coordinate, indexing="xy")
     active = np.hypot(x - 0.5, y - 0.5) < 0.36
     initial = np.where(active[None, :, :], 2.0, -2.0)
-    runtime = pops.bind(artifact, initial_state={"field": initial})
+    runtime = pops.bind(
+        artifact,
+        initial_state={"field": initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
 
     report = pops.run(runtime, t_end=DT, max_steps=1)
     assert report.accepted_steps == 1

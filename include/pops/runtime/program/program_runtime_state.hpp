@@ -46,6 +46,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -53,10 +54,12 @@
 #include <utility>
 #include <vector>
 
+#include <pops/core/identity/prepared_provider.hpp>
 #include <pops/core/foundation/types.hpp>  // Real
 #include <pops/mesh/storage/multifab.hpp>  // MultiFab (history ring element)
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
-#include <pops/runtime/config/runtime_params.hpp>    // RuntimeParams, kMaxRuntimeParams
+#include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams, kMaxRuntimeParams
+#include <pops/runtime/program/accepted_exchange.hpp>
 #include <pops/runtime/program/cache_manager.hpp>    // CacheManager (held-node scheduler cache)
 #include <pops/runtime/program/module_metadata.hpp>  // frozen checkpoint-shape metadata
 #include <pops/runtime/program/profiler.hpp>         // Profiler (per-node / per-brick timing)
@@ -67,6 +70,8 @@ enum class AmrProgramHistoryRemapSource : std::uint8_t {
   RetainedChild = 1,
   ParentDeferred = 2,
   Removed = 3,
+  /// Spatial projection of authenticated equal-clock state samples, retaining covered cells.
+  ParentAlignedState = 4,
 };
 
 /// One canonical affected-ring decision prepared by the AMR lane before topology publication.
@@ -120,6 +125,72 @@ class AcceptedProgramContextSnapshot {
 using AcceptedProgramContextSnapshotFactory =
     std::function<std::unique_ptr<AcceptedProgramContextSnapshot>()>;
 
+/// Exact publication window and its logical occurrence, independent of a level's lifetime step
+/// count. Unknown legacy provenance differs from an actually allocated zero-start ring.
+enum class HistorySampleKind : std::uint8_t { UnknownLegacy, RegisteredZeroStart, Publication };
+struct HistorySampleIdentity {
+  std::uint64_t start_bits = 0;
+  std::uint64_t interval_bits = 0;
+  std::uint64_t ordinal = 0;
+  HistorySampleKind kind = HistorySampleKind::UnknownLegacy;
+  static HistorySampleIdentity zero_start() {
+    return {0, 0, 0, HistorySampleKind::RegisteredZeroStart};
+  }
+  bool authenticated() const noexcept { return kind != HistorySampleKind::UnknownLegacy; }
+  void append_contract(ExactContractBuilder& proof) const {
+    proof.scalar(kind).scalar(start_bits).scalar(interval_bits).scalar(ordinal);
+  }
+
+  void validate() const {
+    if (kind != HistorySampleKind::UnknownLegacy &&
+        kind != HistorySampleKind::RegisteredZeroStart && kind != HistorySampleKind::Publication)
+      throw std::invalid_argument("history sample identity has an invalid kind");
+    if (kind != HistorySampleKind::Publication) {
+      if (start_bits != 0 || interval_bits != 0 || ordinal != 0)
+        throw std::invalid_argument("unknown history sample identity has nonzero window metadata");
+    } else if (ordinal == 0 || !std::isfinite(std::bit_cast<double>(start_bits)) ||
+               !std::isfinite(std::bit_cast<double>(interval_bits)) ||
+               !(std::bit_cast<double>(interval_bits) > 0.0))
+      throw std::invalid_argument("history sample identity has an invalid physical window");
+  }
+  friend bool operator==(const HistorySampleIdentity&, const HistorySampleIdentity&) = default;
+};
+
+inline void validate_history_sample_provenance(const HistorySampleIdentity& sample,
+                                               bool initialized, Real outgoing_dt) {
+  sample.validate();
+  if ((sample.kind == HistorySampleKind::RegisteredZeroStart && initialized) ||
+      (sample.kind == HistorySampleKind::Publication &&
+       (!initialized ||
+        outgoing_dt != static_cast<Real>(std::bit_cast<double>(sample.interval_bits)))))
+    throw std::invalid_argument("history sample differs from its publication metadata");
+}
+
+inline HistorySampleIdentity next_history_sample(std::span<const HistorySampleIdentity> slots,
+                                                 bool pending, double start, double interval) {
+  HistorySampleIdentity result{std::bit_cast<std::uint64_t>(start),
+                               std::bit_cast<std::uint64_t>(interval), 1,
+                               HistorySampleKind::Publication};
+  result.validate();
+  std::uint64_t latest = 0;
+  for (const auto& sample : slots) {
+    sample.validate();
+    if (sample.kind == HistorySampleKind::Publication && sample.start_bits == result.start_bits &&
+        sample.interval_bits == result.interval_bits)
+      latest = std::max(latest, sample.ordinal);
+  }
+  if (pending && !slots.empty() && slots.front().kind == HistorySampleKind::Publication) {
+    if (slots.front().start_bits != result.start_bits ||
+        slots.front().interval_bits != result.interval_bits)
+      throw std::invalid_argument("pending history publication changed its physical window");
+    return slots.front();
+  }
+  if (latest == std::numeric_limits<std::uint64_t>::max())
+    throw std::overflow_error("history publication ordinal exhausted its physical window");
+  result.ordinal = latest + 1;
+  return result;
+}
+
 /// Multistep history ring buffers (ADC-406a), owned by the Program runtime state.
 ///
 /// A name maps to a ring of (depth = max lag + 1) MultiFabs, newest at [0]. Qualified keep_history
@@ -153,6 +224,58 @@ struct HistoryManager {
   /// run-to-target controller clips only its terminal step. A plain data member (no method the
   /// stepper template instantiates) -> MockImpl-safe; empty by default so dense paths never touch it.
   std::map<std::string, std::vector<Real>> slot_dt;
+  std::map<std::string, std::vector<HistorySampleIdentity>> slot_sample;
+
+  const std::vector<HistorySampleIdentity>& validated_samples(const std::string& name) const {
+    const auto& samples = slot_sample.at(name);
+    if (samples.size() != histories.at(name).size() || slot_dt.at(name).size() != samples.size())
+      throw std::invalid_argument("history sample ledger differs from its ring depth");
+    for (const auto& sample : samples)
+      sample.validate();
+    return samples;
+  }
+
+  std::vector<HistorySampleIdentity> prepare_sample_store(const std::string& name, double start,
+                                                          double interval) const {
+    auto samples = validated_samples(name);
+    const auto sample = next_history_sample(samples, store_pending.at(name), start, interval);
+    if (!initialized.at(name))
+      std::fill(samples.begin(), samples.end(), sample);
+    else
+      samples.front() = sample;
+    return samples;
+  }
+
+  void append_descriptor_contract(const std::string& name, ExactContractBuilder& proof) const {
+    proof.text(state_identity.at(name))
+        .text(space_identity.at(name))
+        .text(clock_identity.at(name))
+        .text(interpolation_identity.at(name));
+  }
+
+  HistorySampleIdentity matching_authenticated_sample(const std::string& coarse,
+                                                      const std::string& fine, int lag) const {
+    const auto& parent = slot_sample.at(coarse).at(lag);
+    const auto& child = slot_sample.at(fine).at(lag);
+    validate_history_sample_provenance(parent, initialized.at(coarse), slot_dt.at(coarse).at(lag));
+    validate_history_sample_provenance(child, initialized.at(fine), slot_dt.at(fine).at(lag));
+    if (!parent.authenticated() || !child.authenticated())
+      throw std::invalid_argument("AMR prior-field history has unknown legacy sample provenance");
+    if (parent != child)
+      throw std::invalid_argument(
+          "AMR prior-field history parent has a different publication sample");
+    if (owner.at(coarse) != owner.at(fine) ||
+        state_identity.at(coarse) != state_identity.at(fine) ||
+        space_identity.at(coarse) != space_identity.at(fine) ||
+        clock_identity.at(coarse) != clock_identity.at(fine) ||
+        interpolation_identity.at(coarse) != interpolation_identity.at(fine) ||
+        initialized.at(coarse) != initialized.at(fine) ||
+        fill_count.at(coarse) != fill_count.at(fine) || store_pending.at(coarse) ||
+        store_pending.at(fine) || slot_dt.at(coarse) != slot_dt.at(fine))
+      throw std::invalid_argument(
+          "AMR prior-field history parent has a different retained sample or pending remap");
+    return child;
+  }
 
   /// Shift each ring one step (newest-to-oldest), called ONCE at the end of a macro-step. O(1)
   /// std::swap of the MultiFab handles (not a deep copy): the swap chain from the deepest slot down
@@ -170,6 +293,9 @@ struct HistoryManager {
         for (std::size_t k = dts.size(); k-- > 1;)
           std::swap(dts[k], dts[k - 1]);
       }
+      if (auto samples = slot_sample.find(name); samples != slot_sample.end())
+        for (std::size_t k = samples->second.size(); k-- > 1;)
+          std::swap(samples->second[k], samples->second[k - 1]);
       if (store_pending[name]) {
         fill_count[name] = std::min(static_cast<int>(ring.size()), fill_count[name] + 1);
         store_pending[name] = false;
@@ -192,6 +318,9 @@ struct HistoryManager {
         for (std::size_t k = dts.size(); k-- > 1;)
           std::swap(dts[k], dts[k - 1]);
       }
+      if (auto samples = slot_sample.find(name); samples != slot_sample.end())
+        for (std::size_t k = samples->second.size(); k-- > 1;)
+          std::swap(samples->second[k], samples->second[k - 1]);
       if (store_pending[name]) {
         fill_count[name] = std::min(static_cast<int>(ring.size()), fill_count[name] + 1);
         store_pending[name] = false;
@@ -279,6 +408,10 @@ struct ProgramRuntimeState {
   /// closure lets the facade ask that persistent context to republish its level-qualified clocks and
   /// histories before committing each hierarchy transition. Uniform leaves it empty.
   std::function<void()> hierarchy_refresh_;
+  /// Rebuild derived artifact captures after restored storage replaces their borrows, even when
+  /// the restored physical epoch/generation is unchanged. Never publishes accepted state.
+  std::function<void()> resource_refresh_;
+  bool resource_refresh_pending_ = false;
   /// AMR-only, artifact-owned remap boundary. Unlike hierarchy_refresh_, this callback is reached
   /// only after AmrSystem published a topology and atomically exchanged a prepared history manager.
   /// Keeping it distinct prevents a generic hierarchy refresh from accepting stale history storage.
@@ -406,6 +539,7 @@ struct ProgramRuntimeState {
   /// consumers read it while the facade's outer transaction still retains U^n, so a missing term
   /// cannot silently reuse the preceding step.
   std::map<std::string, Real> step_balance_terms_;
+  AcceptedExchangeLedger accepted_exchanges_;
   /// Native operator contributions captured only for a due Balance attempt. These values are keyed
   /// by their physical runtime coordinate instead of a user ledger route and are therefore not read
   /// by accepted_balance_terms(). The owning facade snapshots this map with the rest of the attempt,
@@ -444,7 +578,7 @@ struct ProgramRuntimeState {
   /// PER-NODE / PER-BRICK PROFILER (ADC-459): disabled by default (no hot-path cost when off). On the
   /// uniform runtime System::step / solve_fields wrap themselves in a ProfileScope into it; on AMR the
   /// engine is wired to its address at build. Used by BOTH.
-  Profiler profiler_;
+  mutable Profiler profiler_;
   /// SCHEDULER VALUE CACHE (ADC-458), UNIFORM ONLY. The held-node cache (every(N).hold / accumulate_dt)
   /// keyed by IR node id; the uniform checkpoint serializes it. Empty on AMR (cache seam not wired).
   CacheManager<Dim> cache_;
@@ -457,6 +591,8 @@ struct ProgramRuntimeState {
   struct ArtifactStepInstallSnapshot {
     std::function<void(double)> step;
     std::function<void()> hierarchy_refresh;
+    std::function<void()> resource_refresh;
+    bool resource_refresh_pending = false;
     std::function<void(const AmrProgramHistoryRemapDescriptor&)> history_remap_accepted;
     std::function<void()> restart_regrid_preflight;
     std::function<void()> restart_regrid;
@@ -505,6 +641,7 @@ struct ProgramRuntimeState {
           last_dt_(accepted.last_dt_),
           diagnostics_(accepted.diagnostics_),
           step_balance_terms_(accepted.step_balance_terms_),
+          accepted_exchanges_(accepted.accepted_exchanges_),
           automatic_balance_terms_(accepted.automatic_balance_terms_),
           automatic_balance_due_(accepted.automatic_balance_due_),
           balance_due_window_active_(accepted.balance_due_window_active_),
@@ -532,6 +669,7 @@ struct ProgramRuntimeState {
     Real last_dt_ = Real(0);
     std::map<std::string, Real> diagnostics_;
     std::map<std::string, Real> step_balance_terms_;
+    AcceptedExchangeLedger accepted_exchanges_;
     std::map<AutomaticBalanceKey, Real> automatic_balance_terms_;
     bool automatic_balance_due_ = false;
     bool balance_due_window_active_ = false;
@@ -561,6 +699,7 @@ struct ProgramRuntimeState {
     static_assert(noexcept(block_params_.swap(prepared.block_params_)));
     static_assert(std::is_nothrow_swappable_v<CacheManager<Dim>>);
     static_assert(std::is_nothrow_swappable_v<HistoryManager<Dim>>);
+    cancel_cadence_continuation();
     cadence_window_dt_ = prepared.cadence_window_dt_;
     cadence_window_steps_ = prepared.cadence_window_steps_;
     cadence_window_start_time_ = prepared.cadence_window_start_time_;
@@ -575,6 +714,7 @@ struct ProgramRuntimeState {
     last_dt_ = prepared.last_dt_;
     diagnostics_.swap(prepared.diagnostics_);
     step_balance_terms_.swap(prepared.step_balance_terms_);
+    accepted_exchanges_.swap(prepared.accepted_exchanges_);
     automatic_balance_terms_.swap(prepared.automatic_balance_terms_);
     automatic_balance_due_ = prepared.automatic_balance_due_;
     balance_due_window_active_ = prepared.balance_due_window_active_;
@@ -602,6 +742,9 @@ struct ProgramRuntimeState {
     if (!step_)
       throw std::logic_error(std::string(operation) +
                              " requires an installed whole-system Program");
+    if (resource_refresh_pending_)
+      throw std::logic_error(std::string(operation) +
+                             " requires complete restored Program resources");
   }
 
   /// Install an ordinary native step without granting artifact-only replay authority.
@@ -617,6 +760,8 @@ struct ProgramRuntimeState {
       throw std::overflow_error("Program step-install generation overflow");
     step_ = std::move(step);
     hierarchy_refresh_ = nullptr;
+    resource_refresh_ = nullptr;
+    resource_refresh_pending_ = false;
     history_remap_accepted_ = nullptr;
     restart_regrid_preflight_ = nullptr;
     restart_regrid_ = nullptr;
@@ -636,6 +781,8 @@ struct ProgramRuntimeState {
   ArtifactStepInstallSnapshot capture_artifact_step_install() const {
     return ArtifactStepInstallSnapshot{step_,
                                        hierarchy_refresh_,
+                                       resource_refresh_,
+                                       resource_refresh_pending_,
                                        history_remap_accepted_,
                                        restart_regrid_preflight_,
                                        restart_regrid_,
@@ -669,6 +816,8 @@ struct ProgramRuntimeState {
   void rollback_artifact_step_install(ArtifactStepInstallSnapshot&& snapshot) noexcept {
     step_ = std::move(snapshot.step);
     hierarchy_refresh_ = std::move(snapshot.hierarchy_refresh);
+    resource_refresh_ = std::move(snapshot.resource_refresh);
+    resource_refresh_pending_ = snapshot.resource_refresh_pending;
     history_remap_accepted_ = std::move(snapshot.history_remap_accepted);
     restart_regrid_preflight_ = std::move(snapshot.restart_regrid_preflight);
     restart_regrid_ = std::move(snapshot.restart_regrid);
@@ -707,6 +856,24 @@ struct ProgramRuntimeState {
       throw std::invalid_argument(runtime +
                                   "::install_program_hierarchy_refresh requires a non-empty hook");
     hierarchy_refresh_ = std::move(refresh);
+  }
+
+  /// The same installer owns both this derived-resource hook and the step that borrows it.
+  void install_resource_refresh(std::function<void()> refresh, const std::string& runtime) {
+    if (!step_ || !refresh)
+      throw std::invalid_argument(runtime +
+                                  " resource refresh requires an installed Program and hook");
+    resource_refresh_ = std::move(refresh);
+    resource_refresh_pending_ = false;
+  }
+
+  void invalidate_resources() noexcept {
+    resource_refresh_pending_ = static_cast<bool>(resource_refresh_);
+  }
+
+  void refresh_resources() const {
+    if (resource_refresh_)
+      resource_refresh_();
   }
 
   /// Attach the exact post-publication history-remap callback emitted beside an AMR Program.
@@ -992,65 +1159,7 @@ struct ProgramRuntimeState {
     }
   }
 
-  /// Execute one accepted facade step through the single Uniform/AMR cadence dispatcher.
-  ///
-  /// The owning runtime lends its exact accepted cursor by reference. The dispatcher publishes each
-  /// numerical substep's start coordinate while invoking the installed Program, restores the entry
-  /// cursor after every failure, commits the held/due cadence image once, then advances the public
-  /// cursor exactly once. Grid and hierarchy work remain inside the installed provider closure.
-  void dispatch_cadence_step(double& physical_time_cursor, int& macro_step_cursor, double dt,
-                             const std::string& runtime) {
-    if (cadence_dispatch_active_)
-      throw std::logic_error(runtime + " Program cadence dispatch is non-reentrant");
-    if (!step_)
-      throw std::logic_error(
-          runtime + " Program cadence dispatch requires an installed whole-system Program");
-
-    cadence_dispatch_active_ = true;
-    struct CadenceDispatchLease {
-      bool& active;
-      ~CadenceDispatchLease() { active = false; }
-    } dispatch_lease{cadence_dispatch_active_};
-
-    const double accepted_time = physical_time_cursor;
-    const int accepted_macro_step = macro_step_cursor;
-    const PreparedCadenceStep cadence =
-        prepare_cadence_step(accepted_time, accepted_macro_step, dt, runtime);
-    if (accepted_macro_step == std::numeric_limits<int>::max())
-      throw std::overflow_error(runtime + " Program cadence macro-step counter overflow");
-
-    try {
-      if (cadence.due) {
-        validate_cadence_partition(cadence, substeps_, runtime);
-        const int held_before_due = cadence.window_steps - 1;
-        if (accepted_macro_step < held_before_due)
-          throw std::logic_error(runtime + " Program cadence window starts before macro-step zero");
-        const int window_start_macro_step = accepted_macro_step - held_before_due;
-        run_balance_due_window(accepted_macro_step, runtime, [&] {
-          for (int substep = 0; substep < substeps_; ++substep) {
-            const PreparedCadenceSubstep partition =
-                prepare_cadence_substep(cadence, substep, substeps_, runtime);
-            physical_time_cursor = partition.start;
-            macro_step_cursor = window_start_macro_step;
-            last_dt_ = static_cast<Real>(partition.dt);
-            step_(partition.dt);
-            physical_time_cursor = partition.end;
-          }
-        });
-        physical_time_cursor = accepted_time;
-        macro_step_cursor = accepted_macro_step;
-      }
-
-      commit_cadence_step(cadence, runtime);
-      physical_time_cursor = cadence.window_end;
-      complete_balance_step(cadence.due);
-      ++macro_step_cursor;
-    } catch (...) {
-      physical_time_cursor = accepted_time;
-      macro_step_cursor = accepted_macro_step;
-      throw;
-    }
-  }
+#include <pops/runtime/program/program_cadence_continuation.inc>
 
   /// Stage an authenticated checkpoint window for one exact set_clock transaction. The accepted
   /// window is not mutated until the matching clock pair is consumed, and no historical duration is

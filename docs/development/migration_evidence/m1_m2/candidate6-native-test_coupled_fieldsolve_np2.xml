@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="1" failures="0" disabled="0" errors="0" time="0.038" timestamp="2026-09-08T00:51:25.143" name="AllTests">
+  <testsuite name="test_coupled_fieldsolve" tests="1" failures="0" disabled="0" skipped="0" errors="0" time="0.038" timestamp="2026-09-08T00:51:25.144">
+    <testcase name="named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs" file="/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/unit/elliptic/test_coupled_fieldsolve.cpp" line="318" status="run" result="completed" time="0.038" timestamp="2026-09-08T00:51:25.144" classname="test_coupled_fieldsolve" />
+  </testsuite>
+</testsuites>

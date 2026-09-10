@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
-
 import pytest
 
 from pops.fields import (
@@ -163,13 +161,12 @@ def test_field_provider_pack_is_ordered_owner_qualified_and_identity_relevant() 
     assert [row["provider"]["local_id"] for row in data] == ["ions", "electrons"]
 
 
-def test_legacy_field_problem_public_surface_is_removed() -> None:
+def test_general_field_problem_is_the_field_operator_authority() -> None:
     import pops.fields as fields
 
-    assert not hasattr(fields, "FieldProblem")
+    assert issubclass(fields.FieldOperator, fields.FieldProblem)
     assert not hasattr(fields, "PoissonProblem")
     assert not hasattr(fields, "HoldPrevious")
-    assert importlib.util.find_spec("pops.fields.problem") is None
 
 
 def test_field_operator_freeze_rejects_mutation() -> None:

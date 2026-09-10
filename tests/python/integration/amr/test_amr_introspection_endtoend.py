@@ -56,6 +56,7 @@ def _amr_metadata_fixture():
         block_names=("ne",),
         parameters=(alpha,),
         tag_parameter="alpha",
+        auxiliary_names=("B_z",),
         cells=64,
         name="amr-introspection-metadata",
     )
@@ -67,7 +68,7 @@ def _amr_metadata_fixture():
         caps={"cpu": True, "amr": True, "mpi": True},
         abi_key=pops._pops.abi_key(), model_hash="h", cxx="c++",
         std="c++23", native_dimension=2, target="amr_system",
-        aux_extra_names=["B_z"],
+        provider_components=["B_z"],
         consumer_owner_qid=resolved.blocks[0].instance_owner_qid)
     handle.definition_identity = compiled_model_identity(model_hash="h")
     schema = resolved.bind_schema
@@ -133,18 +134,32 @@ def test_static_metadata_inspection_surfaces_the_carried_refine_regrid_tags():
 
 # --- live runtime profile + CFL on a real AmrSystem ------------------------------
 def _built_amr(n=32):
+    from pops.physics import Density
+    from pops.physics._facade import Model
+
+    model = Model("amr-introspection-scalar-advection")
+    (rho,) = model.conservative_vars("n", roles=(Density(),))
+    model.flux(x=[0.3 * rho], y=[0.2 * rho])
+    model.eigenvalues(x=[0.3 + 0.0 * rho], y=[0.2 + 0.0 * rho])
+    model.primitive_vars(rho)
+    model.conservative_from([rho])
+    model.elliptic_rhs(rho - 1.0)
+    compiled = model.compile(
+        backend="production", target="amr_system", name="amr_introspection_scalar",
+        consumer_owner_qid="tests.amr-introspection.ne",
+    )
     sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=2, coarse_max_grid=16)
     sim.set_temporal_relations([2], [1], ["integral_only"])
-    sim.add_equation("ne", engine.Model(engine.Scalar(), engine.ExB(), engine.NoSource(),
-                                   engine.BackgroundDensity(alpha=1.0, n0=1.0)),
-                  spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     sim.set_poisson(bc=Periodic())
+    sim.add_equation("ne", compiled,
+                  spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     install_prepared_threshold_union(sim, (("ne", "n", 1.05),))
     xs = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(xs, xs)
     ne = 1.0 + 0.4 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.01)
     sim.set_density("ne", ne + (1.0 - ne.mean()))
     install_forward_euler_program(sim)
+    sim.mark_bound()  # close native assembly before transactional CFL stepping
     return sim
 
 

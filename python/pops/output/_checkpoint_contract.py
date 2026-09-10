@@ -41,7 +41,7 @@ class CheckpointResourceBudget:
     authority: str
 
     def __post_init__(self) -> None:
-        if self.runtime_kind not in {"uniform", "amr", "multi_layout_uniform"}:
+        if self.runtime_kind not in {"uniform", "amr", "multi_layout_uniform", "multi_layout_amr"}:
             raise ValueError("checkpoint resource budget has an unsupported runtime kind")
         for name in (
             "max_members",

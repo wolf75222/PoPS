@@ -32,7 +32,7 @@ from ._board_contract import (normalize_components, normalize_roles, normalize_s
                               normalize_string_mapping, require_bool, require_name)
 
 __all__ = ["Invariant", "FluxHandle", "SourceHandle", "FieldsHandle", "FieldOutputs", "FieldHandle",
-           "LocalLinearOperatorExpr", "StateHandle", "VectorHandle",
+           "LocalLinearOperatorExpr", "StateHandle", "VectorHandle", "RateHandle",
            "_safe_name", "_canon_role", "_roles_for", "_BOARD_ROLE"]
 
 
@@ -181,11 +181,15 @@ class VectorHandle(Handle):
 class FluxHandle(Handle):
     """A declared physical flux (the default hyperbolic flux of a model)."""
 
-    __slots__ = ("is_default",)
+    __slots__ = ("is_default", "reg_name")
 
-    def __init__(self, name: Any, is_default: bool = True, *, owner: Any) -> None:
+    def __init__(self, name: Any, is_default: bool = True, *, owner: Any,
+                 reg_name: Any = None) -> None:
         super().__init__(require_name(name, "flux name"), kind="flux", owner=owner)
         object.__setattr__(self, "is_default", require_bool(is_default, "flux is_default"))
+        object.__setattr__(self, "reg_name", (
+            "flux_default" if is_default else name) if reg_name is None
+            else require_name(reg_name, "physical flux registry name"))
 
     def __repr__(self) -> str:
         return "FluxHandle(%r)" % (self.name,)
@@ -225,6 +229,12 @@ class SourceHandle(Handle):
     def __rsub__(self, other: Any) -> Any:
         return _bm._as_rate(other) - self.__pops_rate_term__()
 
+    def __mul__(self, coefficient: Any) -> Any:
+        return self.__pops_rate_term__() * coefficient
+
+    def __rmul__(self, coefficient: Any) -> Any:
+        return self.__pops_rate_term__() * coefficient
+
     def __repr__(self) -> str:
         return "SourceHandle(%r)" % (self.name,)
 
@@ -242,6 +252,35 @@ class SourceTermExpr(_bm.RateTerm):
 
     def __repr__(self) -> str:
         return "source_term(%r)" % (self.handle,)
+
+
+class RateHandle(OperatorHandle):
+    """Callable rate reference with an immutable scientific balance view."""
+
+    __slots__ = ("view", "_model_ref")
+
+    def __init__(self, handle: OperatorHandle, view: Any, *, model: Any) -> None:
+        from weakref import ref
+        super().__init__(handle.local_id, kind=handle.kind, owner=handle.owner_path,
+                         signature=handle.signature,
+                         registered_operator_name=handle.registered_operator_name)
+        object.__setattr__(self, "view", view)
+        object.__setattr__(self, "_model_ref", ref(model))
+
+    @property
+    def balance(self) -> Any:
+        return self.view.balance
+
+    @property
+    def occurrences(self) -> Any:
+        return self.view.occurrences
+
+    def select(self, *selectors: Any) -> RateHandle:
+        """Register an occurrence-preserving numerical view of this balance."""
+        model = self._model_ref()
+        if model is None:
+            raise RuntimeError("declaring model is unavailable for balance partition authoring")
+        return model._select_rate_view(self, self.view.select(*selectors))
 
 
 class LocalLinearOperatorExpr(Expr):

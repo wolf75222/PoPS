@@ -20,6 +20,7 @@ def model_artifact_spec(
         model_hash,
     )
     from pops.codegen.toolchain import _native_feature_key
+    from pops.codegen._native_model_provider_plan import NATIVE_MODEL_PROVIDER_CONTRACT
     from pops.identity import artifact_spec_identity, make_identity
 
     digest = str(model_hash(model))
@@ -42,6 +43,7 @@ def model_artifact_spec(
             "emitted_name": str(name or ""),
             "consumer_owner_qid": str(consumer_owner_qid or ""),
             "declares_auxiliary_providers": bool(declare_auxiliary_providers),
+            "native_model_provider_contract": NATIVE_MODEL_PROVIDER_CONTRACT,
             # Host add_native_block looks up this exact export.  Changing the
             # emitted loader surface without this component reuses a stale .so.
             "native_system_package_abi_version": NATIVE_SYSTEM_PACKAGE_ABI_VERSION,

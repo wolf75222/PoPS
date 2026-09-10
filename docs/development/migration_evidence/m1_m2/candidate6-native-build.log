@@ -1,0 +1,279 @@
+Building CXX object _deps/googletest-build/googletest/CMakeFiles/gtest.dir/src/gtest-all.cc.o
+Building CXX object tests/CMakeFiles/pops_gtest_main.dir/cpp/support/gtest_main.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/support/gtest_main.cpp:1:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/src/gtest-all.cc:38:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+Linking CXX static library libpops_gtest_main.a
+Linking CXX static library ../../../lib/libgtest.a
+Built target pops_gtest_main
+Built target gtest
+Building CXX object tests/CMakeFiles/test_narrow_physical_operations.dir/cpp/unit/physics/test_narrow_physical_operations.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/unit/physics/test_narrow_physical_operations.cpp:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+Linking CXX executable ../bin/test_narrow_physical_operations
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib' ignored
+Built target test_narrow_physical_operations
+Built target gtest
+Built target pops_gtest_main
+Building CXX object tests/CMakeFiles/test_component_interfaces.dir/cpp/unit/runtime/test_component_interfaces.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/unit/runtime/test_component_interfaces.cpp:10:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+Linking CXX executable ../bin/test_component_interfaces
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib' ignored
+Built target test_component_interfaces
+Built target pops_gtest_main
+Built target gtest
+Building CXX object tests/CMakeFiles/test_aux_single_source.dir/cpp/unit/physics/test_aux_single_source.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/unit/physics/test_aux_single_source.cpp:3:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+Linking CXX executable ../bin/test_aux_single_source
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib' ignored
+Built target test_aux_single_source
+Built target pops_gtest_main
+Built target gtest
+Building CXX object tests/CMakeFiles/test_nd_transfer.dir/cpp/unit/amr/test_nd_transfer.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/unit/amr/test_nd_transfer.cpp:1:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+Linking CXX executable ../bin/test_nd_transfer
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib' ignored
+Built target test_nd_transfer
+Built target gtest
+Built target pops_gtest_main
+Building CXX object tests/CMakeFiles/test_prepared_amr_ghost_fill.dir/cpp/unit/amr/test_prepared_amr_ghost_fill.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/unit/amr/test_prepared_amr_ghost_fill.cpp:1:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+Linking CXX executable ../bin/test_prepared_amr_ghost_fill
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib' ignored
+Built target test_prepared_amr_ghost_fill
+Built target gtest
+Built target pops_gtest_main
+Building CXX object tests/CMakeFiles/test_nd_cluster.dir/cpp/unit/mesh/test_nd_cluster.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/unit/mesh/test_nd_cluster.cpp:1:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+Linking CXX executable ../bin/test_nd_cluster
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib' ignored
+Built target test_nd_cluster
+[  0%] Building CXX object src/CMakeFiles/pops_runtime_core_objects.dir/runtime/prepared_embedded_boundary.cpp.o
+[  0%] Built target gtest
+[  0%] Built target pops_gtest_main
+[  0%] Building CXX object src/CMakeFiles/pops_runtime_core_objects.dir/runtime/program/step_transaction.cpp.o
+[  0%] Built target pops_runtime_core_objects
+[ 33%] Linking CXX static library libpops_runtime_core.a
+[ 33%] Built target pops_runtime_core
+[ 66%] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_aux.cpp.o
+[ 66%] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system.cpp.o
+[ 66%] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_install.cpp.o
+[ 66%] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_fields.cpp.o
+[ 66%] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_embedded_boundary.cpp.o
+[100%] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_field_plans.cpp.o
+[100%] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_layout_transfer.cpp.o
+[100%] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_io.cpp.o
+[100%] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_profiling.cpp.o
+[100%] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_program.cpp.o
+[100%] Built target pops_runtime_system
+[100%] Building CXX object tests/CMakeFiles/test_program_context_contract.dir/cpp/unit/runtime/test_program_context_contract.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/unit/runtime/test_program_context_contract.cpp:26:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+[100%] Linking CXX executable ../bin/test_program_context_contract
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib' ignored
+[100%] Built target test_program_context_contract
+Built target pops_gtest_main
+Built target gtest
+Building CXX object tests/CMakeFiles/test_program_reflux_ledger.dir/cpp/integration/amr/test_program_reflux_ledger.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/integration/amr/test_program_reflux_ledger.cpp:4:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+Linking CXX executable ../bin/test_program_reflux_ledger
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib' ignored
+Built target test_program_reflux_ledger
+[  0%] Built target gtest
+[  0%] Built target pops_runtime_core_objects
+[  0%] Built target pops_gtest_main
+[ 25%] Built target pops_runtime_core
+[ 75%] Built target pops_runtime_system
+[100%] Linking CXX static library libpops_runtime_system_abi.a
+[100%] Built target pops_runtime_system_abi
+[100%] Building CXX object src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_component.cpp.o
+[100%] Building CXX object src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o
+[100%] Building CXX object src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o
+[100%] Built target pops_runtime_amr
+[100%] Building CXX object tests/CMakeFiles/test_amr_synthetic_program_loader_transaction.dir/cpp/integration/native_loader/test_amr_synthetic_program_loader_transaction.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/integration/native_loader/test_amr_synthetic_program_loader_transaction.cpp:8:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+[100%] Linking CXX executable ../bin/test_amr_synthetic_program_loader_transaction
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib' ignored
+[100%] Built target test_amr_synthetic_program_loader_transaction
+[  0%] Built target gtest
+[  0%] Built target pops_runtime_core_objects
+[ 33%] Built target pops_runtime_core
+[ 33%] Built target pops_gtest_main
+[100%] Built target pops_runtime_system
+[100%] Building CXX object tests/CMakeFiles/test_coupled_fieldsolve.dir/cpp/unit/elliptic/test_coupled_fieldsolve.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/unit/elliptic/test_coupled_fieldsolve.cpp:1:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+[100%] Linking CXX executable ../bin/test_coupled_fieldsolve
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib' ignored
+[100%] Built target test_coupled_fieldsolve
+[  0%] Built target gtest
+[  0%] Built target pops_runtime_core_objects
+[ 25%] Built target pops_runtime_core
+[ 25%] Built target pops_gtest_main
+[ 75%] Built target pops_runtime_system
+[100%] Built target pops_runtime_system_abi
+[100%] Built target pops_runtime_amr
+[100%] Building CXX object tests/CMakeFiles/test_generated_amr_system_block.dir/cpp/unit/runtime/test_generated_amr_system_block.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/unit/runtime/test_generated_amr_system_block.cpp:1:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+[100%] Linking CXX executable ../bin/test_generated_amr_system_block
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib' ignored
+[100%] Built target test_generated_amr_system_block
+Built target pops_gtest_main
+Built target gtest
+Building CXX object tests/CMakeFiles/test_nd_flux_ledger.dir/cpp/unit/amr/test_nd_flux_ledger.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/unit/amr/test_nd_flux_ledger.cpp:1:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+Linking CXX executable ../bin/test_nd_flux_ledger
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib' ignored
+Built target test_nd_flux_ledger
+Built target gtest
+Built target pops_gtest_main
+Building CXX object tests/CMakeFiles/test_native_field_attachment.dir/cpp/unit/runtime/test_native_field_attachment.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/unit/runtime/test_native_field_attachment.cpp:1:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+Linking CXX executable ../bin/test_native_field_attachment
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib' ignored
+Built target test_native_field_attachment
+Built target gtest
+Built target pops_gtest_main
+Building CXX object tests/CMakeFiles/test_mpi_prepared_amr_ghost_fill.dir/cpp/integration/mpi/test_mpi_prepared_amr_ghost_fill.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/integration/mpi/test_mpi_prepared_amr_ghost_fill.cpp:1:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+Linking CXX executable ../bin/test_mpi_prepared_amr_ghost_fill
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib' ignored
+Built target test_mpi_prepared_amr_ghost_fill

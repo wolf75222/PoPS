@@ -92,6 +92,29 @@ void apply_coupling_operators(std::string_view graph_identity, std::string_view 
 }
 
 private:
+ using Identity = runtime::program::ProgramOwnerFieldIdentity;
+ using Family = Identity::Family;
+ Identity classify_owner_field_(int owner, const field_type& seed, const char* role) const {
+   return runtime::program::classify_program_owner_field(
+       owner, seed, nlev(),
+       [&](int level) -> const field_type& {
+         return facade_->prepared_amr_block_state(owner, level);
+       },
+       [&](int level) { return live_attempt_state_(owner, level); }, scratches_,
+       runtime_state().hist_, decode_history_key_, role);
+ }
+ const field_type& resolve_owner_field_(int owner, const field_type& seed, const Identity& identity,
+                                        int level, const char* role) const {
+   return runtime::program::resolve_program_owner_field(
+       owner, seed, identity, level,
+       [&](int requested) -> const field_type& {
+         return facade_->prepared_amr_block_state(owner, requested);
+       },
+       [&](int requested) { return live_attempt_state_(owner, requested); }, scratches_,
+       runtime_state().hist_,
+       [&](const std::string& name, int requested) { return history_key_(name, requested); }, role);
+ }
+
 /// Visit every live hierarchy level of an authenticated Program owner exactly once.  The seed
 /// field identifies the owner's state, scratch, history, or current-level layout; each visit
 /// receives that level's matching field and prepared active-cell mask (null when Cartesian).
@@ -105,125 +128,12 @@ void for_each_owner_active_level_(int program_block, const field_type& left,
   if (levels < 1)
     return;
 
-  const auto same_layout = [](const field_type& a, const field_type& b) {
-    return a.layout() == b.layout() && a.distribution() == b.distribution() &&
-           a.local_rank() == b.local_rank() && a.local_size() == b.local_size();
-  };
-
-  enum class Family : std::uint8_t { Unset, State, Scratch, History, Direct };
-  struct Identity {
-    Family family = Family::Unset;
-    int scratch_kind = -1;
-    int scratch_owner = -1;
-    std::int64_t scratch_value_id = -1;
-    int scratch_subslot = -1;
-    std::string history_name;
-    int history_lag = -1;
-    int direct_level = -1;
-  };
-
-  const auto classify = [&](const field_type& seed, const char* role) {
-    Identity identity;
-    for (int level = 0; level < levels; ++level) {
-      if (&seed == &facade_->prepared_amr_block_state(runtime_block, level))
-        identity.family = Family::State;
-      if (const field_type* attempt = live_attempt_state_(runtime_block, level);
-          attempt != nullptr && &seed == attempt)
-        identity.family = Family::State;
-    }
-    for (const auto& [key, scratch] : scratches_) {
-      if (&seed != &scratch)
-        continue;
-      if (std::get<2>(key) != runtime_block)
-        throw std::invalid_argument(std::string(role) +
-                                    " received a foreign AMR Program owner field");
-      if (identity.family != Family::Unset && identity.family != Family::Scratch)
-        throw std::logic_error(std::string(role) +
-                               " aliases multiple AMR Program field identities");
-      identity.family = Family::Scratch;
-      identity.scratch_kind = static_cast<int>(std::get<0>(key));
-      identity.direct_level = std::get<1>(key);
-      identity.scratch_owner = std::get<2>(key);
-      identity.scratch_value_id = std::get<3>(key);
-      identity.scratch_subslot = std::get<4>(key);
-    }
-    const auto& manager = runtime_state().hist_;
-    for (const auto& [key, ring] : manager.histories) {
-      for (std::size_t lag = 0; lag < ring.size(); ++lag) {
-        if (&seed != &ring[lag])
-          continue;
-        const auto decoded = decode_history_key_(key);
-        const auto owner = manager.owner.find(key);
-        if (!decoded || owner == manager.owner.end() || owner->second != runtime_block)
-          throw std::invalid_argument(std::string(role) +
-                                      " received a foreign AMR Program history field");
-        if (identity.family != Family::Unset && identity.family != Family::History)
-          throw std::logic_error(std::string(role) +
-                                 " aliases multiple AMR Program field identities");
-        identity.family = Family::History;
-        identity.history_name = decoded->second;
-        identity.history_lag = static_cast<int>(lag);
-      }
-    }
-    if (identity.family == Family::Unset) {
-      for (int level = 0; level < levels; ++level) {
-        if (!same_layout(seed, facade_->prepared_amr_block_state(runtime_block, level)))
-          continue;
-        if (identity.direct_level >= 0)
-          throw std::logic_error(std::string(role) + " matches multiple AMR Program owner levels");
-        identity.direct_level = level;
-      }
-      if (identity.direct_level < 0)
-        throw std::invalid_argument(std::string(role) +
-                                    " has no authenticated AMR Program owner layout");
-      identity.family = Family::Direct;
-    }
-    return identity;
-  };
-
-  const auto resolve = [&](const field_type& seed, const Identity& identity, int level,
-                           const char* role) -> const field_type& {
-    const field_type& accepted = facade_->prepared_amr_block_state(runtime_block, level);
-    const field_type* current = nullptr;
-    if (identity.family == Family::State) {
-      current = live_attempt_state_(runtime_block, level);
-      if (current == nullptr)
-        current = &accepted;
-    } else if (identity.family == Family::Scratch) {
-      for (const auto& [key, scratch] : scratches_) {
-        if (static_cast<int>(std::get<0>(key)) == identity.scratch_kind &&
-            std::get<1>(key) == level && std::get<2>(key) == identity.scratch_owner &&
-            std::get<3>(key) == identity.scratch_value_id &&
-            std::get<4>(key) == identity.scratch_subslot) {
-          current = &scratch;
-          break;
-        }
-      }
-      if (current == nullptr)
-        throw std::runtime_error(std::string(role) +
-                                 " scratch is missing a live AMR Program owner level");
-    } else if (identity.family == Family::History) {
-      const auto& manager = runtime_state().hist_;
-      const auto found = manager.histories.find(history_key_(identity.history_name, level));
-      if (found == manager.histories.end() || identity.history_lag < 0 ||
-          static_cast<std::size_t>(identity.history_lag) >= found->second.size())
-        throw std::runtime_error(std::string(role) +
-                                 " history is missing a live AMR Program owner level");
-      current = &found->second[static_cast<std::size_t>(identity.history_lag)];
-    } else {
-      if (level != identity.direct_level)
-        throw std::runtime_error(std::string(role) +
-                                 " cannot cover every live AMR Program owner level");
-      current = &seed;
-    }
-    require_same_layout_(*current, accepted, role);
-    return *current;
-  };
-
-  const Identity left_identity = classify(left, "AMR Program reduction");
+  const Identity left_identity =
+      classify_owner_field_(runtime_block, left, "AMR Program reduction");
   const std::optional<Identity> right_identity =
       right == nullptr ? std::nullopt
-                       : std::optional<Identity>(classify(*right, "AMR Program reduction"));
+                       : std::optional<Identity>(
+                             classify_owner_field_(runtime_block, *right, "AMR Program reduction"));
   // State and history reductions cover every live level.  A Program scratch or a
   // layout-authenticated direct field is produced on one active_level_ at a time
   // (the generated body walks for_each_program_resource_level).  Reducing the
@@ -244,10 +154,12 @@ void for_each_owner_active_level_(int program_block, const field_type& left,
     if (right_identity && !covers_level(*right_identity, level))
       continue;
     const field_type& accepted = facade_->prepared_amr_block_state(runtime_block, level);
-    const field_type& left_field = resolve(left, left_identity, level, "AMR Program reduction");
+    const field_type& left_field =
+        resolve_owner_field_(runtime_block, left, left_identity, level, "AMR Program reduction");
     const field_type* right_field = nullptr;
     if (right_identity)
-      right_field = &resolve(*right, *right_identity, level, "AMR Program reduction");
+      right_field = &resolve_owner_field_(runtime_block, *right, *right_identity, level,
+                                          "AMR Program reduction");
     const field_type* const active =
         facade_->prepared_amr_block_level_active_mask(runtime_block, level);
     if (active != nullptr)
@@ -450,11 +362,11 @@ field_type& assembly_source(field_type& field, std::string_view identity) const 
 std::shared_ptr<scalar_boundary_session_type> prepare_mesh_boundary_session(
     field_type& prototype, const ExecutionLane& lane) const {
   require_prepared_lane_(lane, "AMR scalar boundary preparation");
-  return std::make_shared<scalar_boundary_session_type>(
+  return scalar_boundary_session_type::prepare(
       geometry(), facade_->prepared_amr_boundary_topology(), prototype, lane,
-      next_boundary_generation_());
+      next_boundary_generation_(),
+      active_level_ == 0 ? HaloLayoutCoverage::full_domain : HaloLayoutCoverage::sparse_level);
 }
-
 std::shared_ptr<block_boundary_session_type> prepare_block_boundary_session(
     int program_block, field_type& prototype,
     const runtime::multiblock::BoundaryEvaluationPoint& point, const ExecutionLane& lane) const {
@@ -538,9 +450,83 @@ void fill_boundary(field_type& field) const {
 
 void fill_boundary(field_type& field, const ExecutionLane& lane) const {
   require_prepared_lane_(lane, "AMR boundary fill");
-  scalar_boundary_session_type session(geometry(), facade_->prepared_amr_boundary_topology(), field,
-                                       lane, next_boundary_generation_());
-  session.fill(field);
+  ProfileOperation profile(&facade_->profiler_handle(), "fill_boundary");
+  const auto session = prepare_mesh_boundary_session(field, lane);
+  session->fill(field);
+  if (profile.active())
+    Kokkos::fence();
+}
+
+template <int Count>
+void prepare_condensed_sampling(int program_block, int evaluation, field_type& state_field,
+                                const field_type& output, std::string_view consumer) const {
+  prepare_generated_state(program_block, state_field, evaluation);
+  prepare_spatial_collectively([&] {
+    runtime::program::require_condensed_sampling_footprint(
+        output, state_field, [&](std::size_t local) {
+          return provider_values_view<Count>(consumer, program_block, local);
+        });
+  });
+}
+
+// Prior-level fields are readable only before any level publishes or rotates its history.
+template <class Gather>
+void with_synchronized_field_gather(Gather&& gather) const {
+  if (synchronized_field_gather_ || active_attempt_states_.empty() || !multiblock_subcycling_ ||
+      !multiblock_subcycling_->has_synchronized_groups())
+    throw std::logic_error("AMR field gather requires a fresh synchronized attempt");
+  synchronized_field_gather_ = true;
+  try {
+    std::forward<Gather>(gather)();
+  } catch (...) {
+    synchronized_field_gather_ = false;
+    throw;
+  }
+  synchronized_field_gather_ = false;
+}
+
+void prepare_condensed_prior(int program_block, field_type& field) const {
+  if (active_level_ == 0)
+    return;
+  const field_type* parent = nullptr;
+  std::string family_identity;
+  prepare_spatial_collectively([&] {
+    if (!synchronized_field_gather_)
+      throw std::logic_error(
+          "AMR prior-field parent sampling requires the synchronous pre-publication gather");
+    const int owner = sys_block(program_block);
+    const Identity identity = classify_owner_field_(owner, field, "AMR prior-field sampling");
+    if (identity.family == Family::Direct || identity.direct_level != active_level_)
+      throw std::invalid_argument(
+          "AMR prior-field sampling lacks an exact state, scratch SSA, or history ancestor");
+    ExactContractBuilder proof;
+    proof.text("pops.program.synchronous-prior-scalar");
+    if (identity.family == Family::History) {
+      const auto& history = runtime_state().hist_;
+      const auto coarse = history_key_(identity.history_name, active_level_ - 1);
+      const auto fine = history_key_(identity.history_name, active_level_);
+      history.matching_authenticated_sample(coarse, fine, identity.history_lag)
+          .append_contract(proof);
+      history.append_descriptor_contract(fine, proof);
+      if (pending_history_remaps_.contains(coarse) || pending_history_remaps_.contains(fine))
+        throw std::invalid_argument(
+            "AMR prior-field history parent has a different retained sample or pending remap");
+    }
+    parent = &resolve_owner_field_(owner, field, identity, active_level_ - 1,
+                                   "AMR prior-field sampling");
+    proof.scalar(owner)
+        .scalar(static_cast<std::uint8_t>(identity.family))
+        .scalar(identity.scratch_kind)
+        .scalar(identity.scratch_value_id)
+        .scalar(identity.scratch_subslot)
+        .text(identity.history_name)
+        .scalar(identity.history_lag)
+        .scalar(active_subcycling_attempt_)
+        .scalar(current_dt_)
+        .scalar(physical_time());
+    family_identity = std::move(proof).release();
+  });
+  facade_->prepare_generated_amr_scalar_parent(active_level_, *parent, field, family_identity);
 }
 
 void laplacian(field_type& output, field_type& input) const {

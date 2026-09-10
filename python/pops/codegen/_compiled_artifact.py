@@ -26,6 +26,7 @@ class CompiledPlanBlock:
     instance_owner: Any = None
     model_owner: Any = None
     declares_auxiliary_providers: bool = False
+    resolved_operations: Any = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -71,6 +72,15 @@ class CompiledPlanBlock:
                 )
             _evidence(boundary, where="CompiledPlanBlock.boundaries")
         object.__setattr__(self, "boundaries", boundaries)
+        if self.resolved_operations is not None:
+            from .resolved_operations import ResolvedOperationPlan
+
+            if type(self.resolved_operations) is not ResolvedOperationPlan:
+                raise TypeError("CompiledPlanBlock requires an exact ResolvedOperationPlan")
+            # Reconstruct from authenticated data; compiled artifacts retain no
+            # source Module or authoring callback through this authority.
+            object.__setattr__(self, "resolved_operations", ResolvedOperationPlan.from_data(
+                self.resolved_operations.to_data()))
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +103,7 @@ class CompiledPlanRecord:
     lowering_coverage: Any
     blocks: tuple[CompiledPlanBlock, ...]
     time_identity: Any
+    continuation_transitions: Any = None
     consumer_graph: Any = None
     restart_authority: Any = None
     component_contracts: tuple[Any, ...] = ()
@@ -102,6 +113,7 @@ class CompiledPlanRecord:
     bootstrap_plan: Any = None
     amr_execution: Any = None
     amr_providers: Mapping[str, Any] = field(default_factory=dict)
+    layout_amr_authorities: Mapping[str, Any] = field(default_factory=dict)
     resolved_dimension: int = field(init=False)
     contract_identity: Identity = field(init=False)
 
@@ -140,16 +152,19 @@ class CompiledPlanRecord:
                     instance_owner_qid=block.instance_owner_qid,
                     instance_owner=block.instance_owner,
                     model_owner=block.model_owner,
-                    declares_auxiliary_providers=block.declares_auxiliary_providers)
+                    declares_auxiliary_providers=block.declares_auxiliary_providers,
+                    resolved_operations=block.resolved_operations)
                 for block in plan.blocks
             ),
             time_identity=_evidence(plan.time, where="resolved time"),
+            continuation_transitions=plan.continuation_transitions,
             resolved_hierarchy=plan.resolved_hierarchy,
             amr_transfer=plan.amr_transfer,
             initial_condition_plan=plan.initial_condition_plan,
             bootstrap_plan=plan.bootstrap_plan,
             amr_execution=plan.amr_execution,
             amr_providers=plan.amr_providers,
+            layout_amr_authorities=plan.layout_amr_authorities,
         )
 
     def __post_init__(self) -> None:
@@ -188,6 +203,10 @@ class CompiledPlanRecord:
         if type(self.lowering_coverage) is not LoweringCoverageReport:
             raise TypeError(
                 "CompiledPlanRecord.lowering_coverage must be a LoweringCoverageReport")
+        from pops.runtime._continuation_transitions import ContinuationTransitionPlan
+        if type(self.continuation_transitions) is not ContinuationTransitionPlan:
+            raise ValueError("CompiledPlanRecord omits required continuation transition policies")
+        self.continuation_transitions.require("initialization")
         if self.time_identity is None:
             raise ValueError("CompiledPlanRecord lost its authenticated whole-system Program")
         object.__setattr__(self, "time_identity", _deep_freeze(self.time_identity))
@@ -210,6 +229,9 @@ class CompiledPlanRecord:
         object.__setattr__(self, "requirements", _deep_freeze(self.requirements))
         object.__setattr__(self, "capabilities", _deep_freeze(self.capabilities))
         object.__setattr__(self, "amr_providers", _deep_freeze(self.amr_providers))
+        from pops.codegen._layout_amr_authorities import validate_layout_amr_authorities
+        validate_layout_amr_authorities(self.layout_plan, self.layout_amr_authorities)
+        object.__setattr__(self, "layout_amr_authorities", _deep_freeze(self.layout_amr_authorities))
         contracts = tuple(_deep_freeze(item) for item in self.component_contracts)
         component_ids = [item.get("component_id") for item in contracts]
         if any(not isinstance(component_id, str) or not component_id
@@ -255,10 +277,24 @@ class CompiledPlanRecord:
                 for value, kind in zip(amr_authorities, expected, strict=True)
             ):
                 raise TypeError("CompiledPlanRecord contains a non-exact AMR authority")
-        elif self.target == "amr_system":
+        elif self.target == "amr_system" and (not self.layout_amr_authorities
+                                                or len(self.layout_plan.layouts) == 1):
             raise ValueError("CompiledPlanRecord AMR target has no complete AMR authority set")
         object.__setattr__(
             self, "contract_identity", make_identity("compiled-plan", self._payload()))
+
+    @property
+    def resolved_operations(self) -> Mapping[str, Any]:
+        from ._resolved_block_operations import resolved_operation_mapping
+
+        return resolved_operation_mapping(self.blocks)
+
+    def explain(self, result: str | None = None) -> dict[str, Any]:
+        self.verify()
+        if result is not None and result not in self.resolved_operations:
+            raise KeyError("no compiled block %r" % result)
+        return {name: plan.explain() for name, plan in self.resolved_operations.items()
+                if plan is not None and (result is None or name == result)}
 
     def _payload(self) -> dict[str, Any]:
         return {
@@ -305,9 +341,12 @@ class CompiledPlanRecord:
                         block.spatial, where="compiled plan block spatial"),
                     "boundaries": _evidence(
                         block.boundaries, where="compiled plan block boundaries"),
+                    "resolved_operations": _evidence(block.resolved_operations,
+                        where="compiled plan block resolved operations"),
                 }
                 for block in self.blocks
             ],
+            "continuation_transitions": self.continuation_transitions.to_data(),
             "time_identity": _evidence(
                 self.time_identity, where="compiled plan time identity"),
             "resolved_hierarchy": _evidence(
@@ -327,6 +366,8 @@ class CompiledPlanRecord:
             ) if self.amr_execution is not None else None,
             "amr_providers": _evidence(
                 self.amr_providers, where="compiled plan AMR providers"),
+            "layout_amr_authorities": _evidence(
+                self.layout_amr_authorities, where="compiled plan.layout_amr_authorities"),
         }
 
     def verify(self) -> None:
@@ -723,6 +764,15 @@ class CompiledSimulationArtifact:
                for manifest in manifests[1:]):
             return None
         return manifests[0]
+
+    @property
+    def resolved_operations(self) -> Mapping[str, Any]:
+        return self.plan.resolved_operations
+
+    def explain(self, result: str | None = None) -> dict[str, Any]:
+        """Explain resolved operations; binary evidence remains separately authenticated."""
+        self.verify()
+        return self.plan.explain(result)
 
     @property
     def lowering_coverage(self) -> Any:

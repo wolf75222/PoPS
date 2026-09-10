@@ -27,6 +27,8 @@ from pops.external import build_source_package_manifest, load
 from pops.fields import ExternalFieldSolver
 from pops.lib.amr import BergerRigoutsos
 from pops.lib.initial import Gaussian
+from pops.lib.time import ForwardEuler
+from pops.time import FailRun, FixedDt
 
 from _compile_once import compile_resolved_plan_once
 from tests.python.integration._final_field_program import (
@@ -35,7 +37,6 @@ from tests.python.integration._final_field_program import (
 )
 from tests.python.integration.native_loader.test_external_field_solver_runtime import (
     _manifest,
-    _moving_amr_program,
     _mpi_faulted_solver_source,
     _topology_source,
 )
@@ -43,6 +44,15 @@ from tests.python.integration.native_loader.test_external_field_solver_runtime i
 
 _COMM = _pops.mpi_world()
 _fails = 0
+
+
+def _mpi_field_program(state: Any, rate: Any, field: Any) -> Any:
+    # Every attempted step must invoke the provider: the two failure markers below target
+    # consecutive attempts, including the one without a layout-changing regrid.  The loader
+    # suite's Every(5)/Hold-or-Skip helper instead tests off-cadence topology refresh.
+    program = ForwardEuler(state, rate=rate, fields=field, solve_action=FailRun())
+    program.step_strategy(FixedDt(8.0e-2))
+    return program
 
 
 def chk(condition: Any, label: str) -> None:
@@ -236,7 +246,7 @@ def test_external_amr_field_bridge_executes_and_refuses_collectively() -> None:
         x_axis, y_axis = model.frame.axes
         resolved = resolve_periodic_field_program(
             model,
-            _moving_amr_program,
+            _mpi_field_program,
             name="external-amr-field-mpi",
             block_name="material",
             target="amr_system",
@@ -349,12 +359,20 @@ def test_external_amr_field_bridge_executes_and_refuses_collectively() -> None:
         chk(
             len(set(divergent_errors)) == 1
             and divergent_errors[0] is not None
-            and "provider report differs between MPI ranks" in divergent_errors[0],
-            "a rank-local non-finite candidate is refused by exact report consensus",
+            and "invalid_evaluation action=fail_run" in divergent_errors[0]
+            and "native FieldSolver v2 marked a non-finite active solution as solved"
+            in divergent_errors[0],
+            "a rank-local non-finite candidate becomes one collective typed FailRun",
         )
         chk(
             _snapshot_is_exact(runtime, slot, before_divergence),
-            "rank-divergent refusal publishes no field, state, clock or topology mutation",
+            "non-finite candidate refusal publishes no field, state, clock or topology mutation",
+        )
+        _set_marker(divergent_fault, False)
+        finite_retry = pops.run(runtime, t_end=4.0e-1, max_steps=1, console=False)
+        chk(
+            finite_retry.accepted_steps == 1 and runtime.macro_step() == 5,
+            "the exact accepted state remains retryable after non-finite candidate rollback",
         )
 
 

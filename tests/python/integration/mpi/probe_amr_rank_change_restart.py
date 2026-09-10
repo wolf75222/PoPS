@@ -343,6 +343,46 @@ def _assert_snapshot(
             )
 
 
+def _continued_metadata_for_rank_change(
+    source: dict[str, Any], control: dict[str, Any]
+) -> dict[str, Any]:
+    """Authenticate newly produced origins against an independent target-rank execution."""
+
+    expected = json.loads(json.dumps(source))
+    changed = 0
+    for kind in ("flux_ledger", "synchronization"):
+        if len(expected[kind]) != len(control[kind]):
+            raise AssertionError("target-rank control changed the %s evidence count" % kind)
+        for source_row, control_row in zip(expected[kind], control[kind], strict=True):
+            source_origin, control_origin = source_row["origin"], control_row["origin"]
+            source_identity = source_origin["spatial_identity"]
+            control_identity = control_origin["spatial_identity"]
+            prefix = "pops.amr-program.face-evidence-space.v1:sha256:"
+            for identity in (source_identity, control_identity):
+                if (
+                    not isinstance(identity, str)
+                    or not identity.startswith(prefix)
+                    or len(identity[len(prefix):]) != 64
+                    or any(value not in "0123456789abcdef" for value in identity[len(prefix):])
+                ):
+                    raise AssertionError("rank-change control lacks an exact spatial identity")
+            if source_identity == control_identity:
+                raise AssertionError("rank-change evidence did not authenticate changed ownership")
+            # The exact native spatial contract includes rank-space extents and owners, so fresh
+            # one-rank evidence cannot reuse the two-rank digest.  Every other origin/physical
+            # field must still match the uninterrupted two-rank reference exactly.
+            source_origin["spatial_identity"] = control_identity
+            changed += 1
+    if changed == 0:
+        raise AssertionError("rank-change control produced no ownership-bearing face evidence")
+    if expected != control:
+        raise AssertionError(
+            "target-rank control changed nonidentity AMR metadata:\nexpected=%r\nactual=%r"
+            % (expected, control)
+        )
+    return expected
+
+
 def _accepted_tagging_hysteresis_span(payload: Any) -> tuple[bytes, int]:
     """Extract the opaque persistent-tagging bytes and their authenticated offset."""
     encoded = (
@@ -367,8 +407,8 @@ def _accepted_tagging_hysteresis_span(payload: Any) -> tuple[bytes, int]:
         if cursor > len(encoded):
             raise AssertionError("accepted-state string is truncated")
 
-    if encoded[:8] != b"POPSAND4":
-        raise AssertionError("checkpoint does not contain exact-ranked accepted-state v4")
+    if encoded[:8] not in (b"POPSAND4", b"POPSAND5"):
+        raise AssertionError("checkpoint does not contain exact-ranked accepted-state v4/v5")
     cursor = 8
     cursor += 8  # native dimension
     skip_string()  # exact spatial contract
@@ -667,10 +707,29 @@ def _restart_relaxed(checkpoint: Path, evidence: Path, rematerialized: Path) -> 
         require_current_flux_ledger=True,
     )
 
+    # Keep checkpoint-origin equality above exact: those accepted bytes still describe the
+    # original two-rank execution.  New continuation evidence instead authenticates its current
+    # rank ownership.  A fresh one-rank control runs the same complete 3+3-step trajectory, while
+    # the saved two-rank arrays remain the bit-for-bit state/history oracle for both executions.
+    control = _runtime(bit_identical=False)
+    _advance(control, CHECKPOINT_STEPS)
+    _advance(control, CONTINUATION_STEPS)
+    control_metadata, _control_arrays = _capture_arrays(
+        control, prefix="final", require_current_flux_ledger=False
+    )
+    continued_metadata = _continued_metadata_for_rank_change(metadata["final"], control_metadata)
+    _assert_snapshot(
+        control,
+        expected_metadata=continued_metadata,
+        expected_arrays=arrays,
+        prefix="final",
+        require_current_flux_ledger=False,
+    )
+
     _advance(runtime, CONTINUATION_STEPS)
     _assert_snapshot(
         runtime,
-        expected_metadata=metadata["final"],
+        expected_metadata=continued_metadata,
         expected_arrays=arrays,
         prefix="final",
         require_current_flux_ledger=False,

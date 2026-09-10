@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from types import SimpleNamespace
 
@@ -267,13 +268,22 @@ def test_implicit_pair_envelope_precedes_program_and_interface_install(
 ) -> None:
     import pops.runtime._amr_system_install as amr_install
     import pops.runtime._bound_snapshot as bound_snapshot
+    import pops.runtime._checkpoint_resource_budget as checkpoint_budget
     import pops.runtime._component_execution_context as component_execution
     import pops.runtime._install_param_routing as param_routing
     import pops.runtime._lifecycle as lifecycle
     import pops.runtime._runtime_authorities as authorities
+    from pops.runtime._continuation_transitions import ContinuationTransitionPlan
 
     events = []
     bind_schema = object()
+    continuation = ContinuationTransitionPlan(json.dumps({
+        "schema_version": 1,
+        "kind": "pops.continuation-transitions",
+        "target": "amr_system",
+        "evidence_stage": "resolved",
+        "objects": [],
+    }, sort_keys=True, separators=(",", ":")))
     artifact = SimpleNamespace(
         bind_schema=bind_schema,
         so_path="compiled-amr-program.so",
@@ -282,6 +292,8 @@ def test_implicit_pair_envelope_precedes_program_and_interface_install(
             capabilities={
                 "shared_interfaces": {"implicit_jacvec_pair": True},
             },
+            continuation_transitions=continuation,
+            verify=lambda: None,
         ),
     )
     install_plan = SimpleNamespace(
@@ -353,6 +365,14 @@ def test_implicit_pair_envelope_precedes_program_and_interface_install(
             "interfaces-complete" if complete else "interfaces-incremental"
         ),
     )
+    def record_checkpoint_budget(engine, plan):
+        assert isinstance(engine, Probe)
+        assert plan is install_plan
+        events.append("checkpoint-budget")
+
+    monkeypatch.setattr(
+        checkpoint_budget, "install_amr_checkpoint_resource_budget", record_checkpoint_budget,
+    )
 
     Probe()._install_compiled(
         artifact,
@@ -373,6 +393,7 @@ def test_implicit_pair_envelope_precedes_program_and_interface_install(
         "program",
         "interfaces-incremental",
         "interfaces-complete",
+        "checkpoint-budget",
         "freeze",
     ]
 

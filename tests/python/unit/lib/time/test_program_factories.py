@@ -345,7 +345,10 @@ def test_multistate_runge_kutta_synchronizes_stages_and_commits_atomically():
         pair = rhs[2 * stage : 2 * stage + 2]
         assert pair[0].point == pair[1].point
         assert [value.block.local_id for value in pair] == ["alpha", "beta"]
-    assert all(value.point == TimePoint(program.clock, 1) for value in program.commits().values())
+    assert all(value.point == TimePoint(program.clock, step=1)
+               for value in program.commits().values())
+    for state, value in program.commits().items():
+        assert value.point == program.state(state).next.point
 
 
 def test_multistate_runge_kutta_solves_one_shared_field_from_all_states_per_stage():

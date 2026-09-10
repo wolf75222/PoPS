@@ -12,6 +12,51 @@ from typing import Any
 from .spaces import Rate, RateSpace, Space
 
 
+class ProductSpace:
+    """An immutable heterogeneous output/unknown tuple, independent of a solver route.
+
+    A Signature can describe this type before a native joint-field or interaction
+    provider is available. Existing closed numerical routes still reject it.
+    """
+    __slots__ = ("_items",)
+    __pops_ir_immutable__ = True
+
+    def __init__(self, entries: Any) -> None:
+        items = tuple(entries.items())
+        if not items or any(not isinstance(name, str) or not name or not isinstance(space, Space)
+                            for name, space in items):
+            raise TypeError("ProductSpace requires named typed Space outputs")
+        object.__setattr__(self, "_items", items)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("ProductSpace is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("ProductSpace is immutable")
+
+    def __getitem__(self, name: str) -> Space:
+        return dict(self._items)[name]
+
+    def keys(self) -> tuple[str, ...]:
+        return tuple(name for name, _ in self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def items(self) -> tuple:
+        return self._items
+
+    def __eq__(self, other: Any) -> bool:
+        return isinstance(other, ProductSpace) and self._items == other._items
+
+    def __hash__(self) -> int:
+        return hash(self._items)
+
+    def to_data(self) -> dict[str, Any]:
+        return {"kind": "product_space", "outputs": [
+            {"name": name, "space": space.to_data()} for name, space in self._items]}
+
+
 def _block_name(key: Any) -> Any:
     """The block/species name of a RateBundle key: a name string, or a space's name."""
     return key.name if isinstance(key, Space) else str(key)

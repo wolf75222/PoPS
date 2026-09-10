@@ -4,11 +4,13 @@
 #pragma once
 
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/identity/sha256.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/config/generated_component_abi.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
@@ -24,6 +26,7 @@
 #include <exception>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -32,6 +35,11 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+namespace pops::runtime::amr {
+template <int Dim, class MemorySpace>
+class PreparedMultiBlockAmrHierarchy;
+}
 
 namespace pops::runtime::multiblock {
 
@@ -76,6 +84,9 @@ struct AxisAlignedInterface {
   static constexpr int dimension = Dim;
 
   std::string identity;
+  // Exact evaluator artifact/parameters and qualified endpoint authority for retained samples.
+  // Legacy direct callbacks may leave this empty only when they do not capture samples.
+  std::string sampling_provider_identity;
   std::size_t left_block = 0;
   std::size_t right_block = 0;
   int level = 0;
@@ -134,10 +145,32 @@ struct InterfaceFluxFragmentPublication {
   bool stage_weight_resolved = true;
 };
 
+// One evaluated physical face batch. Both endpoint-owned temporal bases reference the same
+// immutable sample; only the Program's final affine expression can assign its time weight.
+struct InterfaceFluxSample {
+  std::string interface_identity;
+  std::string route_contract;
+  std::size_t left_block = 0;
+  std::size_t right_block = 0;
+  int level = 0;
+  std::uint64_t source_topology_epoch = 0;
+  double face_measure = 0.0;
+  int left_axis = 0, right_axis = 0;
+  InterfaceSide left_side = InterfaceSide::Low, right_side = InterfaceSide::High;
+  double left_normal_spacing = 0.0, right_normal_spacing = 0.0;
+  std::size_t face_count = 0;
+  int component_count = 0;
+  std::vector<int> right_component_for_left;
+  BoundaryEvaluationPoint source_point;
+  std::vector<Real> flux_density;
+};
+
 struct InterfaceFluxProductionBudget {
   struct Level {
     std::size_t fragment_count_per_application = 0;
     std::size_t payload_terms_per_application = 0;
+    std::size_t sample_count_per_application = 0;
+    std::size_t sample_payload_terms_per_application = 0;
   };
 
   std::vector<Level> levels;
@@ -168,6 +201,15 @@ class InterfaceFluxScheduler {
   using rank_type = typename field_type::rank_type;
   using ghost_type = typename field_type::ghost_type;
   using memory_space = typename field_type::memory_space;
+
+  InterfaceFluxScheduler() = default;
+  InterfaceFluxScheduler(const InterfaceFluxScheduler&) = default;
+  InterfaceFluxScheduler(InterfaceFluxScheduler&&) noexcept = default;
+  // Assignment retires old evaluators before their retained execution lane, as destruction does.
+  InterfaceFluxScheduler& operator=(InterfaceFluxScheduler other) noexcept {
+    swap(other);
+    return *this;
+  }
 
   void install(route_type route, field_type& left_state, const geometry_type& left_geometry,
                field_type& right_state, const geometry_type& right_geometry,
@@ -327,6 +369,12 @@ class InterfaceFluxScheduler {
       prepared.execution_memory_space = execution.memory_space;
       prepared.device_identity = execution.device_identity;
       prepared.collective_identity = collective_identity;
+      if (!prepared.route.sampling_provider_identity.empty())
+        prepared.route_certificate = route_digest_(collective_plan_identity_(
+            prepared.route, left_state, left_geometry, right_state, right_geometry, left_normal,
+            right_normal, face_count, component_count, prepared.communicator_identity,
+            communicator_size, true));
+      prepared.evaluation_count = std::make_shared<std::size_t>(0);
       materialize_storage_(prepared);
     } catch (...) {
       materialization_failure = std::current_exception();
@@ -367,7 +415,8 @@ class InterfaceFluxScheduler {
 
   void apply(const BoundaryEvaluationPoint& point, std::span<field_type* const> states,
              std::span<field_type* const> rhs,
-             InterfaceFluxFragmentPublication* publication = nullptr) {
+             InterfaceFluxFragmentPublication* publication = nullptr,
+             std::vector<InterfaceFluxSample>* captured = nullptr) {
     if (interfaces_.empty()) {
       validate_point_(point);
       if (publication != nullptr)
@@ -378,9 +427,18 @@ class InterfaceFluxScheduler {
     const bool collective = communicator.active() && communicator.size() > 1;
     std::exception_ptr point_failure;
     try {
+      if (topology_reconstruction_pending_)
+        throw std::logic_error(
+            "multi-block interface evaluation cannot run during hierarchy reconstruction");
       validate_point_(point);
       if (publication != nullptr)
         validate_fragment_publication_(point, *publication);
+      if (captured != nullptr) {
+        if (publication != nullptr || !captured->empty())
+          throw std::invalid_argument(
+              "interface sample capture requires an empty unpublished target");
+        captured->reserve(interfaces_.size());
+      }
     } catch (...) {
       point_failure = std::current_exception();
     }
@@ -391,6 +449,9 @@ class InterfaceFluxScheduler {
       if (minimum != maximum)
         throw std::runtime_error(
             "multi-block interface fragment publication presence differs across MPI ranks");
+      if (all_reduce_min(captured != nullptr ? 1L : 0L, communicator) !=
+          all_reduce_max(captured != nullptr ? 1L : 0L, communicator))
+        throw std::runtime_error("interface sample capture presence differs across MPI ranks");
       if (!registry_agrees_across_ranks_(communicator))
         throw std::runtime_error(
             "multi-block interface prepared registry differs across MPI ranks");
@@ -429,6 +490,9 @@ class InterfaceFluxScheduler {
         const bool left_active = left_state != nullptr || left_rhs != nullptr;
         const bool right_active = right_state != nullptr || right_rhs != nullptr;
         active = left_active || right_active;
+        if (active && captured != nullptr && prepared.route_certificate.empty())
+          throw std::invalid_argument(
+              "interface sample capture has no exact sampling provider authority");
         if (active && (!left_active || !right_active || left_state == nullptr ||
                        right_state == nullptr || left_rhs == nullptr || right_rhs == nullptr))
           throw std::runtime_error(
@@ -437,15 +501,47 @@ class InterfaceFluxScheduler {
         active_failure = std::current_exception();
       }
       finish_collective_preflight_(prepared.communicator, active_failure, "active-mask preflight");
-      if (prepared.distributed) {
+      if (prepared.distributed || (captured != nullptr && collective)) {
         const long minimum = all_reduce_min(active ? 1L : 0L, prepared.communicator);
         const long maximum = all_reduce_max(active ? 1L : 0L, prepared.communicator);
         if (minimum != maximum)
           throw std::runtime_error("multi-block interface active mask differs across MPI ranks");
       }
       if (active)
-        apply_one_(prepared, point, *left_state, *right_state, *left_rhs, *right_rhs, publication);
+        apply_one_(prepared, point, *left_state, *right_state, *left_rhs, *right_rhs, publication,
+                   captured);
     }
+  }
+
+  std::string_view authenticate_sample(const InterfaceFluxSample& sample) const {
+    const auto found = std::find_if(interfaces_.begin(), interfaces_.end(), [&](const auto& route) {
+      return route.route.identity == sample.interface_identity && route.route.level == sample.level;
+    });
+    if (found == interfaces_.end() || found->route_certificate.empty() ||
+        found->route_certificate != sample.route_contract ||
+        found->route.left_block != sample.left_block ||
+        found->route.right_block != sample.right_block ||
+        found->face_measure != sample.face_measure || found->route.left_axis != sample.left_axis ||
+        found->route.right_axis != sample.right_axis ||
+        found->route.left_side != sample.left_side ||
+        found->route.right_side != sample.right_side ||
+        found->left_normal_spacing != sample.left_normal_spacing ||
+        found->right_normal_spacing != sample.right_normal_spacing ||
+        found->face_count != sample.face_count ||
+        found->component_count != sample.component_count ||
+        found->route.right_component_for_left != sample.right_component_for_left ||
+        sample.flux_density.size() !=
+            found->face_count * static_cast<std::size_t>(found->component_count) ||
+        sample.source_point.level != sample.level)
+      throw std::invalid_argument(
+          "retained shared flux sample differs from its authenticated route");
+    validate_point_(sample.source_point);
+    if (sample.source_point.graph_identity.empty() || sample.source_point.rate_identity.empty() ||
+        sample.source_point.application_identity.empty() ||
+        !std::all_of(sample.flux_density.begin(), sample.flux_density.end(),
+                     [](Real value) { return std::isfinite(static_cast<double>(value)); }))
+      throw std::invalid_argument("retained shared flux sample has invalid source provenance");
+    return found->collective_identity;
   }
 
   std::size_t size() const noexcept { return interfaces_.size(); }
@@ -484,6 +580,11 @@ class InterfaceFluxScheduler {
           row.payload_terms_per_application >
               std::numeric_limits<std::size_t>::max() - orientations * payload)
         throw std::length_error("multi-block interface production budget exceeds size_t");
+      ++row.sample_count_per_application;
+      if (payload >
+          std::numeric_limits<std::size_t>::max() - row.sample_payload_terms_per_application)
+        throw std::length_error("interface retained sample budget exceeds size_t");
+      row.sample_payload_terms_per_application += payload;
       row.fragment_count_per_application += orientations;
       row.payload_terms_per_application += orientations * payload;
       budget.maximum_interface_identity_characters =
@@ -620,6 +721,8 @@ class InterfaceFluxScheduler {
       if (orientations != 0 && terms > std::numeric_limits<std::size_t>::max() / orientations)
         throw std::length_error(
             "multi-block interface configured oriented payload budget exceeds size_t");
+      row.sample_count_per_application = logical.size();
+      row.sample_payload_terms_per_application = terms;
       row.payload_terms_per_application = orientations * terms;
       exact.scalar(static_cast<std::uint64_t>(level))
           .scalar(static_cast<std::uint64_t>(
@@ -681,6 +784,8 @@ class InterfaceFluxScheduler {
     const CommunicatorView communicator =
         interfaces_.empty() ? CommunicatorView{} : interfaces_.front().communicator;
     InterfaceFluxScheduler candidate;
+    candidate.execution_lane_owner_ = execution_lane_owner_;
+    candidate.topology_reconstruction_pending_ = topology_reconstruction_pending_;
     std::exception_ptr allocation_failure;
     try {
       candidate.interfaces_.reserve(interfaces_.size());
@@ -734,7 +839,11 @@ class InterfaceFluxScheduler {
     return candidate;
   }
 
-  void swap(InterfaceFluxScheduler& other) noexcept { interfaces_.swap(other.interfaces_); }
+  void swap(InterfaceFluxScheduler& other) noexcept {
+    execution_lane_owner_.swap(other.execution_lane_owner_);
+    interfaces_.swap(other.interfaces_);
+    std::swap(topology_reconstruction_pending_, other.topology_reconstruction_pending_);
+  }
 
   void require_complete_active_level_registry(int active_level_count) const {
     if (active_level_count < 1)
@@ -781,11 +890,42 @@ class InterfaceFluxScheduler {
   std::size_t evaluation_count(const std::string& identity, int level) const {
     for (const PreparedInterface& prepared : interfaces_)
       if (prepared.route.identity == identity && prepared.route.level == level)
-        return prepared.evaluation_count;
+        return *prepared.evaluation_count;
     throw std::out_of_range("multi-block interface identity is not installed on level");
   }
 
  private:
+  friend class ::pops::runtime::amr::PreparedMultiBlockAmrHierarchy<Dim, memory_space>;
+
+  // Only the owning hierarchy's reconstruction scope may temporarily project its complete
+  // recipe onto a live prefix. The ordinary replacement API above retains its strict depth guard.
+  template <class StateProvider, class GeometryProvider>
+  InterfaceFluxScheduler rematerialized_reconstruction_prefix_(
+      int active_level_count, StateProvider&& state_provider,
+      GeometryProvider&& geometry_provider) const {
+    const CommunicatorView communicator =
+        interfaces_.empty() ? CommunicatorView{} : interfaces_.front().communicator;
+    InterfaceFluxScheduler prefix;
+    prefix.execution_lane_owner_ = execution_lane_owner_;
+    std::exception_ptr failure;
+    try {
+      if (active_level_count < 1)
+        throw std::invalid_argument("interface reconstruction requires a positive live prefix");
+      prefix.interfaces_.reserve(interfaces_.size());
+      for (const PreparedInterface& prepared : interfaces_)
+        if (prepared.route.level < active_level_count)
+          prefix.interfaces_.push_back(prepared);
+    } catch (...) {
+      failure = std::current_exception();
+    }
+    finish_collective_preflight_(communicator, failure, "reconstruction prefix allocation");
+    auto candidate =
+        prefix.rematerialized(active_level_count, std::forward<StateProvider>(state_provider),
+                              std::forward<GeometryProvider>(geometry_provider));
+    candidate.topology_reconstruction_pending_ = true;
+    return candidate;
+  }
+
   struct BoundaryCell {
     std::size_t local_box = field_type::not_local;
     index_type index{};
@@ -840,8 +980,13 @@ class InterfaceFluxScheduler {
     PopsMemorySpaceV1 execution_memory_space = POPS_MEMORY_SPACE_HOST_V1;
     std::string device_identity;
     std::string collective_identity;
+    // Physical sampling certificate excludes patch slots/owners. Full live storage authority
+    // remains in collective_identity and is checked independently at consumption.
+    std::string route_certificate;
     InterfaceFluxEvaluator evaluator;
-    std::size_t evaluation_count = 0;
+    // Execution observations belong to the installed route's lifetime. Transaction snapshots
+    // and rematerialized views share them, so restoring scientific state cannot erase work.
+    std::shared_ptr<std::size_t> evaluation_count;
   };
 
   struct PackKernel {
@@ -930,6 +1075,17 @@ class InterfaceFluxScheduler {
 
   void validate_registry_communicator_(std::string_view identity, int size, bool distributed,
                                        const CommunicatorView& communicator) const {
+#ifdef POPS_HAS_MPI
+    if (execution_lane_owner_ && identity == execution_lane_owner_->identity()) {
+      int relation = MPI_UNEQUAL;
+      ::pops::detail::require_mpi_success(
+          MPI_Comm_compare(communicator.native_handle(), execution_lane_owner_->native_handle(),
+                           &relation),
+          "MPI_Comm_compare(interface execution owner)");
+      if (relation != MPI_IDENT)
+        throw std::invalid_argument("multi-block interface execution owner is not the exact lane");
+    }
+#endif
     if (interfaces_.empty())
       return;
     const PreparedInterface& existing = interfaces_.front();
@@ -1282,6 +1438,12 @@ class InterfaceFluxScheduler {
         prepared.route, left_state, left_geometry, right_state, right_geometry,
         replacement.left_normal_spacing, replacement.right_normal_spacing, faces,
         prepared.component_count, prepared.communicator_identity, prepared.communicator_size);
+    if (!prepared.route.sampling_provider_identity.empty())
+      replacement.route_certificate = route_digest_(collective_plan_identity_(
+          prepared.route, left_state, left_geometry, right_state, right_geometry,
+          replacement.left_normal_spacing, replacement.right_normal_spacing, faces,
+          prepared.component_count, prepared.communicator_identity, prepared.communicator_size,
+          true));
     materialize_storage_(replacement);
     return replacement;
   }
@@ -1341,7 +1503,10 @@ class InterfaceFluxScheduler {
 
   static void apply_one_(PreparedInterface& prepared, const BoundaryEvaluationPoint& point,
                          field_type& left_state, field_type& right_state, field_type& left_rhs,
-                         field_type& right_rhs, InterfaceFluxFragmentPublication* publication) {
+                         field_type& right_rhs, InterfaceFluxFragmentPublication* publication,
+                         std::vector<InterfaceFluxSample>* captured = nullptr) {
+    const bool collective_capture =
+        captured != nullptr && prepared.communicator.active() && prepared.communicator.size() > 1;
     const bool layouts_match =
         runtime_field_matches_(left_state, prepared.left_layout, prepared.left_distribution,
                                prepared.left_rank, prepared.left_ghosts,
@@ -1355,7 +1520,7 @@ class InterfaceFluxScheduler {
         runtime_field_matches_(right_rhs, prepared.right_layout, prepared.right_distribution,
                                prepared.right_rank, prepared.right_ghosts,
                                prepared.component_count);
-    if (prepared.distributed) {
+    if (prepared.distributed || collective_capture) {
       if (all_reduce_sum(layouts_match ? 0L : 1L, prepared.communicator) != 0)
         throw std::runtime_error(
             "multi-block interface runtime fields differ from prepared layouts on one rank");
@@ -1408,7 +1573,7 @@ class InterfaceFluxScheduler {
     } catch (...) {
       evaluator_failure = std::current_exception();
     }
-    if (prepared.distributed) {
+    if (prepared.distributed || collective_capture) {
       if (all_reduce_sum(evaluator_failure ? 1L : 0L, prepared.communicator) != 0)
         throw std::runtime_error("multi-block interface evaluator failed on one or more ranks");
     } else if (evaluator_failure) {
@@ -1419,7 +1584,7 @@ class InterfaceFluxScheduler {
     bool finite = true;
     for (std::size_t value = 0; value < packed; ++value)
       finite = finite && std::isfinite(static_cast<double>(prepared.host_flux(value)));
-    if (prepared.distributed) {
+    if (prepared.distributed || collective_capture) {
       if (all_reduce_sum(finite ? 0L : 1L, prepared.communicator) != 0)
         throw std::runtime_error(
             "multi-block interface evaluator returned a non-finite flux on one rank");
@@ -1427,6 +1592,34 @@ class InterfaceFluxScheduler {
     } else if (!finite) {
       throw std::runtime_error("multi-block interface evaluator returned a non-finite flux");
     }
+    std::optional<InterfaceFluxSample> sample;
+    std::exception_ptr capture_failure;
+    try {
+      if (captured != nullptr) {
+        sample.emplace();
+        sample->interface_identity = prepared.route.identity;
+        sample->route_contract = prepared.route_certificate;
+        sample->left_block = prepared.route.left_block;
+        sample->right_block = prepared.route.right_block;
+        sample->level = point.level;
+        sample->face_measure = prepared.face_measure;
+        sample->left_axis = prepared.route.left_axis;
+        sample->right_axis = prepared.route.right_axis;
+        sample->left_side = prepared.route.left_side;
+        sample->right_side = prepared.route.right_side;
+        sample->left_normal_spacing = prepared.left_normal_spacing;
+        sample->right_normal_spacing = prepared.right_normal_spacing;
+        sample->face_count = prepared.face_count;
+        sample->component_count = prepared.component_count;
+        sample->right_component_for_left = prepared.route.right_component_for_left;
+        sample->source_point = point;
+        sample->flux_density.assign(prepared.host_flux.data(), prepared.host_flux.data() + packed);
+      }
+    } catch (...) {
+      capture_failure = std::current_exception();
+    }
+    if (captured != nullptr)
+      finish_collective_preflight_(prepared.communicator, capture_failure, "physical flux capture");
     if (publication != nullptr) {
       std::optional<typename InterfaceFluxFragmentLedger::PreparedAccumulation>
           prepared_publication;
@@ -1453,7 +1646,10 @@ class InterfaceFluxScheduler {
         std::terminate();
       throw;
     }
-    ++prepared.evaluation_count;
+    ++*prepared.evaluation_count;
+    static_assert(std::is_nothrow_move_constructible_v<InterfaceFluxSample>);
+    if (sample)
+      captured->push_back(std::move(*sample));
   }
 
   static void require_distributed_flux_consensus_(PreparedInterface& prepared, std::size_t packed) {
@@ -1537,10 +1733,11 @@ class InterfaceFluxScheduler {
     route_type rhs = right;
     lhs.level = 0;
     rhs.level = 0;
-    return lhs.identity == rhs.identity && lhs.left_block == rhs.left_block &&
-           lhs.right_block == rhs.right_block && lhs.left_axis == rhs.left_axis &&
-           lhs.right_axis == rhs.right_axis && lhs.left_side == rhs.left_side &&
-           lhs.right_side == rhs.right_side &&
+    return lhs.identity == rhs.identity &&
+           lhs.sampling_provider_identity == rhs.sampling_provider_identity &&
+           lhs.left_block == rhs.left_block && lhs.right_block == rhs.right_block &&
+           lhs.left_axis == rhs.left_axis && lhs.right_axis == rhs.right_axis &&
+           lhs.left_side == rhs.left_side && lhs.right_side == rhs.right_side &&
            lhs.tangential_transform == rhs.tangential_transform &&
            lhs.right_component_for_left == rhs.right_component_for_left &&
            lhs.left_trace_projection_identity == rhs.left_trace_projection_identity &&
@@ -1615,11 +1812,13 @@ class InterfaceFluxScheduler {
       const route_type& route, const field_type& left_state, const geometry_type& left_geometry,
       const field_type& right_state, const geometry_type& right_geometry, Real left_normal,
       Real right_normal, std::size_t face_count, int component_count,
-      std::string_view communicator_identity, int communicator_size) {
+      std::string_view communicator_identity, int communicator_size, bool physical_sample = false) {
     std::string bytes;
-    append_text_(bytes, "pops.multiblock.interface-plan.nd.v1");
+    append_text_(bytes, physical_sample ? "pops.multiblock.physical-sampling.nd.v1"
+                                        : "pops.multiblock.interface-plan.nd.v1");
     append_scalar_(bytes, Dim);
     append_text_(bytes, route.identity);
+    append_text_(bytes, route.sampling_provider_identity);
     append_scalar_(bytes, static_cast<std::uint64_t>(route.left_block));
     append_scalar_(bytes, static_cast<std::uint64_t>(route.right_block));
     append_scalar_(bytes, route.level);
@@ -1644,16 +1843,31 @@ class InterfaceFluxScheduler {
     append_scalar_(bytes, route.right_trace_required_depth);
     append_text_(bytes, route.affine_mapping_identity);
     append_scalar_(bytes, route.right_normal_translation);
-    append_layout_(bytes, left_state);
-    append_layout_(bytes, right_state);
+    if (!physical_sample) {
+      append_layout_(bytes, left_state);
+      append_layout_(bytes, right_state);
+    } else {
+      append_scalar_(bytes, left_state.ncomp());
+      append_scalar_(bytes, right_state.ncomp());
+      append_scalar_(bytes, static_cast<std::uint64_t>(sizeof(Real)));
+      // Canonical physical face enumeration, never a local patch slot or owning rank.
+      const auto left_domain = left_state.layout().bounding_box();
+      const auto right_domain = right_state.layout().bounding_box();
+      for (std::size_t face = 0; face < face_count; ++face) {
+        append_index_(bytes, left_face_index_(route, left_domain, face));
+        append_index_(bytes, right_face_index_(route, left_domain, right_domain, face));
+      }
+    }
     append_geometry_(bytes, left_geometry);
     append_geometry_(bytes, right_geometry);
     append_scalar_(bytes, left_normal);
     append_scalar_(bytes, right_normal);
     append_scalar_(bytes, static_cast<std::uint64_t>(face_count));
     append_scalar_(bytes, component_count);
-    append_text_(bytes, communicator_identity);
-    append_scalar_(bytes, communicator_size);
+    if (!physical_sample) {
+      append_text_(bytes, communicator_identity);
+      append_scalar_(bytes, communicator_size);
+    }
     return bytes;
   }
 
@@ -1717,6 +1931,10 @@ class InterfaceFluxScheduler {
     return all_ranks_agree_exact_ordered_byte_pairs(identities, communicator);
   }
 
+  static std::string route_digest_(std::string_view bytes) {
+    return ::pops::identity::sha256_hex(std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+  }
+
   static void validate_point_(const BoundaryEvaluationPoint& point) {
     if (point.clock.empty() || point.tick < 0 || point.level < 0 || point.substep < 0 ||
         point.stage < 0 || !(point.dt > 0.0) || !std::isfinite(point.dt) ||
@@ -1730,10 +1948,7 @@ class InterfaceFluxScheduler {
     if (publication.ledger == nullptr || !publication.ledger->in_transaction())
       throw std::invalid_argument(
           "AMR interface-flux fragment publication requires an active transaction");
-    const ::pops::amr::Rational span =
-        publication.interval.end.phase - publication.interval.begin.phase;
-    const ::pops::amr::Rational expected_phase =
-        publication.interval.begin.phase + point.stage_fraction * span;
+    const auto expected_clock = clock_stamp_in_window(point, publication.interval);
     const double expected_time =
         publication.interval.begin.physical_time +
         point.stage_fraction.value() *
@@ -1746,14 +1961,20 @@ class InterfaceFluxScheduler {
         publication.interval.end.level != point.level ||
         publication.interval.begin.macro_step != point.tick ||
         publication.interval.end.macro_step != point.tick ||
-        publication.clock.macro_step != point.tick || publication.clock.phase != expected_phase ||
+        publication.clock.macro_step != point.tick ||
+        publication.clock.phase != expected_clock.phase ||
         publication.clock.physical_time != point.physical_time ||
         publication.clock.physical_time != expected_time || publication.stage_identity.empty())
       throw std::invalid_argument(
           "AMR interface-flux fragment publication differs from its scheduler point");
   }
 
+  // AMR carriers retain their original lane across topology replacements, including evaluator
+  // closures borrowing its ABI handle. Independent external execution contexts remain caller-owned.
+  // Declare before the routes so their evaluators are destroyed before the communicator owner.
+  std::shared_ptr<const ExecutionLane> execution_lane_owner_;
   std::vector<PreparedInterface> interfaces_;
+  bool topology_reconstruction_pending_ = false;
 };
 
 }  // namespace pops::runtime::multiblock

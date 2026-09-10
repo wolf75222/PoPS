@@ -98,12 +98,9 @@ subcycle_plan_type prepare_subcycling(
 void publish_regrid(::pops::amr::regridding::PreparedRegrid<Dim> prepared,
                     std::optional<field_type> child_state) const {
   require_facade_execution_();
-  require_history_free_for_topology_change_("regrid");
-  const int parent_level = prepared.source_level().level;
-  if (parent_level < 0)
-    throw std::invalid_argument("AMR Program regrid has no source level");
-  runtime_->publish_regrid(static_cast<std::size_t>(parent_level), std::move(prepared),
-                           std::move(child_state));
+  if (all_reduce_max(history_levels_.empty() ? 0L : 1L, prepared_execution_lane()) != 0)
+    throw std::runtime_error("AmrProgramContext regrid requires history-free state on every rank");
+  facade_->publish_prepared_amr_program_regrid_(std::move(prepared), std::move(child_state));
 }
 
 PreparedRebalanceDecision<Dim> prepare_rebalance(
@@ -124,8 +121,11 @@ PreparedRebalanceDecision<Dim> prepare_rebalance(
 void apply_rebalance(std::size_t selected, PreparedRebalanceDecision<Dim> decision,
                      field_type remapped_state) const {
   require_facade_execution_();
-  require_history_free_for_topology_change_("rebalance");
-  runtime_->apply_rebalance(selected, std::move(decision), std::move(remapped_state));
+  if (all_reduce_max(history_levels_.empty() ? 0L : 1L, prepared_execution_lane()) != 0)
+    throw std::runtime_error(
+        "AmrProgramContext rebalance requires history-free state on every rank");
+  facade_->apply_prepared_amr_program_rebalance_(selected, std::move(decision),
+                                                 std::move(remapped_state));
 }
 
 template <class Payload, class Axpy>
@@ -146,11 +146,14 @@ void install(std::function<void(double)> step) const {
 }
 
 void install(std::function<void(double)> step, std::shared_ptr<AmrProgramContext> keep_alive,
-             std::function<void()> hierarchy_refresh = {}) const {
+             std::function<void()> hierarchy_refresh = {},
+             std::function<void()> resource_refresh = {}) const {
   require_facade_execution_();
   if (!step || !keep_alive || keep_alive.get() != this)
     throw std::invalid_argument("AMR Program install requires its exact owning context");
   facade_->install_program_step([step = std::move(step), keep_alive](double dt) { step(dt); });
+  if (resource_refresh)
+    facade_->install_program_resource_refresh(std::move(resource_refresh));
   if (hierarchy_refresh)
     facade_->install_program_hierarchy_refresh(
         [owner = keep_alive, refresh = std::move(hierarchy_refresh)]() mutable {
@@ -223,8 +226,12 @@ void advance_hierarchy(double dt, Body&& body) const {
 }
 
 template <class Body>
-void advance_synchronized_hierarchy(double dt, Body&& body) const {
-  advance_prepared_hierarchy_(dt, std::forward<Body>(body), "advance_synchronized_hierarchy");
+void advance_synchronized_hierarchy(double dt, Body&& body, bool composite = false) const {
+  with_spatial_reconciliation_attempt([&] {
+    advance_prepared_hierarchy_(
+        dt, std::forward<Body>(body),
+        composite ? "advance_composite_hierarchy" : "advance_synchronized_hierarchy");
+  });
 }
 
 void prepare_same_level_cell_temporal_execution(
@@ -287,6 +294,33 @@ decltype(auto) with_program_resource_level(int selected, Function&& function) co
     active_level_ = prior;
     throw;
   }
+}
+
+// Resource selection alone must never impersonate another level's attempt authority.
+template <class Function>
+void with_program_attempt_level(int selected, Function&& function) const {
+  if (!multiblock_subcycling_ || !multiblock_subcycling_->has_synchronized_groups())
+    throw std::logic_error("hierarchy Program stage requires synchronized level attempt envelopes");
+  if (selected < 0 || selected >= nlev())
+    throw std::out_of_range("synchronized Program stage level lies outside its hierarchy");
+  auto found = synchronized_level_envelopes_.find(selected);
+  if (found == synchronized_level_envelopes_.end() || found->second.active_attempt_states_.empty())
+    throw std::logic_error(
+        "synchronized Program stage has no collectively prepared level envelope");
+  auto& envelope = found->second;
+  LevelAttemptEnvelope prior;
+  swap_level_attempt_envelope_(prior);
+  swap_level_attempt_envelope_(envelope);
+  try {
+    facade_->clear_prepared_amr_level_evaluations();
+    std::forward<Function>(function)();
+  } catch (...) {
+    swap_level_attempt_envelope_(envelope);
+    swap_level_attempt_envelope_(prior);
+    throw;
+  }
+  swap_level_attempt_envelope_(envelope);
+  swap_level_attempt_envelope_(prior);
 }
 
 int n_blocks() const {

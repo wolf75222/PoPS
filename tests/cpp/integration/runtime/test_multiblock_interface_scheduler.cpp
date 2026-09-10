@@ -492,10 +492,13 @@ TEST(test_multiblock_interface_scheduler,
       });
   MultiFab<2> replacement_left_rhs = make_field<2>(replacement_left.layout().boxes(), 1);
   MultiFab<2> replacement_right_rhs = make_field<2>(replacement_right.layout().boxes(), 1);
+  const InterfaceFluxScheduler<2> accepted_snapshot = scheduler;
   replacement.apply(point(), std::vector<MultiFab<2>*>{&replacement_left, &replacement_right},
                     std::vector<MultiFab<2>*>{&replacement_left_rhs, &replacement_right_rhs});
   EXPECT_EQ(scheduler.size(), 1u);
-  EXPECT_EQ(scheduler.evaluation_count(route.identity, 0), 0u);
+  // Restoring either topology view must not erase the provider execution observation.
+  EXPECT_EQ(scheduler.evaluation_count(route.identity, 0), 1u);
+  EXPECT_EQ(accepted_snapshot.evaluation_count(route.identity, 0), 1u);
   EXPECT_EQ(replacement.size(), 1u);
   EXPECT_EQ(replacement.evaluation_count(route.identity, 0), 1u);
   EXPECT_EQ(calls, 1);
@@ -505,4 +508,199 @@ TEST(test_multiblock_interface_scheduler,
   }
 }
 
+TEST(test_multiblock_interface_scheduler,
+     OrdinaryReplacementCannotPublishATruncatedThreeLevelRegistry) {
+  ensure_runtime();
+  std::vector<MultiFab<2>> left;
+  std::vector<MultiFab<2>> right;
+  std::vector<Geometry<2>> geometries;
+  left.reserve(3);
+  right.reserve(3);
+  geometries.reserve(3);
+  InterfaceFluxScheduler<2> scheduler;
+  int calls = 0;
+  for (int level = 0; level < 3; ++level) {
+    const int n = 4 << level;
+    const Box<2> domain(Index<2>(0, 0), Index<2>(n - 1, n - 1));
+    left.push_back(make_field<2>(domain, 1));
+    right.push_back(make_field<2>(domain, 1));
+    geometries.push_back(geometry<2>(domain, {Real(0), Real(0)}, {Real(1), Real(1)}));
+    AxisAlignedInterface<2> route;
+    route.identity = "nd.strict-three-level";
+    route.level = level;
+    route.left_block = 0;
+    route.right_block = 1;
+    route.left_axis = route.right_axis = 0;
+    route.left_side = InterfaceSide::High;
+    route.right_side = InterfaceSide::Low;
+    route.right_component_for_left = {0};
+    route.affine_mapping_identity = "nd.periodic-x-translation";
+    route.right_normal_translation = Real(1);
+    authenticate(route);
+    scheduler.install(route, left.back(), geometries.back(), right.back(), geometries.back(),
+                      serial_execution(),
+                      [&](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+                        ++calls;
+                        for (int face = 0; face < batch.face_count; ++face)
+                          batch.shared_flux[face] = Real(1);
+                      });
+  }
+  ASSERT_NO_THROW(scheduler.require_runtime_rematerialization_ready(3));
+  const auto state = [&](std::size_t block, int level) -> MultiFab<2>& {
+    return (block == 0 ? left : right).at(static_cast<std::size_t>(level));
+  };
+  const auto geometry_at = [&](int level) { return geometries.at(level); };
+  EXPECT_THROW((void)scheduler.rematerialized(2, state, geometry_at), std::runtime_error);
+  EXPECT_THROW((void)scheduler.rematerialized(4, state, geometry_at), std::runtime_error);
+  EXPECT_EQ(scheduler.size(), 3u);
+  EXPECT_EQ(calls, 0);
+  for (int level = 0; level < 3; ++level)
+    EXPECT_EQ(scheduler.evaluation_count("nd.strict-three-level", level), 0u);
+  auto complete = scheduler.rematerialized(3, state, geometry_at);
+  EXPECT_EQ(complete.size(), 3u);
+  EXPECT_NO_THROW(complete.require_runtime_rematerialization_ready(3));
+}
+
 }  // namespace
+
+TEST(test_multiblock_interface_scheduler,
+     DirectCaptureRetainsDensityAndAuthenticatesPhysicalRoute) {
+  ensure_runtime();
+  const Box<1> left_box(Index<1>(0), Index<1>(3));
+  const Box<1> right_box(Index<1>(10), Index<1>(13));
+  auto left = make_field<1>(left_box, 1), right = make_field<1>(right_box, 1);
+  auto left_rhs = make_field<1>(left_box, 1), right_rhs = make_field<1>(right_box, 1);
+  left.set_val(Real(1e100));
+  right.set_val(Real(1e100));
+  left_rhs.set_val(Real(0));
+  right_rhs.set_val(Real(0));
+  AxisAlignedInterface<1> route;
+  route.identity = "retained-density";
+  route.sampling_provider_identity = "test.retained-density/flux-artifact-v1/endpoints-v1";
+  route.left_block = 0;
+  route.right_block = 1;
+  route.left_axis = route.right_axis = 0;
+  route.left_side = InterfaceSide::High;
+  route.right_side = InterfaceSide::Low;
+  route.right_component_for_left = {0};
+  authenticate(route);
+  InterfaceFluxScheduler<1> scheduler;
+  scheduler.install(route, left, geometry<1>(left_box, {Real(0)}, {Real(1)}), right,
+                    geometry<1>(right_box, {Real(1)}, {Real(2)}), serial_execution(),
+                    [](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+                      batch.shared_flux[0] = Real(1e-100);
+                    });
+  auto stage = point();
+  stage.graph_identity = "capture-program";
+  stage.rate_identity = "shared-rhs/1";
+  stage.application_identity = "program-rhs-group";
+  std::vector<MultiFab<1>*> states{&left, &right}, rhs{&left_rhs, &right_rhs};
+  std::vector<InterfaceFluxSample> captured;
+  scheduler.apply(stage, std::span<MultiFab<1>* const>(states), std::span<MultiFab<1>* const>(rhs),
+                  nullptr, &captured);
+  ASSERT_EQ(captured.size(), 1);
+  EXPECT_EQ(captured[0].flux_density, std::vector<Real>{Real(1e-100)});
+  EXPECT_EQ(get_cell(left_rhs, Index<1>(3), 0), -Real(4) * Real(1e-100));
+  EXPECT_EQ(get_cell(right_rhs, Index<1>(10), 0), Real(4) * Real(1e-100));
+  EXPECT_EQ(scheduler.evaluation_count(route.identity, 0), 1);
+  EXPECT_FALSE(scheduler.authenticate_sample(captured[0]).empty());
+  auto malformed = captured[0];
+  malformed.right_side = InterfaceSide::High;
+  EXPECT_THROW(scheduler.authenticate_sample(malformed), std::invalid_argument);
+  malformed = captured[0];
+  malformed.right_normal_spacing *= 2;
+  EXPECT_THROW(scheduler.authenticate_sample(malformed), std::invalid_argument);
+  malformed = captured[0];
+  malformed.route_contract[0] = malformed.route_contract[0] == '0' ? '1' : '0';
+  EXPECT_THROW(scheduler.authenticate_sample(malformed), std::invalid_argument);
+  malformed = captured[0];
+  malformed.flux_density[0] = std::numeric_limits<Real>::quiet_NaN();
+  EXPECT_THROW(scheduler.authenticate_sample(malformed), std::invalid_argument);
+  EXPECT_EQ(scheduler.evaluation_count(route.identity, 0), 1);
+}
+
+TEST(test_multiblock_interface_scheduler, RetainedSampleSurvivesRepartitionAndFreshProviderBind) {
+  ensure_runtime();
+  const Box<2> domain(Index<2>(0, 0), Index<2>(1, 3));
+  const auto geom = geometry<2>(domain, {Real(0), Real(0)}, {Real(1), Real(4)});
+  auto left = make_field<2>(domain, 1), right = make_field<2>(domain, 1);
+  auto left_rhs = make_field<2>(domain, 1), right_rhs = make_field<2>(domain, 1);
+  left.set_val(Real(1));
+  right.set_val(Real(2));
+  left_rhs.set_val(Real(0));
+  right_rhs.set_val(Real(0));
+  AxisAlignedInterface<2> route;
+  route.identity = "retained.physical-sampling";
+  route.sampling_provider_identity = "test.artifact-v1/parameters-v1/qualified-endpoints-v1";
+  route.left_block = 0;
+  route.right_block = 1;
+  route.left_axis = route.right_axis = 0;
+  route.left_side = InterfaceSide::High;
+  route.right_side = InterfaceSide::Low;
+  route.right_component_for_left = {0};
+  route.affine_mapping_identity = "test.periodic-translation";
+  route.right_normal_translation = Real(1);
+  authenticate(route);
+  const auto evaluator = [](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+    for (int face = 0; face < batch.face_count; ++face)
+      batch.shared_flux[face] = Real(face + 1) / 8;
+  };
+  InterfaceFluxScheduler<2> accepted;
+  accepted.install(route, left, geom, right, geom, serial_execution(), evaluator);
+  auto stage = point();
+  stage.graph_identity = "retained-program";
+  stage.rate_identity = "shared-rhs/1";
+  stage.application_identity = "program-rhs-group";
+  std::vector<InterfaceFluxSample> samples;
+  accepted.apply(stage, std::vector<MultiFab<2>*>{&left, &right},
+                 std::vector<MultiFab<2>*>{&left_rhs, &right_rhs}, nullptr, &samples);
+  ASSERT_EQ(samples.size(), 1);
+  const auto retained = samples.front();
+  const std::string original_live_route(accepted.authenticate_sample(retained));
+  EXPECT_EQ(retained.flux_density,
+            (std::vector<Real>{Real(1) / 8, Real(2) / 8, Real(3) / 8, Real(4) / 8}));
+  const std::vector<Box<2>> boxes{{Index<2>(0, 0), Index<2>(1, 1)},
+                                  {Index<2>(0, 2), Index<2>(1, 3)}};
+  auto new_left = make_field<2>(boxes, 1), new_right = make_field<2>(boxes, 1);
+  auto replacement = accepted.rematerialized(
+      1, [&](std::size_t block, int) -> MultiFab<2>& { return block == 0 ? new_left : new_right; },
+      [&](int) { return geom; });
+  const std::string new_live_route(replacement.authenticate_sample(retained));
+  EXPECT_NE(original_live_route, new_live_route);
+  EXPECT_EQ(samples.front().route_contract, retained.route_contract);
+  EXPECT_EQ(samples.front().flux_density, retained.flux_density);
+  // A fresh provider bind has no in-memory pointer relationship to the retained sample,
+  // as when a restored Program imports the decoded POPSFLX2 sample after rebuilding routes.
+  InterfaceFluxScheduler<2> rebound;
+  rebound.install(route, new_left, geom, new_right, geom, serial_execution(), evaluator);
+  EXPECT_EQ(std::string(rebound.authenticate_sample(retained)), new_live_route);
+  EXPECT_EQ(rebound.evaluation_count(route.identity, 0), 0);
+  auto changed_geometry = accepted.rematerialized(
+      1, [&](std::size_t block, int) -> MultiFab<2>& { return block == 0 ? new_left : new_right; },
+      [&](int) { return geometry<2>(domain, {Real(0), Real(0)}, {Real(1), Real(8)}); });
+  EXPECT_THROW(changed_geometry.authenticate_sample(retained), std::invalid_argument);
+  auto different_provider = route;
+  different_provider.sampling_provider_identity += "/different-parameters";
+  InterfaceFluxScheduler<2> changed_provider;
+  changed_provider.install(different_provider, new_left, geom, new_right, geom, serial_execution(),
+                           evaluator);
+  EXPECT_THROW(changed_provider.authenticate_sample(retained), std::invalid_argument);
+  auto different_projection = route;
+  different_projection.left_trace_projection_identity += "/different-reconstruction";
+  InterfaceFluxScheduler<2> changed_projection;
+  changed_projection.install(different_projection, new_left, geom, new_right, geom,
+                             serial_execution(), evaluator);
+  EXPECT_THROW(changed_projection.authenticate_sample(retained), std::invalid_argument);
+  auto unauthenticated_route = route;
+  unauthenticated_route.sampling_provider_identity.clear();
+  InterfaceFluxScheduler<2> unauthenticated;
+  unauthenticated.install(unauthenticated_route, left, geom, right, geom, serial_execution(),
+                          evaluator);
+  samples.clear();
+  EXPECT_THROW(
+      unauthenticated.apply(stage, std::vector<MultiFab<2>*>{&left, &right},
+                            std::vector<MultiFab<2>*>{&left_rhs, &right_rhs}, nullptr, &samples),
+      std::invalid_argument);
+  EXPECT_TRUE(samples.empty());
+  EXPECT_EQ(unauthenticated.evaluation_count(route.identity, 0), 0);
+}

@@ -75,6 +75,9 @@ def _emit(program, model):
             "boundary_kernel_required": False,
         },
     )
+    from pops.codegen.module_lowering import lower_and_validate
+    if model is not None:
+        model, _ = lower_and_validate(model)
     return emit_cpp_program(
         program, model=model, field_plans={field.local_id: plan})
 
@@ -166,7 +169,10 @@ def test_local_linear_solve_is_collective_fail_closed_before_commit(t):
     P, model = _predictor_corrector(t)
     source = _emit(P, model)
 
-    assert source.count("pops::reduce_max(local_solve_status_") == 2
+    assert source.count("pops::reduce_max_local(local_solve_status_") == 2
+    assert source.count("pops::all_reduce_max(pops::reduce_max_local(local_solve_status_") == 2
+    assert source.count("= ctx.prepared_execution_lane();") == 2
+    assert source.count("pops::SolveOutcome::collective_lane(") == 2
     assert source.count("pops::SolveReport local_solve_report_") == 2
     assert source.count("pops::SolveOutcome local_solve_outcome_") == 2
     assert "pops::SolveStatus::kSingular" in source

@@ -10,8 +10,8 @@ from typing import Any
 def _resolved_native_amr_field_roles(plan: Any) -> dict[str, tuple[dict[str, Any], ...]]:
     """Project complete resolved field plans onto exact per-block package roles."""
     roles: dict[str, list[dict[str, Any]]] = {block.name: [] for block in plan.blocks}
-    if plan.target != "amr_system":
-        return {block: () for block in roles}
+    if plan.target not in {"system", "amr_system"}:
+        raise ValueError("resolved field roles require a native System or AmrSystem target")
     from pops.identity import canonical_bytes
 
     for field_name, field_plan in sorted(plan.field_plans.items()):
@@ -74,6 +74,13 @@ def _resolved_native_amr_field_roles(plan: Any) -> dict[str, tuple[dict[str, Any
 
 
 def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
+    from pops.codegen._resolved_operation_ownership import require_block_plan_owner
+
+    # Authenticate every Case block before the first native compilation can run.
+    for block in plan.blocks:
+        require_block_plan_owner(
+            block.resolved_operations, block.instance_owner_qid,
+            where="compiled block %r" % block.name, required=True)
     compile_options = {
         key: value for key, value in options.items() if key in ("include", "cxx", "std")
     }
@@ -92,9 +99,10 @@ def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
             plan.target,
             compile_options,
             state_spaces=block.state_spaces,
-            native_field_roles=(roles[block.name] if plan.target == "amr_system" else None),
+            native_field_roles=roles[block.name],
             consumer_owner_qid=block.instance_owner_qid,
             declare_auxiliary_providers=block.declares_auxiliary_providers,
+            resolved_operations=block.resolved_operations,
         )
     return compiled
 
@@ -106,7 +114,12 @@ def build_program_model_graph(plan: Any) -> Any:
     if type(plan) is not ResolvedSimulationPlan:
         raise TypeError("program model graph requires an exact ResolvedSimulationPlan")
     from pops.codegen.program_models import ProgramModelGraph
+    from pops.codegen._resolved_operation_ownership import require_block_plan_owner
 
+    for block in plan.blocks:
+        require_block_plan_owner(
+            block.resolved_operations, block.instance_owner_qid,
+            where="Program block %r" % block.name, required=True)
     return ProgramModelGraph.from_resolved_blocks(plan.blocks)
 
 
@@ -121,23 +134,24 @@ def compile_install_model(
     native_field_roles: Any = None,
     consumer_owner_qid: Any = None,
     declare_auxiliary_providers: bool = True,
+    resolved_operations: Any = None,
 ) -> Any:
     from pops.codegen.loader import CompiledModel
     from pops.codegen._compiled_model_boundary import validate_compiled_model_result
     from pops.codegen._compiled_model_identity import authenticate_compiled_model
+    from pops.codegen._resolved_operation_ownership import require_block_plan_owner
 
-    if target == "system":
-        if native_field_roles is not None:
-            raise ValueError("resolved AMR field roles cannot be compiled for System")
-        expected_roles: tuple[dict[str, Any], ...] = ()
-    elif target == "amr_system":
-        if native_field_roles is None:
-            raise ValueError("resolved AMR blocks require an exact per-block field-role contract")
-        from pops.codegen._compile_emit import _normalize_native_amr_field_roles
+    require_block_plan_owner(
+        resolved_operations, consumer_owner_qid, where="compiled block %r" % name)
 
-        expected_roles = _normalize_native_amr_field_roles(native_field_roles)
-    else:
+    if target not in {"system", "amr_system"}:
         raise ValueError("compiled block target must be 'system' or 'amr_system'")
+    if target == "amr_system" and native_field_roles is None:
+        raise ValueError("resolved AMR blocks require an exact per-block field-role contract")
+    from pops.codegen._compile_emit import _normalize_native_amr_field_roles
+
+    expected_roles = _normalize_native_amr_field_roles(native_field_roles)
+    has_field_role_contract = native_field_roles is not None
     state_spaces = tuple(state_spaces)
     if len(state_spaces) != 1 or not isinstance(state_spaces[0], str) or not state_spaces[0]:
         raise TypeError("compiled block %r requires exactly one named state space" % name)
@@ -147,14 +161,14 @@ def compile_install_model(
             raise ValueError("resolved compiled model state-space route disagrees with its plan")
         if model.target != target or model.backend != backend:
             raise ValueError("resolved compiled model route disagrees with its plan")
-        if target == "amr_system":
+        if has_field_role_contract:
             observed_roles = getattr(model, "_native_field_roles", None)
             if (
                 observed_roles is None
                 or _normalize_native_amr_field_roles(observed_roles) != expected_roles
             ):
                 raise ValueError(
-                    "precompiled AMR block field roles differ from the resolved Case; recompile"
+                    "precompiled native block field roles differ from the resolved Case; recompile"
                 )
         from pops.codegen._plans import attest_precompiled_consumer_owner
 
@@ -167,7 +181,9 @@ def compile_install_model(
     from pops.codegen.module_lowering import lower_and_validate
 
     facade = model
-    model, source_module = lower_and_validate(model, facade=facade, state_space=state_spaces[0])
+    model, source_module = lower_and_validate(
+        model, facade=facade, state_space=state_spaces[0],
+        resolved_operations=resolved_operations)
     if source_module is None:
         raise TypeError(
             "resolved block %r compiler lowering has no operator-first Module authority" % name
@@ -186,20 +202,20 @@ def compile_install_model(
     compiled = compile_model(
         backend=backend,
         target=target,
-        _native_field_roles=(expected_roles if target == "amr_system" else None),
+        _native_field_roles=(expected_roles if has_field_role_contract else None),
         consumer_owner_qid=consumer_owner_qid,
         declare_auxiliary_providers=declare_auxiliary_providers,
         **compile_options,
     )
     if type(compiled) is not CompiledModel:
         raise TypeError("resolved block compiler must return exact CompiledModel")
-    if target == "amr_system":
+    if has_field_role_contract:
         observed_roles = getattr(compiled, "_native_field_roles", None)
         if (
             observed_roles is None
             or _normalize_native_amr_field_roles(observed_roles) != expected_roles
         ):
-            raise ValueError("compiled AMR block did not attest the exact resolved field roles")
+            raise ValueError("compiled native block did not attest the exact resolved field roles")
     if compiled.module_manifest is not None:
         raise TypeError(
             "model.compile() returned a CompiledModel with a pre-attached ModuleManifest; "
@@ -232,6 +248,12 @@ def capture_field_plans(
     # for field B in the same Problem.
     prepared = []
     for name, field in problem._field_registry.resolved_items(problem.resolve):
+        from pops.fields.operator import FieldOperator
+
+        if not isinstance(field.operator, FieldOperator):
+            # Generic fields have explicit Program scratch/solve authority. They are admitted by
+            # capture_program_field_plans, never by a fabricated legacy provider pack.
+            continue
         providers, provider_route = _field_rhs_providers(problem, field)
         prepared.append((name, field, providers, provider_route))
     for name, field, providers, provider_route in prepared:
@@ -328,10 +350,20 @@ def _field_rhs_providers(
                 raise ValueError(
                     "field %r RHS provider has no executable expression graph" % operator.name
                 )
+            # The registry body belongs to a reusable model definition; compare it
+            # in the exact provider instance, like the resolved field equation.
+            from pops._ir.expr_references import resolve_expr_references
+
+            body = resolve_expr_references(
+                field_op.body,
+                lambda handle, block=block_handle: problem.resolve(handle, block=block),
+                {},
+                allow_formula_vars=True,
+            )
             term = (
-                field_op.body
+                body
                 if contribution.coefficient == 1.0
-                else field_op.body * contribution.coefficient
+                else body * contribution.coefficient
             )
             composed_body = term if composed_body is None else composed_body + term
             authenticated.append(qualified)

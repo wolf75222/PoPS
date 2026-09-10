@@ -259,6 +259,18 @@ def validate_restored_contract(sim, payload):
     """Validate the dynamic contract after the opaque Program image is installed transactionally."""
     contract = _decode_contract(payload)
     current = contract_for(sim)
+    # V4 encoded face/synchronization rows before their origin suffix existed. The native
+    # decoder derives that origin from the sealed original envelope; compare the original
+    # fields exactly while retaining the inferred origin in the live report.
+    if bytes(payload["program_accepted_state"][:8]) == b"POPSAND4":
+        current = dict(current)
+        current["ledger"] = dict(current["ledger"])
+        current["ledger"]["entries"] = [
+            row[:13] if len(row) == 17 else row for row in current["ledger"]["entries"]
+        ]
+        current["synchronization"] = [
+            row[:7] if len(row) == 11 else row for row in current["synchronization"]
+        ]
     if contract != current:
         mismatched = sorted(key for key in _CONTRACT_KEYS if contract.get(key) != current.get(key))
         raise ValueError(

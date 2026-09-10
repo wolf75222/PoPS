@@ -1,0 +1,703 @@
+{
+  "schema": "pops.scalar-candidate5-to7-source-equivalence.v1",
+  "decision": "No material scalar execution-path change found; candidate5 science carries only as proved source-equivalent evidence, not as a candidate7 full execution.",
+  "scientific_execution": {
+    "candidate": 5,
+    "source_pin": "76319c0658187d9542c527870854321609a0f891",
+    "native_sha256": "16342cd011e2dc8d002ee180971060ef5a3925367e4953595fc5ab2f49c8ce02",
+    "profile": "scalar_full",
+    "seconds": 3937.8176452909975,
+    "returncode": 0,
+    "report": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate5-examples/scalar/report.json",
+    "log_sha256": "06f8bbbf9f50ec7695d63ab85867af108c886f3e5130b09593908f3be5423fc2",
+    "final_time": 0.4,
+    "final_step": 456,
+    "checks": [
+      "manual full defaults",
+      "scientific HDF5 and ParaView reopen",
+      "analytic error bound",
+      "three-level synchronization and regrid",
+      "bit-identical strict restart within candidate5",
+      "independent full preset parity"
+    ],
+    "relative_l2_from_log": 0.01700899
+  },
+  "final_candidate7_full_scalar_executed": false,
+  "source_and_installed_member_checks": {
+    "candidate5": {
+      "source_pin": "76319c0658187d9542c527870854321609a0f891",
+      "checkout": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6",
+      "clean": true,
+      "package": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate5-env/lib/python3.12/site-packages/pops",
+      "native_sha256": "16342cd011e2dc8d002ee180971060ef5a3925367e4953595fc5ab2f49c8ce02",
+      "example_sha256": "2f82a5591bfa055b468ea2e587618c3d9f374f7d9b57026662d1c7c52afe6de6",
+      "changed_python_members": {
+        "python/pops/_ir/lowering.py": "63433062a0d9fc3e6c2803b4bb2d43cf7aa16bddd5afe591a7c2afd67fc088d8",
+        "python/pops/codegen/_compile_emit.py": "fbe3f9ade10280774f14d41f4549e5a588a6186d7417a8dfcbf2979465aab3e9",
+        "python/pops/codegen/_phases.py": "b5824b5f77e73c82a78c8b566feb5fe07074949f4b37e20e1068968dc62f8f6f",
+        "python/pops/codegen/_plans.py": "44e80ca13656efd6e7fb8cd5b014d04aec2500cb82739ae2009dbb6c0055d782",
+        "python/pops/codegen/_resolved_operation_inputs.py": "3fce87417cdd2d7d7db29147f9a61943d50d1f83141924ee18a3a6e3f54b05ca",
+        "python/pops/codegen/program_emit_kernels.py": "5c9046ac7bbe7c5cb83838f5f3c609ee616eda0071d6d31bb479ca301664c194",
+        "python/pops/codegen/program_emit_model_kernels.py": "e01b0600da29a3c0f98b6f84a028d7ef86701e6c10b3a0aeb43b8edb3890a6e4",
+        "python/pops/codegen/program_emit_ops.py": "ed6e2ca5fce7b8d546e053bae34d65ed057afd96b56e6adcd9f35c214461b444",
+        "python/pops/physics/_authoring_flux.py": "db5277136ad3c9c79569e5b446bc65ac487d04287da36be3036416351a818b2d",
+        "python/pops/physics/_authoring_vars.py": "e34ea0d9d420c97e8de40f4ca2ddb7188ea52e67d5bf639fe29c1fbfce0adc41",
+        "python/pops/physics/_model.py": "9f9b178588801f95f8108d3c8a0be6f3ac3f47249c6c846bf83be1b0f6dfa994",
+        "python/pops/physics/_model_contract.py": "9cef8226428958fa7689e3d35c16e9af789d0e8a7f7d64e74dc8a9c782fe0a71",
+        "python/pops/physics/board.py": "d4e25e092fddb0482faa48f90ed26d0080e296dbf2010d2de032e2ae8eaf77a3",
+        "python/pops/runtime/_auxiliary_bind.py": null,
+        "python/pops/runtime/_bind_validation.py": "eb56329937212361f7d61ef141086bdda8ae8882e77e44e33dc4a519f65dcce5",
+        "python/pops/runtime/_bound_snapshot.py": "9c1f6fcbbcd0dcd405af5b63dd6e3681286eaff593f345b5c9560e17b57292d0"
+      }
+    },
+    "candidate7": {
+      "source_pin": "bd583faf196f3c1faeedec489e04d24e959ed00b",
+      "checkout": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8",
+      "clean": true,
+      "package": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops",
+      "native_sha256": "d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518",
+      "example_sha256": "2f82a5591bfa055b468ea2e587618c3d9f374f7d9b57026662d1c7c52afe6de6",
+      "changed_python_members": {
+        "python/pops/_ir/lowering.py": "388c8fcd3bdea111da94886749be8cd1db609f808712f5132e3cc6c191595431",
+        "python/pops/codegen/_compile_emit.py": "abe123af048ef8c855b01e1b7ac91b280fa393a8c04b576713aa25d54fabf11b",
+        "python/pops/codegen/_phases.py": "e8bf39240609dcfd0a11385c8f88d9095c9c388bc3f19f6df25a7de15e309cbb",
+        "python/pops/codegen/_plans.py": "6de59094a3a43b808df82f78ab8dc67f37976c628c59c9397708aae1f720e10b",
+        "python/pops/codegen/_resolved_operation_inputs.py": "88915bca9ce2c8fb72bd2243e180b26fbb029457100d6c0056ceca6d8662633b",
+        "python/pops/codegen/program_emit_kernels.py": "b12e28b0b2f54997e9629f6f507d063759f411309fb6ad10fb0fe84ec4c5aa83",
+        "python/pops/codegen/program_emit_model_kernels.py": "010f0e2288bec66237d0f09c1c35785d8d1d538ec700791081ed7b07f6da05da",
+        "python/pops/codegen/program_emit_ops.py": "6fea042f9c565dd556746711c9ffd2dd43b9ecbc1422cf9597a8689fe9e0df7d",
+        "python/pops/physics/_authoring_flux.py": "6a0a10a185181b7e542a4c7b403a7e58a574d775093c3b91917fae4b7b22c64d",
+        "python/pops/physics/_authoring_vars.py": "7191a3f1e1764fe161a4c27b54385414970b5db0cc89247da36d43d60172fdf9",
+        "python/pops/physics/_model.py": "8c962f5b50f6bea703e5b1129bd6b6865264b6881d8d9cb1b214e5d140896a5f",
+        "python/pops/physics/_model_contract.py": "1c331ae44db70053329d152201dc4e2ce5344e1e0572fbe1f4b9a305d9af184f",
+        "python/pops/physics/board.py": "95c383d58945d905afee4e3011829bba5dc8b560f5703559eda08c015f66b791",
+        "python/pops/runtime/_auxiliary_bind.py": "4bb45ed6da67ef946e6437cf8258cf2899e2c850c073b7d26d59481bb7cb08a1",
+        "python/pops/runtime/_bind_validation.py": "d3b55fb75d72dfe75d102144e3acb725146be873dfcf20c5090d8f6954b1f482",
+        "python/pops/runtime/_bound_snapshot.py": "ad55300f1309c5743c149ef3967b840d7db2e252e7857327f380a5006ed69da9"
+      }
+    }
+  },
+  "observed_program_node_kinds": [
+    "state_read",
+    "operator_call",
+    "program_value",
+    "operator_call",
+    "program_value",
+    "commit"
+  ],
+  "default_profile": {
+    "cells": [
+      128,
+      128
+    ],
+    "max_levels": 3,
+    "refinement_ratios": [
+      [
+        2,
+        2
+      ],
+      [
+        2,
+        2
+      ]
+    ],
+    "ghost_depth": 2,
+    "tag_buffer": 2,
+    "method": "MUSCL/VanLeer/ScalarUpwind; explicit SSPRK2",
+    "cfl": 0.45,
+    "max_dt": 0.01,
+    "refine_threshold": 0.1,
+    "coarsen_threshold": 0.04
+  },
+  "comparisons": {
+    "manual": {
+      "identical_values": {
+        "target": "amr_system",
+        "dimension": 2,
+        "program_semantic_hash": "b856d30c47e27d8c1ae7ccec5a3d60f394fdae3565fb08b675c6213f7d3c6fbf",
+        "source_module_hash": "ee984bf0174695fb3a0e615d74ce00248cb1ea28c61b2bd0a42ed57f6898dd84",
+        "model_hash": "dc09c2a024a752c94270bb52ba9b4f67288f17f3f6a6bb749b1a5b9404d14d32",
+        "snapshot_semantic_identity": "pops.semantic.v1:sha256:c8acda2010f87dd5e9227c1ddec165293bd5ae463c1fdaebee90ce48ddf2e762",
+        "empty_bind_inputs_identity": "pops.bind-inputs.v1:sha256:79877bdf709614656777a5dfb629a9d9657390971f3be3eea2ed4068fc3dd748",
+        "legacy_empty_aux_snapshot_evidence": {},
+        "aux_bind_empty": true,
+        "uninstantiated_effects": [
+          [],
+          []
+        ]
+      },
+      "byte_identical_source_sha256": {
+        "program_graph": "e992136ad637c56be8349b60894ff158136f2f9ee20169fdd2aab7e38dbbc5d6",
+        "bind_params": "22e180492a0eecb282f5683574ad44995409b443535e48c3916872adfe36a929",
+        "native_loader-tracer": "363a39540a2f841470e00664b900de1566f9f2d4e82aad22aabc9a41354a9243",
+        "program_cpp": "156fc423a18196e0b93d1e33b45f93809dd0b1e03ab03122eda229b5aba93a58"
+      },
+      "operation_metadata_differences": [
+        {
+          "path": "/tracer/identity",
+          "candidate5": "pops.resolved_operations.v1:sha256:10888252cfc8fbf9b7c5c70d5206e49b120a66013ff189488173da38420164e5",
+          "candidate7": "pops.resolved_operations.v1:sha256:d6edb7c19f61deaa606d940907355e0a82653084233e4cb538fe10f4d651df27"
+        },
+        {
+          "path": "/tracer/operations/0/effects",
+          "candidate5": [],
+          "candidate7": [
+            "opaque",
+            "fallible"
+          ]
+        },
+        {
+          "path": "/tracer/operations/1/effects",
+          "candidate5": [],
+          "candidate7": [
+            "opaque",
+            "fallible"
+          ]
+        },
+        {
+          "path": "/tracer/operations/2/effects",
+          "candidate5": [],
+          "candidate7": [
+            "opaque",
+            "fallible"
+          ]
+        },
+        {
+          "path": "/tracer/operations/3/effects",
+          "candidate5": [],
+          "candidate7": [
+            "opaque",
+            "fallible"
+          ]
+        }
+      ],
+      "plan_differences": [
+        {
+          "path": "/blocks/0/resolved_operations/value/identity",
+          "candidate5": "pops.resolved_operations.v1:sha256:10888252cfc8fbf9b7c5c70d5206e49b120a66013ff189488173da38420164e5",
+          "candidate7": "pops.resolved_operations.v1:sha256:d6edb7c19f61deaa606d940907355e0a82653084233e4cb538fe10f4d651df27"
+        },
+        {
+          "path": "/blocks/0/resolved_operations/value/operations/0/effects",
+          "candidate5": [],
+          "candidate7": [
+            "opaque",
+            "fallible"
+          ]
+        },
+        {
+          "path": "/blocks/0/resolved_operations/value/operations/1/effects",
+          "candidate5": [],
+          "candidate7": [
+            "opaque",
+            "fallible"
+          ]
+        },
+        {
+          "path": "/blocks/0/resolved_operations/value/operations/2/effects",
+          "candidate5": [],
+          "candidate7": [
+            "opaque",
+            "fallible"
+          ]
+        },
+        {
+          "path": "/blocks/0/resolved_operations/value/operations/3/effects",
+          "candidate5": [],
+          "candidate7": [
+            "opaque",
+            "fallible"
+          ]
+        },
+        {
+          "path": "/snapshot_artifact_hash",
+          "candidate5": "72a6a57cbdef84e454ce6763e9b0c13ec36b4e406b24ef77b2f7c76992ed4486",
+          "candidate7": "6b1b5f6137d4fcdaf3b9cdf62dd2306d9166473d403edc5b75704e3e199e0e4f"
+        }
+      ],
+      "snapshot_provenance_differences": [
+        {
+          "path": "/payload/blocks/tracer/model/manifest/operators/0/provenance/id",
+          "candidate5": "sha256:7f52b0606673db0b6f538caeb8e8fca597d9559e4564352fbc0dae9bb1a5afca",
+          "candidate7": "sha256:d91513af3c73a9a2c458f7c332616663fb6cb9751f90a703f4c3b9bca8093e7c"
+        },
+        {
+          "path": "/payload/blocks/tracer/model/manifest/operators/0/provenance/origins/0/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/blocks/tracer/model/manifest/operators/0/provenance/primary/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/blocks/tracer/model/manifest/operators/1/provenance/id",
+          "candidate5": "sha256:7f52b0606673db0b6f538caeb8e8fca597d9559e4564352fbc0dae9bb1a5afca",
+          "candidate7": "sha256:d91513af3c73a9a2c458f7c332616663fb6cb9751f90a703f4c3b9bca8093e7c"
+        },
+        {
+          "path": "/payload/blocks/tracer/model/manifest/operators/1/provenance/origins/0/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/blocks/tracer/model/manifest/operators/1/provenance/primary/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/0/provenance/id",
+          "candidate5": "sha256:4cd5c7510065c8af74642cd2f564fdd10eb2e86b955b1c2927b65b68600f7ccd",
+          "candidate7": "sha256:1df9de826ef79da0f558b4b783f5764781fd16087b8b8f7268813934d2179b42"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/0/provenance/origins/0/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/0/provenance/primary/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/1/provenance/id",
+          "candidate5": "sha256:1538e6430c29b32615b884357cac4c6081c209db50d55008ccb31cbdef7ff97c",
+          "candidate7": "sha256:cd41a2fc5a4e74fe290f1930ea72c19ebd63da27e2b6cc356dc30e1c01d64e30"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/1/provenance/origins/0/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/1/provenance/primary/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/2/provenance/id",
+          "candidate5": "sha256:d74530cfd303c1fa3664e844dc4b3a2e9ec513f71f1d0ff2f13131ec7857931f",
+          "candidate7": "sha256:4e707418dc41c028f2d8c235ebe771c258da0a8b1a185ae13ef2f0dfc4614bee"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/2/provenance/origins/0/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/2/provenance/primary/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/3/provenance/id",
+          "candidate5": "sha256:d2ded920015e1ee4f706f0311184ab6db6712e2540f4b48b1be4703d94418030",
+          "candidate7": "sha256:cf82c7a91b26c4afd4aae1cb27740a6351746b60e28f2b698ef722910c97171c"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/3/provenance/origins/0/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/3/provenance/primary/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/4/provenance/id",
+          "candidate5": "sha256:125c945606ec955af0484538e250020f2710e0b565048f7c42cd2f7f025e4de3",
+          "candidate7": "sha256:35ae492719ff141c0cda4ced5a0af46fe98806ce5b7075ccceb5bc50b32a284a"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/4/provenance/origins/0/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/4/provenance/primary/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        }
+      ],
+      "candidate5_plan_identity": "pops.resolved-plan.v1:sha256:0a816d817ce0a4ae45a2abd4795467738925192872a3c1b81610f90a4dc82c07",
+      "candidate7_plan_identity": "pops.resolved-plan.v1:sha256:e5ed8761f821a2774e7f054a5c46c6407497ed5b2187b6a45233d4efe7961b93"
+    },
+    "preset": {
+      "identical_values": {
+        "target": "amr_system",
+        "dimension": 2,
+        "program_semantic_hash": "b856d30c47e27d8c1ae7ccec5a3d60f394fdae3565fb08b675c6213f7d3c6fbf",
+        "source_module_hash": "ee984bf0174695fb3a0e615d74ce00248cb1ea28c61b2bd0a42ed57f6898dd84",
+        "model_hash": "dc09c2a024a752c94270bb52ba9b4f67288f17f3f6a6bb749b1a5b9404d14d32",
+        "snapshot_semantic_identity": "pops.semantic.v1:sha256:c8acda2010f87dd5e9227c1ddec165293bd5ae463c1fdaebee90ce48ddf2e762",
+        "empty_bind_inputs_identity": "pops.bind-inputs.v1:sha256:79877bdf709614656777a5dfb629a9d9657390971f3be3eea2ed4068fc3dd748",
+        "legacy_empty_aux_snapshot_evidence": {},
+        "aux_bind_empty": true,
+        "uninstantiated_effects": [
+          [],
+          []
+        ]
+      },
+      "byte_identical_source_sha256": {
+        "program_graph": "e992136ad637c56be8349b60894ff158136f2f9ee20169fdd2aab7e38dbbc5d6",
+        "bind_params": "22e180492a0eecb282f5683574ad44995409b443535e48c3916872adfe36a929",
+        "native_loader-tracer": "363a39540a2f841470e00664b900de1566f9f2d4e82aad22aabc9a41354a9243",
+        "program_cpp": "156fc423a18196e0b93d1e33b45f93809dd0b1e03ab03122eda229b5aba93a58"
+      },
+      "operation_metadata_differences": [
+        {
+          "path": "/tracer/identity",
+          "candidate5": "pops.resolved_operations.v1:sha256:10888252cfc8fbf9b7c5c70d5206e49b120a66013ff189488173da38420164e5",
+          "candidate7": "pops.resolved_operations.v1:sha256:d6edb7c19f61deaa606d940907355e0a82653084233e4cb538fe10f4d651df27"
+        },
+        {
+          "path": "/tracer/operations/0/effects",
+          "candidate5": [],
+          "candidate7": [
+            "opaque",
+            "fallible"
+          ]
+        },
+        {
+          "path": "/tracer/operations/1/effects",
+          "candidate5": [],
+          "candidate7": [
+            "opaque",
+            "fallible"
+          ]
+        },
+        {
+          "path": "/tracer/operations/2/effects",
+          "candidate5": [],
+          "candidate7": [
+            "opaque",
+            "fallible"
+          ]
+        },
+        {
+          "path": "/tracer/operations/3/effects",
+          "candidate5": [],
+          "candidate7": [
+            "opaque",
+            "fallible"
+          ]
+        }
+      ],
+      "plan_differences": [
+        {
+          "path": "/blocks/0/resolved_operations/value/identity",
+          "candidate5": "pops.resolved_operations.v1:sha256:10888252cfc8fbf9b7c5c70d5206e49b120a66013ff189488173da38420164e5",
+          "candidate7": "pops.resolved_operations.v1:sha256:d6edb7c19f61deaa606d940907355e0a82653084233e4cb538fe10f4d651df27"
+        },
+        {
+          "path": "/blocks/0/resolved_operations/value/operations/0/effects",
+          "candidate5": [],
+          "candidate7": [
+            "opaque",
+            "fallible"
+          ]
+        },
+        {
+          "path": "/blocks/0/resolved_operations/value/operations/1/effects",
+          "candidate5": [],
+          "candidate7": [
+            "opaque",
+            "fallible"
+          ]
+        },
+        {
+          "path": "/blocks/0/resolved_operations/value/operations/2/effects",
+          "candidate5": [],
+          "candidate7": [
+            "opaque",
+            "fallible"
+          ]
+        },
+        {
+          "path": "/blocks/0/resolved_operations/value/operations/3/effects",
+          "candidate5": [],
+          "candidate7": [
+            "opaque",
+            "fallible"
+          ]
+        },
+        {
+          "path": "/snapshot_artifact_hash",
+          "candidate5": "59216ac2e7716f3ee90cc0daa96333cd33f31e4c524be93e33d8bb5c5834fd31",
+          "candidate7": "58c29da9cc77216bbdfcea62977ee370f4cff895fe4a027f780249a1ef2de7d0"
+        }
+      ],
+      "snapshot_provenance_differences": [
+        {
+          "path": "/payload/blocks/tracer/model/manifest/operators/0/provenance/id",
+          "candidate5": "sha256:7f52b0606673db0b6f538caeb8e8fca597d9559e4564352fbc0dae9bb1a5afca",
+          "candidate7": "sha256:d91513af3c73a9a2c458f7c332616663fb6cb9751f90a703f4c3b9bca8093e7c"
+        },
+        {
+          "path": "/payload/blocks/tracer/model/manifest/operators/0/provenance/origins/0/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/blocks/tracer/model/manifest/operators/0/provenance/primary/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/blocks/tracer/model/manifest/operators/1/provenance/id",
+          "candidate5": "sha256:7f52b0606673db0b6f538caeb8e8fca597d9559e4564352fbc0dae9bb1a5afca",
+          "candidate7": "sha256:d91513af3c73a9a2c458f7c332616663fb6cb9751f90a703f4c3b9bca8093e7c"
+        },
+        {
+          "path": "/payload/blocks/tracer/model/manifest/operators/1/provenance/origins/0/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/blocks/tracer/model/manifest/operators/1/provenance/primary/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/0/provenance/id",
+          "candidate5": "sha256:fc1e7f5a81dae306013949dc21958693d6c8421996e0a67536c5fc4364150012",
+          "candidate7": "sha256:468d4d997d71fd674d9fda69c944e91119f4b0b86f014bccade914251c2d9e75"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/0/provenance/origins/0/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/0/provenance/origins/1/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate5-env/lib/python3.12/site-packages/pops/lib/time/rk.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/lib/time/rk.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/0/provenance/primary/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/1/provenance/id",
+          "candidate5": "sha256:fc1e7f5a81dae306013949dc21958693d6c8421996e0a67536c5fc4364150012",
+          "candidate7": "sha256:468d4d997d71fd674d9fda69c944e91119f4b0b86f014bccade914251c2d9e75"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/1/provenance/origins/0/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/1/provenance/origins/1/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate5-env/lib/python3.12/site-packages/pops/lib/time/rk.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/lib/time/rk.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/1/provenance/primary/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/2/provenance/id",
+          "candidate5": "sha256:fc1e7f5a81dae306013949dc21958693d6c8421996e0a67536c5fc4364150012",
+          "candidate7": "sha256:468d4d997d71fd674d9fda69c944e91119f4b0b86f014bccade914251c2d9e75"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/2/provenance/origins/0/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/2/provenance/origins/1/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate5-env/lib/python3.12/site-packages/pops/lib/time/rk.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/lib/time/rk.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/2/provenance/primary/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/3/provenance/id",
+          "candidate5": "sha256:fc1e7f5a81dae306013949dc21958693d6c8421996e0a67536c5fc4364150012",
+          "candidate7": "sha256:468d4d997d71fd674d9fda69c944e91119f4b0b86f014bccade914251c2d9e75"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/3/provenance/origins/0/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/3/provenance/origins/1/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate5-env/lib/python3.12/site-packages/pops/lib/time/rk.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/lib/time/rk.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/3/provenance/primary/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/4/provenance/id",
+          "candidate5": "sha256:fc1e7f5a81dae306013949dc21958693d6c8421996e0a67536c5fc4364150012",
+          "candidate7": "sha256:468d4d997d71fd674d9fda69c944e91119f4b0b86f014bccade914251c2d9e75"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/4/provenance/origins/0/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/4/provenance/origins/1/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate5-env/lib/python3.12/site-packages/pops/lib/time/rk.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/lib/time/rk.py"
+        },
+        {
+          "path": "/payload/compile_context/time/ir/nodes/4/provenance/primary/file",
+          "candidate5": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+          "candidate7": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+        }
+      ],
+      "candidate5_plan_identity": "pops.resolved-plan.v1:sha256:4af26a930b456c0ee1fb06162d2360483d8a279eb985f441ba33905ee384acc2",
+      "candidate7_plan_identity": "pops.resolved-plan.v1:sha256:dc6ff5bb0cd067cdad1fe5715957282bb364a3ef01f93a2500b77d31dcdf4d98"
+    }
+  },
+  "reachable_delta_assessment": [
+    {
+      "change": "Qualified conservative-coordinate AD",
+      "paths": [
+        "python/pops/_ir/lowering.py",
+        "python/pops/physics/_authoring_flux.py",
+        "python/pops/physics/_authoring_vars.py",
+        "python/pops/physics/_model.py",
+        "python/pops/physics/_model_contract.py",
+        "python/pops/physics/board.py"
+      ],
+      "result": "ScalarUpwind uses authored parametric wave speeds; no Roe/Jacobian-derived wave path. Complete model and Program emission are byte-identical."
+    },
+    {
+      "change": "Exact InputAux binding and snapshots",
+      "paths": [
+        "python/pops/codegen/_phases.py",
+        "python/pops/codegen/_plans.py",
+        "python/pops/runtime/_auxiliary_bind.py",
+        "python/pops/runtime/_bind_validation.py",
+        "python/pops/runtime/_bound_snapshot.py"
+      ],
+      "result": "Both resolved auxiliary packs are empty and no aux upload is supplied. New expected/supplied component sets are empty. BindInputs identity and empty snapshot evidence remain identical."
+    },
+    {
+      "change": "DerivedAux launcher closure",
+      "paths": [
+        "python/pops/codegen/_compile_emit.py"
+      ],
+      "result": "No DerivedAux route exists; full emitted native loader is byte-identical."
+    },
+    {
+      "change": "Projection preparation and model-free projection guard",
+      "paths": [
+        "python/pops/codegen/program_emit_ops.py",
+        "python/pops/codegen/program_emit_kernels.py"
+      ],
+      "result": "The scalar graph has no projection operation and targets amr_system; full emitted Program is byte-identical."
+    },
+    {
+      "change": "Local auxiliary SolveOutcome preparation",
+      "paths": [
+        "python/pops/codegen/program_emit_ops.py",
+        "python/pops/codegen/program_emit_model_kernels.py",
+        "python/pops/codegen/program_emit_kernels.py"
+      ],
+      "result": "The scalar graph has no local solve. Existing independent AMR preparation/finite-wrapper proof is reused; complete emitted Program is byte-identical."
+    },
+    {
+      "change": "Evaluated expression effect closure",
+      "paths": [
+        "python/pops/codegen/_resolved_operation_inputs.py"
+      ],
+      "result": "Four resolved records gain conservative opaque/fallible boundary effects. Bare source records remain effect-free. Only effect arrays and operation/plan identities change; all signed terms, reads, outputs, routes, guards, evaluation ordering, methods, halos and AMR plan data match."
+    }
+  ],
+  "reused_native_equivalence": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/aux-outcome-amr-equivalence.json",
+    "sha256": "479c3386d7c514b15bc61a5bbc7ddb873b39228e5130310f6a82a2f5986429c8",
+    "scope": "Independent finite-wrapper and AMR preparation proof reused, not repeated.",
+    "all_28_carried_source_blobs_match_candidate7": true,
+    "no_native_source_delta_between_prior_review_and_final7": true
+  },
+  "procedure": {
+    "probe": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-source-equivalence-probe.py",
+    "probe_sha256": "2e8798cde9e068d37d3be8ab0c2fc4d8c42782b2b7593e1c093575e65a258f77",
+    "environments": [
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate5-env/bin/python",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/bin/python"
+    ],
+    "stages": [
+      "select/load exact Dim2 native",
+      "build unchanged full case",
+      "validate and resolve exact plan",
+      "authenticate/lower exact block and source Module",
+      "emit complete production native loader",
+      "prepare exact Program authority and detach compiled Program",
+      "emit resolve-authenticated production Program graph"
+    ],
+    "shared_output_root": "/scalar-equivalence-common-output",
+    "output_root_note": "Same inert string in both resolves; no simulation, scientific output, build, bind, install, or package writes.",
+    "bytecode_writes_disabled": true,
+    "probe_exits": {
+      "candidate5": 0,
+      "candidate7": 0
+    }
+  },
+  "limitations": [
+    "Candidate5 is the only full scalar scientific execution in this receipt. Candidate7 full scalar was not executed.",
+    "Native binaries, header/ABI identities, resolved-operation identities and artifact identities differ; no binary equality, cross-candidate bit-identical result, or cross-candidate checkpoint-compatibility claim.",
+    "Snapshot artifact differences are confined to explicit source-file provenance and derived provenance IDs from the two immutable checkout/environment paths; semantic snapshot identity is equal.",
+    "No generated-source difference or reachable mathematical change requiring a scalar rerun was found. An acceptance rule demanding execution on the exact final binary still requires that execution.",
+    "Scope is the original scalar manual/restart/preset profile at Dim2, CPU OpenMP2, one MPI rank, three AMR levels; no broader API, dimension, MPI scaling, GPU or M3-M8 claim."
+  ],
+  "evidence_sha256": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-source-equivalence-probe.py": "2e8798cde9e068d37d3be8ab0c2fc4d8c42782b2b7593e1c093575e65a258f77",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate5-examples/scalar/report.json": "8c0a3ec4b254e8d912b4d2b43a902f4f541498ccde1532adaefc6603fafb93e3",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/m2-build-fifth-proof.json": "f232dc3bacfa1f677022c5061882eec21503a14114183cc46efe3473edada994",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/m2-build-seventh-proof.json": "233170261eee8cbcc82b1a77242a114432841c2e927177857150b7c12b87246f",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate5/emission-records.json": "c3e36e675f6fda324f56e3e74094f94a6bb78b4a1326b36010a0c98a0bf50ba4",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate5/preset-program.cpp": "156fc423a18196e0b93d1e33b45f93809dd0b1e03ab03122eda229b5aba93a58",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate5/preset-plan.json": "bbb05cbc5e90cec33f414a83ab1dab4204752f2fa7c49f8357b41212769703cb",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate5/manual-operations-tracer.json": "5a12ef2750e84f73ca13c56bfb4c9b86a0ac99d49322ac570f0703556a596f07",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate5/manual-program.cpp": "156fc423a18196e0b93d1e33b45f93809dd0b1e03ab03122eda229b5aba93a58",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate5/manual-bind-params.json": "22e180492a0eecb282f5683574ad44995409b443535e48c3916872adfe36a929",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate5/manual-native-loader-tracer.cpp": "363a39540a2f841470e00664b900de1566f9f2d4e82aad22aabc9a41354a9243",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate5/preset-native-loader-tracer.cpp": "363a39540a2f841470e00664b900de1566f9f2d4e82aad22aabc9a41354a9243",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate5/preset-bind-params.json": "22e180492a0eecb282f5683574ad44995409b443535e48c3916872adfe36a929",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate5/preset-operations-tracer.json": "5a12ef2750e84f73ca13c56bfb4c9b86a0ac99d49322ac570f0703556a596f07",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate5/preset-program-graph.json": "e992136ad637c56be8349b60894ff158136f2f9ee20169fdd2aab7e38dbbc5d6",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate5/manual-program-graph.json": "e992136ad637c56be8349b60894ff158136f2f9ee20169fdd2aab7e38dbbc5d6",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate5/manual-snapshot-artifact.json": "6798fadc5a0b824855a7a451e897b7f9970994d072c58dfde8f74a1ee6cd1a8e",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate5/manual-plan.json": "19293432141a1fafed406cf351f772bd352cd6ad808ea34b4128a11424ae68f4",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate5/preset-snapshot-artifact.json": "32b69691fca32367189cd2252e7353cbd28b8614a611bbcf2512d95a744537cf",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate5.log": "4c9c95d871454fc58d6a0857d848155063454fa33eb0772d6d74fdccab576d40",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate7/emission-records.json": "6d9deb5c4f792a232dd74b7a3595a31b00a2b38d4584d68f4dd3e7b76d7e88e1",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate7/preset-program.cpp": "156fc423a18196e0b93d1e33b45f93809dd0b1e03ab03122eda229b5aba93a58",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate7/preset-plan.json": "c93ac9374a3a18d2ace7690ba4a4ad41da7c6007f8c4910a5fe1462c1ccfe7ab",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate7/manual-operations-tracer.json": "d1cba7dc286733f7afed597b05a1934adc4aecaee9eba52c81dbab05fb7c7651",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate7/manual-program.cpp": "156fc423a18196e0b93d1e33b45f93809dd0b1e03ab03122eda229b5aba93a58",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate7/manual-bind-params.json": "22e180492a0eecb282f5683574ad44995409b443535e48c3916872adfe36a929",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate7/manual-native-loader-tracer.cpp": "363a39540a2f841470e00664b900de1566f9f2d4e82aad22aabc9a41354a9243",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate7/preset-native-loader-tracer.cpp": "363a39540a2f841470e00664b900de1566f9f2d4e82aad22aabc9a41354a9243",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate7/preset-bind-params.json": "22e180492a0eecb282f5683574ad44995409b443535e48c3916872adfe36a929",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate7/preset-operations-tracer.json": "d1cba7dc286733f7afed597b05a1934adc4aecaee9eba52c81dbab05fb7c7651",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate7/preset-program-graph.json": "e992136ad637c56be8349b60894ff158136f2f9ee20169fdd2aab7e38dbbc5d6",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate7/manual-program-graph.json": "e992136ad637c56be8349b60894ff158136f2f9ee20169fdd2aab7e38dbbc5d6",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate7/manual-snapshot-artifact.json": "e0558966eafdcf405d264bad81272373159eaf65e586d9940671c20edb6faf5a",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate7/manual-plan.json": "a5e92d15d4fdf5385b06e6ab40c25ab58e909c9a8941b8c4a79b2d0384f0f3e9",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate7/preset-snapshot-artifact.json": "6ad58c5789b4e6d9bd115a73af1634f426ac1bf5ff39bb3d6c2ddaa546c18a60",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/scalar-equivalence-candidate7.log": "e8d727f1b587f995738dd1fc7455967cff1d0d83e3a3702f05b9fd0c26527f41"
+  },
+  "summary_script_sha256": "9082f0dd237309fa949fc6a476c26de717a095faf53789824621ca61199644f0",
+  "markdown_sha256": "56ee8fb9a008b73049609ef4b9d0a54b716505ecc893d203f245c2b1d7581843"
+}

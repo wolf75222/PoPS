@@ -129,6 +129,10 @@ def test_program_and_time_library_expose_only_final_authoring_spelling() -> None
     assert tuple(signature(pops.Program.state).parameters) == ("self", "state", "clock")
     assert tuple(libtime.__all__) == (
         "AdamsBashforth",
+        "BACKWARD_EULER_TABLEAU",
+        "DIRK",
+        "DiagonallyImplicitRungeKuttaTableau",
+        "IMPLICIT_MIDPOINT_TABLEAU",
         "BDF",
         "ButcherTableau",
         "FORWARD_EULER_TABLEAU",
@@ -169,13 +173,24 @@ def test_program_and_time_library_expose_only_final_authoring_spelling() -> None
 
     from pops import fields
 
-    for removed in ("FieldProblem", "PoissonProblem", "HoldPrevious"):
+    from pops.fields.problem import (
+        FieldBoundary, FieldProblem, FieldProblemError, FieldStorageBinding, SharedMeanGauge,
+    )
+
+    for name, definition in (
+        ("FieldBoundary", FieldBoundary), ("FieldProblem", FieldProblem),
+        ("FieldProblemError", FieldProblemError), ("FieldStorageBinding", FieldStorageBinding),
+        ("SharedMeanGauge", SharedMeanGauge),
+    ):
+        assert name in fields.__all__
+        assert getattr(fields, name) is definition
+    for removed in ("PoissonProblem", "HoldPrevious"):
         assert not hasattr(fields, removed)
 
 
-def test_public_state_rejects_opaque_units_until_a_typed_unit_protocol_exists() -> None:
+def test_public_state_rejects_opaque_units_outside_the_typed_dimension_protocol() -> None:
     model = pops.Model("dimension_contract")
-    with pytest.raises(TypeError, match="units are unsupported"):
+    with pytest.raises(TypeError, match="PhysicalDimension values"):
         model.state("U", components=("rho",), units=("kg/m3",))
 
 
@@ -263,10 +278,12 @@ def test_runtime_instance_has_only_the_explicit_read_and_restart_surface() -> No
         "consumer_cursors",
         "consumer_graph",
         "consumer_recoveries",
+        "continuation_transition_report",
         "field_potential_global",
         "field_potential_level_global",
         "field_provider_levels",
         "field_provider_slots",
+        "set_field_composite_mean_neutralizing",
         "flush_live_visualizations",
         "flush_post_commit_consumers",
         "get_state",

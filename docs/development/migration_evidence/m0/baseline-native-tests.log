@@ -1,0 +1,57 @@
+Test project /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-baseline/build/migration-native
+      Start 265: ComponentInterfaces.FallibleOutcomeKeepsTransactionActionExplicit
+ 1/22 Test #265: ComponentInterfaces.FallibleOutcomeKeepsTransactionActionExplicit .................   Passed    0.41 sec
+      Start 266: ComponentInterfaces.PersistentTaggingStateUsesExactRankAndCanonicalRestartImage
+ 2/22 Test #266: ComponentInterfaces.PersistentTaggingStateUsesExactRankAndCanonicalRestartImage ...   Passed    0.02 sec
+      Start 267: ComponentInterfaces.SolveReportCarriesTypedIncompatibleRhsReason
+ 3/22 Test #267: ComponentInterfaces.SolveReportCarriesTypedIncompatibleRhsReason ..................   Passed    0.02 sec
+      Start 268: ComponentInterfaces.RegistryIsCollisionSafeIdempotentAndExplicitlyFrozen
+ 4/22 Test #268: ComponentInterfaces.RegistryIsCollisionSafeIdempotentAndExplicitlyFrozen ..........   Passed    0.02 sec
+      Start 269: ComponentInterfaces.PreparedTaggingExecutionIsExactRankedAndAllocationFree
+ 5/22 Test #269: ComponentInterfaces.PreparedTaggingExecutionIsExactRankedAndAllocationFree ........   Passed    0.02 sec
+      Start 270: ComponentInterfaces.PreparedTaggingRejectsNonFiniteBeforePublishingMasks
+ 6/22 Test #270: ComponentInterfaces.PreparedTaggingRejectsNonFiniteBeforePublishingMasks ..........   Passed    0.02 sec
+      Start 271: ComponentInterfaces.TopologyMaterialFractionsUseExactRankedStridesAndGhosts
+ 7/22 Test #271: ComponentInterfaces.TopologyMaterialFractionsUseExactRankedStridesAndGhosts .......   Passed    0.02 sec
+      Start 272: ComponentInterfaces.TopologyMaterialFractionsFailClosedOnRankAndStrideOverflow
+ 8/22 Test #272: ComponentInterfaces.TopologyMaterialFractionsFailClosedOnRankAndStrideOverflow ....   Passed    0.02 sec
+      Start 273: ComponentInterfaces.BoundaryFluxValidatesCoordinatesAndNormalsAcrossExactRank
+ 9/22 Test #273: ComponentInterfaces.BoundaryFluxValidatesCoordinatesAndNormalsAcrossExactRank .....   Passed    0.02 sec
+      Start 274: ComponentInterfaces.RefluxBatchAcceptsAxisTwoAndRejectsAxesOutsideExactRank
+10/22 Test #274: ComponentInterfaces.RefluxBatchAcceptsAxisTwoAndRejectsAxesOutsideExactRank .......   Passed    0.02 sec
+      Start 275: ComponentInterfaces.ExactAbiConsumersExecuteEveryClosedScientificFamily
+11/22 Test #275: ComponentInterfaces.ExactAbiConsumersExecuteEveryClosedScientificFamily ...........   Passed    0.02 sec
+      Start 276: ComponentInterfaces.FieldSolverV2CarriesOneBinaryCoverageMultilevelBatch
+12/22 Test #276: ComponentInterfaces.FieldSolverV2CarriesOneBinaryCoverageMultilevelBatch ..........   Passed    0.02 sec
+      Start 277: ComponentInterfaces.PreparedExecutionContextBindsExactExecutionLaneAuthority
+13/22 Test #277: ComponentInterfaces.PreparedExecutionContextBindsExactExecutionLaneAuthority ......   Passed    0.03 sec
+      Start 571: ProviderValues.EmptyPackIsAFirstClassDeviceCarrier
+14/22 Test #571: ProviderValues.EmptyPackIsAFirstClassDeviceCarrier ................................   Passed    0.29 sec
+      Start 572: ProviderValues.QualifiedConsumersDoNotAliasBySpelling
+15/22 Test #572: ProviderValues.QualifiedConsumersDoNotAliasBySpelling .............................   Passed    0.02 sec
+      Start 573: ProviderValues.GradientSourcesUseExplicitPermutedSlotsInEveryRank
+16/22 Test #573: ProviderValues.GradientSourcesUseExplicitPermutedSlotsInEveryRank .................   Passed    0.02 sec
+      Start 574: ProviderValues.ExBUsesExplicitPermutedGradientSlots
+17/22 Test #574: ProviderValues.ExBUsesExplicitPermutedGradientSlots ...............................   Passed    0.02 sec
+      Start 575: ProviderValues.CartesianExBConsumesEveryVectorComponentInThreeDimensions
+18/22 Test #575: ProviderValues.CartesianExBConsumesEveryVectorComponentInThreeDimensions ..........   Passed    0.02 sec
+      Start 576: ProviderValues.CartesianExBOneDimensionalProjectionUsesTheSameContraction
+19/22 Test #576: ProviderValues.CartesianExBOneDimensionalProjectionUsesTheSameContraction .........   Passed    0.02 sec
+      Start 577: ProviderValues.LorentzUsesItsExplicitMagneticProvider
+20/22 Test #577: ProviderValues.LorentzUsesItsExplicitMagneticProvider .............................   Passed    0.02 sec
+      Start 578: ProviderValues.MagneticFactoryDispatchAndRuntimeAreExactRanked
+21/22 Test #578: ProviderValues.MagneticFactoryDispatchAndRuntimeAreExactRanked ....................   Passed    0.02 sec
+      Start 579: ProviderValues.CompositePropagatesItsExactProviderCount
+22/22 Test #579: ProviderValues.CompositePropagatesItsExactProviderCount ...........................   Passed    0.02 sec
+
+100% tests passed out of 22
+
+Label Time Summary:
+cpp-target:test_aux_single_source       =   0.44 sec*proc (9 tests)
+cpp-target:test_component_interfaces    =   0.65 sec*proc (13 tests)
+fast                                    =   1.09 sec*proc (22 tests)
+physics                                 =   0.44 sec*proc (9 tests)
+runtime                                 =   0.65 sec*proc (13 tests)
+unit                                    =   1.09 sec*proc (22 tests)
+
+Total Test time (real) =   1.12 sec

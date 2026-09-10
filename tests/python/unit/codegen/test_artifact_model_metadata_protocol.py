@@ -99,3 +99,53 @@ def test_component_metadata_refuses_ambiguous_program_block_routes(routes):
 
     with pytest.raises(ValueError, match="unambiguous"):
         component_model_metadata(compiled)
+
+
+@pytest.mark.parametrize("target", ("system", "amr_system"))
+def test_compiled_auxiliary_metadata_uses_the_resolved_provider_pack(tmp_path, monkeypatch, target):
+    """Exercise the metadata producer with only native compilation replaced by inert bytes."""
+    from dataclasses import replace
+
+    from pops.codegen.component_provider_packs import resolve_emitter_provider_packs
+    from pops.codegen.inspect_compiled import _build_aux_arguments
+    from pops.fields import AuxiliaryBoundary, DerivedAux
+    from pops.math import ValueExpr
+    from pops.physics._facade import Model
+
+    model = Model("compiled_auxiliary_inventory")
+    (q,) = model.conservative_vars("q")
+    imposed = model.aux("imposed")
+    model.flux(x=[0.0 * q], y=[0.0 * q])
+    model.projection([imposed])
+    module = model.module
+    derived = module.aux_field("derived")
+    module.aux_provider(DerivedAux(
+        module.aux_handle(derived),
+        2.0 * ValueExpr(module.field_handle(module.field_spaces()["fields"])),
+        boundary=AuxiliaryBoundary(width=1, kind="foextrap")))
+    packs = resolve_emitter_provider_packs(model, module)
+    model.__pops_bind_component_provider_packs__(packs)
+    assert model._m._provider_components == ["imposed"]
+    assert {key.component for key in packs.auxiliary} == {"derived", "imposed"}
+
+    def inert_compile(path, include, **options):
+        assert options["target"] == target
+        from pathlib import Path
+        Path(path).write_bytes(b"source-only metadata producer control; not a native library")
+        return str(path)
+
+    monkeypatch.setattr(model._m, "compile", inert_compile)
+    monkeypatch.setattr("pops.codegen.abi._abi_key_python", lambda *_: "source-only-metadata-abi")
+    compiled = model.compile(
+        str(tmp_path / "source-only.so"), include=str(tmp_path), target=target)
+
+    for provider in (model, compiled):
+        row = _metadata("scalar", provider, expected_state_spaces=("U",))
+        assert row.provider_components == tuple(key.component for key in packs.auxiliary)
+        assert row.n_aux == 2
+        assert _build_aux_arguments((row,), {}, {"scalar": packs.auxiliary}) == {
+            "imposed": {"layout": "cell", "required": True}}
+        for components in (("imposed",), ("derived", "imposed", "foreign")):
+            with pytest.raises(ValueError, match="metadata differs from its resolved ProviderPack"):
+                _build_aux_arguments((replace(row, provider_components=components),), {},
+                                     {"scalar": packs.auxiliary})

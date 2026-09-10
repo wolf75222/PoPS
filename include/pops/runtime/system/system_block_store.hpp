@@ -109,6 +109,8 @@ class SystemBlockStore {
     PreparedPointBoundaryResidual boundary_core_at_point_prepared;
     PreparedPointBoundaryResidual boundary_flux_full_at_point_prepared;
     PreparedPointBoundaryResidual boundary_flux_core_at_point_prepared;
+    typename SystemBlockClosures<Dim>::PreparedPointPeriodicResidual
+        periodic_flux_at_point_prepared;
     PreparedPointBoundaryResidual boundary_residual_at_point_prepared;
     PreparedPointJvp boundary_jvp_at_point_prepared;
     std::shared_ptr<BoundaryFluxTransform> external_boundary_flux;
@@ -152,15 +154,19 @@ class SystemBlockStore {
 
   int size() const noexcept { return static_cast<int>(blocks.size()); }
 
-  void install_interface_provider(InterfaceProvider provider) {
+  void install_interface_provider(InterfaceProvider provider,
+                                  typename InterfaceProvider::CoreEvaluator core,
+                                  typename InterfaceProvider::CoreAdmission admission) {
     if (interface_provider_)
       throw std::runtime_error("System shared-interface provider is already installed");
     if (provider.provider_identity.empty() || provider.collective_contract.empty() ||
         !provider.evaluate_rhs || !provider.evaluate_core || !provider.evaluation_count ||
-        !provider.has_interfaces || !provider.discard)
+        !provider.has_interfaces || !provider.discard || !core || !admission)
       throw std::invalid_argument(
           "System shared-interface provider must implement the complete ranked contract");
     interface_provider_ = std::move(provider);
+    interface_core_ = std::move(core);
+    interface_admission_ = std::move(admission);
   }
 
   std::vector<std::string> names() const {
@@ -178,11 +184,17 @@ class SystemBlockStore {
                                     const std::vector<field_type*>& states,
                                     const std::vector<field_type*>& residuals,
                                     const std::vector<int>& flux_only = {}) {
-    validate_batch_(states, residuals, flux_only);
     if (interface_provider_) {
-      interface_provider_->evaluate_rhs(point, states, residuals, flux_only);
+      SystemInterfaceCoreSession<Dim>::dispatch(
+          [&] { validate_interface_batch_(states, residuals, flux_only); },
+          [&] { interface_core_(point, states, residuals, flux_only); },
+          [&](const auto& core) {
+            interface_provider_->evaluate_rhs(point, states, residuals, flux_only, core);
+          },
+          interface_admission_);
       return;
     }
+    validate_batch_(states, residuals, flux_only);
     for (std::size_t block = 0; block < blocks.size(); ++block) {
       if (states[block] == nullptr)
         continue;
@@ -195,11 +207,17 @@ class SystemBlockStore {
                                          const std::vector<field_type*>& states,
                                          const std::vector<field_type*>& residuals,
                                          const std::vector<int>& flux_only = {}) {
-    validate_batch_(states, residuals, flux_only);
     if (interface_provider_) {
-      interface_provider_->evaluate_core(point, states, residuals, flux_only);
+      SystemInterfaceCoreSession<Dim>::dispatch(
+          [&] { validate_interface_batch_(states, residuals, flux_only); },
+          [&] { interface_core_(point, states, residuals, flux_only); },
+          [&](const auto& core) {
+            interface_provider_->evaluate_core(point, states, residuals, flux_only, core);
+          },
+          interface_admission_);
       return;
     }
+    validate_batch_(states, residuals, flux_only);
     for (std::size_t block = 0; block < blocks.size(); ++block) {
       if (states[block] == nullptr)
         continue;
@@ -262,6 +280,7 @@ class SystemBlockStore {
   std::size_t interface_evaluation_count(const std::string& identity, int level) const {
     return interface_provider_ ? interface_provider_->evaluation_count(identity, level) : 0;
   }
+  bool has_interface_provider() const noexcept { return interface_provider_.has_value(); }
   bool has_interfaces(int block) const {
     return interface_provider_ && interface_provider_->has_interfaces(block);
   }
@@ -270,6 +289,8 @@ class SystemBlockStore {
       return;
     interface_provider_->discard();
     interface_provider_.reset();
+    interface_core_ = {};
+    interface_admission_ = {};
   }
 
   std::vector<double> copy_comp0(const field_type& field) const {
@@ -316,6 +337,22 @@ class SystemBlockStore {
     if (block >= blocks.size())
       throw std::out_of_range("System block index is out of range");
     return blocks[block];
+  }
+
+  void validate_interface_batch_(const std::vector<field_type*>& states,
+                                 const std::vector<field_type*>& residuals,
+                                 const std::vector<int>& flux_only) const {
+    validate_batch_(states, residuals, flux_only);
+    for (std::size_t block = 0; block < residuals.size(); ++block) {
+      if (residuals[block] == nullptr)
+        continue;
+      for (std::size_t other = 0; other < states.size(); ++other) {
+        if (residuals[block] == states[other] ||
+            (other < block && residuals[block] == residuals[other]))
+          throw std::invalid_argument(
+              "shared-interface outputs must not alias group states or outputs");
+      }
+    }
   }
 
   void validate_batch_(const std::vector<field_type*>& states,
@@ -385,6 +422,8 @@ class SystemBlockStore {
   }
 
   std::optional<InterfaceProvider> interface_provider_;
+  typename InterfaceProvider::CoreEvaluator interface_core_;
+  typename InterfaceProvider::CoreAdmission interface_admission_;
 };
 
 }  // namespace pops

@@ -40,7 +40,28 @@ class _FacadeCompileMixin(_FacadeModel):
             emit_model=self,
             source_module=self.module,
             facade=self,
+            owns_emitter=False,
         )
+
+    def __pops_retain_compiler_source__(self, source_module: Any) -> None:
+        """Retain the explicitly nominated source as compiler metadata only."""
+        self._require_compiler_source(source_module)
+        previous = getattr(self, "_retained_compiler_source", None)
+        if previous is not None and (
+                previous.owner_path != source_module.owner_path
+                or previous.module_hash() != source_module.module_hash()):
+            raise ValueError("compiler emitter cannot replace its retained source authority")
+        object.__setattr__(self, "_retained_compiler_source", source_module)
+
+    def _require_compiler_source(self, source_module: Any) -> None:
+        from pops.model import Module
+        if not isinstance(source_module, Module):
+            raise TypeError("compiler source authority must be a Module")
+        if source_module.owner_path != self._m.owner_path:
+            raise ValueError("compiler source Module owner differs from its formula emitter")
+        expected_hash = getattr(self, "_compile_source_module_hash", None)
+        if expected_hash is not None and source_module.module_hash() != expected_hash:
+            raise ValueError("compiler source Module hash differs from its lowered emitter")
 
     def __pops_bind_component_provider_packs__(self, packs: Any) -> None:
         """Bind the exact Module provider resolution to both native-emitter carriers."""
@@ -48,8 +69,18 @@ class _FacadeCompileMixin(_FacadeModel):
 
         if type(packs) is not ComponentProviderPacks:
             raise TypeError("compiler provider-pack binding requires exact ComponentProviderPacks")
+        # A frozen multi-state facade may intentionally have no derived Module
+        # cache. CompilerLowering supplies its exact source through the internal
+        # retain hook; direct authoring binds an already materialized cache.
+        source_module = getattr(self, "_retained_compiler_source", None)
+        if source_module is None:
+            source_module = getattr(self, "_module_cache", None)
+        if source_module is not None:
+            self._require_compiler_source(source_module)
         packs.attach(self)
         packs.attach(self._m)
+        if source_module is not None:
+            object.__setattr__(self._m, "_formula_source_module", source_module)
 
     def __pops_native_loader_source__(
         self,
@@ -61,9 +92,9 @@ class _FacadeCompileMixin(_FacadeModel):
         declare_auxiliary_providers: bool = True,
     ) -> str:
         """Emit a native package without exposing the private formula carrier."""
-        from pops.codegen.component_provider_packs import resolve_component_provider_packs
+        from pops.codegen.component_provider_packs import resolve_emitter_provider_packs
 
-        self.__pops_bind_component_provider_packs__(resolve_component_provider_packs(self.module))
+        self.__pops_bind_component_provider_packs__(resolve_emitter_provider_packs(self, self.module))
         return self._m.emit_cpp_native_loader(
             name=name,
             target=target,
@@ -78,9 +109,9 @@ class _FacadeCompileMixin(_FacadeModel):
         n_aux + NAMED params (m.params). Used to identify/reuse an already-compiled .so (cache key)
         and to trace the run. Delegates to the shared computation HyperbolicModel._model_hash, passing it
         the Param of the facade (otherwise two models differing only by a param would have the same hash)."""
-        from pops.codegen.component_provider_packs import resolve_component_provider_packs
+        from pops.codegen.component_provider_packs import resolve_emitter_provider_packs
 
-        self.__pops_bind_component_provider_packs__(resolve_component_provider_packs(self.module))
+        self.__pops_bind_component_provider_packs__(resolve_emitter_provider_packs(self, self.module))
         return self._m._model_hash(params=self.params)
 
     def compile(
@@ -163,26 +194,23 @@ class _FacadeCompileMixin(_FacadeModel):
         backend = lower_backend(backend)
         if target not in ("system", "amr_system"):
             raise ValueError("compile: target 'system' | 'amr_system' (got %r)" % (target,))
-        if target == "system" and _native_field_roles is not None:
-            raise ValueError("resolved AMR field roles cannot be compiled for System")
         from pops.codegen._compile_emit import (
             _native_amr_field_roles_identity,
             _normalize_native_amr_field_roles,
         )
 
-        normalized_field_roles = (
-            _normalize_native_amr_field_roles(_native_field_roles) if target == "amr_system" else ()
-        )
+        normalized_field_roles = _normalize_native_amr_field_roles(_native_field_roles)
 
         m = self._m
         if target == "amr_system" and _native_field_roles is None and bool(m._elliptic_fields):
             raise ValueError(
                 "named AMR elliptic providers require exact resolved per-block field roles"
             )
-        from pops.codegen.component_provider_packs import resolve_component_provider_packs
+        from pops.codegen.component_provider_packs import resolve_emitter_provider_packs
 
-        self.__pops_bind_component_provider_packs__(resolve_component_provider_packs(self.module))
-        model_dimension = len(m._flux)
+        self.__pops_bind_component_provider_packs__(resolve_emitter_provider_packs(self, self.module))
+        from pops.codegen.module_emit_helpers import _ranked_axes
+        model_dimension = len(_ranked_axes(m))
         if model_dimension not in (1, 2, 3):
             raise ValueError("compile: model has no exact 1D/2D/3D physical flux rank")
         native_dimension = loader_native_dimension()
@@ -233,10 +261,11 @@ class _FacadeCompileMixin(_FacadeModel):
                 else float((getattr(m, "_ws_jacobian", {}) or {})["im_tol"]).hex()
             ),
         }
-        if target == "amr_system":
+        if target == "amr_system" or _native_field_roles is not None:
             from pops.identity import canonical_bytes
 
-            spec_components["amr_field_roles"] = canonical_bytes(
+            role_key = "amr_field_roles" if target == "amr_system" else "system_field_roles"
+            spec_components[role_key] = canonical_bytes(
                 _native_amr_field_roles_identity(normalized_field_roles)
             ).hex()
         spec_identity = artifact_spec_identity(
@@ -282,7 +311,8 @@ class _FacadeCompileMixin(_FacadeModel):
                 target=target,
                 hoist_reciprocals=hoist_reciprocals,
                 model_identity=model_hash,
-                _native_field_roles=(normalized_field_roles if target == "amr_system" else None),
+                _native_field_roles=(normalized_field_roles if _native_field_roles is not None
+                                     or target == "amr_system" else None),
                 consumer_owner_qid=consumer_owner_qid,
                 declare_auxiliary_providers=declare_auxiliary_providers,
             )
@@ -301,7 +331,9 @@ class _FacadeCompileMixin(_FacadeModel):
             gamma=m.gamma,
             n_aux=m._total_n_aux(),
             params=self.params,
-            caps=compiled_capability_flags(backend),
+            caps={**compiled_capability_flags(backend), **(
+                {"program_only_storage": True}
+                if getattr(m, "_program_only_storage_axes", ()) else {})},
             abi_key=abi_key,
             model_hash=model_hash,
             definition_identity=model_compile_identity(self),
@@ -315,7 +347,8 @@ class _FacadeCompileMixin(_FacadeModel):
             roe_entropy_policy=riemann_evidence.roe_entropy_policy,
             roe_entropy_delta=riemann_evidence.roe_entropy_delta,
             characteristic_no_inflow=has_characteristic_no_inflow_provider(m),
-            provider_components=m._provider_components,
+            # Module-level providers need not appear in the façade formula declarations.
+            provider_components=[key.component for key in m._auxiliary_provider_pack],
             wave_speeds=wave_speed_provider is not None,
             wave_speed_provider=(None if wave_speed_provider is None else wave_speed_provider.kind),
             # NAMED elliptic fields the model declares (m.elliptic_field, ADC-419 / ADC-428): the
@@ -329,7 +362,7 @@ class _FacadeCompileMixin(_FacadeModel):
         cm.artifact_spec_identity = spec_identity
         cm.binary_identity = binary_identity
         cm.artifact_identity = final_artifact_identity
-        if target == "amr_system":
+        if target == "amr_system" or _native_field_roles is not None:
             cm._native_field_roles = normalized_field_roles
         # Exact ABI order of only the RuntimeParamRef nodes actually read by emitted formulas.
         # BindSchema routes qualified values into this local vector; declarations that are never

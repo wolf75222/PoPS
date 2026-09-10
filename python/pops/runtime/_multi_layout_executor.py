@@ -1,4 +1,4 @@
-"""Exact multi-layout Uniform runtime coordination and transactional persistence."""
+"""Exact multi-layout native runtime coordination and transactional persistence."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ import math
 import os
 import shutil
 import tempfile
+from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +22,7 @@ class _PreparedMultiLayoutRestart:
     restart_identity: Any
     mapping: dict[str, int]
     children: tuple[Any, ...]
+    temporal_state: _CompositeTemporalRestartState
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,8 +31,11 @@ class _NativeTransferRoute:
     source_block: str
     target_block: str
     session: Any
-    source_element_count: int
-    destination_element_count: int
+    # AMR inventories belong to the active native hierarchy/stage receipt census.
+    source_element_count: int | None
+    destination_element_count: int | None
+    program_invocation: str = ""
+    physical_contract_identity: str = ""
 
 
 def _common_exact(values: Any, *, where: str) -> Any:
@@ -103,7 +109,7 @@ def _require_unique_transfer_targets(transfers: Any) -> None:
     """Defend install against order-dependent overwrite transfers in a forged runtime plan."""
     writers: dict[tuple[str, str, str], str] = {}
     for transfer in transfers:
-        if transfer.operation_abi != 1:
+        if transfer.synchronization_uri == "pops://synchronization/program-point@1":
             continue
         key = (transfer.target_layout_id, transfer.target_subject_id, transfer.synchronization_uri)
         previous = writers.get(key)
@@ -313,7 +319,8 @@ def _release_layout_engines(engines: list[Any]) -> None:
         ) from None
 
 
-def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]) -> Any:
+def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any],
+                               program_invocation: str = "") -> Any:
     """Authenticate every fallible route field before a native session exists."""
     source_block, target_block = _mapping_blocks(plan, transfer)
     try:
@@ -323,22 +330,61 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
         raise ValueError("layout transfer names an unknown layout") from None
     source_shape = tuple(int(value) for value in source_engine.spatial_shape())
     target_shape = tuple(int(value) for value in target_engine.spatial_shape())
-    if len(source_shape) != len(target_shape) or any(
-        source_extent < target_extent or source_extent % target_extent
-        for source_extent, target_extent in zip(source_shape, target_shape, strict=True)
-    ):
-        raise ValueError("CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts")
-    ratio = tuple(
-        source_extent // target_extent
-        for source_extent, target_extent in zip(source_shape, target_shape, strict=True)
-    )
+    dimension = len(source_shape)
+    contract = {"physical_contract": False, "physical_source_to_target": (-1,) * dimension,
+                "physical_source_active": (0,) * dimension, "physical_target_active": (0,) * dimension}
+    source_cells = math.prod(source_shape)
+    layout_targets = {row.layout_id: row.target for row in plan.artifact.layout_programs}
+    source_target = layout_targets[transfer.source_layout_id]
+    target_target = layout_targets[transfer.target_layout_id]
+    if source_target != target_target or source_target not in ("system", "amr_system"):
+        raise ValueError("layout Transfer requires matching resolved native execution targets")
+    adaptive = source_target == "amr_system"
+    if transfer.operation_abi in (2, 3):
+        requirement = next(row.requirement for row in plan.artifact.layout_plan.mappings
+                           if row.requirement.qualified_id == transfer.mapping_id)
+        physical = requirement.physical_map
+        if physical is None:
+            raise ValueError("native physical Transfer lost its resolved support/axis contract")
+        source = plan.artifact.native_layouts[transfer.source_layout_id]
+        target = plan.artifact.native_layouts[transfer.target_layout_id]
+        from pops.runtime._physical_mapping import validate_physical_geometry
+        validate_physical_geometry(requirement, source, target, composite=adaptive)
+        if source_shape != tuple(source.shape) or target_shape != tuple(target.shape):
+            raise ValueError("native physical Transfer storage differs from its resolved geometry")
+        contract = physical.native_contract()
+        ratio = (1,) * dimension
+        if not adaptive:
+            # Uniform capture storage is indexed by destination patch. A broadcast
+            # may duplicate source regions; authenticate that carrier inventory.
+            source_cells = 0
+            for box in target.decomposition["boxes"]:
+                extent = tuple(upper - lower for lower, upper in
+                               zip(box["lower"], box["upper_exclusive"], strict=True))
+                source_cells += math.prod(
+                    extent[target_axis] if target_axis >= 0 else source_shape[axis]
+                    for axis, target_axis in enumerate(physical.source_to_target))
+    else:
+        if dimension != len(target_shape) or any(
+                a < b or a % b for a, b in zip(source_shape, target_shape, strict=True)):
+            raise ValueError("native layout Transfer requires exactly aligned integer extents")
+        ratio = tuple(a // b for a, b in zip(source_shape, target_shape, strict=True))
     component = plan.components.get(transfer.component_id)
     if getattr(component, "native_handle", None) is None:
         raise TypeError("mapping Transfer component has no authenticated native handle")
-    source_components = int(source_engine.n_vars(source_block))
-    target_components = int(target_engine.n_vars(target_block))
+    source_components = int(source_engine.block_n_vars(source_block) if adaptive
+                            else source_engine.n_vars(source_block))
+    target_components = int(target_engine.block_n_vars(target_block) if adaptive
+                            else target_engine.n_vars(target_block))
     if source_components != target_components or source_components <= 0:
         raise ValueError("layout transfer source/target component counts differ")
+    physical_spec = None
+    if adaptive:
+        if transfer.operation_abi not in (2, 3):
+            raise NotImplementedError("AMR cross-layout transfer requires a typed physical map")
+        from pops.runtime._amr_physical_mapping import physical_amr_spec
+        physical_spec = physical_amr_spec(plan, requirement, source_engine, target_engine,
+                                          source_block, target_block)
     return SimpleNamespace(
         transfer=transfer,
         source_engine=source_engine,
@@ -360,9 +406,12 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
             "synchronization_identity": transfer.synchronization_uri,
             "refinement_ratio": ratio,
             "operation": transfer.operation_abi,
+            "program_invocation": program_invocation,
+            **contract,
         },
-        source_element_count=source_components * math.prod(source_shape),
-        destination_element_count=target_components * math.prod(target_shape),
+        physical_spec=physical_spec,
+        source_element_count=None if adaptive else source_components * source_cells,
+        destination_element_count=None if adaptive else target_components * math.prod(target_shape),
     )
 
 
@@ -374,12 +423,11 @@ def _prepare_layout_transfer_route(prepared: Any, execution: Any) -> tuple[Any, 
     try:
         source_native = prepared.source_engine._native_step_target()
         target_native = prepared.target_engine._native_step_target()
-        session = source_native._prepare_layout_transfer(
-            target_native,
-            prepared.component.native_handle,
-            prepared.spec,
-            execution,
-        )
+        arguments = (target_native, prepared.component.native_handle, prepared.spec, execution)
+        physical_spec = getattr(prepared, "physical_spec", None)
+        if physical_spec is not None:
+            arguments += (physical_spec,)
+        session = source_native._prepare_layout_transfer(*arguments)
         route = _NativeTransferRoute(
             transfer=prepared.transfer,
             source_block=prepared.source_block,
@@ -387,6 +435,9 @@ def _prepare_layout_transfer_route(prepared: Any, execution: Any) -> tuple[Any, 
             session=session,
             source_element_count=prepared.source_element_count,
             destination_element_count=prepared.destination_element_count,
+            program_invocation=prepared.spec["program_invocation"],
+            physical_contract_identity=(physical_spec["physical_contract_identity"]
+                                        if physical_spec is not None else ""),
         )
         published = (source_native, target_native)
         session = None
@@ -416,6 +467,7 @@ def _publish_layout_transfer_route(
     transfer: Any,
     engines: dict[str, Any],
     execution: Any,
+    program_invocation: str = "",
 ) -> None:
     """Prepare one route and publish it; the caller never owns last-route locals."""
     prepared = None
@@ -423,7 +475,7 @@ def _publish_layout_transfer_route(
     handles = None
     native_start = None
     try:
-        prepared = _validated_layout_transfer(plan, transfer, engines)
+        prepared = _validated_layout_transfer(plan, transfer, engines, program_invocation)
         route, handles = _prepare_layout_transfer_route(prepared, execution)
         prepared = None
         routes.append(route)
@@ -546,18 +598,89 @@ def _require_runtime_plan_bundle(plan: Any, runtime_plan: Any) -> None:
 
 
 class _CompositeTemporalRestartState:
-    """Broadcast temporal mutations and prove every layout clock stays identical."""
+    """One controller envelope with immutable, layout-qualified Program schedules."""
 
-    def __init__(self, states: Any) -> None:
-        self.states = tuple(states)
-        if not self.states:
-            raise ValueError("composite temporal state requires one state per layout")
+    def __init__(self, states: Mapping[str, Any]) -> None:
+        from pops.runtime._temporal_restart import TemporalRestartState
+
+        if not isinstance(states, Mapping) or not states:
+            raise TypeError("composite temporal state requires a nonempty layout mapping")
+        self._layout_states = tuple(states.items())
+        if any(type(key) is not str or not key for key, _state in self._layout_states):
+            raise TypeError("composite temporal state requires exact layout identities")
+        if any(type(state) is not TemporalRestartState for state in self.states):
+            raise TypeError("composite temporal state requires exact temporal leaves")
+        if len({id(state) for state in self.states}) != len(self.states):
+            raise ValueError("each layout must own a distinct temporal state")
+        self._schedule_json = self._current_schedule_json()
+        self._require_shared()
+
+    @property
+    def layout_ids(self) -> tuple[str, ...]:
+        return tuple(key for key, _state in self._layout_states)
+
+    @property
+    def states(self) -> tuple[Any, ...]:
+        # Accepted-attempt snapshots and rollback statistics use this canonical leaf order.
+        return tuple(state for _key, state in self._layout_states)
+
+    def _current_schedule_json(self) -> str:
+        from pops.runtime._temporal_restart import _validate_program_schedule
+
+        schedules = {}
+        clocks = {}
+        parents = {}
+        for layout_id, state in self._layout_states:
+            schedule = (None if state.program_schedule is None
+                        else _validate_program_schedule(state.program_schedule))
+            schedules[layout_id] = schedule
+            if schedule is None:
+                continue
+            for row in schedule["clocks"]:
+                if row["id"] in clocks and clocks[row["id"]] != row:
+                    raise RuntimeError("per-layout temporal clock contracts diverged")
+                clocks[row["id"]] = row
+            for row in schedule["subcycles"]:
+                relation = (row["parent_clock"], row["count"])
+                if row["child_clock"] in parents and parents[row["child_clock"]] != relation:
+                    raise RuntimeError("per-layout temporal clock parent contracts diverged")
+                parents[row["child_clock"]] = relation
+        if any(row is None for row in schedules.values()) and any(
+                row is not None for row in schedules.values()):
+            raise RuntimeError("per-layout temporal Program installation is incomplete")
+        return json.dumps({
+            "schema_version": 1,
+            "kind": "pops.multi-layout-temporal-program-schedule",
+            "layout_ids": list(self.layout_ids),
+            "layouts": schedules,
+        }, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
     def _same_attribute(self, name: str) -> Any:
         values = tuple(getattr(state, name) for state in self.states)
         if any(value != values[0] for value in values[1:]):
             raise RuntimeError("per-layout temporal state diverged at %s" % name)
         return values[0]
+
+    def _require_shared(self) -> None:
+        for name in ("_restored_pending", "strategy", "time_hex", "macro_step",
+                     "controller_state", "event_queue", "transaction_stats", "status",
+                     "synchronized"):
+            self._same_attribute(name)
+        cursors = {}
+        for state in self.states:
+            for clock_id, cursor in state.clock_cursors.items():
+                if clock_id in cursors and cursor != cursors[clock_id]:
+                    raise RuntimeError("per-layout temporal cursors diverged")
+                cursors[clock_id] = cursor
+
+    def require_bindings(self, trusted: _CompositeTemporalRestartState) -> None:
+        if self.layout_ids != trusted.layout_ids:
+            raise RuntimeError("composite temporal layout identities or order differ")
+        self._require_shared()
+        self._installed_schedule()
+        trusted._installed_schedule()
+        if self._schedule_json != trusted._schedule_json:
+            raise RuntimeError("composite temporal schedules differ from installed layouts")
 
     @property
     def _restored_pending(self) -> Any:
@@ -580,21 +703,55 @@ class _CompositeTemporalRestartState:
         return self._same_attribute("macro_step")
 
     @property
-    def program_schedule(self) -> Any:
-        return self._same_attribute("program_schedule")
+    def program_schedule(self) -> dict[str, Any]:
+        self._require_shared()
+        return self._installed_schedule()
+
+    def _installed_schedule(self) -> dict[str, Any]:
+        # Rollback may inspect the trusted binding while its live attempt envelope has diverged.
+        if self._current_schedule_json() != self._schedule_json:
+            raise RuntimeError("temporal schedule changed its installed layout binding")
+        return json.loads(self._schedule_json)
 
     def to_data(self) -> dict[str, Any]:
-        """Project one temporal report only after proving every layout is identical."""
-        rows = tuple(state.to_data() for state in self.states)
-        return _common_exact(rows, where="multi-layout temporal report")
+        schedule = self.program_schedule
+        rows = {key: deepcopy(state.to_data()) for key, state in self._layout_states}
+        first = rows[self.layout_ids[0]]
+        return {
+            "schema_version": 1,
+            "kind": "pops.multi-layout-temporal-state",
+            "program_schedule": schedule,
+            **{key: first[key] for key in (
+                "strategy", "clock", "controller_state", "event_queue",
+                "transaction_stats", "status", "synchronized")},
+            "layouts": rows,
+        }
 
     def _broadcast(self, name: str, **kwargs: Any) -> None:
+        self._require_shared()
         for state in self.states:
             getattr(state, name)(**kwargs)
 
     def begin_run(self, strategy: Any, *, time: Any, macro_step: Any) -> None:
-        for state in self.states:
-            state.begin_run(strategy, time=time, macro_step=macro_step)
+        schedule = self.program_schedule
+        if isinstance(strategy, dict) and set(strategy) == {"strategy", "program_schedule"}:
+            if json.dumps(strategy["program_schedule"], sort_keys=True,
+                          separators=(",", ":"), allow_nan=False) != self._schedule_json:
+                raise RuntimeError("prepared run schedule differs from installed layout schedules")
+            control = strategy["strategy"]
+        else:
+            control = strategy
+        # Validate every local binding and controller transition before publishing any leaf.
+        # Copies own all allocations; the final dict swaps preserve references held by engines.
+        candidate = deepcopy(self)
+        for layout_id, state in candidate._layout_states:
+            state.begin_run({"strategy": control,
+                             "program_schedule": schedule["layouts"][layout_id]},
+                            time=time, macro_step=macro_step)
+        candidate._require_shared()
+        publications = tuple(zip(self.states, candidate.states, strict=True))
+        for state, prepared in publications:
+            state.__dict__ = prepared.__dict__
 
     def before_attempt(self, *, time: Any, macro_step: Any) -> None:
         self._broadcast("before_attempt", time=time, macro_step=macro_step)
@@ -631,10 +788,17 @@ class _CompositeTemporalRestartState:
         self._broadcast("fail", **kwargs)
 
     def cursor_for_clock(self, clock: Any) -> Any:
-        values = tuple(state.cursor_for_clock(clock) for state in self.states)
-        if any(value != values[0] for value in values[1:]):
-            raise RuntimeError("per-layout temporal cursors diverged")
-        return values[0]
+        from pops.time import Clock
+
+        if type(clock) is not Clock:
+            raise TypeError("temporal cursor requires an exact Clock descriptor")
+        _ = self.program_schedule
+        owners = tuple(state for state in self.states
+                       if clock.qualified_id in state.clock_cursors)
+        if not owners:
+            raise ValueError("temporal clock is not declared in any installed layout")
+        return _common_exact((state.cursor_for_clock(clock) for state in owners),
+                             where="multi-layout temporal clock cursor")
 
 
 class _MultiLayoutUniformExecutor:
@@ -660,6 +824,11 @@ class _MultiLayoutUniformExecutor:
             self._engines = dict(engines)
             self._block_layouts = dict(blocks)
             self._transfer_routes = tuple(transfer_routes)
+            from pops.runtime._physical_mapping import physical_mapping_schedule
+            self._physical_mapping_schedule = physical_mapping_schedule(
+                (route.transfer for route in self._transfer_routes
+                 if not route.program_invocation), self._engines)
+            self._has_program_maps = any(route.program_invocation for route in self._transfer_routes)
             self._mapping_evaluations = {
                 row.mapping_id: 0 for row in runtime_plan.communication.transfers
             }
@@ -681,7 +850,7 @@ class _MultiLayoutUniformExecutor:
                 where="multi-layout transaction plan",
             )
             self._temporal_restart_state = _CompositeTemporalRestartState(
-                engine._temporal_restart_state for engine in self._engines.values()
+                {key: engine._temporal_restart_state for key, engine in self._engines.items()}
             )
             self._step_controller = None
             self._last_step_transaction_report = None
@@ -830,6 +999,10 @@ class _MultiLayoutUniformExecutor:
             rows.append((layout_program, engine_blocks, report))
         return tuple(rows)
 
+    def continuation_transition_report(self) -> dict[str, Any]:
+        return {"schema_version": 1, "layouts": {str(layout): engine.continuation_transition_report()
+                for layout, engine in self._engines.items()}}
+
     def program_report(self) -> Any:
         """Aggregate every real child Program without inventing a single native engine."""
         from pops.identity import make_identity
@@ -950,10 +1123,7 @@ class _MultiLayoutUniformExecutor:
                 (report.temporal_partition for _row, _blocks, report in children),
                 where="multi-layout Program temporal-partition report",
             ),
-            temporal=_common_exact(
-                (report.temporal for _row, _blocks, report in children),
-                where="multi-layout Program temporal report",
-            ),
+            temporal=self._temporal_restart_state.to_data(),
         )
 
     def installed_program_hash(self) -> str:
@@ -962,6 +1132,14 @@ class _MultiLayoutUniformExecutor:
 
     def state_global(self, block: str) -> Any:
         return self.executor_for_block(block).state_global(block)
+
+    def block_level_state_global(self, block: str, level: int) -> Any:
+        return self.executor_for_block(block).block_level_state_global(block, level)
+
+    @property
+    def _checkpoint_runtime_kind(self) -> str:
+        from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
+        return require_checkpoint_resource_budget(self).runtime_kind
 
     def get_state(self, block: str) -> Any:
         return self.executor_for_block(block).get_state(block)
@@ -1037,6 +1215,11 @@ class _MultiLayoutUniformExecutor:
             "source_element_count": route.source_element_count,
             "destination_element_count": route.destination_element_count,
         }
+        if route.physical_contract_identity:
+            from pops.runtime._amr_physical_mapping import authenticate_amr_receipt
+            authenticate_amr_receipt(route, receipt, expected)
+        if route.program_invocation:
+            expected["program_invocation"] = route.program_invocation
         for name, value in expected.items():
             if getattr(receipt, name, object()) != value:
                 raise RuntimeError(
@@ -1044,11 +1227,19 @@ class _MultiLayoutUniformExecutor:
                     % (name, transfer.mapping_id)
                 )
 
-    def _restore_rejected_native_attempt(self, generation: int, attempt: int) -> None:
+    def _restore_rejected_native_attempt(
+        self, generation: int, attempt: int, captured_routes: list[_NativeTransferRoute]
+    ) -> None:
         """Restore every child to the outer accepted snapshot before a controller retries."""
-        for route in self._transfer_routes:
-            route.session.reject_attempt(generation, attempt)
         rollback_errors = []
+        # An ordered field solve can reject before the pullback is captured. Native
+        # sessions intentionally reject attempts they never captured; reset only the
+        # routes owned by this attempt, and still restore every child if reset fails.
+        for route in reversed(captured_routes):
+            try:
+                route.session.reject_attempt(generation, attempt)
+            except BaseException as error:
+                rollback_errors.append(error)
         for engine in reversed(tuple(self._engines.values())):
             try:
                 engine._rollback_step_transaction()
@@ -1083,25 +1274,57 @@ class _MultiLayoutUniformExecutor:
             raise RuntimeError("multi-layout native step requires an active transfer transaction")
         self._transfer_attempt += 1
         attempt = self._transfer_attempt
-        # Snapshot every source before any destination changes.  Cycles therefore observe one
-        # common pre-transfer state and never depend on mapping declaration order.
-        for route in self._transfer_routes:
-            route.session.capture(generation, attempt)
+        from pops.runtime._physical_mapping import physical_mapping_schedule
+        if not hasattr(self, "_physical_mapping_schedule"):
+            self._physical_mapping_schedule = physical_mapping_schedule(
+                (route.transfer for route in self._transfer_routes), self._engines)
+        schedule = self._physical_mapping_schedule
         receipts = []
+        captured_routes = []
         try:
-            for route in self._transfer_routes:
-                receipt = route.session.apply(generation, attempt)
-                self._authenticate_mapping_receipt(
-                    route, receipt, generation=generation, attempt=attempt
-                )
-                receipts.append(receipt)
-            for engine in self._engines.values():
-                native_step_target(engine).step(dt)
+            if getattr(self, "_has_program_maps", False):
+                from pops.runtime._program_mapping_executor import execute_program_maps
+                execute_program_maps(self, dt, generation, attempt, receipts, captured_routes)
+            elif schedule is None:
+                # Ordinary mappings retain simultaneous pre-step snapshot semantics.
+                for route in self._transfer_routes:
+                    route.session.capture(generation, attempt)
+                    captured_routes.append(route)
+                for route in self._transfer_routes:
+                    receipt = route.session.apply(generation, attempt)
+                    self._authenticate_mapping_receipt(
+                        route, receipt, generation=generation, attempt=attempt)
+                    receipts.append(receipt)
+                for engine in self._engines.values():
+                    native_step_target(engine).step(dt)
+            else:
+                routes = {row.transfer.mapping_id: row for row in self._transfer_routes}
+                accepted = set(schedule.accepted_captures)
+                for mapping_id in schedule.accepted_captures:
+                    route = routes[mapping_id]
+                    route.session.capture(generation, attempt)
+                    captured_routes.append(route)
+                for kind, identity in schedule.events:
+                    if kind == "step":
+                        native_step_target(self._engines[identity]).step(dt)
+                        continue
+                    route = routes[identity]
+                    if identity not in accepted:
+                        route.session.capture(generation, attempt)
+                        captured_routes.append(route)
+                    receipt = route.session.apply(generation, attempt)
+                    self._authenticate_mapping_receipt(
+                        route, receipt, generation=generation, attempt=attempt)
+                    receipts.append(receipt)
         except StepAttemptRejected:
-            self._restore_rejected_native_attempt(generation, attempt)
+            self._restore_rejected_native_attempt(generation, attempt, captured_routes)
             raise
-        for route in self._transfer_routes:
-            self._mapping_evaluations[route.transfer.mapping_id] += 1
+        if getattr(self, "_has_program_maps", False):
+            for receipt in receipts:
+                self._mapping_evaluations[receipt.mapping_identity] += 1
+        else:
+            for route in self._transfer_routes:
+                self._mapping_evaluations[route.transfer.mapping_id] += 1
         self._last_mapping_receipts = tuple(receipts)
         self._common_clock("time")
         self._common_clock("macro_step")
@@ -1182,26 +1405,52 @@ class _MultiLayoutUniformExecutor:
     def checkpoint_topology_epoch(self) -> int:
         return 0
 
+    def _require_temporal_layouts(self, state: Any) -> None:
+        if type(state) is not _CompositeTemporalRestartState:
+            raise TypeError("multi-layout temporal restore requires a composite state")
+        if state.layout_ids != tuple(self._engines):
+            raise RuntimeError("composite temporal layout identities or order differ from engines")
+        state.require_bindings(self._temporal_restart_state)
+
     def _synchronize_child_temporal_states(self) -> None:
-        states = tuple(self._temporal_restart_state.states)
-        if len(states) != len(self._engines):
-            raise RuntimeError("composite temporal state count differs from native layouts")
-        for engine, state in zip(self._engines.values(), states, strict=True):
-            engine._temporal_restart_state = state
+        state = self._temporal_restart_state
+        self._require_temporal_layouts(state)
+        for layout_id, leaf in state._layout_states:
+            self._engines[layout_id]._temporal_restart_state = leaf
 
     def _restore_temporal_restart_state(self, state: Any) -> None:
-        """Restore the coordinator envelope and every child authority atomically."""
-        if not isinstance(state, _CompositeTemporalRestartState):
-            raise TypeError("multi-layout temporal restore requires a composite state")
+        """Validate every binding before replacing coordinator or child authorities."""
+        self._require_temporal_layouts(state)
+        for layout_id, leaf in state._layout_states:
+            self._engines[layout_id]._temporal_restart_state = leaf
         self._temporal_restart_state = state
-        self._synchronize_child_temporal_states()
 
     def _rebuild_composite_temporal_state(self) -> None:
-        self._temporal_restart_state = _CompositeTemporalRestartState(
-            engine._temporal_restart_state for engine in self._engines.values()
-        )
-        self._common_clock("time")
-        self._common_clock("macro_step")
+        state = _CompositeTemporalRestartState(
+            {key: engine._temporal_restart_state for key, engine in self._engines.items()})
+        self._require_temporal_layouts(state)
+        if (state.time_hex != float(self._common_clock("time")).hex()
+                or state.macro_step != self._common_clock("macro_step")):
+            raise RuntimeError("composite temporal state differs from native layout clocks")
+        self._restore_temporal_restart_state(state)
+
+    def _prepared_temporal_state(self, children: tuple[Any, ...]) -> _CompositeTemporalRestartState:
+        from pops.runtime._amr_system_io import _PreparedAMRSystemRestart
+        from pops.runtime._system_io import _PreparedUniformRestart
+
+        if len(children) != len(self._engines):
+            raise RuntimeError("multi-layout prepared child count is incomplete")
+        states = {}
+        for layout_id, child in zip(self._engines, children, strict=True):
+            if type(child) is _PreparedUniformRestart:
+                states[layout_id] = child.temporal_state
+            elif type(child) is _PreparedAMRSystemRestart:
+                states[layout_id] = child.codec.temporal_state
+            else:
+                raise TypeError("multi-layout restart requires exact prepared native children")
+        state = _CompositeTemporalRestartState(states)
+        self._require_temporal_layouts(state)
+        return state
 
     @staticmethod
     def _result_evidence(result: Any) -> Any:
@@ -1275,7 +1524,7 @@ class _MultiLayoutUniformExecutor:
                     child_path, child_budget.max_archive_bytes
                 )
                 stored = decode_checkpoint_bytes(child_bytes, child_budget)
-                authenticate_checkpoint_payload(child_engine, stored, runtime_kind="uniform")
+                authenticate_checkpoint_payload(child_engine, stored, runtime_kind=child_budget.runtime_kind)
                 return child_bytes if retain_payloads else None
 
             payload = root_effect(
@@ -1374,7 +1623,7 @@ class _MultiLayoutUniformExecutor:
                     payload["layout_checkpoint_%d" % index] = np.frombuffer(
                         child, dtype=np.uint8
                     ).copy()
-                seal_checkpoint_payload(self, payload, runtime_kind="multi_layout_uniform")
+                seal_checkpoint_payload(self, payload, runtime_kind=self._checkpoint_runtime_kind)
                 if precreated_inode:
                     if type(precreated_descriptor) is not int:
                         raise RuntimeError(
@@ -1407,7 +1656,7 @@ class _MultiLayoutUniformExecutor:
                     _bounded_checkpoint_path_bytes(target, container_budget.max_archive_bytes),
                     container_budget,
                 )
-                authenticate_checkpoint_payload(self, stored, runtime_kind="multi_layout_uniform")
+                authenticate_checkpoint_payload(self, stored, runtime_kind=self._checkpoint_runtime_kind)
 
             root_effect(topology, "multi-layout container sealing", write_root)
         finally:
@@ -1439,7 +1688,7 @@ class _MultiLayoutUniformExecutor:
         policy = require_restart_bit_identical(bit_identical, where="multi-layout restart")
         stored = decode_checkpoint_bytes(payload, require_checkpoint_resource_budget(self))
         identity = authenticate_checkpoint_payload(
-            self, stored, runtime_kind="multi_layout_uniform"
+            self, stored, runtime_kind=self._checkpoint_runtime_kind
         )
         layout_ids = tuple(str(value) for value in stored["layout_ids"])
         if layout_ids != tuple(self._engines):
@@ -1464,7 +1713,14 @@ class _MultiLayoutUniformExecutor:
                 )
             child_bytes = np.asarray(stored[name], dtype=np.uint8).tobytes()
             prepared_children.append(prepare(child_bytes, bit_identical=policy))
-        return _PreparedMultiLayoutRestart(identity, dict(mapping), tuple(prepared_children))
+        children = tuple(prepared_children)
+        temporal = self._prepared_temporal_state(children)
+        from pops.runtime._temporal_restart import _clock
+
+        now, step = _clock(stored["t"].item(), stored["macro_step"].item())
+        if temporal.time_hex != now or temporal.macro_step != step:
+            raise ValueError("checkpoint temporal state differs from composite checkpoint clock")
+        return _PreparedMultiLayoutRestart(identity, dict(mapping), children, deepcopy(temporal))
 
     def _begin_checkpoint_restart(self) -> None:
         if "_checkpoint_restart_snapshot" in self.__dict__:
@@ -1504,8 +1760,14 @@ class _MultiLayoutUniformExecutor:
     def _apply_checkpoint_restart(self, prepared: _PreparedMultiLayoutRestart) -> Any:
         if type(prepared) is not _PreparedMultiLayoutRestart:
             raise TypeError("multi-layout restart requires its exact prepared payload")
-        if len(prepared.children) != len(self._engines):
-            raise RuntimeError("multi-layout prepared child count is incomplete")
+        temporal = self._prepared_temporal_state(prepared.children)
+        self._require_temporal_layouts(prepared.temporal_state)
+        actual_json = json.dumps(temporal.to_data(), sort_keys=True,
+                                 separators=(",", ":"), allow_nan=False)
+        expected_json = json.dumps(prepared.temporal_state.to_data(), sort_keys=True,
+                                   separators=(",", ":"), allow_nan=False)
+        if actual_json != expected_json:
+            raise RuntimeError("prepared checkpoint temporal state changed after preflight")
         for engine, child in zip(self._engines.values(), prepared.children, strict=True):
             engine._apply_checkpoint_restart(child)
         self._mapping_evaluations = dict(prepared.mapping)
@@ -1604,6 +1866,7 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
     strategies = []
     transaction_plans = []
     configs = {}
+    native_layouts = plan.artifact.native_layouts
     for row in layouts.rows:
         layout_id = row.handle.qualified_id
         authored = programs[layout_id].program.program
@@ -1614,7 +1877,13 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
             )
         strategies.append(strategy)
         transaction_plans.append(authored.transaction_plan())
-        configs[layout_id] = system_config_from_layout(plan.artifact.native_layouts[layout_id])
+        execution_target = programs[layout_id].target
+        if execution_target == "system":
+            # Validate every ranked Uniform tiling before materializing any child.
+            # Adaptive layouts are lowered by their exact LayoutInstallProjection.
+            configs[layout_id] = system_config_from_layout(native_layouts[layout_id])
+        elif execution_target != "amr_system":
+            raise NotImplementedError("multi-layout native execution target is unsupported")
     if any(value != strategies[0] for value in strategies[1:]) or any(
         value != transaction_plans[0] for value in transaction_plans[1:]
     ):
@@ -1624,36 +1893,56 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
         row.requirement.qualified_id for row in plan.artifact.layout_plan.mappings
     }:
         raise ValueError("runtime transfer plan differs from the resolved LayoutPlan")
+    from pops.runtime._physical_mapping import physical_mapping_schedule, validate_physical_geometry
+    physical_mapping_schedule((row for row in transfer_rows.values()
+        if row.synchronization_uri != "pops://synchronization/program-point@1"), native_layouts)
+    requirements = {row.requirement.qualified_id: row.requirement
+                    for row in plan.artifact.layout_plan.mappings}
     for transfer in transfer_rows.values():
-        if (
-            transfer.operation_abi != 1
-            or transfer.synchronization_uri != "pops://synchronization/before-step@1"
-        ):
+        if transfer.operation_abi not in (1, 2, 3):
             raise NotImplementedError("native multi-layout transfer operation is unsupported")
         component = plan.components.get(transfer.component_id)
         if getattr(component, "native_handle", None) is None:
             raise TypeError("mapping Transfer component has no authenticated native handle")
-        source = configs[transfer.source_layout_id]
-        target = configs[transfer.target_layout_id]
-        _require_conservative_cell_average_geometry(source, target)
-        source_shape = tuple(source.shape)
-        target_shape = tuple(target.shape)
-        if any(
-            source_extent < target_extent or source_extent % target_extent
-            for source_extent, target_extent in zip(source_shape, target_shape, strict=True)
-        ):
-            raise ValueError("CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts")
+        source_target = programs[transfer.source_layout_id].target
+        target_target = programs[transfer.target_layout_id].target
+        if source_target != target_target:
+            raise ValueError("layout Transfer requires matching resolved native execution targets")
+        adaptive = source_target == "amr_system"
+        source = native_layouts[transfer.source_layout_id]
+        target = native_layouts[transfer.target_layout_id]
+        if transfer.operation_abi in (2, 3):
+            validate_physical_geometry(requirements[transfer.mapping_id], source, target,
+                                       composite=adaptive)
+        else:
+            if adaptive:
+                raise NotImplementedError("AMR cross-layout transfer requires a typed physical map")
+            if transfer.synchronization_uri != "pops://synchronization/before-step@1":
+                raise NotImplementedError("native conservative transfer timing is unsupported")
+            _require_conservative_cell_average_geometry(source, target)
+            if any(a < b or a % b for a, b in zip(source.shape, target.shape, strict=True)):
+                raise ValueError("CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts")
 
     from pops.runtime._runtime_authorities import install_runtime_authorities
     from pops.runtime._runtime_executor import _uniform_initial_sources
 
-    initial_sources = _uniform_initial_sources(plan)
+    initial_sources = (_uniform_initial_sources(plan)
+                       if any(row.target == "system" for row in programs.values()) else {})
     engines = {}
     materialized: list[Any] = []
     transfer_routes, native_handles = _transfer_publication_containers()
     try:
         for row in layouts.rows:
             layout_id = row.handle.qualified_id
+            if programs[layout_id].target == "amr_system":
+                from pops.runtime._layout_install_projection import LayoutInstallProjection
+                from pops.runtime._runtime_executor import _install_adaptive_native_engine
+                child = LayoutInstallProjection(plan, programs[layout_id],
+                                                plan.layout_amr_authorities[layout_id])
+                engine = _install_adaptive_native_engine(child)
+                materialized.append(engine)
+                engines[layout_id] = engine
+                continue
             engine = System(configs[layout_id])
             materialized.append(engine)
             from pops.runtime._checkpoint_spatial import install_checkpoint_spatial_contract
@@ -1694,10 +1983,17 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
             engines[layout_id] = engine
 
         execution = component_execution_data(plan.execution_context)
+        from pops.codegen.program_mapping_regions import compiled_program_map_invocations
+        invocations = compiled_program_map_invocations(plan.artifact) if any(
+            row.synchronization_uri == "pops://synchronization/program-point@1"
+            for row in runtime_plan.communication.transfers) else ()
         for transfer in runtime_plan.communication.transfers:
-            _publish_layout_transfer_route(
-                transfer_routes, native_handles, plan, transfer, engines, execution
-            )
+            ports = tuple(row.identity for row in invocations
+                          if row.requirement.qualified_id == transfer.mapping_id)
+            for invocation in ports or ("",):
+                _publish_layout_transfer_route(
+                    transfer_routes, native_handles, plan, transfer, engines, execution, invocation)
+
         execution = None
         return _build_multi_layout_executor(
             plan, runtime_plan, engines, blocks, transfer_routes

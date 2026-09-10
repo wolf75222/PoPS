@@ -34,6 +34,7 @@ from .nullspace import (
     PreparedNullspace,
     RHSCompatibilityEvidence,
 )
+from .problem import FieldBoundary, FieldProblem, FieldProblemError, FieldStorageBinding, SharedMeanGauge, ConstantModeGauge
 from .operator import (
     FieldOperator,
     FieldProviderContribution,
@@ -140,6 +141,12 @@ __all__ = [
     "FieldInput",
     "FieldMaterialization",
     "FieldOperator",
+    "FieldBoundary",
+    "FieldProblem",
+    "FieldProblemError",
+    "FieldStorageBinding",
+    "SharedMeanGauge",
+    "ConstantModeGauge",
     "FieldProviderContribution",
     "FieldProviderMeasure",
     "FieldProviderPack",

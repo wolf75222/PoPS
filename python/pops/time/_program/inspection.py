@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pops._report import Report
+from pops.model.ownership import _definition_fingerprint_scope
 from pops.time._program.constants import _ProgramConstants
 from pops.time.references import block_name, handle_data
 from pops.time.values import ProgramValue, _Affine  # noqa: F401
@@ -69,6 +70,7 @@ class _ProgramInspect(_ProgramConstants, _ProgramBase):
             histories=dict(getattr(self, "_histories", {})), dt_bound=dt_bound,
             scratch=dict(estimate))
 
+    @_definition_fingerprint_scope()
     def ir_nodes(self, *, recursive: bool = False) -> Any:
         """The generated IR nodes as a structured, inert list (ADC-554 inspection surface).
 

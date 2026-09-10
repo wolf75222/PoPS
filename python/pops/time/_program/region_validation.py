@@ -5,15 +5,10 @@ from typing import Any
 
 from pops.time.values import ProgramValue
 from pops.time._program.value_validation import (
-    require_affine_region, require_owned, require_region, require_top_level,
+    _BLOCK_KEYS, require_affine_region, require_owned, require_region, require_top_level,
     validate_input_regions,
 )
 
-
-_BLOCK_KEYS = (
-    "cond_block", "body_block", "apply_block", "residual_block",
-    "true_block", "false_block",
-)
 
 
 def _block_region(program: Any, block: Any, where: str, hint: Any = None) -> int:
@@ -32,6 +27,10 @@ def _block_region(program: Any, block: Any, where: str, hint: Any = None) -> int
         raise ValueError("%s: recorded region metadata does not match its nodes" % where)
     for value in block:
         require_owned(program, value, where)
+        if "solve_request" in value.attrs:
+            from pops.time._program.solve_request import validate_solve_request_node
+
+            validate_solve_request_node(program, value)
         validate_input_regions(program, value.inputs, region, where)
         for key in _BLOCK_KEYS:
             nested = value.attrs.get(key)
@@ -45,6 +44,14 @@ def _block_region(program: Any, block: Any, where: str, hint: Any = None) -> int
 def validate_program_regions(program: Any) -> None:
     """Fail if a value is foreign, fabricated, or escapes/crosses an undeclared region."""
     for value in program._values:
+        if value.op == "solve_spatial_nonlinear":
+            from pops.time._program.spatial_solve import validate_spatial_commit
+
+            validate_spatial_commit(program, value)
+        if "solve_request" in value.attrs:
+            from pops.time._program.solve_request import validate_solve_request_node
+
+            validate_solve_request_node(program, value)
         require_top_level(program, value, "Program.validate top-level")
         validate_input_regions(program, value.inputs, 0, "Program.validate top-level")
         attrs = value.attrs
@@ -82,10 +89,10 @@ def validate_program_regions(program: Any) -> None:
             result = attrs.get("apply_result")
             if result is not None:
                 require_affine_region(program, result, regions["apply_block"], "set_apply")
-        elif value.op == "solve_local_nonlinear":
+        elif value.op in ("solve_local_nonlinear", "solve_spatial_nonlinear"):
             require_region(
                 program, attrs["residual"], regions["residual_block"],
-                "solve_local_nonlinear residual")
+                "%s residual" % value.op)
         elif value.op == "post_synchronization":
             post_sync_region = regions["body_block"]
             for state in getattr(program, "_post_sync_commits", {}).values():

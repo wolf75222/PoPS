@@ -1,0 +1,125 @@
+{
+  "schema": "pops.migration.baseline-evidence.v1",
+  "source_revision": "51bcdc2e2399dbc922c58c3008ae30a11332f1d8",
+  "reference_platform": {
+    "dimension": 2,
+    "backend": "OpenMP",
+    "threads": 2,
+    "ranks": [
+      1,
+      2
+    ],
+    "native_sha256": "c98574b452ab5ee138212a660c48fe638571f9b5e37d5c6b2eb708fa45ea069c"
+  },
+  "benchmark_source_delta": "benchmarks/src/scalar_mg_case.cpp: provide explicit ExecutionLane to current GeometricMG constructor; numerical profiles unchanged",
+  "files": [
+    {
+      "path": "baseline-contracts.log",
+      "sha256": "5b27a8abe2ec26cf60820650def09e9baa5c4bddfc4f12c38f10d82139f74335",
+      "bytes": 919
+    },
+    {
+      "path": "baseline-native-tests.log",
+      "sha256": "b94c290740788226c5aa1ab972c0baa8a006ecf8925f9dccae6ddd88fc86023b",
+      "bytes": 5164
+    },
+    {
+      "path": "baseline-benchmarks.json",
+      "sha256": "9e72c81eb7573129d7d35019b391a0bf39e8ea211030fd440aecf67b458e3899",
+      "bytes": 6118
+    },
+    {
+      "path": "baseline-benchmarks-mpi2.json",
+      "sha256": "282e66048b06f54ec3e28974ddcfe5d21e30d54775d5ac2c029ef03fdfa37b10",
+      "bytes": 6149
+    },
+    {
+      "path": "baseline-benchmarks-mpi2-resources.log",
+      "sha256": "6abd2a6c0fdba39396a98b9f00e5a218f9b6e31eb8b796b977d171441dd1f9ec",
+      "bytes": 777
+    },
+    {
+      "path": "baseline-examples/report.json",
+      "sha256": "c2ca6437a004daa04bf3ae789e72f8c3d2b71f632c1f504b34975aeabf6ae2a3",
+      "bytes": 6825
+    },
+    {
+      "path": "baseline-examples/scalar_tutorial_openmp.log",
+      "sha256": "83923596ff17335079606274400ae04beaa44b42901bc14ee7623c37b92c2e96",
+      "bytes": 210
+    },
+    {
+      "path": "baseline-examples/scalar_tutorial_mpi2.log",
+      "sha256": "ad96b167805bfdda451baaa715d8c1b30b841f39c73d0b77c6c5110b6bba5b5f",
+      "bytes": 466
+    },
+    {
+      "path": "baseline-examples/scalar_full.log",
+      "sha256": "f421543dfd71224acf226f1283ff39f6aef0a931103c4e6fadcc40a8419c2eb0",
+      "bytes": 527
+    },
+    {
+      "path": "baseline-examples/multiphysics_full.log",
+      "sha256": "62242f718744947f6c6dfda23ae3442db613f84ccf5d6796372371b87c6a76e2",
+      "bytes": 186
+    },
+    {
+      "path": "baseline-examples/imex_amr_full.log",
+      "sha256": "b45cff38f6b7154262e13fb94073df4aef6f5ed940950308dce8e7dccd3dadc9",
+      "bytes": 521
+    }
+  ],
+  "external_build_logs": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/baseline-benchmark-build.log",
+      "sha256": "559b621bee332025b29a824ef4efd52cfbece62c74bc76618b0a5a4e385cae4a",
+      "bytes": 4660
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/baseline-benchmark-repaired-build.log",
+      "sha256": "964341b95faf35c07836aa4f1fadb7e98983c70c88c85ff6ef916882e856dd95",
+      "bytes": 2353
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/baseline-build-install-rpath.log",
+      "sha256": "0d35084361f7e87af69286eeb463d172ab4851e61cc04591457418198f92c3c2",
+      "bytes": 55095
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/baseline-build.log",
+      "sha256": "7c91fde04e10ec00db4ab99a681e58fb081e39d0139a3b31c46366541e9c510b",
+      "bytes": 56492
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/baseline-native-build.log",
+      "sha256": "2dad50b552ec3be560c94f740a0c4dea04ee2724810c1dcb7ac31648cf1d8535",
+      "bytes": 9237
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/m2-native-build.log",
+      "sha256": "3394960afa2bacbfb810b5b679dacc0f25f03eebbb5a6a52182777b261613871",
+      "bytes": 10304
+    }
+  ],
+  "unavailable_metrics": [
+    "device measurements: no GPU",
+    "kernel launch and memory traffic counters: no instrumented run",
+    "aggregate MPI worker peak RSS: launcher resource report only",
+    "successful full-example restart comparison: baseline examples failed before accepted outputs"
+  ],
+  "regression_policy": {
+    "numerical": "preserve example-owned assertions and benchmark manifest tolerances without reduction",
+    "timing": "compare same manifest defaults and rank/thread count; report medians and dispersion, investigate sustained regression; no unmeasured hard threshold or zero overhead claim"
+  },
+  "compilation": {
+    "cold_compile_seconds": 123.97,
+    "cold_compile_peak_rss_bytes": 1888010240,
+    "cold_compile_status": "compiled; installed proof failed due RPATH byte rewrite",
+    "cached_corrected_build_seconds": 9.36,
+    "installed_proof_members": 901,
+    "wheel_sha256": "37d66611578bd0e4117171009c87b4605182764a60b2f141fa1f84befbfffb54",
+    "wheel_bytes": 7353945,
+    "native_bytes": 11332280,
+    "binary_size_scope": "Dim2 aggregate runtime wheel, not per-generated-equation native package"
+  }
+}

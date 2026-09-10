@@ -191,9 +191,13 @@ def test_same_component_names_are_qualified_by_state_space():
     })
 
     source = emit_cpp_program(program, model=None)
-    assert electron_density.name in source
-    assert ion_density.name in source
-    assert electron_density.name != ion_density.name
+    assert electron_density.handle == module.state_handle(electrons)
+    assert ion_density.handle == module.state_handle(ions)
+    assert electron_density.component == ion_density.component == "density"
+    assert electron_density.handle != ion_density.handle
+    assert electron_density.qualified_id != ion_density.qualified_id
+    assert "pops_input_0_component_0" in source
+    assert "pops_input_1_component_0" in source
 
 
 def test_dense_newton_dimension_follows_the_typed_rate_bundle():
@@ -231,3 +235,45 @@ def test_dense_newton_dimension_follows_the_typed_rate_bundle():
     assert "pops::prepare_local_nonlinear_problem<17>" in source
     assert "pops::LocalNonlinearCellResult<17>" in source
     assert "pops::detail::mat_inverse<17>" not in source
+
+
+def test_two_instances_of_one_state_space_keep_distinct_declared_output_owners():
+    module = model.Module("two_instances")
+    state = module.state_space("shared", ("q",))
+    exchange = module.operator(name="exchange", kind="coupled_rate",
+        signature=model.Signature((state, state), model.RateBundle({
+            "left": model.Rate(state), "right": model.Rate(state)})),
+        expr={"left": (Const(1),), "right": (Const(-1),)})
+    program = time.Program("two_instances")
+    left = typed_state(program, "left", space=state, model=module, state=module.state_handle(state))
+    right = typed_state(program, "right", space=state, model=module, state=module.state_handle(state))
+    explicit = exchange(left, right)
+    assert set(explicit.keys()) == {left.block, right.block}
+    solved = program.solve(time.CoupledImplicitEuler(exchange, (left, right)),
+                           solver=LocalNewton()).consume(action=time.RejectAttempt())
+    left_next = typed_state(program, "left", state_name=state.name, space=state,
+                            model=module, state=module.state_handle(state)).next
+    right_next = typed_state(program, "right", state_name=state.name, space=state,
+                             model=module, state=module.state_handle(state)).next
+    program.commit_many({left_next: solved[left.block], right_next: solved[right.block]})
+    token = next(value for value in program._values if value.op == "solve_coupled_implicit")
+    assert token.attrs["output_bindings"] == {"left": left.block, "right": right.block}
+    assert left.block != right.block
+    source = emit_cpp_program(program)
+    assert "rout[0] = Ueval[0] - G_[0]" in source
+    assert "rout[1] = Ueval[1] - G_[1]" in source
+    bad = {"left": right.block, "right": left.block}
+    program._replace_value(token, attrs={**token.attrs, "output_bindings": bad})
+    with pytest.raises(ValueError, match="admitted owner-qualified input"):
+        emit_cpp_program(program)
+
+
+def test_coupled_output_multiplicity_cannot_fabricate_an_input_owner():
+    module = model.Module("missing_instance")
+    left = module.state_space("left", ("q",))
+    right = module.state_space("right", ("q",))
+    with pytest.raises(TypeError, match="input StateSpace multiplicity"):
+        module.operator(name="exchange", kind="coupled_rate",
+            signature=model.Signature((left, right), model.RateBundle({
+                "left": model.Rate(left), "extra": model.Rate(left)})),
+            expr={"left": (Const(1),), "extra": (Const(-1),)})

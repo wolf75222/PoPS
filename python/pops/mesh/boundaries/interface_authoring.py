@@ -1,6 +1,7 @@
 """Public pre-resolve authoring authority for one conservative two-block interface."""
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, replace
 import json
 import math
@@ -53,6 +54,52 @@ def _trace_projection_contract(block: Any) -> tuple[str, Any, int]:
         else InterfaceTraceOperation.RECONSTRUCTED_FACE
     )
     return route.id, operation, spatial.ghost_depth
+
+
+@dataclass(frozen=True, slots=True)
+class _InterfaceFaceExecutionAuthority:
+    """Reserve one authenticated physical face for its selected shared flux."""
+
+    base: Any
+    physical_provider: Handle
+    interface: Handle
+    face_ordinal: int
+
+    def canonical_identity(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "authority_type": "shared_interface_face",
+            "base": self.base.canonical_identity(),
+            "physical_provider": self.physical_provider.canonical_identity(),
+            "interface": self.interface.canonical_identity(),
+            "face_ordinal": self.face_ordinal,
+        }
+
+    def _externalize(self, data: Any) -> dict[str, Any]:
+        if type(data) is not dict or not isinstance(data.get("faces"), list):
+            raise TypeError("shared interface requires a ranked physical boundary face table")
+        result = deepcopy(data)
+        matches = [face for face in result["faces"]
+                   if face.get("producer") == self.physical_provider.qualified_id]
+        if len(matches) != 1 or matches[0].get("ordinal") != self.face_ordinal:
+            raise ValueError("shared interface must consume exactly its owned physical face")
+        face = matches[0]
+        if face.get("type") in {"periodic", "external"}:
+            raise ValueError("shared interface physical face is already consumed")
+        # This face is now filled by the exact interface trace, not the former physical
+        # boundary value or primitive converter. All other face declarations stay intact.
+        face.update(type="external", values=[], representation="conservative", converter=None)
+        if "analytic_programs" in face:
+            face["analytic_programs"] = []
+        if "analytic_clock" in face:
+            face["analytic_clock"] = None
+        return result
+
+    def compile_boundary_data(self) -> dict[str, Any]:
+        return self._externalize(self.base.compile_boundary_data())
+
+    def runtime_boundary_data(self, params: Any) -> dict[str, Any]:
+        return self._externalize(self.base.runtime_boundary_data(params))
 
 
 @dataclass(frozen=True, slots=True)
@@ -420,7 +467,14 @@ class ConservativeInterface:
                 plan.topology, plan.coverage, plan.regions, tuple(productions),
                 plan.corner_policies, plan.interfaces + (interface,),
                 plan.residual_contributions, plan.linearization_contributions,
-                plan.execution_authority, plan.component_bindings + (binding,),
+                _InterfaceFaceExecutionAuthority(
+                    plan.execution_authority,
+                    physical_provider.boundary_providers[0].handle,
+                    interface.handle,
+                    2 * boundary.orientation.axis + (
+                        0 if boundary.orientation.side.value == "lower" else 1),
+                ),
+                plan.component_bindings + (binding,),
             )
             remaining = tuple(
                 row for row in numerics.interfaces

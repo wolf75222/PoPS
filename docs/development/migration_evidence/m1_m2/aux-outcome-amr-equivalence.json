@@ -1,0 +1,169 @@
+{
+  "candidate5_source": "76319c0658187d9542c527870854321609a0f891",
+  "assessed_main_source": "08a56cbd00c4db42a12b19a4bcedc17050c1d9d7",
+  "scope": "Source equivalence of typed auxiliary outcome change on exercised AMR path; not a candidate6 execution claim",
+  "finite_check": {
+    "inspection_and_collective_reduction_prefix_byte_identical": true,
+    "prefix_sha256": "e17719260b5b0c0da01ad0e487c59d6b1d7b1099d8938cf947666595490681ce",
+    "throw_type_expression_and_message_byte_identical": true,
+    "throw_suffix_sha256": "1746fd16999e80f513f766f8c4cbf7fed9c14b844b1e1eb6d8995bb86afc87ec",
+    "predicate_equivalence": "nonfinite != 0 equals !(nonfinite == 0) for the integer reduction result",
+    "wrapper_keeps_void_throwing_contract": true
+  },
+  "amr_preparation": {
+    "helper_byte_identical": true,
+    "helper_sha256": "f953b083a6ca9da6626023f08913dae0164ac3abbb8dc4a24a7bbec8792964d5",
+    "executed_extracted_function_cases": [
+      {
+        "provider_count": 0,
+        "candidate5_preparation": [],
+        "current_preparation": [],
+        "current_local_solve_preparation": []
+      },
+      {
+        "provider_count": 1,
+        "candidate5_preparation": [],
+        "current_preparation": [],
+        "current_local_solve_preparation": []
+      },
+      {
+        "provider_count": 3,
+        "candidate5_preparation": [],
+        "current_preparation": [],
+        "current_local_solve_preparation": []
+      }
+    ],
+    "interpretation": "prepare_providers=False removes an already-empty AMR preparation result; replacement helper also returns before solve/action metadata for target amr_system."
+  },
+  "unchanged_amr_source_blobs": [
+    {
+      "path": "include/pops/runtime/program/amr_program_context.hpp",
+      "git_blob": "1be0d7047a8730eaa6ca1bc1abd433d4e62dfbc6"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_cell_temporal_configuration.inc",
+      "git_blob": "3fc47e58e88eff8fd686bd5452b75745be5c5853"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_cell_temporal_level_runtime.inc",
+      "git_blob": "7765791afea667f7556d87e4aa42284b13997db8"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_cell_temporal_runtime.inc",
+      "git_blob": "3cbb81d07d271252dcd316d73a2fb9b6582302cc"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_field_runtime_definitions.inc",
+      "git_blob": "8c12a33a94ef546f6c83b9ce8c863aa4fae4c04f"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_field_runtime_private.inc",
+      "git_blob": "17edc14b328d594389f45a1310cc28adf9f59bc3"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_field_runtime_public.inc",
+      "git_blob": "07ee937782654de2ea0fc387b80315fd445d885b"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_field_runtime_services.inc",
+      "git_blob": "e8c0c9c927c69323f62b7384dfa12022a0b32768"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_field_runtime_solver.inc",
+      "git_blob": "378b1a1c64e56b4a92a8a78cec8cc9459d3141cc"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_flux_basis.inc",
+      "git_blob": "0e3ea2c836d28e6d793897a81245e0d54582ce35"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_flux_basis_definitions.inc",
+      "git_blob": "60dd570a92105362744bfdfd4927d21fc8a29aa8"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_flux_expression_definitions.inc",
+      "git_blob": "6b9da49605413412d9f6fd4591f903b337e1b653"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_flux_expression_polynomial.inc",
+      "git_blob": "70cc83a542327c9db86a5780a8eb5855d812e529"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_flux_expression_public.inc",
+      "git_blob": "9c99b8b64a83c54c170a1480858556978486822a"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_flux_expression_runtime.inc",
+      "git_blob": "4a7df49b61c39b10b9916ff8167a8fcb1a880298"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_flux_expression_services.inc",
+      "git_blob": "fabccb6a24744a7a70100d357c9deae7a37dd21f"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_history_checkpoint_definitions.inc",
+      "git_blob": "5c14ee9cd19da10b2873343f0012055d97d7c2b3"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_history_checkpoint_public.inc",
+      "git_blob": "0fbece124644e0a7aa6dd96812fbaf5409542314"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_history_checkpoint_runtime.inc",
+      "git_blob": "49f4a5e004fc410667ffe9e4a9a45798436051b1"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_history_checkpoint_services.inc",
+      "git_blob": "a15633ba7512c8695f51ff3ffeb0e8b1299d79dd"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_spatial.inc",
+      "git_blob": "ae4d19a1f34d60874ec6256221d214dd408611fe"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_spatial_operations.inc",
+      "git_blob": "f866e68d347e8b7cbaf888cdb8244125f63209b4"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_spatial_operations_services.inc",
+      "git_blob": "f2f48d4b8b1484279b45341b3b8834e6d1569f17"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_subcycling_runtime.inc",
+      "git_blob": "25853e736150586acccbdc82abbeddf7448676e7"
+    },
+    {
+      "path": "python/pops/codegen/program_emit_amr.py",
+      "git_blob": "8ae072471759648e512b8c98a36cb6a47238cb1c"
+    },
+    {
+      "path": "src/runtime/amr/amr_field_solver_builtin.cpp",
+      "git_blob": "663f0a5c8b77f660f81927e5587850ec801c94b9"
+    },
+    {
+      "path": "src/runtime/amr/amr_field_solver_component.cpp",
+      "git_blob": "cd85cc4a72f5f4221123c09132949b6ef733c5c1"
+    },
+    {
+      "path": "src/runtime/amr/amr_system.cpp",
+      "git_blob": "ce784f58a1a19a4264257dcac27865ca4a642b97"
+    }
+  ],
+  "mpi_selector": {
+    "source_file": "tests/CMakeLists.txt",
+    "test": "test_program_context_contract_np2",
+    "selected_count": 4,
+    "names": [
+      "AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors",
+      "AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch",
+      "PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection",
+      "ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation"
+    ],
+    "line": "\"ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors:ProgramContextContract.AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch:ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection:ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation\")"
+  },
+  "limitations": [
+    "Candidate5 full AMR remains execution evidence for its exact candidate5 wheel.",
+    "New native/header identity requires its own declared qualification; this result is not an actual candidate6 full AMR run.",
+    "Scope covers listed AMR sources and changed preparation/finite-validation seam, not every intervening authoring/example change."
+  ]
+}

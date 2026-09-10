@@ -17,7 +17,6 @@ from pops.model.operators import OPERATOR_KINDS
 from pops.time.operator_resolution import resolve_operator_handle
 from pops.time._schedule.api import Schedule, native_schedule_cache_required
 from pops.time._schedule.ir import ScheduleDueIR, ScheduleDueKind
-from pops.time.references import block_name
 from pops.time._program.value_validation import require_owned, require_top_level
 from pops.time.value_collections import _CoupledResult
 from pops.time.values import ProgramValue
@@ -51,6 +50,8 @@ class _ProgramCall(_ProgramBase):
         if schedule is not None:
             self._validate_schedule(op, schedule, args)
         result = self._lower_call(op, operator_handle, operator_name, args, name)
+        from .native_flux import physical_rate_native_functions
+        native_calls = physical_rate_native_functions(op, args)
         # A coupled_rate has no single output ProgramValue (it returns a _CoupledResult): its per-block
         # spaces are tagged inside _lower_coupled_rate, and a schedule on the whole bundle is not
         # meaningful yet -- reject it with a clear message rather than leaking an AttributeError.
@@ -70,6 +71,8 @@ class _ProgramCall(_ProgramBase):
             if coupled is not None:
                 attrs = dict(coupled.attrs)
                 attrs["operator_handle"] = operator_handle
+                if native_calls:
+                    attrs["native_functions"] = native_calls
                 self._replace_value(coupled, attrs=attrs)
             return _CoupledResult(tagged)
         # Tag the result with the operator's declared output type (a Rate / FieldSpace /
@@ -77,6 +80,8 @@ class _ProgramCall(_ProgramBase):
         # (a Rate(U) cannot be combined with a State(V); an L: U -> U cannot drive a State(V)).
         attrs = dict(result.attrs)
         attrs["operator_handle"] = operator_handle
+        if native_calls:
+            attrs["native_functions"] = native_calls
         if schedule is not None:
             attrs["schedule"] = schedule
             schedule.validate_site(clock=result.clock, point=result.point,
@@ -184,6 +189,17 @@ class _ProgramCall(_ProgramBase):
 
     def _lower_rate(self, op: Any, _operator_handle: Any, operator_name: Any,
                     args: Any, name: Any) -> Any:
+        if op.lowering.get("joint_balance"):
+            from .interactions import lower_joint_balance
+            return lower_joint_balance(self, op, args, name)
+        from .source_rate import lower_source_rate
+        source = lower_source_rate(self, op, args, name)
+        if source is not None:
+            return source
+        from .diffusion import lower_diffusive_rate
+        diffusion = lower_diffusive_rate(self, op, args, name)
+        if diffusion is not None:
+            return diffusion
         # grid_operator (flux divergence only) and local_rate (flux + sources per op.lowering).
         fields = args[1] if len(args) > 1 else None
         if op.kind == "grid_operator":
@@ -248,19 +264,14 @@ class _ProgramCall(_ProgramBase):
                 "construct one explicit partitioned StagePoint or synchronize them first"
                 % operator_name)
         bundle = op.signature.output                 # a model.RateBundle: block -> RateSpace
-        input_blocks = {
-            block_name(argument.block): argument.block
-            for argument in args if getattr(argument, "block", None) is not None
-        }
-        missing = [name for name in bundle.keys() if name not in input_blocks]
-        if missing:
-            raise ValueError(
-                "coupled operator %r outputs blocks %s but no matching typed input BlockHandle "
-                "was supplied" % (operator_name, missing))
-        blocks = [input_blocks[name] for name in bundle.keys()]
+        from .coupled_bindings import coupled_output_inputs
+        output_bindings = {output: value.block for output, value in
+                           coupled_output_inputs(bundle, args).items()}
+        blocks = list(output_bindings.values())
         base = name or operator_name
         coupled = self._new("rhs", "coupled_rate", tuple(args),
-                            {"operator": operator_name, "blocks": list(blocks)},
+                            {"operator": operator_name, "blocks": list(blocks),
+                             "output_bindings": output_bindings},
                             base, args[0].block)
         outs = {}
         for output_name, blk in zip(bundle.keys(), blocks, strict=True):

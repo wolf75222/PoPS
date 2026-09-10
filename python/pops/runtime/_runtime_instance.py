@@ -304,6 +304,48 @@ def _field_solver_configuration(executor: Any, slot: str) -> dict[str, Any] | No
     return semantic_value(result, where="native field solver configuration")
 
 
+def _field_provider_materializations(
+    executor: Any, expected_slots: frozenset[str],
+) -> dict[str, bool]:
+    """Read current provider preparation, independently of accepted field publication."""
+    engines = getattr(executor, "_engines", None)
+    candidates = tuple(engines.values()) if isinstance(engines, Mapping) else (executor,)
+    owners: dict[str, Any] = {}
+    for candidate in candidates:
+        native = getattr(candidate, "_s", candidate)
+        slots = getattr(native, "configured_field_provider_slots", None)
+        if slots is None:
+            slots = getattr(native, "field_provider_slots", None)
+        if not callable(slots):
+            raise TypeError("native field-provider registry is missing")
+        registered = slots()
+        if not isinstance(registered, (tuple, list)) or any(
+            type(slot) is not str or not slot for slot in registered
+        ):
+            raise TypeError("native field-provider registry requires exact slot identities")
+        if len(set(registered)) != len(registered):
+            raise ValueError("native field-provider registry contains duplicate slots")
+        getter = getattr(native, "field_provider_materialized", None)
+        if expected_slots.intersection(registered) and not callable(getter):
+            raise TypeError("native field-provider materialization getter is missing")
+        for slot in registered:
+            if slot not in expected_slots:
+                # Private or legacy carriers are outside this public field-plan report.
+                continue
+            if slot in owners:
+                raise RuntimeError("one qualified field-provider slot has multiple native owners")
+            owners[slot] = getter
+    if set(owners) != expected_slots:
+        raise ValueError("native field-provider registry differs from configured field plans")
+    result: dict[str, bool] = {}
+    for slot, getter in owners.items():
+        materialized = getter(slot)
+        if type(materialized) is not bool:
+            raise TypeError("native field-provider materialization must be an exact bool")
+        result[slot] = materialized
+    return result
+
+
 def _field_provider_evidence(
     install_plan: Any,
     layout_plan: Any,
@@ -311,7 +353,12 @@ def _field_provider_evidence(
 ) -> tuple[dict[str, Any], ...]:
     """Return one common, honest report schema for builtin and external field providers."""
     result = []
-    for name, field_plan in sorted(install_plan.artifact.plan.field_plans.items()):
+    field_plans = install_plan.artifact.plan.field_plans
+    slots = tuple(plan.native_options["provider_slot"] for plan in field_plans.values())
+    if len(set(slots)) != len(slots):
+        raise ValueError("configured field plans contain a duplicate provider slot")
+    materializations = _field_provider_materializations(executor, frozenset(slots)) if slots else {}
+    for name, field_plan in sorted(field_plans.items()):
         options = field_plan.native_options
         from pops.fields._prepared_field_solver_registry import (
             prepared_field_solver_binding_from_data,
@@ -340,7 +387,7 @@ def _field_provider_evidence(
                 "topology_recipe_identity": binding.facts.layout["topology_identity"],
                 "topology_contract": binding.resolution.to_data()["topology_contract"],
                 "component_bindings": binding.resolution.to_data()["component_bindings"],
-                "materialized": bool(patches),
+                "materialized": materializations[slot],
                 "materialized_layout_identity": (
                     next(iter(materialized_layouts)) if materialized_layouts else None
                 ),
@@ -848,6 +895,10 @@ class RuntimeInstance:
 
     def program_report(self) -> Any:
         return self._executor.program_report()
+
+    def continuation_transition_report(self) -> Any:
+        """Return the committed retained-object lifecycle outcomes."""
+        return self._executor.continuation_transition_report()
 
     def program_accepted_state(self) -> bytes:
         """Return the exact accepted AMR Program state owned by the native executor."""

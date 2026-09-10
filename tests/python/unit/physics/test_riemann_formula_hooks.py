@@ -33,9 +33,12 @@ def _euler(custom_pressure=None):
     g = m.value(m.param(ConstParam("gamma", 1.4)))
     p = m.primitive("p", (g - 1.0) * (E - 0.5 * (mx * mx + my * my) / rho))
     d = m._dsl
-    u, v = mx / rho, my / rho
-    d.conservative_from([rho, rho * u, rho * v, p / (g - 1.0) + 0.5 * rho * (u * u + v * v)])
-    d._m.set_primitive_state(rho, u, v, p)
+    u = m.primitive("u", mx / rho)
+    v = m.primitive("v", my / rho)
+    m.primitive_state(
+        rho, u, v, p,
+        conservative=[rho, rho * u, rho * v, p / (g - 1.0) + 0.5 * rho * (u * u + v * v)],
+    )
     d.flux(x=[mx, mx * u + p, mx * v, (E + p) * u],
            y=[my, my * u, my * v + p, (E + p) * v])
     c = sqrt(g * p / rho)
@@ -120,9 +123,12 @@ def test_pressure_formula_referencing_a_missing_capability_raises():
     g = m.value(m.param(ConstParam("gamma", 1.4)))
     p = m.primitive("p", (g - 1.0) * (E - 0.5 * (mx * mx + my * my) / rho))
     d = m._dsl
-    u, v = mx / rho, my / rho
-    d.conservative_from([rho, rho * u, rho * v, E])
-    d._m.set_primitive_state(rho, u, v, p)
+    u = m.primitive("u", mx / rho)
+    v = m.primitive("v", my / rho)
+    m.primitive_state(
+        rho, u, v, p,
+        conservative=[rho, rho * u, rho * v, p / (g - 1.0) + 0.5 * rho * (u * u + v * v)],
+    )
     d.flux(x=[mx, mx, mx, mx], y=[my, my, my, my])
     d.eigenvalues(x=[u, u, u, u], y=[v, v, v, v])
     m.riemann("hllc", pressure=rho + Var("B_z", "aux"))   # references an undeclared capability

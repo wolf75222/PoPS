@@ -1,4 +1,4 @@
-"""Multi-layout Uniform children receive per-layout RuntimeInstance authorities."""
+"""Multi-layout native children retain their exact layout and runtime authorities."""
 
 from __future__ import annotations
 
@@ -647,15 +647,23 @@ def _object_graph_holds(root, predicate, *, seen=None, depth=0):
     elif isinstance(root, (list, tuple, set, frozenset)):
         values.extend(root)
     else:
-        namespace = getattr(root, "__dict__", None)
+        # Inspect retained storage without running lazy imports or user lookup hooks.
+        try:
+            namespace = object.__getattribute__(root, "__dict__")
+        except AttributeError:
+            namespace = None
         if isinstance(namespace, dict):
             values.extend(namespace.values())
-        slots = getattr(root, "__slots__", ())
-        if isinstance(slots, str):
-            slots = (slots,)
-        for name in slots or ():
-            if name != "__dict__" and hasattr(root, name):
-                values.append(getattr(root, name))
+        for cls in type(root).__mro__:
+            slots = vars(cls).get("__slots__", ())
+            if isinstance(slots, str):
+                slots = (slots,)
+            for name in slots or ():
+                if name != "__dict__":
+                    try:
+                        values.append(object.__getattribute__(root, name))
+                    except AttributeError:
+                        pass
     return any(
         _object_graph_holds(value, predicate, seen=seen, depth=depth + 1) for value in values
     )
@@ -788,7 +796,9 @@ def _retaining_transfer_system(events, *, fail_prepare=None, fail_close=False):
             self._bound_snapshot = "child-%s" % config.name
             self._step_strategy = "shared"
             self._step_transaction_plan = "shared"
-            self._temporal_restart_state = SimpleNamespace()
+            from pops.runtime._temporal_restart import TemporalRestartState
+
+            self._temporal_restart_state = TemporalRestartState()
 
         @property
         def bound_snapshot(self):
@@ -849,6 +859,220 @@ def _patch_two_layout_transfer_install(monkeypatch, plan, runtime_plan, system_c
         "pops.runtime._runtime_authorities.install_runtime_authorities",
         lambda engine, _plan: setattr(engine, "_boundary_authorities", {}),
     )
+
+
+def _physical_transfer_plan(targets=("amr_system", "amr_system"), *, extension=False):
+    from pops._geometry_contracts import cartesian_geometry_contract
+    from pops.mesh import AxisQuadrature, NativeSpatialLayout, PhysicalSupportMap
+    from pops.model import PhysicalDimension, PhysicalSupport
+
+    plan, runtime_plan, fake_layouts = _two_layout_transfer_plan()
+    phase = PhysicalSupport((("x", "position"), ("v", "velocity")))
+    position = PhysicalSupport((("x", "position"),))
+    physical = (PhysicalSupportMap(position, phase) if extension else PhysicalSupportMap(
+        phase, position, reductions=(AxisQuadrature(1, -1, 1, 4, PhysicalDimension()),)))
+    # Composite transfers can join different base resolutions on a shared axis.
+    target_cells = 4 if "amr_system" in targets else 8
+    shapes = ((8, 1), (target_cells, 4)) if extension else ((8, 4), (target_cells, 1))
+    bounds = (((0, 0), (1, 1)), ((0, -1), (1, 1)))
+    if not extension:
+        bounds = bounds[::-1]
+    coordinates, measure = cartesian_geometry_contract(2)
+    plan.artifact.native_layouts = {}
+    for program, target, shape, (lower, upper) in zip(
+        plan.artifact.layout_programs, targets, shapes, bounds, strict=True
+    ):
+        program.target = target
+        decomposition = {"schema_version": 1, "kind": "adaptive"}
+        if target == "system":
+            split_axis = 1 if shape[1] > 1 else 0
+            middle = list(shape)
+            middle[split_axis] //= 2
+            start = [0, 0]
+            start[split_axis] = middle[split_axis]
+            decomposition = {
+                "schema_version": 1, "kind": "axis_bands",
+                "boxes": [{"lower": (0, 0), "upper_exclusive": tuple(middle)},
+                          {"lower": tuple(start), "upper_exclusive": shape}],
+            }
+        plan.artifact.native_layouts[program.layout_id] = NativeSpatialLayout(
+            layout_id=program.layout_id, coordinate_system=coordinates, cell_measure=measure,
+            axis_names=("x", "y"), shape=shape, lower=lower, upper=upper,
+            periodicity=(True, True), centering="cell", decomposition=decomposition,
+        )
+    plan.artifact.layout_plan.mappings = plan.artifact.layout_plan.mappings[:1]
+    requirement = plan.artifact.layout_plan.mappings[0].requirement
+    requirement.physical_map = physical
+    runtime_plan.communication.transfers = runtime_plan.communication.transfers[:1]
+    transfer = runtime_plan.communication.transfers[0]
+    transfer.operation_abi = physical.operation_abi
+    transfer.source_subject_id, transfer.target_subject_id = "tracer", "coarse"
+    plan.layout_amr_authorities = {row.layout_id: object()
+                                  for row in plan.artifact.layout_programs}
+    return plan, runtime_plan, fake_layouts
+
+
+def _patch_physical_preflight(monkeypatch, plan, runtime_plan, fake_layouts):
+    from pops.runtime._runtime_mesh_lowering import _uniform_system_values
+
+    def unexpected_engine(*_args, **_kwargs):
+        pytest.fail("preflight materialized a native engine")
+
+    _patch_two_layout_transfer_install(
+        monkeypatch, plan, runtime_plan, unexpected_engine, fake_layouts)
+    monkeypatch.setattr("pops.runtime._runtime_executor._install_adaptive_native_engine",
+                        unexpected_engine)
+    lowered = []
+
+    def checked_uniform_config(layout):
+        # Keep the production ranked-box validator; only native config allocation is replaced.
+        _uniform_system_values(layout)
+        lowered.append(layout.layout_id)
+        return layout
+
+    monkeypatch.setattr("pops.runtime._runtime_mesh_lowering.system_config_from_layout",
+                        checked_uniform_config)
+    return lowered
+
+
+@pytest.mark.parametrize("extension", (False, True))
+def test_adaptive_physical_preflight_uses_layout_geometry_and_exact_child(monkeypatch, extension):
+    plan, runtime_plan, fake_layouts = _physical_transfer_plan(extension=extension)
+    lowered = _patch_physical_preflight(monkeypatch, plan, runtime_plan, fake_layouts)
+    selected = []
+    projection = object()
+
+    def project(parent, program, authority):
+        selected.append((parent, program, authority))
+        return projection
+
+    class ReachedAdaptiveInstall(RuntimeError):
+        pass
+
+    def adaptive_install(child):
+        assert child is projection
+        raise ReachedAdaptiveInstall
+
+    monkeypatch.setattr("pops.runtime._layout_install_projection.LayoutInstallProjection", project)
+    monkeypatch.setattr("pops.runtime._runtime_executor._install_adaptive_native_engine",
+                        adaptive_install)
+    with pytest.raises(ReachedAdaptiveInstall):
+        install_multi_layout_uniform(plan, runtime_plan)
+    first = plan.artifact.layout_programs[0]
+    assert selected == [(plan, first, plan.layout_amr_authorities[first.layout_id])]
+    assert lowered == []
+
+
+@pytest.mark.parametrize("targets", (("amr_system", "system"), ("system", "amr_system")))
+def test_mixed_native_transfer_families_fail_before_materialization(monkeypatch, targets):
+    plan, runtime_plan, fake_layouts = _physical_transfer_plan(targets)
+    lowered = _patch_physical_preflight(monkeypatch, plan, runtime_plan, fake_layouts)
+    with pytest.raises(ValueError, match="matching resolved native execution targets"):
+        install_multi_layout_uniform(plan, runtime_plan)
+    assert lowered == [row.layout_id for row in plan.artifact.layout_programs
+                       if row.target == "system"]
+
+
+@pytest.mark.parametrize("defect,exception,message", (
+    ("gap", ValueError, "does not tile"),
+    ("overlap", ValueError, "overlapping boxes"),
+    ("rank", TypeError, "exact ranked integer bounds"),
+))
+def test_uniform_tiling_remains_validated_before_any_child(
+    monkeypatch, defect, exception, message
+):
+    from dataclasses import replace
+
+    plan, runtime_plan, fake_layouts = _physical_transfer_plan(("amr_system", "system"))
+    layout = plan.artifact.native_layouts["layout::coarse"]
+    boxes = [{"lower": [0, 0], "upper_exclusive": [2, 1]},
+             {"lower": [2, 0], "upper_exclusive": [4, 1]}]
+    if defect == "gap":
+        boxes.pop()
+    elif defect == "overlap":
+        boxes[1]["lower"][0] = 1
+    else:
+        boxes[1]["upper_exclusive"] = [4]
+    plan.artifact.native_layouts[layout.layout_id] = replace(
+        layout, decomposition={"schema_version": 1, "kind": "axis_bands", "boxes": boxes})
+    _patch_physical_preflight(monkeypatch, plan, runtime_plan, fake_layouts)
+    with pytest.raises(exception, match=message):
+        install_multi_layout_uniform(plan, runtime_plan)
+
+
+@pytest.mark.parametrize("adaptive", (False, True))
+@pytest.mark.parametrize("extension", (False, True))
+def test_physical_route_inventory_uses_its_native_storage_authority(monkeypatch, adaptive, extension):
+    from pops.runtime._multi_layout_executor import _validated_layout_transfer
+
+    target = "amr_system" if adaptive else "system"
+    plan, runtime_plan, _ = _physical_transfer_plan((target, target), extension=extension)
+    transfer = runtime_plan.communication.transfers[0]
+    engines = {key: SimpleNamespace(spatial_shape=lambda row=row: row.shape,
+                                   block_n_vars=lambda _block: 2, n_vars=lambda _block: 2)
+               for key, row in plan.artifact.native_layouts.items()}
+    physical_spec = {"physical_contract_identity": "exact-composite-contract"}
+    monkeypatch.setattr("pops.runtime._amr_physical_mapping.physical_amr_spec",
+                        lambda *_args: physical_spec)
+    prepared = _validated_layout_transfer(plan, transfer, engines)
+    if adaptive:
+        assert prepared.physical_spec is physical_spec
+        assert prepared.source_element_count is None
+        assert prepared.destination_element_count is None
+        _assert_live_amr_receipt_census(plan, prepared)
+    else:
+        assert prepared.physical_spec is None
+        # Extension captures the same source twice for the two destination velocity bands.
+        assert prepared.source_element_count == (32 if extension else 64)
+        assert prepared.destination_element_count == (64 if extension else 16)
+
+
+def _assert_live_amr_receipt_census(plan, prepared):
+    from pops.runtime._multi_layout_executor import (
+        _MultiLayoutUniformExecutor,
+        _prepare_layout_transfer_route,
+    )
+
+    census = dict(
+        physical_contract_identity=prepared.physical_spec["physical_contract_identity"],
+        source_hierarchy_identity="source-hierarchy", target_hierarchy_identity="target-hierarchy",
+        source_hierarchy_generation=1, target_hierarchy_generation=1,
+        source_stage_identity="accepted-current", target_stage_identity="accepted-current",
+        source_stage_generation=0, target_stage_generation=0,
+        source_active_elements=73, destination_active_elements=19,
+        canonical_jobs=11, transported_elements=87, prepared_bytes=4096,
+        source_element_count=73, destination_element_count=19,
+    )
+
+    class Session:
+        active = False
+
+        def expected_receipt_contract(self):
+            assert self.active, "hierarchy receipt census requires an active transaction"
+            return SimpleNamespace(**census)
+
+    session = Session()
+    source_native = SimpleNamespace(_prepare_layout_transfer=lambda *_args: session)
+    prepared.source_engine._native_step_target = lambda: source_native
+    prepared.target_engine._native_step_target = lambda: object()
+    route, _ = _prepare_layout_transfer_route(prepared, object())
+    executor = _MultiLayoutUniformExecutor.__new__(_MultiLayoutUniformExecutor)
+    executor._plan = plan
+    session.active = True
+    for generation, source_count, target_count in ((1, 73, 19), (2, 109, 29)):
+        census.update(source_element_count=source_count, destination_element_count=target_count,
+                      source_active_elements=source_count, destination_active_elements=target_count,
+                      source_hierarchy_generation=generation, target_hierarchy_generation=generation)
+        receipt = SimpleNamespace(**{
+            **prepared.spec, **census, "applied": True, "generation": generation, "attempt": 1,
+            "execution_identity": plan.execution_context.identity.token,
+        })
+        executor._authenticate_mapping_receipt(route, receipt, generation=generation, attempt=1)
+        for counter in ("source_element_count", "destination_element_count"):
+            changed = SimpleNamespace(**vars(receipt))
+            setattr(changed, counter, getattr(changed, counter) + 1)
+            with pytest.raises(RuntimeError, match=counter):
+                executor._authenticate_mapping_receipt(route, changed, generation=generation, attempt=1)
 
 
 def test_failed_transfer_prepare_releases_retained_handles_before_children(monkeypatch):
@@ -1077,4 +1301,3 @@ def test_constructor_failure_after_capture_scrubs_self_and_rolls_back_snapshots(
     ]
     assert all(event[2] != PublishedSnapshot() for event in events if event[0] == "destroy")
     assert all(event[2].startswith("child-") for event in events if event[0] == "destroy")
-

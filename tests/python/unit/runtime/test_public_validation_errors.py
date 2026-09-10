@@ -5,17 +5,23 @@ from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
 import pops.runtime._engine_descriptors as engine  # noqa: E402
+from pops.physics import Density  # noqa: E402
+from pops.physics._facade import Model  # noqa: E402
 
 
 def _make_system():
     sim = System(n=4, L=1.0, periodicity=(True, True))
+    model = Model("validation_scalar")
+    (density,) = model.conservative_vars("n", roles=(Density(),))
+    model.flux(x=[0.3 * density], y=[0.2 * density])
+    model.eigenvalues(x=[0.3 + 0.0 * density], y=[0.2 + 0.0 * density])
+    model.primitive_vars(density)
+    model.conservative_from([density])
     sim.add_equation(
         "ne",
-        engine.Model(
-            state=engine.Scalar(),
-            transport=engine.ExB(),
-            source=engine.NoSource(),
-            elliptic=engine.BackgroundDensity(alpha=1.0, n0=1.0),
+        model.compile(
+            backend="production", target="system", name="validation_scalar",
+            consumer_owner_qid="tests.public-validation.scalar",
         ),
         spatial=engine.Spatial(none=True),
         time=engine.Explicit(),

@@ -1,0 +1,63 @@
+{
+  "schema": "pops.tests.historical-unavailable.v1",
+  "status": "historical_unavailable_not_qualified",
+  "baseline_sha": "51bcdc2e2399dbc922c58c3008ae30a11332f1d8",
+  "introduced_by": "bcb73f4a0d648bc110ef1bd7bd00a5560d7206d3",
+  "reason": "These seven tests were committed without their dependencies before M0; the M0 baseline records the detached campaign as unavailable. Retention is not execution, qualification, or M8 closure.",
+  "tests": [
+    {
+      "path": "tests/python/verification/test_check_verification_manifest.py",
+      "sha256": "8255f950a01cc9fb5d3b58822d3beb6cf5d701aa3886305b89cbfb8322b4bf87",
+      "missing_assets": [
+        "scripts/check_verification_manifest.py",
+        "verification/manifest.toml",
+        "schemas/verification_manifest.v1.json"
+      ]
+    },
+    {
+      "path": "tests/python/verification/test_reference_errors.py",
+      "sha256": "a0c2fdafa10589be6abfddf3f9af24bbefeb396812cec18b66b0418b5d65d089",
+      "missing_assets": [
+        "verification/pops_verify/reference_errors.py"
+      ]
+    },
+    {
+      "path": "tests/python/verification/test_run_verification.py",
+      "sha256": "15d30f64fd7046d6a90eff80dbf4f9e09b0d3f7f8299f77077fe11f0df2e3d2b",
+      "missing_assets": [
+        "scripts/run_verification.py",
+        "verification/manifest.toml",
+        "verification/cases/euler_poisson/langmuir_cold/run.py"
+      ]
+    },
+    {
+      "path": "tests/python/verification/test_verification_manifest_schema.py",
+      "sha256": "44f32a99805d5e4416131de041a956fbaf1be2e49f9dee2f9c35780f0ec636fb",
+      "missing_assets": [
+        "schemas/verification_manifest.v1.json",
+        "verification/manifest.toml"
+      ]
+    },
+    {
+      "path": "tests/python/verification/test_verification_metrics_schema.py",
+      "sha256": "42d2bbd839c9dd1492dc9f58fb8b0cbb45a21660fcca0ca0979171d6f1fb12c8",
+      "missing_assets": [
+        "schemas/verification_metrics.v1.json"
+      ]
+    },
+    {
+      "path": "tests/python/verification/test_verification_provenance_schema.py",
+      "sha256": "4fbded0dc6b7fd65a1912a531a72711ce7e170fdc9929bd492ee03615bfd7a24",
+      "missing_assets": [
+        "schemas/verification_provenance.v1.json"
+      ]
+    },
+    {
+      "path": "tests/python/verification/test_verification_report_schema.py",
+      "sha256": "d307734d095473c425ec3e19b9f33ff42fc2e4acec65c6c6a3d654189d50e389",
+      "missing_assets": [
+        "schemas/verification_report.v1.json"
+      ]
+    }
+  ]
+}

@@ -2,7 +2,7 @@
 """Vague 3 (solde des restes de genericite) : couverture facade.
 
   (A) CoupledSource.frequency : la 'CFL de couplage' declaree borne le pas
-      (dt == cfl/mu, raison 'coupled_source:<nom>') -- System, sans compilateur ; et un couplage
+      (dt == cfl/mu, raison 'coupled_source:<nom>') -- System, packages compiles ; et un couplage
       REJETE ne laisse AUCUNE borne fantome (frequence enregistree apres validation, revue v3) ;
   (B) Newton sur AMR : le runtime spatial n'expose aucun moteur temporel ou rapport Newton cache ;
       l'execution non lineaire est couverte par le Program compile dans test_amr_newton_full ;
@@ -30,6 +30,8 @@ from pops.math import sqrt
 from pops.physics import Density, Momentum
 from pops.physics._facade import Model
 from pops.physics.multispecies import CoupledSource
+from pops.runtime._amr_package_lane import ensure_native_block_state_route
+from pops.runtime._modelspec_compile import compile_modelspec_package
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 from tests.python.support.explicit_program import (
     install_forward_euler_program,
@@ -40,6 +42,9 @@ from tests.python.support.requirements import (
     repo_include,
     require_native_or_skip,
 )
+
+# Cold packages and four forced-fresh native model compiles exceed the default 300-second budget.
+POPS_PROCESS_TIMEOUT = 900
 
 fails = 0
 INCLUDE = repo_include()
@@ -57,7 +62,7 @@ def iso_model(charge=1.0, *, n0=1.0, elliptic_alpha=None):
     return engine.Model(
         state=engine.FluidState("isothermal", cs2=0.5),
         transport=engine.IsothermalFlux(),
-        source=engine.PotentialForce(charge=charge),
+        source=engine.NoSource(),
         elliptic=engine.BackgroundDensity(alpha=alpha, n0=n0),
     )
 
@@ -76,7 +81,8 @@ rho16_mean = float(rho16.mean())
 sim = System(n=n, L=1.0, periodicity=(True, True))
 sim.set_poisson(rhs="charge_density", solver="cartesian_cg", bc=Periodic())
 # This density-exchange fixture sources the potential from the conserved total-density contrast.
-# Both blocks therefore use the same elliptic sign while retaining their opposite force charges.
+# Both blocks use the same elliptic sign; only the explicitly installed CoupledSource acts.
+sim._batch_native_packages = True
 sim.add_equation(
     "a",
     iso_model(+1.0, n0=rho16_mean, elliptic_alpha=1.0),
@@ -87,6 +93,8 @@ sim.add_equation(
     iso_model(-1.0, n0=rho16_mean, elliptic_alpha=1.0),
     spatial=engine.Spatial(limiter=Minmod()),
 )
+sim._commit_pending_native_packages()
+sim._batch_native_packages = False
 sim.set_density("a", rho16.ravel())
 sim.set_density("b", rho16.ravel())
 src = CoupledSource("friction").frequency(500.0)  # mu = 500 -> dt = 0.4/500 = 8e-4 << transport
@@ -139,13 +147,22 @@ print("== (C) set_conservative_state multi-blocs : etat complet seede (avec deri
 amr3 = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 amr3.set_temporal_relations([2], [1], ["integral_only"])
 amr3.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-amr3.add_equation("e1", iso_model(+1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()))
-amr3.add_equation("e2", iso_model(-1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()))
+packages = {
+    name: compile_modelspec_package(
+        iso_model(charge, n0=rho16_mean), name=name, target="amr_system",
+    )
+    for name, charge in (("e1", +1.0), ("e2", -1.0))
+}
+for name, package in packages.items():
+    ensure_native_block_state_route(amr3._s, name, package)
+for name, package in packages.items():
+    amr3.add_equation(name, package, spatial=engine.Spatial(limiter=Minmod()))
 rho0 = rho16
 u0 = 0.3 * np.ones((16, 16))
 amr3.set_conservative_state("e1", np.stack([rho0, rho0 * u0, 0.0 * rho0]))
 amr3.set_density("e2", rho0)
 install_forward_euler_program(amr3)
+amr3.mark_bound()
 d_before = np.asarray(amr3.density("e1")).reshape(16, 16).copy()
 amr3.step(2e-3)
 d_after = np.asarray(amr3.density("e1")).reshape(16, 16)
@@ -251,10 +268,11 @@ try:
         s.set_primitive_state("f", rho=gaussian(16), u=0.2 + z16, v=z16)
         try:
             s.step(1e-3)
-        except RuntimeError as error:
+        except TypeError as error:
             chk(
-                "installed whole-system Program" in str(error),
-                f"{label}: pas de solveur IMEX cache",
+                "exact registered StepStrategy" in str(error)
+                and "Program.step_strategy" in str(error),
+                f"{label}: un Program avec strategie authentifiee reste obligatoire",
             )
             return
         chk(False, f"{label}: un ancien solveur IMEX a avance sans Program")

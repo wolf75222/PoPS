@@ -379,6 +379,42 @@ class Profiler {
   std::map<std::string, std::int64_t> counters_;
 };
 
+// An optional, non-owning operation scope for native phases. Names must outlive the scope
+// (call sites use literals). Disabled construction does not allocate or read the clock. Counts
+// describe completed operations; unwinding and diagnostic allocation failure never change physics.
+// Device callers fence completed work before leaving the scope, only when active().
+class ProfileOperation {
+ public:
+  ProfileOperation(Profiler* profiler, const char* name) noexcept
+      : profiler_(profiler),
+        name_(name),
+        active_(profiler != nullptr && profiler->enabled()),
+        exceptions_(std::uncaught_exceptions()) {
+    if (active_)
+      start_ = std::chrono::steady_clock::now();
+  }
+  ~ProfileOperation() noexcept {
+    if (!active_ || std::uncaught_exceptions() != exceptions_)
+      return;
+    const auto elapsed = std::chrono::steady_clock::now() - start_;
+    try {
+      profiler_->record(name_, std::chrono::duration<double>(elapsed).count());
+      profiler_->count(name_);
+    } catch (...) {  // Best-effort diagnostics cannot invalidate or strand a numerical transaction.
+    }
+  }
+  bool active() const noexcept { return active_; }
+  ProfileOperation(const ProfileOperation&) = delete;
+  ProfileOperation& operator=(const ProfileOperation&) = delete;
+
+ private:
+  Profiler* profiler_;
+  const char* name_;
+  bool active_;
+  int exceptions_;
+  std::chrono::steady_clock::time_point start_{};
+};
+
 // RAII scope: times its own lifetime into `prof` under `name`. One per Program node / brick call.
 // Construct it at the top of the work; its destructor records the elapsed wall-clock seconds.
 class ProfileScope {

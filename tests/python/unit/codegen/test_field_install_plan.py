@@ -259,6 +259,39 @@ def test_one_level_amr_resolve_preserves_level_by_level_capability() -> None:
     )
 
 
+def test_rhs_authentication_resolves_the_provider_instance_without_mutating_its_definition():
+    import json
+
+    problem, _ = _case(Dirichlet(0.0))
+    model = problem._block_registry.spec("material")["model"]
+    provider = next(item for item in model.module.operator_registry()
+                    if item.kind == "field_operator")
+    body = provider.body
+    references = body.declaration_references()
+    assert references and all(not handle.is_resolved for handle in references)
+
+    plan = capture_field_plans(
+        problem, lambda value: value, target="system", layout=_LAYOUT)["potential_0"]
+
+    assert "#authoring=" not in json.dumps(plan.to_data())
+    assert provider.body is body
+    assert all(not handle.is_resolved for handle in references)
+
+
+def test_rhs_authentication_still_rejects_a_changed_resolved_equation():
+    from copy import copy
+    from types import SimpleNamespace
+    from pops.codegen._orchestration_compile import _field_rhs_providers
+
+    problem, _ = _case(Dirichlet(0.0))
+    _, registration = problem._field_registry.resolved_items(problem.resolve)[0]
+    operator = copy(registration.operator)
+    operator.equation = operator.equation.lhs == operator.equation.rhs + 1.0
+
+    with pytest.raises(ValueError, match="RHS differs from its ordered provider composition"):
+        _field_rhs_providers(problem, SimpleNamespace(operator=operator))
+
+
 def test_composite_fac_refuses_a_single_level_amr_backend() -> None:
     with pytest.raises(LoweringRejection, match="multi-level AMR backend"):
         _one_level_amr_plan(
@@ -395,6 +428,8 @@ def test_gradient_output_sign_is_part_of_the_exact_native_output_route(
 
 
 def test_non_unit_laplacian_scale_is_preserved_by_exact_rhs_normalization() -> None:
+    from pops._ir.expr import Var
+
     model = Model("scaled-laplacian-model")
     (rho,) = model.state("U", components=["rho"])
     unknown = model.field("potential")
@@ -407,7 +442,7 @@ def test_non_unit_laplacian_scale_is_preserved_by_exact_rhs_normalization() -> N
 
     lowered_model = model.__pops_compiler_lowering__().emit_model._m
     lowered_rhs = lowered_model._elliptic_fields["potential"]["rhs"]
-    assert strict_field_data(lowered_rhs) == strict_field_data(rho / 2.0)
+    assert strict_field_data(lowered_rhs) == strict_field_data(Var("rho", "cons") / 2.0)
 
     problem = Case(name="scaled-laplacian-case")
     problem.block("material", model)

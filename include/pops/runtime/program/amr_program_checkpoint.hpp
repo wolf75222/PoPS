@@ -8,6 +8,7 @@
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/program/cell_temporal_partition.hpp>
+#include <pops/runtime/program/program_runtime_state.hpp>
 
 #include <algorithm>
 #include <array>
@@ -60,6 +61,7 @@ struct AmrProgramHistorySlotProvenance {
   double outgoing_dt = 0.0;
   bool initialized = false;
   int fill_count = 0;
+  HistorySampleIdentity sample;
 
   friend bool operator==(const AmrProgramHistorySlotProvenance&,
                          const AmrProgramHistorySlotProvenance&) = default;
@@ -96,6 +98,18 @@ struct AmrProgramSynchronizationEvent {
   ::pops::amr::ClockStamp clock;
 };
 
+/// Geometry on which the last accepted step produced its face/synchronization evidence.
+/// This is historical report authority, never a layout for the next numerical advance.
+struct AmrProgramFaceEvidenceProvenance {
+  std::string spatial_contract;
+  std::uint64_t topology_epoch = 0;
+  std::uint64_t materialization_generation = 0;
+  std::size_t level_count = 0;
+
+  friend bool operator==(const AmrProgramFaceEvidenceProvenance&,
+                         const AmrProgramFaceEvidenceProvenance&) = default;
+};
+
 /// Rank-independent accepted image of one exact native AMR Program.
 ///
 /// Face entries are the published side of the canonical transactional ledger. Pending fragments,
@@ -122,6 +136,7 @@ struct AmrProgramAcceptedState {
   /// Exact prepared authorities which bounded and coupled the accepted face ledgers.
   std::string flux_budget_contract;
   std::string coupling_contract;
+  std::optional<AmrProgramFaceEvidenceProvenance> face_evidence_provenance;
   std::array<std::vector<amr_reflux::FaceFluxFragment<Dim, AmrProgramFacePayload>>, Dim>
       accepted_face_flux;
   std::vector<::pops::amr::InterfaceFluxFragment<AmrProgramFacePayload>> accepted_interface_flux;
@@ -130,7 +145,105 @@ struct AmrProgramAcceptedState {
 
 namespace checkpoint_detail {
 
-inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '4'};
+// Pure accepted-history wire metadata: no ring mutation, active clock, or publication authority.
+inline std::optional<std::pair<int, std::string>> decode_history_key(std::string_view key) {
+  constexpr std::string_view prefix = "pops.amr.level-history.v1/";
+  if (!key.starts_with(prefix))
+    return std::nullopt;
+  key.remove_prefix(prefix.size());
+  const std::size_t slash = key.find('/');
+  const std::size_t colon = key.find(':', slash == std::string_view::npos ? 0 : slash);
+  if (slash == std::string_view::npos || colon == std::string_view::npos)
+    throw std::invalid_argument("AMR Program history storage key is malformed");
+  std::size_t consumed = 0;
+  const int level = std::stoi(std::string(key.substr(0, slash)), &consumed);
+  if (level < 0 || consumed != slash)
+    throw std::invalid_argument("AMR Program history storage key has an invalid level");
+  const std::string length_text(key.substr(slash + 1, colon - slash - 1));
+  consumed = 0;
+  const std::size_t length = std::stoull(length_text, &consumed);
+  const std::string name(key.substr(colon + 1));
+  if (consumed != length_text.size() || name.empty() || name.size() != length)
+    throw std::invalid_argument("AMR Program history storage key has an invalid name");
+  return std::pair<int, std::string>{level, name};
+}
+
+struct HistoryMetadata {
+  std::vector<AmrProgramHistoryDescriptor> histories;
+  std::vector<AmrProgramHistorySlotProvenance> history_slots;
+};
+
+template <class Manager, class BlockMap>
+HistoryMetadata history_metadata(const Manager& manager, const BlockMap& block_map,
+                                 std::size_t level_count) {
+  HistoryMetadata result;
+  struct AccumulatedHistory {
+    AmrProgramHistoryDescriptor descriptor;
+    std::set<int> levels;
+  };
+  std::map<std::string, AccumulatedHistory> histories;
+  for (const auto& [key, ring] : manager.histories) {
+    const auto decoded = decode_history_key(key);
+    if (!decoded || ring.empty())
+      throw std::runtime_error("AMR Program accepted history registry is malformed");
+    const auto& [level, name] = *decoded;
+    const int runtime_owner = manager.owner.at(key);
+    int program_owner = -1;
+    for (std::size_t program = 0; program < block_map.size(); ++program)
+      if (block_map[program] == runtime_owner) {
+        program_owner = static_cast<int>(program);
+        break;
+      }
+    if (program_owner < 0)
+      throw std::runtime_error("AMR Program history lost its authenticated block owner");
+    AmrProgramHistoryDescriptor descriptor{name,
+                                           program_owner,
+                                           manager.state_identity.at(key),
+                                           manager.space_identity.at(key),
+                                           manager.clock_identity.at(key),
+                                           manager.interpolation_identity.at(key),
+                                           manager.depth.at(key),
+                                           ring.front().ncomp()};
+    auto [entry, inserted] =
+        histories.try_emplace(name, AccumulatedHistory{descriptor, std::set<int>{level}});
+    if (!inserted) {
+      const auto& retained = entry->second.descriptor;
+      if (retained.program_owner != descriptor.program_owner ||
+          retained.state_identity != descriptor.state_identity ||
+          retained.space_identity != descriptor.space_identity ||
+          retained.clock_identity != descriptor.clock_identity ||
+          retained.interpolation_identity != descriptor.interpolation_identity ||
+          retained.depth != descriptor.depth || retained.components != descriptor.components ||
+          !entry->second.levels.insert(level).second)
+        throw std::runtime_error("AMR Program history differs between active levels");
+    }
+    const auto& dts = manager.slot_dt.at(key);
+    if (dts.size() != ring.size())
+      throw std::runtime_error("AMR Program history dt provenance has the wrong depth");
+    for (std::size_t slot = 0; slot < ring.size(); ++slot)
+      result.history_slots.push_back({name, level, static_cast<int>(slot),
+                                      static_cast<double>(dts[slot]), manager.initialized.at(key),
+                                      manager.fill_count.at(key),
+                                      manager.slot_sample.at(key).at(slot)});
+  }
+  for (auto& [name, accumulated] : histories) {
+    (void)name;
+    if (accumulated.levels.size() != level_count)
+      throw std::runtime_error("AMR Program history omits an active hierarchy level");
+    result.histories.push_back(std::move(accumulated.descriptor));
+  }
+  std::sort(result.history_slots.begin(), result.history_slots.end(),
+            [](const auto& left, const auto& right) {
+              return std::tie(left.name, left.level, left.slot) <
+                     std::tie(right.name, right.level, right.slot);
+            });
+  return result;
+}
+
+inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '7'};
+inline constexpr std::array<std::uint8_t, 8> kLegacyMagic6{'P', 'O', 'P', 'S', 'A', 'N', 'D', '6'};
+inline constexpr std::array<std::uint8_t, 8> kLegacyMagic5{'P', 'O', 'P', 'S', 'A', 'N', 'D', '5'};
+inline constexpr std::array<std::uint8_t, 8> kLegacyMagic4{'P', 'O', 'P', 'S', 'A', 'N', 'D', '4'};
 
 class Writer {
  public:
@@ -173,7 +286,7 @@ class Writer {
 
 /// Allocation-free twin of Writer used by the artifact checkpoint-capacity preflight.  Keeping the
 /// primitive surface identical lets the binary encoder itself remain the only wire-schema
-/// authority: a field added to POPSAND4 changes both serialization and capacity accounting in the
+/// authority: a field added to POPSAND6 changes both serialization and capacity accounting in the
 /// same function.
 class CountingWriter {
  public:
@@ -310,7 +423,8 @@ inline constexpr std::size_t kEncodedClockBytes = 5 * kEncodedScalarBytes;
 // credible binary shape even when semantic validation later rejects them.
 inline constexpr std::size_t kMinLogicalClockBytes = 2 * kEncodedScalarBytes;
 inline constexpr std::size_t kMinHistoryDescriptorBytes = 8 * kEncodedScalarBytes;
-inline constexpr std::size_t kMinHistorySlotBytes = 6 * kEncodedScalarBytes;
+inline constexpr std::size_t kLegacyMinHistorySlotBytes = 6 * kEncodedScalarBytes;
+inline constexpr std::size_t kMinHistorySlotBytes = 10 * kEncodedScalarBytes;
 inline constexpr std::size_t kMinTemporalPartitionRecordBytes = 4 * kEncodedScalarBytes;
 inline constexpr std::size_t kMinInterfaceFragmentBytes = 32 * kEncodedScalarBytes;
 inline constexpr std::size_t kMinSynchronizationEventBytes = 9 * kEncodedScalarBytes;
@@ -320,6 +434,9 @@ inline constexpr std::size_t kMinPendingHistoryRemapBytes = 13 * kEncodedScalarB
 
 template <int Dim>
 inline constexpr std::size_t kMinFaceFragmentBytes =
+    (25 + 2 * static_cast<std::size_t>(Dim)) * kEncodedScalarBytes;
+template <int Dim>
+inline constexpr std::size_t kLegacyMinFaceFragmentBytes =
     (24 + 2 * static_cast<std::size_t>(Dim)) * kEncodedScalarBytes;
 
 template <class Output>
@@ -419,6 +536,7 @@ void write_face_fragment(Output& out,
   write_index(out, fragment.key.face);
   write_index(out, fragment.key.coarse_face);
   write_clock(out, fragment.key.clock);
+  out.string(fragment.key.temporal_family);
   out.string(fragment.key.stage);
   out.u64(fragment.key.attempt);
   out.u64(static_cast<std::uint64_t>(fragment.key.role));
@@ -434,7 +552,8 @@ void write_face_fragment(Output& out,
 }
 
 template <int Dim>
-amr_reflux::FaceFluxFragment<Dim, AmrProgramFacePayload> read_face_fragment(Reader& in) {
+amr_reflux::FaceFluxFragment<Dim, AmrProgramFacePayload> read_face_fragment(Reader& in,
+                                                                            bool has_family) {
   amr_reflux::FaceFluxFragment<Dim, AmrProgramFacePayload> fragment;
   fragment.key.owner = in.string();
   fragment.key.state = in.string();
@@ -448,6 +567,8 @@ amr_reflux::FaceFluxFragment<Dim, AmrProgramFacePayload> read_face_fragment(Read
   fragment.key.face = read_index<Dim>(in);
   fragment.key.coarse_face = read_index<Dim>(in);
   fragment.key.clock = read_clock(in);
+  if (has_family)
+    fragment.key.temporal_family = in.string();
   fragment.key.stage = in.string();
   fragment.key.attempt = in.u64();
   const std::uint64_t role = in.u64();
@@ -576,6 +697,8 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
   std::tuple<std::string, int, int> previous_slot{"", -1, -1};
   bool first_slot = true;
   for (const AmrProgramHistorySlotProvenance& slot : state.history_slots) {
+    validate_history_sample_provenance(slot.sample, slot.initialized,
+                                       static_cast<Real>(slot.outgoing_dt));
     const auto descriptor = std::find_if(
         state.histories.begin(), state.histories.end(),
         [&](const AmrProgramHistoryDescriptor& history) { return history.name == slot.name; });
@@ -666,13 +789,17 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
                                          return slot.name == key_name &&
                                                 slot.level == pending.child_level && slot.slot == 1;
                                        });
+    // fill_count counts committed stores, not allocated slots.  After the first cold store and
+    // rotation, lag one already holds the accepted source sample even though fill_count is one.
+    // The deferred reader requires a fresh current-slot store before interpolating that sample;
+    // it never treats the cold-start duplicate in slot zero as a second earned time sample.
     if (pending.key.empty() || (!previous_pending.empty() && previous_pending >= pending.key) ||
         pending.parent_level < 0 || pending.parent_level == std::numeric_limits<int>::max() ||
         pending.child_level != pending.parent_level + 1 ||
         pending.child_level >= static_cast<int>(state.level_clocks.size()) || pending.consumed ||
         key_level != pending.child_level || history == state.histories.end() ||
         history->depth != 2 || lag_slot == state.history_slots.end() || !lag_slot->initialized ||
-        lag_slot->fill_count != 2 || lag_slot->outgoing_dt != pending.source_dt ||
+        lag_slot->outgoing_dt != pending.source_dt ||
         pending.accepted_macro_step !=
             state.level_clocks[static_cast<std::size_t>(pending.child_level)].macro_step ||
         pending.prior_topology_epoch == std::numeric_limits<std::uint64_t>::max() ||
@@ -696,6 +823,21 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
     throw std::invalid_argument(
         "exact AMR Program checkpoint has a truncated history-flux payload");
 
+  const bool has_face_evidence =
+      !state.synchronization_events.empty() ||
+      std::any_of(state.accepted_face_flux.begin(), state.accepted_face_flux.end(),
+                  [](const auto& fragments) { return !fragments.empty(); });
+  if (has_face_evidence && !state.face_evidence_provenance)
+    throw std::invalid_argument("exact AMR Program face evidence lacks its originating geometry");
+  if (!has_face_evidence && state.face_evidence_provenance)
+    throw std::invalid_argument(
+        "empty AMR Program face evidence cannot retain geometry provenance");
+  if (state.face_evidence_provenance &&
+      (state.face_evidence_provenance->spatial_contract.empty() ||
+       state.face_evidence_provenance->level_count == 0 ||
+       state.face_evidence_provenance->level_count >
+           static_cast<std::size_t>(std::numeric_limits<int>::max())))
+    throw std::invalid_argument("exact AMR Program face evidence has invalid geometry provenance");
   for (int axis = 0; axis < Dim; ++axis) {
     const auto validate_fragments = [&](const auto& fragments, std::string_view family) {
       std::optional<amr_reflux::FaceFluxFragmentKey<Dim>> previous;
@@ -704,6 +846,10 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
           throw std::invalid_argument("exact AMR Program checkpoint stores a " +
                                       std::string(family) + " face under another axis");
         amr_reflux::validate_face_flux_fragment(fragment.key, fragment.measure);
+        if (static_cast<std::size_t>(fragment.key.levels.fine) >=
+            state.face_evidence_provenance->level_count)
+          throw std::invalid_argument(
+              "exact AMR Program face fragment is outside its originating hierarchy");
         if (fragment.payload.empty())
           throw std::invalid_argument("exact AMR Program checkpoint face payload cannot be empty");
         for (Real component : fragment.payload)
@@ -735,7 +881,8 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
   }
   for (const AmrProgramSynchronizationEvent& event : state.synchronization_events) {
     if (event.parent_level < 0 || event.child_level != event.parent_level + 1 ||
-        static_cast<std::size_t>(event.child_level) >= state.level_clocks.size() ||
+        static_cast<std::size_t>(event.child_level) >=
+            state.face_evidence_provenance->level_count ||
         event.runtime_block < 0 || (event.phase != "reflux" && event.phase != "average_down") ||
         event.clock.level != event.parent_level || event.clock.macro_step < 0 ||
         !std::isfinite(event.clock.physical_time))
@@ -778,6 +925,10 @@ void write_state(Output& out, const AmrProgramAcceptedState<Dim>& state) {
     out.real(slot.outgoing_dt);
     out.u64(slot.initialized ? 1U : 0U);
     out.i32(slot.fill_count);
+    out.u64(static_cast<std::uint64_t>(slot.sample.kind));
+    out.u64(slot.sample.start_bits);
+    out.u64(slot.sample.interval_bits);
+    out.u64(slot.sample.ordinal);
   }
   out.size(state.pending_history_remaps.size());
   for (const auto& pending : state.pending_history_remaps) {
@@ -817,6 +968,14 @@ void write_state(Output& out, const AmrProgramAcceptedState<Dim>& state) {
     out.string(event.phase);
     write_clock(out, event.clock);
   }
+  out.u64(state.face_evidence_provenance ? 1U : 0U);
+  if (state.face_evidence_provenance) {
+    const auto& origin = *state.face_evidence_provenance;
+    out.string(origin.spatial_contract);
+    out.u64(origin.topology_epoch);
+    out.u64(origin.materialization_generation);
+    out.size(origin.level_count);
+  }
 }
 
 }  // namespace checkpoint_detail
@@ -842,6 +1001,11 @@ AmrProgramAcceptedState<Dim> accepted_amr_program_state(
     std::sort(destination.begin(), destination.end(),
               [](const auto& left, const auto& right) { return left.key < right.key; });
   }
+  if (std::any_of(state.accepted_face_flux.begin(), state.accepted_face_flux.end(),
+                  [](const auto& fragments) { return !fragments.empty(); }))
+    state.face_evidence_provenance =
+        AmrProgramFaceEvidenceProvenance{state.spatial_contract, topology_epoch,
+                                         materialization_generation, state.level_clocks.size()};
   checkpoint_detail::validate_state(state);
   return state;
 }
@@ -863,7 +1027,7 @@ std::size_t serialized_amr_program_accepted_state_size(const AmrProgramAcceptedS
   return out.count();
 }
 
-/// Artifact-derived maximum POPSAND4 shape.  It carries character and term counts only: computing a
+/// Artifact-derived maximum POPSAND6 shape.  It carries character and term counts only: computing a
 /// resource ceiling must never first allocate the potentially large scientific vectors it is meant
 /// to bound.
 template <int Dim>
@@ -883,6 +1047,7 @@ struct AmrProgramAcceptedStateCapacity {
   std::array<std::size_t, Dim> face_fragment_counts{};
   std::size_t face_owner_characters = 0;
   std::size_t face_state_characters = 0;
+  std::size_t face_temporal_family_characters = 0;
   std::size_t face_stage_characters = 0;
   std::size_t face_payload_terms = 0;
   std::size_t interface_fragment_count = 0;
@@ -980,6 +1145,10 @@ std::size_t serialized_amr_program_accepted_state_capacity(
   if (capacity.face_state_characters > std::numeric_limits<std::size_t>::max() - face_characters)
     throw std::length_error("AMR Program face identity capacity exceeds size_t");
   face_characters += capacity.face_state_characters;
+  if (capacity.face_temporal_family_characters >
+      std::numeric_limits<std::size_t>::max() - face_characters)
+    throw std::length_error("AMR Program face identity capacity exceeds size_t");
+  face_characters += capacity.face_temporal_family_characters;
   if (capacity.face_stage_characters > std::numeric_limits<std::size_t>::max() - face_characters)
     throw std::length_error("AMR Program face identity capacity exceeds size_t");
   face_characters += capacity.face_stage_characters;
@@ -1004,6 +1173,11 @@ std::size_t serialized_amr_program_accepted_state_capacity(
                      checkpoint_detail::kMinSynchronizationEventBytes);
   out.repeated_bytes(capacity.synchronization_event_count,
                      capacity.synchronization_phase_characters);
+  out.u64(1);
+  out.string_size(capacity.spatial_contract_characters);
+  out.u64(0);
+  out.u64(0);
+  out.size(capacity.level_count);
   return out.count();
 }
 
@@ -1012,7 +1186,16 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
     std::span<const std::uint8_t> bytes,
     const ::pops::amr::InterfaceFluxLedgerBudget* interface_budget = nullptr) {
   checkpoint_detail::Reader in(bytes);
-  in.expect_raw(checkpoint_detail::kMagic);
+  const auto has_magic = [&](const auto& magic) {
+    return bytes.size() >= magic.size() && std::equal(magic.begin(), magic.end(), bytes.begin());
+  };
+  const bool legacy4 = has_magic(checkpoint_detail::kLegacyMagic4);
+  const bool legacy5 = has_magic(checkpoint_detail::kLegacyMagic5);
+  const bool legacy6 = has_magic(checkpoint_detail::kLegacyMagic6);
+  in.expect_raw(legacy4   ? checkpoint_detail::kLegacyMagic4
+                : legacy5 ? checkpoint_detail::kLegacyMagic5
+                : legacy6 ? checkpoint_detail::kLegacyMagic6
+                          : checkpoint_detail::kMagic);
   if (in.i32() != Dim)
     throw std::runtime_error(
         "invalid exact AMR Program checkpoint: native dimension does not match the artifact");
@@ -1042,7 +1225,9 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
     history.depth = in.i32();
     history.components = in.i32();
   }
-  state.history_slots.resize(in.size(checkpoint_detail::kMinHistorySlotBytes));
+  state.history_slots.resize(in.size(legacy4 || legacy5 || legacy6
+                                         ? checkpoint_detail::kLegacyMinHistorySlotBytes
+                                         : checkpoint_detail::kMinHistorySlotBytes));
   for (AmrProgramHistorySlotProvenance& slot : state.history_slots) {
     slot.name = in.string();
     slot.level = in.i32();
@@ -1054,6 +1239,15 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
           "invalid exact AMR Program checkpoint: invalid history initialized tag");
     slot.initialized = initialized != 0;
     slot.fill_count = in.i32();
+    if (!legacy4 && !legacy5 && !legacy6) {
+      const auto kind = in.u64();
+      if (kind > static_cast<std::uint64_t>(HistorySampleKind::Publication))
+        throw std::invalid_argument("history sample identity has an invalid encoded kind");
+      slot.sample.kind = static_cast<HistorySampleKind>(kind);
+      slot.sample.start_bits = in.u64();
+      slot.sample.interval_bits = in.u64();
+      slot.sample.ordinal = in.u64();
+    }
   }
   state.pending_history_remaps.resize(in.size(checkpoint_detail::kMinPendingHistoryRemapBytes));
   for (auto& pending : state.pending_history_remaps) {
@@ -1081,9 +1275,12 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
   state.coupling_contract = in.string();
   for (int axis = 0; axis < Dim; ++axis) {
     auto& fragments = state.accepted_face_flux[static_cast<std::size_t>(axis)];
-    fragments.resize(in.size(checkpoint_detail::kMinFaceFragmentBytes<Dim>));
+    const std::size_t minimum = legacy4 || legacy5
+                                    ? checkpoint_detail::kLegacyMinFaceFragmentBytes<Dim>
+                                    : checkpoint_detail::kMinFaceFragmentBytes<Dim>;
+    fragments.resize(in.size(minimum));
     for (auto& fragment : fragments)
-      fragment = checkpoint_detail::read_face_fragment<Dim>(in);
+      fragment = checkpoint_detail::read_face_fragment<Dim>(in, !legacy4 && !legacy5);
   }
   const std::size_t interface_count = in.size(checkpoint_detail::kMinInterfaceFragmentBytes);
   if (interface_budget != nullptr && interface_count > interface_budget->max_fragments_per_window)
@@ -1103,6 +1300,26 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
     event.runtime_block = in.i32();
     event.phase = in.string();
     event.clock = checkpoint_detail::read_clock(in);
+  }
+  if (legacy4) {
+    if (!state.synchronization_events.empty() ||
+        std::any_of(state.accepted_face_flux.begin(), state.accepted_face_flux.end(),
+                    [](const auto& fragments) { return !fragments.empty(); }))
+      state.face_evidence_provenance = AmrProgramFaceEvidenceProvenance{
+          state.spatial_contract, state.topology_epoch, state.materialization_generation,
+          state.level_clocks.size()};
+  } else {
+    const auto present = in.u64();
+    if (present > 1)
+      throw std::runtime_error("invalid exact AMR Program face evidence provenance marker");
+    if (present != 0) {
+      AmrProgramFaceEvidenceProvenance origin;
+      origin.spatial_contract = in.string();
+      origin.topology_epoch = in.u64();
+      origin.materialization_generation = in.u64();
+      origin.level_count = in.u64();
+      state.face_evidence_provenance = std::move(origin);
+    }
   }
   in.finish();
   checkpoint_detail::validate_state(state);

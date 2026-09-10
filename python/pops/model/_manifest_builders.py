@@ -194,6 +194,23 @@ def build_module_manifest(module: Any) -> ModuleManifest:
     routes = _native_routes()
     catalog = _native_catalog()
     provider_pack = build_provider_pack(module).to_data()
+    from .hash_data import body_identity, canonical_hash_data
+    from pops._ir.expr_references import resolve_reference_value
+    # Carry the retained graph projection itself as well as its scientific hash.
+    # This is immutable inspection/snapshot data, never an executable callback codec.
+    expression_memo: dict[int, Any] = {}
+    def expression_data(value: Any) -> Any:
+        # Private facade formulas retain their authenticated local Var namespace.
+        # This snapshot projection canonicalizes handles without opening the
+        # public declaration resolver to free-name scientific references.
+        return resolve_reference_value(
+            value, lambda handle: handle._resolved(), expression_memo,
+            allow_formula_vars=True,
+        )
+    expressions = {
+        "operators": {operator.name: body_identity(expression_data(operator.body)) for operator in registry},
+        "primitives": canonical_hash_data(expression_data(module.primitive_recipes())),
+    }
     return ModuleManifest(
         name=module.name,
         owner_path=canonical_owner,
@@ -211,6 +228,7 @@ def build_module_manifest(module: Any) -> ModuleManifest:
         native_catalog=catalog,
         abi_requirements={"route_registry_signature": routes["signature"], "abi_key": None},
         params_utilization=_params_utilization(params),
+        expressions=expressions,
     )
 
 

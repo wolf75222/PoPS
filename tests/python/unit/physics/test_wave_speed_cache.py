@@ -1,31 +1,15 @@
 #!/usr/bin/env python3
-"""Cache des vitesses d'onde HLL (ADC-199) : opt-in, bit-identique en NoSlope.
+"""Production-package wave-speed cache admission and default HLL transport parity.
 
-Motivation (audit step_cfl, run diocotron HyQMOM) : avec riemann='hll' + vitesses d'onde
-exactes, AssembleRhsKernel rappelle model.wave_speeds par FACE -> wave_speeds est recalcule
-plusieurs fois par cellule et par etage RK ; pour un modele HyQMOM (hierarchie de moments +
-factorisations a chaque appel) le pas explose (x10 mesure n=128). Le cache opt-in evalue
-wave_speeds UNE fois par cellule et direction, puis borne chaque face par min/max des deux
-cellules voisines.
-
-On verifie :
- (1) BIT-IDENTITE : limiter='none' (NoSlope) + recon conservatif -> wave_speeds recoit les memes
-     entrees que le chemin par face, donc le cache (ON) donne EXACTEMENT le meme etat que OFF apres
-     N pas (np.array_equal sur l'etat). Le champ doit avoir REELLEMENT evolue (sinon test creux).
- (2) DEFAUT INCHANGE : un bloc construit SANS wave_speed_cache == le bloc OFF (cache implicite OFF).
- (3) GARDE riemann : wave_speed_cache=True avec riemann != 'hll' -> erreur explicite (pas d'ignore
-     silencieux : le cache ne s'applique qu'au flux HLL).
- (4) GARDE temps : wave_speed_cache=True avec un traitement IMEX -> erreur explicite (cable sur
-     l'avance explicite seulement).
- (5) GARDE geometrie implicite : wave_speed_cache=True avec un LevelSet et un mode de transport
-     staircase/cutcell -> erreur explicite dans LES DEUX ORDRES. Le cache reste reserve au chemin
-     cartesien plein.
-
-Modele natif IsothermalFlux (expose wave_speeds) : aucun compilateur requis.
+ModelSpec now lowers to an authenticated production package. That ABI does not carry
+wave_speed_cache, so enabling it must fail explicitly before native publication. The
+historical native-composed cache ON/OFF trajectory is not a supported Python route.
+Keep the full N32, twenty-step default/OFF bit-parity and nonstationary-state oracle,
+and exercise the explicit refusal across the former Riemann/time/geometry routes.
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import HLL, Rusanov
-from pops.mesh.masks import CutCell, Staircase
+from pops.mesh.masks import CutCell
 import sys
 
 import numpy as np
@@ -77,20 +61,14 @@ U0 = np.stack([1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y),
                0.2 * np.cos(2 * np.pi * X),
                -0.15 * np.sin(2 * np.pi * Y)])
 
-print("== (1) bit-identite NoSlope+HLL : cache ON == OFF apres N pas ==")
+print("== (1) explicit cache OFF: full twenty-step HLL trajectory ==")
 s_off = make_sim(cache=False)
-s_on = make_sim(cache=True)
 s_off.set_state("ions", U0)
-s_on.set_state("ions", U0)
 install_forward_euler_program(s_off)
-install_forward_euler_program(s_on)
 for _ in range(20):
     s_off.step_cfl(0.4)
-    s_on.step_cfl(0.4)
 A_off = np.array(s_off.get_state("ions"))
-A_on = np.array(s_on.get_state("ions"))
 chk(not np.array_equal(A_off, U0), "l'etat a reellement evolue (test non creux)")
-chk(np.array_equal(A_off, A_on), "cache ON et OFF bit-identiques (0 ulp) sur l'etat final")
 
 print("== (2) defaut inchange : sans wave_speed_cache == cache OFF ==")
 s_def = System(n=N, L=1.0, periodicity=(True, True))
@@ -107,19 +85,18 @@ for _ in range(20):
 chk(np.array_equal(np.array(s_def.get_state("ions")), A_off),
     "FiniteVolume sans wave_speed_cache == cache OFF (bit-identique)")
 
-print("== (3) garde riemann : cache + rusanov -> erreur ==")
-msg = err_msg(lambda: make_sim(cache=True, riemann=Rusanov()))
-chk("wave_speed_cache" in msg and "hll" in msg,
-    f"rusanov + cache rejete ({msg[:60]}...)")
+def check_unsupported_cache(fn, label):
+    message = err_msg(fn)
+    chk("wave_speed_cache" in message and "production package ABI" in message,
+        f"{label}: explicit unsupported production capability ({message[:100]})")
 
-print("== (4) garde temps : cache + IMEX -> erreur ==")
-msg = err_msg(lambda: make_sim(cache=True, riemann=HLL(), time=IMEX()))
-chk("wave_speed_cache" in msg,
-    f"IMEX + cache rejete ({msg[:60]}...)")
 
-print("== (5) garde geometrie implicite : cache + EB staircase/cutcell -> erreur ==")
-# A prepared analytic LevelSet routes through masked/EB residuals and must be rejected in both
-# authoring orders while the cache remains specific to the Cartesian residual.
+print("== (3) cache ON is refused for every production-package treatment ==")
+check_unsupported_cache(lambda: make_sim(cache=True), "HLL explicit")
+message = err_msg(lambda: make_sim(cache=True, riemann=Rusanov()))
+chk("wave_speed_cache requires flux=riemann.HLL()" in message,
+    "Rusanov is rejected by the spatial contract before package admission")
+check_unsupported_cache(lambda: make_sim(cache=True, time=IMEX()), "HLL IMEX")
 
 
 def install_half_space(sim, mode):
@@ -138,11 +115,6 @@ def install_half_space(sim, mode):
     )
 
 
-def make_level_set_sim_then_mode():
-    sim = make_sim(cache=True)  # cached Cartesian block
-    install_half_space(sim, Staircase().lower())
-
-
 def make_mode_then_cache():
     sim = System(n=N, L=1.0, periodicity=(True, True))
     install_half_space(sim, CutCell().lower())
@@ -155,31 +127,9 @@ def make_mode_then_cache():
                      time=Explicit())
 
 
-msg = err_msg(make_level_set_sim_then_mode)
-chk("wave_speed_cache" in msg and ("staircase" in msg or "disque" in msg),
-    f"cache puis LevelSet(staircase) rejete ({msg[:60]}...)")
-msg = err_msg(make_mode_then_cache)
-chk("wave_speed_cache" in msg and ("cutcell" in msg or "staircase" in msg),
-    f"LevelSet(cutcell) puis add_equation(cache) rejete ({msg[:60]}...)")
-
-print("== (6) garde backend compile : cache + add_equation(modele .so) -> erreur ==")
-# Le cache n'est cable que sur le chemin natif compose de add_equation. Le package de production ne
-# transporte pas le flag : il serait ignore en silence. On verifie le rejet avant le dlopen.
-from pops.codegen.loader import CompiledModel  # noqa: E402
-
-fake = CompiledModel(so_path="/inexistant.so", backend="production",
-                     cons_names=["rho"], cons_roles=["Density"], prim_names=["rho"],
-                     n_vars=1, gamma=None, n_aux=0, params={}, caps={}, abi_key="k",
-                     model_hash="h", cxx="c++", std="c++20", wave_speeds=True,
-                     wave_speed_provider="explicit_pair", native_dimension=2)
-
-def add_eq_cache():
-    s = System(n=16, L=1.0, periodicity=(True, True))
-    s.add_equation("g", fake, spatial=Spatial(limiter=FirstOrder(), flux=HLL(),
-                                               wave_speed_cache=True),
-                   time=Explicit())
-m6 = err_msg(add_eq_cache)
-chk("wave_speed_cache" in m6, f"package production + cache rejete ({m6[:55]}...)")
+# The reverse order cannot publish a cached block: cache admission already refuses.
+# The geometry-first order must retain that same ABI refusal, with its geometry intact.
+check_unsupported_cache(make_mode_then_cache, "LevelSet then cached package")
 
 print("FAILS =", fails)
 sys.exit(1 if fails else 0)

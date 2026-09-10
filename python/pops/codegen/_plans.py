@@ -55,6 +55,17 @@ def _string_mapping(value: Any, *, where: str) -> Mapping[str, Any]:
     return _deep_freeze(value)
 
 
+def _component_mapping(value: Any, *, where: str) -> Mapping[Any, Any]:
+    """Preserve the exact native component identity across the public bind boundary."""
+    from pops.model.provider_pack import ComponentKey
+
+    if not isinstance(value, Mapping):
+        raise TypeError("%s must be a ComponentKey-keyed mapping" % where)
+    if any(type(key) is not ComponentKey for key in value):
+        raise TypeError("%s keys must be exact pops.model.ComponentKey values" % where)
+    return _deep_freeze(value)
+
+
 def _array_evidence(value: Any, *, where: str) -> dict[str, Any] | None:
     """Return content evidence for an array-like value, or ``None`` when it is not array-like."""
     if not (hasattr(value, "__array__") or hasattr(value, "__array_interface__")):
@@ -424,6 +435,7 @@ class ResolvedBlock:
     instance_owner: Any = field(init=False, default=None)
     model_owner: Any = field(init=False, default=None)
     declares_auxiliary_providers: bool = False
+    resolved_operations: Any = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -461,6 +473,14 @@ class ResolvedBlock:
         _evidence(self.spatial, where="ResolvedBlock.spatial")
         object.__setattr__(self, "numerics", _deep_freeze(self.numerics))
         _evidence(self.numerics, where="ResolvedBlock.numerics")
+        if self.resolved_operations is not None:
+            from .resolved_operations import ResolvedOperationPlan
+            from ._compiler_lowering import require_compiler_lowering
+
+            if type(self.resolved_operations) is not ResolvedOperationPlan:
+                raise TypeError("ResolvedBlock.resolved_operations must be an exact ResolvedOperationPlan")
+            self.resolved_operations.require_module(
+                require_compiler_lowering(self.model).source_module)
 
 
 @dataclass(frozen=True, slots=True)
@@ -483,6 +503,7 @@ class ResolvedSimulationPlan:
     capabilities: Mapping[str, Any]
     lowering_coverage: Any
     native_layouts: Mapping[str, Any] = field(default_factory=dict)
+    program_field_plans: Mapping[str, Any] = field(default_factory=dict)
     consumer_graph: Any = None
     restart_authority: Any = field(default_factory=_builtin_restart_authority)
     component_inputs: tuple[Any, ...] = ()
@@ -493,6 +514,8 @@ class ResolvedSimulationPlan:
     bootstrap_plan: Any = None
     amr_execution: Any = None
     amr_providers: Mapping[str, Any] = field(default_factory=dict)
+    layout_amr_authorities: Mapping[str, Any] = field(default_factory=dict)
+    continuation_transitions: Any = field(init=False)
     resolved_dimension: int = field(init=False)
     plan_identity: Identity = field(init=False)
 
@@ -581,6 +604,18 @@ class ResolvedSimulationPlan:
                 raise TypeError(
                     "ResolvedSimulationPlan.field_plans[%r] must be a total resolved install plan"
                     % name)
+        object.__setattr__(self, "program_field_plans", _string_mapping(
+            self.program_field_plans, where="ResolvedSimulationPlan.program_field_plans"))
+        from pops.codegen.program_field_plan import ResolvedProgramFieldPlan
+
+        if set(self.field_plans) & set(self.program_field_plans):
+            raise ValueError("a field cannot have competing native-provider and Program authorities")
+        for name, registration in self.program_field_plans.items():
+            if type(registration) is not ResolvedProgramFieldPlan or registration.name != name:
+                raise TypeError("program_field_plans requires exact resolved Program field plans")
+            if registration.storage.layout != self.layout_plan.layout_for(registration.handle):
+                raise ValueError("Program field storage layout differs from the resolved layout plan")
+            registration.validate_program(self.time)
         for name in ("libraries",):
             object.__setattr__(
                 self, name, tuple(_deep_freeze(item) for item in getattr(self, name)))
@@ -648,7 +683,12 @@ class ResolvedSimulationPlan:
             self.compile_options, where="ResolvedSimulationPlan.compile_options"))
         object.__setattr__(self, "amr_providers", _string_mapping(
             self.amr_providers, where="ResolvedSimulationPlan.amr_providers"))
+        from pops.codegen._layout_amr_authorities import validate_layout_amr_authorities
+        validate_layout_amr_authorities(self.layout_plan, self.layout_amr_authorities)
+        object.__setattr__(self, "layout_amr_authorities", _deep_freeze(self.layout_amr_authorities))
         self._validate_amr_authorities()
+        from pops.runtime._continuation_transitions import derive_continuation_transitions
+        object.__setattr__(self, "continuation_transitions", derive_continuation_transitions(self))
         object.__setattr__(self, "plan_identity", make_identity("resolved-plan", self._payload()))
 
     def _validate_amr_authorities(self) -> None:
@@ -656,10 +696,25 @@ class ResolvedSimulationPlan:
 
         validate_amr_authorities(self)
 
+    @property
+    def resolved_operations(self) -> Mapping[str, Any]:
+        from ._resolved_block_operations import resolved_operation_mapping
+
+        return resolved_operation_mapping(self.blocks)
+
+    def explain(self, result: str | None = None) -> dict[str, Any]:
+        """Project the exact compiler operation choices, without claiming execution."""
+        self.verify()
+        if result is not None and result not in self.resolved_operations:
+            raise KeyError("no resolved block %r" % result)
+        return {name: plan.explain() for name, plan in self.resolved_operations.items()
+                if plan is not None and (result is None or name == result)}
+
     def _payload(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
             "snapshot_artifact_hash": self.snapshot.artifact_hash,
+            "continuation_transitions": self.continuation_transitions.to_data(),
             "target": self.target,
             "backend": self.backend,
             "bind_schema_artifact_hash": self.bind_schema.artifact_hash,
@@ -682,8 +737,13 @@ class ResolvedSimulationPlan:
                 "model": _evidence(block.model, where="plan.block.model"),
                 "spatial": _evidence(block.spatial, where="plan.block.spatial"),
                 "numerics": _evidence(block.numerics, where="plan.block.numerics"),
+                "resolved_operations": _evidence(block.resolved_operations,
+                                                  where="plan.block.resolved_operations"),
             } for block in self.blocks],
             "field_plans": _evidence(self.field_plans, where="plan.field_plans"),
+            **({"program_field_plans": _evidence(
+                self.program_field_plans, where="plan.program_field_plans")}
+               if self.program_field_plans else {}),
             "consumer_graph": (
                 None if self.consumer_graph is None else self.consumer_graph.to_data()
             ),
@@ -713,9 +773,13 @@ class ResolvedSimulationPlan:
             ) if self.amr_execution is not None else None,
             "amr_providers": _evidence(
                 self.amr_providers, where="plan.amr_providers"),
+            "layout_amr_authorities": _evidence(
+                self.layout_amr_authorities, where="plan.layout_amr_authorities"),
         }
 
     def verify(self) -> None:
+        from pops.runtime._continuation_transitions import require_resolved_continuation
+        require_resolved_continuation(self)
         expected = make_identity("resolved-plan", self._payload())
         if self.plan_identity != expected:
             raise ValueError("ResolvedSimulationPlan identity verification failed")
@@ -778,7 +842,7 @@ class BindInputs:
 
     initial_state: Mapping[str, Any] = field(default_factory=dict)
     params: Mapping[Any, Any] = field(default_factory=dict)
-    aux: Mapping[str, Any] = field(default_factory=dict)
+    aux: Mapping[Any, Any] = field(default_factory=dict)
     resources: Mapping[str, Any] = field(default_factory=dict)
     initial_values: Mapping[Any, Any] = field(default_factory=dict)
     inputs_identity: Identity = field(init=False)
@@ -789,7 +853,7 @@ class BindInputs:
         if not isinstance(self.params, Mapping):
             raise TypeError("BindInputs.params must be a mapping")
         object.__setattr__(self, "params", _deep_freeze(self.params))
-        object.__setattr__(self, "aux", _string_mapping(self.aux, where="BindInputs.aux"))
+        object.__setattr__(self, "aux", _component_mapping(self.aux, where="BindInputs.aux"))
         object.__setattr__(self, "resources", _string_mapping(
             self.resources, where="BindInputs.resources"))
         if not isinstance(self.initial_values, Mapping):
@@ -837,7 +901,7 @@ class InstallPlan:
     bind_inputs: BindInputs
     instances: Mapping[str, Any]
     params: Any
-    aux: Mapping[str, Any]
+    aux: Mapping[Any, Any]
     resources: Mapping[str, Any] = field(default_factory=dict)
     components: Mapping[str, Any] = field(default_factory=dict)
     execution_context: Any = None
@@ -857,7 +921,7 @@ class InstallPlan:
             raise TypeError("InstallPlan.params must be exact resolved BindSchema values")
         if self.params.schema.hash != self.artifact.bind_schema.hash:
             raise ValueError("InstallPlan.params were resolved from a different BindSchema")
-        object.__setattr__(self, "aux", _string_mapping(self.aux, where="InstallPlan.aux"))
+        object.__setattr__(self, "aux", _component_mapping(self.aux, where="InstallPlan.aux"))
         object.__setattr__(self, "resources", _string_mapping(
             self.resources, where="InstallPlan.resources"))
         object.__setattr__(self, "components", _string_mapping(
@@ -957,6 +1021,10 @@ class InstallPlan:
     @property
     def amr_execution(self) -> Any:
         return self.artifact.plan.amr_execution
+
+    @property
+    def layout_amr_authorities(self) -> Mapping[str, Any]:
+        return self.artifact.plan.layout_amr_authorities
 
     @property
     def amr_providers(self) -> Mapping[str, Any]:

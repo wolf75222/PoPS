@@ -5,6 +5,7 @@
 #include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/core/state/variables.hpp>
+#include <pops/numerics/fv/flux_interfaces.hpp>
 #include <pops/physics/composition/exact_brick_contract.hpp>
 
 #include <concepts>
@@ -212,9 +213,9 @@ template <class Hyperbolic, class = void>
 struct FluxProviderRequirementAlias {};
 
 template <class Hyperbolic>
-struct FluxProviderRequirementAlias<
-    Hyperbolic, std::void_t<decltype(Hyperbolic::n_flux_providers),
-                            decltype(Hyperbolic::flux_provider_requirements)>> {
+struct FluxProviderRequirementAlias<Hyperbolic,
+                                    std::void_t<decltype(Hyperbolic::n_flux_providers),
+                                                decltype(Hyperbolic::flux_provider_requirements)>> {
   static constexpr int n_flux_providers = Hyperbolic::n_flux_providers;
   static constexpr auto flux_provider_requirements = Hyperbolic::flux_provider_requirements;
 };
@@ -227,7 +228,13 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic>,
   static constexpr int dimension = composite_detail::hyperbolic_dimension<Hyperbolic>();
   static_assert(dimension >= 1 && dimension <= 3,
                 "CompositeModel hyperbolic rank must be 1, 2, or 3");
-  static_assert(composite_detail::hyperbolic_contract<Hyperbolic, dimension>(),
+  static constexpr bool program_only_storage = [] {
+    if constexpr (requires { Hyperbolic::program_only_storage; })
+      return static_cast<bool>(Hyperbolic::program_only_storage);
+    return false;
+  }();
+  static_assert(composite_detail::hyperbolic_contract<Hyperbolic, dimension>() ||
+                    (program_only_storage && PhysicalStateFor<Hyperbolic, dimension>),
                 "CompositeModel requires an exact-ranked hyperbolic brick");
   static_assert(composite_detail::dimension_matches<Source, dimension>(),
                 "CompositeModel source rank differs from its hyperbolic rank");
@@ -318,6 +325,20 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic>,
   template <class Providers>
   POPS_HD State flux(const State& state, const Providers& providers, int axis) const {
     return flux_at_runtime_axis(state, providers, axis);
+  }
+
+  template <int Axis = 0, class Providers>
+  POPS_HD FluxDensity<State> flux_evaluation(const State& state, const Providers& providers,
+                                             int axis) const {
+    if (axis == Axis) {
+      if constexpr (requires { hyp.template flux_evaluation<Axis>(state, providers); })
+        return hyp.template flux_evaluation<Axis>(state, providers);
+      else
+        return {flux<Axis>(state, providers)};
+    }
+    if constexpr (Axis + 1 < dimension)
+      return flux_evaluation<Axis + 1>(state, providers, axis);
+    return {composite_detail::invalid_state<State>(), EvaluationStatus::kFailed, 1};
   }
 
   template <int Axis, class Providers>
@@ -570,8 +591,9 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic>,
 
   POPS_HD bool characteristic_no_inflow(const State& interior, const State& reference,
                                         const Real* normal, State& ghost) const
-    requires requires(const Hyperbolic h, const State a, const State b, const Real* n,
-                      State& out) { h.characteristic_no_inflow(a, b, n, out); }
+    requires requires(const Hyperbolic h, const State a, const State b, const Real* n, State& out) {
+      h.characteristic_no_inflow(a, b, n, out);
+    }
   {
     return hyp.characteristic_no_inflow(interior, reference, normal, ghost);
   }

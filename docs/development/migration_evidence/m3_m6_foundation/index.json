@@ -1,0 +1,3847 @@
+{
+  "schema": "pops.migration.m3-m6.foundation-evidence.v1",
+  "status": "active",
+  "closure_claim": false,
+  "updated_at": "2026-09-08T12:54:37+02:00",
+  "source": {
+    "integration_revision": "08ff8a6c689fea8b5ba30480343b3ee35524f019",
+    "integration_short_revision": "08ff8a6",
+    "integration_lineage": [
+      "ecda0dc: retain native transport faces in accepted diffusion quadrature",
+      "d72f853: refuse unqualified embedded geometry before diffusive evaluation",
+      "cc88b3b: reuse and reauthenticate definition fingerprints within canonical projections",
+      "a3c9946: close fingerprint witnesses across copied contexts and complete projection scopes",
+      "6b2a1c3: expose exact periodic prepared flux faces without physical boundaries",
+      "34a8acc: share exact provider shapes and prepare combined transport reads",
+      "3826eb4: align derived transport SSP fixture with exact RK stages",
+      "f8c51e4: preserve serial prepare exception contract",
+      "1c124b8: retain Newton execution lane until outcome consumption",
+      "5893d06: prepare exact execution context and inspect accepted ledger provenance",
+      "08ff8a6: report effective clustering overrides and refresh fixture authority setup"
+    ],
+    "historic_native_receipt_revision": "24b58985e89b194ebd505672ca0b1e04d75ee4f4",
+    "historic_native_receipt_short_revision": "24b5898",
+    "source_worktree": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-m3-m6",
+    "docs_worktree": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-evidence-docs",
+    "docs_branch": "adc903-final-evidence-docs",
+    "manifest": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json",
+    "manifest_sha256": "b64efb3c33266c769aa58a7ef44ad7dc873867e7dac18792972a5df00f4c676d",
+    "evidence_root": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence",
+    "contract": "docs/development/migration_m3_m6_contract.md"
+  },
+  "lifecycle": [
+    "validate",
+    "resolve",
+    "compile",
+    "bind",
+    "run"
+  ],
+  "evidence_levels": {
+    "representable": {
+      "required": "Typed authoring or IR witness with stable identity or serialization."
+    },
+    "validated": {
+      "required": "Exact validation command, exit code and accepted diagnostic or plan."
+    },
+    "resolved": {
+      "required": "Resolved report with mapping, dependencies, effects, coverage and disposition."
+    },
+    "emitted": {
+      "required": "Generated/native source or typed operation plus authenticated artifact and build provenance."
+    },
+    "executed": {
+      "required": "Exact runtime command, configuration, exit code and retained output or artifact hashes."
+    },
+    "numerically_checked": {
+      "required": "Declared equation/oracle, norms, tolerance, comparison, refinement/restart policy and result."
+    },
+    "performance_characterized": {
+      "required": "Equivalent numerical conditions, warmups/repetitions, device/MPI completion, raw metrics and uncertainty summary."
+    }
+  },
+  "status_vocabulary": [
+    "pending",
+    "pass",
+    "fail",
+    "unsupported",
+    "unavailable"
+  ],
+  "interpretation": {
+    "source_assertion_is_not_execution": true,
+    "structured_refusal_is_not_successful_execution": true,
+    "unavailable_cells_are_not_substituted": true,
+    "stage_status_is_bounded": true
+  },
+  "matrix_policy": {
+    "axes": [
+      "dimension",
+      "backend",
+      "mpi_ranks",
+      "layout",
+      "levels_and_blocks",
+      "method",
+      "restart_and_output",
+      "tolerances"
+    ],
+    "declaration": "Only executed cells and explicit limits are recorded.",
+    "common_profile": {
+      "backend": "Kokkos OpenMP host or Serial",
+      "threads": 2,
+      "mpi_ranks": [
+        1
+      ],
+      "layout": "Uniform uncut Cartesian",
+      "levels": 1,
+      "blocks": 1,
+      "output": "none"
+    },
+    "unqualified": [
+      "final immutable Dim1/Dim2 artifacts for the current integration and final source/native proof lineage",
+      "final 1065-entry CTest execution/inventory after the 225-target native build",
+      "final 485-file non-MPI Python closure gate"
+    ],
+    "bounded_extension_limits": [
+      "AMR scientific matrices",
+      "GPU/device execution",
+      "off-diagonal tensor diffusion",
+      "curvilinear/embedded multi-component diffusion integration",
+      "wider backend/layout/rank cells not declared by the bounded profiles",
+      "provider DerivedAux beyond the bounded Dim2 Uniform periodic CPU profile"
+    ]
+  },
+  "command_catalog": {
+    "wheel_dim2": {
+      "status": "exact",
+      "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-m3-m6",
+      "executable": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/python3.12",
+      "command": "python -m pip wheel -v . --no-deps --no-build-isolation --wheel-dir /Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-wheel-dim2 -C build-dir=build/{wheel_tag}-dim2 -C cmake.define.POPS_NATIVE_DIM=2 -C cmake.define.POPS_HEAVY_MODULE_TU_POOL=2 -C cmake.define.POPS_USE_MPI=ON -C cmake.define.POPS_USE_HDF5=ON -Ccmake.define.CMAKE_BUILD_WITH_INSTALL_RPATH=ON",
+      "receipts": [
+        "pub_dim2_proof",
+        "pub_dim2_wheel"
+      ]
+    },
+    "wheel_dim1": {
+      "status": "exact",
+      "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-m3-m6",
+      "executable": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/python3.12",
+      "command": "python -m pip wheel -v . --no-deps --no-build-isolation --wheel-dir /Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-wheel-dim1 -C build-dir=build/{wheel_tag}-dim1 -C cmake.define.POPS_NATIVE_DIM=1 -C cmake.define.POPS_HEAVY_MODULE_TU_POOL=2 -C cmake.define.POPS_USE_MPI=ON -Ccmake.define.POPS_USE_HDF5=ON -Ccmake.define.CMAKE_BUILD_WITH_INSTALL_RPATH=ON",
+      "receipts": [
+        "pub_dim1_proof",
+        "pub_dim1_wheel"
+      ]
+    },
+    "native_178": {
+      "status": "historical_exact_argv",
+      "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-m3-m6",
+      "argv_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-native-full-build-v3.json#/command",
+      "receipts": [
+        "cpp_selection",
+        "native_build",
+        "native_build_log",
+        "native_build_log2"
+      ],
+      "note": "Historical 178-target argv and interrupted logs; superseded by the active 225-target v3 native build."
+    },
+    "broad_source": {
+      "status": "exact_argv_pending_resume",
+      "argv_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/broad-source-command.json#/command",
+      "receipts": [
+        "broad_command",
+        "broad_log"
+      ],
+      "note": "The retained 475-file selector is historical/preselection evidence; the active current-source closure selector is the exact 485-file command."
+    },
+    "source_gate": {
+      "status": "output_and_selector_only",
+      "receipts": [
+        "source_xml",
+        "source_log"
+      ],
+      "note": "Invocation not retained."
+    },
+    "field_overlay": {
+      "status": "selector_only",
+      "selector": "tests/python/integration/runtime/test_public_field_matrix.py and tests/python/integration/runtime/test_public_field_consumers.py",
+      "receipts": [
+        "fields_overlay_xml",
+        "fields_overlay"
+      ],
+      "note": "Invocation not retained."
+    },
+    "field_consumers": {
+      "status": "selector_only",
+      "selector": "tests/python/integration/runtime/test_public_field_consumers.py",
+      "receipts": [
+        "fields_consumers",
+        "fields_transport",
+        "fields_consumers_private_overlay",
+        "fields_detach",
+        "review_public_native",
+        "review_public_native_command"
+      ],
+      "note": "Earlier overlay invocation is retained for history; the immutable review-native command and 14-test result are recorded separately."
+    },
+    "interactions_rank1": {
+      "status": "receipt_selector_only",
+      "selector": "rank-one interaction matrix",
+      "receipts": [
+        "interactions_rank1",
+        "interactions_rank1_log"
+      ],
+      "note": "Configuration and output retained; shell invocation not retained."
+    },
+    "interactions_mpi2": {
+      "status": "receipt_selector_only",
+      "selector": "MPI2 implicit exact/approximate/finite-difference matrix",
+      "receipts": [
+        "interactions_mpi2",
+        "interactions_mpi2_pub_r0_log",
+        "interactions_mpi2_pub_r0_xml",
+        "interactions_mpi2_pub_r1_log",
+        "interactions_mpi2_pub_r1_xml",
+        "interactions_publication_overlay",
+        "interactions_publication_overlay_branch",
+        "interactions_final_evidence"
+      ],
+      "note": "Foundation and publication rank outputs retained; shell invocation not retained."
+    },
+    "interactions_publication": {
+      "status": "receipt_selector_only",
+      "selector": "tests/python/unit/codegen/test_native_interaction_matrix.py publication MPI2 numerical/timing matrix",
+      "receipts": [
+        "interactions_mpi2_pub_r0_log",
+        "interactions_mpi2_pub_r0_xml",
+        "interactions_mpi2_pub_r1_log",
+        "interactions_mpi2_pub_r1_xml",
+        "interactions_publication_overlay",
+        "interactions_publication_overlay_branch",
+        "interactions_final_evidence"
+      ],
+      "note": "Goodall 24b5898 overlay receipts remain supporting history; authoritative current closure-interactions receipts use the no-overlay closure environment and are recorded under closure_interactions."
+    },
+    "interactions_face": {
+      "status": "receipt_selector_only",
+      "selector": "tests/python/unit/codegen/test_native_constitutive_faces.py::test_full_native_joint_constitutive_face_matrix",
+      "receipts": [
+        "interactions_final_evidence",
+        "interactions_face_protocol",
+        "interactions_face_log",
+        "interactions_face_xml"
+      ],
+      "note": "Goodall consolidated evidence supersedes the historical v3 face failure; failed log/XML remain provenance only."
+    },
+    "diffusion_sg": {
+      "status": "receipt_selector_only",
+      "selector": "tests/python/integration/runtime/test_public_drift_diffusion_matrix.py",
+      "receipts": [
+        "sg_public_log",
+        "sg_public_xml",
+        "sg_final_proof",
+        "sg_validation_report"
+      ],
+      "note": "6 cases pass in the final proof/report; invocation not retained."
+    },
+    "diffusion_explicit": {
+      "status": "receipt_selector_only",
+      "selector": "tests/python/integration/runtime/test_public_diffusion_matrix.py",
+      "receipts": [
+        "diff_final_summary",
+        "diff_final_post_payload",
+        "diff_tensor_log",
+        "diff_tensor_xml"
+      ],
+      "note": "Immutable Dim2 final summary/post-payload proof passes; diagnostic tensor receipts remain supporting evidence."
+    },
+    "implicit": {
+      "status": "receipt_selector_only",
+      "selector": "tests/python/integration/runtime/test_public_implicit_diffusion.py",
+      "receipts": [
+        "implicit_summary",
+        "implicit_overlay",
+        "review_public_native",
+        "review_private_proof"
+      ],
+      "note": "The six-case implicit result is superseded for artifact provenance by the immutable review-native result."
+    },
+    "solve": {
+      "status": "receipt_selector_only",
+      "selector": "M6.1 solve source/native lifecycle selectors",
+      "receipts": [
+        "solve_summary",
+        "solve_source",
+        "solve_lifecycle"
+      ]
+    },
+    "retry": {
+      "status": "receipt_selector_only",
+      "selector": "tests/python/integration/runtime/test_native_retry_transactions.py",
+      "receipts": [
+        "retry_summary",
+        "retry_xml",
+        "retry_overlay"
+      ]
+    },
+    "transactions": {
+      "status": "receipt_selector_only",
+      "selector": "CMake transaction/residual/ProgramContext contract filters",
+      "receipts": [
+        "transaction_xml",
+        "transaction_log",
+        "transaction_source"
+      ]
+    },
+    "review_public_native": {
+      "status": "receipt_selector_only",
+      "selector": "tests/python/integration/runtime/test_public_field_problem.py, test_public_field_reuse.py, test_public_field_consumers.py, test_implicit_diffusion_lifecycle.py and test_native_retry_transactions.py",
+      "receipts": [
+        "review_public_native",
+        "review_public_native_command",
+        "review_public_native_summary",
+        "review_private_proof"
+      ],
+      "note": "Immutable review-native Dim2 selector; no Python overlay."
+    },
+    "review_public_native_command": {
+      "status": "exact",
+      "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-review-env",
+      "executable": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-review-env/bin/python",
+      "command": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-review-env/bin/python -m pytest tests/python/integration/runtime/test_public_field_problem.py tests/python/integration/runtime/test_public_field_reuse.py tests/python/integration/runtime/test_public_field_consumers.py tests/python/integration/runtime/test_implicit_diffusion_lifecycle.py tests/python/integration/runtime/test_native_retry_transactions.py -q --tb=short --maxfail=3 --junitxml=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/review-public-native.xml",
+      "receipts": [
+        "review_public_native",
+        "review_public_native_summary",
+        "review_private_proof"
+      ],
+      "note": "rc=0; source 14a0f74; no Python overlay; 14 selected tests."
+    },
+    "native_225": {
+      "status": "exact_argv_pass_build_ctest_partial_failure",
+      "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-m3-m6",
+      "argv_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/final-native-v3-build-command.json#/command",
+      "receipts": [
+        "native_build_225_v3_command",
+        "native_build_225_v3_result",
+        "native_build_225_v3_log",
+        "closure_ctest_commands",
+        "closure_ctest_summary",
+        "closure_ctest_inventory",
+        "closure_ctest_cpp_log",
+        "closure_ctest_cpp_xml",
+        "closure_ctest_mpi_np1_log",
+        "closure_ctest_mpi_np1_xml",
+        "closure_ctest_mpi_np2_log",
+        "closure_ctest_mpi_np2_xml",
+        "closure_ctest_mpi_np3_log",
+        "closure_ctest_mpi_np3_xml",
+        "closure_ctest_mpi_np4_log",
+        "closure_ctest_mpi_np4_xml",
+        "closure_ctest_standalone_log",
+        "closure_ctest_standalone_xml"
+      ],
+      "note": "Exact argv selects 225 targets and the native build passes; the complete 1065-entry CTest inventory is partially failing: cpp, MPI-np1, MPI-np2 and MPI-np4 have failures, while MPI-np3 and standalone pass. No all-green CTest or repository closure claim exists."
+    },
+    "periodic_dim1_sg": {
+      "status": "receipt_selector_only",
+      "selector": "tests/python/integration/runtime/test_public_drift_diffusion_matrix.py",
+      "receipts": [
+        "periodic_dim1_sg_final_proof",
+        "periodic_dim1_sg_report"
+      ],
+      "note": "Exact installed Dim1 SG replay at source 6b2a1c3, no Python overlay; interpreter and fixture are retained in the proof."
+    },
+    "closure_source_485": {
+      "status": "exact_argv_main_gate_failed_remainder_in_progress",
+      "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-m3-m6",
+      "argv_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-source-command.json#/command",
+      "receipts": [
+        "closure_source_command",
+        "closure_source_summary",
+        "closure_source_log",
+        "closure_source_remainder_command",
+        "closure_source_remainder_log"
+      ],
+      "note": "The exact current-source 485-file bulk gate completed with 8 failures, 20 passes and 247 deselected; the 472-file continuation is diagnostic and running, so no source closure receipt exists."
+    },
+    "closure_wheel_dim2": {
+      "status": "exact",
+      "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-m3-m6",
+      "argv_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-wheel-dim2-command.json#/command",
+      "receipts": [
+        "closure_dim2_command",
+        "closure_dim2_build",
+        "closure_dim2_proof",
+        "closure_doctor"
+      ],
+      "note": "Current closure Dim2 artifact is pinned to source 34a8acc; current repository source is 08ff8a6. The native/source continuity receipt covers the clean 6b prerequisite and packaged 34a source."
+    },
+    "closure_ctest": {
+      "status": "exact_argv_complete_partial_failure",
+      "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-m3-m6",
+      "argv_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-ctest-commands.json#/batches",
+      "receipts": [
+        "closure_ctest_commands",
+        "closure_ctest_inventory",
+        "closure_ctest_summary",
+        "closure_ctest_cpp_log",
+        "closure_ctest_cpp_xml",
+        "closure_ctest_mpi_np1_log",
+        "closure_ctest_mpi_np1_xml",
+        "closure_ctest_mpi_np2_log",
+        "closure_ctest_mpi_np2_xml",
+        "closure_ctest_mpi_np3_log",
+        "closure_ctest_mpi_np3_xml",
+        "closure_ctest_mpi_np4_log",
+        "closure_ctest_mpi_np4_xml",
+        "closure_ctest_standalone_log",
+        "closure_ctest_standalone_xml",
+        "closure_native_source_continuity"
+      ],
+      "note": "Exact batches cover 963 normal, 20 MPI-np1, 49 MPI-np2, 3 MPI-np3, 25 MPI-np4 and 5 standalone entries. Cpp, MPI-np1, MPI-np2 and MPI-np4 completed with failures; MPI-np3 and standalone passed. The aggregate is not all-green."
+    },
+    "closure_interactions": {
+      "status": "exact_receipts_pass",
+      "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-closure-interactions",
+      "argv_receipts": [
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-before.json#/commands",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-matrix-mpi2.command.txt",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-guard-solve-mpi2.command.txt",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-native-rank1.command.txt"
+      ],
+      "receipts": [
+        "closure_interactions_final",
+        "closure_interactions_before",
+        "closure_interactions_mpi2_r0_log",
+        "closure_interactions_mpi2_r0_xml",
+        "closure_interactions_mpi2_r1_log",
+        "closure_interactions_mpi2_r1_xml",
+        "closure_interactions_guard_r0_log",
+        "closure_interactions_guard_r0_xml",
+        "closure_interactions_guard_r1_log",
+        "closure_interactions_guard_r1_xml",
+        "closure_interactions_rank1_log",
+        "closure_interactions_rank1_xml"
+      ],
+      "note": "Authoritative closure-env M4 no-overlay receipts pass all three batches on source 34a8acc; the repository source has since advanced to 08ff8a6. Concurrent host timing remains bounded and is not a universal performance claim."
+    }
+  },
+  "receipt_catalog": {
+    "manifest": {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json",
+      "sha256": "b64efb3c33266c769aa58a7ef44ad7dc873867e7dac18792972a5df00f4c676d",
+      "note": "Pinned issue list and acceptance numbering."
+    },
+    "pub_dim1_proof": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-dim1-private-proof.json",
+      "sha256": "9f261e3e42aa21b31944e91c80544520beaf05d6e5e26b1f5a8e71cdc879bad8",
+      "note": "Immutable Dim1 publication proof.",
+      "pins": {
+        "source": "24b5898",
+        "native_manifest_sha256": "41f37df67ba78c70465b9563ae4ffec81edd9ef686f8ccafb0312a8724968ebd",
+        "native_so_sha256": "0ca463317f99e4a78d292c2946e7ad93d08b28e68840f01a80cf6e4aaff4e71e",
+        "installed_tree_sha256": "93fc6a863c59d25d988b2046eb08f9f611a89a5f5a956f61c70355189d89f024"
+      }
+    },
+    "pub_dim1_wheel": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-wheel-dim1/pops-1.0.0-cp312-cp312-macosx_26_0_arm64.whl",
+      "sha256": "c2925e874a1a3a6e16d988a4805bcda7afa92b8d947b72722a4a7cd7b53f556e",
+      "note": "Dim1 wheel."
+    },
+    "pub_dim2_proof": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-private-proof.json",
+      "sha256": "8b88a1b9bb6a14e32dbedc159a5ea5eaf9180da76a932e9edc8310ae4f9b3e3b",
+      "note": "Immutable Dim2 publication proof.",
+      "pins": {
+        "source": "24b5898",
+        "native_manifest_sha256": "4a01cf1b1ad5c8f02f827d4574b99eaf654f82d49e45abe8bb3ee94239e4967a",
+        "native_so_sha256": "a5e7032b044f9a259f3f23bc967a8430388dbc5900a9c210b067e28966f49265",
+        "installed_tree_sha256": "5082b4df59f457189e281529d16a6c97f5f60afa5137e8cdf8bba04b3c9194b8"
+      }
+    },
+    "pub_dim2_wheel": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-wheel-dim2/pops-1.0.0-cp312-cp312-macosx_26_0_arm64.whl",
+      "sha256": "762994fbdd723551e6ec64c3cf4bcc1dc8b36bfb72a8117c322e3503fd68c848",
+      "note": "Dim2 wheel."
+    },
+    "source_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/integrated-source-gate.xml",
+      "sha256": "a25710546175354739f44d86585d91e7937b91bd367daacc59f23f128177fdec",
+      "result": "222 passed, 2 deselected",
+      "note": "Integrated source-only gate."
+    },
+    "source_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/integrated-source-gate.log",
+      "sha256": "6227031d9ecfcc860e6edb680058913addfe7d9193c2ed06ad2d23c1a505759c",
+      "result": "222 passed, 2 deselected",
+      "note": "Integrated source-only output."
+    },
+    "cpp_selection": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-cpp-selection.log",
+      "sha256": "5caefbd2164d58a601d49126f6765653787f18eb447e18faa944c4646d664dc9",
+      "result": "178/178 targets selected",
+      "note": "C++ selection inventory; not execution."
+    },
+    "native_build": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-native-full-build-v3.json",
+      "sha256": "0afafb64054f6129d60d0f0e67fa3567a2616349be39288280517288a7cba7c0",
+      "note": "Historical 178-target argv; candidate source 9bc2145; retained for provenance only."
+    },
+    "native_build_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-native-full-build-v3.log",
+      "sha256": "d36c3c792b2b8d309c5626b0a731bb477ceaf50cf235da47d8a0dc8fc5e49379",
+      "result": "incomplete; test_amr_riemann_native.cpp compile error",
+      "note": "Historical incomplete 178-target output; retained for provenance only."
+    },
+    "native_build_log2": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/publication-native-full-build-v4.log",
+      "sha256": "fab6e2f9f223a17544dbf662fa9dff8db19ed8a466aa27653095044270191add",
+      "result": "incomplete; log ends after test_world_communicator link",
+      "note": "Historical incomplete follow-up 178-target output; retained for provenance only."
+    },
+    "fields_matrix": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-public-matrix.json",
+      "sha256": "42292e6a46093c54adb9358be0ff200d65140f33ddc02b995450bca4f0ce1c4f",
+      "result": "9 accepted rows",
+      "note": "D2 field matrix."
+    },
+    "fields_overlay": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-public-overlay.json",
+      "sha256": "13c6be9cd56b083717bec58cc999b05eafdbc07e9fd25c2fe82f999d824ebc1d",
+      "note": "Private Python field overlay."
+    },
+    "fields_overlay_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-public-overlay.xml",
+      "sha256": "077b01654f9aa06bd7dc4945df9f7db22ae460cd8de891822242b4a7f2167b13",
+      "result": "2 passed",
+      "note": "Field overlay lifecycle output."
+    },
+    "fields_euler": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-public-Euler_Poisson_source.json",
+      "sha256": "2e746d1833d200c2241329b21e615df55883a4ec4fb2118dc1faaae10fd4e300",
+      "result": "N16/32/64, orders 2.002789 and 2.000696",
+      "note": "Euler-Poisson source receipt."
+    },
+    "fields_consumers": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-public-consumers.xml",
+      "sha256": "f56517cb0a3b0e1e35e68af3218c58c7225c8004e3bed10d5b57bfa504ea981c",
+      "result": "3 tests, 9 rows pass; Euler-Poisson source, field transport and joint Neumann gradient consumers",
+      "note": "Current field consumer result; supersedes the earlier transport-failure XML."
+    },
+    "fields_transport": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-public-field_transport.json",
+      "sha256": "f5d24d1ba817e8b510c0bdc61c748388c9add94a4dc558fa71487eccef373675",
+      "result": "N16/32/64; observed transport orders 1.3176677704849828 and 1.1117397898166301; finest L2 9.987480340715498e-05",
+      "note": "Current field-transport consumer numerical receipt; first-order FV acceptance is predeclared as order >=0.8 and both observed rates pass that criterion."
+    },
+    "fields_consumers_private_overlay": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-consumers-private-overlay.json",
+      "sha256": "900e0eaf2b2d7e21dec9db015cc7788b70dfdf8e924977256fb5aad17bebb297",
+      "result": "base 24b5898; overlay commits d2b8bca, 3bc360c, 41c0293; native and headers unchanged",
+      "note": "Private exact Python patch copy used by the current field-consumer receipt."
+    },
+    "fields_detach": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-public-consumers-detach-refusal.xml",
+      "sha256": "601eaaef63688aac21e0cb5766d86486ec851178f6881ae58f8f0da8175b1d2c",
+      "note": "Structured authoritative Case registry refusal."
+    },
+    "fields_stage": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-stage-native.log",
+      "sha256": "f26bcff1cb9e7d0900348ba19dc246eb6d8d56e4876f5a29abfeb314712c7af1",
+      "result": "4 solves plus 1 reuse",
+      "note": "Stage reuse output."
+    },
+    "fields_joint": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/fields-joint-gradient-overlay.xml",
+      "sha256": "0d2c17748ba5f895ce0f017f8860b1b3591eb8d6d932d63405508f5a663b224c",
+      "result": "1 pass",
+      "note": "Joint gradient overlay."
+    },
+    "interactions_rank1": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-matrix-rank1-summary.json",
+      "sha256": "6faa028a3d23cc0e9c61514bea0f8bec4644a26496e646bfeb28a4e83ce5aebc",
+      "result": "13 rows pass; 1300.163 seconds",
+      "note": "D2 rank-one interaction matrix."
+    },
+    "interactions_rank1_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-matrix-rank1.log",
+      "sha256": "0efd4e6c0c749367cb568c74291f9dad2f21625c04a829f1d0400a203db5a04c",
+      "result": "13 passed, 12 warnings in 1300.75 seconds",
+      "note": "D2 rank-one output."
+    },
+    "interactions_mpi2": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-implicit-mpi2-summary.json",
+      "sha256": "61d7088779206eb3f2c067e80c97fb1bbdaa5a4f8365775e928afe92fd66aa9c",
+      "result": "9 exact/approximate/FD cases per rank",
+      "note": "D2 MPI2 derivative matrix."
+    },
+    "interactions_mpi2_pub_r0_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-matrix-publication-mpi2-rank0.log",
+      "sha256": "c811a675d6899e9217bdcbb1b16c425651171ca48f214b1f64462246e9440e90",
+      "result": "13 passed, 12 warnings in 1572.82 seconds",
+      "note": "Publication Dim2 MPI2 rank-zero interaction matrix."
+    },
+    "interactions_mpi2_pub_r0_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-matrix-publication-mpi2-rank0.xml",
+      "sha256": "7ed293e652a2d8cb7f14848e6735beb463cce627f460ff608c5866b61b53857b",
+      "result": "13 passed; N16/32/64, 100-step Heun and paired timing properties",
+      "note": "Publication Dim2 MPI2 rank-zero JUnit interaction matrix."
+    },
+    "interactions_mpi2_pub_r1_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-matrix-publication-mpi2-rank1.log",
+      "sha256": "c811a675d6899e9217bdcbb1b16c425651171ca48f214b1f64462246e9440e90",
+      "result": "13 passed, 12 warnings in 1572.82 seconds",
+      "note": "Publication Dim2 MPI2 rank-one interaction matrix."
+    },
+    "interactions_mpi2_pub_r1_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-matrix-publication-mpi2-rank1.xml",
+      "sha256": "93537baa77318684023b358e20f2241ebc38db47615347682a9c955a533204ec",
+      "result": "13 passed; N16/32/64, 100-step Heun and paired timing properties",
+      "note": "Publication Dim2 MPI2 rank-one JUnit interaction matrix."
+    },
+    "interactions_publication_overlay": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-publication-overlay.json",
+      "sha256": "fb332c28690b992a15593790e84a75b4937386ad75905aedd4c634e014cd1814",
+      "result": "native base 24b5898; source head 6ab867a226fbb653cf00ffd8a87b9b36b939f4b2",
+      "note": "Publication interaction source overlay manifest."
+    },
+    "interactions_publication_overlay_branch": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-publication-overlay-branch.json",
+      "sha256": "9381d9a3f043234fbbd4125a876a4981d4120d3230baf52f68813b597c19c902",
+      "result": "native base 24b5898 unchanged; Python authoring overlay recorded",
+      "note": "Publication interaction branch overlay manifest and projection limits."
+    },
+    "interactions_final_evidence": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-final-evidence.json",
+      "sha256": "d674fe3b3366dd5a5c082ca77c66f8b4144385df296df131aa55e6542d092c45",
+      "result": "13+13 publication MPI2, 15+15 guard/solve MPI2 and 19 final native rank-one tests pass; no failures",
+      "note": "Consolidated M4 receipt with 13+13 publication, 15+15 guard/solve and 19 rank-one rows; runtime source 24b5898 used recorded overlays, while current closure no-overlay receipts are separate.",
+      "pins": {
+        "native_runtime_source": "24b5898",
+        "production_head": "a25848d",
+        "fixture_manifest": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-publication-mpi2-fixtures/manifest.json",
+        "fixture_manifest_sha256": "c85423a93ab44a55d92e618f7ffff6757418fc30d1aa1cbb6859f7bebba698ed"
+      }
+    },
+    "interactions_face_protocol": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-face-protocol.json",
+      "sha256": "cfc8e46590f607e95adc281f9bc15d19ad17ce894612b7b6b9bad8e78e78d0b3",
+      "note": "Predeclared joint face oracle."
+    },
+    "interactions_face_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-face-publication-v3.log",
+      "sha256": "ee168d7752c4e10539836c6471e950cfe615f9019f3ef52252cb999430d35a68",
+      "result": "100 accepted steps then oracle mismatch",
+      "note": "Historical v3 failed output retained for provenance only; its NumPy axes oracle was wrong and is superseded by the clean 19-test rank-one receipt."
+    },
+    "interactions_face_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-face-publication-v3.xml",
+      "sha256": "9b0059214fc0fe29e3b80d56056c14dd274b50e1dcae084e54c70747a70158f0",
+      "result": "1 failed",
+      "note": "Historical v3 failed JUnit retained for provenance only; the failure was a fixture-oracle axes mismatch, not an open native face defect."
+    },
+    "diff_constant": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-explicit-spatial-constant.json",
+      "sha256": "543040affa7374998856ff8a5ae39728934aa7663d49a86d1103e405150fbd11",
+      "result": "orders 1.8665, 1.8630, 1.8526",
+      "note": "D2 constant diffusion."
+    },
+    "diff_variable": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-explicit-spatial-variable.json",
+      "sha256": "eabd86c3c86696e9821f1e144daa3ba37768ef8c05d35d59530cba0d42a94627",
+      "result": "orders 2.00013, 2.00043, 1.99124",
+      "note": "D2 variable diffusion."
+    },
+    "diff_linear": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-explicit-spatial-diagonal_linear.json",
+      "sha256": "79864980a643f8dd518b1ea96e50cabbfe93c4b51f0d42b138e7315e2adada77",
+      "result": "zero-error rows",
+      "note": "D2 diagonal linear diffusion."
+    },
+    "diff_smooth": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-explicit-spatial-diagonal_smooth.json",
+      "sha256": "b2141a69eafe7f5903dc44e78721be7f93536b375c58869669c1065b91c31496",
+      "result": "orders 1.99757, 1.99497, 1.91860",
+      "note": "D2 diagonal smooth diffusion."
+    },
+    "diff_tensor_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-variable-tensor-native.log",
+      "sha256": "67772e1ea3567e648af6815d33c1244c096b415c777fa156957a4118d44e163e",
+      "result": "4 passed, 5 deselected in 1396.80 seconds",
+      "note": "D2 variable/tensor diagnostic."
+    },
+    "diff_tensor_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-variable-tensor-native.xml",
+      "sha256": "f94f358f287c95ccd561a57b90ae756ad82d7ba463a0114bd2792dfcb4e02913",
+      "result": "4 passed",
+      "note": "D2 variable/tensor XML."
+    },
+    "diff_combined": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-combined-stability-dim2.json",
+      "sha256": "1cce59a5796cf6700590d61c3a0c8bb894344dc31071081d61ae3bdcaa019c62",
+      "result": "c=.2 accepted; c=.6 refused",
+      "note": "Historical D2 combined restriction receipt; exact accepted-face Euler/SSPRK2 reconciliation is superseded by combined_periodic_native_xml/log."
+    },
+    "diff_exchange_euler": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-explicit-exchanges-euler.json",
+      "sha256": "8a5652365589a8a4241d6b59bc887780b070c5f1fa9b2205bb1059d75d292ef3",
+      "result": "1024/4096/16384 records",
+      "note": "Euler exchange ledger."
+    },
+    "diff_exchange_ssprk2": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-explicit-exchanges-ssprk2.json",
+      "sha256": "d8a0311b6d5c3f9f4a3170b0b06bb0dc27160a3461f91f14c2fe4d9bbde8b213",
+      "result": "2048/8192/32768 records",
+      "note": "SSPRK2 exchange ledger."
+    },
+    "sg_mms": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-sg-native-matrix/diffusion-sg-mms.json",
+      "sha256": "b46bcbb0d8d48c33bcb6b10a9116ca4959971ddea3e2d9571242579f56998b6e",
+      "result": "orders 2.002086, 1.999170, 1.995879",
+      "note": "SG manufactured matrix."
+    },
+    "sg_boundary": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-sg-native-matrix/diffusion-sg-boundary-equilibrium.json",
+      "sha256": "0d6088050023876f5ae555654eff8709e70fa934344da0d3d7e31f8fe82a3dcc",
+      "result": "face flux <= 1.2825e-15",
+      "note": "SG boundary matrix."
+    },
+    "sg_public_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-sg-public-2.log",
+      "sha256": "040c16774e96759b5f76751880c8efbf6abd169e89d0d7b8ef10876a7b30d162",
+      "result": "6 passed in 255.22 seconds",
+      "note": "D1 public SG output."
+    },
+    "sg_public_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-sg-public-2.xml",
+      "sha256": "89260dc5c11baff8127d2f59c3ba1eb09f5b26a6691529ebc45d7157614f4af9",
+      "result": "6 passed",
+      "note": "D1 public SG XML."
+    },
+    "sg_final_proof": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-sg-final-proof.json",
+      "sha256": "a39523a6c6bb2a161689d622552253ad9e31f8c83821d22105d55007bc13b61c",
+      "result": "6 tests pass, 0 skipped/failed in 255.22 seconds; base source 24b5898",
+      "note": "Final SG proof with native and fixture/source pins."
+    },
+    "sg_validation_report": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-sg-validation-report.md",
+      "sha256": "432f039ecf27f6b2c8f7d6385606864aa8ff7f7d8b44c85e7065cd18ff9590a0",
+      "result": "D1 N16/32/64 public SG validation; solved-potential consumer and combined bounds pass",
+      "note": "Human-readable SG validation report; no AMR/GPU/MPI2 qualification."
+    },
+    "sg_overlay": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-dim1-overlay-proof.json",
+      "sha256": "ad059c92547ed77615b685f37f135879652d9ab4c938cdc4d84d411edf71b278",
+      "result": "base source 24b5898",
+      "note": "Dim1 Python overlay."
+    },
+    "diff_final": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-final-native-provenance.json",
+      "sha256": "0584de188fbb1f1b90d4bde20ea29ccab56d27e90c04f8f3500e91e96dd290f1",
+      "result": "passed; 9 tests, 0 failures, 0 skipped in 2667.177 seconds",
+      "note": "Completed immutable Dim2 provenance receipt; summary and post-payload proof provide the normalized result and integrity record."
+    },
+    "solve_summary": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/solve-summary.json",
+      "sha256": "647d4d2710ec1218e784cf33e1740ba322d6d291465eb05f3dfddee1b3e0f60c",
+      "result": "60 source, 14 existing-linear, 8 residual, 2 lifecycle",
+      "note": "M6.1 solve summary."
+    },
+    "solve_source": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/solve-source.xml",
+      "sha256": "e147b2bc1fd4099cf78228124fcf74289b548f397c3a3fa65246c6262eeede8a",
+      "result": "60 pass",
+      "note": "M6.1 source solve."
+    },
+    "solve_lifecycle": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/solve-native-lifecycle.xml",
+      "sha256": "c4fb633de97eb6c0056fbb0c025efc76ade7cd59d712693107ba58b4244f87df",
+      "result": "2 pass",
+      "note": "M6.1 native lifecycle."
+    },
+    "solve_overlay": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/solve-native-overlay.json",
+      "sha256": "3992de16d132fc1bfcd1a0edf77a2c292ddd61e26942ac1392e4d952db9872cd",
+      "result": "source abb5ab25; foundation 71880cfe",
+      "note": "M6.1 native overlay."
+    },
+    "implicit_summary": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/solve-implicit-summary.json",
+      "sha256": "678a605da9e4b4ea28415b1acdaa131fdd9c00d1ad872e538d2f7b887edfae92",
+      "result": "6 public cases pass in 145.85 seconds",
+      "note": "M5.4 implicit matrix."
+    },
+    "implicit_overlay": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/solve-implicit-public-overlay.json",
+      "sha256": "5a62b98f8589c0d414f923893f07b034d0edf6aa67af418e2b3b961c0292a107",
+      "result": "a08cc5f native plus f92a55a/2fac0aa Python patches",
+      "note": "M5.4 overlay."
+    },
+    "implicit_fatal": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/solve-implicit-fatal-witness.json",
+      "sha256": "d5c8a11797fcb2bfad966b7df3281c0bc029e40e04c9b88c822ed3f7bdb228dc",
+      "result": "3/3 isolated native witnesses",
+      "note": "M5.4 fatal witness."
+    },
+    "retry_summary": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/native-retry-summary.json",
+      "sha256": "b77ba0e137d08e4bd4a42cae85ea52613f023924153afca16c857481d2e77e1b",
+      "result": "2 pass in 40.15 seconds",
+      "note": "M6.2 public retry summary."
+    },
+    "retry_overlay": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/native-retry-overlay.json",
+      "sha256": "0d4ff642e52eeea4fbfd2f9ee16c023c5bdc4940ba13502bc8abbb1eb7637ff1",
+      "result": "base 24b5898, patch a22a874, native headers unchanged",
+      "note": "M6.2 overlay."
+    },
+    "retry_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/native-retry-v5.xml",
+      "sha256": "90ac5d88272eb6888c46fc01391fce0e9881413d1dc971364aedab1c9192191c",
+      "result": "2 pass",
+      "note": "M6.2 exact retry XML."
+    },
+    "transaction_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/transaction-native-tests-2.xml",
+      "sha256": "993a42a25895e9db0a385309f2081dbe61c8558787c8497c1723e37e671d365c",
+      "result": "39 tests, 36 pass, 3 skipped",
+      "note": "M6.2 native transaction XML."
+    },
+    "transaction_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/transaction-native-tests-2.log",
+      "sha256": "ed2a81c15e157165f1182dc1cfc3b68d735ab5598031255e2d8dcb286ecca728",
+      "result": "36 pass, 3 skipped",
+      "note": "M6.2 native transaction output."
+    },
+    "transaction_source": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/transaction-source-tests.log",
+      "sha256": "e39bdfe24084bc687d6447d20969cff5ce213da2dd1b1c6802ca844b26841374",
+      "result": "79 passed in 1.81 seconds",
+      "note": "M6.2 source transaction output."
+    },
+    "broad_command": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/broad-source-command.json",
+      "sha256": "ea626f7e2f7afe80bb79f3e69d8c7c92176cbd537619d91e9d7002f763d4b5b1",
+      "result": "475 non-MPI files selected; completion pending after fingerprint-scope repair",
+      "note": "Exact broad source argv; no completion receipt is claimed."
+    },
+    "broad_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/broad-source.log",
+      "note": "Broad source log has no completion receipt; resume is required after the fingerprint-scope repair."
+    },
+    "review_public_native": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/review-public-native.xml",
+      "sha256": "6090250b9d7068fb1a8db9b9c69366278b4a63fb982861f30293956c09b724a9",
+      "result": "14 passed, 0 failed, 0 skipped in 811.086 seconds",
+      "note": "Immutable review-native public artifact for field, implicit-diffusion and retry selectors; source 14a0f74; no Python overlay."
+    },
+    "review_public_native_command": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/review-public-native-command.json",
+      "sha256": "d0d5b55e67e68505c68ecf9ea9932d21be91d92dc7cc644456d476b3c4d0565c",
+      "result": "rc=0; exact pytest command retained; source 14a0f74; no Python overlay",
+      "note": "Review environment command for the immutable 14-test public-native artifact."
+    },
+    "review_public_native_summary": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/review-public-native-summary.json",
+      "sha256": "66bd459b3f68cdb1de4006e62e17b29ef3fb383cfbb02a87d2793cd1967a0a5b",
+      "result": "14 passed, 0 failed, 0 skipped; source 14a0f74; no Python overlay",
+      "note": "Machine-readable review-native result summary."
+    },
+    "review_private_proof": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/review-private-proof.json",
+      "sha256": "11607e6b8f9f16d1e85967b5dc0c9a4c790ead595f30cbc383e7943f58e6e3e5",
+      "result": "963 installed members; immutable review wheel and native hashes authenticated",
+      "note": "Private post-run proof for the immutable review-native artifact.",
+      "pins": {
+        "source": "14a0f74",
+        "wheel_sha256": "cf4953fc0545f6d564ac02af5b78abd046602352e3ce63ebde68155219a0e2bb",
+        "installed_tree_sha256": "e12cc68e92af24ad92312e75d66c97763006f59588b3917a2a8c2baf4a3ac4d6",
+        "native_manifest_sha256": "c2b10ced642978afe90a5f0bc63a24e22ebca81110504c06a3d53c03de2c9e34",
+        "native_so_sha256": "1ea8fc45435dada765f51f604630962b8248bbc63bb9fb0f85c35f28cb87b5a9",
+        "environment": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-review-env",
+        "python": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-review-env/bin/python",
+        "installed_member_count": 963
+      }
+    },
+    "diff_final_summary": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-final-summary.json",
+      "sha256": "c0fcd8c2aa34bf5cfa50006f634247119a63f90c37b6046749d93e23295cd32e",
+      "result": "passed; 9 tests, 27 native scenarios, 24 accepted and 3 rejected in 2667.177 seconds",
+      "note": "Immutable Dim2 explicit qualification result.",
+      "pins": {
+        "source": "24b58985e89b194ebd505672ca0b1e04d75ee4f4",
+        "fixture": "4beb66cd40350e32393684b4e82ffe5aad4115b4"
+      }
+    },
+    "diff_final_post_payload": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/diffusion-final-post-payload-proof.json",
+      "sha256": "0065a264a34837781303a2fe277a5087e640055e0dbdfa60b91aa333fb7a124b",
+      "result": "All immutable wheel members byte-identical after the 9-test qualification; wheel sha256 762994fbdd723551e6ec64c3cf4bcc1dc8b36bfb72a8117c322e3503fd68c848",
+      "note": "Post-payload integrity proof for the immutable Dim2 explicit artifact.",
+      "pins": {
+        "reference_proof": "publication-private-proof.json",
+        "installed_tree_sha256": "5082b4df59f457189e281529d16a6c97f5f60afa5137e8cdf8bba04b3c9194b8"
+      }
+    },
+    "native_build_225_command": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/final-native-v2-build-command.json",
+      "sha256": "903979e9571e1832bef154526dc22a4de9a456f5fe10db8b14682d55845d4567",
+      "result": "225 targets selected; source 2c6ed3f; build not yet complete",
+      "note": "Historical v2 command retained for provenance only; active v3 command is native_build_225_v3_command."
+    },
+    "native_build_225_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/final-native-v2-build.log",
+      "sha256": "34410b5b57e1bf9cbca45195fdd7f1fef0e5f1b02f55a59bca56a54d7e020d2c",
+      "result": "interrupted at test_program_context_schur_free; no compile-pass claim",
+      "note": "Historical v2 interruption retained for provenance only; active v3 build result is native_build_225_v3_result."
+    },
+    "ctest_inventory_1065": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/review-ctest-inventory-v3.json",
+      "sha256": "0789ba274436e6a165741c8a1dd066c8816a1630b7275f28b0ce4331396f9e2c",
+      "result": "1065 CTest entries enumerated",
+      "note": "Inventory receipt; enumeration is not a successful build."
+    },
+    "broad_python_selection": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/broad-python-selection.log",
+      "sha256": "62626ce6858451323297cd88f7474ff101b887d197e3969b03c65c0589a532ac",
+      "result": "475 non-MPI Python files selected; no completion receipt",
+      "note": "Selection output retained while the broad run awaits fingerprint-scope repair."
+    },
+    "interactions_final_native_rank1_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-final-native-rank1.log",
+      "sha256": "a6bffa6909ed13ab199be9c7dcfb667fbc15a7d1ee2b412aba3affb439d626fb",
+      "result": "19 passed, 0 failed, 0 skipped in 358.54 seconds",
+      "note": "Clean final native rank-one receipt; the old face failure is a fixture-oracle issue."
+    },
+    "interactions_final_native_rank1_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-final-native-rank1.xml",
+      "sha256": "cbb2a91aa35e481c5c5ca8cd0e60a9e52abfc47cec305b6f0cb4a8e3dee88100",
+      "result": "19 tests; errors=0, failures=0, skipped=0; 358.537 seconds",
+      "note": "Superseding rank-one JUnit receipt with six W/A face rows at N16/32/64 and guard/repetition controls."
+    },
+    "interactions_guard_solve_r0_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-guard-solve-final-mpi2-rank0.log",
+      "sha256": "fd2bd7c5a0d9176d6679f4de390386aa22a325c605a22e1a214979351abe88d6",
+      "result": "15 passed, 0 failed, 0 skipped in 319.79 seconds",
+      "note": "Final MPI2 guard/solve log for rank 0."
+    },
+    "interactions_guard_solve_r0_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-guard-solve-final-mpi2-rank0.xml",
+      "sha256": "8756e15d9f4a8b575c44723afdee755435e22d361a0b7030f5429d3733c8491c",
+      "result": "15 tests; errors=0, failures=0, skipped=0; 319.785 seconds",
+      "note": "Final MPI2 guard/solve JUnit receipt for rank 0."
+    },
+    "interactions_guard_solve_r1_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-guard-solve-final-mpi2-rank1.log",
+      "sha256": "fd2bd7c5a0d9176d6679f4de390386aa22a325c605a22e1a214979351abe88d6",
+      "result": "15 passed, 0 failed, 0 skipped in 319.79 seconds",
+      "note": "Final MPI2 guard/solve log for rank 1."
+    },
+    "interactions_guard_solve_r1_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/interactions-guard-solve-final-mpi2-rank1.xml",
+      "sha256": "3deb2359207f0bb105b4db4acd8cec6f7bfa9c413c350e16003227edc24b2040",
+      "result": "15 tests; errors=0, failures=0, skipped=0; 319.785 seconds",
+      "note": "Final MPI2 guard/solve JUnit receipt for rank 1."
+    },
+    "periodic_dim1_sg_final_proof": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/periodic-dim1-sg-final-proof.json",
+      "sha256": "c170e251b4c3ca4b7ff4fe60f2d74221f8c79ebdfe9c7f828b7a72e4b7d61708",
+      "result": "6 passed, 0 failed, 0 skipped in 226.013 seconds; source 6b2a1c3; no Python overlay",
+      "note": "Exact installed Dim1 proof with 964 members, tree 819ca798..., manifest 8669525f..., native 55511124..., wheel 4d5b432f..., fixture SHA 7657aab4....",
+      "pins": {
+        "source": "6b2a1c3402535209e0169b543e81e5537fec3551",
+        "fixture": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-m3-m6/tests/python/integration/runtime/test_public_drift_diffusion_matrix.py",
+        "fixture_sha256": "7657aab4035161fdd4d9820dd03047d171787f77d5e29fae70e0a3cf6cd0386a",
+        "python": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-periodic-dim1-env/bin/python",
+        "wheel_sha256": "4d5b432fd28b926402fb2347a4a4a229cb0315ccf9103703a64daf1669fcf61d",
+        "installed_tree_sha256": "819ca7983fed3f3ff618c1f413e3db1a31a4fb9e4a438d6293c1308b9a2581a8",
+        "native_manifest_sha256": "8669525fc32c13aaa8409e99d11a2892758e1523751b155a4bea077a0f1ff139",
+        "native_so_sha256": "555111246645f3151d304166b6ce67dde98dc7f6d3b40748eb5bfcc3826e7f82",
+        "installed_member_count": 964
+      }
+    },
+    "periodic_dim1_sg_report": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/periodic-dim1-sg-validation-report.md",
+      "sha256": "a22963c71d5c99229bc02e3ebd21efccacf7d0c49cb6c6476b67a7834cf8689e",
+      "result": "6 passed, 0 failed, 0 skipped in 226.013 seconds; MMS orders 2.002086/1.999170/1.995879; source 6b2a1c3; no Python overlay",
+      "note": "Human-readable exact-installed replay report for SG, solved-potential, zero-jump and combined-bound rows."
+    },
+    "combined_periodic_native_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/periodic-native.xml",
+      "sha256": "9985fa32b257baca1e5b247e9486191887b258628e01d657764afbdafc8463cc",
+      "result": "4 tests; errors=0, failures=0, skipped=0; 120.089 seconds",
+      "note": "Exact 6b2a1c3 Dim2 periodic native receipt: Euler/SSPRK2 accepted-face reconciliation over N16/32/64 plus staircase/cutcell refusal rows."
+    },
+    "combined_periodic_native_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/periodic-native.log",
+      "sha256": "a4ec59915ca0b74c99e6a19116ad133722c2d93f6badf2c4b944e5426de0f17b",
+      "result": "4 passed in 120.09 seconds",
+      "note": "Companion exact 6b2a1c3 combined-face log; both embedded-geometry cases are structured refusals."
+    },
+    "provider_shapes_source_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/provider-shapes-source.xml",
+      "sha256": "ad56e5494c3764bff475a1a7c93d3d439360b971fa1c183bdae1b9840ab3f741",
+      "result": "29 tests; errors=0, failures=0, skipped=0; 29.580 seconds",
+      "note": "Source-level provider-shape/auxiliary-preparation checks for the 809afdb repair integrated as 34a8acc."
+    },
+    "provider_shapes_source_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/provider-shapes-source.log",
+      "sha256": "c2e3003db987c0be1215faf4c91c11250173efb9ca664a13d3f6c9fe48ce97c5",
+      "result": "29 passed in 29.58 seconds",
+      "note": "Companion source-level provider-shape log."
+    },
+    "provider_final_overlay": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/provider-final-overlay-proof.json",
+      "sha256": "655525ebfc2ee7f8667b744bf3562ad76375e7637507a8c6d156f60286d88587",
+      "result": "Python provider overlay pins 809afdb changes; native headers/source unchanged",
+      "note": "Five-member Python overlay over immutable 6b native; fixture follow-up bf5c4de aligns SSP stages. Supporting provenance only."
+    },
+    "provider_final_native_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/provider-final-native.xml",
+      "sha256": "c51ebcf6b5395f1f7a7ebd32ec5c1f6ca2c93068030c4c1963cf1057fd5aa431",
+      "result": "1 passed, 1 failed in 89.071 seconds; superseded diagnostic",
+      "note": "Incomplete overlay diagnostic; provider-final-native-v2 and closure-provider-native are the completed receipts."
+    },
+    "provider_final_native_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/provider-final-native.log",
+      "sha256": "75edc45bde9157bcecc97c8cc4a6c2792d778aad3cafab04ffe8e53a900ed510",
+      "result": "1 failed, 1 passed in 89.07 seconds; superseded diagnostic",
+      "note": "Incomplete overlay diagnostic retained for provenance only."
+    },
+    "provider_shape_only_control_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/provider-shape-only-control.xml",
+      "sha256": "e91cfcc8fb27591d92802dd553765d90582f8981d2d6521f94aa063a6fed119f",
+      "result": "1 failed negative control; 224/256 cells differ; max absolute difference 0.00135368",
+      "note": "Intentional shape-only negative control proving selected transport preparation is numerically observable."
+    },
+    "provider_shape_only_control_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/provider-shape-only-control.log",
+      "sha256": "1029564596bfcc362d2b007cd4be3fb873e3a805be5dd21cac4444f2ba6c258d",
+      "result": "1 failed negative control in 36.75 seconds; 224/256 cells differ",
+      "note": "Companion expected negative-control log."
+    },
+    "provider_final_native_v2_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/provider-final-native-v2.xml",
+      "sha256": "555057081f5ff4d94947c8bfe5852af5c9b5600401b933f6f34daa3a5e6461d2",
+      "result": "2 tests; errors=0, failures=0, skipped=0; 223.440 seconds",
+      "note": "Complete bounded overlay native provider matrix: Euler/SSPRK2 x N16/32/64 x two changed-input intervals."
+    },
+    "provider_final_native_v2_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/provider-final-native-v2.log",
+      "sha256": "6a1fed2f770afebfabc67d4bc1bef23a78aee7896bf2762e00b07e90326453dd",
+      "result": "2 passed in 223.47 seconds",
+      "note": "Companion complete bounded overlay provider matrix log."
+    },
+    "provider_final_matrix_euler": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/provider-final-matrix/combined-derived-transport-euler.json",
+      "sha256": "432820b9d656ca12398e64f42de876d4a98b0f8323f5033673ac8233e84479f8",
+      "result": "6 Euler rows pass; max face-flux defect 4.44e-16; max cell-balance defect 8.56e-19",
+      "note": "Per-row overlay Euler transport-only DerivedAux reconciliation."
+    },
+    "provider_final_matrix_ssprk2": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/provider-final-matrix/combined-derived-transport-ssprk2.json",
+      "sha256": "328c4e2cdf261387487ae83a4e0db3629064e6d4e3b373b307c9c025e47a19b5",
+      "result": "6 SSPRK2 rows pass; max face-flux defect 2.858824288409778e-15; max cell-balance defect 1.370499308657458e-18",
+      "note": "Per-row overlay SSPRK2 transport-only DerivedAux reconciliation."
+    },
+    "closure_provider_native_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/closure-provider-native.xml",
+      "sha256": "6ab8f48041572002164a45bff27e8571ff4cfb9acd74a811e94a4c35754fb237",
+      "result": "2 tests; errors=0, failures=0, skipped=0; 160.38 seconds",
+      "note": "Authoritative current closure-env no-overlay provider qualification, source 34a8acc and test fixture bf5c4de/root 3826eb4."
+    },
+    "closure_provider_native_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/closure-provider-native.log",
+      "sha256": "651bf83cfeac62fd5e97d7625432dd2f1ed054e927101cc9cdc4fd3c40d777b6",
+      "result": "2 passed in 160.38 seconds",
+      "note": "Companion authoritative no-overlay provider matrix log."
+    },
+    "closure_provider_result": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/closure-provider-result.json",
+      "sha256": "649dc3c9d3a504f8210e32d4e29308cabc410246788720f2937b1b0860a97d9d",
+      "result": "12 rows pass; no overlay; source 34a8acc; fixture bf5c4de; 160.38 seconds",
+      "note": "Machine-readable provider result with 6 Euler and 6 SSPRK2 rows."
+    },
+    "closure_provider_matrix_euler": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/closure-provider-matrix/combined-derived-transport-euler.json",
+      "sha256": "67cbbe122176b67bca45328ef2d0f99dee51f05176a104029a2d0c32d4c039f9",
+      "result": "6 Euler rows pass; max flux defect 4.440892098500626e-16; max cell defect 8.559267932004705e-19",
+      "note": "Authoritative no-overlay per-row Euler matrix."
+    },
+    "closure_provider_matrix_ssprk2": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/combined-accepted-exchanges/closure-provider-matrix/combined-derived-transport-ssprk2.json",
+      "sha256": "0da35e31392cabf29a38a0b18a6739d3b1f5ea3470a63107d899644e4672c9fd",
+      "result": "6 SSPRK2 rows pass; max flux defect 2.858824288409778e-15; max cell defect 1.370499308657458e-18",
+      "note": "Authoritative no-overlay per-row SSPRK2 matrix."
+    },
+    "native_build_225_v3_command": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/final-native-v3-build-command.json",
+      "sha256": "40accd0c254a0413fbb391d33f4bce97582de903547fc7f592f2350c5873b021",
+      "result": "225 selected targets; source 6b2a1c3 native prerequisite; command completed",
+      "note": "Exact CMake argv retaining selected_targets=225 and the required target union."
+    },
+    "native_build_225_v3_result": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/final-native-v3-build.json",
+      "sha256": "a35966579db1b11a16a6ef6945162ea074ce473a8de5d3f147b465270a947e22",
+      "result": "returncode=0; 225 selected targets built in 1241.053 seconds",
+      "note": "Completed native target build; separate CTest execution is not certified here."
+    },
+    "native_build_225_v3_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/final-native-v3-build.log",
+      "sha256": "457a1cbf95e0fd64d3aa3826ac8adcaea090511b67d24b4f2d95acbba6c0cf1b",
+      "result": "225-target build log completed without a build failure",
+      "note": "Stable completed v3 build log; compiler warnings remain part of provenance."
+    },
+    "closure_ctest_commands": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-ctest-commands.json",
+      "sha256": "a5ad68ba701460195e3e3357ae169241f529dcc4d10ff94aeaaf605cc09e46ce",
+      "result": "1065-entry CTest batches complete; cpp, MPI-np1, MPI-np2 and MPI-np4 have failures; MPI-np3 and standalone pass",
+      "note": "Exact cpp, MPI-np1/2/3/4 and standalone CTest argv batches are complete. The aggregate is not all-green."
+    },
+    "closure_ctest_inventory": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-ctest-inventory.json",
+      "sha256": "e1c24bf3e6afa0ed195acca44b22dc7a9e799e9e993255de596b675e8ef8e75b",
+      "result": "1065 CTest entries enumerated",
+      "note": "Inventory receipt; enumeration is not successful execution."
+    },
+    "closure_ctest_cpp_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-ctest-cpp.log",
+      "sha256": "688a7cff9e962920bdad6fe9fa6387b70635e535017e62864753e76cf9b2f964",
+      "result": "963 tests; 9 failures, 17 skipped; returncode=8 in 377.903 seconds",
+      "note": "Completed cpp CTest batch; failure names and exact JUnit diagnostics are retained in closure-ctest-cpp.xml."
+    },
+    "closure_native_source_continuity": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-native-source-continuity.json",
+      "sha256": "9b4b63d9addc0fd0ec6e79d881c6cd418c88479e97ebaec47fd7fa5755fe28b6",
+      "result": "native source 6b2a1c3 and packaged Python source 34a8acc have no native/header/CMake diff",
+      "note": "Continuity receipt for closure package and native prerequisite."
+    },
+    "closure_source_command": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-source-command.json",
+      "sha256": "3e4048f7ee256515946daba05bcca72530716f5eb7fb3b749228289bfc994c16",
+      "result": "485 non-MPI files selected; source 34a8acc; returncode=1 after 562.376 seconds; 472-file diagnostic remainder running",
+      "note": "Exact current-source closure argv; no PoPS Python overlay, h5py runtime dependency overlay only. The first bulk gate stopped after 8 failures; the remainder is diagnostic, not final closure."
+    },
+    "closure_selected_python": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-selected-python.json",
+      "sha256": "ba082aec271a112bafcdc6bb3ab92d75f33c728ce4740e9f8c7553ee4d0b5ea5",
+      "result": "491 Python tests selected (490 sharded); current closure command has 485 non-MPI files",
+      "note": "Selection manifest for live closure gate; selection is not execution evidence."
+    },
+    "closure_source_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-source.log",
+      "result": "20 passed, 8 failed, 247 deselected in 561.19 seconds; returncode=1",
+      "note": "Completed first 485-file bulk gate; the separate 472-file remainder is diagnostic and still running.",
+      "sha256": "18ca03b0f3116e319e3eee5c767b838797aa7c919ae5073cb8c321385f2548d7"
+    },
+    "closure_dim2_command": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-wheel-dim2-command.json",
+      "sha256": "d32447c90d086299b265cb2efe50886d1aaf20b13275e7c2e4c9ef6e52e2d2bb",
+      "result": "exact incremental Dim2 wheel command; source 34a8acc",
+      "note": "Native headers/source unchanged from clean 6b artifact; five Python production files rebuilt."
+    },
+    "closure_dim2_build": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-wheel-dim2-build.json",
+      "sha256": "f80ecce2092665f1d54d45df590f5d2e437b5234e0c902f7f1c9df37ddaaac5c",
+      "result": "returncode=0 in 12.216 seconds; source 34a8acc",
+      "note": "Current closure Dim2 artifact is pinned to source 34a8acc; current repository source is 08ff8a6. The native/source continuity receipt covers the clean 6b prerequisite and packaged 34a source."
+    },
+    "closure_dim2_proof": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-private-proof.json",
+      "sha256": "3bc5cc8b66ee3d8b5a9d734b16fb02fcbfa93f99f762bfc830986222eb656436",
+      "result": "current Dim2 closure proof; 965 installed members; wheel f4c8f3ba...; source 34a8acc",
+      "note": "Private current-source Dim2 package proof; expected_dimensions=[2], manifest f7bbe226..., tree 325ef681..., native 0ebcaef6..., no Python overlay.",
+      "pins": {
+        "source": "34a8acc31f86841abd5fce039eed3c762be21098",
+        "wheel_sha256": "f4c8f3ba154f869d8bc95304a7d0ae20b5915faa5a83df198f6b2487cfc99f38",
+        "installed_tree_sha256": "325ef681ddccccd8785ebcce90b6f5ca8a178500e91bfef2b75a4aed6d24ad66",
+        "native_manifest_sha256": "f7bbe226338fb2f17ea9e57fbefed5903d7e6e5d8ef478a24f3f81a5aa7a36c0",
+        "native_so_sha256": "0ebcaef693841716bc268ebbd1d87139bd442531b1a568d2c8818a69f97379b8",
+        "installed_member_count": 965
+      }
+    },
+    "closure_doctor": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-doctor.log",
+      "sha256": "6d142fdc2fd8d2e7dd1960cb72f224ed3568c2f3b1dd3622063df301d84ed92b",
+      "result": "Dim2 closure environment doctor passes; ABI and headers coherent",
+      "note": "Current closure environment health receipt; package proof remains artifact identity authority."
+    },
+    "closure_interactions_final": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-final.json",
+      "sha256": "a23b73d1a808c6e0a0c4f5a93a731112d1b9f575566d700c46d92e8fef5ed7d1",
+      "result": "13+13 MPI2 matrix, 15+15 MPI2 guard/solve and 19 rank-one tests pass; no failures/errors/skips; source 34a8acc; no overlay",
+      "note": "Authoritative closure-env M4 no-overlay receipts pass all three batches on source 34a8acc; the repository source has since advanced to 08ff8a6. Concurrent host timing remains bounded and is not a universal performance claim."
+    },
+    "closure_interactions_before": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-before.json",
+      "sha256": "784b4cf4558eeff302baf28cb81d145a5ae5f4d312cb46484ddc6a97422b5c7e",
+      "result": "Immutable pre-run commands and hashes recorded; source 34a8acc; no overlay",
+      "note": "Before-record for all three current closure interaction batches."
+    },
+    "closure_interactions_mpi2_r0_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-matrix-mpi2-rank0.log",
+      "sha256": "63805139f9cd8a2d037592f5a42ef48c06d97b009d3d53a9cb7e068cddaad45a",
+      "result": "13 passed, 0 failed, 0 skipped per rank in 523.99 seconds",
+      "note": "Current closure no-overlay MPI2 interaction matrix log for rank 0."
+    },
+    "closure_interactions_mpi2_r0_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-matrix-mpi2-rank0.xml",
+      "sha256": "2ac2763e1bacb599097a24bd1c7ad28697d82611ae0c7328a5c016b9e8bfce08",
+      "result": "13 tests; errors=0, failures=0, skipped=0; 523.983 seconds",
+      "note": "Current closure no-overlay MPI2 interaction matrix JUnit for rank 0."
+    },
+    "closure_interactions_guard_r0_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-guard-solve-mpi2-rank0.log",
+      "sha256": "51c3b7e9845f97ff7dc3bb20517603db8c2e62ee6eb507a6299beead55dee0e8",
+      "result": "15 passed, 0 failed, 0 skipped per rank in 235.05 seconds",
+      "note": "Current closure no-overlay guard/solve log for rank 0."
+    },
+    "closure_interactions_guard_r0_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-guard-solve-mpi2-rank0.xml",
+      "sha256": "757069039faf3517a8d9adbeb273549d1e9cef38be6064b86e2a91d9f7ca71a9",
+      "result": "15 tests; errors=0, failures=0, skipped=0; 235.05 seconds",
+      "note": "Current closure no-overlay guard/solve JUnit for rank 0."
+    },
+    "closure_interactions_mpi2_r1_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-matrix-mpi2-rank1.log",
+      "sha256": "7b39062630fec2f7868aaac49ba046954703ff983c150ecf6088c0d9ea79d428",
+      "result": "13 passed, 0 failed, 0 skipped per rank in 523.99 seconds",
+      "note": "Current closure no-overlay MPI2 interaction matrix log for rank 1."
+    },
+    "closure_interactions_mpi2_r1_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-matrix-mpi2-rank1.xml",
+      "sha256": "8a68a709f5ae01a9c32f5bf6fa7e10d44caf063a66b5fb85a6b0aab8a11e3567",
+      "result": "13 tests; errors=0, failures=0, skipped=0; 523.983 seconds",
+      "note": "Current closure no-overlay MPI2 interaction matrix JUnit for rank 1."
+    },
+    "closure_interactions_guard_r1_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-guard-solve-mpi2-rank1.log",
+      "sha256": "2997b7490743ea7cb52a1d65e35ab260655b27e0f947c1a8366ae7c498d8028b",
+      "result": "15 passed, 0 failed, 0 skipped per rank in 235.05 seconds",
+      "note": "Current closure no-overlay guard/solve log for rank 1."
+    },
+    "closure_interactions_guard_r1_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-guard-solve-mpi2-rank1.xml",
+      "sha256": "c3e34c97dff73f6f8e48d30e2a30c677fa75973096b2d79c4156c78d61783f0a",
+      "result": "15 tests; errors=0, failures=0, skipped=0; 235.05 seconds",
+      "note": "Current closure no-overlay guard/solve JUnit for rank 1."
+    },
+    "closure_interactions_rank1_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-native-rank1.log",
+      "sha256": "c688021987b1b17a4c58698bfd9cdfc6fdfc2756de2aea1cc38eaa45b94449c6",
+      "result": "19 passed, 0 failed, 0 skipped in 462.23 seconds",
+      "note": "Current closure no-overlay rank-one face/control/repetition log."
+    },
+    "closure_interactions_rank1_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-native-rank1.xml",
+      "sha256": "2be97bce9435255c7ea61de3982e0f2e5b54da65a074a0dbeb2c1e352c573a84",
+      "result": "19 tests; errors=0, failures=0, skipped=0; 462.234 seconds",
+      "note": "Current closure no-overlay rank-one face/control/repetition JUnit."
+    },
+    "closure_interactions_mpi2_command": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-matrix-mpi2.command.txt",
+      "sha256": "da72aa6c83c9d683b10524d97f75a32cedd2c1f462563f88a4a651b5bf3b71b3",
+      "result": "Exact command retained for current closure interaction batch",
+      "note": "Command text receipt; execution result is recorded in the matching XML/log."
+    },
+    "closure_interactions_guard_command": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-guard-solve-mpi2.command.txt",
+      "sha256": "2cd177578bf291c1b7025e97a5dcd781f8a0b0c12c4b53077598cbb733491b05",
+      "result": "Exact command retained for current closure interaction batch",
+      "note": "Command text receipt; execution result is recorded in the matching XML/log."
+    },
+    "closure_interactions_rank1_command": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-native-rank1.command.txt",
+      "sha256": "d41872a9200b6890dd2e1ef1acc3f8d6be2d44784d4887d95340b794822e52a2",
+      "result": "Exact command retained for current closure interaction batch",
+      "note": "Command text receipt; execution result is recorded in the matching XML/log."
+    },
+    "closure_ctest_cpp_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-ctest-cpp.xml",
+      "sha256": "37f67c8e9e6292b4f285e1bf117fee1daed57e8cd55ad7008dc82eaadc003384",
+      "result": "963 tests; 9 failures, 17 skipped; CTest time 377.903 seconds; returncode=8",
+      "note": "Completed cpp CTest JUnit receipt; it is a failure receipt, not a closure claim."
+    },
+    "closure_ctest_mpi_np1_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-ctest-mpi-np1.log",
+      "sha256": "0116a3f1afef3e62146efcf7c1d2dfbe5f66320c376e2bb5fbee8f165e3c1252",
+      "result": "1 failed in 20.56 seconds; returncode=8",
+      "note": "Completed MPI-np1 CTest batch; remaining MPI and standalone batches are separate."
+    },
+    "closure_ctest_mpi_np1_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-ctest-mpi-np1.xml",
+      "sha256": "6b44035d98d355ca338ae62cab56b9f67c31e50d4bda626e1f7bc2aa869adc87",
+      "result": "20 tests; 1 failure, 0 skipped; CTest time 20.557 seconds; returncode=8",
+      "note": "Completed MPI-np1 CTest JUnit receipt; it is a failure receipt, not a closure claim."
+    },
+    "closure_ctest_summary": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-ctest-summary.json",
+      "sha256": "436615e969a30442b62ee78df162e9fdd7622d56ffd2ac7f2ea3030b43bf49e1",
+      "result": "cpp 963 rc=8 (9 failures), MPI-np1 20 rc=8 (1 failure), MPI-np2 49 rc=8 (3 failures), MPI-np3 3 rc=0, MPI-np4 25 rc=8 (1 failure), standalone 5 rc=0",
+      "note": "Complete six-batch summary; aggregate return remains nonzero and does not certify the 1065-entry inventory."
+    },
+    "closure_source_summary": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-source-summary.json",
+      "sha256": "4945fdadeb439768dee2605c3e912c5f8192221d8309dbcf5f8b23465ba2790c",
+      "result": "source 34a8acc; returncode=1; 562.376 seconds",
+      "note": "Summary for the first 485-file non-MPI bulk gate; no final closure claim."
+    },
+    "closure_source_remainder_command": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-source-remainder-command.json",
+      "sha256": "52efbc33e5d63489d67e5e7bb5f08b523c70c28f94bed7bca7c8a7aeb19c143c",
+      "result": "472 diagnostic files selected; execution in progress; not final gate",
+      "note": "Continuation command after the first bulk gate stopped at 8 failures."
+    },
+    "closure_source_remainder_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-source-remainder.log",
+      "result": "diagnostic remainder running; no completion receipt",
+      "note": "Live diagnostic output; no stable completion hash is asserted."
+    },
+    "closure_ctest_mpi_np2_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-ctest-mpi-np2.log",
+      "sha256": "766f45876e36c52c811bb63c867e49483dbb15102f0418bdc2e381ceaf815a27",
+      "result": "3 failures in 618.286 seconds; returncode=8",
+      "note": "Completed MPI-np2 CTest batch."
+    },
+    "closure_ctest_mpi_np2_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-ctest-mpi-np2.xml",
+      "sha256": "f817991bbd8626f921bc900b3e29eba5579fca983d21d30138ddbf8f8fa41d8c",
+      "result": "49 tests; 3 failures, 0 skipped; CTest time 618.286 seconds; returncode=8",
+      "note": "Completed MPI-np2 CTest JUnit receipt."
+    },
+    "closure_ctest_mpi_np3_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-ctest-mpi-np3.log",
+      "sha256": "4567c65da316adecfc96f82169ec68b3175ef3cc58414fe2f950b340f9c7d841",
+      "result": "3 passed in 0.894 seconds; returncode=0",
+      "note": "Completed MPI-np3 CTest batch."
+    },
+    "closure_ctest_mpi_np3_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-ctest-mpi-np3.xml",
+      "sha256": "3daa4b1ebec11a9e4a6117e9948dbc539ed8eed792a9f681764093b8d9ac855a",
+      "result": "3 tests; 0 failures, 0 skipped; CTest time 0.894 seconds; returncode=0",
+      "note": "Completed MPI-np3 CTest JUnit receipt."
+    },
+    "closure_ctest_mpi_np4_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-ctest-mpi-np4.log",
+      "sha256": "4bd492cef5cdd4c91ddc4bddc45e3bec7454b56321d24e65f49aceb5d1b30d79",
+      "result": "1 failure in 381.942 seconds; returncode=8",
+      "note": "Completed MPI-np4 CTest batch."
+    },
+    "closure_ctest_mpi_np4_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-ctest-mpi-np4.xml",
+      "sha256": "e76938d0389b320b26470c6ccd764f43958d28d50dcef759eadd3b75182c34c6",
+      "result": "25 tests; 1 failure, 0 skipped; CTest time 381.942 seconds; returncode=8",
+      "note": "Completed MPI-np4 CTest JUnit receipt."
+    },
+    "closure_ctest_standalone_log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-ctest-standalone.log",
+      "sha256": "8bbda8d3465a095094acf48e87f32d3503a8967ab8d836fb0b1264ec8c0bbc04",
+      "result": "5 passed in 6.073 seconds; returncode=0",
+      "note": "Completed standalone CTest batch."
+    },
+    "closure_ctest_standalone_xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-ctest-standalone.xml",
+      "sha256": "ec12a42938723109be475201292f595a33dbacacf360564bffdd362bc86990fe",
+      "result": "5 tests; 0 failures, 0 skipped; CTest time 6.073 seconds; returncode=0",
+      "note": "Completed standalone CTest JUnit receipt."
+    }
+  },
+  "leaves": [
+    {
+      "id": "M3.1",
+      "title": "Define joint field problems, physical boundaries and independent storage",
+      "manifest": {
+        "issue": "M3.1",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-669",
+        "ADC-705",
+        "ADC-727"
+      ],
+      "dependencies": [
+        "M1.1",
+        "M1.2",
+        "M2.1"
+      ],
+      "bounded_matrix": {
+        "scope": "Static field contracts plus immutable review-native Dim2 field selectors; public package Dim1/Dim2.",
+        "limits": [
+          "Review-native field execution is Dim2; no AMR/GPU/distributed numerical qualification.",
+          "Review receipt source 14a0f74 is distinct from current integration 6b2a1c3."
+        ]
+      },
+      "current_disposition": "bounded_field_contract_and_review_native_pass",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Typed joint field, physical boundary, compatibility and independent storage contracts.",
+          "receipt_refs": [
+            "fields_matrix",
+            "fields_overlay"
+          ],
+          "command_refs": [
+            "source_gate"
+          ],
+          "provenance": [
+            "integration 24b5898; field overlay source 9a32b633"
+          ],
+          "limits": [
+            "Representation witness is not execution."
+          ]
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Source and preflight/refusal diagnostics pass.",
+          "receipt_refs": [
+            "source_xml",
+            "fields_detach"
+          ],
+          "command_refs": [
+            "source_gate"
+          ],
+          "provenance": [
+            "222 source passes; structured Case registry refusal"
+          ],
+          "limits": [
+            "Exact source invocation not retained."
+          ]
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Field state/field-space identity and incompatible-load dispositions retained.",
+          "receipt_refs": [
+            "fields_matrix",
+            "fields_detach"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "D2 N16/32/64 overlay"
+          ],
+          "limits": [
+            "Final integrated resolved report pending."
+          ]
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Immutable review-native field artifact is authenticated by private proof; Dim1/Dim2 package proofs remain separately pinned.",
+          "receipt_refs": [
+            "review_public_native",
+            "review_public_native_summary",
+            "review_private_proof",
+            "pub_dim1_proof",
+            "pub_dim2_proof"
+          ],
+          "command_refs": [
+            "review_public_native_command",
+            "wheel_dim1",
+            "wheel_dim2"
+          ],
+          "provenance": [
+            "Review source 14a0f74; no Python overlay; wheel cf4953fc...; installed tree e12cc68e..."
+          ],
+          "limits": [
+            "Review artifact source is 14a0f74; the final 225-target current-integration gate remains separate."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "Immutable review-native public selector passes the field problem, reuse and field-consumer rows; the retained batch is 14 passed, 0 failed, 0 skipped.",
+          "receipt_refs": [
+            "review_public_native",
+            "review_public_native_command",
+            "review_public_native_summary"
+          ],
+          "command_refs": [
+            "review_public_native",
+            "review_public_native_command"
+          ],
+          "provenance": [
+            "Review environment; source 14a0f74; no Python overlay; 811.086 seconds"
+          ],
+          "limits": [
+            "The batch also contains implicit and retry selectors; current integration 6b2a1c3 remains a separate source/native gate."
+          ]
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Field problem, reuse and consumer rows pass their declared bounded field oracles in the immutable review-native batch.",
+          "receipt_refs": [
+            "review_public_native",
+            "fields_euler",
+            "fields_transport",
+            "fields_joint"
+          ],
+          "command_refs": [
+            "review_public_native"
+          ],
+          "provenance": [
+            "Dim2 review-native execution; no Python overlay"
+          ],
+          "limits": [
+            "No AMR/GPU/distributed numerical qualification."
+          ]
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Broader repository/native gate; no field-specific emitted/executed replay gap remains."
+      ]
+    },
+    {
+      "id": "M3.2",
+      "title": "Execute variable-coefficient scalar fields through the general resolved contract",
+      "manifest": {
+        "issue": "M3.2",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-772",
+        "ADC-670",
+        "ADC-740"
+      ],
+      "dependencies": [
+        "M3.1",
+        "M2.2",
+        "M2.3",
+        "M6.1"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 immutable review-native field replay; variable scalar and joint field consumers on the declared N16/32/64 rows.",
+        "limits": [
+          "No AMR/GPU/MPI>1 field qualification in this bounded profile.",
+          "Review receipt source 14a0f74 is distinct from current integration 6b2a1c3."
+        ]
+      },
+      "current_disposition": "bounded_variable_field_review_native_pass",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Variable scalar and joint field tuples with separate identities.",
+          "receipt_refs": [
+            "fields_matrix",
+            "fields_overlay"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "overlay source head 9a32b633; native source 255209d"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "7 source tests and 2 field overlay tests pass; incompatible rows are structured.",
+          "receipt_refs": [
+            "source_log",
+            "fields_overlay_xml",
+            "fields_detach"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "D2 OpenMP2 MPI1"
+          ],
+          "limits": [
+            "Invocation not retained."
+          ]
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Variable coefficient and joint normalization matrix retained.",
+          "receipt_refs": [
+            "fields_matrix",
+            "fields_detach"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "N16/32/64; residuals in matrix"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Immutable review-native field wheel and private proof authenticate the variable-field replay.",
+          "receipt_refs": [
+            "review_public_native",
+            "review_public_native_summary",
+            "review_private_proof"
+          ],
+          "command_refs": [
+            "review_public_native_command"
+          ],
+          "provenance": [
+            "Review source 14a0f74; no Python overlay; 963 installed members"
+          ],
+          "limits": [
+            "The final 225-target current-integration gate remains separate."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "Immutable review-native field selector passes the variable scalar and joint consumer rows.",
+          "receipt_refs": [
+            "review_public_native",
+            "review_public_native_summary"
+          ],
+          "command_refs": [
+            "review_public_native",
+            "review_public_native_command"
+          ],
+          "provenance": [
+            "14 passed in the retained batch; source 14a0f74; no Python overlay"
+          ],
+          "limits": [
+            "Wider backend/layout/rank cells are outside the bounded profile."
+          ]
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Variable scalar and joint field consumer rows pass the declared N16/32/64 error and identity checks.",
+          "receipt_refs": [
+            "review_public_native",
+            "fields_matrix",
+            "fields_transport",
+            "fields_joint"
+          ],
+          "command_refs": [
+            "review_public_native"
+          ],
+          "provenance": [
+            "Dim2 immutable review-native execution"
+          ],
+          "limits": [
+            "No AMR/GPU/MPI>1 field qualification."
+          ]
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Broader repository/native gate and wider undeclared matrix."
+      ]
+    },
+    {
+      "id": "M3.3",
+      "title": "Bind stage field observations and validate precise field reuse",
+      "manifest": {
+        "issue": "M3.3",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-669",
+        "ADC-759"
+      ],
+      "dependencies": [
+        "M3.2",
+        "M1.4",
+        "M2.2",
+        "M6.1",
+        "M6.2"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 OpenMP2 MPI1 Uniform N16/32/64; Euler-Poisson source and reuse overlays; first-order FV field transport consumer.",
+        "limits": [
+          "First-order FV transport has a predeclared order >=0.8; observed orders 1.3176677704849828 and 1.1117397898166301 pass that criterion.",
+          "Same-source-module distinct output publication remains an explicit refusal boundary.",
+          "Review receipt source 14a0f74 is distinct from current source 08ff8a6.",
+          "Authoritative provider matrix is Dim2 Uniform periodic CPU with no overlay: source 34a8acc, fixture bf5c4de/root 3826eb4, 12 rows."
+        ]
+      },
+      "current_disposition": "bounded_first_order_transport_and_derived_aux_native_pass_with_final_gate_open",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Observation, solve/reuse identity and consume contracts.",
+          "receipt_refs": [
+            "fields_overlay",
+            "fields_stage",
+            "fields_joint"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "overlay source 9a32b633; 4 solves plus 1 reuse"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Source checks and structured publication-detach refusal pass.",
+          "receipt_refs": [
+            "source_xml",
+            "fields_detach",
+            "provider_shapes_source_xml",
+            "provider_shapes_source_log"
+          ],
+          "command_refs": [
+            "source_gate",
+            "field_consumers"
+          ],
+          "provenance": [
+            "Refusal names authoritative Case registry"
+          ],
+          "limits": [
+            "Refusal is not consumer execution."
+          ]
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Euler source, joint-gradient and reuse metadata retained.",
+          "receipt_refs": [
+            "fields_euler",
+            "fields_matrix",
+            "fields_stage",
+            "fields_joint",
+            "provider_shapes_source_xml"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "Euler N16/32/64; stage sequence"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Immutable review-native field-consumer artifact is authenticated by the private proof.",
+          "receipt_refs": [
+            "review_public_native",
+            "review_public_native_summary",
+            "review_private_proof",
+            "fields_consumers_private_overlay",
+            "provider_final_overlay",
+            "closure_provider_result",
+            "closure_dim2_proof"
+          ],
+          "command_refs": [
+            "review_public_native_command"
+          ],
+          "provenance": [
+            "Review source 14a0f74; no Python overlay; wheel cf4953fc..."
+          ],
+          "limits": [
+            "The earlier Python overlay receipt remains historical; current integration source/native proof is separate."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "The exact review-native batch command is retained in review_public_native_command; its field consumer selectors pass 3 tests and 9 N16/32/64 rows.",
+          "receipt_refs": [
+            "review_public_native",
+            "review_public_native_command",
+            "review_public_native_summary",
+            "fields_euler",
+            "fields_consumers",
+            "fields_transport",
+            "fields_joint",
+            "provider_final_native_v2_xml",
+            "provider_final_native_v2_log",
+            "provider_final_matrix_euler",
+            "provider_final_matrix_ssprk2",
+            "closure_provider_native_xml",
+            "closure_provider_native_log",
+            "closure_provider_result",
+            "closure_provider_matrix_euler",
+            "closure_provider_matrix_ssprk2"
+          ],
+          "command_refs": [
+            "review_public_native",
+            "review_public_native_command"
+          ],
+          "provenance": [
+            "Authoritative closure-provider-native passes 2 tests in 160.38 seconds with no overlay, covering 12 Euler/SSPRK2 N16/32/64 two-interval rows.",
+            "Provider result records max flux defect 2.858824288409778e-15 and max cell-change defect 1.370499308657458e-18; the earlier overlay receipt remains supporting history."
+          ],
+          "limits": [
+            "Current source 08ff8a6 is newer than the no-overlay provider receipt pinned to 34a8acc; final 225-target native and 485-file gates remain separate."
+          ]
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Euler/SSPRK2 transport-only DerivedAux rows pass; maximum face-flux defect 2.858824288409778e-15 and maximum per-cell balance defect 1.370499308657458e-18. First-order FV transport remains accepted at the predeclared order >=0.8.",
+          "receipt_refs": [
+            "fields_euler",
+            "fields_consumers",
+            "fields_transport",
+            "review_public_native",
+            "provider_final_matrix_euler",
+            "provider_final_matrix_ssprk2",
+            "closure_provider_matrix_euler",
+            "closure_provider_matrix_ssprk2"
+          ],
+          "command_refs": [
+            "review_public_native"
+          ],
+          "provenance": [
+            "closure-provider-matrix Euler/SSPRK2 JSONs; field transport orders 1.3176677704849828/1.1117397898166301."
+          ],
+          "limits": [
+            "The receipt records the declared first-order criterion only; no higher-order transport claim is made."
+          ]
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Final current-integration source/native proof lineage and remaining 1065-entry CTest/485-file gates; the bounded DerivedAux matrix is complete.",
+        "Same-source-module distinct-output refusal remains an explicit limit."
+      ]
+    },
+    {
+      "id": "M3.4",
+      "title": "Execute a joint multi-field problem with one shared normalization",
+      "manifest": {
+        "issue": "M3.4",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-670"
+      ],
+      "dependencies": [
+        "M3.1",
+        "M3.2",
+        "M6.1"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 immutable review-native N16/32/64 joint Neumann constant/smooth-gradient field consumers.",
+        "limits": [
+          "No AMR/GPU/MPI>1 field qualification in this bounded profile.",
+          "Review receipt source 14a0f74 is distinct from current integration 6b2a1c3."
+        ]
+      },
+      "current_disposition": "bounded_joint_field_review_native_pass",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Joint tuple, shared compatibility and normalization.",
+          "receipt_refs": [
+            "fields_matrix",
+            "fields_joint"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "Joint constants/smooth rows"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Joint source and overlay lifecycle checks pass.",
+          "receipt_refs": [
+            "source_log",
+            "fields_joint"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "7 source pass; joint-gradient overlay pass"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Joint compatible and incompatible-load dispositions retained.",
+          "receipt_refs": [
+            "fields_matrix",
+            "fields_detach",
+            "fields_joint"
+          ],
+          "command_refs": [
+            "field_overlay"
+          ],
+          "provenance": [
+            "N16/32/64"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Immutable review-native joint field consumer artifact is authenticated by the private proof.",
+          "receipt_refs": [
+            "review_public_native",
+            "review_public_native_summary",
+            "review_private_proof"
+          ],
+          "command_refs": [
+            "review_public_native_command"
+          ],
+          "provenance": [
+            "Review source 14a0f74; no Python overlay"
+          ],
+          "limits": [
+            "The final 225-target current-integration gate remains separate."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "Immutable review-native field-consumer selector passes the joint Neumann gradient rows.",
+          "receipt_refs": [
+            "review_public_native",
+            "review_public_native_summary",
+            "fields_joint"
+          ],
+          "command_refs": [
+            "review_public_native",
+            "review_public_native_command"
+          ],
+          "provenance": [
+            "Dim2 N16/32/64 joint rows in the retained 14-test batch"
+          ],
+          "limits": [
+            "No AMR/GPU/MPI>1 field qualification."
+          ]
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Joint Neumann constant and smooth-gradient field consumer rows pass their declared identity and refinement checks.",
+          "receipt_refs": [
+            "review_public_native",
+            "fields_joint"
+          ],
+          "command_refs": [
+            "review_public_native"
+          ],
+          "provenance": [
+            "Immutable review-native Dim2 execution"
+          ],
+          "limits": [
+            "No wider coupled diffusion qualification is claimed."
+          ]
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Broader repository/native gate."
+      ]
+    },
+    {
+      "id": "M4.1",
+      "title": "Execute heterogeneous interactions and joint constitutive outputs",
+      "manifest": {
+        "issue": "M4.1",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-690"
+      ],
+      "dependencies": [
+        "M1.3",
+        "M2.1",
+        "M2.2",
+        "M2.3"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 OpenMP2 MPI2 closure native source 34a8acc with no Python overlay; Uniform uncut N16/32/64; publication, guard/solve and rank-one interaction batches.",
+        "limits": [
+          "Current closure receipts cover 13 publication rows per MPI2 rank, 15 guard/solve rows per rank and 19 rank-one native rows.",
+          "The repository source has since advanced to 08ff8a6; final 1065-entry CTest closure remains separate.",
+          "No GPU/AMR/memory qualification; these are bounded extensions."
+        ]
+      },
+      "current_disposition": "bounded_current_mpi2_interaction_pass_no_overlay_with_ctest_open",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Heterogeneous output projections and shared evaluation context.",
+          "receipt_refs": [
+            "closure_interactions_final",
+            "closure_interactions_rank1_xml",
+            "closure_interactions_guard_r0_xml",
+            "closure_interactions_guard_r1_xml"
+          ],
+          "command_refs": [
+            "closure_interactions"
+          ],
+          "provenance": [
+            "Current closure source 34a8acc; no Python overlay; exact package and fixture pins retained."
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Current no-overlay closure commands emit rank-one, MPI2 publication and guard/solve outputs with zero failures or skips.",
+          "receipt_refs": [
+            "closure_interactions_final",
+            "closure_interactions_rank1_xml",
+            "closure_interactions_guard_r0_xml",
+            "closure_interactions_guard_r1_xml"
+          ],
+          "command_refs": [
+            "closure_interactions"
+          ],
+          "provenance": [
+            "Exact command text files and the consolidated no-overlay receipt are retained."
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Current no-overlay output ownership, inventory and projection records.",
+          "receipt_refs": [
+            "closure_interactions_final",
+            "closure_interactions_rank1_xml",
+            "closure_interactions_mpi2_r0_xml",
+            "closure_interactions_mpi2_r1_xml"
+          ],
+          "command_refs": [
+            "closure_interactions"
+          ],
+          "provenance": [
+            "Source 34a8acc; current repository source 08ff8a6 is a later lineage point."
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Current no-overlay closure interaction artifacts retain compile, binary and package provenance.",
+          "receipt_refs": [
+            "closure_interactions_final",
+            "closure_dim2_proof",
+            "closure_native_source_continuity"
+          ],
+          "command_refs": [
+            "closure_interactions",
+            "closure_wheel_dim2"
+          ],
+          "provenance": [
+            "Closure source 34a8acc; no Python overlay; Dim2 package proof and native/source continuity retained."
+          ],
+          "limits": [
+            "Final 1065-entry CTest closure remains separate."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "Current no-overlay closure records 13 publication rows per MPI2 rank, 15 guard/solve rows per rank and 19 rank-one native rows.",
+          "receipt_refs": [
+            "closure_interactions_final",
+            "closure_interactions_mpi2_r0_log",
+            "closure_interactions_mpi2_r0_xml",
+            "closure_interactions_mpi2_r1_log",
+            "closure_interactions_mpi2_r1_xml",
+            "closure_interactions_guard_r0_log",
+            "closure_interactions_guard_r0_xml",
+            "closure_interactions_guard_r1_log",
+            "closure_interactions_guard_r1_xml",
+            "closure_interactions_rank1_log",
+            "closure_interactions_rank1_xml"
+          ],
+          "command_refs": [
+            "closure_interactions"
+          ],
+          "provenance": [
+            "No-overlay closure: 13/13 publication rows per MPI2 rank, 15/15 guard/solve rows per rank, 19/19 rank-one rows; exact times and hashes are catalogued."
+          ],
+          "limits": []
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Publication, guard/solve and rank-one interaction outcomes pass their declared exact/approximate/FD, ownership, repetition and inventory checks.",
+          "receipt_refs": [
+            "closure_interactions_final",
+            "closure_interactions_mpi2_r0_xml",
+            "closure_interactions_mpi2_r1_xml",
+            "closure_interactions_guard_r0_xml",
+            "closure_interactions_guard_r1_xml",
+            "closure_interactions_rank1_xml"
+          ],
+          "command_refs": [
+            "closure_interactions"
+          ],
+          "provenance": [
+            "Closure no-overlay JUnit outputs retain compile/call/binary properties and fixture hashes."
+          ],
+          "limits": [
+            "Full multi-component diffusion integration is not claimed."
+          ]
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Final 1065-entry CTest closure; broader backend/device/memory cells are bounded extensions."
+      ]
+    },
+    {
+      "id": "M4.2",
+      "title": "Add authenticated typed native calls without core model kinds",
+      "manifest": {
+        "issue": "M4.2",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-681",
+        "ADC-719",
+        "ADC-694"
+      ],
+      "dependencies": [
+        "M1.3",
+        "M2.2",
+        "M2.3"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 OpenMP2 MPI2 imported exact/approximate/FD routes, guard/solve failures and native face consumers; current closure no-overlay receipts add six actual face rows, 19 rank-one rows and 15 guard/solve rows per MPI2 rank.",
+        "limits": [
+          "Authoritative closure runtime uses source 34a8acc with no Python overlay; repository source 08ff8a6 is later.",
+          "Full multi-component diffusion integration is outside this receipt.",
+          "Historical face-oracle failure was a NumPy axes fixture mismatch; current closure no-overlay receipts leave no M4.2 face defect open."
+        ]
+      },
+      "current_disposition": "bounded_imported_face_derivative_and_guard_pass_current_closure_no_overlay",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Typed native signature, read footprint, outputs and authenticated metadata.",
+          "receipt_refs": [
+            "interactions_mpi2",
+            "interactions_final_evidence",
+            "pub_dim2_proof",
+            "closure_interactions_final",
+            "closure_interactions_rank1_xml",
+            "closure_interactions_guard_r0_xml",
+            "closure_interactions_guard_r1_xml"
+          ],
+          "command_refs": [
+            "interactions_mpi2",
+            "wheel_dim2"
+          ],
+          "provenance": [
+            "Native manifest/toolchain hashes retained"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Imported call and ownership/transform checks pass in bounded receipts.",
+          "receipt_refs": [
+            "interactions_mpi2",
+            "interactions_final_evidence",
+            "interactions_rank1_log",
+            "closure_interactions_final",
+            "closure_interactions_rank1_xml",
+            "closure_interactions_guard_r0_xml",
+            "closure_interactions_guard_r1_xml"
+          ],
+          "command_refs": [
+            "interactions_mpi2",
+            "interactions_rank1"
+          ],
+          "provenance": [
+            "Exact/approximate/FD distinct; Goodall guard/solve and face selectors consolidated"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Derivative route, guard/failure disposition and native face protocol are explicit in the consolidated evidence.",
+          "receipt_refs": [
+            "interactions_mpi2",
+            "interactions_final_evidence",
+            "interactions_face_protocol",
+            "closure_interactions_final",
+            "closure_interactions_rank1_xml",
+            "closure_interactions_guard_r0_xml",
+            "closure_interactions_guard_r1_xml"
+          ],
+          "command_refs": [
+            "interactions_mpi2",
+            "interactions_publication"
+          ],
+          "provenance": [
+            "Goodall six actual face rows; MPI2 guard/solve rows; fixture manifest c85423a9..."
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Consolidated native face, derivative and guard outputs retain compile/binary metadata and package proof pins.",
+          "receipt_refs": [
+            "closure_interactions_final",
+            "closure_dim2_proof",
+            "closure_native_source_continuity"
+          ],
+          "command_refs": [
+            "closure_interactions",
+            "closure_wheel_dim2"
+          ],
+          "provenance": [
+            "Closure source 34a8acc; no Python overlay; current repository source 08ff8a6 is later."
+          ],
+          "limits": [
+            "Current source/native proof and the 1065-entry CTest closure remain separate."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "Goodall consolidated evidence records six actual face rows, 19 final native rank-one rows and 15 guard/solve rows per MPI2 rank.",
+          "receipt_refs": [
+            "interactions_final_evidence",
+            "interactions_mpi2_pub_r0_xml",
+            "interactions_mpi2_pub_r1_xml",
+            "closure_interactions_final",
+            "closure_interactions_rank1_xml",
+            "closure_interactions_guard_r0_xml",
+            "closure_interactions_guard_r1_xml",
+            "closure_interactions_rank1_log",
+            "closure_interactions_guard_r0_log",
+            "closure_interactions_guard_r1_log"
+          ],
+          "command_refs": [
+            "interactions_publication",
+            "interactions_mpi2"
+          ],
+          "provenance": [
+            "Current closure no-overlay rank-one: 19 passed in 462.23 seconds; guard/solve: 15 passed per MPI2 rank in 235.05 seconds; matrix and package pins are in closure_interactions_final.",
+            "Historical Goodall 24b overlay receipts remain reproducible supporting evidence."
+          ],
+          "limits": [
+            "MPI2 counts are per rank; full multi-component diffusion integration is not claimed."
+          ]
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Six actual face rows pass; scalar unequal-diffusivity y1+y2 counterexamples are observed as intended while the compatible control remains near roundoff; derivative/guard rows pass.",
+          "receipt_refs": [
+            "interactions_final_evidence",
+            "closure_interactions_final",
+            "closure_interactions_rank1_xml",
+            "closure_interactions_guard_r0_xml",
+            "closure_interactions_guard_r1_xml"
+          ],
+          "command_refs": [
+            "interactions_publication",
+            "interactions_mpi2"
+          ],
+          "provenance": [
+            "Current closure no-overlay rank-one JUnit and closure_interactions_final; scalar counterexamples and compatible controls retain declared meanings."
+          ],
+          "limits": [
+            "The scalar counterexample is not a claim of full joint multicomponent diffusion integration."
+          ]
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Full multi-component diffusion integration remains a bounded extension outside this receipt; repository CTest closure remains open."
+      ]
+    },
+    {
+      "id": "M4.3",
+      "title": "Preserve native failure domains and derivative contracts in solves",
+      "manifest": {
+        "issue": "M4.3",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-757",
+        "ADC-750"
+      ],
+      "dependencies": [
+        "M4.2",
+        "M2.2",
+        "M2.4",
+        "M6.1",
+        "M6.2"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 OpenMP2 MPI1/MPI2 Uniform; exact/approximate/FD derivative and injected-failure matrices.",
+        "limits": [
+          "Current closure guard/solve receipt covers MPI2 exact/approximate/FD, guard and failure rows; no GPU/AMR qualification in this bounded profile.",
+          "The current repository source 08ff8a6 is later than the closure source 34a8acc; final CTest closure remains separate."
+        ]
+      },
+      "current_disposition": "bounded_derivative_failure_guard_pass_current_closure_no_overlay",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Native status, derivative strategy and solve outcome contracts.",
+          "receipt_refs": [
+            "interactions_mpi2",
+            "implicit_fatal",
+            "transaction_xml"
+          ],
+          "command_refs": [
+            "interactions_mpi2",
+            "transactions"
+          ],
+          "provenance": [
+            "Rank-coherent failure categories"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Native guard/residual/transaction selectors pass; fatal witness 3/3.",
+          "receipt_refs": [
+            "transaction_xml",
+            "implicit_fatal",
+            "interactions_mpi2"
+          ],
+          "command_refs": [
+            "transactions",
+            "interactions_mpi2"
+          ],
+          "provenance": [
+            "39 tests; 36 pass/3 skipped"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Exact/approximate/FD and failure dispositions explicit.",
+          "receipt_refs": [
+            "interactions_mpi2",
+            "implicit_fatal"
+          ],
+          "command_refs": [
+            "interactions_mpi2"
+          ],
+          "provenance": [
+            "Rank0/rank1 outcomes"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Consolidated derivative/guard/failure native outputs retain compile/binary properties and package pins.",
+          "receipt_refs": [
+            "closure_interactions_final",
+            "closure_dim2_proof",
+            "closure_native_source_continuity"
+          ],
+          "command_refs": [
+            "closure_interactions",
+            "closure_wheel_dim2"
+          ],
+          "provenance": [
+            "Closure source 34a8acc; no Python overlay; exact current-package continuity is recorded."
+          ],
+          "limits": [
+            "Final current-source/native proof and 1065-entry CTest closure remain separate."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "MPI2 guard/solve selectors pass 15 cases per rank; final native rank-one selector records 19 passed rows.",
+          "receipt_refs": [
+            "interactions_final_evidence",
+            "closure_interactions_guard_r0_log",
+            "closure_interactions_guard_r0_xml",
+            "closure_interactions_guard_r1_log",
+            "closure_interactions_guard_r1_xml"
+          ],
+          "command_refs": [
+            "interactions_mpi2",
+            "interactions_publication"
+          ],
+          "provenance": [
+            "Current closure no-overlay MPI2 guard/solve receipts pass 15 tests per rank in 235.05 seconds; exact/approximate/FD solves, collective rollback and signed repetition are covered."
+          ],
+          "limits": []
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Exact/approximate/FD solved iterates, invalid-cell guard, rollback and repeated signed contributions pass the declared outcomes.",
+          "receipt_refs": [
+            "interactions_final_evidence",
+            "implicit_fatal",
+            "closure_interactions_guard_r0_xml",
+            "closure_interactions_guard_r1_xml"
+          ],
+          "command_refs": [
+            "interactions_mpi2",
+            "interactions_publication"
+          ],
+          "provenance": [
+            "Goodall consolidated derivative/guard/failure rows"
+          ],
+          "limits": [
+            "No wider backend/AMR/GPU numerical qualification."
+          ]
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Final 1065-entry CTest closure; wider backend/layout cells remain bounded extensions."
+      ]
+    },
+    {
+      "id": "M4.4",
+      "title": "Qualify joint interaction inventories and native-call costs",
+      "manifest": {
+        "issue": "M4.4",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-690",
+        "ADC-769"
+      ],
+      "dependencies": [
+        "M4.1",
+        "M4.2",
+        "M4.3",
+        "M1.4",
+        "M6.1",
+        "M6.2"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 OpenMP2 MPI2 current closure native source 34a8acc with no Python overlay; Uniform N16/32/64; publication interaction timing rows.",
+        "limits": [
+          "No GPU/memory qualification; those are bounded extensions.",
+          "The current repository source 08ff8a6 is later than the closure source 34a8acc; final CTest closure remains separate."
+        ]
+      },
+      "current_disposition": "bounded_publication_mpi2_performance_pass_current_closure_no_overlay",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Inventory maps, accepted exchanges and shared/unshared cost variants.",
+          "receipt_refs": [
+            "interactions_rank1",
+            "interactions_publication_overlay"
+          ],
+          "command_refs": [
+            "interactions_rank1"
+          ],
+          "provenance": [
+            "Rank-one timing summary"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Rank-one selector and publication MPI2 rank outputs each record 13 passing rows.",
+          "receipt_refs": [
+            "interactions_rank1_log",
+            "interactions_mpi2_pub_r0_log",
+            "interactions_mpi2_pub_r1_log"
+          ],
+          "command_refs": [
+            "interactions_rank1"
+          ],
+          "provenance": [
+            "Rank-one and publication MPI2 logs each record 13 pass"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Shared versus repeated use and accepted inventory records.",
+          "receipt_refs": [
+            "interactions_rank1",
+            "interactions_mpi2_pub_r0_xml",
+            "interactions_mpi2_pub_r1_xml"
+          ],
+          "command_refs": [
+            "interactions_rank1"
+          ],
+          "provenance": [
+            "D2 rank1"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Goodall consolidated publication receipt retains authenticated timing and compile/binary metadata.",
+          "receipt_refs": [
+            "closure_interactions_final",
+            "closure_dim2_proof",
+            "closure_native_source_continuity"
+          ],
+          "command_refs": [
+            "closure_interactions",
+            "closure_wheel_dim2"
+          ],
+          "provenance": [
+            "Closure source 34a8acc; no Python overlay; timing and compile/binary properties are retained."
+          ],
+          "limits": [
+            "Timing remains bounded to the recorded host/concurrency protocol."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "13 rank-one rows and publication MPI2 rows execute on each rank.",
+          "receipt_refs": [
+            "interactions_rank1_log",
+            "interactions_mpi2_pub_r0_log",
+            "interactions_mpi2_pub_r1_log",
+            "interactions_mpi2_pub_r0_xml",
+            "interactions_mpi2_pub_r1_xml",
+            "closure_interactions_mpi2_r0_log",
+            "closure_interactions_mpi2_r0_xml",
+            "closure_interactions_mpi2_r1_log",
+            "closure_interactions_mpi2_r1_xml"
+          ],
+          "command_refs": [
+            "interactions_rank1",
+            "interactions_mpi2",
+            "interactions_publication"
+          ],
+          "provenance": [
+            "Current closure no-overlay MPI2 matrix passes 13 tests per rank in 523.99 seconds; JUnit retains shared/unshared timing samples and call/binary properties."
+          ],
+          "limits": []
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Rank-one inventory and accepted quadrature rows pass.",
+          "receipt_refs": [
+            "interactions_rank1",
+            "interactions_mpi2_pub_r0_xml",
+            "interactions_mpi2_pub_r1_xml",
+            "closure_interactions_mpi2_r0_xml",
+            "closure_interactions_mpi2_r1_xml"
+          ],
+          "command_refs": [
+            "interactions_rank1",
+            "interactions_publication"
+          ],
+          "provenance": [
+            "100-step Heun; N16/32/64 publication properties"
+          ],
+          "limits": []
+        },
+        "performance_characterized": {
+          "status": "pass",
+          "protocol": "Bounded paired protocol: 2 warmups, 7 samples, shared/unshared variants; rank-one and publication MPI2 rows pass, with publication rank outputs completing in 1572.82 seconds per rank.",
+          "receipt_refs": [
+            "interactions_final_evidence",
+            "interactions_rank1_log",
+            "interactions_mpi2_pub_r0_log",
+            "interactions_mpi2_pub_r1_log",
+            "closure_interactions_mpi2_r0_log",
+            "closure_interactions_mpi2_r1_log"
+          ],
+          "command_refs": [
+            "interactions_rank1",
+            "interactions_publication"
+          ],
+          "provenance": [
+            "Goodall consolidated timing properties; host activity may be concurrent."
+          ],
+          "limits": [
+            "Concurrent host compilation and validation constrain interpretation; timings are not universal performance claims."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Final 1065-entry CTest closure; GPU/device and memory cells remain bounded extensions."
+      ]
+    },
+    {
+      "id": "M5.1",
+      "title": "Execute scalar diffusion with explicit gradient and boundary semantics",
+      "manifest": {
+        "issue": "M5.1",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-682",
+        "ADC-749"
+      ],
+      "dependencies": [
+        "M1.2",
+        "M2.1",
+        "M2.2",
+        "M2.3"
+      ],
+      "bounded_matrix": {
+        "scope": "D2 OpenMP2 MPI1 Uniform scalar diffusion N16/32/64; explicit constant/variable, boundary and exchange controls.",
+        "limits": [
+          "Immutable Dim2 summary/post-payload proof uses source 24b5898 and fixture 4beb66c; current integration source/native proof is separate.",
+          "No AMR/GPU/MPI>1 qualification in this bounded profile."
+        ]
+      },
+      "current_disposition": "bounded_explicit_immutable_dim2_pass",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Explicit gradient, constitutive flux, boundary and exchange records.",
+          "receipt_refs": [
+            "diff_constant",
+            "diff_combined",
+            "diff_exchange_euler",
+            "diff_exchange_ssprk2"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "Generated source and addendum retained"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Combined restriction/boundary/exchange controls pass.",
+          "receipt_refs": [
+            "diff_combined",
+            "diff_exchange_euler",
+            "diff_exchange_ssprk2"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "c=.2 accepted; c=.6 refused"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Scalar coefficient, signed exchange and physical boundary closures.",
+          "receipt_refs": [
+            "diff_constant",
+            "diff_variable",
+            "diff_combined"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "D2 N16/32/64"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Immutable Dim2 explicit wheel and post-payload member proof authenticate the final 9-test artifact.",
+          "receipt_refs": [
+            "diff_final_summary",
+            "diff_final_post_payload",
+            "pub_dim2_proof"
+          ],
+          "command_refs": [
+            "diffusion_explicit",
+            "wheel_dim2"
+          ],
+          "provenance": [
+            "Source 24b5898; wheel 762994fb...; installed tree 5082b4df..."
+          ],
+          "limits": [
+            "Combined accepted RHS reconciliation remains M5.3."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "Immutable Dim2 explicit qualification passes 9 tests and records 27 native scenarios: 24 accepted and 3 rejected.",
+          "receipt_refs": [
+            "diff_final_summary",
+            "diff_final_post_payload"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "2667.177 seconds; source 24b5898; fixture 4beb66c"
+          ],
+          "limits": [
+            "No AMR/GPU/MPI>1 qualification."
+          ]
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Constant orders 1.8665/1.8630/1.8526 and variable 2.00013/2.00043/1.99124; exchange counts retained.",
+          "receipt_refs": [
+            "diff_constant",
+            "diff_variable",
+            "diff_exchange_euler",
+            "diff_exchange_ssprk2"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "Diagnostic D2 t=.05 rows"
+          ],
+          "limits": []
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Final source/native proof lineage; the combined Euler/SSPRK2 reconciliation is recorded in M5.3."
+      ]
+    },
+    {
+      "id": "M5.2",
+      "title": "Extend diffusion to variable coefficients and a bounded tensor route",
+      "manifest": {
+        "issue": "M5.2",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-772"
+      ],
+      "dependencies": [
+        "M5.1",
+        "M2.2",
+        "M2.4"
+      ],
+      "bounded_matrix": {
+        "scope": "D2 OpenMP2 MPI1 Uniform N16/32/64; variable scalar and diagonal linear/smooth rows.",
+        "limits": [
+          "Immutable Dim2 summary/post-payload proof uses source 24b5898 and fixture 4beb66c.",
+          "Off-diagonal tensor, AMR and GPU are bounded extensions; MPI>1 is outside this profile."
+        ]
+      },
+      "current_disposition": "bounded_variable_diagonal_immutable_dim2_pass",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Variable scalar and bounded diagonal tensor dependencies.",
+          "receipt_refs": [
+            "diff_variable",
+            "diff_linear",
+            "diff_smooth"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "No arbitrary anisotropy claim"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Variable/tensor native diagnostic selector passes 4 cases.",
+          "receipt_refs": [
+            "diff_tensor_log",
+            "diff_tensor_xml"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "4 pass, 5 deselected"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Divergence coefficient, diagonal tensor and nonlinear gradient checks.",
+          "receipt_refs": [
+            "diff_variable",
+            "diff_linear",
+            "diff_smooth"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "N16/32/64"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Immutable Dim2 explicit wheel and post-payload member proof authenticate variable and diagonal rows.",
+          "receipt_refs": [
+            "diff_final_summary",
+            "diff_final_post_payload",
+            "pub_dim2_proof"
+          ],
+          "command_refs": [
+            "diffusion_explicit",
+            "wheel_dim2"
+          ],
+          "provenance": [
+            "Source 24b5898; wheel 762994fb..."
+          ],
+          "limits": [
+            "Off-diagonal tensor, AMR and GPU remain bounded extensions."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "Immutable Dim2 explicit qualification includes the variable and diagonal rows; all 9 selected tests pass.",
+          "receipt_refs": [
+            "diff_final_summary",
+            "diff_final_post_payload"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "24 accepted/3 rejected native scenarios; 2667.177 seconds"
+          ],
+          "limits": [
+            "No off-diagonal tensor, AMR, GPU or MPI>1 qualification."
+          ]
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Variable orders 2.00013/2.00043/1.99124; diagonal linear exact zero; smooth orders 1.99757/1.99497/1.91860, within the declared bounded rows.",
+          "receipt_refs": [
+            "diff_final_summary",
+            "diff_variable",
+            "diff_linear",
+            "diff_smooth"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "Immutable Dim2 final summary plus supporting refinement receipts"
+          ],
+          "limits": [
+            "No off-diagonal tensor, AMR or GPU scientific qualification."
+          ]
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Final current source/native proof lineage; the combined Euler/SSPRK2 reconciliation is recorded in M5.3; off-diagonal, AMR and GPU remain bounded extensions."
+      ]
+    },
+    {
+      "id": "M5.3",
+      "title": "Enforce combined explicit restrictions and weighted diffusive exchanges",
+      "manifest": {
+        "issue": "M5.3",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-677",
+        "ADC-756"
+      ],
+      "dependencies": [
+        "M5.1",
+        "M1.4",
+        "M2.1",
+        "M2.2",
+        "M6.1",
+        "M6.2"
+      ],
+      "bounded_matrix": {
+        "scope": "D1 SG combined restriction and D2 explicit exchange controls; exact 6b2a1c3 Dim2 periodic prepared-face matrix, Uniform host MPI1 N16/32/64.",
+        "limits": [
+          "The combined receipt covers Euler/SSPRK2 accepted-face per-cell reconciliation across N16/32/64.",
+          "Staircase and cutcell embedded-geometry cases are structured refusals before diffusive evaluation.",
+          "AMR local-h/subcycling and distributed exchange are bounded extension limits.",
+          "Immutable Dim2 explicit proof is separate; this receipt closes the bounded combined-face matrix only."
+        ]
+      },
+      "current_disposition": "bounded_restriction_exchange_and_combined_rhs_pass",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Combined restriction, stage quadrature and oriented ledgers.",
+          "receipt_refs": [
+            "diff_combined",
+            "diff_exchange_euler",
+            "diff_exchange_ssprk2",
+            "sg_public_xml",
+            "combined_periodic_native_xml",
+            "combined_periodic_native_log"
+          ],
+          "command_refs": [
+            "diffusion_explicit",
+            "diffusion_sg"
+          ],
+          "provenance": [
+            "D1/D2 receipts"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "D2 c=.2/c=.6 and D1 SG combined rows pass.",
+          "receipt_refs": [
+            "diff_combined",
+            "sg_public_xml",
+            "combined_periodic_native_xml",
+            "combined_periodic_native_log"
+          ],
+          "command_refs": [
+            "diffusion_explicit",
+            "diffusion_sg"
+          ],
+          "provenance": [
+            "SG public 6 pass"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Restriction policy and accepted exchange counts.",
+          "receipt_refs": [
+            "diff_combined",
+            "diff_exchange_euler",
+            "diff_exchange_ssprk2",
+            "combined_periodic_native_xml",
+            "combined_periodic_native_log"
+          ],
+          "command_refs": [
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "Counts retained"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Exact 6b2a1c3 periodic native combined-face JUnit/log emitted with accepted-face reconciliation and explicit EB refusals.",
+          "receipt_refs": [
+            "pub_dim2_proof",
+            "diff_final_summary",
+            "diff_final_post_payload",
+            "combined_periodic_native_xml",
+            "combined_periodic_native_log"
+          ],
+          "command_refs": [
+            "wheel_dim2",
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "Exact source 6b2a1c3; periodic-native.xml/log; no source overlay recorded for this receipt."
+          ],
+          "limits": [
+            "Current integration later advanced to 3826eb4; final current-source native proof remains separate."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "Exact 6b2a1c3 periodic native receipt passes Euler and SSPRK2 accepted-face matrix over N16/32/64 and both EB refusal cases.",
+          "receipt_refs": [
+            "sg_public_xml",
+            "diff_combined",
+            "diff_exchange_euler",
+            "diff_exchange_ssprk2",
+            "combined_periodic_native_xml",
+            "combined_periodic_native_log"
+          ],
+          "command_refs": [
+            "diffusion_sg",
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "4 passed in 120.09 seconds; two accepted intervals per method and both structured embedded-geometry refusals."
+          ],
+          "limits": [
+            "The controls do not substitute for combined accepted RHS execution."
+          ]
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Euler/SSPRK2 N16/32/64 accepted-face per-cell reconciliation passes; maximum face defect 5.69e-15 and cell-change defect 3.05e-18; both EB cases refuse before evaluation.",
+          "receipt_refs": [
+            "diff_combined",
+            "diff_exchange_euler",
+            "diff_exchange_ssprk2",
+            "sg_public_xml",
+            "combined_periodic_native_xml",
+            "combined_periodic_native_log"
+          ],
+          "command_refs": [
+            "diffusion_sg",
+            "diffusion_explicit"
+          ],
+          "provenance": [
+            "Exact 6b2a1c3 periodic-native.xml/log, 4 passed in 120.09 seconds."
+          ],
+          "limits": [
+            "No AMR reflux, local-h/subcycling or distributed-exchange qualification is claimed."
+          ]
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Final current-integration source/native proof lineage; AMR local-h/subcycling and distributed exchange remain bounded extensions."
+      ]
+    },
+    {
+      "id": "M5.4",
+      "title": "Execute spatial implicit diffusion while preserving accumulation",
+      "manifest": {
+        "issue": "M5.4",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-670",
+        "ADC-750"
+      ],
+      "dependencies": [
+        "M5.1",
+        "M5.3",
+        "M1.2",
+        "M2.3",
+        "M6.1",
+        "M6.2"
+      ],
+      "bounded_matrix": {
+        "scope": "D2 OpenMP2 MPI1 Uniform periodic N16/32/64; explicit/implicit Fourier, MMS, shifted constant, nonlinear accumulation and invalid-domain cases.",
+        "limits": [
+          "Immutable review-native receipt source is 14a0f74 with no Python overlay.",
+          "Variable/tensor/general coupled, AMR, multirank and GPU paths remain bounded extensions."
+        ]
+      },
+      "current_disposition": "bounded_implicit_six_case_review_native_pass",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Spatial residual, frozen data/seed, derivative and failure disposition.",
+          "receipt_refs": [
+            "implicit_summary",
+            "implicit_fatal"
+          ],
+          "command_refs": [
+            "implicit"
+          ],
+          "provenance": [
+            "foundation 16f48a1; guard f92a55a; CSE 2fac0aa"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "Public six-case and fatal/source contract gates pass.",
+          "receipt_refs": [
+            "implicit_summary",
+            "implicit_fatal",
+            "transaction_xml"
+          ],
+          "command_refs": [
+            "implicit",
+            "transactions"
+          ],
+          "provenance": [
+            "6 public; 78 source; fatal 3/3"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Accumulation, current iterate/FD route and explicit failure.",
+          "receipt_refs": [
+            "implicit_summary",
+            "implicit_overlay",
+            "implicit_fatal"
+          ],
+          "command_refs": [
+            "implicit"
+          ],
+          "provenance": [
+            "D2 coefficient .1"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Immutable review-native wheel and private proof authenticate the six-case implicit artifact.",
+          "receipt_refs": [
+            "review_public_native",
+            "review_public_native_summary",
+            "review_private_proof"
+          ],
+          "command_refs": [
+            "review_public_native_command"
+          ],
+          "provenance": [
+            "Source 14a0f74; no Python overlay; wheel cf4953fc..."
+          ],
+          "limits": [
+            "Final current-integration source/native gate remains separate."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "The immutable review-native batch includes six public implicit cases and passes 14 tests overall with no skips or failures.",
+          "receipt_refs": [
+            "review_public_native",
+            "review_public_native_command",
+            "review_public_native_summary"
+          ],
+          "command_refs": [
+            "review_public_native",
+            "review_public_native_command"
+          ],
+          "provenance": [
+            "811.086 seconds; source 14a0f74; no Python overlay"
+          ],
+          "limits": [
+            "No AMR/multirank/GPU/variable/tensor/general coupled qualification."
+          ]
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "FE/BE MMS orders near 2; shifted nonzero mean exact; H(T)=T+T² gives 0.6180339887; invalid domain explicit fail_run.",
+          "receipt_refs": [
+            "review_public_native",
+            "implicit_summary",
+            "implicit_fatal"
+          ],
+          "command_refs": [
+            "review_public_native"
+          ],
+          "provenance": [
+            "Immutable review-native six-case result; older overlay/fatal receipts retained as supporting history"
+          ],
+          "limits": []
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Broader repository/native gate and final source/native proof; undeclared variable/tensor/general coupled paths remain bounded extensions."
+      ]
+    },
+    {
+      "id": "M5.5",
+      "title": "Execute a joint fitted drift-diffusion construction with exact coverage",
+      "manifest": {
+        "issue": "M5.5",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-772"
+      ],
+      "dependencies": [
+        "M5.1",
+        "M5.3",
+        "M3.3",
+        "M2.1",
+        "M2.3"
+      ],
+      "bounded_matrix": {
+        "scope": "D1 OpenMP2 MPI1 Uniform; exact installed Dim1 SG N16/32/64, solved-potential and combined restriction rows.",
+        "limits": [
+          "The exact six-case proof/report is source 6b2a1c3 with no Python overlay; current source 08ff8a6 closure artifacts are separate.",
+          "AMR/GPU/MPI>1 are bounded extensions."
+        ]
+      },
+      "current_disposition": "bounded_dim1_public_sg_periodic_immutable_pass_with_current_lineage_open",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Joint fitted flux, Bernoulli zero-jump and coverage/refusal records.",
+          "receipt_refs": [
+            "sg_mms",
+            "sg_boundary",
+            "sg_overlay",
+            "periodic_dim1_sg_final_proof",
+            "periodic_dim1_sg_report"
+          ],
+          "command_refs": [
+            "diffusion_sg"
+          ],
+          "provenance": [
+            "base source 24b5898"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "D1 public SG matrix completes 6 tests with no skips or failures.",
+          "receipt_refs": [
+            "sg_public_xml",
+            "sg_public_log",
+            "sg_final_proof",
+            "sg_validation_report",
+            "periodic_dim1_sg_final_proof",
+            "periodic_dim1_sg_report"
+          ],
+          "command_refs": [
+            "diffusion_sg"
+          ],
+          "provenance": [
+            "6 pass, 0 skip/fail in 255.22 seconds; final proof/report retain source, native and fixture pins"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Joint coverage and separate IMEX/refusal rows.",
+          "receipt_refs": [
+            "sg_public_xml",
+            "sg_mms",
+            "sg_boundary",
+            "sg_final_proof",
+            "sg_validation_report",
+            "periodic_dim1_sg_final_proof",
+            "periodic_dim1_sg_report"
+          ],
+          "command_refs": [
+            "diffusion_sg"
+          ],
+          "provenance": [
+            "N16/32/64"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Exact installed no-overlay Dim1 SG proof/report emitted with wheel, native manifest, installed-tree and fixture pins.",
+          "receipt_refs": [
+            "sg_overlay",
+            "pub_dim1_proof",
+            "sg_final_proof",
+            "sg_validation_report",
+            "periodic_dim1_sg_final_proof",
+            "periodic_dim1_sg_report"
+          ],
+          "command_refs": [
+            "periodic_dim1_sg"
+          ],
+          "provenance": [
+            "Source 6b2a1c3; 964 installed members; wheel 4d5b432f...; current source 08ff8a6 closure lineage remains separate."
+          ],
+          "limits": [
+            "No AMR/GPU/MPI>1 qualification."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "Public D1 manufactured, boundary, zero-jump, solved-potential-to-SG and combined-bound tests pass.",
+          "receipt_refs": [
+            "sg_public_xml",
+            "sg_public_log",
+            "sg_final_proof",
+            "sg_validation_report",
+            "periodic_dim1_sg_final_proof",
+            "periodic_dim1_sg_report"
+          ],
+          "command_refs": [
+            "periodic_dim1_sg"
+          ],
+          "provenance": [
+            "6 passed, 0 failed, 0 skipped in 226.013 seconds; exact installed Dim1, no Python overlay."
+          ],
+          "limits": []
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "MMS orders 2.00208647236/1.99917032064/1.99587940574; SG boundary face flux <=1.2824799897365428e-15; solved-potential face flux <=2.9117651847192965e-15; zero-jump error <=4.440892098500626e-16.",
+          "receipt_refs": [
+            "sg_mms",
+            "sg_boundary",
+            "sg_public_xml",
+            "sg_final_proof",
+            "sg_validation_report",
+            "periodic_dim1_sg_final_proof",
+            "periodic_dim1_sg_report"
+          ],
+          "command_refs": [
+            "periodic_dim1_sg"
+          ],
+          "provenance": [
+            "Exact periodic-dim1-sg-final-proof.json and validation report; source 6b2a1c3, no overlay."
+          ],
+          "limits": []
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Current source 08ff8a6 immutable Dim1 artifact/proof and final source/native runtime lineage; broader undeclared matrices remain bounded extensions."
+      ]
+    },
+    {
+      "id": "M6.1",
+      "title": "Define and execute the general solve request and result protocol",
+      "manifest": {
+        "issue": "M6.1",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-665",
+        "ADC-700"
+      ],
+      "dependencies": [
+        "M2.3"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 Kokkos host/OpenMP2 MPI1 Uniform periodic 4x4; one linear unknown, one accepted dt; source/native residual/lifecycle selectors.",
+        "limits": [
+          "One unknown per adapter; nonlinear/spatial/MPI multi-rank outside.",
+          "Standalone residual header and 24b solve overlay are separate from the final current-integration source/native artifact."
+        ]
+      },
+      "current_disposition": "bounded_solve_protocol_pass_with_source_native_gate_open",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Typed unknown/equation inputs, seed, derivative and solve result contracts.",
+          "receipt_refs": [
+            "solve_summary",
+            "solve_source",
+            "solve_overlay"
+          ],
+          "command_refs": [
+            "solve"
+          ],
+          "provenance": [
+            "source abb5ab25; foundation 71880cfe"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "60 source, 14 existing-linear and 8 residual checks pass.",
+          "receipt_refs": [
+            "solve_summary",
+            "solve_source",
+            "solve_lifecycle"
+          ],
+          "command_refs": [
+            "solve"
+          ],
+          "provenance": [
+            "Output hashes retained"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Solve coordinates, effects, derivative route and failure disposition.",
+          "receipt_refs": [
+            "solve_summary",
+            "solve_overlay"
+          ],
+          "command_refs": [
+            "solve"
+          ],
+          "provenance": [
+            "D2 2I x=b"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Lifecycle artifact and overlay proof retain native/source hashes.",
+          "receipt_refs": [
+            "solve_lifecycle",
+            "solve_overlay",
+            "pub_dim2_proof"
+          ],
+          "command_refs": [
+            "solve",
+            "wheel_dim2"
+          ],
+          "provenance": [
+            "Package 24b; solve overlay abb5ab25; final current-integration source/native artifact remains separate"
+          ],
+          "limits": [
+            "No final current-integration rebuilt artifact."
+          ]
+        },
+        "executed": {
+          "status": "pass",
+          "command": "2 native lifecycle cases execute validate/resolve/compile/bind/run.",
+          "receipt_refs": [
+            "solve_lifecycle",
+            "solve_summary"
+          ],
+          "command_refs": [
+            "solve"
+          ],
+          "provenance": [
+            "D2 OpenMP2 MPI1"
+          ],
+          "limits": []
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Exact diagonal solve returns x=.5b with residual tolerance 2e-15.",
+          "receipt_refs": [
+            "solve_summary",
+            "solve_overlay"
+          ],
+          "command_refs": [
+            "solve"
+          ],
+          "provenance": [
+            "Exact linear route"
+          ],
+          "limits": []
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Final source/native artifact and wider solve matrix; M6.3/M6.4 remain downstream and are outside the current 15-leaf acceptance-gap list."
+      ]
+    },
+    {
+      "id": "M6.2",
+      "title": "Enforce nested attempt publication and accepted exchange transactions",
+      "manifest": {
+        "issue": "M6.2",
+        "acceptance_items": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "source": "/Users/romaindespoulain/Documents/Codex/2026-09-07/infer-the-intended-scope-from-the/notes/migration-manifest.json"
+      },
+      "related_issue_refs": [
+        "ADC-666",
+        "ADC-702",
+        "ADC-757"
+      ],
+      "dependencies": [
+        "M6.1",
+        "M2.1"
+      ],
+      "bounded_matrix": {
+        "scope": "Dim2 OpenMP/Serial host 2 threads MPI1 Uniform 16x16; nested retry and finite-budget rollback.",
+        "limits": [
+          "Three MPI2-only rank-divergent transaction selector cells are skipped by this MPI1 finite-retry selector; no unsupported result is substituted.",
+          "M6.3/M6.4 remain downstream; no performance characterization."
+        ]
+      },
+      "current_disposition": "bounded_public_retry_transaction_pass",
+      "stages": {
+        "representable": {
+          "status": "pass",
+          "witness": "Nested staged effects, accepted publication, rollback and ledgers.",
+          "receipt_refs": [
+            "transaction_source",
+            "transaction_xml",
+            "retry_summary"
+          ],
+          "command_refs": [
+            "transactions",
+            "retry"
+          ],
+          "provenance": [
+            "States/fields/topology/ledgers/caches/histories/clocks/schedules/consumers/diagnostics rollback list retained"
+          ],
+          "limits": []
+        },
+        "validated": {
+          "status": "pass",
+          "command": "79 source and 36 native transaction tests pass; 3 MPI2-only rank-divergent selector cells are skipped by this MPI1 selector.",
+          "receipt_refs": [
+            "transaction_source",
+            "transaction_xml",
+            "transaction_log"
+          ],
+          "command_refs": [
+            "transactions",
+            "source_gate"
+          ],
+          "provenance": [
+            "79 source pass; 36 native pass/3 MPI2-only skips"
+          ],
+          "limits": []
+        },
+        "resolved": {
+          "status": "pass",
+          "witness": "Retry/control identities and finite-budget accepted envelopes.",
+          "receipt_refs": [
+            "retry_summary",
+            "retry_overlay"
+          ],
+          "command_refs": [
+            "retry"
+          ],
+          "provenance": [
+            "fixture 71a8e81; package 24b; patch a22a874"
+          ],
+          "limits": []
+        },
+        "emitted": {
+          "status": "pass",
+          "witness": "Dim2 wheel plus source-only storage overlay; native headers unchanged.",
+          "receipt_refs": [
+            "pub_dim2_proof",
+            "retry_overlay"
+          ],
+          "command_refs": [
+            "wheel_dim2",
+            "retry"
+          ],
+          "provenance": [
+            "native_headers_changed=false"
+          ],
+          "limits": []
+        },
+        "executed": {
+          "status": "pass",
+          "command": "Retry/control and finite exhaustion tests pass in 40.15 seconds.",
+          "receipt_refs": [
+            "retry_xml",
+            "retry_summary",
+            "transaction_xml"
+          ],
+          "command_refs": [
+            "retry",
+            "transactions"
+          ],
+          "provenance": [
+            "2 accepted/1 rejected versus 2/0 control; budget 1 after 2 attempts"
+          ],
+          "limits": []
+        },
+        "numerically_checked": {
+          "status": "pass",
+          "oracle": "Retry/control end at t=.125, macro step 2; exhaustion leaves no committed effects and rolls back all staged effects.",
+          "receipt_refs": [
+            "retry_xml",
+            "retry_summary"
+          ],
+          "command_refs": [
+            "retry"
+          ],
+          "provenance": [
+            "Exact state/time/history/ledger properties"
+          ],
+          "limits": [
+            "MPI2-only rank-divergent selector cells are outside this MPI1 finite-retry run; no unsupported result is substituted."
+          ]
+        },
+        "performance_characterized": {
+          "status": "pending",
+          "protocol": "No retained paired performance protocol.",
+          "receipt_refs": [],
+          "command_refs": [],
+          "provenance": [],
+          "limits": [
+            "Suite elapsed time is not a performance characterization."
+          ]
+        }
+      },
+      "open_acceptance": [
+        "Downstream M6.3/M6.4 consumer use and R1 entry review; these are outside the current 15-leaf acceptance-gap list."
+      ]
+    }
+  ],
+  "active_acceptance_gaps": [
+    {
+      "id": "G1",
+      "issue": "Final 1065-entry CTest execution/inventory after the 225-target native build",
+      "status": "open",
+      "receipts": [
+        "native_build_225_v3_command",
+        "native_build_225_v3_result",
+        "native_build_225_v3_log",
+        "closure_ctest_commands",
+        "closure_ctest_summary",
+        "closure_ctest_inventory",
+        "closure_ctest_cpp_log",
+        "closure_ctest_cpp_xml",
+        "closure_ctest_mpi_np1_log",
+        "closure_ctest_mpi_np1_xml",
+        "closure_ctest_mpi_np2_log",
+        "closure_ctest_mpi_np2_xml",
+        "closure_ctest_mpi_np3_log",
+        "closure_ctest_mpi_np3_xml",
+        "closure_ctest_mpi_np4_log",
+        "closure_ctest_mpi_np4_xml",
+        "closure_ctest_standalone_log",
+        "closure_ctest_standalone_xml"
+      ],
+      "detail": "The active v3 native argv selects 225 targets and the build completes with returncode 0 in 1241.053 seconds. The exact 1065-entry inventory is partitioned as 963 normal, 20 MPI-np1, 49 MPI-np2, 3 MPI-np3, 25 MPI-np4 and 5 standalone entries. The completed batches report 9 failures/17 skips in normal, 1 failure in MPI-np1, 3 failures in MPI-np2, 0 failures in MPI-np3, 1 failure in MPI-np4 and 0 failures in standalone. The inventory is complete but not all-green, so repository closure remains open."
+    },
+    {
+      "id": "G2",
+      "issue": "Final 485-file non-MPI Python closure gate",
+      "status": "open",
+      "receipts": [
+        "closure_source_command",
+        "closure_source_summary",
+        "closure_source_log",
+        "closure_source_remainder_command",
+        "closure_source_remainder_log"
+      ],
+      "detail": "The first current-source closure command selects 485 non-MPI files and completes with returncode 1 after 562.376 seconds: 20 passed, 8 failed and 247 deselected. A separate 472-file diagnostic remainder is running; neither result is a final source closure gate."
+    },
+    {
+      "id": "G3",
+      "issue": "Final immutable Dim1/Dim2 artifacts and source/native proof lineage",
+      "status": "open",
+      "receipts": [
+        "periodic_dim1_sg_final_proof",
+        "periodic_dim1_sg_report",
+        "closure_dim2_proof",
+        "closure_native_source_continuity",
+        "closure_interactions_final"
+      ],
+      "detail": "The exact 6b Dim1 proof/report pass without an overlay, and current closure emits an authenticated 965-member Dim2 proof plus a no-overlay M4 package continuity receipt. The current repository source is 08ff8a6, while these closure proofs are pinned to source 34a8acc (Dim2) and 6b2a1c3 (Dim1); current Dim1 artifact/proof and final source/native runtime lineage remain required. CTest and the 485-file closure run are tracked separately."
+    }
+  ],
+  "downstream": {
+    "M6.3": {
+      "status": "pending",
+      "dependencies": [
+        "M6.2",
+        "M3.3",
+        "M4.3",
+        "M5.4"
+      ],
+      "detail": "No integrated checked explicit/implicit/IMEX/splitting expansion receipt; downstream status, outside the current 15-leaf acceptance-gap list."
+    },
+    "M6.4": {
+      "status": "pending",
+      "dependencies": [
+        "M6.2",
+        "M3.3"
+      ],
+      "detail": "No completed AMR/multiblock/restart accepted-exchange consumer receipt; downstream expansion, outside the current 15-leaf acceptance-gap list."
+    },
+    "R1": {
+      "status": "pending",
+      "representative_paths": [
+        "scalar AMR",
+        "field-coupled transport",
+        "Euler-Poisson source",
+        "heterogeneous interaction",
+        "explicit diffusion",
+        "implicit diffusion",
+        "nonconstant-coefficient scalar field",
+        "imported native primitive"
+      ],
+      "entry_requirements": [
+        "M0/M2",
+        "M3.2",
+        "M3.3",
+        "M4",
+        "M5.3",
+        "M5.4",
+        "M6",
+        "M6.3",
+        "M6.4"
+      ],
+      "blockers": [
+        "final immutable Dim1/Dim2 artifact and source/native proof lineage",
+        "final 1065-entry CTest execution and 485-file closure gates",
+        "M6.3/M6.4 pending"
+      ]
+    }
+  },
+  "limits": [
+    "Private overlays are labeled with their base/native/source pins and are not final integration claims.",
+    "The same-source-module double-instantiation limitation requires explicit refusal while preserving distinct solved FieldSolution identities.",
+    "No Linear writes were performed.",
+    "Provider fix 34a8acc from 809afdb and fixture alignment 3826eb4 have an authoritative no-overlay 12-row closure matrix; it remains a bounded CPU Dim2 Uniform periodic qualification.",
+    "Current source 08ff8a6 includes post-closure fixture and diagnostic repairs; no final runtime proof is attributed to those newer commits."
+  ]
+}

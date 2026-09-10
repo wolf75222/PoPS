@@ -149,6 +149,16 @@ def cos(value: Any) -> ScalarExpr:
     return _scalar_unary("cos", value)
 
 
+def erf(value: Any) -> ScalarExpr:
+    """Error function as a generic native scalar operation."""
+    return _scalar_unary("erf", value)
+
+
+def erfc(value: Any) -> ScalarExpr:
+    """Complementary error function, preserving positive-tail differences."""
+    return _scalar_unary("erfc", value)
+
+
 def exp(value: Any) -> ScalarExpr:
     return _scalar_unary("exp", value)
 
@@ -235,6 +245,8 @@ __all__ = [
     "coordinates",
     "cos",
     "exp",
+    "erf",
+    "erfc",
     "hypot",
     "input",
     "log",

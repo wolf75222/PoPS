@@ -257,6 +257,7 @@ class PreparedMaskedCartesianOperator {
                          BoundaryFaceOmission<Dim> omission = {}) const
     requires(Count == flux_provider_count<Model>)
   {
+    cartesian_operator_detail::require_provider_face_storage(state.box(), providers);
     assemble_residual_(state, providers, active_cells, residual, omission);
   }
 

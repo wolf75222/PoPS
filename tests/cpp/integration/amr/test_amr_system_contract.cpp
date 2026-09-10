@@ -35,6 +35,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -156,7 +157,7 @@ void verify_rectangular_geometry_and_independent_periodicity() {
 template <int Dim>
 GasModel<Dim> gas_model() {
   return GasModel<Dim>{
-      {}, pops::EulerND<Dim>{pops::Real(1.4)}, pops::NoSource{}, pops::NoElliptic{}};
+      {}, {}, pops::EulerND<Dim>{pops::Real(1.4)}, pops::NoSource{}, pops::NoElliptic{}};
 }
 
 template <int Dim>
@@ -301,6 +302,8 @@ void verify_prepared_installation_parity() {
   prepared.set_conservative_state("tracer", initial);
   direct.set_program_block_map({0});
   prepared.set_program_block_map({0});
+  direct.refresh_prepared_amr_levels();
+  prepared.refresh_prepared_amr_levels();
 
   const pops::MultiFab<Dim>& direct_state = direct.prepared_amr_block_state(0, 0);
   const pops::MultiFab<Dim>& prepared_state = prepared.prepared_amr_block_state(0, 0);
@@ -600,6 +603,7 @@ std::vector<std::vector<double>> run_magnetic_source(pops::Real bz) {
   const auto keys = install_magnetic_provider(system, {consumer_qid});
   system.install_block_state_route("fluid", "tests.amr.system-contract/magnetic/state");
   MagneticModel<Dim> model{{},
+                           {},
                            pops::EulerND<Dim>{pops::Real(1.4)},
                            pops::MagneticLorentzForceND<Dim>{pops::Real(1)},
                            pops::NoElliptic{}};
@@ -768,6 +772,7 @@ MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
 
   for (std::size_t block = 0; block < names.size(); ++block) {
     MagneticModel<Dim> model{{},
+                             {},
                              pops::EulerND<Dim>{pops::Real(1.4)},
                              pops::MagneticLorentzForceND<Dim>{pops::Real(1)},
                              pops::NoElliptic{}};
@@ -933,6 +938,19 @@ void verify_stride_window_contract() {
   EXPECT_EQ(system.program_cadence_window_steps(), 1);
   EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
 
+  const auto accepted_image = [&]() {
+    const auto& state = context->runtime_state();
+    return std::tuple{system.time(),
+                      system.macro_step(),
+                      system.program_cadence_window_dt(),
+                      system.program_cadence_window_steps(),
+                      system.program_cadence_window_start_time(),
+                      state.step_balance_terms_,
+                      state.balance_step_completed_,
+                      state.balance_program_was_due_};
+  };
+  const auto held_image = accepted_image();
+
   system.begin_step_transaction();
   system.step(0.2);
   const auto rejected_due_balance = system.accepted_balance_terms(balance_route);
@@ -942,10 +960,19 @@ void verify_stride_window_contract() {
   EXPECT_EQ(system.macro_step(), 1);
   EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.1);
   EXPECT_EQ(system.program_cadence_window_steps(), 1);
+  EXPECT_EQ(accepted_image(), held_image);
   system.begin_step_transaction();
-  const auto restored_held_balance = system.accepted_balance_terms(balance_route);
-  expect_balance(restored_held_balance, 0.0);
+  // The restored accepted image belongs to the preceding step, never to this fresh attempt.
+  try {
+    (void)system.accepted_balance_terms(balance_route);
+    FAIL() << "A fresh attempt reused the preceding held-step balance";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(
+        std::string(error.what()).find("current native attempt omitted term 'storage_change'"),
+        std::string::npos);
+  }
   system.rollback_step_transaction();
+  EXPECT_EQ(accepted_image(), held_image);
 
   times.clear();
   steps.clear();
@@ -1103,6 +1130,40 @@ TEST(test_amr_system_contract, RebuildDistributionModesPreserveReplicaAndPartiti
   Kokkos::ScopeGuard guard;
 #endif
   verify_exact_rebuild_distribution_modes<pops::kNativeDimension>();
+}
+
+TEST(test_amr_system_contract, InitialCoarseTilingConsumesCapsAndPreservesExplicitBoxes) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  constexpr int Dim = pops::kNativeDimension;
+  for (int mode = 0; mode < 3; ++mode) {
+    auto config = single_level_config<Dim>(10);
+    config.distribute_coarse = mode != 0;
+    std::size_t tiled_count = 1;
+    for (int axis = 0; axis < Dim; ++axis) {
+      config.coarse_max_grid[axis] = 4;
+      tiled_count *= 3;
+    }
+    if (mode == 2) {
+      auto left = config.index_domain();
+      auto right = left;
+      left.hi[0] = 4;
+      right.lo[0] = 5;
+      config.boxes = {left, right};
+    }
+    pops::AmrSystem<Dim> system(config);
+    pops::test::install_amr_runtime_authority(system, "tests.coarse-tiling/runtime");
+    system.install_block_state_route("tracer", "tests.coarse-tiling/state");
+    install_direct_tracer(system, "tracer", "tests.coarse-tiling/flux");
+    const std::vector<double> initial(cell_count(config.shape), 1.0);
+    system.set_conservative_state("tracer", initial);
+    const auto expected = mode == 0 ? std::size_t{1} : mode == 1 ? tiled_count : std::size_t{2};
+    EXPECT_EQ(system.coarse_total_boxes(), static_cast<int>(expected));
+    EXPECT_EQ(system.level_distribution_mode(0), mode == 0 ? "replicated" : "partitioned");
+    EXPECT_EQ(system.level_owner_ranks(0).size(), mode == 0 ? 0u : expected);
+    EXPECT_EQ(system.block_level_state_global("tracer", 0), initial);
+  }
 }
 
 TEST(test_amr_system_contract, VariableDtStrideUsesOneExactPublicWindow) {

@@ -22,6 +22,7 @@ from pops.runtime._checkpoint_manifest import (
     seal_checkpoint_payload,
 )
 from pops.time import FixedDt
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -83,6 +84,7 @@ def _bound_history_runtime(native_cxx: str):
     return pops.bind(
         artifact,
         initial_state={"blk": np.ones((1, N, N), dtype=np.float64)},
+        resources={"execution_context": artifact_execution_context(artifact)},
     )
 
 

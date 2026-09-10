@@ -19,6 +19,29 @@ from pops.codegen._rhs_coherence import plan_rhs_coherence
 from pops.time.references import block_name
 
 
+def _detached_coupled_quantity_identity(quantity: Any, source: Any) -> Any:
+    """Canonicalize an exact source declaration for a detached Program input.
+
+    Detachment sheds authoring capabilities from Program handles, while the
+    immutable source Module still owns the qualified formula leaves. Authenticate
+    that live declaration before comparing complete canonical identities; equal
+    display names or independently authored equivalent Modules are insufficient.
+    """
+    handle = quantity.handle
+    declaration = handle.declaration_ref if handle.is_instance else handle
+    spaces = source.state_spaces()
+    if declaration.kind != "state" or declaration.local_id not in spaces:
+        return None
+    registered = source.state_handle(spaces[declaration.local_id])
+    if declaration != registered:
+        return None
+    if quantity.space != registered.space or declaration.space != registered.space:
+        raise ValueError("coupled_rate qualified input changes its physical state type")
+    from pops.time.references import canonical_handle
+
+    return canonical_handle(handle).canonical_identity()
+
+
 def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dict:
     """Resolve a ``coupled_rate`` node @p v to its per-block component formulas (Spec 3 criterion
     27, ADC-457), validated for the cons-only MVP. Returns ``{block: [Expr, ...]}`` (one formula
@@ -31,9 +54,13 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
     cannot lower in this MVP: no bound registry, no operator body, a block whose component count
     does not match its StateSpace, or a formula referencing a non-cons (prim / aux) Var."""
     from pops._ir.expr import Var
+    from pops._ir.quantity import QuantityRef
+    from pops._ir.application import substitute_quantities
+    from pops.model.state_symbols import native_input_state_component_symbols
     op_name = v.attrs["operator"]
     from pops.time.operator_resolution import resolve_operator_handle
     operator_handle = v.attrs.get("operator_handle")
+    detached_source = None
     if operator_handle is not None and getattr(program, "_operator_registries", None):
         op = resolve_operator_handle(
             program, operator_handle, where="coupled_rate codegen", values=v.inputs)
@@ -59,21 +86,89 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
         if op.kind != operator_handle.kind or op.kind != "coupled_rate":
             raise ValueError(
                 "coupled_rate codegen: operator handle kind differs from its source Module")
+        if getattr(program, "_compiled_detached", False):
+            detached_source = source
     else:
         raise ValueError(
             "coupled_rate codegen: node %r lacks its owner-qualified OperatorHandle" % v.name)
+    from pops.time._program.coupled_bindings import coupled_output_inputs
+    bindings = {name: value.block for name, value in
+                coupled_output_inputs(op.signature.output, v.inputs).items()}
+    if v.attrs.get("output_bindings") is not None and dict(v.attrs["output_bindings"]) != bindings:
+        raise ValueError("coupled output binding differs from its admitted owner-qualified input")
     expr = op.body
+    if v.op == "solve_coupled_implicit":
+        from pops.time._program.native_derivatives import coupled_derivative_contract
+        from pops.time.solve_request import DerivativeStrategy
+        from pops.time._program.serialization import _json_ready
+        recorded = v.attrs.get("derivative_contract")
+        strategy = None if recorded is None else DerivativeStrategy(recorded["route"])
+        actual, functions = coupled_derivative_contract(expr, strategy)
+        if recorded is not None and _json_ready(recorded) != _json_ready(actual):
+            raise ValueError("coupled implicit derivative differs from authenticated residual providers")
+        if functions and tuple(v.attrs.get("native_functions", ())) != functions:
+            raise ValueError("coupled implicit native providers differ from authenticated residual")
+    application = v.attrs.get("joint_application")
+    if application is not None:
+        from ._joint_cpp import instantiated_body
+        expr = instantiated_body(op, application)
     if not isinstance(expr, Mapping):
         raise NotImplementedError(
             "the coupled_rate kernel codegen (ADC-457) needs operator %r to carry its per-block "
             "component formulas as an expr={block: [Expr, ...]} dict (got %r); a decorator-body "
             "coupled_rate is a later phase (node %r)" % (op_name, type(expr).__name__, v.name))
+    # Bind qualified leaves only after matching the exact declaration/instance and
+    # complete physical type of one Program input. The private symbols are positional
+    # within this kernel; equal scientific display names cannot alias one another.
+    coordinates = native_input_state_component_symbols(state.space for state in v.inputs)
+    bindings = {}
+    for comps in expr.values():
+        for expression in comps:
+            for quantity in _walk_expr(expression):
+                if not isinstance(quantity, QuantityRef):
+                    continue
+                canonical = (None if detached_source is None else
+                             _detached_coupled_quantity_identity(quantity, detached_source))
+                matches = []
+                for ordinal, state in enumerate(v.inputs):
+                    reference = getattr(state, "state_ref", None)
+                    declaration = getattr(reference, "declaration_ref", None)
+                    canonical_match = canonical is not None and any(
+                        candidate is not None and candidate.is_resolved
+                        and candidate.canonical_identity() == canonical
+                        for candidate in (reference, declaration))
+                    if quantity.handle == reference or (
+                            declaration is not None and quantity.handle == declaration) \
+                            or canonical_match:
+                        if quantity.space != state.space:
+                            raise ValueError("coupled_rate qualified input changes its physical state type")
+                        if canonical_match and any(
+                                candidate is not None and candidate.space != state.space
+                                for candidate in (reference, declaration)):
+                            raise ValueError("coupled_rate qualified input changes its physical state type")
+                        matches.append((ordinal, state))
+                if len(matches) != 1:
+                    raise ValueError(
+                        "coupled_rate qualified quantity requires exactly one matching input state "
+                        "declaration; found %d for %s" % (len(matches), quantity.handle.local_id))
+                ordinal, state = matches[0]
+                if quantity.handle.kind != "state" or quantity.component not in state.space.components:
+                    raise ValueError("coupled_rate native formulas require a declared state component")
+                bindings[(quantity.handle, quantity.index)] = Var(
+                    coordinates[ordinal][quantity.index], "cons")
+    private_symbols = {symbol.name for symbol in bindings.values()}
+    if any(isinstance(node, Var) and node.name in private_symbols
+           for formulas in expr.values() for formula in formulas for node in _walk_expr(formula)):
+        raise ValueError("coupled_rate authored variable collides with a private input binding")
+    expr = substitute_quantities(expr, bindings)
     # Each coupled_rate_out block must own one input state (its rate scratch is shaped like that
     # block's state) whose StateSpace gives the component count + cons names.
     by_block = {block_name(state.block): state for state in v.inputs}
     components = {}
     for blk, comps in expr.items():
-        state_in = by_block.get(blk)
+        bound_block = v.attrs.get("output_bindings", {}).get(blk)
+        state_in = (next((state for state in v.inputs if state.block == bound_block), None)
+                    if bound_block is not None else by_block.get(blk))
         if state_in is None or getattr(state_in, "space", None) is None:
             raise NotImplementedError(
                 "the coupled_rate kernel codegen (ADC-457) needs every output block to map to an "
@@ -107,6 +202,7 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
         for space in spaces for component in space.components
     }
     all_cons.update(component for component, count in counts.items() if count == 1)
+    all_cons.update(private_symbols)
     referenced = set()
     for comps in components.values():
         for e in comps:
@@ -149,9 +245,9 @@ def _stage_fraction(value: Any) -> Fraction:
 
 def _emit_contiguous_rhs_group(
         values: Sequence[Any], block_idx: Mapping[Any, int], var: dict[Any, str],
-        lines: list[str], group_identity: int) -> None:
+        lines: list[str], group_identity: int, target: Any = "system") -> None:
     """Emit one complete same-StagePoint residual group before any result is consumable."""
-    from pops.codegen.program_emit_ops import _required_block_index
+    from pops.codegen.program_emit_ops import _required_block_index, _rhs_flux_temporal_family
 
     stage = _stage_fraction(values[0])
     lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
@@ -165,9 +261,45 @@ def _emit_contiguous_rhs_group(
             block_idx, value.block, "emit simultaneous rhs %r" % value.name)
         requested = value.attrs.get("sources")
         default_source = requested is None or "default" in requested
-        requests.append("{%d, &%s, &%s, %d, %d}" % (
-            index, var[state.id], var[value.id], int(value.id), 0 if default_source else 1))
+        family = (
+            ", " + json.dumps(_rhs_flux_temporal_family(value))
+            if target == "amr_system" else ""
+        )
+        requests.append("{%d, &%s, &%s, %d, %d%s}" % (
+            index, var[state.id], var[value.id], int(value.id), 0 if default_source else 1,
+            family))
     lines.append("ctx.rhs_group(%d, {%s});" % (group_identity, ", ".join(requests)))
+
+
+def _emit_commit_group(commits: Any, bases: Any, var: Any, *, phase: int) -> list[str]:
+    """Adapt scalar publication storage without changing the solve's vector space.
+
+    Base state nodes only bind ctx.state; they never own scratch. Their SSA ids,
+    paired with the publication phase, cannot collide with producer scratch ids
+    or another destination. AMR additionally keys scratch by active level/owner.
+    """
+    lines = []
+    pairs = []
+    for state_ref, committed in commits.items():
+        base = bases[state_ref.block_ref]
+        destination = var[base.id]
+        source = var[committed.id]
+        if committed.vtype == "scalar_field":
+            token = "commit_source_%d_%d" % (base.id, phase)
+            lines.append("auto* %s = &%s;" % (token, source))
+            lines.append("if (%s->ghosts() != %s.ghosts()) {" % (token, destination))
+            # This cache is provisional and destination-shaped. Copy validates
+            # layout/owner/components before touching it, never readable state.
+            lines.append("  auto& publication = ctx.scratch_state(%d, %d, %s);"
+                         % (base.id, phase, destination))
+            lines.append("  pops::PureFieldAlgebra::copy(publication, *%s);" % token)
+            lines.append("  %s = &publication;" % token)
+            lines.append("}")
+            source = "(*%s)" % token
+        pairs.append("{&%s, &%s}" % (destination, source))
+    if pairs:
+        lines.append("ctx.commit_many({%s});" % ", ".join(pairs))
+    return lines
 
 
 def _emit_body(program: Any, model: Any = None, target: Any = "system",
@@ -261,12 +393,18 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         lines,
     )
     values = list(program._values)
+    from pops.codegen.program_emit_hierarchy_regions import (
+        hierarchy_region_solves, open_hierarchy_continuation,
+    )
+    hierarchy_solves = (hierarchy_region_solves(program) if target == "amr_system" else ())
+    hierarchy_solve_ids = {value.id for value in hierarchy_solves}
     index = 0
+    mapping_continuations = 0
     # Group identities occupy compiler-reserved slots after the authored SSA namespace.  They are
     # deterministic, cannot alias a rate node, and keep BoundaryEvaluationPoint.stage faithful to
     # the atomic group while every RhsGroupRequest retains its own exact rate identity.
     next_group_identity = int(program._next_id)
-    rhs_plan = plan_rhs_coherence(program, values)
+    rhs_plan = plan_rhs_coherence(program, values, model=model)
     rhs_schedule = rhs_plan.schedule
     rhs_grouped = rhs_plan.grouped_ids
     while index < len(values):
@@ -279,32 +417,58 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                     "RHS coherence barrier lacks materialized state value ids %s"
                     % unavailable)
             _emit_contiguous_rhs_group(
-                group, block_idx, var, lines, next_group_identity)
+                group, block_idx, var, lines, next_group_identity, target)
             next_group_identity += 1
         v = values[index]
         if v.id in rhs_grouped or v.op == "post_synchronization":
             index += 1
             continue
         base = bases.get(v.block)  # the block-state value of THIS op's block (None: a scalar op)
-        _emit_op(program, v, base, committed_ids, var, model, lines, prelude, block_idx,
+        hierarchy_solve = v.id in hierarchy_solve_ids
+        if hierarchy_solve:
+            var[("direct_hierarchy_solve", v.id)] = True
+        if hierarchy_solves and v.op == "field_publication":
+            # Levels enter the same qualified barrier in order. Reset before its first gather,
+            # including a retry after a prior attempt failed between two level callbacks.
+            lines.append("if (ctx.level() == 0) ctx.begin_staged_field_publications();")
+        emitted = [] if hierarchy_solve else lines
+        _emit_op(program, v, base, committed_ids, var, model, emitted, prelude, block_idx,
                  target=target, field_plans=field_plans,
                  has_shared_interface_implicit_jacvec=(
                      has_shared_interface_implicit_jacvec
                  ))
+        if hierarchy_solve:
+            if v.attrs.get("has_guess"):
+                lines.append("ctx.stage_hierarchy_field_initial_guess(%d, %s);" %
+                             (v.id, var[v.inputs[2].id]))
+            else:
+                lines.append("ctx.stage_hierarchy_field_initial_guess(%d);" % v.id)
+            open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
+                                        emitted, kind="linear_solve")
+            mapping_continuations += 1
+        elif hierarchy_solves and v.op == "field_publication":
+            open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
+                                        ["ctx.publish_staged_field_components();"],
+                                        kind="field_publication")
+            mapping_continuations += 1
+        elif v.op in ("layout_map_export", "layout_map_import"):
+            from pops.codegen.program_emit_mapping_regions import open_map_continuation
+            open_map_continuation(v, values[:index + 1], var, lines)
+            mapping_continuations += 1
         index += 1
-    # Each committed block: a scratch commit (solve_local_linear / solve_linear / a non-base
-    # linear_combine wrote a scratch) is copied into the block state; a linear_combine commit already
-    # wrote ctx.state(idx) in place (var == base), so its copy is a no-op (skipped).
-    commit_pairs = []
-    for state_ref, committed in program._commits.items():
-        base = bases[state_ref.block_ref]
-        commit_pairs.append("{&%s, &%s}" % (var[base.id], var[committed.id]))
-    if commit_pairs:
-        lines.append("ctx.commit_many({%s});" % ", ".join(commit_pairs))
+    from .program_interaction_exchanges import emit_accepted_interaction_exchanges
+    lines += emit_accepted_interaction_exchanges(program, var, block_idx, target=target)
+    from pops.codegen.program_diffusion_exchanges import emit_accepted_diffusive_exchanges
+    lines.extend(emit_accepted_diffusive_exchanges(
+        program, target=target, block_indices=block_idx))
+    # All outputs stay provisional until the one atomic publication group.
+    lines.extend(_emit_commit_group(program._commits, bases, var, phase=0))
     # Rotate the history rings ONCE at the very end of the step (after the commit), so the next step
     # reads lag k as the value k stores ago. Only emitted when the Program uses histories.
     if any(row["clock"] == program.clock.qualified_id for row in temporal["histories"]):
         lines.append("ctx.rotate_histories(%s);" % json.dumps(program.clock.qualified_id))
+    from pops.codegen.program_emit_mapping_regions import close_map_continuations
+    close_map_continuations(mapping_continuations, lines)
     post_sync_lines = _emit_post_synchronization_phase(
         program,
         model,
@@ -371,12 +535,8 @@ def _emit_post_synchronization_phase(
             field_plans=field_plans,
             has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
         )
-    commit_pairs = []
-    for state_ref, committed in getattr(program, "_post_sync_commits", {}).items():
-        base = bases[state_ref.block_ref]
-        commit_pairs.append("{&%s, &%s}" % (var[base.id], var[committed.id]))
-    if commit_pairs:
-        lines.append("ctx.commit_many({%s});" % ", ".join(commit_pairs))
+    lines.extend(_emit_commit_group(
+        getattr(program, "_post_sync_commits", {}), bases, var, phase=1))
     return lines
 
 
@@ -391,13 +551,19 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
     """
     from pops.codegen.program_emit_ops import _emit_op
     from pops.codegen.program_lowerability import all_ops
+    from pops.codegen.program_emit_hierarchy_regions import hierarchy_region_solves
 
     if type(has_shared_interface_implicit_jacvec) is not bool:
         raise TypeError(
             "AMR hierarchy lowering requires exact shared-interface JVP evidence"
         )
+    if hierarchy_region_solves(program):
+        # Invocation-owned field resources cross each actual solve/publication barrier through
+        # the same continuation scheduler as physical maps. No singleton phase split is needed.
+        return None
     solves = [v for v in all_ops(program) if v.op == "solve_linear"]
-    scoped = [v for v in solves if v.attrs.get("scope") == "hierarchy"]
+    spatial = [v for v in all_ops(program) if v.op == "solve_spatial_nonlinear"]
+    scoped = [v for v in solves if v.attrs.get("scope") == "hierarchy"] + spatial
     if not scoped:
         return None
     top_level_ids = {id(value) for value in program._values}
@@ -406,16 +572,29 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
         raise NotImplementedError(
             "a hierarchy-scoped solve must be a top-level barrier; nested solve_linear values %r "
             "cannot cross the gather/solve/publish boundary" % nested_scoped)
-    if len(scoped) != 1 or len(solves) != 1:
+    if len(scoped) != 1 or len(solves) + len(spatial) != 1:
         raise NotImplementedError(
-            "AMR hierarchy-scoped lowering supports exactly one top-level solve_linear; multiple "
-            "hierarchy barriers require an explicit region schedule")
+            ("AMR composite spatial lowering supports exactly one top-level spatial stage; " if spatial else
+             "AMR hierarchy-scoped lowering supports exactly one top-level solve_linear; ") +
+            "multiple hierarchy barriers require an explicit region schedule")
     solve = scoped[0]
     from pops.solvers.providers import prepared_hierarchy_solver_provider_from_attrs
 
-    hierarchy_provider = prepared_hierarchy_solver_provider_from_attrs(solve.attrs)
-    hierarchy_provider.validate_node(solve, target="amr_system")
+    if not spatial:
+        hierarchy_provider = prepared_hierarchy_solver_provider_from_attrs(solve.attrs)
+        hierarchy_provider.validate_node(solve, target="amr_system")
     split = next(index for index, value in enumerate(program._values) if value is solve)
+    publications = [index for index, value in enumerate(program._values) if value.op == "field_publication"]
+    observation_end = max(publications, default=split)
+    if publications:
+        if min(publications) <= split:
+            raise ValueError("hierarchy field publication must follow its consumed solve")
+        observation_ops = {"solve_fields", "solve_outcome", "solve_outcome_component", "field_component", "field_gradient", "field_publication"}
+        unsupported = [value.op for value in program._values[split + 1:observation_end + 1]
+                       if value.op not in observation_ops]
+        if unsupported:
+            raise NotImplementedError("hierarchy field publication barrier requires observation-only preparation; "
+                                      "move consumers after publication: %r" % unsupported)
     control = {"while", "range", "branch"}
     nested = [v.name for v in program._values if v.op in control]
     if nested:
@@ -427,7 +606,7 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
     # wider than one per-level loop iteration.  This is the load-bearing refusal that prevents a local
     # C++ temporary from being referenced after the loop that declared it.  Alias ops are admitted only
     # when their storage input is itself portable.
-    portable_ops = {"state", "history", "scalar_field", "matrix_free_operator", "condensed_coeffs"}
+    portable_ops = {"state", "history", "scalar_field", "matrix_free_operator", "condensed_coeffs", "field_problem_load", "field_problem_coefficients"}
     portable = {v.id for v in program._values[:split] if v.op in portable_ops}
     changed = True
     aliases = {"solve_fields": 0, "condensed_rhs": 0, "laplacian": 0,
@@ -442,7 +621,7 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
                 changed = True
     solve_inputs = [item.id for item in solve.inputs]
     missing_solve = [item for item in solve_inputs if item not in portable]
-    if missing_solve:
+    if missing_solve and not spatial:
         raise NotImplementedError(
             "hierarchy-scoped solve inputs must use persistent/state/history storage across the "
             "level barrier; non-portable value ids %r" % missing_solve)
@@ -462,7 +641,7 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
         if value.op == "state" and value.block not in bases:
             bases[value.block] = value
     committed_ids = frozenset()
-    binding_ops = frozenset({"state", "history", "scalar_field", "matrix_free_operator"})
+    binding_ops = frozenset({"state", "history", "scalar_field", "matrix_free_operator", "field_problem_load", "field_problem_coefficients"})
 
     def registrations() -> list[str]:
         lines = []
@@ -491,7 +670,12 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
         return lines
 
     def emit_phase(phase: str) -> str:
-        var = {}
+        var: dict[Any, Any] = {("hierarchy_retained_bindings",): frozenset(
+            value.id for value in program._values[:split] if value.op in binding_ops
+        ) if phase in ("solve", "observe", "publish") else frozenset()}
+        var[("hierarchy_field_phase",)] = phase
+        if spatial:
+            var[("spatial_hierarchy_phase",)] = phase
         if provider_plans is not None:
             # Hierarchy phases are still Program nodes.  Reuse the package-wide
             # plan authority so their requirements are registered before the
@@ -512,14 +696,16 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
                          has_shared_interface_implicit_jacvec
                      ))
             if phase == "gather":
-                keep = index < split
+                keep = index < split or (bool(spatial) and index == split)
             elif phase == "solve":
                 keep = index == split or (index < split and value.op in binding_ops)
+            elif phase == "observe":
+                keep = (split < index <= observation_end) or (index < split and value.op in binding_ops)
             else:
-                keep = index > split or (index < split and value.op in binding_ops)
+                keep = index > split or (bool(spatial) and index == split) or (index < split and value.op in binding_ops)
             if keep:
                 lines.extend(emitted)
-            if phase == "gather" and index == split:
+            if phase == "gather" and index == split and not spatial:
                 # The ordinary solve emitter seeds one level-local iterate immediately before the
                 # solve.  A hierarchy solve instead needs one initial guess per level, gathered at the
                 # same barrier as its coefficients/RHS.  Stage it in context-owned hierarchy storage;
@@ -527,22 +713,21 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
                 # makes the ADC-427 scalar phi^n history carry compose on refined AMR.
                 if value.attrs.get("has_guess"):
                     guess = value.inputs[2]
-                    lines.append("ctx.stage_linear_initial_guess(%s);" % var[guess.id])
+                    lines.append("ctx.stage_hierarchy_field_initial_guess(%d, %s);" % (value.id, var[guess.id])
+                                 if "hierarchy_field_identity" in value.attrs else "ctx.stage_linear_initial_guess(%s);" % var[guess.id])
                 else:
-                    lines.append("ctx.stage_linear_initial_guess();")
+                    lines.append("ctx.stage_hierarchy_field_initial_guess(%d);" % value.id
+                                 if "hierarchy_field_identity" in value.attrs else "ctx.stage_linear_initial_guess();")
         if phase == "publish":
-            commit_pairs = []
-            for state_ref, committed in program._commits.items():
-                base = bases[state_ref.block_ref]
-                commit_pairs.append("{&%s, &%s}" % (var[base.id], var[committed.id]))
-            if commit_pairs:
-                lines.append("ctx.commit_many({%s});" % ", ".join(commit_pairs))
+            lines.extend(_emit_commit_group(program._commits, bases, var, phase=0))
             histories = program.temporal_manifest()["histories"]
             if any(row["clock"] == program.clock.qualified_id for row in histories):
                 lines.append(
                     "ctx.rotate_histories(%s);" % json.dumps(program.clock.qualified_id))
         return "\n".join("    " + line for line in lines)
 
+    if publications:
+        return emit_phase("gather"), emit_phase("solve"), emit_phase("observe"), emit_phase("publish")
     return emit_phase("gather"), emit_phase("solve"), emit_phase("publish")
 
 

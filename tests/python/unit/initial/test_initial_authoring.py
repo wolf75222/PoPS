@@ -331,7 +331,7 @@ def test_gaussian_is_typed_frame_bound_and_scalar():
         value=profile,
         projection=ConservativeCellAverage(),
     )
-    assert initial.value.initial_source_options()["native_route"] == "gaussian_field"
+    assert initial.value.initial_source_options()["native_route"] == "analytic_expression"
     assert initial.projection.formal_order == 2
 
     other_case, _, _, vector_state, _ = _case(components=("u", "v"))

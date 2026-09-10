@@ -64,7 +64,7 @@ struct NoEll {
 using Dens = CompositeModel<EulerND<kDim>, NoSource, NoEll>;
 
 static Dens density_model() {
-  return Dens{{}, EulerND<kDim>{Real(1.4)}, NoSource{}, NoEll{}};
+  return Dens{{}, {}, EulerND<kDim>{Real(1.4)}, NoSource{}, NoEll{}};
 }
 
 static std::vector<double> uniform_state(std::size_t cells, double density) {
@@ -77,22 +77,22 @@ static std::vector<double> uniform_state(std::size_t cells, double density) {
 
 static void install_ionization_program(NativeSystem& system) {
   system.set_program_block_map({0, 1, 2});
-  runtime::program::ProgramContext<kDim> context(&system);
-  context.configure_primary_clock("test.clock.macro");
-  context.install([context](double step) {
-    context.begin_step(step);
-    NativeMultiFab& electrons = context.state(0);
-    NativeMultiFab& ions = context.state(1);
-    NativeMultiFab& neutrals = context.state(2);
-    NativeMultiFab& next_electrons = context.scratch_state(100, 0, electrons);
-    NativeMultiFab& next_ions = context.scratch_state(101, 0, ions);
-    NativeMultiFab& next_neutrals = context.scratch_state(102, 0, neutrals);
-    context.lincomb(next_electrons, Real(1), electrons, Real(0), electrons);
-    context.lincomb(next_ions, Real(1), ions, Real(0), ions);
-    context.lincomb(next_neutrals, Real(1), neutrals, Real(0), neutrals);
-    context.apply_coupling_operators(Real(step),
-                                     {{0, &next_electrons}, {1, &next_ions}, {2, &next_neutrals}});
-    context.commit_many(
+  auto context = runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("test.clock.macro");
+  context->install([context](double step) {
+    context->begin_step(step);
+    NativeMultiFab& electrons = context->state(0);
+    NativeMultiFab& ions = context->state(1);
+    NativeMultiFab& neutrals = context->state(2);
+    NativeMultiFab& next_electrons = context->scratch_state(100, 0, electrons);
+    NativeMultiFab& next_ions = context->scratch_state(101, 0, ions);
+    NativeMultiFab& next_neutrals = context->scratch_state(102, 0, neutrals);
+    context->lincomb(next_electrons, Real(1), electrons, Real(0), electrons);
+    context->lincomb(next_ions, Real(1), ions, Real(0), ions);
+    context->lincomb(next_neutrals, Real(1), neutrals, Real(0), neutrals);
+    context->apply_coupling_operators(Real(step),
+                                      {{0, &next_electrons}, {1, &next_ions}, {2, &next_neutrals}});
+    context->commit_many(
         {{&electrons, &next_electrons}, {&ions, &next_ions}, {&neutrals, &next_neutrals}});
   });
   system.set_program_block_map({0, 1, 2});

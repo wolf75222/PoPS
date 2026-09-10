@@ -17,7 +17,7 @@ emitted, and a Program WITHOUT a dt bound emits ``has_dt_bound() -> false``. Sec
 (needs _pops + a compiler + a visible Kokkos via POPS_KOKKOS_ROOT) and self-skips cleanly otherwise; it
 never fakes the engine.
 """
-from tests.python.support.requirements import require_native_or_skip
+from tests.python.support.requirements import repo_include, require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
 import pops
 from pops.codegen import Production
@@ -30,9 +30,8 @@ from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.physics import Model
 from typed_program_support import codegen_field_plans, solve_field, typed_state
+from tests.python.support.native_execution_context import artifact_execution_context
 
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
 from pops.numerics.terms import DefaultSource, Flux
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
@@ -42,9 +41,8 @@ from pops.numerics.terms import Flux as FinalFlux, DefaultSource as FinalDefault
 def _final_case_program(name, *, factor=None):
     """Author one native transport program through Case -> validate -> resolve.
 
-    The System used by the historical dt-bound oracle remains the runtime consumer, but its
-    component is now produced by the public operator-first model and resolved plan.  No legacy
-    ModelSpec/compile_drivers route is involved.
+    The native dt-bound oracle uses the executor installed from this exact artifact. Both the
+    Program and its transport component therefore share one resolved scientific declaration.
     """
     frame = Rectangle("%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
     x_axis, y_axis = frame.axes
@@ -89,7 +87,7 @@ def _final_case_program(name, *, factor=None):
         frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes)))
     resolved = pops.resolve(
         pops.validate(case), layout=layout, backend=Production(),
-        compile_options={"include": str(__import__("pathlib").Path(__file__).resolve().parents[4] / "include")},
+        compile_options={"include": repo_include()},
     )
     return pops.compile(resolved)
 
@@ -101,7 +99,6 @@ def _skip(msg):
 try:
     import numpy as np
 
-    import pops.runtime._engine_descriptors as engine
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001
     _skip("pops/numpy unavailable: %s" % exc)
@@ -231,30 +228,15 @@ if not hasattr(probe, "install_program") or not hasattr(probe, "set_program_cade
     _skip("_pops lacks install_program (rebuild _pops) (A passed)")
 
 
-def transport_model():
-    # Pure transport (isothermal, NoSource); the discrete mean-one background keeps the periodic
-    # field solve compatible and inert, so the compiled cadence is bit-exact vs native.
-    return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
-                     transport=engine.IsothermalFlux(),
-                     source=engine.NoSource(),
-                     elliptic=engine.BackgroundDensity(alpha=1.0, n0=1.0))
-
-
 N = 24
 CFL = 0.4
 
 
-def make_sim():
-    sim = System(n=N, L=1.0, periodicity=(True, True))
-    sim.add_equation("ions", transport_model(),
-                  spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                  time=engine.Explicit(method="euler"))
-    sim.set_poisson("charge_density", "geometric_mg")
+def initial_state():
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("ions", np.stack([rho, 0.4 * rho, -0.2 * rho]))
-    return sim
+    return np.stack([rho, 0.4 * rho, -0.2 * rho])
 
 
 def fe_program(name, *, factor=None):
@@ -285,9 +267,14 @@ except RuntimeError as exc:  # no compiler / no Kokkos visible / compile failed
 
 
 def install(prog):
-    sim = make_sim()
-    sim.install_program(prog.program.so_path)
-    return sim
+    runtime = pops.bind(
+        prog,
+        initial_state={"ions": initial_state()},
+        resources={"execution_context": artifact_execution_context(prog)},
+    )
+    # This test targets the native step_cfl ABI directly. Public bind has already authenticated
+    # the state route, component, Program and cadence; no independent ModelSpec is installed.
+    return runtime._executor
 
 
 # Baseline: the explicit no-bound Program computes the native CFL dt on the same state.

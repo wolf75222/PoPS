@@ -1,0 +1,12 @@
+-- PoPS native spatial specialization: Dim=2
+-- PoPS Real specialization: double
+-- ccache actif : /Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/ccache (cache de compilation ; -DPOPS_USE_CCACHE=OFF pour desactiver)
+-- Kokkos trouve (install 5.2.1) : for_each_cell backend = Kokkos (OPENMP;SERIAL)
+-- MPI found (/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/mpiexec) : enabling distributed comm seam
+-- FFTW3 found (/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907) : PoissonFFT local-axis production radix backend
+-- PoPS benchmark source: /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8
+-- PoPS benchmark MPI: ON
+-- PoPS benchmark executable: /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-benchmarks/bin/pops_benchmark
+-- Configuring done (1.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-benchmarks

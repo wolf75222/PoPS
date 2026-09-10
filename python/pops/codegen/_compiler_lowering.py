@@ -22,14 +22,26 @@ class _CompilerEmitter(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class CompilerLowering:
-    """One total lowering: executable emitter plus its canonical IR authority."""
+    """One total lowering: executable emitter plus its canonical IR authority.
+
+    ``owns_emitter`` promises that the provider created a private emitter for this exact call.
+    Extension providers remain shared by default and must opt in only when that lifetime is true.
+    """
 
     emit_model: _CompilerEmitter
     source_module: Module
     facade: object
+    owns_emitter: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.owns_emitter) is not bool:
+            raise TypeError("CompilerLowering.owns_emitter must be an exact bool")
 
     def bind_component_provider_packs(self, packs: Any) -> None:
         """Bind one resolved provider-pack authority before native source emission."""
+        retain_source = getattr(self.emit_model, "__pops_retain_compiler_source__", None)
+        if callable(retain_source) and retain_source(self.source_module) is not None:
+            raise TypeError("compiler source retention protocol must return None")
         result = self.emit_model.__pops_bind_component_provider_packs__(packs)
         if result is not None:
             raise TypeError(

@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <exception>
 #include <limits>
 #include <optional>
@@ -28,6 +29,7 @@ namespace {
 using runtime::system::AuxiliaryComponentKey;
 using runtime::system::AuxiliaryEvaluationPoint;
 using runtime::system::AuxiliaryProviderKind;
+using runtime::system::AuxiliaryPublicationStatus;
 using runtime::system::AuxiliaryStorageShape;
 
 template <int Dim>
@@ -300,6 +302,215 @@ void System<Dim>::stage_auxiliary_input(const AuxiliaryComponentKey& key,
 
 template <int Dim>
 void System<Dim>::refresh_auxiliary(const AuxiliaryEvaluationPoint& point) {
+  if (refresh_auxiliary_(point, {}) == AuxiliaryPublicationStatus::nonfinite_candidate)
+    throw std::runtime_error(
+        "System auxiliary publication rejected: candidate valid/ghost image contains non-finite values");
+}
+
+template <int Dim>
+void System<Dim>::prepare_program_auxiliary_consumer(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
+    int block, const MultiFab<Dim>& stage_state, int evaluation_sequence) {
+  if (prepare_program_auxiliary_consumer_for_solve(
+          point, consumer_qid, block, stage_state, evaluation_sequence) ==
+      AuxiliaryPublicationStatus::nonfinite_candidate)
+    throw std::runtime_error(
+        "System auxiliary publication rejected: candidate valid/ghost image contains non-finite values");
+}
+
+template <int Dim>
+AuxiliaryPublicationStatus System<Dim>::prepare_program_auxiliary_consumer_for_solve(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
+    int block, const MultiFab<Dim>& stage_state, int evaluation_sequence) {
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  std::exception_ptr preflight_error;
+  try {
+    if (point.clock.empty() || point.tick != p_->macro_step_ || point.level != 0 ||
+        point.substep < 0 || point.stage < 0 || point.stage_fraction < amr::Rational(0, 1) ||
+        amr::Rational(1, 1) < point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0 ||
+        !std::isfinite(point.physical_time) || evaluation_sequence < 0)
+      throw std::invalid_argument("Program auxiliary read requires its complete current point");
+    const auto& accepted = block_state(block);
+    if (stage_state.layout() != accepted.layout() ||
+        stage_state.distribution() != accepted.distribution() ||
+        stage_state.local_rank() != accepted.local_rank() ||
+        stage_state.ncomp() != accepted.ncomp())
+      throw std::invalid_argument("Program auxiliary read SSA state differs from its block layout");
+    (void)p_->auxiliary_registry_.consumer_plan(consumer_qid);
+  } catch (...) {
+    preflight_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      preflight_error, &lane, "Program auxiliary read preflight failed collectively");
+  ExactContractBuilder exact;
+  exact.text("pops.system.program-auxiliary-read").scalar(std::uint32_t{1})
+      .text(consumer_qid).scalar(block).text(point.clock).scalar(point.tick)
+      .scalar(point.level).scalar(point.substep).scalar(point.stage)
+      .scalar(point.stage_fraction.numerator).scalar(point.stage_fraction.denominator)
+      .scalar(point.dt).scalar(point.physical_time).scalar(evaluation_sequence);
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"program-auxiliary-read", std::move(exact).release()}}, lane))
+    throw std::invalid_argument("Program auxiliary read identity differs across MPI ranks");
+  AuxiliaryEvaluationPoint auxiliary_point;
+  auxiliary_point.clock = point.clock;
+  auxiliary_point.accepted_step = static_cast<std::uint64_t>(point.tick);
+  auxiliary_point.layout_generation = p_->embedded_boundary_generation_;
+  auxiliary_point.substep = point.substep;
+  auxiliary_point.stage = point.stage;
+  auxiliary_point.nonlinear_iteration = evaluation_sequence;
+  auxiliary_point.event = runtime::system::AuxiliaryEvaluationEvent::before_residual;
+  return refresh_auxiliary_(auxiliary_point, {consumer_qid});
+}
+
+template <int Dim>
+void System<Dim>::publish_program_field_components(
+    const runtime::multiblock::BoundaryEvaluationPoint& point,
+    const std::string& publication_identity, const std::vector<ProgramFieldComponent>& components) {
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  std::vector<std::string> provider_ids, exact_keys, remaining_dirty;
+  std::string contract;
+  std::exception_ptr error;
+  try {
+    if (publication_identity.empty() || components.empty() || !p_->auxiliary_registry_.sealed() ||
+        !p_->provider_carrier_)
+      throw std::invalid_argument("Program field publication requires sealed exact destinations");
+    if (point.clock.empty() || point.tick != p_->macro_step_ || point.level != 0 ||
+        point.substep < 0 || point.stage < 0 || point.stage_fraction < amr::Rational(0, 1) ||
+        amr::Rational(1, 1) < point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0 ||
+        !std::isfinite(point.physical_time))
+      throw std::invalid_argument("Program field publication requires its complete current point");
+    ExactContractBuilder exact;
+    exact.text("pops.program.consumed-field-publication")
+        .scalar(std::uint32_t{1})
+        .text(publication_identity)
+        .text(point.clock)
+        .scalar(point.tick)
+        .scalar(point.level)
+        .scalar(point.substep)
+        .scalar(point.stage)
+        .scalar(point.stage_fraction.numerator)
+        .scalar(point.stage_fraction.denominator)
+        .scalar(point.dt)
+        .scalar(point.physical_time)
+        .scalar(p_->embedded_boundary_generation_)
+        .scalar(p_->auxiliary_registry_.accepted_generation());
+    for (const auto& item : components) {
+      if (item.values == nullptr || item.component < 0 || item.component >= item.values->ncomp() ||
+          item.key.space_kind != "field" || item.expected_provider_identity.empty())
+        throw std::invalid_argument(
+            "Program field publication has an invalid observation or destination");
+      const auto& provider = p_->auxiliary_registry_.provider_for_key(item.key);
+      if (provider.kind() != AuxiliaryProviderKind::field_output ||
+          provider.identity() != item.expected_provider_identity)
+        throw std::invalid_argument(
+            "Program field publication lacks its exact field-output producer");
+      const auto address = p_->auxiliary_registry_.address_of(item.key);
+      const auto* destination = p_->provider_carrier_->find(address.group);
+      if (!destination || address.component >= static_cast<std::size_t>(destination->ncomp()) ||
+          item.values->layout() != destination->layout() ||
+          item.values->distribution() != destination->distribution() ||
+          item.values->local_rank() != destination->local_rank())
+        throw std::invalid_argument(
+            "Program field observation differs from its destination layout");
+      const auto key = item.key.exact_key();
+      if (std::find(exact_keys.begin(), exact_keys.end(), key) != exact_keys.end())
+        throw std::invalid_argument("Program field publication contains duplicate destinations");
+      exact_keys.push_back(key);
+      if (std::find(provider_ids.begin(), provider_ids.end(), provider.identity()) ==
+          provider_ids.end())
+        provider_ids.push_back(provider.identity());
+      item.key.serialize_exact(exact);
+      exact.text(provider.identity()).scalar(item.component).scalar(item.values->ncomp());
+    }
+    for (const auto& item : components)
+      for (const auto& output : p_->auxiliary_registry_.provider_for_key(item.key).outputs())
+        if (std::find(exact_keys.begin(), exact_keys.end(), output.key.exact_key()) ==
+            exact_keys.end())
+          throw std::invalid_argument("Program field publication omits a provider output");
+    remaining_dirty = p_->dirty_auxiliary_providers_;
+    for (const auto& identity : p_->auxiliary_registry_.dependent_provider_identities(provider_ids))
+      if (std::find(remaining_dirty.begin(), remaining_dirty.end(), identity) ==
+          remaining_dirty.end())
+        remaining_dirty.push_back(identity);
+    std::erase_if(remaining_dirty, [&](const auto& identity) {
+      return std::find(provider_ids.begin(), provider_ids.end(), identity) != provider_ids.end();
+    });
+    contract = std::move(exact).release();
+  } catch (...) {
+    error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      error, &lane, "Program field publication preflight failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"program-field-publication", contract}}, lane))
+    throw std::invalid_argument("Program field publication identities differ across ranks");
+
+  AuxiliaryEvaluationPoint evaluation;
+  evaluation.clock = point.clock;
+  evaluation.accepted_step = static_cast<std::uint64_t>(point.tick);
+  evaluation.layout_generation = p_->embedded_boundary_generation_;
+  evaluation.substep = point.substep;
+  evaluation.stage = point.stage;
+  evaluation.event = runtime::system::AuxiliaryEvaluationEvent::before_residual;
+  runtime::system::AuxiliaryStorageGroups<Dim> candidate;
+  using Transaction = typename runtime::system::ExactAuxiliaryRegistry<Dim>::PublicationTransaction;
+  std::optional<Transaction> transaction;
+  error = nullptr;
+  try {
+    candidate = *p_->provider_carrier_;
+    transaction.emplace(
+        p_->auxiliary_registry_.begin_external_publication(evaluation, provider_ids));
+    for (const auto& item : components) {
+      const auto address = p_->auxiliary_registry_.address_of(item.key);
+      auto& destination = *candidate.find(address.group);
+      for (std::size_t local = 0; local < item.values->local_size(); ++local) {
+        const auto source = item.values->fab(local).view();
+        const auto target = destination.fab(local).view();
+        const int from = item.component;
+        const auto to = address.component;
+        for_each_cell(destination.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+          target(cell, to) = source(cell, from);
+        });
+      }
+    }
+    for (const auto index : p_->auxiliary_registry_.topological_order()) {
+      const auto& identity = p_->auxiliary_registry_.provider(index).identity();
+      if (std::find(provider_ids.begin(), provider_ids.end(), identity) != provider_ids.end())
+        transaction->stage_external(identity);
+    }
+    Kokkos::fence();
+  } catch (...) {
+    error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      error, &lane, "Program field candidate construction failed collectively");
+  auto transport = runtime::system::prepare_auxiliary_ghost_transport(
+      *p_->provider_carrier_, p_->auxiliary_registry_, p_->dom, p_->geom,
+      BoundaryTopology<Dim>::axis_periodic(p_->periodicity), &lane);
+  const auto refresh_ghosts = [&] { transport.execute(candidate); };
+  refresh_ghosts();
+  transaction->launch_ready_native(
+      {&*p_->provider_carrier_, &candidate}, [&](const auto&, std::exception_ptr failure) {
+        runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+            failure, &lane, "Program field prerequisite failed collectively");
+        refresh_ghosts();
+      });
+  runtime::system::require_finite_auxiliary_groups(candidate, &lane, "Program field publication");
+  error = nullptr;
+  try {
+    transaction->validate_complete();
+  } catch (...) {
+    error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      error, &lane, "Program field candidate completion failed collectively");
+  transaction->accept();
+  std::swap(*p_->provider_carrier_, candidate);
+  p_->dirty_auxiliary_providers_.swap(remaining_dirty);
+}
+
+template <int Dim>
+AuxiliaryPublicationStatus System<Dim>::refresh_auxiliary_(
+    const AuxiliaryEvaluationPoint& point, const std::vector<std::string>& consumer_qids) {
   if (!p_->auxiliary_registry_.sealed())
     throw std::logic_error("System auxiliary refresh requires a sealed provider registry");
   require_collective_auxiliary_point<Dim>(point);
@@ -308,19 +519,72 @@ void System<Dim>::refresh_auxiliary(const AuxiliaryEvaluationPoint& point) {
         p_->auxiliary_registry_.begin_publication(point, p_->dirty_auxiliary_providers_);
     transaction.accept();
     p_->dirty_auxiliary_providers_.clear();
-    return;
+    return AuxiliaryPublicationStatus::ready;
   }
   runtime::system::AuxiliaryStorageGroups<Dim> candidate;
   using transaction_type =
       typename runtime::system::ExactAuxiliaryRegistry<Dim>::PublicationTransaction;
   std::optional<transaction_type> prepared_transaction;
+  std::vector<std::string> remaining_dirty;
+  bool has_due_provider = consumer_qids.empty();
+  std::string publication_contract;
   std::exception_ptr candidate_error;
   try {
     if (!p_->provider_carrier_)
       throw std::logic_error("System sealed auxiliary registry has no compact carrier allocation");
-    candidate = *p_->provider_carrier_;
+    // Select the exact read closure first. In particular a dirty input belonging to another
+    // consumer must neither be published nor make an unrelated field-output solve due.
+    std::vector<std::string> required;
+    const auto require_provider = [&](const auto& self, const auto& provider) -> void {
+      if (std::find(required.begin(), required.end(), provider.identity()) != required.end())
+        return;
+      required.push_back(provider.identity());
+      for (const auto& dependency : provider.dependencies())
+        self(self, p_->auxiliary_registry_.provider_for_key(dependency.key));
+    };
+    for (const auto& qid : consumer_qids)
+      for (const auto& value : p_->auxiliary_registry_.consumer_plan(qid).values)
+        require_provider(require_provider, p_->auxiliary_registry_.provider_for_key(value.key));
+    std::vector<std::string> forced;
+    for (const auto& identity : p_->dirty_auxiliary_providers_)
+      if (consumer_qids.empty() ||
+          std::find(required.begin(), required.end(), identity) != required.end())
+        forced.push_back(identity);
     prepared_transaction.emplace(
-        p_->auxiliary_registry_.begin_publication(point, p_->dirty_auxiliary_providers_));
+        p_->auxiliary_registry_.begin_publication(point, forced, consumer_qids));
+    auto& transaction = *prepared_transaction;
+    std::vector<std::string> published;
+    for (std::size_t index = 0; index < p_->auxiliary_registry_.provider_count(); ++index) {
+      const auto& provider = p_->auxiliary_registry_.provider(index);
+      if (transaction.requires_staging(provider.identity())) {
+        has_due_provider = true;
+        published.push_back(provider.identity());
+      } else if (std::find(required.begin(), required.end(), provider.identity()) != required.end() &&
+                 !p_->auxiliary_registry_.last_accepted_point(provider.identity())) {
+        throw std::logic_error("Program auxiliary prerequisite has never been published: " +
+                               provider.identity());
+      }
+    }
+    remaining_dirty = p_->dirty_auxiliary_providers_;
+    if (!consumer_qids.empty())
+      for (const auto& identity : p_->auxiliary_registry_.dependent_provider_identities(published))
+        if (std::find(remaining_dirty.begin(), remaining_dirty.end(), identity) == remaining_dirty.end())
+          remaining_dirty.push_back(identity);
+    std::erase_if(remaining_dirty, [&](const auto& identity) {
+      return transaction.requires_staging(identity);
+    });
+    ExactContractBuilder publication;
+    publication.text("pops.system.auxiliary-publication-selection").scalar(std::uint32_t{1})
+        .scalar(p_->auxiliary_registry_.accepted_generation()).scalar(has_due_provider);
+    const auto identities = [](ExactContractBuilder& item, const std::string& identity) {
+      item.text(identity);
+    };
+    publication.sequence(consumer_qids, identities).sequence(required, identities)
+        .sequence(forced, identities).sequence(published, identities)
+        .sequence(remaining_dirty, identities);
+    publication_contract = std::move(publication).release();
+    if (has_due_provider)
+      candidate = *p_->provider_carrier_;
   } catch (...) {
     candidate_error = std::current_exception();
   }
@@ -328,6 +592,13 @@ void System<Dim>::refresh_auxiliary(const AuxiliaryEvaluationPoint& point) {
       candidate_error, nullptr,
       "System auxiliary candidate preparation failed collectively before lane duplication");
   auto& transaction = *prepared_transaction;
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-auxiliary-publication-selection", publication_contract}}))
+    throw std::invalid_argument("System auxiliary publication selection differs across MPI ranks");
+  if (!has_due_provider) {
+    transaction.reject();
+    return AuxiliaryPublicationStatus::ready;
+  }
   try {
     if (!p_->auxiliary_ghost_lane_)
       p_->auxiliary_ghost_lane_.emplace(
@@ -385,11 +656,14 @@ void System<Dim>::refresh_auxiliary(const AuxiliaryEvaluationPoint& point) {
     runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
         fence_error, &*p_->auxiliary_ghost_lane_,
         "System auxiliary device fence failed collectively");
-    runtime::system::require_finite_auxiliary_groups(candidate, &*p_->auxiliary_ghost_lane_,
-                                                     "System auxiliary publication");
+    if (!runtime::system::auxiliary_groups_are_finite(candidate, &*p_->auxiliary_ghost_lane_)) {
+      transaction.reject();
+      return AuxiliaryPublicationStatus::nonfinite_candidate;
+    }
     transaction.accept();
     std::swap(*p_->provider_carrier_, candidate);
-    p_->dirty_auxiliary_providers_.clear();
+    p_->dirty_auxiliary_providers_.swap(remaining_dirty);
+    return AuxiliaryPublicationStatus::ready;
   } catch (...) {
     transaction.reject();
     throw;
@@ -729,6 +1003,15 @@ template void System<kNativeDimension>::seal_auxiliary_providers_(const Communic
 template void System<kNativeDimension>::stage_auxiliary_input(const AuxiliaryComponentKey&,
                                                               const std::vector<double>&);
 template void System<kNativeDimension>::refresh_auxiliary(const AuxiliaryEvaluationPoint&);
+template void System<kNativeDimension>::publish_program_field_components(
+    const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&,
+    const std::vector<ProgramFieldComponent>&);
+template void System<kNativeDimension>::prepare_program_auxiliary_consumer(
+    const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&, int,
+    const MultiFab<kNativeDimension>&, int);
+template AuxiliaryPublicationStatus System<kNativeDimension>::prepare_program_auxiliary_consumer_for_solve(
+    const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&, int,
+    const MultiFab<kNativeDimension>&, int);
 template runtime::system::AuxiliaryStorageAddress<kNativeDimension>
 System<kNativeDimension>::auxiliary_address(const AuxiliaryComponentKey&) const;
 template std::vector<double> System<kNativeDimension>::auxiliary_component(

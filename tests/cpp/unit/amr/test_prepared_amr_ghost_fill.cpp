@@ -1,12 +1,14 @@
 #include <gtest/gtest.h>
 
 #include <pops/runtime/amr/prepared_amr_ghost_fill.hpp>
+#include <pops/amr/tagging/berger_rigoutsos.hpp>
 
 #include "../mesh/nd_multifab_test_utils.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 using namespace pops;
@@ -73,21 +75,27 @@ Real quartic_average(Real lower, Real upper) {
 }
 
 template <int Dim>
-void prove_sparse_parent_interpolation() {
-  const Box<Dim> coarse_domain = box<Dim>(0, 7);
-  const Box<Dim> fine_domain = box<Dim>(0, 15);
-  const BoxArray<Dim> coarse_layout(std::vector<Box<Dim>>{coarse_domain});
-  const BoxArray<Dim> fine_layout(std::vector<Box<Dim>>{box<Dim>(4, 11)});
+void prove_sparse_parent_interpolation(int ghost_depth = 1, int fine_lower = 4, int fine_upper = 11,
+                                       bool constant = false, bool sparse_parent = false) {
+  const Box<Dim> coarse_domain = box<Dim>(0, sparse_parent ? 15 : 7);
+  const Box<Dim> fine_domain = box<Dim>(0, sparse_parent ? 31 : 15);
+  const Box<Dim> coarse_valid = sparse_parent ? box<Dim>(3, 12) : coarse_domain;
+  const BoxArray<Dim> coarse_layout(std::vector<Box<Dim>>{coarse_valid});
+  const BoxArray<Dim> fine_layout(std::vector<Box<Dim>>{box<Dim>(fine_lower, fine_upper)});
   HostMultiFab<Dim> coarse(coarse_layout, replicated(coarse_layout), Index<Dim>{}, 2,
                            uniform_extent<Dim>(0));
   HostMultiFab<Dim> fine(fine_layout, replicated(fine_layout), Index<Dim>{}, 2,
-                         uniform_extent<Dim>(1));
-  fill_valid_encoded(coarse, Real{-1});
+                         uniform_extent<Dim>(ghost_depth));
+  if (constant)
+    fill_valid(coarse, Real{-1},
+               [](const Index<Dim>&, int component) { return Real(3 + component); });
+  else
+    fill_valid_encoded(coarse, Real{-1});
   fill_valid(fine, Real{-777},
              [](const Index<Dim>&, int component) { return Real(8000 + component); });
 
   AmrGhostFillPreparation<Dim> request{};
-  request.fine_level = 1;
+  request.fine_level = sparse_parent ? 2 : 1;
   request.coarse_domain = coarse_domain;
   request.fine_domain = fine_domain;
   request.ratio = ratio_two<Dim>();
@@ -100,7 +108,7 @@ void prove_sparse_parent_interpolation() {
   const auto fill = prepare_amr_ghost_fill(coarse, fine, request, lane);
 
   runtime::multiblock::BoundaryEvaluationPoint point{};
-  point.level = 1;
+  point.level = request.fine_level;
   fill(fine, point);
 
   const auto& fab = fine.fab_global(0);
@@ -109,8 +117,217 @@ void prove_sparse_parent_interpolation() {
     const Index<Dim> index = index_from_ordinal(fab.grown_box(), ordinal);
     for (int component = 0; component < fine.ncomp(); ++component) {
       const Real expected = fab.box().contains(index) ? Real(8000 + component)
+                            : constant                ? Real(3 + component)
                                                       : expected_linear_parent(index, component);
       EXPECT_DOUBLE_EQ(value_at(fine, 0, index, component), expected);
+    }
+  }
+}
+
+template <int Dim>
+void prove_parent_layout_rejected(std::vector<Box<Dim>> coarse_boxes, const char* message) {
+  const BoxArray<Dim> coarse_layout(std::move(coarse_boxes));
+  const BoxArray<Dim> fine_layout(std::vector<Box<Dim>>{box<Dim>(12, 19)});
+  HostMultiFab<Dim> coarse(coarse_layout, replicated(coarse_layout), Index<Dim>{}, 2,
+                           uniform_extent<Dim>(0));
+  HostMultiFab<Dim> fine(fine_layout, replicated(fine_layout), Index<Dim>{}, 2,
+                         uniform_extent<Dim>(2));
+  try {
+    const CoarseFineGhostSchedule<Dim> schedule(
+        coarse, fine, box<Dim>(0, 15), box<Dim>(0, 31), ratio_two<Dim>(),
+        BoundaryTopology<Dim>::physical(), 1, budget<Dim>(coarse_layout.size(), 1).coarse_fine);
+    FAIL() << "coarse/fine schedule accepted an invalid parent layout";
+  } catch (const std::invalid_argument& error) {
+    EXPECT_STREQ(error.what(), message);
+  }
+}
+
+template <int Dim>
+void prove_sparse_parent_missing_stencil_rejected() {
+  const char* message =
+      "coarse/fine ghost parent layout does not cover a required interpolation stencil";
+  // Fine ghosts 10..11 require parent cell 5 and its neighbors along each axis.
+  prove_parent_layout_rejected<Dim>({box<Dim>(6, 12)}, message);
+  Box<Dim> lower = box<Dim>(3, 12);
+  Box<Dim> upper = box<Dim>(3, 12);
+  lower.hi[0] = 4;
+  upper.lo[0] = 6;
+  prove_parent_layout_rejected<Dim>({lower, upper}, message);
+}
+
+template <int Dim>
+void prove_parent_overlap_and_outside_domain_rejected() {
+  const char* message =
+      "coarse/fine ghost schedule requires disjoint parent and child patches within their domains";
+  prove_parent_layout_rejected<Dim>({box<Dim>(3, 12), box<Dim>(5, 6)}, message);
+  prove_parent_layout_rejected<Dim>({box<Dim>(3, 16)}, message);
+}
+
+template <int Dim>
+struct PeriodicSparseParentGeometry {
+  Box<Dim> coarse_domain{};
+  Box<Dim> fine_domain{};
+  Box<Dim> fine_patch{};
+  Box<Dim> staging{};
+  std::vector<Box<Dim>> coarse_patches{};
+  BoundaryTopology<Dim> topology{};
+};
+
+template <int Dim>
+PeriodicSparseParentGeometry<Dim> periodic_sparse_parent_geometry(int periodic_axes,
+                                                                  unsigned upper_faces) {
+  PeriodicSparseParentGeometry<Dim> result{};
+  std::array<bool, Dim> periodic{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    // Shifted, axis-distinct origins exercise the parent/fine mapping independently of zero.
+    result.coarse_domain.lo[axis] = -7 + 3 * axis;
+    result.coarse_domain.hi[axis] = result.coarse_domain.lo[axis] + 31;
+    result.fine_domain.lo[axis] = 2 * result.coarse_domain.lo[axis];
+    result.fine_domain.hi[axis] = 2 * result.coarse_domain.hi[axis] + 1;
+    periodic[axis] = axis < periodic_axes;
+    const bool upper = (upper_faces & (1u << axis)) != 0;
+    const int fine_offset = periodic[axis] ? (upper ? 56 : 0) : 24;
+    const int staging_offset = periodic[axis] ? (upper ? 26 : -2) : 10;
+    result.fine_patch.lo[axis] = result.fine_domain.lo[axis] + fine_offset;
+    result.fine_patch.hi[axis] = result.fine_patch.lo[axis] + 7;
+    result.staging.lo[axis] = result.coarse_domain.lo[axis] + staging_offset;
+    result.staging.hi[axis] = result.staging.lo[axis] + 7;
+  }
+  result.topology = BoundaryTopology<Dim>::axis_periodic(periodic);
+  // Only the local eight-cell staging extent exists, split into its canonical periodic
+  // source boxes. No unrelated middle-of-domain parent cells are available.
+  for (unsigned wrapped_axes = 0; wrapped_axes < (1u << periodic_axes); ++wrapped_axes) {
+    Box<Dim> source{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int origin = result.coarse_domain.lo[axis];
+      if (axis >= periodic_axes) {
+        source.lo[axis] = origin + 10;
+        source.hi[axis] = origin + 17;
+        continue;
+      }
+      const bool upper = (upper_faces & (1u << axis)) != 0;
+      const bool wrapped = (wrapped_axes & (1u << axis)) != 0;
+      source.lo[axis] = origin + (upper ? (wrapped ? 0 : 26) : (wrapped ? 30 : 0));
+      source.hi[axis] = origin + (upper ? (wrapped ? 1 : 31) : (wrapped ? 31 : 5));
+    }
+    result.coarse_patches.push_back(source);
+  }
+  return result;
+}
+
+template <int Dim>
+void prove_periodic_sparse_parent_interpolation(bool constant) {
+  for (int periodic_axes = 1; periodic_axes <= Dim; ++periodic_axes) {
+    for (unsigned upper_faces = 0; upper_faces < (1u << periodic_axes); ++upper_faces) {
+      SCOPED_TRACE(::testing::Message() << "Dim=" << Dim << " periodic_axes=" << periodic_axes
+                                        << " upper_faces=" << upper_faces);
+      const auto geometry = periodic_sparse_parent_geometry<Dim>(periodic_axes, upper_faces);
+      const BoxArray<Dim> coarse_layout(geometry.coarse_patches);
+      const BoxArray<Dim> fine_layout(std::vector<Box<Dim>>{geometry.fine_patch});
+      HostMultiFab<Dim> coarse(coarse_layout, replicated(coarse_layout), Index<Dim>{}, 2,
+                               uniform_extent<Dim>(0));
+      HostMultiFab<Dim> fine(fine_layout, replicated(fine_layout), Index<Dim>{}, 2,
+                             uniform_extent<Dim>(2));
+      fill_valid(coarse, Real{-1}, [&](const Index<Dim>& index, int component) {
+        if (constant)
+          return Real(3 + component);
+        Real result = Real(10000 * component);
+        Real scale = 1;
+        for (int axis = 0; axis < Dim; ++axis) {
+          int coordinate = index[axis];
+          const int relative = coordinate - geometry.coarse_domain.lo[axis];
+          if (axis < periodic_axes) {
+            const bool upper = (upper_faces & (1u << axis)) != 0;
+            if (upper && relative < 2)
+              coordinate += 32;
+            else if (!upper && relative >= 30)
+              coordinate -= 32;
+          }
+          result += scale * Real(coordinate);
+          scale *= 97;
+        }
+        return result;
+      });
+      fill_valid(fine, Real{-777},
+                 [](const Index<Dim>&, int component) { return Real(8000 + component); });
+      const auto limits = budget<Dim>(coarse_layout.size(), 1);
+      const CoarseFineGhostSchedule<Dim> schedule(coarse, fine, geometry.coarse_domain,
+                                                  geometry.fine_domain, ratio_two<Dim>(),
+                                                  geometry.topology, 1, limits.coarse_fine);
+      ASSERT_EQ(schedule.patch_plans().size(), 1u);
+      EXPECT_EQ(schedule.patch_plans()[0].coarse_staging_region, geometry.staging);
+      EXPECT_EQ(schedule.local_elements(),
+                static_cast<std::size_t>(geometry.staging.numPts()) * fine.ncomp());
+
+      AmrGhostFillPreparation<Dim> request{};
+      request.fine_level = 2;
+      request.coarse_domain = geometry.coarse_domain;
+      request.fine_domain = geometry.fine_domain;
+      request.ratio = ratio_two<Dim>();
+      request.topology = geometry.topology;
+      request.topology_generation = 23;
+      request.materialization_generation = 29;
+      request.field_identity = "periodic-sparse-parent";
+      request.budget = limits;
+      const ExecutionLane lane = ExecutionLane::world();
+      const auto fill = prepare_amr_ghost_fill(coarse, fine, request, lane);
+      runtime::multiblock::BoundaryEvaluationPoint point{};
+      point.level = request.fine_level;
+      fill(fine, point);
+
+      const auto& fab = fine.fab_global(0);
+      auto actual = fab.create_host_mirror();
+      fab.copy_to_host(actual);
+      const std::size_t cells = static_cast<std::size_t>(fab.grown_box().numPts());
+      for (std::size_t ordinal = 0; ordinal < cells; ++ordinal) {
+        const Index<Dim> index = index_from_ordinal(fab.grown_box(), ordinal);
+        for (int component = 0; component < fine.ncomp(); ++component) {
+          Real expected = Real(10000 * component);
+          Real scale = 1;
+          for (int axis = 0; axis < Dim; ++axis) {
+            const Real parent_center = Real(geometry.coarse_domain.lo[axis]) +
+                                       Real(index[axis] - geometry.fine_domain.lo[axis]) / Real(2) -
+                                       Real(0.25);
+            expected += scale * parent_center;
+            scale *= 97;
+          }
+          if (fab.box().contains(index))
+            expected = Real(8000 + component);
+          else if (constant)
+            expected = Real(3 + component);
+          EXPECT_DOUBLE_EQ(actual(offset(fab.grown_box(), index, component)), expected);
+        }
+      }
+    }
+  }
+}
+
+template <int Dim>
+void prove_periodic_sparse_parent_gap_rejected() {
+  for (int periodic_axes = 1; periodic_axes <= Dim; ++periodic_axes) {
+    for (unsigned upper_faces = 0; upper_faces < (1u << periodic_axes); ++upper_faces) {
+      SCOPED_TRACE(::testing::Message() << "Dim=" << Dim << " periodic_axes=" << periodic_axes
+                                        << " upper_faces=" << upper_faces);
+      auto geometry = periodic_sparse_parent_geometry<Dim>(periodic_axes, upper_faces);
+      // Remove a required source layer from the wrapped edge/corner box, not from the
+      // unavailable middle of the domain. Exact source coverage must still fail closed.
+      --geometry.coarse_patches.back().hi[0];
+      const BoxArray<Dim> coarse_layout(geometry.coarse_patches);
+      const BoxArray<Dim> fine_layout(std::vector<Box<Dim>>{geometry.fine_patch});
+      HostMultiFab<Dim> coarse(coarse_layout, replicated(coarse_layout), Index<Dim>{}, 2,
+                               uniform_extent<Dim>(0));
+      HostMultiFab<Dim> fine(fine_layout, replicated(fine_layout), Index<Dim>{}, 2,
+                             uniform_extent<Dim>(2));
+      try {
+        const CoarseFineGhostSchedule<Dim> schedule(
+            coarse, fine, geometry.coarse_domain, geometry.fine_domain, ratio_two<Dim>(),
+            geometry.topology, 1, budget<Dim>(coarse_layout.size(), 1).coarse_fine);
+        FAIL() << "coarse/fine schedule accepted a missing wrapped parent stencil";
+      } catch (const std::invalid_argument& error) {
+        EXPECT_STREQ(
+            error.what(),
+            "coarse/fine ghost parent layout does not cover a required interpolation stencil");
+      }
     }
   }
 }
@@ -121,6 +338,156 @@ TEST(test_prepared_amr_ghost_fill, sparse_parent_interpolation_is_exact_in_1d_2d
   prove_sparse_parent_interpolation<1>();
   prove_sparse_parent_interpolation<2>();
   prove_sparse_parent_interpolation<3>();
+}
+
+TEST(test_prepared_amr_ghost_fill, full_profile_parent_corner_is_reclustered_before_interpolation) {
+  // Captured from the unchanged 128x128/max_levels=3 scalar profile at level-2 bootstrap.
+  // Its former fine corner [0,0]..[15,15] required the absent parent cell (8,8).
+  const Box<2> coarse_domain{Index<2>{0, 0}, Index<2>{255, 255}};
+  const Box<2> fine_domain{Index<2>{0, 0}, Index<2>{511, 511}};
+  const BoxArray<2> coarse_layout(std::vector<Box<2>>{
+      Box<2>{Index<2>{0, 0}, Index<2>{7, 7}}, Box<2>{Index<2>{0, 8}, Index<2>{7, 69}},
+      Box<2>{Index<2>{0, 70}, Index<2>{7, 131}}, Box<2>{Index<2>{0, 132}, Index<2>{7, 193}},
+      Box<2>{Index<2>{0, 194}, Index<2>{7, 255}}, Box<2>{Index<2>{8, 0}, Index<2>{69, 7}},
+      Box<2>{Index<2>{12, 26}, Index<2>{55, 89}}, Box<2>{Index<2>{12, 90}, Index<2>{55, 153}},
+      Box<2>{Index<2>{56, 26}, Index<2>{99, 89}}, Box<2>{Index<2>{56, 90}, Index<2>{99, 153}},
+      Box<2>{Index<2>{70, 0}, Index<2>{131, 7}}, Box<2>{Index<2>{100, 26}, Index<2>{141, 89}},
+      Box<2>{Index<2>{100, 90}, Index<2>{141, 153}}, Box<2>{Index<2>{132, 0}, Index<2>{193, 7}},
+      Box<2>{Index<2>{194, 0}, Index<2>{255, 7}}});
+  const ::pops::amr::hierarchy::LevelLayout<2> parent(
+      1, coarse_domain, coarse_layout, replicated(coarse_layout), ratio_two<2>(), {15, 105});
+  ::pops::amr::tagging::TagMask<2> mask(parent, Index<2>{},
+                                        {15, 15, 65536, 65536, 65536, 1U << 20});
+  for (int j = 0; j != 8; ++j)
+    for (int i = 0; i != 8; ++i)
+      mask.set(Index<2>{i, j});
+  ::pops::amr::tagging::ClusterOptions<2> controls{
+      0.7, {1, 1}, {32, 32}, {1, 65536, 8U << 20, 65536, 1U << 20}};
+  controls.nesting_buffer = {2, 2};  // ceil(two fine halos / ratio two) + radius one.
+  const auto clustered = ::pops::amr::tagging::BergerRigoutsosProvider<2>{}.cluster(
+      std::array<::pops::amr::tagging::TagMask<2>, 1>{mask}, controls);
+  std::vector<Box<2>> fine_boxes;
+  std::int64_t retained_parent_cells = 0;
+  for (const auto& valid : clustered.boxes.boxes()) {
+    EXPECT_FALSE(valid.contains(Index<2>{7, 7}));
+    retained_parent_cells += valid.numPts();
+    fine_boxes.push_back(::pops::amr::hierarchy::refine_box(valid, ratio_two<2>()));
+  }
+  EXPECT_EQ(retained_parent_cells, 60);  // Only the unsupported two-by-two corner is excluded.
+  const BoxArray<2> fine_layout(std::move(fine_boxes));
+  HostMultiFab<2> coarse(coarse_layout, replicated(coarse_layout), Index<2>{}, 1,
+                         uniform_extent<2>(0));
+  HostMultiFab<2> fine(fine_layout, replicated(fine_layout), Index<2>{}, 1, uniform_extent<2>(2));
+  fill_valid_encoded(coarse, Real{-1});
+  fill_valid(fine, Real{-777}, [](const Index<2>& cell, int component) {
+    return expected_linear_parent(cell, component);
+  });
+  AmrGhostFillPreparation<2> request{};
+  request.fine_level = 2;
+  request.coarse_domain = coarse_domain;
+  request.fine_domain = fine_domain;
+  request.ratio = ratio_two<2>();
+  request.topology = BoundaryTopology<2>::physical();
+  request.topology_generation = 1;
+  request.materialization_generation = 1;
+  request.field_identity = "scalar-full-profile-corner";
+  request.budget = budget<2>(coarse_layout.size(), fine_layout.size());
+  const ExecutionLane lane = ExecutionLane::world();
+  const auto fill = prepare_amr_ghost_fill(coarse, fine, request, lane);
+  runtime::multiblock::BoundaryEvaluationPoint point{};
+  point.level = 2;
+  fill(fine, point);
+  for (std::size_t local = 0; local < fine.local_size(); ++local) {
+    const auto& fab = fine.fab(local);
+    const Box<2> region = fab.grown_box().intersect(fine_domain);
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(region.numPts()); ++ordinal) {
+      const Index<2> cell = index_from_ordinal(region, ordinal);
+      EXPECT_DOUBLE_EQ(value_at(fine, fine.global_index(local), cell, 0),
+                       expected_linear_parent(cell, 0));
+    }
+  }
+}
+
+TEST(test_prepared_amr_ghost_fill,
+     sparse_parent_level_keeps_two_halo_linear_accuracy_in_1d_2d_and_3d) {
+  prove_sparse_parent_interpolation<1>(2, 12, 19, false, true);
+  prove_sparse_parent_interpolation<2>(2, 12, 19, false, true);
+  prove_sparse_parent_interpolation<3>(2, 12, 19, false, true);
+}
+
+TEST(test_prepared_amr_ghost_fill, sparse_parent_level_rejects_missing_stencil_cells_and_holes) {
+  prove_sparse_parent_missing_stencil_rejected<1>();
+  prove_sparse_parent_missing_stencil_rejected<2>();
+  prove_sparse_parent_missing_stencil_rejected<3>();
+}
+
+TEST(test_prepared_amr_ghost_fill, sparse_parent_level_still_rejects_overlap_and_outside_domain) {
+  prove_parent_overlap_and_outside_domain_rejected<1>();
+  prove_parent_overlap_and_outside_domain_rejected<2>();
+  prove_parent_overlap_and_outside_domain_rejected<3>();
+}
+
+TEST(test_prepared_amr_ghost_fill,
+     periodic_sparse_parent_edges_and_corners_keep_local_staging_and_linear_accuracy) {
+  prove_periodic_sparse_parent_interpolation<1>(false);
+  prove_periodic_sparse_parent_interpolation<2>(false);
+  prove_periodic_sparse_parent_interpolation<3>(false);
+}
+
+TEST(test_prepared_amr_ghost_fill, periodic_sparse_parent_edges_and_corners_preserve_constants) {
+  prove_periodic_sparse_parent_interpolation<1>(true);
+  prove_periodic_sparse_parent_interpolation<2>(true);
+  prove_periodic_sparse_parent_interpolation<3>(true);
+}
+
+TEST(test_prepared_amr_ghost_fill,
+     periodic_sparse_parent_edges_and_corners_refuse_wrapped_source_gaps) {
+  prove_periodic_sparse_parent_gap_rejected<1>();
+  prove_periodic_sparse_parent_gap_rejected<2>();
+  prove_periodic_sparse_parent_gap_rejected<3>();
+}
+
+TEST(test_prepared_amr_ghost_fill, two_destination_halos_keep_linear_accuracy_at_physical_faces) {
+  prove_sparse_parent_interpolation<1>(2, 2, 5);
+  prove_sparse_parent_interpolation<2>(2, 2, 5);
+  prove_sparse_parent_interpolation<3>(2, 2, 5);
+  prove_sparse_parent_interpolation<1>(2, 10, 13);
+  prove_sparse_parent_interpolation<2>(2, 10, 13);
+  prove_sparse_parent_interpolation<3>(2, 10, 13);
+}
+
+TEST(test_prepared_amr_ghost_fill, two_destination_halos_preserve_constants_at_physical_faces) {
+  prove_sparse_parent_interpolation<1>(2, 2, 5, true);
+  prove_sparse_parent_interpolation<2>(2, 2, 5, true);
+  prove_sparse_parent_interpolation<3>(2, 2, 5, true);
+  prove_sparse_parent_interpolation<1>(2, 10, 13, true);
+  prove_sparse_parent_interpolation<2>(2, 10, 13, true);
+  prove_sparse_parent_interpolation<3>(2, 10, 13, true);
+}
+
+TEST(test_prepared_amr_ghost_fill, physical_faces_do_not_authorize_missing_interior_stencils) {
+  using namespace ::pops::amr::transfer;
+  const BoxArray<1> coarse_layout(std::vector<Box<1>>{box<1>(0, 1)});
+  const BoxArray<1> fine_layout(std::vector<Box<1>>{box<1>(0, 3)});
+  HostMultiFab<1> coarse(coarse_layout, replicated(coarse_layout), Index<1>{}, 1, Extent<1>{0});
+  HostMultiFab<1> fine(fine_layout, replicated(fine_layout), Index<1>{}, 1, Extent<1>{0});
+  const auto source = std::as_const(coarse.fab_global(0)).view();
+  const auto destination = fine.fab_global(0).view();
+  const auto provider = TransferProvider<1, Centering::Cell>::coarse_fine_ghost_interpolation();
+  const PhysicalParentBoundary<1> physical{box<1>(0, 7), {true}, {true}};
+
+  EXPECT_THROW((void)provider.prepare(source, destination, box<1>(0, 1), ratio_two<1>()),
+               std::invalid_argument);
+  EXPECT_NO_THROW((void)provider.prepare_physical_boundary_ghosts(
+      source, destination, box<1>(0, 1), ratio_two<1>(), {}, {}, physical));
+  EXPECT_THROW((void)provider.prepare_physical_boundary_ghosts(source, destination, box<1>(0, 3),
+                                                               ratio_two<1>(), {}, {}, physical),
+               std::invalid_argument);
+  const auto fifth_order =
+      TransferProvider<1, Centering::Cell>::fifth_order_coarse_fine_ghost_interpolation();
+  EXPECT_THROW((void)fifth_order.prepare_physical_boundary_ghosts(source, destination, box<1>(0, 1),
+                                                                  ratio_two<1>(), {}, {}, physical),
+               std::invalid_argument);
 }
 
 TEST(test_prepared_amr_ghost_fill,
@@ -246,7 +613,7 @@ TEST(test_prepared_amr_ghost_fill, physical_face_ghosts_remain_for_the_boundary_
   const BoxArray<1> coarse_layout(std::vector<Box<1>>{coarse_domain});
   const BoxArray<1> fine_layout(std::vector<Box<1>>{{Index<1>{0}, Index<1>{3}}});
   HostMultiFab<1> coarse(coarse_layout, replicated(coarse_layout), Index<1>{}, 1, Extent<1>{0});
-  HostMultiFab<1> fine(fine_layout, replicated(fine_layout), Index<1>{}, 1, Extent<1>{1});
+  HostMultiFab<1> fine(fine_layout, replicated(fine_layout), Index<1>{}, 1, Extent<1>{2});
   fill_valid(coarse, Real{-1}, [](const Index<1>&, int) { return Real(3); });
   fill_valid(fine, Real{-777}, [](const Index<1>&, int) { return Real(9); });
 
@@ -265,8 +632,10 @@ TEST(test_prepared_amr_ghost_fill, physical_face_ghosts_remain_for_the_boundary_
   point.level = 1;
   fill(fine, point);
 
+  EXPECT_DOUBLE_EQ(value_at(fine, 0, Index<1>{-2}), -777);
   EXPECT_DOUBLE_EQ(value_at(fine, 0, Index<1>{-1}), -777);
   EXPECT_DOUBLE_EQ(value_at(fine, 0, Index<1>{4}), 3);
+  EXPECT_DOUBLE_EQ(value_at(fine, 0, Index<1>{5}), 3);
 }
 
 TEST(test_prepared_amr_ghost_fill, periodic_sparse_ghost_without_a_fine_peer_uses_the_parent) {

@@ -124,7 +124,7 @@ function(pops_add_gtest_suite)
 
   if(NOT ARG_NO_DISCOVER)
     if(ARG_RUNTIME_DISCOVERY)
-      # Runtime discovery is an explicit escape hatch for a future suite whose
+      # Runtime discovery is an explicit escape hatch for a suite whose
       # parameterized or generated names cannot be recovered from its sources.
       # Keep it POST_BUILD: PRE_TEST would enumerate every executable on each
       # CTest inventory and again on execution, which is especially costly for
@@ -161,7 +161,7 @@ endforeach()
       set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
         "${_pops_list_properties_file}")
     else()
-      # All current PoPS suites use ordinary TEST/TEST_F declarations.  Register
+      # Ordinary PoPS suites use TEST/TEST_F declarations.  Register
       # them at configure time so CTest reads one CTestTestfile.cmake instead of
       # two generated include scripts per executable on every inventory/run.
       # Omitting SKIP_DEPENDENCY intentionally makes CMake reconfigure whenever
@@ -226,7 +226,7 @@ function(pops_add_mpi_rank_test name nproc)
                    ${_gtest_filter_arg}
                    ${MPIEXEC_POSTFLAGS})
   set_tests_properties(${name}_np${nproc} PROPERTIES
-    LABELS "backend;mpi;medium"
+    LABELS "backend;mpi;medium;cpp-target:${name}"
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=${nproc}"
     PROCESSORS ${nproc}
     TIMEOUT 600)
@@ -279,7 +279,7 @@ function(pops_add_mpi_rank_parity_test name)
       "-DPOPS_MPI_SIGNATURE_PREFIX=${ARG_SIGNATURE_PREFIX}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_mpi_rank_parity.cmake")
   set_tests_properties(${_test_name} PROPERTIES
-    LABELS "backend;mpi;medium"
+    LABELS "backend;mpi;medium;cpp-target:${name}"
     PROCESSORS ${_max_rank}
     TIMEOUT 600)
 endfunction()
@@ -339,7 +339,7 @@ function(pops_add_mpi_standalone_suite name)
              COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${_np}
                      ${MPIEXEC_PREFLAGS} $<TARGET_FILE:${name}> ${MPIEXEC_POSTFLAGS})
     set_tests_properties(${name}_np${_np} PROPERTIES
-      LABELS "backend;mpi;medium"
+      LABELS "backend;mpi;medium;cpp-target:${name}"
       PROCESSORS ${_np}
       TIMEOUT 60)
   endforeach()
@@ -418,6 +418,7 @@ if(Python3_Interpreter_FOUND)
 endif()
 
 set(POPS_CPP_STANDARD_TESTS
+  test_amr_history_flux_snapshot
   test_analytic_expression
   test_analytic_level_set
   test_exact_aux_registry_nd
@@ -430,6 +431,8 @@ set(POPS_CPP_STANDARD_TESTS
   test_step_attempt_rejected_header_only
   test_world_communicator
   test_residual_operator
+  test_prepared_spatial_residual
+  test_prepared_resource_cache
   test_capability_report
   test_canonical_identity
   test_box
@@ -459,6 +462,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_route_ids
   test_brick_catalog
   test_component_interfaces
+  test_physical_support_transfer
   test_fill_boundary
   test_fill_boundary_cache
   test_copy_schedule_cache
@@ -490,6 +494,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_composite_fac_variable_eps
   test_composite_fac_variable_k
   test_composite_fac_tensor
+  test_composite_general_field
   test_amr_composite_poisson
   test_polar_poisson_mms
   test_polar_tensor_elliptic_mms
@@ -504,6 +509,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_public_validation_errors
   test_program_context_schur_free
   test_platform_manifest
+  test_native_field_attachment
   test_krylov_workspace_reentrancy
   test_solver_codegen_generated
   test_dispatch_tags
@@ -523,6 +529,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_aux_halo
   test_aux_coupler_bz
   test_aux_single_source
+  test_narrow_physical_operations
   test_weno_convergence
   test_splitting
   test_imex_ap
@@ -539,8 +546,10 @@ set(POPS_CPP_STANDARD_TESTS
   test_newton_robustness
   test_variable_recovery_chain
   test_generated_amr_system_block
+  test_generated_stability_speed
   test_prepared_cartesian_nd
   test_prepared_field_solver_nd
+  test_prepared_diffusion
   test_prepared_numerics_gate
   test_elliptic_interface
   test_field_nullspace
@@ -578,6 +587,8 @@ pops_add_gtest_suite(NAME test_exb_seam SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_
 
 pops_test_source(_src test_coupled_fieldsolve)
 pops_add_gtest_suite(NAME test_coupled_fieldsolve SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
+pops_test_source(_src test_system_interface_core_session)
+pops_add_gtest_suite(NAME test_system_interface_core_session SOURCES "${_src}" EXTRA_LIBS pops_runtime_system)
 
 pops_test_source(_src test_config_model_validation)
 pops_add_gtest_suite(NAME test_config_model_validation SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
@@ -605,7 +616,7 @@ pops_test_source(_src test_amr_potential)
 pops_add_gtest_suite(NAME test_amr_potential SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
 
 pops_test_source(_src test_amr_program_diffusion)
-pops_add_gtest_suite(NAME test_amr_program_diffusion SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+pops_add_gtest_suite(NAME test_amr_program_diffusion SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr RUNTIME_DISCOVERY)
 
 pops_test_source(_src test_amr_program_embedded_boundary)
 pops_add_gtest_suite(NAME test_amr_program_embedded_boundary SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
@@ -643,9 +654,20 @@ pops_add_gtest_suite(NAME test_amr_system_twoblock SOURCES "${_src}" EXTRA_LIBS 
 
 pops_test_source(_src test_amr_named_field)
 pops_add_gtest_suite(NAME test_amr_named_field SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+pops_test_source(_src test_amr_program_field_publication)
+pops_add_gtest_suite(NAME test_amr_program_field_publication SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
 pops_test_source(_src test_amr_multiblock_compiled)
 pops_add_gtest_suite(NAME test_amr_multiblock_compiled SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
+pops_test_source(_src test_amr_hierarchy_barrier_continuation)
+pops_add_gtest_suite(NAME test_amr_hierarchy_barrier_continuation SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
+pops_test_source(_src test_amr_hierarchy_field_scratch)
+pops_add_gtest_suite(NAME test_amr_hierarchy_field_scratch SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
+
+pops_test_source(_src test_amr_synchronized_continuation)
+pops_add_gtest_suite(NAME test_amr_synchronized_continuation SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
 pops_test_source(_src test_amr_multiblock_substeps)
 pops_add_gtest_suite(NAME test_amr_multiblock_substeps SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
@@ -664,6 +686,9 @@ pops_add_gtest_suite(NAME test_amr_multiblock_regrid_union SOURCES "${_src}" EXT
 
 pops_test_source(_src test_amr_history_ring)
 pops_add_gtest_suite(NAME test_amr_history_ring SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
+pops_test_source(_src test_collective_step_rejection)
+pops_add_gtest_suite(NAME test_collective_step_rejection SOURCES "${_src}")
 
 # Link-only ABI fence: the source itself references the out-of-line StepAttemptRejected key
 # function/typeinfo, while the target requests only the AMR facade. The link therefore proves that
@@ -695,6 +720,15 @@ pops_add_gtest_suite(NAME test_cell_temporal_partition_executor SOURCES "${_src}
 pops_test_source(_src test_cell_temporal_program_route)
 pops_add_gtest_suite(NAME test_cell_temporal_program_route SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
+pops_test_source(_src test_amr_transition_invariants)
+pops_add_gtest_suite(NAME test_amr_transition_invariants SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
+# Physical AMR transfer providers are compiled into DSOs by the fixture and resolve
+# Kokkos symbols exported by the executable. Keep their shared temporary files exclusive.
+pops_test_source(_src test_amr_layout_transfer)
+pops_native_loader_definitions(_native_defs)
+pops_add_gtest_suite(NAME test_amr_layout_transfer SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
+
 pops_test_source(_src test_amr_transfer_properties)
 pops_add_gtest_suite(NAME test_amr_transfer_properties SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
@@ -711,7 +745,7 @@ pops_add_gtest_suite(NAME test_program_runtime SOURCES "${_src}" EXTRA_LIBS ${CM
 # real System (the ring memory is co-distributed with block 0), so they link the heavy runtime object
 # library like test_program_runtime -- NOT the standalone-core POPS_CPP_STANDARD_TESTS list.
 pops_test_source(_src test_program_context_contract)
-pops_add_gtest_suite(NAME test_program_context_contract SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
+pops_add_gtest_suite(NAME test_program_context_contract SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
 
 pops_test_source(_src test_checkpoint_history)
 pops_add_gtest_suite(NAME test_checkpoint_history SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
@@ -720,7 +754,9 @@ pops_add_gtest_suite(NAME test_checkpoint_history SOURCES "${_src}" EXTRA_LIBS $
 # native ramp step closure and calls rebuild_history_slots), so it links the heavy runtime object
 # library like test_checkpoint_history above.
 pops_test_source(_src test_checkpoint_history_policy)
-pops_add_gtest_suite(NAME test_checkpoint_history_policy SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
+# CMake's static TEST parser also matches authored comments in this suite.
+# Discover its actual compiled bodies without changing those comments or test workloads.
+pops_add_gtest_suite(NAME test_checkpoint_history_policy SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system RUNTIME_DISCOVERY)
 
 pops_test_source(_src test_program_loader)
 pops_native_loader_definitions(_native_defs)
@@ -786,9 +822,12 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_amr_rebalance_migration 2 4)
   set(POPS_MPI_RANKS_test_mpi_composite_fac 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_composite_fac_partitioned_nd 2)
+  set(POPS_MPI_RANKS_test_mpi_amr_spatial_norm 2)
+  set(POPS_MPI_RANKS_test_mpi_exchange_batches 3)
   set(POPS_MPI_RANKS_test_mpi_composite_fac_fft_coarse 2)
   set(POPS_MPI_RANKS_test_mpi_composite_fac_replicated_coarse 2)
   set(POPS_MPI_RANKS_test_mpi_tensor_fac_provider_nd 2)
+  set(POPS_MPI_RANKS_test_prepared_hyperbolic_boundary 2)
   set(POPS_MPI_RANKS_test_prepared_embedded_boundary_nd 2)
   set(POPS_MPI_RANKS_test_amr_regrid_mpi_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_dynamic_active_depth 1 2 4)
@@ -809,6 +848,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_system_io_gather 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_layout_transfer 2)
   set(POPS_MPI_RANKS_test_mpi_load_balance_authority 2 4)
+  set(POPS_MPI_RANKS_test_mpi_transition_invariants 2 4)
   set(POPS_MPI_RANKS_test_mpi_array_reduce 4)
   set(POPS_MPI_RANKS_test_mpi_cartesian_poisson_nd 3)
   set(POPS_MPI_RANKS_test_mpi_multiblock_interface_scheduler 2)
@@ -826,11 +866,24 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_pure_field_algebra_extreme_dot 2)
   set(POPS_MPI_RANKS_test_geometric_mg 2)
   set(POPS_MPI_RANKS_test_coupled_fieldsolve 2)
+  set(POPS_MPI_RANKS_test_composite_general_field 2)
+  set(POPS_MPI_RANKS_test_prepared_resource_cache 2)
+  set(POPS_MPI_RANKS_test_amr_program_diffusion 2)
+  set(POPS_MPI_RANKS_test_amr_layout_transfer 2)
+  set(POPS_MPI_RANKS_test_amr_multiblock_implicit_transaction 2)
+  set(POPS_MPI_RANKS_test_amr_hierarchy_barrier_continuation 2)
+  set(POPS_MPI_RANKS_test_amr_hierarchy_field_scratch 2)
+  set(POPS_MPI_RANKS_test_amr_synchronized_continuation 2)
+  set(POPS_MPI_RANKS_test_amr_multiblock_substeps 2)
+  set(POPS_MPI_RANKS_test_collective_step_rejection 2)
+  set(POPS_MPI_RANKS_test_amr_synthetic_program_loader_transaction 2)
   set(POPS_MPI_RANKS_test_amr_program_positivity_floor 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_coupled_source 2)
   set(POPS_MPI_RANKS_test_program_context_contract 2)
   set(POPS_MPI_RANKS_test_program_runtime 2)
   set(POPS_MPI_RANKS_test_generated_amr_system_block 2)
+  set(POPS_MPI_RANKS_test_generated_stability_speed 2)
+  set(POPS_MPI_RANKS_test_system_interface_core_session 2)
   set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
   set(POPS_MPI_RANKS_test_copy_schedule_cache 1 2 4)
   set(POPS_MPI_RANKS_test_world_communicator 1 2)
@@ -844,6 +897,8 @@ if(POPS_HAS_MPI)
     test_mpi_amr_rebalance_migration
     test_mpi_composite_fac
     test_mpi_composite_fac_partitioned_nd
+    test_mpi_amr_spatial_norm
+    test_mpi_exchange_batches
     test_mpi_composite_fac_fft_coarse
     test_mpi_composite_fac_replicated_coarse
     test_mpi_tensor_fac_provider_nd
@@ -866,6 +921,7 @@ if(POPS_HAS_MPI)
     test_mpi_system_io_gather
     test_mpi_system_layout_transfer
     test_mpi_load_balance_authority
+    test_mpi_transition_invariants
     test_mpi_array_reduce
     test_mpi_cartesian_poisson_nd
     test_mpi_multiblock_interface_scheduler
@@ -962,8 +1018,10 @@ if(POPS_HAS_MPI)
     TIMEOUT 30)
   # This regression consumes two MPI processor slots and exercises transport, not on-node
   # threading. Keep one Kokkos worker per rank so the CTest PROCESSORS=2 accounting is honest.
-  set_tests_properties(test_mpi_amr_program_reflux_np2 test_mpi_amr_program_reflux_np4 PROPERTIES
-    ENVIRONMENT "OMP_NUM_THREADS=1")
+  set_tests_properties(test_mpi_amr_program_reflux_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1")
+  set_tests_properties(test_mpi_amr_program_reflux_np4 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=4;OMP_NUM_THREADS=1")
   set_property(
     TEST test_mpi_amr_program_reflux_np2 test_mpi_amr_program_reflux_np4
          test_mpi_amr_rebalance_migration_np2 test_mpi_amr_rebalance_migration_np4
@@ -972,12 +1030,13 @@ if(POPS_HAS_MPI)
   # threading.  One Kokkos worker per rank avoids OpenMP oversubscription and matches CTest's
   # PROCESSORS=2 accounting.
   set_tests_properties(test_mpi_multiblock_interface_scheduler_np2 PROPERTIES
-    ENVIRONMENT "OMP_NUM_THREADS=1")
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1")
 
   # These are ordinary serial suites with additional MPI launch variants. Their rank sets are
   # declared authoritatively as `mpi_variants` in tests/test_manifest.toml; the source-only
   # architecture gate compares this projection and these CMake registrations exactly.
   set(POPS_CPP_MPI_VARIANT_TESTS
+    test_prepared_hyperbolic_boundary
     test_prepared_embedded_boundary_nd
     test_amr_program_positivity_floor
     test_amr_multiblock_coupled_source
@@ -985,9 +1044,30 @@ if(POPS_HAS_MPI)
     test_pure_field_algebra_extreme_dot
     test_geometric_mg
     test_coupled_fieldsolve
+    # Two real patches per level are partitioned over ranks 0/1, including
+    # coarse/fine flux replacement and collective incompatible-RHS refusal.
+    test_composite_general_field
+    # Only rank zero invalidates preparation or throws during preflight; every
+    # rank must reconstruct/refuse together without corrupting the cached entry.
+    test_prepared_resource_cache
+    # Run only the real AMR cache collective preflight witness under MPI.
+    test_amr_program_diffusion
+    # Independent hierarchy ownership is reversed across ranks; all four cases are collective.
+    test_amr_layout_transfer
+    test_amr_multiblock_implicit_transaction
+    # Rank-local barrier mismatch/callback failure must reject collectively, then retry.
+    test_amr_hierarchy_barrier_continuation
+    # Rank-local field shape and solve-identity refusals must remain collective.
+    test_amr_hierarchy_field_scratch
+    test_amr_synchronized_continuation
+    test_amr_multiblock_substeps
+    test_collective_step_rejection
+    test_amr_synthetic_program_loader_transaction
     test_program_runtime
     test_program_context_contract
     test_generated_amr_system_block
+    test_generated_stability_speed
+    test_system_interface_core_session
     test_fill_boundary_cache
     test_copy_schedule_cache
     test_world_communicator
@@ -1037,7 +1117,17 @@ if(POPS_HAS_MPI)
   )
   foreach(_test IN LISTS POPS_CPP_MPI_VARIANT_TESTS)
     foreach(_np IN LISTS POPS_MPI_RANKS_${_test})
-      if(_test STREQUAL "test_krylov_workspace_reentrancy")
+      if(_test STREQUAL "test_prepared_hyperbolic_boundary")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "test_prepared_hyperbolic_boundary.characteristic_rank_local_rejection_rolls_back_collectively_and_retry_publishes")
+      elseif(_test STREQUAL "test_amr_program_diffusion")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "test_amr_program_diffusion.PreparedCacheHandlesRankLocalMissAndInvalidGhostsCollectively")
+      elseif(_test STREQUAL "test_krylov_workspace_reentrancy")
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
@@ -1050,7 +1140,17 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "test_coupled_fieldsolve.named_solve_honors_every_qualified_stage_without_live_mutation")
+            "test_coupled_fieldsolve.named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs:test_coupled_fieldsolve.exact_interface_masks_bind_collectively_without_partial_publication:test_coupled_fieldsolve.exact_interface_masks_finalize_collectively_without_partial_publication")
+      elseif(_test STREQUAL "test_amr_multiblock_implicit_transaction")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "test_amr_multiblock_implicit_transaction.TwoBlockImplicitSourceTransactionRollsBackAndRetriesExactly:test_amr_multiblock_implicit_transaction.BalanceMailboxResetsOnlyInsideOutermostTransactionSnapshot:test_amr_multiblock_implicit_transaction.InterfaceProviderPublicationRefreshesExactAcceptedProgramContracts:test_amr_multiblock_implicit_transaction.CoupledJacvecPreservesUnrelatedAttemptCarrierWithPermutedProgramPair:test_amr_multiblock_implicit_transaction.MultilevelPairBudgetReservesOneEvaluationWithoutAcceptedApplications")
+      elseif(_test STREQUAL "test_amr_synthetic_program_loader_transaction")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh:test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack")
       elseif(_test STREQUAL "test_program_runtime")
         pops_add_mpi_rank_test(
           ${_test} ${_np}
@@ -1060,19 +1160,26 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection:ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation")
+            "ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors:ProgramContextContract.AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch:ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection:ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation:ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges:ProgramContextContract.NativeEvaluationFailureIsCollectiveAndCannotPublishWork:ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation:ProgramContextContract.ConsumedFieldPublicationIsExactCollectiveAndTransactional:ProgramContextContract.AmrProgramTopologyPublishesAndRollsBackExactContracts:ProgramContextContract.AmrProgramSingleCarrierTopologyRejectsMultipleBlocks")
       elseif(_test STREQUAL "test_generated_amr_system_block")
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance")
+            "GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance:GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords:GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically:GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry:GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry:GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts")
       else()
         pops_add_mpi_rank_test(${_test} ${_np})
       endif()
     endforeach()
   endforeach()
-  set_tests_properties(test_coupled_fieldsolve_np2 PROPERTIES
+  set_tests_properties(test_amr_layout_transfer_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
+    RESOURCE_LOCK native_loader
+    TIMEOUT 600)
+  set_tests_properties(test_amr_program_diffusion_np2 PROPERTIES
     ENVIRONMENT "OMP_NUM_THREADS=1"
+    TIMEOUT 60)
+  set_tests_properties(test_coupled_fieldsolve_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
     TIMEOUT 30)
   set_tests_properties(test_amr_program_positivity_floor_np2 PROPERTIES
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"

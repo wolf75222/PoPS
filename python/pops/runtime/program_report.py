@@ -237,7 +237,7 @@ def _amr_temporal_report(sim: Any) -> tuple[Any, Any, Any, Any, Any]:
         )
     ledger = []
     for row in _call(sim, "program_flux_ledger_manifest", []) or []:
-        if len(row) != 13:
+        if len(row) not in (13, 17):
             raise ValueError("native AMR Program flux-ledger report has an invalid row")
         ledger.append(
             {
@@ -254,9 +254,16 @@ def _amr_temporal_report(sim: Any) -> tuple[Any, Any, Any, Any, Any]:
                 "substep_duration": float(row[12]),
             }
         )
+        if len(row) == 17:
+            ledger[-1]["origin"] = {
+                "spatial_identity": row[13],
+                "topology_epoch": int(row[14]),
+                "materialization_generation": int(row[15]),
+                "level_count": int(row[16]),
+            }
     synchronization = []
     for row in _call(sim, "program_sync_manifest", []) or []:
-        if len(row) != 7:
+        if len(row) not in (7, 11):
             raise ValueError("native AMR Program synchronization report has an invalid row")
         synchronization.append(
             {
@@ -268,6 +275,13 @@ def _amr_temporal_report(sim: Any) -> tuple[Any, Any, Any, Any, Any]:
                 "clock_phase": {"numerator": int(row[5]), "denominator": int(row[6])},
             }
         )
+        if len(row) == 11:
+            synchronization[-1]["origin"] = {
+                "spatial_identity": row[7],
+                "topology_epoch": int(row[8]),
+                "materialization_generation": int(row[9]),
+                "level_count": int(row[10]),
+            }
     temporal_partition = {}
     for row in _call(sim, "program_temporal_partition_manifest", []) or []:
         if row[0] == "summary" and len(row) == 7:

@@ -6,9 +6,9 @@ from typing import Any
 
 
 _UNSLICEABLE_OPS = frozenset({
-    "coupled_rate", "solve_coupled_implicit", "solve_fields_from_blocks",
+    "solve_coupled_implicit", "solve_fields_from_blocks",
     "field_solve_from_blocks", "while", "branch", "range", "subcycle",
-    "matrix_free_operator", "solve_local_nonlinear",
+    "solve_local_nonlinear", "solve_spatial_nonlinear",
 })
 
 
@@ -54,9 +54,11 @@ def slice_program(program: Any, block_names: Any) -> Any:
     selected = frozenset(block_names)
     if not selected or any(not isinstance(name, str) or not name for name in selected):
         raise TypeError("slice_program block_names must contain non-empty names")
-    if program._dt_bound is not None or program._histories or program._acceptance_guards:
+    if program._dt_bound is not None or program._acceptance_guards:
         raise ValueError(
-            "multi-layout Program slicing does not support dt bounds, histories, or guards")
+            "multi-layout Program slicing does not support dt bounds or guards")
+    if set(program._histories) - set(program._history_state_refs):
+        raise ValueError("multi-layout histories require exact qualified state ownership")
     values = tuple(program._values)
     unsupported = sorted({value.op for value in values if value.op in _UNSLICEABLE_OPS})
     if unsupported:
@@ -76,6 +78,11 @@ def slice_program(program: Any, block_names: Any) -> Any:
                 "layout Program partition reads block %r outside its selected layout" % block)
         keep.add(value.id)
         pending.extend(getattr(value, "inputs", ()))
+        # Matrix-free apply regions can capture block-owned coefficient values.
+        # Their inputs are part of the partition closure, even when the operator
+        # itself has no direct inputs.
+        for key in ("apply_block", "residual_block", "body_block"):
+            pending.extend(value.attrs.get(key, ()))
     selected_commits = {
         state: value for state, value in program._commits.items()
         if getattr(getattr(state, "block_ref", None), "local_id", None) in selected
@@ -104,12 +111,17 @@ def slice_program(program: Any, block_names: Any) -> Any:
         registry_keep=lambda owner: owner in registry_owners,
         transformation="normalize",
     )
-    if tuple(value.id for value in clone._values) != tuple(range(len(clone._values))) \
-            or clone._next_id != len(clone._values):
+    from pops.codegen.program_emit_field_routes import _walk_program_nodes
+    all_values = tuple(_walk_program_nodes(tuple(clone._values)))
+    all_ids = sorted({value.id for value in all_values})
+    if all_ids != list(range(clone._next_id)):
         raise RuntimeError("sliced Program SSA identity is not a closed contiguous partition")
-    if clone._recording or clone._recording_regions:
+    if clone._recording:
         raise RuntimeError("sliced Program retained foreign authoring regions")
-    active_regions = {value.region for value in clone._values}
+    active_regions = {value.region for value in all_values}
+    if any(region not in active_regions or any(value.id not in all_ids for value in block)
+           for block, region in clone._recording_regions.values()):
+        raise RuntimeError("sliced Program retained a foreign matrix-free recording region")
     if any(destination not in active_regions or any(source not in active_regions for source in sources)
            for destination, sources in clone._region_imports.items()):
         raise RuntimeError("sliced Program retained a foreign region import")
@@ -128,6 +140,12 @@ def slice_program(program: Any, block_names: Any) -> Any:
                 % (name, sorted(retained - selected)))
     if _block_ids(clone._commits) - selected or _block_ids(clone._state_spaces) - selected:
         raise RuntimeError("sliced Program retained foreign state authority")
+    if _block_ids(clone._history_state_refs) - selected or _block_ids(clone._history_blocks) - selected:
+        raise RuntimeError("sliced Program retained foreign history authority")
+    expected_histories = {name for name, state in program._history_state_refs.items()
+                          if _block_id(state) in selected}
+    if set(clone._histories) != expected_histories:
+        raise RuntimeError("sliced Program histories differ from their exact state partition")
     if set(clone._operator_registries) - set(registry_owners):
         raise RuntimeError("sliced Program retained a foreign operator registry")
     clone.validate()

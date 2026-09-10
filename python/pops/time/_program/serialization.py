@@ -1,6 +1,8 @@
 """Canonical Program serialization and hashing."""
 from __future__ import annotations
 
+from pops.time.canonical_data import _json_ready as _json_ready
+
 import hashlib
 import json
 from collections.abc import Mapping
@@ -10,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from pops.identity.scalar import scalar_data
 from pops.model.handles import Handle
+from pops.model.ownership import _definition_fingerprint_scope
 from pops.time.references import handle_data
 from pops.time.values import ProgramValue, _Affine, _affine_ids
 
@@ -87,28 +90,6 @@ def _serialize_schedule(schedule: Any) -> dict[str, Any]:
     }
 
 
-def _json_ready(value: Any) -> Any:
-    if isinstance(value, Handle):
-        return {"handle": handle_data(value)}
-    hook = getattr(value, "to_data", None)
-    if callable(hook):
-        return _json_ready(hook())
-    if isinstance(value, Mapping):
-        if all(isinstance(key, str) and key for key in value):
-            return {key: _json_ready(item) for key, item in value.items()}
-        entries = [[_json_ready(key), _json_ready(item)] for key, item in value.items()]
-        entries.sort(key=lambda item: json.dumps(
-            item[0], sort_keys=True, separators=(",", ":")))
-        return {"mapping_entries": entries}
-    if isinstance(value, (list, tuple)):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, (set, frozenset)):
-        items = [_json_ready(item) for item in value]
-        return sorted(items, key=lambda item: json.dumps(
-            item, sort_keys=True, separators=(",", ":")))
-    return value
-
-
 def _serialize_field_context(context: Any) -> dict[str, Any]:
     from pops.time.field_context import FieldReadProvenance
     if isinstance(context, FieldReadProvenance):
@@ -166,12 +147,13 @@ class _ProgramSerialization(_ProgramBase):
                 ref = attrs.get(key)
                 attrs[key] = (_affine_ids(ref) if isinstance(ref, _Affine)
                               else (ref.id if isinstance(ref, ProgramValue) else None))
-        elif value.op == "solve_local_nonlinear":
+        elif value.op in ("solve_local_nonlinear", "solve_spatial_nonlinear"):
             attrs["residual_block"] = [
                 _ProgramSerialization._serialize_node(
                     node, include_provenance=include_provenance) for node in attrs["residual_block"]]
             for key in ("residual", "iterate", "guess"):
-                attrs[key] = attrs[key].id
+                if key in attrs:
+                    attrs[key] = attrs[key].id
         node = {"id": value.id, "name": value.name, "vtype": value.vtype, "op": value.op,
                 "block": handle_data(value.block) if value.block is not None else None,
                 "state": handle_data(value.state_ref) if value.state_ref is not None else None,
@@ -189,6 +171,7 @@ class _ProgramSerialization(_ProgramBase):
             node["provenance"] = value.provenance.to_data()
         return node
 
+    @_definition_fingerprint_scope()
     def _serialize(self, *, include_provenance: bool = True) -> dict[str, Any]:
         if not isinstance(include_provenance, bool):
             raise TypeError("Program._serialize include_provenance must be bool")

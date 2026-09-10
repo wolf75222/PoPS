@@ -13,8 +13,11 @@
 #include <cmath>
 #include <cstddef>
 #include <exception>
+#include <iomanip>
+#include <iostream>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -241,8 +244,8 @@ PhysicalBoundaryConditions<Dim> periodic_boundary(const Geometry<Dim>& geometry)
   RealVector<Dim> spacing{};
   for (int axis = 0; axis < Dim; ++axis)
     spacing[axis] = geometry.spacing(axis);
-  return PhysicalBoundaryConditions<Dim>{BoundaryTopology<Dim>::axis_periodic(periodic), {},
-                                         spacing};
+  return PhysicalBoundaryConditions<Dim>{
+      BoundaryTopology<Dim>::axis_periodic(periodic), {}, spacing};
 }
 
 template <int Dim>
@@ -335,11 +338,10 @@ void expect_mg_distributed_fac() {
   options.coarse_abs_tol = Real(1e-10);
   options.coarse_cycles = 192;
   pops::elliptic::mg::CompositeFacPoisson<Dim> solver(std::move(request), lane, options, Real(1));
-  solver.install_nullspace(
-      pops::FieldNullspacePlan<Dim>{},
-      std::vector<pops::PreparedVectorDistribution<Dim>>(
-          static_cast<std::size_t>(solver.n_levels()),
-          pops::PreparedVectorDistribution<Dim>::distributed()));
+  solver.install_nullspace(pops::FieldNullspacePlan<Dim>{},
+                           std::vector<pops::PreparedVectorDistribution<Dim>>(
+                               static_cast<std::size_t>(solver.n_levels()),
+                               pops::PreparedVectorDistribution<Dim>::distributed()));
   EXPECT_EQ(pops::all_reduce_min(solver.has_remote_same_level_halo() ? 1L : 0L, lane), 1L);
   EXPECT_EQ(pops::all_reduce_min(solver.has_remote_parent_gather() ? 1L : 0L, lane), 1L);
   EXPECT_EQ(pops::all_reduce_min(solver.has_remote_fine_restriction() ? 1L : 0L, lane), 1L);
@@ -447,6 +449,280 @@ void expect_partitioned_fac_embedded_boundary() {
   EXPECT_LT(maximum_constant_error(solver.phi_level(1), lane), Real(0.12));
 }
 
+enum class ForcingCase {
+  Gaussian,
+  BoundaryOnly,
+  ZeroWithNonzeroGuess,
+  SmallGaussian,
+  DirichletConstant,
+  NeumannConstant
+};
+
+template <bool PartitionedBackend = false>
+void expect_periodic_partition_independence(int refinement_case, int partition_profile = 0,
+                                            bool exhaust_coarse = false,
+                                            ForcingCase forcing_case = ForcingCase::Gaussian) {
+  const Real forcing_scale = forcing_case == ForcingCase::SmallGaussian ? Real(1e-8) : Real(1);
+  const bool corner = refinement_case == 1;
+  const bool strip = refinement_case == 2;
+  constexpr int Dim = 2;
+  const auto lane = ExecutionLane::world("pops.test.fac.periodic-partition-independence");
+  const auto coarse_geometry =
+      Geometry<Dim>::from_bounds(Box<Dim>{Index<Dim>{0, 0}, Index<Dim>{15, 15}},
+                                 coordinates<Dim>(Real(0)), coordinates<Dim>(Real(1)));
+  const auto fine_geometry = coarse_geometry.refine(Extent<Dim>{2, 2});
+  const BoxArray<Dim> coarse_boxes(std::vector<Box<Dim>>{{Index<Dim>{0, 0}, Index<Dim>{7, 7}},
+                                                         {Index<Dim>{8, 0}, Index<Dim>{15, 7}},
+                                                         {Index<Dim>{0, 8}, Index<Dim>{7, 15}},
+                                                         {Index<Dim>{8, 8}, Index<Dim>{15, 15}}});
+  const BoxArray<Dim> fine_boxes(
+      strip    ? std::vector<Box<Dim>>{{Index<Dim>{2, 0}, Index<Dim>{7, 31}},
+                                       {Index<Dim>{8, 0}, Index<Dim>{13, 31}}}
+      : corner ? std::vector<Box<Dim>>{{Index<Dim>{0, 0}, Index<Dim>{7, 7}},
+                                       {Index<Dim>{8, 0}, Index<Dim>{11, 7}},
+                                       {Index<Dim>{0, 8}, Index<Dim>{7, 11}},
+                                       {Index<Dim>{8, 8}, Index<Dim>{11, 11}}}
+               : std::vector<Box<Dim>>{{Index<Dim>{2, 10}, Index<Dim>{9, 17}},
+                                       {Index<Dim>{10, 10}, Index<Dim>{13, 17}},
+                                       {Index<Dim>{2, 18}, Index<Dim>{9, 21}},
+                                       {Index<Dim>{10, 18}, Index<Dim>{13, 21}}});
+  const RankSpace<Dim> ranks{Index<Dim>{}, Extent<Dim>{2, 1}};
+  const auto local_rank = rank_coordinate<Dim>(pops::my_rank());
+  const std::vector<Index<Dim>> owners{rank_coordinate<Dim>(0), rank_coordinate<Dim>(1),
+                                       rank_coordinate<Dim>(1), rank_coordinate<Dim>(0)};
+  auto make = [&](bool replicated) {
+    using Request =
+        std::conditional_t<PartitionedBackend, pops::elliptic::amr::CompositeFacBuildRequest<Dim>,
+                           pops::elliptic::mg::CompositeFacBuildRequest<Dim>>;
+    Request request;
+    if constexpr (PartitionedBackend) {
+      request.budget = budget();
+      request.budget.parent_gather.canonical_jobs = 1024;
+    }
+    for (int level = 0; level < 2; ++level) {
+      const auto& boxes = level == 0 ? coarse_boxes : fine_boxes;
+      const auto& geometry = level == 0 ? coarse_geometry : fine_geometry;
+      const bool level_replicated = replicated || (partition_profile == 1 && level == 0) ||
+                                    (partition_profile == 2 && level == 1);
+      const auto distribution =
+          level_replicated
+              ? Distribution<Dim>::replicated(boxes, ranks)
+              : Distribution<Dim>::partitioned(
+                    boxes, ranks,
+                    (strip && level == 1)
+                        ? std::vector<Index<Dim>>{rank_coordinate<Dim>(1), rank_coordinate<Dim>(0)}
+                        : owners);
+      auto boundary = periodic_boundary<Dim>(geometry);
+      if (forcing_case == ForcingCase::BoundaryOnly ||
+          forcing_case == ForcingCase::DirichletConstant ||
+          forcing_case == ForcingCase::NeumannConstant) {
+        std::array<pops::PhysicalBoundaryFace, 2 * Dim> faces{};
+        for (auto& face : faces)
+          face = forcing_case == ForcingCase::NeumannConstant
+                     ? pops::PhysicalBoundaryFace{pops::PhysicalBoundaryKind::neumann, Real(0)}
+                     : pops::PhysicalBoundaryFace{pops::PhysicalBoundaryKind::dirichlet, Real(2)};
+        pops::RealVector<Dim> spacing{};
+        for (int axis = 0; axis < Dim; ++axis)
+          spacing[axis] = geometry.spacing(axis);
+        boundary = PhysicalBoundaryConditions<Dim>{BoundaryTopology<Dim>::axis_periodic({}), faces,
+                                                   spacing};
+      }
+      request.levels.push_back(EllipticBuildRequest<Dim>{
+          geometry, boxes, distribution, local_rank, boundary, Extent<Dim>{},
+          integer_extent<Dim>(1), BoxArrayValidationBudget{4, 6}});
+    }
+    request.ratios = {RefinementRatio<Dim>{{2, 2}}};
+    pops::CompositeFacOptions options;
+    options.max_iters = 30;
+    options.fine_sweeps = 400;
+    options.rel_tol = Real(1e-9);
+    options.abs_tol = Real(0);
+    options.coarse_rel_tol = Real(1e-12);
+    options.coarse_abs_tol = Real(0);
+    options.coarse_cycles = exhaust_coarse ? 1 : 100;
+    auto solver = [&] {
+      if constexpr (PartitionedBackend)
+        return std::make_unique<pops::elliptic::amr::CompositeFacPoisson<Dim>>(std::move(request),
+                                                                               options, Real(1));
+      else
+        return std::make_unique<pops::elliptic::mg::CompositeFacPoisson<Dim>>(
+            std::move(request), lane, options, Real(1));
+    }();
+    std::vector<pops::PreparedVectorDistribution<Dim>> distributions;
+    for (int level = 0; level < 2; ++level)
+      distributions.push_back(solver->phi_level(level).distribution().replicated()
+                                  ? pops::PreparedVectorDistribution<Dim>::replicated()
+                                  : pops::PreparedVectorDistribution<Dim>::distributed());
+    solver->install_nullspace(pops::FieldNullspacePlan<Dim>{}, std::move(distributions));
+    for (int level = 0; level < 2; ++level) {
+      auto& rhs = solver->rhs_level(level);
+      const auto& geometry = level == 0 ? coarse_geometry : fine_geometry;
+      for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+        auto& fab = rhs.fab(local);
+        auto host = fab.create_host_mirror();
+        const auto box = fab.box();
+        const auto grown = fab.grown_box();
+        for (int y = box.lo[1]; y <= box.hi[1]; ++y)
+          for (int x = box.lo[0]; x <= box.hi[0]; ++x) {
+            const auto dx = geometry.cell_coordinate(0, x) - Real(0.25);
+            const auto dy = geometry.cell_coordinate(1, y) - Real(0.5);
+            host(static_cast<std::size_t>(x - grown.lo[0]) +
+                 static_cast<std::size_t>(y - grown.lo[1]) * grown.length(0)) =
+                forcing_case == ForcingCase::BoundaryOnly ||
+                        forcing_case == ForcingCase::ZeroWithNonzeroGuess
+                    ? Real(0)
+                : forcing_case == ForcingCase::DirichletConstant ||
+                        forcing_case == ForcingCase::NeumannConstant
+                    ? Real(2)
+                    : forcing_scale *
+                          (Real(1) + Real(0.5) * std::exp(-Real(140) * (dx * dx + dy * dy)));
+          }
+        fab.copy_from_host(host);
+      }
+      solver->phi_level(level).set_val(forcing_case == ForcingCase::ZeroWithNonzeroGuess ? Real(1)
+                                       : forcing_case == ForcingCase::DirichletConstant ||
+                                               forcing_case == ForcingCase::NeumannConstant
+                                           ? Real(2)
+                                           : Real(0));
+    }
+    return solver;
+  };
+  auto reference = make(true);
+  auto partitioned = make(false);
+  const auto reference_report = reference->solve();
+  const auto partitioned_report = partitioned->solve();
+  if (pops::my_rank() == 0)
+    std::cout << std::setprecision(17)
+              << "periodic FAC backend=" << (PartitionedBackend ? "amr" : "mg")
+              << " refinement_case=" << refinement_case
+              << " partition_profile=" << partition_profile << " exhaust_coarse=" << exhaust_coarse
+              << " forcing_case=" << static_cast<int>(forcing_case)
+              << " replicated_status=" << reference_report.reason
+              << " replicated_residual=" << reference_report.residual_norm
+              << " partitioned_status=" << partitioned_report.reason
+              << " partitioned_residual=" << partitioned_report.residual_norm << '\n';
+  if (exhaust_coarse) {
+    for (const auto* report : {&reference_report, &partitioned_report}) {
+      EXPECT_EQ(report->status, pops::SolveStatus::kIterationLimit);
+      EXPECT_EQ(report->action, pops::SolveAction::kFailRun);
+      EXPECT_NE(report->reason.find("coarse_correction_failed:"), std::string::npos);
+      EXPECT_FALSE(report->solved());
+      EXPECT_EQ(pops::all_reduce_min(static_cast<long>(report->status), lane),
+                pops::all_reduce_max(static_cast<long>(report->status), lane));
+    }
+    return;
+  }
+  if (forcing_case == ForcingCase::ZeroWithNonzeroGuess) {
+    // With R(0)=0 and abs_tol=0 only an exact zero residual may be accepted,
+    // regardless of the nonzero warm guess. The report must stay finite in either outcome.
+    for (const auto* report : {&reference_report, &partitioned_report}) {
+      EXPECT_EQ(report->reference_residual_norm, Real(0));
+      EXPECT_TRUE(pops::solve_report_is_publishable(*report, 30));
+      EXPECT_TRUE(std::isfinite(report->rel_residual));
+      EXPECT_EQ(report->rel_residual, report->residual_norm);
+      if (report->solved())
+        EXPECT_EQ(report->residual_norm, Real(0));
+      else {
+        EXPECT_EQ(report->status, pops::SolveStatus::kIterationLimit);
+        EXPECT_EQ(report->action, pops::SolveAction::kFailRun);
+      }
+    }
+    return;
+  }
+  if (forcing_case == ForcingCase::DirichletConstant ||
+      forcing_case == ForcingCase::NeumannConstant) {
+    // Independent discrete oracle: reaction=1, RHS=2, u=2. Every physical
+    // extension and quadratic C/F stencil is exactly constant, so R(u)=0.
+    for (const auto* report : {&reference_report, &partitioned_report}) {
+      EXPECT_TRUE(report->solved()) << report->reason;
+      EXPECT_EQ(report->iters, 0);
+      EXPECT_EQ(report->residual_norm, Real(0));
+      EXPECT_EQ(report->reference_residual_norm,
+                forcing_case == ForcingCase::DirichletConstant ? Real(2050) : Real(2));
+    }
+    return;
+  }
+  if (forcing_case == ForcingCase::BoundaryOnly)
+    for (const auto* report : {&reference_report, &partitioned_report})
+      // Each corner has two reflected Dirichlet ghosts of value 4 and h=1/16.
+      EXPECT_EQ(report->reference_residual_norm, Real(2 * 4 * 16 * 16));
+  if (forcing_case == ForcingCase::SmallGaussian)
+    for (const auto* report : {&reference_report, &partitioned_report}) {
+      EXPECT_GE(report->reference_residual_norm, forcing_scale);
+      EXPECT_LE(report->reference_residual_norm, Real(1.5) * forcing_scale);
+    }
+  ASSERT_TRUE(reference_report.solved())
+      << reference_report.reason << " residual=" << reference_report.residual_norm;
+  ASSERT_TRUE(partitioned_report.solved())
+      << partitioned_report.reason << " residual=" << partitioned_report.residual_norm;
+  Real maximum = Real(0);
+  for (int level = 0; level < 2; ++level) {
+    const auto& field = partitioned->phi_level(level);
+    for (std::size_t local = 0; local < field.local_size(); ++local) {
+      const auto& fab = field.fab(local);
+      const auto& reference_fab = reference->phi_level(level).fab_global(field.global_index(local));
+      auto host = fab.create_host_mirror();
+      auto reference_host = reference_fab.create_host_mirror();
+      fab.copy_to_host(host);
+      reference_fab.copy_to_host(reference_host);
+      const auto box = fab.box();
+      const auto grown = fab.grown_box();
+      for (int y = box.lo[1]; y <= box.hi[1]; ++y)
+        for (int x = box.lo[0]; x <= box.hi[0]; ++x) {
+          const auto offset = static_cast<std::size_t>(x - grown.lo[0]) +
+                              static_cast<std::size_t>(y - grown.lo[1]) * grown.length(0);
+          maximum = std::max(maximum, std::abs(host(offset) - reference_host(offset)));
+          if (forcing_case == ForcingCase::BoundaryOnly) {
+            // The screened equation has reaction=1: use its independent maximum principle
+            // bounds for the positive, boundary-driven RHS=0 solution.
+            EXPECT_GT(host(offset), Real(0));
+            EXPECT_LE(host(offset), Real(2));
+          }
+        }
+    }
+  }
+  const double global_difference = pops::all_reduce_max(static_cast<double>(maximum), lane);
+  if (pops::my_rank() == 0)
+    std::cout << std::setprecision(17)
+              << "periodic FAC backend=" << (PartitionedBackend ? "amr" : "mg")
+              << " refinement_case=" << refinement_case
+              << " partition_profile=" << partition_profile
+              << " replicated_residual=" << reference_report.residual_norm
+              << " partitioned_residual=" << partitioned_report.residual_norm
+              << " max_partition_difference=" << global_difference << '\n';
+  EXPECT_LT(global_difference, 1e-8 * forcing_scale);
+  {
+    // Re-evaluating the same equation with its accepted candidate must preserve the
+    // declared forcing scale, rather than demand another relative reduction of roundoff.
+    for (auto* solver : {reference.get(), partitioned.get()}) {
+      const auto cold = solver->last_solve_report();
+      const auto warm = solver->solve();
+      if (pops::my_rank() == 0)
+        std::cout << std::setprecision(17) << "warm FAC refinement_case=" << refinement_case
+                  << " initial_reference=" << cold.reference_residual_norm
+                  << " warm_reference=" << warm.reference_residual_norm
+                  << " residual=" << warm.residual_norm << " status=" << warm.reason << '\n';
+      EXPECT_TRUE(warm.solved()) << warm.reason << " residual=" << warm.residual_norm;
+      EXPECT_EQ(warm.reference_residual_norm, cold.reference_residual_norm);
+      EXPECT_LE(warm.residual_norm, Real(1e-9) * cold.reference_residual_norm);
+      EXPECT_EQ(warm.iters, 0);
+      if (forcing_case == ForcingCase::Gaussian && refinement_case == 0 && partition_profile == 0) {
+        for (int level = 0; level < 2; ++level)
+          solver->phi_level(level).set_val(Real(1e6));
+        const auto huge_guess = solver->solve();
+        EXPECT_EQ(huge_guess.reference_residual_norm, cold.reference_residual_norm);
+        EXPECT_TRUE(pops::solve_report_is_publishable(huge_guess, 30));
+        if (huge_guess.solved())
+          EXPECT_LE(huge_guess.residual_norm, Real(1e-9) * cold.reference_residual_norm);
+        else {
+          EXPECT_EQ(huge_guess.status, pops::SolveStatus::kIterationLimit);
+          EXPECT_EQ(huge_guess.action, pops::SolveAction::kFailRun);
+        }
+      }
+    }
+  }
+}
+
 int run_partitioned_fac_matrix(int argc, char** argv) {
   pops::comm_init(&argc, &argv);
   int result = 0;
@@ -468,6 +744,25 @@ int run_partitioned_fac_matrix(int argc, char** argv) {
       expect_exact_rank_ratio_prepares<2>({3, 1});
       expect_exact_rank_ratio_prepares<3>({1, 2, 3});
       expect_collective_budget_failure();
+      expect_periodic_partition_independence(false);
+      expect_periodic_partition_independence(true);
+      expect_periodic_partition_independence(2);
+      expect_periodic_partition_independence(0, 0, false, ForcingCase::DirichletConstant);
+      expect_periodic_partition_independence(0, 0, false, ForcingCase::NeumannConstant);
+      expect_periodic_partition_independence(0, 0, false, ForcingCase::BoundaryOnly);
+      expect_periodic_partition_independence(0, 0, false, ForcingCase::ZeroWithNonzeroGuess);
+      expect_periodic_partition_independence(0, 0, false, ForcingCase::SmallGaussian);
+      expect_periodic_partition_independence<true>(0);
+      expect_periodic_partition_independence<true>(1);
+      expect_periodic_partition_independence<true>(2);
+      expect_periodic_partition_independence<true>(2, 1);
+      expect_periodic_partition_independence<true>(2, 2);
+      expect_periodic_partition_independence<true>(0, 0, true);
+      expect_periodic_partition_independence<true>(0, 0, false, ForcingCase::DirichletConstant);
+      expect_periodic_partition_independence<true>(0, 0, false, ForcingCase::NeumannConstant);
+      expect_periodic_partition_independence<true>(0, 0, false, ForcingCase::BoundaryOnly);
+      expect_periodic_partition_independence<true>(0, 0, false, ForcingCase::ZeroWithNonzeroGuess);
+      expect_periodic_partition_independence<true>(0, 0, false, ForcingCase::SmallGaussian);
     }
     result = ::testing::Test::HasFailure() ? 1 : 0;
   }

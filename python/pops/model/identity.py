@@ -86,13 +86,14 @@ class RoleKey(ComponentRole):
 
 
 def parse_role(role: Any, *, dimension: Any = None, where: str = "role") -> RoleKey:
-    """Parse the sole structured role vocabulary and validate its axis against ``dimension``.
+    """Parse structured roles against the mesh rank or physical axial embedding.
 
     Physical roles use scalar families (``density``, ``energy``, ``pressure``, ``scalar``,
     ``temperature``) or an exact vector token (``momentum:<axis>``, ``velocity:<axis>``,
     ``axial:<axis>``).  Every other non-empty exact string is a user role label and remains in a
     separate ``custom`` namespace; malformed spellings of reserved physical families are rejected
-    instead of being reinterpreted as custom roles.
+    instead of being reinterpreted as custom roles. Momentum and velocity use the mesh dimension;
+    axial components use the physical x/y/z embedding, including out-of-plane components.
     """
     role = _exact_role_text(role, where=where)
     if role in _SCALAR_FAMILIES:
@@ -107,8 +108,12 @@ def parse_role(role: Any, *, dimension: Any = None, where: str = "role") -> Role
         return RoleKey("custom", label=role)
     family, axis_text = match.groups()
     axis = int(axis_text)
-    if dimension is not None and axis >= _dimension(dimension, where="%s.dimension" % where):
-        raise ValueError("%s axis %d is outside dimension %d" % (where, axis, dimension))
+    dim = None if dimension is None else _dimension(dimension, where="%s.dimension" % where)
+    if family == "axial":
+        if axis >= 3:
+            raise ValueError("%s axial axis %d is outside the physical x/y/z embedding" % (where, axis))
+    elif dim is not None and axis >= dim:
+        raise ValueError("%s axis %d is outside dimension %d" % (where, axis, dim))
     return RoleKey(family, axis)
 
 

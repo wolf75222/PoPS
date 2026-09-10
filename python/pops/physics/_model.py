@@ -80,6 +80,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
             wave_speed_provider = "jacobian"
         elif "p" in self.prim_defs:
             wave_speed_provider = "pressure_derived"
+        n_aux = self._total_n_aux()
         return {
             "schema_version": 3,
             "native_dimension": len(self._flux),
@@ -88,8 +89,9 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
             "cons_roles": tuple(roles_for(self.cons_names, self.cons_roles)),
             "n_vars": self.n_vars,
             "params": params,
-            "provider_components": tuple(self._provider_components),
-            "n_aux": self._total_n_aux(),
+            "provider_components": tuple(dict.fromkeys(
+                key.component for key in self._auxiliary_provider_pack)),
+            "n_aux": n_aux,
             "capabilities": {},
             "wave_speed_provider": wave_speed_provider,
         }
@@ -105,6 +107,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
         # mutated only by operator_alias(); reading Module/operator_registry never repairs state.
         self._aliases = {}
         self._state_space_metadata = {
+            "name": "U",
             "representation": "conservative",
             "centering": "cell",
             "layout": "cell",
@@ -114,6 +117,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
             "units": None,
         }
         self.cons_names = []
+        self._conservative_coordinates = None  # exact Board declarations used as AD targets
         self.prim_defs = {}     # name -> Expr (in terms of the cons / previous prims / aux)
         self._recovery_admissibility = {}  # primitive component -> symbolic Boolean predicate
         self._provider_components = []  # Ordered ordinary provider component declarations.

@@ -77,7 +77,8 @@ def _typed_lowering_roles(state: Any) -> list[Any] | None:
     return None if all(role is None for role in result) else result
 
 
-def _module_to_model(module: Any, state_space: Any = None) -> Any:
+def _module_to_model(module: Any, state_space: Any = None,
+                     *, resolved_operations: Any = None) -> Any:
     """Lower a :class:`pops.model.Module` to a :class:`pops.dsl.Model`
     (Spec 2, S2-11), reusing the dsl codegen engine -- a translation, NOT a
     second backend.  The Module's typed operators carry dsl ``Expr`` bodies;
@@ -114,7 +115,7 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     from pops.model.state_symbols import rebind_state_symbols  # noqa: PLC0415
 
     def _body_for_state(body: Any) -> Any:
-        return rebind_state_symbols(body, state, states.values())
+        return rebind_state_symbols(body, state, states.values(), module=module)
 
     m = Model(module.name)
     # Preserve the canonical source-Module identity across the internal facade lowering. The
@@ -124,7 +125,15 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
         resolve_component_provider_packs,
     )
 
-    provider_packs = resolve_component_provider_packs(module)
+    if resolved_operations is None:
+        provider_packs = resolve_component_provider_packs(module)
+    else:
+        from pops.codegen.resolved_operations import ResolvedOperationPlan
+
+        if type(resolved_operations) is not ResolvedOperationPlan:
+            raise TypeError("compiler requires an exact resolved operation plan")
+        provider_packs = resolved_operations.require_provider_packs(module)
+        object.__setattr__(m, "_resolved_operations", resolved_operations)
     m.__pops_bind_component_provider_packs__(provider_packs)
     # The facade is a lowering view of THIS Module, not a newly declared model. Re-anchor its empty
     # backing model before the first declaration so every derived operator registry retains the
@@ -158,20 +167,14 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     for declaration in module.params().values():
         if registry.handle(declaration) != module.param_handle(declaration):
             raise ValueError("compile_problem: Module parameter authority is inconsistent")
-        if declaration.name == "gamma":
-            from pops.params import ConstParam
-
-            if not isinstance(declaration, ConstParam):
-                raise ValueError(
-                    "compile_problem: EOS metadata parameter 'gamma' must be a ConstParam"
-                )
-            m._m.set_gamma(declaration.value)
         handle = module.param_handle(declaration)
         targets = ["dsl:param_registry:%s" % handle.qualified_id]
-        if declaration.name == "gamma":
-            targets.append("dsl:eos:gamma")
         coverage_rows.append(LoweringCoverageRow(
             "parameter:%s" % handle.qualified_id, "lowered", tuple(targets)))
+    if module._constitutive is not None:
+        m._m.set_gamma(module._constitutive["gamma"])
+        coverage_rows.append(LoweringCoverageRow(
+            "constitutive:ideal_gas", "lowered", ("dsl:eos:gamma",)))
     declared = {}
 
     def _declare_aux(nm: Any, key: Any) -> None:
@@ -224,6 +227,20 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
                       if getattr(item, "kind", None) == "state")
             or state in op.signature.inputs)
     }
+    if not applicable_grid_names and any(op.lowering.get("joint_balance") for op in applicable_rates):
+        # Geometry comes from the captured physical frame, never an invented transport law.
+        joint_storage = {(tuple(op.capabilities.get("storage_axes", ())),
+                          op.capabilities.get("storage_frame"))
+                         for op in operators if op.kind == "coupled_rate"
+                         and state in op.signature.inputs}
+        if len(joint_storage) != 1:
+            raise ValueError("joint state storage requires one exact authored Cartesian frame")
+        axes, frame = next(iter(joint_storage))
+        from pops._cartesian_axes import canonical_axis_mapping
+        axes = tuple(canonical_axis_mapping(dict.fromkeys(axes), where="joint storage frame"))
+        if not axes or frame != state.frame:
+            raise ValueError("joint state storage requires its exact StateSpace frame")
+        object.__setattr__(m._m, "_program_only_storage_axes", axes)
     explicit_default = applicable_grid_names & {"flux", "flux_default"}
     declared_defaults = {
         op.lowering.get("default_flux")
@@ -340,6 +357,34 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
             coverage_rows.append(LoweringCoverageRow(
                 source, "documentary"))
             continue
+        refusal = op.lowering.get("native_unsupported")
+        from pops.numerics.diffusion import diffusion_balance_supported
+        from pops.numerics.scharfetter_gummel import fitted_balance_supported
+        diffusion_view = op.lowering.get("physical_balance")
+        from pops._ir.balance import source_balance_supported
+        if source_balance_supported(diffusion_view):
+            coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:source_balance",)))
+            continue
+        if diffusion_balance_supported(diffusion_view) or fitted_balance_supported(diffusion_view):
+            coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:diffusive_rhs",)))
+            continue
+        if op.lowering.get("diffusive_law") is not None or op.lowering.get("drift_law") is not None:
+            coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:constitutive_flux",)))
+            continue
+        if refusal:
+            _reject(source, "unsupported_balance_realization",
+                    "operator %r retains a physical balance without a native realization: %s"
+                    % (op.name, refusal))
+        if op.lowering.get("joint_balance"):
+            from pops.physics.interactions import joint_balance_supported
+            if not joint_balance_supported(op.lowering.get("physical_balance")):
+                _reject(source, "invalid_joint_balance", "joint balance contract was not authenticated")
+            coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:multi_block_operator",)))
+            continue
+        if op.kind == "local_rate" and len(state_inputs) != 1:
+            _reject(source, "joint_balance_realization_unavailable",
+                    "operator %r requires a joint numerical realization; the single-state "
+                    "adapter cannot discard its other inputs" % op.name)
         if op.kind == "field_operator" and len(state_inputs) > 1:
             _reject(
                 source,
@@ -376,6 +421,48 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
             _reject(source, "operator_lowering_failed", str(exc))
         coverage_rows.append(LoweringCoverageRow(
             source, "lowered", (builder_targets[op.kind],)))
+    # A Module owns named constitutive recipes as well as operator bodies. Retain
+    # the transitive recipes read by this selected state route; another state's
+    # unused recipe must never be rebound into this block's local coordinates.
+    from pops._ir.expr import Expr, Var
+    from pops._ir.visitors import _children
+    from pops.codegen.native_build import model_native_roots
+    recipes = module.primitive_recipes()
+    visited, active, retained = set(), [], set()
+
+    def retain_recipes(value):
+        if isinstance(value, Var) and value.kind == "prim" and value.name in recipes:
+            name = value.name
+            if name in active:
+                raise ValueError("primitive recipe cycle: " + " -> ".join((*active, name)))
+            if name not in retained:
+                active.append(name)
+                body = _body_for_state(recipes[name])
+                retain_recipes(body)
+                active.pop()
+                m.primitive(name, body)
+                retained.add(name)
+                coverage_rows.append(LoweringCoverageRow(
+                    "primitive_recipe:%s" % name, "lowered", ("dsl:primitive:%s" % name,)))
+            return
+        if id(value) in visited:
+            return
+        visited.add(id(value))
+        if isinstance(value, Expr):
+            for child in _children(value):
+                retain_recipes(child)
+        elif isinstance(value, Mapping):
+            for child in value.values():
+                retain_recipes(child)
+        elif isinstance(value, (tuple, list)):
+            for child in value:
+                retain_recipes(child)
+
+    retain_recipes(model_native_roots(m._m))
+    from pops.codegen.diffusion_lowering import prepare_diffusion_carrier
+    prepare_diffusion_carrier(m, module)
+    from pops.codegen.state_storage_lowering import prepare_source_storage_carrier
+    prepare_source_storage_carrier(m, module, state_space=state)
     # The executable DSL validates the spectrum against the already-selected
     # physical flux axes.  A Module deliberately stores those two declarations
     # independently, so materialize all grid operators before attaching the
@@ -390,6 +477,11 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     else:
         coverage_rows.append(LoweringCoverageRow(
             "module:%s:eigenvalues" % module.name, "documentary"))
+    retain_recipes(m._m._eig)
+    from pops.codegen.state_storage_lowering import prepare_named_flux_storage_carrier
+    prepare_named_flux_storage_carrier(
+        m, module, resolved_operations, emitter_is_private=True
+    )
     coverage_report = LoweringCoverageReport(coverage_rows)
     object.__setattr__(m, "lowering_coverage_report", coverage_report)
     object.__setattr__(m, "_lowering_coverage_report", coverage_report)
@@ -401,6 +493,10 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     # identity depend on call order, that synthesized view is intentionally shaped for the legacy
     # emitter and need not have the same structural hash as the source compile IR.
     object.__setattr__(m, "_module_cache", module)
+    # Every state-bearing formula above crossed _body_for_state for this exact
+    # selected route. Preserve that fact without reinterpreting the full source
+    # Module as a single-state model at a later raw-carrier emission boundary.
+    object.__setattr__(m._m, "_formula_native_bound", True)
     return m
 
 
@@ -437,7 +533,8 @@ def remap_lowering_error(exc: Any, facade: Any) -> None:
     raise ValueError(message) from exc
 
 
-def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None) -> Any:
+def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
+                       *, resolved_operations: Any = None) -> Any:
     """The SINGLE validate + lower entry of the compile pipeline (ADC-557).
 
     Validates @p model ONCE and returns ``(emit_model, source_module)``:
@@ -457,20 +554,52 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None) 
     try:
         from pops.codegen._compiler_lowering import require_compiler_lowering
 
+        if resolved_operations is None:
+            resolved_operations = getattr(model, "_resolved_operations", None)
         lowering = require_compiler_lowering(model)
         if diagnostic_facade is None:
             diagnostic_facade = lowering.facade
         from pops.codegen.component_provider_packs import resolve_component_provider_packs
 
-        lowering.bind_component_provider_packs(
-            resolve_component_provider_packs(lowering.source_module)
-        )
+        if resolved_operations is None:
+            packs = resolve_component_provider_packs(lowering.source_module)
+        else:
+            from pops.codegen.resolved_operations import ResolvedOperationPlan
+            if type(resolved_operations) is not ResolvedOperationPlan:
+                raise TypeError("compiler requires an exact resolved operation plan")
+            packs = resolved_operations.require_provider_packs(lowering.source_module)
+            for operation in resolved_operations.operations:
+                if "program_evaluation" in operation.guarantees:
+                    resolved_operations.require_native(operation.identity, module=lowering.source_module)
         states = lowering.source_module.state_spaces()
         if len(states) > 1:
+            # Each selected state/evaluation gets a fresh compiler view. Bind its
+            # authenticated plan once, without changing the shared multi-state
+            # authoring facade or first attaching a different default pack.
             emit_model = _module_to_model(
-                lowering.source_module, state_space=state_space)
+                lowering.source_module, state_space=state_space,
+                resolved_operations=resolved_operations)
             emit_model.check()
             return emit_model, lowering.source_module
+        if resolved_operations is not None:
+            from pops.codegen._compiler_lowering import CompilerLowering
+            from pops.codegen.state_storage_lowering import prepare_named_flux_storage_carrier
+
+            emit_model = prepare_named_flux_storage_carrier(
+                lowering.emit_model,
+                lowering.source_module,
+                resolved_operations,
+                emitter_is_private=lowering.owns_emitter,
+            )
+            if emit_model is not lowering.emit_model:
+                lowering = CompilerLowering(
+                    emit_model=emit_model,
+                    source_module=lowering.source_module,
+                    facade=lowering.facade,
+                    owns_emitter=True,
+                )
+            object.__setattr__(lowering.emit_model, "_resolved_operations", resolved_operations)
+        lowering.bind_component_provider_packs(packs)
         lowering.emit_model.check()
         return lowering.emit_model, lowering.source_module
     except ValueError as exc:

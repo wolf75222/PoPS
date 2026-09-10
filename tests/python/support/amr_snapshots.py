@@ -53,6 +53,26 @@ def composite_active_mask(
     refinement_ratio: int,
 ) -> np.ndarray:
     """Return the valid, uncovered cell mask for one globally shaped AMR level."""
+    active = level_valid_mask(
+        simulation,
+        level,
+        refinement_ratio=refinement_ratio,
+    )
+    shape = tuple(extent * (refinement_ratio**level) for extent in _spatial_shape(simulation))
+    boxes = tuple(_ranked_box(row) for row in simulation.patch_boxes())
+
+    for _child_level, lower, upper in (box for box in boxes if box[0] == level + 1):
+        active[_box_slices(lower, upper, shape=shape, scale=refinement_ratio)] = False
+    return active
+
+
+def level_valid_mask(
+    simulation: Any,
+    level: int,
+    *,
+    refinement_ratio: int,
+) -> np.ndarray:
+    """Return the cells backed by a patch in one globally shaped AMR level."""
     if isinstance(refinement_ratio, bool) or not isinstance(refinement_ratio, int):
         raise TypeError("refinement_ratio must be an integer")
     if refinement_ratio <= 1:
@@ -61,7 +81,7 @@ def composite_active_mask(
     shape = tuple(extent * (refinement_ratio**level) for extent in _spatial_shape(simulation))
     boxes = tuple(_ranked_box(row) for row in simulation.patch_boxes())
     # Public arrays keep the last axis fastest, matching Index<Dim> x-first storage.
-    active = (
+    valid = (
         np.ones(tuple(reversed(shape)), dtype=np.bool_)
         if level == 0
         else np.zeros(tuple(reversed(shape)), dtype=np.bool_)
@@ -71,11 +91,8 @@ def composite_active_mask(
     if level > 0:
         assert level_boxes, f"AMR level {level} has no patch"
         for _box_level, lower, upper in level_boxes:
-            active[_box_slices(lower, upper, shape=shape)] = True
-
-    for _child_level, lower, upper in (box for box in boxes if box[0] == level + 1):
-        active[_box_slices(lower, upper, shape=shape, scale=refinement_ratio)] = False
-    return active
+            valid[_box_slices(lower, upper, shape=shape)] = True
+    return valid
 
 
 def composite_active_block_state(

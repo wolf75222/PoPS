@@ -13,6 +13,8 @@ from dataclasses import dataclass
 import json
 from typing import Any, cast
 
+from ._history_sample_identity import identity_key, prepare_identity_payload, validate_identity_bytes
+
 
 @dataclass(frozen=True, slots=True)
 class HistoryLevelCapture:
@@ -22,6 +24,7 @@ class HistoryLevelCapture:
     initialized: bool
     fill_count: int
     slot_dt: tuple[float, ...]
+    sample_identity: bytes = b""
 
     def to_data(self):
         return {
@@ -29,6 +32,7 @@ class HistoryLevelCapture:
             "initialized": self.initialized,
             "fill_count": self.fill_count,
             "slot_dt": [float(value).hex() for value in self.slot_dt],
+            "sample_identity": self.sample_identity.hex(),
         }
 
 
@@ -329,7 +333,14 @@ def prepare_history_capture(system, persistence, *, macro_step=0, regrid_every=0
                 fill_count,
                 level=level,
             )
-            levels.append(HistoryLevelCapture(level, initialized, fill_count, slot_dt))
+            provider = getattr(system, "history_sample_identity", None)
+            if not callable(provider):
+                raise TypeError("checkpoint history capture requires history_sample_identity")
+            sample_identity = validate_identity_bytes(
+                provider(hname, level) if level is not None else provider(hname),
+                hname, level, depth, initialized=initialized, slot_dt=slot_dt,
+            )
+            levels.append(HistoryLevelCapture(level, initialized, fill_count, slot_dt, sample_identity))
         requested, stored, storage_mode, regrid_steps = resolve_hierarchy_history_storage(
             storage_rows, depth
         )
@@ -388,6 +399,9 @@ def capture_histories(system, plan, out):
             out[_history_level_key("history_slot_dt_", hname, level.level)] = np.asarray(
                 level.slot_dt, dtype=np.float64
             )
+            out[identity_key(hname, level.level)] = np.frombuffer(
+                level.sample_identity, dtype=np.uint8
+            ).copy()
             for k in ring.stored_slots:
                 key = _history_slot_key(hname, level.level, k)
                 values = (
@@ -409,7 +423,7 @@ def serialize_histories(system, persistence, out):
     capture_histories(system, plan, out)
 
 
-def restore_histories(system, d, fired_out=None):
+def restore_histories(system, d, fired_out=None, *, before_replay=None):
     """Restore every checkpointed ring, replaying omitted slots only on a stable hierarchy.
 
     The current payload is validated in full before native mutation.  All rings then restore their
@@ -419,11 +433,18 @@ def restore_histories(system, d, fired_out=None):
     only the omitted slots by deterministic replay. Requested/effective storage or policy mismatches
     are refused verbatim. When @p fired_out is a dict it records native replay guard evidence; every
     valid value is empty because regrid-window captures use dense safety storage. Returns the typed
-    :class:`~pops.time._history.report.HistoryReplayReport`."""
+    :class:`~pops.time._history.report.HistoryReplayReport`.
+
+    ``before_replay`` imports an enclosing runtime's authenticated accepted image after all
+    anchors and provenance are installed, but before any omitted slot executes its Program.
+    The enclosing restart transaction remains responsible for rollback if that import fails.
+    """
     import numpy as np
     from pops.time._history.persistence import HistoryPersistence
     from pops.time._history.report import HistoryReplayReport
 
+    if before_replay is not None and not callable(before_replay):
+        raise TypeError("history before_replay must be callable")
     names = tuple(str(h) for h in d["history_names"])
     if len(names) != len(set(names)):
         raise ValueError("restart : checkpoint history names must be unique")
@@ -518,7 +539,11 @@ def restore_histories(system, d, fired_out=None):
             slot_dt = validate_history_slot_dt_payload(
                 d, hname, depth, fill_count, level=level
             )
-            level_rows.append((level, fill_count, anchors, slot_dt, initialized))
+            sample_identity = prepare_identity_payload(d, hname, level, depth, initialized=initialized, slot_dt=slot_dt)
+            sample_restore = getattr(system, "restore_history_sample_identity", None)
+            if not callable(sample_restore):
+                raise TypeError("history restart requires restore_history_sample_identity")
+            level_rows.append((level, fill_count, anchors, slot_dt, initialized, sample_identity))
         expected_requested, expected_stored, expected_mode, _steps = resolve_hierarchy_history_storage(
             storage_rows, depth
         )
@@ -559,7 +584,7 @@ def restore_histories(system, d, fired_out=None):
     if not atomic_metadata_restore and any(
         initialized != (fill_count > 0)
         for _, _, _, _, _, _, level_rows in prepared
-        for _, fill_count, _, _, initialized in level_rows
+        for _, fill_count, _, _, initialized, _ in level_rows
     ):
         raise RuntimeError(
             "restart : runtime cannot atomically restore independent history initialized/fill_count metadata"
@@ -577,7 +602,7 @@ def restore_histories(system, d, fired_out=None):
         level_rows,
     ) in prepared:
         qualified = level_rows[0][0] is not None
-        for level, fill_count, anchors, slot_dt, initialized in level_rows:
+        for level, fill_count, anchors, slot_dt, initialized, sample_identity in level_rows:
             for k, values in anchors:
                 if qualified:
                     system.restore_history(hname, level, k, values)
@@ -591,6 +616,7 @@ def restore_histories(system, d, fired_out=None):
                     initialized,
                     fill_count,
                 )
+                system.restore_history_sample_identity(hname, level, sample_identity)
                 continue
             for k, dt in enumerate(slot_dt):
                 if qualified:
@@ -608,6 +634,17 @@ def restore_histories(system, d, fired_out=None):
             else:
                 system.set_history_initialized(hname, initialized)
                 system.restore_history_fill_count(hname, fill_count)
+            # Numeric/metadata-only APIs cannot assert a publication identity. Install the exact
+            # complete ledger last, before either Program import or selective replay. Legacy absent
+            # members explicitly clear any live/fresh identity to UnknownLegacy.
+            if qualified:
+                system.restore_history_sample_identity(hname, level, sample_identity)
+            else:
+                system.restore_history_sample_identity(hname, sample_identity)
+
+    if before_replay is not None and any(len(stored) < depth
+                                        for _, depth, _, _, stored, _, _ in prepared):
+        before_replay()
 
     # Phase 2 -- all ring dependencies now expose the checkpoint image.  Native replay restores its
     # own save bracket after each ring and returns one count per Program step, which is also the

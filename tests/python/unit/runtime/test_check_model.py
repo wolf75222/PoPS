@@ -48,15 +48,17 @@ def _isothermal_model(*, broken_roundtrip: bool = False, nan_flux: bool = False)
         },
     )
 
+    model.primitive_state(
+        rho, u, v,
+        conservative=[rho, rho * u, (2.0 if broken_roundtrip else 1.0) * rho * v],
+    )
+    model._dsl.elliptic_rhs(0.0 * rho)
     lowering = model.__pops_compiler_lowering__()
     assert lowering.facade is model
     assert lowering.source_module is model.module
-    emitter = lowering.emit_model
-    emitter.primitive_vars(rho, u, v)
-    emitter.conservative_from(
-        [rho, rho * u, (2.0 if broken_roundtrip else 1.0) * rho * v]
-    )
-    emitter.elliptic_rhs(0.0 * rho)
+    from pops.codegen.module_lowering import lower_and_validate
+    emitter, source = lower_and_validate(model)
+    assert source is lowering.source_module
     return model, emitter
 
 
@@ -126,8 +128,80 @@ def test_compiled_model_rechecks_the_installed_native_block(
     assert report["ok"] is False
     assert any(
         "residual -div F + S evaluation failed" in failure
-        and "numerical flux evaluation reject" in failure
-        and "reason_code=0x53544201" in failure
+        and "prepared ND hyperbolic face evaluation refused publication status=1" in failure
         for failure in report["failures"]
     )
     assert any("Density" in failure for failure in report["failures"])
+
+
+class _DiagnosticNative:
+    """A valid state whose residual evaluation exposes a native failure unchanged."""
+
+    def __init__(self, message):
+        self.message = message
+        self.state = np.ones((1, 2, 2))
+
+    def n_vars(self, block):
+        return 1
+
+    def get_state(self, block):
+        return self.state.copy()
+
+    def solve_fields(self):
+        pass
+
+    def eval_rhs(self, block):
+        raise RuntimeError(self.message)
+
+    def variable_roles(self, block, kind):
+        return ["density"]
+
+    def variable_names(self, block, kind):
+        return ["rho"]
+
+    def get_primitive_state(self, block):
+        return self.state.copy()
+
+    def set_primitive_state(self, block, state):
+        self.state = state.copy()
+
+    set_state = set_primitive_state
+
+
+@pytest.mark.parametrize("stage", ("face evaluation", "residual"))
+@pytest.mark.parametrize("status", (1, 2, 3, 4, 6, 7))
+def test_runtime_model_diagnostic_reports_known_nd_numerical_refusals(stage, status):
+    from pops.runtime._system_diagnostics import _SystemDiagnostics
+
+    message = f"prepared ND hyperbolic {stage} refused publication status={status}"
+    system = _SystemDiagnostics()
+    system._s = _DiagnosticNative(message)
+    before = system._s.state.copy()
+    report = system.check_model("U", raise_on_error=False)
+    assert report == {
+        "ok": False,
+        "failures": [f"residual -div F + S evaluation failed ({message})"],
+        "block": "U",
+    }
+    np.testing.assert_array_equal(system._s.state, before)
+    with pytest.raises(ValueError, match="residual -div F"):
+        system.check_model("U")
+
+
+@pytest.mark.parametrize("message", (
+    "prepared ND hyperbolic face evaluation refused publication status=0",
+    "prepared ND hyperbolic face evaluation refused publication status=5",
+    "prepared ND hyperbolic face evaluation refused publication status=8",
+    "prepared ND hyperbolic face evaluation refused publication status=9",
+    "prepared ND hyperbolic face evaluation refused publication status=10",
+    "prepared ND hyperbolic face evaluation refused publication status=1 unexpected suffix",
+    "unavailable native runtime storage",
+))
+def test_runtime_model_diagnostic_propagates_geometry_storage_and_unknown_failures(message):
+    from pops.runtime._system_diagnostics import _SystemDiagnostics
+
+    system = _SystemDiagnostics()
+    system._s = _DiagnosticNative(message)
+    with pytest.raises(RuntimeError) as caught:
+        system.check_model("U", raise_on_error=False)
+    assert str(caught.value) == message

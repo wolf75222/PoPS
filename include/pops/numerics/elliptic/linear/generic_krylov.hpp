@@ -461,6 +461,8 @@ inline ScaledScalar scaled_difference(const ScaledScalar& left, const ScaledScal
 
 template <int Dim>
 inline void validate_controls(const KrylovControls<Dim>& controls) {
+  if (!controls.failure_actions.valid())
+    throw std::invalid_argument("prepared Krylov numerical failure actions are invalid");
   const KrylovMethodValidation validation = controls.method.validate_controls(
       KrylovMethodControls{controls.rel_tol, controls.abs_tol, controls.max_iterations});
   if (!validation.accepted())
@@ -473,6 +475,8 @@ template <int Dim>
 inline long controls_failure(const KrylovControls<Dim>& controls) noexcept {
   if (!controls.method)
     return 19;
+  if (!controls.failure_actions.valid())
+    return 28;
   return controls.method
                  .validate_controls(KrylovMethodControls{controls.rel_tol, controls.abs_tol,
                                                          controls.max_iterations})
@@ -521,6 +525,9 @@ inline void append_controls(KrylovCollectivePayload& payload,
   payload.append(std::bit_cast<std::uint64_t>(controls.rel_tol));
   payload.append(std::bit_cast<std::uint64_t>(controls.abs_tol));
   payload.append(controls.max_iterations);
+  payload.append(static_cast<std::uint8_t>(controls.failure_actions.singular));
+  payload.append(static_cast<std::uint8_t>(controls.failure_actions.breakdown));
+  payload.append(static_cast<std::uint8_t>(controls.failure_actions.iteration_limit));
 }
 
 template <int Dim>
@@ -1566,7 +1573,8 @@ class PreparedKrylovSolveContext {
   }
   [[nodiscard]] SolveReport report(Real physical_residual, int iterations,
                                    SolveStatus status) const {
-    return detail::report_physical(normalization_, physical_residual, iterations, status);
+    return controls_.failure_actions.numerical_report(
+        detail::report_physical(normalization_, physical_residual, iterations, status));
   }
 
  private:
@@ -1604,16 +1612,17 @@ class PreparedKrylovSolveContext {
 template <int Dim>
 inline SolveReport detail::CgKrylovMethodProvider<Dim>::solve(
     PreparedKrylovSolveContext<Dim>& context, const PreparedProviderOptions&) const {
-  return detail::solve_cg(context.problem_, context.workspace_, context.iterate_, context.rhs_,
-                          context.controls_, context.normalization_, context.initial_measurement_);
+  return context.controls_.failure_actions.numerical_report(
+      detail::solve_cg(context.problem_, context.workspace_, context.iterate_, context.rhs_,
+                       context.controls_, context.normalization_, context.initial_measurement_));
 }
 
 template <int Dim>
 inline SolveReport detail::BicgstabKrylovMethodProvider<Dim>::solve(
     PreparedKrylovSolveContext<Dim>& context, const PreparedProviderOptions&) const {
-  return detail::solve_bicgstab(context.problem_, context.workspace_, context.iterate_,
-                                context.rhs_, context.controls_, context.normalization_,
-                                context.initial_measurement_);
+  return context.controls_.failure_actions.numerical_report(detail::solve_bicgstab(
+      context.problem_, context.workspace_, context.iterate_, context.rhs_, context.controls_,
+      context.normalization_, context.initial_measurement_));
 }
 
 template <int Dim>
@@ -1623,9 +1632,9 @@ inline SolveReport detail::GmresKrylovMethodProvider<Dim>::solve(
       detail::exact_int_option(options, detail::kGmresOptionsSchema, "restart");
   if (restart == nullptr)
     throw std::logic_error("prepared GMRES options were not authenticated");
-  return detail::solve_gmres(context.problem_, context.workspace_, context.iterate_, context.rhs_,
-                             context.controls_, static_cast<int>(*restart), context.normalization_,
-                             context.initial_measurement_);
+  return context.controls_.failure_actions.numerical_report(detail::solve_gmres(
+      context.problem_, context.workspace_, context.iterate_, context.rhs_, context.controls_,
+      static_cast<int>(*restart), context.normalization_, context.initial_measurement_));
 }
 
 template <int Dim>
@@ -1635,9 +1644,9 @@ inline SolveReport detail::RichardsonKrylovMethodProvider<Dim>::solve(
       detail::exact_real_option(options, detail::kRichardsonOptionsSchema, "relaxation");
   if (relaxation == nullptr)
     throw std::logic_error("prepared Richardson options were not authenticated");
-  return detail::solve_richardson(context.problem_, context.workspace_, context.iterate_,
-                                  context.rhs_, context.controls_, static_cast<Real>(*relaxation),
-                                  context.normalization_, context.initial_measurement_);
+  return context.controls_.failure_actions.numerical_report(detail::solve_richardson(
+      context.problem_, context.workspace_, context.iterate_, context.rhs_, context.controls_,
+      static_cast<Real>(*relaxation), context.normalization_, context.initial_measurement_));
 }
 
 template <int Dim>

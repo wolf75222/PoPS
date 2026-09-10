@@ -630,7 +630,8 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
              "true_result": true_result, "false_block": false_block,
              "false_region": false_region, "false_result": false_result},
             name, true_result.block, space=true_result.space, point=true_result.point,
-            field_context=true_result.field_context)
+            field_context=true_result.field_context, state_ref=true_result.state_ref,
+            inherit_state_ref=False)
 
     @staticmethod
     def _require_branch_compatible(left: Any, right: Any) -> None:
@@ -642,11 +643,13 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
             raise ValueError("branch: both arms must share one clock and exact point")
         if left.space != right.space:
             raise ValueError("branch: both arms must return the same typed space")
+        if left.state_ref != right.state_ref:
+            raise ValueError("branch: both arms must return the same qualified state authority")
         if left.field_context != right.field_context:
             raise ValueError("branch: both arms must return the same field context")
 
     _POST_SYNC_FORBIDDEN_OPS = frozenset({
-        "rhs",
+        "rhs", "diffusive_rhs",
         "source",
         "implicit_source",
         "apply",
@@ -657,6 +660,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         "solve_fields_from_blocks",
         "solve_local_linear",
         "solve_local_nonlinear",
+        "solve_spatial_nonlinear",
         "solve_coupled_implicit",
         "solve_linear",
         "condensed_coeffs",

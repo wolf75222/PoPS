@@ -1,12 +1,15 @@
 #include <gtest/gtest.h>
 
 #include <pops/runtime/program/same_level_cell_temporal_provider.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
 
 #include <Kokkos_Core.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -406,4 +409,50 @@ TEST(test_cell_temporal_program_route,
   prove_rollback_and_generation_authentication<1>();
   prove_rollback_and_generation_authentication<2>();
   prove_rollback_and_generation_authentication<3>();
+}
+
+TEST(test_cell_temporal_program_route, cell_update_matches_generated_euler_axpy_rounding) {
+  ensure_runtime();
+  using namespace pops::runtime::program::same_level_cell_temporal_detail;
+  const Real epsilon = std::ldexp(Real(1), -(std::numeric_limits<Real>::digits / 2 + 1));
+  const Real dt = Real(1) + epsilon;
+  const Real rhs = Real(1) - epsilon;
+  const Box<1> cell_box{Index<1>{0}, Index<1>{0}};
+  const Box<1> face_box{Index<1>{0}, Index<1>{1}};
+  Fab<1, Kokkos::HostSpace> stage(cell_box, 1, Extent<1>{});
+  Fab<1, Kokkos::HostSpace> residual(cell_box, 1, Extent<1>{});
+  Fab<1, Kokkos::HostSpace> candidate_a(cell_box, 1, Extent<1>{});
+  Fab<1, Kokkos::HostSpace> candidate_b(cell_box, 1, Extent<1>{});
+  Fab<1, Kokkos::HostSpace> flux(face_box, 1, Extent<1>{});
+  stage.set_val(Real(-1));
+  residual.set_val(rhs);
+  flux.set_val(Real(0));
+  candidate_b.set_val(Real(-99));
+  std::array<Real, 2> integrated_flux{};
+  SameLevelTransportEulerDeviceCell<1> cell;
+  cell.component_count = 1;
+  cell.stage = std::as_const(stage).view();
+  cell.residual = std::as_const(residual).view();
+  cell.fluxes[0] = std::as_const(flux).view();
+  cell.candidate_a = candidate_a.view();
+  cell.candidate_b = candidate_b.view();
+  SameLevelTransportEulerDeviceView<1> view;
+  view.cells = &cell;
+  view.integrated_flux = integrated_flux.data();
+  view.seconds_per_tick = dt;
+  view.cell_count = 1;
+  view.expected_end_tick = 1;
+  const auto result =
+      view.evaluate_local_stage_and_record_space_time_flux(CellTemporalStagePoint{.end_tick = 1});
+  ASSERT_EQ(result.disposition, CellTemporalStageDisposition::Accepted);
+  // Exercise the actual two axpy kernels emitted by RungeKutta's noncommitted
+  // step value, rather than assuming a materialized-product rounding boundary.
+  candidate_a.set_val(Real(0));
+  pops::mf_arith_detail::SaxpyKernel<1>{candidate_a.view(), std::as_const(stage).view(), Real(1),
+                                        0}(Index<1>{0});
+  pops::mf_arith_detail::SaxpyKernel<1>{candidate_a.view(), std::as_const(residual).view(), dt,
+                                        0}(Index<1>{0});
+  EXPECT_EQ(candidate_b.view()(Index<1>{0}, 0), candidate_a.view()(Index<1>{0}, 0));
+  EXPECT_EQ(integrated_flux[0], Real(0));
+  EXPECT_EQ(integrated_flux[1], Real(0));
 }

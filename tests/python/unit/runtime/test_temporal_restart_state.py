@@ -6,11 +6,14 @@ from copy import deepcopy
 from fractions import Fraction
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from pops._bootstrap import StepAttemptRejected
+from pops._platform_contracts import ExecutionContext, ExecutionResource, proven_serial_manifest
+from pops.identity import make_identity
 from pops.runtime._native_step_target import native_step_target
 from pops.runtime._program_cadence_checkpoint import (
     capture_program_cadence,
@@ -34,6 +37,39 @@ FROZEN_UNIFORM_V2_B64 = (
 FROZEN_UNIFORM_V2_SHA256 = (
     "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226"
 )
+
+_CHECKPOINT_EXCHANGE_IMAGE = b"POPSEX01" + bytes(8)
+
+
+def _serial_checkpoint_context():
+    return ExecutionContext(
+        backend=proven_serial_manifest(
+            backend="production", target="system", abi="test|c++|c++23", runtime=True),
+        communicator=ExecutionResource("communicator", "serial"),
+        datatype=ExecutionResource("datatype", "float64"),
+        device=ExecutionResource("device", "host"),
+    )
+
+
+def _empty_continuation_plan():
+    from pops.runtime._continuation_transitions import ContinuationTransitionPlan
+
+    return ContinuationTransitionPlan(json.dumps({
+        "schema_version": 1,
+        "kind": "pops.continuation-transitions",
+        "target": "system",
+        "evidence_stage": "resolved",
+        "objects": [],
+    }, sort_keys=True, separators=(",", ":")))
+
+
+def _checkpoint_owner(native):
+    return SimpleNamespace(
+        _s=native,
+        _execution_context=_serial_checkpoint_context(),
+        _continuation_transition_plan=_empty_continuation_plan(),
+        _checkpoint_exchange_byte_capacity=4096,
+    )
 
 
 class _Native:
@@ -542,7 +578,10 @@ def test_system_direct_step_requires_the_installed_python_program_strategy(
 
     engine._step_strategy = None
 
-    with pytest.raises(TypeError, match=r"Program\.step_strategy"):
+    with pytest.raises(
+        RuntimeError,
+        match="installed step transaction plan differs from the authored strategy",
+    ):
         engine.step(dt)
 
     assert (runtime.time(), runtime.macro_step()) == initial_clock
@@ -1000,7 +1039,10 @@ def test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart(
     native_cxx,
     tmp_path,
 ):
+    import struct
+
     import pops
+    from pops.runtime._history_sample_identity import prepare_identity_payload
 
     artifact = _linear_history_artifact(native_cxx, child_owned=True)
 
@@ -1023,9 +1065,31 @@ def test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart(
             stored["history_slot_dt_%s" % name],
             np.full(3, 0.05, dtype=np.float64),
         )
+        identities = prepare_identity_payload(
+            stored, name, None, 3, initialized=True,
+            slot_dt=stored["history_slot_dt_%s" % name],
+        )
+        # Four child stores and rotations leave the recycled .05 sample in slot zero,
+        # the .15 sample in lag one and the .1 sample in lag two. These are actual
+        # child windows, not macro windows or inferred identities after restart.
+        rows = list(struct.iter_unpack("<QQQQ", identities[-3 * 32:]))
+        def bits(value):
+            return struct.unpack("<Q", struct.pack("<d", value))[0]
+
+        assert rows == [(2, bits(start), bits(0.05), 1)
+                        for start in (0.05, 0.1 + 0.05, 0.1)]
+        retained_history = {
+            key: stored[key].copy() for key in stored.files if key.startswith("history_")
+        }
 
     resumed = fresh()
     resumed.restart(checkpoint)
+    restored_checkpoint = Path(resumed.checkpoint(tmp_path / "child-linear-restored"))
+    with np.load(restored_checkpoint, allow_pickle=False) as restored:
+        for key, values in retained_history.items():
+            assert restored[key].dtype == values.dtype
+            assert restored[key].shape == values.shape
+            assert restored[key].tobytes() == values.tobytes(), key
     pops.run(split, t_end=0.3, max_steps=1, console=False)
     pops.run(resumed, t_end=0.3, max_steps=1, console=False)
     assert np.array_equal(
@@ -1036,6 +1100,21 @@ def test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart(
         np.asarray(resumed.state_global("blk")),
         np.asarray(reference.state_global("blk")),
     )
+
+    # Compare the complete native ledgers after the original third macro step, including
+    # its endpoint-adjusted child dt, on uninterrupted, split and strict-resumed routes.
+    final_histories = []
+    for label, runtime in (("reference", reference), ("split", split), ("resumed", resumed)):
+        path = Path(runtime.checkpoint(tmp_path / ("child-linear-final-" + label)))
+        with np.load(path, allow_pickle=False) as stored:
+            final_histories.append({key: stored[key].copy() for key in stored.files
+                                    if key.startswith("history_")})
+    for actual in final_histories[1:]:
+        assert actual.keys() == final_histories[0].keys()
+        for key, expected in final_histories[0].items():
+            assert actual[key].dtype == expected.dtype
+            assert actual[key].shape == expected.shape
+            assert actual[key].tobytes() == expected.tobytes(), key
 
 
 def test_strict_temporal_manifest_refuses_missing_or_unsynchronized_state():
@@ -1148,6 +1227,9 @@ def test_uniform_preflight_rejects_incomplete_dynamic_indexes_before_native_rest
             "cache_nodes": np.array([], dtype=np.int64),
             "cache_names": np.array([], dtype="U1"),
             "temporal_restart_state": np.array("{}"),
+            "continuation_transition_plan": np.array('{"schema_version":1,"kind":"pops.continuation-transitions","target":"system","evidence_stage":"resolved","objects":[]}'),
+            "program_exchange_state": np.frombuffer(b"POPSEX01" + bytes(8), dtype=np.uint8),
+            "program_exchange_offsets": np.array([0, 16], dtype=np.int64),
             "program_cadence_substeps": np.array(1, dtype=np.int64),
             "program_cadence_stride": np.array(1, dtype=np.int64),
             "program_cadence_window_steps": np.array(0, dtype=np.int64),
@@ -1173,8 +1255,11 @@ def test_uniform_preflight_rejects_noncanonical_scheduled_cache_name():
             "program_hash": np.array("ab" * 32),
             "history_names": np.array([], dtype="U1"),
             "cache_nodes": np.array([7], dtype=np.int64),
-            "cache_names": np.array(["wrong_name"]),
+            "cache_names": np.array(["node_8"]),
             "temporal_restart_state": np.array("{}"),
+            "continuation_transition_plan": np.array('{"schema_version":1,"kind":"pops.continuation-transitions","target":"system","evidence_stage":"resolved","objects":[]}'),
+            "program_exchange_state": np.frombuffer(b"POPSEX01" + bytes(8), dtype=np.uint8),
+            "program_exchange_offsets": np.array([0, 16], dtype=np.int64),
             "program_cadence_substeps": np.array(1, dtype=np.int64),
             "program_cadence_stride": np.array(1, dtype=np.int64),
             "program_cadence_window_steps": np.array(0, dtype=np.int64),
@@ -1189,8 +1274,10 @@ def test_uniform_preflight_rejects_noncanonical_scheduled_cache_name():
         }
     )
 
-    with pytest.raises(ValueError, match="node 7 must use canonical cache name 'node_7'"):
+    with pytest.raises(ValueError, match="node 7 must use its live cache name or 'node_7'"):
         preflight_uniform_restart(payload)
+    payload["cache_names"] = np.array(["authored_scheduled_value"])
+    preflight_uniform_restart(payload)
 
 
 class _CadenceEngine:
@@ -1263,6 +1350,7 @@ def test_program_cadence_checkpoint_preserves_exact_variable_dt_window():
 def test_uniform_restart_restores_clock_before_selective_history_replay(monkeypatch):
     from pops.runtime._program_cadence_checkpoint import ProgramCadenceCheckpointState
     from pops.runtime._system_io import _PreparedUniformRestart, _SystemIO
+    from pops.time._history.report import HistoryReplayReport
     import pops.runtime._system_io_history as history_io
 
     events = []
@@ -1271,6 +1359,12 @@ def test_uniform_restart_restores_clock_before_selective_history_replay(monkeypa
         def __init__(self):
             self.clock = (0.0, 0)
             self.staged = None
+
+        def time(self):
+            return self.clock[0]
+
+        def macro_step(self):
+            return self.clock[1]
 
         def set_state(self, block, values):
             events.append(("state", block))
@@ -1285,6 +1379,9 @@ def test_uniform_restart_restores_clock_before_selective_history_replay(monkeypa
             assert self.staged == (0.125, time, macro_step)
             self.clock = (time, macro_step)
             events.append(("clock", time, macro_step))
+
+        def _restore_checkpoint_program_exchanges(self, values):
+            assert values == _CHECKPOINT_EXCHANGE_IMAGE
 
         def restore_program_cadence_window(
             self,
@@ -1301,11 +1398,13 @@ def test_uniform_restart_restores_clock_before_selective_history_replay(monkeypa
 
     native = Native()
 
+    replay_report = HistoryReplayReport()
+
     def assert_checkpoint_cursor_before_replay(sim, payload):
         assert sim is native
         assert sim.clock == (1.5, 3)
         events.append(("history", sim.clock))
-        return "replay-report"
+        return replay_report
 
     monkeypatch.setattr(history_io, "restore_histories", assert_checkpoint_cursor_before_replay)
     payload = {
@@ -1319,9 +1418,10 @@ def test_uniform_restart_restores_clock_before_selective_history_replay(monkeypa
         "t": np.array(1.5, dtype=np.float64),
         "macro_step": np.array(3, dtype=np.int64),
     }
+    restart_identity = make_identity("test-uniform-restart", {"name": "restart-id"})
     prepared = _PreparedUniformRestart(
         payload=payload,
-        restart_identity="restart-id",
+        restart_identity=restart_identity,
         temporal_state="temporal-state",
         cadence_state=ProgramCadenceCheckpointState(
             substeps=1,
@@ -1332,16 +1432,14 @@ def test_uniform_restart_restores_clock_before_selective_history_replay(monkeypa
             last_dt=0.125,
         ),
         auxiliary_checkpoint=b"POPSAUX2",
+        exchange_checkpoint=_CHECKPOINT_EXCHANGE_IMAGE,
     )
 
-    class Owner:
-        _s = native
-        _temporal_restart_state = "old-temporal-state"
-        _step_controller = object()
-
-    owner = Owner()
-    assert _SystemIO._apply_checkpoint_restart(owner, prepared) == "restart-id"
-    assert owner._last_restart_report == "replay-report"
+    owner = _checkpoint_owner(native)
+    owner._temporal_restart_state = "old-temporal-state"
+    owner._step_controller = object()
+    assert _SystemIO._apply_checkpoint_restart(owner, prepared) == restart_identity
+    assert owner._last_restart_report is replay_report
     assert events.index(("clock", 1.5, 3)) < events.index(("history", (1.5, 3)))
 
 
@@ -1376,6 +1474,9 @@ def test_uniform_capture_uses_field_slots_without_materializing_default_field(
         def capture_auxiliary_checkpoint_accepted_state(self):
             return b"POPSAUX2"
 
+        def _checkpoint_program_exchanges(self):
+            return _CHECKPOINT_EXCHANGE_IMAGE
+
     monkeypatch.setattr(history_io, "capture_histories", lambda *_args: None)
     monkeypatch.setattr(
         checkpoint_manifest,
@@ -1392,7 +1493,7 @@ def test_uniform_capture_uses_field_slots_without_materializing_default_field(
         cache_nodes=(),
         capture_identity="capture",
     )
-    owner = type("Owner", (), {"_s": Native()})()
+    owner = _checkpoint_owner(Native())
     payload, token = _SystemIO._capture_checkpoint(owner, prepared)
 
     assert token == "sealed"
@@ -1483,6 +1584,9 @@ def test_uniform_capture_default_field_keeps_the_legacy_phi_as_an_exact_alias(mo
         def capture_auxiliary_checkpoint_accepted_state(self):
             return b"POPSAUX2"
 
+        def _checkpoint_program_exchanges(self):
+            return _CHECKPOINT_EXCHANGE_IMAGE
+
     monkeypatch.setattr(history_io, "capture_histories", lambda *_args: None)
     monkeypatch.setattr(
         checkpoint_manifest,
@@ -1499,9 +1603,7 @@ def test_uniform_capture_default_field_keeps_the_legacy_phi_as_an_exact_alias(mo
         cache_nodes=(),
         capture_identity="capture",
     )
-    payload, _token = _SystemIO._capture_checkpoint(
-        type("Owner", (), {"_s": Native()})(), prepared
-    )
+    payload, _token = _SystemIO._capture_checkpoint(_checkpoint_owner(Native()), prepared)
 
     assert calls == [("state", "blk"), ("potential",), ("field", _DEFAULT_FIELD_SLOT)]
     assert payload["phi"].tobytes(order="C") == payload["field_potential_0"].tobytes(order="C")
@@ -1512,7 +1614,7 @@ def test_uniform_capture_default_field_keeps_the_legacy_phi_as_an_exact_alias(mo
             return default + 1.0
 
     with pytest.raises(ValueError, match="differs bitwise"):
-        _SystemIO._capture_checkpoint(type("Owner", (), {"_s": MismatchedNative()})(), prepared)
+        _SystemIO._capture_checkpoint(_checkpoint_owner(MismatchedNative()), prepared)
 
 
 def test_uniform_phi_alias_validation_and_restore_uses_default_once():
@@ -1570,6 +1672,15 @@ def test_uniform_phi_alias_validation_and_restore_uses_default_once():
         def restore_auxiliary_checkpoint_accepted_state(self, values):
             assert values == b"POPSAUX2"
 
+        def time(self):
+            return 0.0
+
+        def macro_step(self):
+            return 0
+
+        def _restore_checkpoint_program_exchanges(self, values):
+            assert values == _CHECKPOINT_EXCHANGE_IMAGE
+
         def restore_program_cadence_window(self, *_args):
             pass
 
@@ -1588,18 +1699,18 @@ def test_uniform_phi_alias_validation_and_restore_uses_default_once():
         "t": np.array(0.0, dtype=np.float64),
         "macro_step": np.array(0, dtype=np.int64),
     }
+    restart_identity = make_identity("test-uniform-restart", {"name": "restart-id"})
     prepared = _PreparedUniformRestart(
         payload=restart_payload,
-        restart_identity="restart-id",
+        restart_identity=restart_identity,
         temporal_state="temporal-state",
         cadence_state=ProgramCadenceCheckpointState(1, 1, 0, 0.0, 0.0, 0.0),
         auxiliary_checkpoint=b"POPSAUX2",
+        exchange_checkpoint=_CHECKPOINT_EXCHANGE_IMAGE,
     )
-    owner = type(
-        "Owner",
-        (),
-        {"_s": Native(), "_temporal_restart_state": None, "_step_controller": None},
-    )()
+    owner = _checkpoint_owner(Native())
+    owner._temporal_restart_state = None
+    owner._step_controller = None
     _SystemIO._apply_checkpoint_restart(owner, prepared)
     assert [row[0] for row in calls] == ["default", "named"]
     assert calls[1][1] == "pops.test.named-field"
@@ -1614,10 +1725,11 @@ def test_uniform_phi_alias_validation_and_restore_uses_default_once():
         owner,
         _PreparedUniformRestart(
             payload=field_free,
-            restart_identity="restart-id",
+            restart_identity=restart_identity,
             temporal_state="temporal-state",
             cadence_state=ProgramCadenceCheckpointState(1, 1, 0, 0.0, 0.0, 0.0),
             auxiliary_checkpoint=b"POPSAUX2",
+            exchange_checkpoint=_CHECKPOINT_EXCHANGE_IMAGE,
         ),
     )
     assert calls == []

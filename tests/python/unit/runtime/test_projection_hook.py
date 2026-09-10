@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 from pops.amr import (
     AMRExecution,
     AMRHierarchy,
@@ -125,18 +126,24 @@ def _projection_case() -> tuple[pops.Case, AMR]:
 
     program = pops.Program("project_after_step")
     temporal = program.state(state_instance)
+    peer_temporal = program.state(peer_state_instance)
+    # State bindings are lazy: both old states and sibling residuals must precede consumers.
+    old, peer_old = temporal.n, peer_temporal.n
+    residual, peer_residual = rate(old), peer_rate(peer_old)
     candidate = program.value(
         "candidate",
-        temporal.n + program.dt * rate(temporal.n),
+        old + program.dt * residual,
         at=temporal.next.point,
     )
-    program.commit(temporal.next, program.project(candidate))
-    peer_temporal = program.state(peer_state_instance)
     peer_candidate = program.value(
         "peer_candidate",
-        peer_temporal.n + program.dt * peer_rate(peer_temporal.n),
+        peer_old + program.dt * peer_residual,
         at=peer_temporal.next.point,
     )
+    # Both sibling residuals belong to one coherent evaluation round.  Materialize them before
+    # either projection publishes a side effect; the projections remain separate block-owned
+    # commits after that shared residual barrier.
+    program.commit(temporal.next, program.project(candidate))
     program.commit(peer_temporal.next, program.project(peer_candidate))
     program.step_strategy(FixedDt(PROJECTION_DT))
     case.program(program)
@@ -212,7 +219,18 @@ def test_bound_aux_drives_public_projection_in_a_native_amr_step(
     artifact = pops.compile(_resolve_projection_case(cxx=native_cxx))
     floor = np.full((GRID_CELLS, GRID_CELLS), FLOOR_VALUE, dtype=np.float64)
     peer_floor = np.full((GRID_CELLS, GRID_CELLS), PEER_FLOOR_VALUE, dtype=np.float64)
-    simulation = pops.bind(artifact, aux={"floor": floor, "peer_ceiling": peer_floor})
+    from pops.model.provider_pack import ProviderPack
+    providers = [ProviderPack.from_data(block.resolved_operations.to_data()
+                 ["provider_evidence"]["auxiliary"]) for block in artifact.plan.blocks]
+    inputs = {key: {"floor": floor, "peer_ceiling": peer_floor}[key.component]
+              for pack in providers for key in pack
+              if pack.declared_entry(key).producer == "runtime_input"}
+    assert {key.component for key in inputs} == {"floor", "peer_ceiling"}
+    simulation = pops.bind(
+        artifact,
+        aux=inputs,
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     assert simulation.spatial_shape() == (GRID_CELLS, GRID_CELLS)
     level_count = simulation.n_levels()
     assert level_count == 2

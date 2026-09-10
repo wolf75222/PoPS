@@ -280,7 +280,8 @@ def program_to_graph(program: Any) -> Any:
         elif value.op == "solve_linear":
             if len(inputs) not in (2, 3):
                 raise ValueError("solve_linear graph conversion expects operator, rhs[, guess]")
-            if len(inputs) == 3:
+            explicit_request = "solve_request" in value.attrs
+            if len(inputs) == 3 and not explicit_request:
                 unknown = inputs[2]
             else:
                 unknown_node = Unknown(
@@ -293,7 +294,7 @@ def program_to_graph(program: Any) -> Any:
                 prefix = (unknown_node,)
                 unknown = ValueRef(next_id)
                 next_id += 1
-            if len(inputs) == 3:
+            if len(inputs) == 3 and not explicit_request:
                 prefix = ()
             node = Solve(
                 value.id,
@@ -304,6 +305,7 @@ def program_to_graph(program: Any) -> Any:
                 value.point,
                 name=_name(value),
                 attrs=attrs,
+                initial=inputs[2] if explicit_request and len(inputs) == 3 else None,
             )
         else:
             node = GraphValue(

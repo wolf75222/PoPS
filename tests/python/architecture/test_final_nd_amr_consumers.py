@@ -23,7 +23,13 @@ UNCHANGED_CONSUMERS = (
 CONTEXT_FRAGMENT_PATHS = frozenset(
     {
         "pops/runtime/program/amr_program_context_spatial.inc",
+        "pops/runtime/program/amr_program_context_spatial_implicit.inc",
+        "pops/runtime/program/amr_program_context_spatial_imex.inc",
         "pops/runtime/program/amr_program_context_field_runtime_public.inc",
+        "pops/runtime/program/amr_program_context_general_field_public.inc",
+        "pops/runtime/program/amr_program_context_general_field_services.inc",
+        "pops/runtime/program/amr_program_context_general_field_scratch.inc",
+        "pops/runtime/program/amr_program_context_diffusion.inc",
         "pops/runtime/program/amr_program_context_flux_expression_public.inc",
         "pops/runtime/program/amr_program_context_spatial_operations.inc",
         "pops/runtime/program/amr_program_context_history_checkpoint_public.inc",
@@ -38,9 +44,13 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/amr_program_context_field_runtime_definitions.inc",
         "pops/runtime/program/amr_program_context_flux_expression_services.inc",
         "pops/runtime/program/amr_program_context_cell_temporal_runtime.inc",
+        "pops/runtime/program/amr_program_context_hierarchy_barriers.inc",
+        "pops/runtime/program/amr_program_context_mapping_continuation.inc",
         "pops/runtime/program/amr_program_context_subcycling_runtime.inc",
+        "pops/runtime/program/amr_program_context_flux_family.inc",
         "pops/runtime/program/amr_program_context_flux_basis.inc",
         "pops/runtime/program/amr_program_context_flux_expression_runtime.inc",
+        "pops/runtime/program/amr_program_context_shared_flux.inc",
         "pops/runtime/program/amr_program_context_history_checkpoint_runtime.inc",
         "pops/runtime/program/amr_program_context_field_runtime_services.inc",
         "pops/runtime/program/amr_program_context_history_checkpoint_services.inc",
@@ -48,9 +58,23 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
     }
 )
 PROGRAM_RESPONSIBILITY_AUTHORITIES = {
-    "spatial_context": frozenset(
-        {"pops/runtime/program/amr_program_context_spatial.inc"}
+    "field_scratch": frozenset(
+        {"pops/runtime/program/amr_program_context_general_field_scratch.inc"}
     ),
+    "joint_field_publication": frozenset(
+        {
+            "pops/runtime/program/amr_program_context_general_field_public.inc",
+            "pops/runtime/program/amr_program_context_general_field_services.inc",
+        }
+    ),
+    "spatial_implicit": frozenset(
+        {
+            "pops/runtime/program/amr_program_context_spatial_implicit.inc",
+            "pops/runtime/program/amr_program_context_spatial_imex.inc",
+        }
+    ),
+    "diffusion": frozenset({"pops/runtime/program/amr_program_context_diffusion.inc"}),
+    "spatial_context": frozenset({"pops/runtime/program/amr_program_context_spatial.inc"}),
     "spatial_operations": frozenset(
         {
             "pops/runtime/program/amr_program_context_spatial_operations.inc",
@@ -83,11 +107,19 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
             "pops/runtime/program/amr_program_context_flux_expression_runtime.inc",
         }
     ),
+    "shared_flux": frozenset({"pops/runtime/program/amr_program_context_shared_flux.inc"}),
+    "flux_family": frozenset(
+        {"pops/runtime/program/amr_program_context_flux_family.inc"}
+    ),
     "flux_basis": frozenset(
         {
             "pops/runtime/program/amr_program_context_flux_basis.inc",
             "pops/runtime/program/amr_program_context_flux_basis_definitions.inc",
         }
+    ),
+    "hierarchy_barriers": frozenset({"pops/runtime/program/amr_program_context_hierarchy_barriers.inc"}),
+    "mapping_continuation": frozenset(
+        {"pops/runtime/program/amr_program_context_mapping_continuation.inc"}
     ),
     "subcycling_runtime": frozenset(
         {"pops/runtime/program/amr_program_context_subcycling_runtime.inc"}
@@ -101,20 +133,68 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
     ),
 }
 PROGRAM_RESPONSIBILITY_BUDGETS = {
+    # Collective shape authentication and stable per-level general-field scratch identity.
+    "field_scratch": 96,
+    "joint_field_publication": 350,
+    # N-component face sizing, shape authentication and per-component reflux add one
+    # bounded extension to the former scalar implementation (12 source lines today).
+    "spatial_implicit": 400 + 32,
+    "diffusion": 180,
     "spatial_context": 350,
     "spatial_operations": 900,
     "field_runtime": 1_800,
     "history_checkpoint": 1_800,
     "flux_expression": 1_200,
+    "shared_flux": 400,
+    "flux_family": 128,
     "flux_basis": 500,
+    # Retained per-level map ports and resumable callbacks are counted independently.
+    "mapping_continuation": 250,
+    # Authenticate cross-level barrier requests before one collective callback and resume.
+    "hierarchy_barriers": 150,
     "subcycling_runtime": 800,
     "cell_temporal_runtime": 800,
 }
 # Intentional Phase 0 policy envelopes: fragment and scaffolding growth remain
 # separately bounded, and their aggregate remains independently enforced.
-PROGRAM_FRAGMENT_BUDGET = 7_450
-PROGRAM_SCAFFOLDING_BUDGET = 1_850
-PROGRAM_SEMANTIC_CLOSURE_BUDGET = 9_300
+# M6 solve outcomes, accepted exchange transactions, and authenticated history replay add
+# explicit contracts to these fixed fragments. Retain a bounded allowance for those foundations.
+# Shared RHS capture, paired signed quadrature, and retained source serialization form a new
+# responsibility (400 lines). Diffusion already has its independent 180-line allowance above.
+# Composite temporal residual closure and exact predictor reconciliation add one
+# separately bounded responsibility; existing responsibility allowances stay fixed.
+SPATIAL_IMPLICIT_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["spatial_implicit"]
+# Exact producer-family registration and FLX2 migration are a separately bounded
+# responsibility. Its closure remains counted; every prior responsibility cap is unchanged.
+FLUX_FAMILY_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["flux_family"]
+# Independent field storage, one hierarchy solve and atomic all-level observation publication.
+# Count this new responsibility separately from the earlier field-runtime allowance.
+JOINT_FIELD_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["joint_field_publication"]
+FIELD_SCRATCH_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["field_scratch"]
+# Resumable per-level map ports have their own authority and aggregate allowance.
+MAPPING_CONTINUATION_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["mapping_continuation"]
+HIERARCHY_BARRIER_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["hierarchy_barriers"]
+PROGRAM_FRAGMENT_BUDGET = (
+    7_730 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
+    + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
+    + HIERARCHY_BARRIER_FRAGMENT_BUDGET + FIELD_SCRATCH_FRAGMENT_BUDGET
+)
+# Context-owned cache acquisition and independent field-resource handles extend the
+# existing scaffolding; numerical solve and publication bodies remain counted above.
+CONTEXT_RESOURCE_SCAFFOLDING_BUDGET = 32
+# The shared subcycling engine retains synchronized attempts, callback authority and
+# rollback state across begin/resume/finish; this is distinct from context map ports.
+SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET = 200
+PROGRAM_SCAFFOLDING_BUDGET = (
+    1_850 + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET
+    + SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET
+)
+PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
+    9_580 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
+    + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
+    + HIERARCHY_BARRIER_FRAGMENT_BUDGET + FIELD_SCRATCH_FRAGMENT_BUDGET
+    + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET + SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET
+)
 SEMANTIC_AUTHORITIES = frozenset(
     {
         "pops/numerics/time/amr/reflux/amr_flux_execution.hpp",
@@ -141,6 +221,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/numerics/elliptic/linear/solve_outcome.hpp",
         "pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp",
         "pops/numerics/time/amr/levels/amr_patch_range.hpp",
+        "pops/parallel/collective_exception.hpp",
         "pops/parallel/execution_lane.hpp",
         "pops/runtime/amr/amr_runtime.hpp",
         "pops/runtime/amr/prepared_multiblock_hierarchy.hpp",
@@ -148,19 +229,26 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/builders/compiled/generated_amr_system_block.hpp",
         "pops/runtime/multiblock/evaluation_point.hpp",
         "pops/runtime/program/amr_program_checkpoint.hpp",
+        "pops/runtime/program/amr_history_flux_snapshot.hpp",
+        "pops/runtime/program/amr_history_flux_snapshot_codec.hpp",
+        "pops/runtime/program/amr_history_flux_snapshot_execution.hpp",
         "pops/runtime/program/clock_schedule.hpp",
         "pops/runtime/program/source_mask.hpp",
         "pops/runtime/program/prepared_scalar_boundary_session.hpp",
+        "pops/runtime/program/prepared_resource_cache.hpp",
+        "pops/runtime/program/prepared_condensed_sampling.hpp",
+        "pops/runtime/program/program_owner_field_identity.hpp",
+        "pops/runtime/program/prepared_amr_spatial_residual.hpp",
         "pops/runtime/program/prepared_tensor_boundary_session.hpp",
         "pops/runtime/program/program_runtime_state.hpp",
+        "pops/runtime/program/profiler.hpp",
         "pops/runtime/program/same_level_cell_temporal_provider.hpp",
         "pops/runtime/program/step_transaction.hpp",
+        "pops/runtime/program/collective_step_rejection.hpp",
         "pops/runtime/system/provider_storage_binding.hpp",
     }
 )
-INCLUDE_RE = re.compile(
-    r'^\s*#include\s*(?:<(pops/[^>]+)>|"(pops/[^"]+)")', re.MULTILINE
-)
+INCLUDE_RE = re.compile(r'^\s*#include\s*(?:<(pops/[^>]+)>|"(pops/[^"]+)")', re.MULTILINE)
 FIXED_RANK_PATTERNS = (
     re.compile(r"\bMultiFab\s*<\s*2(?:\s*,[^>]*)?\s*>"),
     re.compile(r"\bBox\s*<\s*2\s*>"),
@@ -198,9 +286,7 @@ def _semantic_closure(root: str) -> tuple[str, ...]:
         visited.add(path)
         ordered.append(path)
         for include in _direct_local_includes(path):
-            _require_classified_local_include(
-                path, include, known, PERMITTED_UPSTREAM_BOUNDARIES
-            )
+            _require_classified_local_include(path, include, known, PERMITTED_UPSTREAM_BOUNDARIES)
             if include in known:
                 visit(include)
         visiting.remove(path)
@@ -223,9 +309,7 @@ def _without_tuple_value_indices(source: str) -> str:
 
 def _fixed_rank_authorities(source: str) -> tuple[str, ...]:
     return tuple(
-        match.group(0)
-        for pattern in FIXED_RANK_PATTERNS
-        for match in pattern.finditer(source)
+        match.group(0) for pattern in FIXED_RANK_PATTERNS for match in pattern.finditer(source)
     )
 
 
@@ -253,9 +337,7 @@ def test_amr_consumer_closures_are_explicit_bounded_and_acyclic() -> None:
     assert responsibility_union == CONTEXT_FRAGMENT_PATHS
     assert sum(map(len, responsibility_groups)) == len(responsibility_union)
     for responsibility, paths in PROGRAM_RESPONSIBILITY_AUTHORITIES.items():
-        lines = sum(
-            (INCLUDE / path).read_text(encoding="utf-8").count("\n") + 1 for path in paths
-        )
+        lines = sum((INCLUDE / path).read_text(encoding="utf-8").count("\n") + 1 for path in paths)
         assert lines <= PROGRAM_RESPONSIBILITY_BUDGETS[responsibility], (
             responsibility,
             lines,
@@ -263,7 +345,8 @@ def test_amr_consumer_closures_are_explicit_bounded_and_acyclic() -> None:
         )
 
     assert len(_source(closures["flux"]).splitlines()) <= 700
-    assert len(_source(closures["subcycling"]).splitlines()) <= 1_600
+    # Persistent synchronized continuations add retained state and rollback to this closure.
+    assert len(_source(closures["subcycling"]).splitlines()) <= 1_650
     program_fragments = tuple(
         path for path in closures["program"] if path in CONTEXT_FRAGMENT_PATHS
     )
@@ -272,12 +355,24 @@ def test_amr_consumer_closures_are_explicit_bounded_and_acyclic() -> None:
     )
     assert len(_source(program_fragments).splitlines()) <= PROGRAM_FRAGMENT_BUDGET
     assert len(_source(program_scaffolding).splitlines()) <= PROGRAM_SCAFFOLDING_BUDGET
-    assert (
-        len(_source(closures["program"]).splitlines())
-        <= PROGRAM_SEMANTIC_CLOSURE_BUDGET
-    )
+    assert len(_source(closures["program"]).splitlines()) <= PROGRAM_SEMANTIC_CLOSURE_BUDGET
     shallow_roots = (*UNCHANGED_CONSUMERS, *ROOTS.values())
     assert len(_source(shallow_roots).splitlines()) < 1_000
+
+
+def test_condensed_sampling_utilities_remain_stateless_and_independently_bounded() -> None:
+    utilities = {
+        "pops/runtime/program/program_owner_field_identity.hpp": (190, frozenset()),
+        "pops/runtime/program/prepared_condensed_sampling.hpp": (
+            60, frozenset({"pops/mesh/storage/multifab.hpp"})),
+    }
+    for path, (budget, dependencies) in utilities.items():
+        source = (INCLUDE / path).read_text(encoding="utf-8")
+        assert len(source.splitlines()) <= budget, (path, budget)
+        assert frozenset(_local_includes(source)) == dependencies
+        for forbidden in ("AmrProgramContext", "AmrSystem", "mutable ", "static std::map",
+                          "prepare_amr_ghost_fill", "SolveOutcome", "MPI_"):
+            assert forbidden not in source, (path, forbidden)
 
 
 def test_local_include_parser_authenticates_both_delimiters_and_hidden_fragments() -> None:
@@ -395,3 +490,77 @@ def test_direct_native_proof_exercises_one_and_three_dimensional_consumers() -> 
     assert "PatchRange<1>" in source
     assert "PatchRange<3>" in source
     assert "RefinementRatio<3>{2, 3, 1}" in source
+
+
+def test_typed_rejection_protocol_has_one_bounded_shared_authority() -> None:
+    authority = "pops/runtime/program/collective_step_rejection.hpp"
+    # This is a shared upstream runtime protocol, not an AMR context fragment moved out of sight.
+    assert len((INCLUDE / authority).read_text().splitlines()) <= 240
+    for consumer in (
+        "pops/numerics/time/amr/levels/amr_subcycling_engine.hpp",
+        "pops/mesh/boundary/prepared_boundary_component.hpp",
+        "pops/runtime/amr/detail/native_tagger_session.hpp",
+    ):
+        text = (INCLUDE / consumer).read_text()
+        assert authority in _local_includes(text)
+        assert "collective_step_rejection_phase(" in text
+        assert "struct StepRejectionEnvelope" not in text
+        assert "encode_step_rejection" not in text
+        assert "decode_step_rejection" not in text
+
+
+def test_composite_temporal_workspace_has_one_bounded_authority() -> None:
+    authority = "pops/runtime/program/prepared_amr_spatial_residual.hpp"
+    source = (INCLUDE / authority).read_text()
+    assert len(source.splitlines()) <= 230
+    assert "AmrFieldNewtonKrylovWorkspace<Dim>" in source
+    assert "no_gauge" in source
+    assert "stage_accepted_exchanges" not in source
+    assert "FluxBasis" not in source
+
+
+# Independent upstream utilities contain immutable data/math/wire operations, not an alternate
+# Program context. Their bodies retain explicit bounds instead of exempting context fragments.
+HISTORY_FLUX_UTILITY_BUDGETS = {
+    "pops/runtime/program/amr_history_flux_snapshot.hpp": 400,
+    "pops/runtime/program/amr_history_flux_snapshot_codec.hpp": 550,
+    "pops/runtime/program/amr_history_flux_snapshot_execution.hpp": 350,
+}
+
+
+def test_history_flux_utilities_are_bounded_stateless_upstream_authorities() -> None:
+    forbidden_owners = re.compile(
+        r"\b(?:AmrProgramContext|AmrSystem|ProgramRuntimeState|HistoryManager)\b"
+        r"|\b(?:facade_|runtime_|history_flux_expressions_|accepted_state_revision_)\b"
+        r"|\b(?:publish_program_accepted_state|restore_program_accepted_state)\b"
+    )
+    forbidden_dependencies = {
+        "pops/runtime/amr_system.hpp",
+        "pops/runtime/program/program_runtime_state.hpp",
+        "pops/runtime/program/amr_program_context.hpp",
+    }
+    for path, budget in HISTORY_FLUX_UTILITY_BUDGETS.items():
+        source = (INCLUDE / path).read_text(encoding="utf-8")
+        assert len(source.splitlines()) <= budget, path
+        assert not forbidden_owners.search(source), path
+        for dependency in _local_includes(source):
+            assert dependency not in forbidden_dependencies, (path, dependency)
+            assert "amr_program_context_" not in dependency, (path, dependency)
+    context = (INCLUDE / ROOTS["program"]).read_text(encoding="utf-8")
+    assert (
+        "pops/runtime/program/amr_history_flux_snapshot_execution.hpp" in _local_includes(context)
+    )
+    # History maps and publication remain in the counted context closure.
+    counted = _source(_semantic_closure(ROOTS["program"]))
+    assert "history_flux_expressions_" in counted
+    assert "publish_history_flux_snapshots_" in counted
+    assert "prepare_remapped_history_flux_faces_" in counted
+
+
+def test_history_sample_codec_is_bounded_exact_metadata_only() -> None:
+    path = "pops/runtime/program/history_sample_identity_codec.hpp"
+    source = (INCLUDE / path).read_text(encoding="utf-8")
+    assert len(source.splitlines()) <= 110
+    assert set(_local_includes(source)) == {"pops/runtime/program/program_runtime_state.hpp"}
+    assert not re.search(r"\b(?:AmrProgramContext|AmrSystem|MultiFab|Kokkos|HistoryManager)\b", source)
+    assert "field_values" not in source

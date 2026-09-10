@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <pops/runtime/program/step_transaction.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
@@ -14,6 +15,7 @@
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
+#include <pops/runtime/program/prepared_resource_cache.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/source_mask.hpp>
 #include <pops/runtime/system.hpp>
@@ -148,10 +150,10 @@ class ProgramContext {
           prior_physical_time_offset_ + static_cast<double>(iteration) * child_dt;
       if (!std::isfinite(child_dt) || !(child_dt > 0.0) || !std::isfinite(child_offset))
         throw std::overflow_error("Program logical evaluation child window is not finite");
-      const amr::Rational child_fraction(iteration, count);
-      const amr::Rational child_span(1, count);
+      const ::pops::amr::Rational child_fraction(iteration, count);
+      const ::pops::amr::Rational child_span(1, count);
       owner_->current_dt_ = child_dt;
-      owner_->stage_time_ = amr::Rational(0, 1);
+      owner_->stage_time_ = ::pops::amr::Rational(0, 1);
       owner_->logical_phase_begin_ = prior_phase_begin_ + prior_phase_span_ * child_fraction;
       owner_->logical_phase_span_ = prior_phase_span_ * child_span;
       owner_->logical_physical_time_offset_ = child_offset;
@@ -190,9 +192,9 @@ class ProgramContext {
 
     const ProgramContext* owner_ = nullptr;
     double prior_dt_ = 0.0;
-    amr::Rational prior_stage_{0, 1};
-    amr::Rational prior_phase_begin_{0, 1};
-    amr::Rational prior_phase_span_{1, 1};
+    ::pops::amr::Rational prior_stage_{0, 1};
+    ::pops::amr::Rational prior_phase_begin_{0, 1};
+    ::pops::amr::Rational prior_phase_span_{1, 1};
     double prior_physical_time_offset_ = 0.0;
   };
 
@@ -202,16 +204,23 @@ class ProgramContext {
     system_->install_program_step(std::move(step));
   }
 
+  void suspend_map(std::string identity, bool target, field_type& field,
+                   std::function<void()> continuation) const {
+    runtime_state().suspend_program_map(std::move(identity), target, {&field},
+                                        std::move(continuation));
+  }
+
   void begin_step(double dt) const {
     (void)prepared_execution_lane();
     if (!std::isfinite(dt) || dt <= 0.0)
       throw std::invalid_argument("ProgramContext step requires a finite positive dt");
     current_dt_ = dt;
-    stage_time_ = amr::Rational(0, 1);
-    logical_phase_begin_ = amr::Rational(0, 1);
-    logical_phase_span_ = amr::Rational(1, 1);
+    stage_time_ = ::pops::amr::Rational(0, 1);
+    logical_phase_begin_ = ::pops::amr::Rational(0, 1);
+    logical_phase_span_ = ::pops::amr::Rational(1, 1);
     logical_physical_time_offset_ = 0.0;
     active_operator_snapshot_.reset();
+    auxiliary_evaluation_sequence_ = 0;
   }
 
   void configure_primary_clock(const std::string& clock) const {
@@ -227,7 +236,7 @@ class ProgramContext {
   void set_stage_time(std::int64_t numerator, std::int64_t denominator) const {
     if (denominator <= 0 || numerator < 0 || numerator > denominator)
       throw std::invalid_argument("ProgramContext stage time is outside [0, 1]");
-    stage_time_ = amr::Rational(numerator, denominator);
+    stage_time_ = ::pops::amr::Rational(numerator, denominator);
     active_operator_snapshot_.reset();
   }
 
@@ -235,7 +244,8 @@ class ProgramContext {
     require_rate_identity_(stage);
     if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
       throw std::logic_error("ProgramContext boundary evaluation has no prepared clock and dt");
-    const amr::Rational evaluation_stage = logical_phase_begin_ + stage_time_ * logical_phase_span_;
+    const ::pops::amr::Rational evaluation_stage =
+        logical_phase_begin_ + stage_time_ * logical_phase_span_;
     return {primary_clock_,
             static_cast<std::int64_t>(macro_step()),
             0,
@@ -280,8 +290,71 @@ class ProgramContext {
     return runtime_block;
   }
 
+  void consume_pointwise_evaluation_status(int program_block, int evaluation_id, Real status,
+                                           const char* operation_identity,
+                                           std::uint32_t reason_code = 0) const {
+    consume_native_evaluation_status(prepared_execution_lane(), program_block, evaluation_id,
+                                     static_cast<double>(status), operation_identity, reason_code);
+  }
+
+  using ProgramFieldComponent = typename runtime_type::ProgramFieldComponent;
+  void publish_field_components(int evaluation_id, const std::string& publication_identity,
+                                std::initializer_list<ProgramFieldComponent> components) const {
+    const auto& lane = prepared_execution_lane();
+    runtime::multiblock::BoundaryEvaluationPoint point;
+    std::vector<ProgramFieldComponent> prepared;
+    std::exception_ptr error;
+    try {
+      point = boundary_evaluation_point(evaluation_id);
+      prepared.assign(components.begin(), components.end());
+    } catch (...) {
+      error = std::current_exception();
+    }
+    if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && error)
+        std::rethrow_exception(error);
+      throw std::runtime_error("Program field publication preparation failed collectively");
+    }
+    system_->publish_program_field_components(point, publication_identity, prepared);
+  }
+
+  void stage_exchange(ExchangeRecord record) const {
+    stage_exchange_batch([&](auto&& stage) { stage(std::move(record)); });
+  }
+
+  template <class Producer>
+  void stage_exchange_batch(Producer&& producer) const {
+    auto records = prepare_exchange_batch(
+        std::forward<Producer>(producer),
+        [&](ExchangeRecord& record) { record.qualify_runtime_point(boundary_evaluation_point(0)); },
+        prepared_execution_lane());
+    system_->stage_program_exchanges(records);
+  }
+
   field_type& state(int program_block) const {
     return system_->block_state(sys_block(program_block));
+  }
+  /// One collective prerequisite publication before a generated consumer traverses local Fabs.
+  /// The supplied SSA state is authenticated without substituting the accepted block state.
+  /// Native DerivedAux launchers consume their declared auxiliary dependencies; state-dependent
+  /// formulas continue to read this SSA value in the generated kernel itself.
+  void prepare_provider_values(std::string_view consumer_qid, int program_block,
+                               const field_type& stage_state, int evaluation_id) const {
+    if (prepare_provider_values_for_solve(consumer_qid, program_block, stage_state,
+                                          evaluation_id) ==
+        runtime::system::AuxiliaryPublicationStatus::nonfinite_candidate)
+      throw std::runtime_error(
+          "System auxiliary publication rejected: candidate valid/ghost image contains non-finite "
+          "values");
+  }
+  [[nodiscard]] runtime::system::AuxiliaryPublicationStatus prepare_provider_values_for_solve(
+      std::string_view consumer_qid, int program_block, const field_type& stage_state,
+      int evaluation_id) const {
+    if (auxiliary_evaluation_sequence_ == std::numeric_limits<int>::max())
+      throw std::overflow_error("Program auxiliary evaluation sequence exceeds its exact range");
+    return system_->prepare_program_auxiliary_consumer_for_solve(
+        boundary_evaluation_point(evaluation_id), std::string(consumer_qid),
+        sys_block(program_block), stage_state, auxiliary_evaluation_sequence_++);
   }
   /// Bind one native consumer's exact compact provider ABI for one local state patch.
   ///
@@ -319,6 +392,14 @@ class ProgramContext {
   field_type& rhs_scratch(std::int64_t value_id, int subslot, const field_type& prototype) const {
     return persistent_scratch_(ScratchKind::Rhs, value_id, subslot, prototype, prototype.ncomp(),
                                prototype.ghosts());
+  }
+
+  template <class Resource, class Matches, class... Args>
+  Resource& prepared_resource(std::int64_t node, int block, Matches&& matches,
+                              Args&&... args) const {
+    return prepared_resources_.template acquire<Resource>(node, block, 0, prepared_execution_lane(),
+                                                          std::forward<Matches>(matches),
+                                                          std::forward<Args>(args)...);
   }
 
   field_type& scratch_state(std::int64_t value_id, int subslot, const field_type& prototype) const {
@@ -361,8 +442,36 @@ class ProgramContext {
                                  int rate_id) const {
     require_rate_identity_(rate_id);
     count_kernel_();
-    system_->block_neg_div_flux_into_at(boundary_evaluation_point(rate_id),
-                                        sys_block(program_block), state_value, rhs);
+    const auto point = boundary_evaluation_point(rate_id);
+    const int runtime_block = sys_block(program_block);
+    if (system_->requires_block_boundary_session(runtime_block)) {
+      const ExecutionLane& lane = system_->prepared_boundary_execution_lane();
+      auto boundary = prepare_block_boundary_session(program_block, state_value, point, lane);
+      system_->block_neg_div_flux_into_at_prepared(
+          point, runtime_block, state_value, rhs, boundary->system(), boundary->runtime_block(),
+          boundary->point(), boundary->lane(), boundary->transport());
+      return;
+    }
+    system_->block_neg_div_flux_into_at(point, runtime_block, state_value, rhs);
+  }
+
+  /// Retain the exact native faces used by one flux-only residual. These are provisional
+  /// numerical observations; only the accepted Program quadrature may stage exchanges.
+  void neg_div_flux_default_with_faces_into(int program_block, field_type& state_value,
+                                            field_type& rhs, int rate_id,
+                                            std::vector<nd::FaceField<Dim>>& faces) const {
+    require_rate_identity_(rate_id);
+    count_kernel_();
+    const auto point = boundary_evaluation_point(rate_id);
+    const auto& lane = prepared_execution_lane();
+    auto boundary = prepare_block_boundary_session(program_block, state_value, point, lane);
+    system_->block_neg_div_flux_into_at_prepared(
+        point, sys_block(program_block), state_value, rhs, boundary->system(),
+        boundary->runtime_block(), boundary->point(), boundary->lane(), boundary->transport());
+    // FaceField owns Fab values with deep-copy semantics: subsequent residual evaluations
+    // cannot overwrite a prior stage's accepted quadrature data.
+    boundary->transport().with_boundary_scratch(
+        state_value, [&](auto& scratch) { faces = scratch.generated_faces; });
   }
 
   void source_default_into(int program_block, field_type& state_value, field_type& rhs) const {
@@ -385,8 +494,8 @@ class ProgramContext {
   }
 
   void apply_source_mask(field_type& rhs, std::initializer_list<int> keep) const {
-    pops::runtime::program::apply_component_keep_mask(
-        rhs, std::vector<int>(keep.begin(), keep.end()));
+    pops::runtime::program::apply_component_keep_mask(rhs,
+                                                      std::vector<int>(keep.begin(), keep.end()));
     count_kernel_();
   }
 
@@ -931,24 +1040,28 @@ class ProgramContext {
   void laplacian(field_type& output, field_type& input,
                  const scalar_boundary_session_type& boundary) const {
     require_prepared_lane_(boundary.lane(), "Program Laplacian boundary");
-    require_scalar_stencil_(output, input, 1, "Program Laplacian");
+    require_componentwise_stencil_(output, input, "Program Laplacian");
     boundary.fill(input);
     const Geometry<Dim> geom = boundary.geometry();
+    const int components = input.ncomp();
     for (std::size_t local = 0; local < output.local_size(); ++local) {
       const FieldView<Real, Dim> result = output.fab(local).view();
       const FieldView<const Real, Dim> value = std::as_const(input).fab(local).view();
       for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-        Real image = Real(0);
-        for (int axis = 0; axis < Dim; ++axis) {
-          Index<Dim> lower = cell;
-          Index<Dim> upper = cell;
-          --lower[axis];
-          ++upper[axis];
-          const Real spacing = geom.spacing(axis);
-          image +=
-              (value(upper, 0) - Real(2) * value(cell, 0) + value(lower, 0)) / (spacing * spacing);
+        for (int component = 0; component < components; ++component) {
+          Real image = Real(0);
+          for (int axis = 0; axis < Dim; ++axis) {
+            Index<Dim> lower = cell;
+            Index<Dim> upper = cell;
+            --lower[axis];
+            ++upper[axis];
+            const Real spacing = geom.spacing(axis);
+            image += (value(upper, component) - Real(2) * value(cell, component) +
+                      value(lower, component)) /
+                     (spacing * spacing);
+          }
+          result(cell, component) = image;
         }
-        result(cell, 0) = image;
       });
     }
     count_kernel_();
@@ -1134,6 +1247,8 @@ class ProgramContext {
     history.clock_identity[name] = clock_identity;
     history.interpolation_identity[name] = interpolation_identity;
     history.slot_dt[name] = std::vector<Real>(static_cast<std::size_t>(ring_depth), Real(0));
+    history.slot_sample[name].assign(static_cast<std::size_t>(ring_depth),
+                                     HistorySampleIdentity::zero_start());
   }
 
   field_type& history(const std::string& name, int lag, int ncomp = -1) const {
@@ -1162,7 +1277,7 @@ class ProgramContext {
 
   void store_history(const std::string& name, const field_type& value) const {
     if (std::isfinite(current_dt_) && current_dt_ > 0.0) {
-      store_history_(name, value, static_cast<Real>(current_dt_));
+      store_history_(name, value, current_dt_);
       return;
     }
     // Preserve the direct legacy route when this context has no active generated-step interval:
@@ -1172,7 +1287,7 @@ class ProgramContext {
   void store_history(const std::string& name, const field_type& value, double dt) const {
     if (!std::isfinite(dt) || dt <= 0.0)
       throw std::invalid_argument("ProgramContext history dt must be finite and positive");
-    store_history_(name, value, static_cast<Real>(dt));
+    store_history_(name, value, dt);
   }
   void rotate_histories() const { runtime_state().hist_.rotate(); }
   void rotate_histories(const std::string& clock) const { runtime_state().hist_.rotate(clock); }
@@ -1717,6 +1832,19 @@ class ProgramContext {
                                   " requires a complete boundary evaluation point");
   }
 
+  static void require_componentwise_stencil_(const field_type& output, const field_type& input,
+                                             const char* operation) {
+    if (input.ncomp() < 1 || output.ncomp() != input.ncomp() || output.layout() != input.layout() ||
+        output.distribution() != input.distribution() ||
+        output.local_rank() != input.local_rank() || output.local_size() != input.local_size())
+      throw std::invalid_argument(std::string(operation) +
+                                  " fields do not share the exact componentwise stencil layout");
+    for (int axis = 0; axis < Dim; ++axis)
+      if (input.ghosts()[axis] < 1)
+        throw std::invalid_argument(std::string(operation) +
+                                    " input requires one ghost on every native axis");
+  }
+
   static void require_scalar_stencil_(const field_type& output, const field_type& input,
                                       int output_components, const char* operation) {
     if (output_components < 1 || output.ncomp() != output_components || input.ncomp() != 1 ||
@@ -1769,7 +1897,8 @@ class ProgramContext {
                                                         OperatorFingerprint topology,
                                                         OperatorFingerprint resources,
                                                         std::uint64_t revision) const {
-    const amr::Rational evaluation_stage = logical_phase_begin_ + stage_time_ * logical_phase_span_;
+    const ::pops::amr::Rational evaluation_stage =
+        logical_phase_begin_ + stage_time_ * logical_phase_span_;
     const double evaluation_time =
         physical_time() + logical_physical_time_offset_ + stage_time_.value() * current_dt_;
     return {authority,
@@ -1820,27 +1949,61 @@ class ProgramContext {
     return result;
   }
 
-  void store_history_(const std::string& name, const field_type& value,
-                      std::optional<Real> dt) const {
+  void store_history_(const std::string& name, const field_type& value, double dt) const {
     auto& manager = runtime_state().hist_;
-    auto found = manager.histories.find(name);
-    if (found == manager.histories.end())
-      throw std::out_of_range("ProgramContext history is not registered");
-    require_same_field_contract_(found->second.front(), value, "ProgramContext history store");
-    auto dt_ledger = manager.slot_dt.find(name);
-    if (dt_ledger == manager.slot_dt.end() || dt_ledger->second.size() != found->second.size())
-      throw std::logic_error("ProgramContext history dt ledger differs from its ring depth");
-    found->second.front() = value;
-    if (!manager.initialized.at(name))
-      for (std::size_t slot = 1; slot < found->second.size(); ++slot) {
-        found->second[slot] = value;
-        if (dt)
-          dt_ledger->second[slot] = *dt;
+    std::vector<field_type> prepared_fields;
+    std::vector<Real> prepared_dts;
+    std::vector<HistorySampleIdentity> prepared_samples;
+    std::string contract;
+    std::exception_ptr error;
+    try {
+      const auto found = manager.histories.find(name);
+      if (found == manager.histories.end() || found->second.empty())
+        throw std::out_of_range("ProgramContext history is not registered");
+      require_same_field_contract_(found->second.front(), value, "ProgramContext history store");
+      prepared_dts = manager.slot_dt.at(name);
+      prepared_samples =
+          manager.prepare_sample_store(name, system_->time() + logical_physical_time_offset_, dt);
+      const std::size_t count = manager.initialized.at(name) ? 1 : found->second.size();
+      prepared_fields.reserve(count);
+      for (std::size_t slot = 0; slot < count; ++slot) {
+        prepared_fields.push_back(value);
+        prepared_dts[slot] = static_cast<Real>(dt);
       }
-    manager.initialized[name] = true;
-    manager.store_pending[name] = true;
-    if (dt)
-      dt_ledger->second.front() = *dt;
+      ExactContractBuilder proof;
+      const auto clock = manager.clock_identity.find(name);
+      proof.text("pops.program.history-publication")
+          .text(name)
+          .text(clock == manager.clock_identity.end() ? std::string_view{} : clock->second)
+          .scalar(count);
+      for (std::size_t slot = 0; slot < prepared_samples.size(); ++slot) {
+        const auto& identity = prepared_samples[slot];
+        proof.scalar(identity.kind)
+            .scalar(identity.start_bits)
+            .scalar(identity.interval_bits)
+            .scalar(identity.ordinal)
+            .scalar(prepared_dts[slot]);
+      }
+      contract = std::move(proof).release();
+    } catch (...) {
+      error = std::current_exception();
+    }
+    const auto& lane = prepared_execution_lane();
+    if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && error)
+        std::rethrow_exception(error);
+      throw std::runtime_error("Program history publication preparation failed collectively");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs({{"pops.program.history", contract}}, lane))
+      throw std::invalid_argument("Program history publication identity differs between ranks");
+    static_assert(std::is_nothrow_swappable_v<field_type>);
+    auto& ring = manager.histories.at(name);
+    for (std::size_t slot = 0; slot < prepared_fields.size(); ++slot)
+      std::swap(ring[slot], prepared_fields[slot]);
+    manager.slot_dt.at(name).swap(prepared_dts);
+    manager.slot_sample.at(name).swap(prepared_samples);
+    manager.initialized.at(name) = true;
+    manager.store_pending.at(name) = true;
   }
 
   std::optional<ScheduleCoordinate> schedule_coordinate_(ScheduleDomainKind kind,
@@ -1860,13 +2023,15 @@ class ProgramContext {
   mutable std::uint64_t operator_snapshot_revision_ = 0;
   mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;
   mutable double current_dt_ = 0.0;
-  mutable amr::Rational stage_time_{0, 1};
-  mutable amr::Rational logical_phase_begin_{0, 1};
-  mutable amr::Rational logical_phase_span_{1, 1};
+  mutable ::pops::amr::Rational stage_time_{0, 1};
+  mutable int auxiliary_evaluation_sequence_ = 0;
+  mutable ::pops::amr::Rational logical_phase_begin_{0, 1};
+  mutable ::pops::amr::Rational logical_phase_span_{1, 1};
   mutable double logical_physical_time_offset_ = 0.0;
   mutable std::string primary_clock_;
   mutable ClockScheduleState clock_schedule_;
   mutable std::map<ScratchKey, field_type> scratch_;
+  mutable PreparedResourceCache prepared_resources_;
   mutable std::map<std::int64_t, GeneratedFieldRoute> generated_field_routes_;
 };
 

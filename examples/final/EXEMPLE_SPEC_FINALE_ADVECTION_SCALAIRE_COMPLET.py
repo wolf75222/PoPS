@@ -47,9 +47,16 @@ ProgramBuilder = Callable[[Any, Any], pops.Program]
 def _native_output_mode() -> Any:
     """Select the portable publication topology proved by the loaded native backend."""
 
+    import os
+
+    from pops._native_selector import select_native_dimension, selected_native_module
     from pops.output import ParallelMode
     from pops.runtime_environment import runtime_environment_report
 
+    if selected_native_module(required=False) is None:
+        launched = os.environ.get("POPS_NATIVE_DIM")
+        if launched in {"1", "2", "3"}:
+            select_native_dimension(int(launched))
     communicator = runtime_environment_report().get("communicator")
     if communicator == "serial":
         return ParallelMode.SERIAL
@@ -124,7 +131,7 @@ class ScalarRuntimeSnapshot:
     time: float
     macro_step: int
     states: tuple[np.ndarray, ...]
-    patch_boxes: tuple[tuple[int, ...], ...]
+    patch_boxes: tuple[tuple[int, tuple[int, ...], tuple[int, ...]], ...]
     regrid_count: int
     topology_epoch: int
     program_hash: str
@@ -600,8 +607,9 @@ def _snapshot(simulation: Any) -> ScalarRuntimeSnapshot:
             for level in range(level_count)
         ),
         patch_boxes=tuple(
-            tuple(int(value) for value in row)
-            for row in simulation.patch_boxes()
+            (int(level), tuple(int(value) for value in lower),
+             tuple(int(value) for value in upper))
+            for level, lower, upper in simulation.patch_boxes()
         ),
         regrid_count=int(regrid.regrid_count),
         topology_epoch=int(regrid.topology_epoch),

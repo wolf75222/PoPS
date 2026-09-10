@@ -1,0 +1,136 @@
+{"fixture": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/tests/python/unit/time/test_time_local_newton.py", "fixture_sha256": "b8ba7e58eec00eebd3e702ba1eadee40b6e6a1e7144a1fcde19905b73e776082", "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8", "source_commit": "bd583faf196f3c1faeedec489e04d24e959ed00b", "python": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/bin/python", "prefix": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env", "package": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/__init__.py", "native_sha256": "d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518"}
+== (A) solve_local_nonlinear validation + codegen ==
+  [OK ] a non-callable residual is rejected
+  [OK ] a non-State initial_guess is rejected
+  [OK ] max_iter <= 0 is rejected
+  [OK ] a string solver selector is rejected
+  [OK ] a non-local residual op (P.rhs) is rejected
+  [OK ] the implicit-reaction Newton IR validates
+  [OK ] the Newton IR serializes to a stable hash
+  [OK ] tol / max_iter recorded on the op
+  [OK ] the complete prepared controls are recorded on the op
+  [OK ] the residual sub-block holds the iterate + guess + ops
+  [OK ] a different tol rehashes the IR
+  [OK ] a different max_iter rehashes the IR
+  [OK ] the Newton kernel has 'auto residual_eval = [&]'
+  [OK ] the Newton kernel has 'pops::prepare_local_nonlinear_problem<1>'
+  [OK ] the Newton kernel has 'pops::solve_prepared_local_nonlinear(prepared_, Gval)'
+  [OK ] the Newton kernel has 'pops::SolveReport ln_report_'
+  [OK ] the Newton kernel has 'pops::SolveOutcome ln_outcome_'
+  [OK ] the Newton kernel has 'pops::local_nonlinear_solve_report('
+  [OK ] the Newton kernel has 'pops::for_each_cell('
+  [OK ] the Newton kernel has 'ctx.pointwise_active_mask(0,'
+  [OK ] the Newton kernel has 'pops::all_reduce_max(pops::reduce_max_local(ln_status_'
+  [OK ] the Newton kernel has 'ctx.prepared_execution_lane()'
+  [OK ] the Newton kernel has 'pops::local_nonlinear_status_from_priority('
+  [OK ] the Newton kernel has 'pops::collective_first_local_nonlinear_failure('
+  [OK ] the Newton kernel has 'collective status/location precedence mismatch'
+  [OK ] a failed Newton report is consumed before the state commit
+  [OK ] the frozen guess is read into a stack vector
+  [OK ] the prepared solve is seeded from the frozen guess
+  [OK ] the residual is re-evaluated at the iterate
+  [OK ] the generated residual route has no 'std::function'
+  [OK ] the generated residual route has no 'Eigen::'
+  [OK ] the generated residual route has no 'new '
+  [OK ] the generated residual route has no 'malloc'
+  [OK ] the generated residual route has no 'Jinv_'
+  [OK ] the generated residual route has no 'for (int it_ ='
+  [OK ] RejectAttempt is selected exactly at SolveOutcome consumption without downgrading FailRun
+  [OK ] the rejection guard reads the report returned by SolveOutcome.consume
+  [OK ] FailRun is consumed exactly into one authoritative SolveReport
+  [OK ] the fatal diagnostic is rendered from SolveReport.action
+  [OK ] the Newton codegen is refused without a model
+  [OK ] n_cons=9 reaches the exact manifest-sized prepared provider
+== (B) end-to-end: per-cell implicit reaction vs analytic + offline Newton ==
+  [OK ] handle carries the program name
+  implicit reaction: max|rho-closed| = 5.73e-13  max|rho-offline_newton| = 5.73e-13
+  offline Newton: iters(max) = 4  residual 6.58e-01 -> 2.22e-16  |compiled residual| = 7.85e-13  moved 3.70e-01
+  [OK ] stepped rho == analytic implicit reaction (max|d| = 5.73e-13)
+  [OK ] stepped rho == offline numpy Newton (max|d| = 5.73e-13)
+  [OK ] the compiled solution drives the per-cell residual to ~0 (7.85e-13)
+  [OK ] the Newton solve takes more than one iteration (4)
+  [OK ] the residual drops from O(6.6e-01) to below tol (Newton converges)
+  [OK ] the implicit step actually moved the state (max|d| = 3.70e-01)
+== (C) end-to-end: LocalNewton failure/action matrix + atomic rollback ==
+  [OK ] reject_attempt/singular starts without a terminal attempt report
+  reject_attempt/singular observed StepAttemptRejected: step attempt rejected during local_nonlinear: solve status=singular (local_nonlinear failed: local_nonlinear_singular_jacobian)
+  [OK ] reject_attempt/singular publishes a failed solve
+  [OK ] reject_attempt/singular carries typed status singular
+  [OK ] reject_attempt/singular restores the accepted state
+  [OK ] reject_attempt/singular restores physical time and macro-step
+  [OK ] reject_attempt/singular restores history metadata, slots and pending rotation
+  [OK ] reject_attempt/singular restores caches and provisional diagnostics
+  [OK ] reject_attempt/singular preserves schedule cursors and the installed transaction contract
+  [OK ] reject_attempt/singular publishes only the terminal rejected report
+  [OK ] reject_attempt/iteration_limit starts without a terminal attempt report
+  reject_attempt/iteration_limit observed StepAttemptRejected: step attempt rejected during local_nonlinear: solve status=iteration_limit (local_nonlinear failed: local_nonlinear_iteration_limit)
+  [OK ] reject_attempt/iteration_limit publishes a failed solve
+  [OK ] reject_attempt/iteration_limit carries typed status iteration_limit
+  [OK ] reject_attempt/iteration_limit restores the accepted state
+  [OK ] reject_attempt/iteration_limit restores physical time and macro-step
+  [OK ] reject_attempt/iteration_limit restores history metadata, slots and pending rotation
+  [OK ] reject_attempt/iteration_limit restores caches and provisional diagnostics
+  [OK ] reject_attempt/iteration_limit preserves schedule cursors and the installed transaction contract
+  [OK ] reject_attempt/iteration_limit publishes only the terminal rejected report
+  [OK ] reject_attempt/invalid_residual starts without a terminal attempt report
+  reject_attempt/invalid_residual observed StepAttemptRejected: step attempt rejected during local_nonlinear: solve status=invalid_evaluation (local_nonlinear failed: auxiliary_nonfinite_candidate)
+  [OK ] reject_attempt/invalid_residual publishes a failed solve
+  [OK ] reject_attempt/invalid_residual carries typed status invalid_evaluation
+  [OK ] reject_attempt/invalid_residual restores the accepted state
+  [OK ] reject_attempt/invalid_residual restores physical time and macro-step
+  [OK ] reject_attempt/invalid_residual restores history metadata, slots and pending rotation
+  [OK ] reject_attempt/invalid_residual restores caches and provisional diagnostics
+  [OK ] reject_attempt/invalid_residual preserves schedule cursors and the installed transaction contract
+  [OK ] reject_attempt/invalid_residual publishes only the terminal rejected report
+  [OK ] reject_attempt/invalid_jacobian starts without a terminal attempt report
+  reject_attempt/invalid_jacobian observed StepAttemptRejected: step attempt rejected during local_nonlinear: solve status=invalid_evaluation (local_nonlinear failed: local_nonlinear_invalid_evaluation)
+  [OK ] reject_attempt/invalid_jacobian publishes a failed solve
+  [OK ] reject_attempt/invalid_jacobian carries typed status invalid_evaluation
+  [OK ] reject_attempt/invalid_jacobian restores the accepted state
+  [OK ] reject_attempt/invalid_jacobian restores physical time and macro-step
+  [OK ] reject_attempt/invalid_jacobian restores history metadata, slots and pending rotation
+  [OK ] reject_attempt/invalid_jacobian restores caches and provisional diagnostics
+  [OK ] reject_attempt/invalid_jacobian preserves schedule cursors and the installed transaction contract
+  [OK ] reject_attempt/invalid_jacobian publishes only the terminal rejected report
+  [OK ] fail_run/singular starts without a terminal attempt report
+  fail_run/singular observed RuntimeError: local_nonlinear failed: singular action=fail_run reason=local_nonlinear_singular_jacobian
+  [OK ] fail_run/singular publishes a failed solve
+  [OK ] fail_run/singular fails the run with status singular
+  [OK ] fail_run/singular restores the accepted state
+  [OK ] fail_run/singular restores physical time and macro-step
+  [OK ] fail_run/singular restores history metadata, slots and pending rotation
+  [OK ] fail_run/singular restores caches and provisional diagnostics
+  [OK ] fail_run/singular preserves schedule cursors and the installed transaction contract
+  [OK ] fail_run/singular publishes only the terminal failed report
+  [OK ] fail_run/iteration_limit starts without a terminal attempt report
+  fail_run/iteration_limit observed RuntimeError: local_nonlinear failed: iteration_limit action=fail_run reason=local_nonlinear_iteration_limit
+  [OK ] fail_run/iteration_limit publishes a failed solve
+  [OK ] fail_run/iteration_limit fails the run with status iteration_limit
+  [OK ] fail_run/iteration_limit restores the accepted state
+  [OK ] fail_run/iteration_limit restores physical time and macro-step
+  [OK ] fail_run/iteration_limit restores history metadata, slots and pending rotation
+  [OK ] fail_run/iteration_limit restores caches and provisional diagnostics
+  [OK ] fail_run/iteration_limit preserves schedule cursors and the installed transaction contract
+  [OK ] fail_run/iteration_limit publishes only the terminal failed report
+  [OK ] fail_run/invalid_residual starts without a terminal attempt report
+  fail_run/invalid_residual observed RuntimeError: local_nonlinear failed: invalid_evaluation action=fail_run reason=auxiliary_nonfinite_candidate
+  [OK ] fail_run/invalid_residual publishes a failed solve
+  [OK ] fail_run/invalid_residual fails the run with status invalid_evaluation
+  [OK ] fail_run/invalid_residual restores the accepted state
+  [OK ] fail_run/invalid_residual restores physical time and macro-step
+  [OK ] fail_run/invalid_residual restores history metadata, slots and pending rotation
+  [OK ] fail_run/invalid_residual restores caches and provisional diagnostics
+  [OK ] fail_run/invalid_residual preserves schedule cursors and the installed transaction contract
+  [OK ] fail_run/invalid_residual publishes only the terminal failed report
+  [OK ] fail_run/invalid_jacobian starts without a terminal attempt report
+  fail_run/invalid_jacobian observed RuntimeError: local_nonlinear failed: invalid_evaluation action=fail_run reason=local_nonlinear_invalid_evaluation
+  [OK ] fail_run/invalid_jacobian publishes a failed solve
+  [OK ] fail_run/invalid_jacobian fails the run with status invalid_evaluation
+  [OK ] fail_run/invalid_jacobian restores the accepted state
+  [OK ] fail_run/invalid_jacobian restores physical time and macro-step
+  [OK ] fail_run/invalid_jacobian restores history metadata, slots and pending rotation
+  [OK ] fail_run/invalid_jacobian restores caches and provisional diagnostics
+  [OK ] fail_run/invalid_jacobian preserves schedule cursors and the installed transaction contract
+  [OK ] fail_run/invalid_jacobian publishes only the terminal failed report
+PASS test_time_local_newton
+{"fixture_result": "test_time_local_newton.py", "exit_code": 0, "seconds": 73.267}

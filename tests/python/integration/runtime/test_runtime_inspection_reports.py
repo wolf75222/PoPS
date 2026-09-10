@@ -68,7 +68,8 @@ def test_amr_system_inspect_composes_amr_snapshot():
     # The native runtime does not own the bind-time resource ceiling.  Reporting the
     # policy authority is exact; manufacturing the common two-level default is not.
     assert d["amr"]["max_levels"] == "resource_policy"
-    assert d["amr"]["ratio"] == 2
+    # No hierarchy transition has selected a ratio in this descriptor-free runtime.
+    assert d["amr"]["ratio"] is None
     assert d["runtime_environment"]["amr_refinement_ratio"] is None
     assert d["runtime_environment"]["amr_refinement_ratio_selection"] == "hierarchy_exact_rank"
     assert d["runtime_environment"]["amr_refinement_ratio_rank"] == 2
@@ -81,7 +82,7 @@ def test_amr_system_inspect_composes_amr_snapshot():
     # ADC-589: sim.amr.inspect() is the unified 4-part RuntimeInspection; the
     # hierarchy snapshot (which used to BE the whole report) is one component.
     assert set(view_d) == {"hierarchy", "patches", "regrid", "limitations"}
-    assert view_d["hierarchy"]["ratio"] == 2
+    assert view_d["hierarchy"]["ratio"] is None
     assert "array(" not in str(rep)
 
 

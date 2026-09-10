@@ -52,6 +52,7 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
         block_names=("block",),
         parameters=tuple(resolved_params.values()),
         tag_parameter="alpha" if runtime_param else None,
+        auxiliary_names=tuple(aux),
         cells=64,
         name="amr-route-introspection",
     )
@@ -141,10 +142,20 @@ def test_bind_creates_exact_install_plan_without_mutating_compiled_components():
 
 def test_public_amr_bind_refuses_the_retired_initial_state_compatibility_route():
     artifact = _amr_artifact(runtime_param=False)
+    from pops.model.provider_pack import ProviderPack
+
+    auxiliary_data = artifact.plan.blocks[0].resolved_operations.to_data()[
+        "provider_evidence"
+    ]["auxiliary"]
+    auxiliary = ProviderPack.from_data(auxiliary_data)
+    aux = {key: np.zeros((8, 8), dtype=np.float64) for key in auxiliary}
     with pytest.raises(ValueError, match="single layout initialization authority"):
         bind_phase(
             artifact,
-            BindInputs(initial_state={"block": np.ones((3, 8, 8), dtype=np.float64)}),
+            BindInputs(
+                initial_state={"block": np.ones((3, 8, 8), dtype=np.float64)},
+                aux=aux,
+            ),
         )
 
 

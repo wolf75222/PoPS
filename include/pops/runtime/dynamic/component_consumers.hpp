@@ -766,15 +766,18 @@ inline int cluster_tags(const PopsClusteringApiV1& api, void* state,
   return code;
 }
 
-inline int apply_transfer(const PopsTransferApiV1& api, void* state,
+inline int apply_transfer(const PopsTransferApiV2& api, void* state,
                           const PopsTransferRequestV1& request, PopsComponentStatusV1& status) {
   require_operation(api.apply != nullptr, "apply");
+  require_operation(api.apply_integral != nullptr, "apply_integral");
   validate_execution_context(request.execution);
   validate_execution_field(request.execution, request.source, "transfer source");
   validate_execution_field(request.execution, request.destination, "transfer destination");
   if (request.dimension != request.source.dimension ||
       request.dimension != request.destination.dimension || request.refinement_ratio == nullptr ||
-      request.operation != POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1 ||
+      (request.operation != POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1 &&
+       request.operation != POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1 &&
+       request.operation != POPS_TRANSFER_OPERATION_PHYSICAL_PULLBACK_V1) ||
       request.source.component_count != request.destination.component_count ||
       request.source.centering != request.destination.centering ||
       request.source.centering_axes != request.destination.centering_axes ||
@@ -787,13 +790,85 @@ inline int apply_transfer(const PopsTransferApiV1& api, void* state,
     const auto destination_interior = request.destination.extents[axis] -
                                       request.destination.ghost_lower[axis] -
                                       request.destination.ghost_upper[axis];
-    if (ratio <= 0 ||
-        destination_interior >
-            std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(ratio) ||
-        source_interior != destination_interior * static_cast<std::size_t>(ratio))
-      throw std::invalid_argument("transfer refinement ratio must be positive");
+    if (request.operation == POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1) {
+      if (ratio <= 0 ||
+          destination_interior >
+              std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(ratio) ||
+          source_interior != destination_interior * static_cast<std::size_t>(ratio))
+        throw std::invalid_argument("transfer refinement ratio must authenticate aligned extents");
+    } else if (ratio != 1) {
+      // Physical axes may be permuted, eliminated or extended. Their exact domain
+      // relation is authenticated by the prepared support contract and provider.
+      throw std::invalid_argument("physical support transfer requires unit mesh refinement ratios");
+    }
   }
   return api.apply(state, &request, &status);
+}
+
+/// Dispatch the mandatory V2 integral operation. Numerical reduction belongs to the provider;
+/// the runtime validates the complete borrowed-view and tensor-coefficient contract first.
+inline int apply_transfer_integral(const PopsTransferApiV2& api, void* state,
+                                   const PopsTransferIntegralRequestV2& request,
+                                   PopsComponentStatusV1& status) {
+  require_operation(api.apply != nullptr, "apply");
+  require_operation(api.apply_integral != nullptr, "apply_integral");
+  if (request.struct_size < sizeof(PopsTransferIntegralRequestV2) ||
+      !component_text(request.physical_contract_identity) || !request.axis_weights ||
+      request.dimension < 1 || request.dimension > 3 ||
+      request.source.dimension != request.dimension ||
+      request.destination.dimension != request.dimension ||
+      (request.operation != POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1 &&
+       request.operation != POPS_TRANSFER_OPERATION_PHYSICAL_PULLBACK_V1))
+    throw std::invalid_argument("Transfer integral request has incomplete physical provenance");
+  validate_execution_context(request.execution);
+  validate_execution_field(request.execution, request.source, "transfer integral source");
+  validate_execution_field(request.execution, request.destination, "transfer integral destination");
+  if (request.execution.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
+      request.source.component_count != request.destination.component_count ||
+      request.source.centering != POPS_FIELD_CENTERING_CELL_V1 ||
+      request.destination.centering != POPS_FIELD_CENTERING_CELL_V1)
+    throw std::invalid_argument("Transfer integral requires matched host cell components");
+  const auto offset_fits = [](const auto& view) {
+    const auto limit =
+        static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()) / sizeof(double);
+    std::size_t span = 0;
+    const auto include = [&](std::size_t count, std::ptrdiff_t stride) {
+      if (!count || stride <= 0 || count - 1 > (limit - span) / static_cast<std::size_t>(stride))
+        return false;
+      span += (count - 1) * static_cast<std::size_t>(stride);
+      return true;
+    };
+    if (!include(view.component_count, view.component_stride))
+      return false;
+    for (int axis = 0; axis < view.dimension; ++axis)
+      if (!include(view.extents[axis], view.axis_strides[axis]))
+        return false;
+    return true;
+  };
+  if (!offset_fits(request.source) || !offset_fits(request.destination))
+    throw std::invalid_argument("Transfer integral field offsets exceed addressable storage");
+  std::size_t consumed = 0;
+  for (int axis = 0; axis < 3; ++axis) {
+    if (axis >= request.dimension) {
+      if (request.weight_offsets[axis] != 0)
+        throw std::invalid_argument("Transfer integral has inactive coefficient metadata");
+      continue;
+    }
+    if (request.destination.extents[axis] != 1 || request.source.ghost_lower[axis] ||
+        request.source.ghost_upper[axis] || request.destination.ghost_lower[axis] ||
+        request.destination.ghost_upper[axis] || request.weight_offsets[axis] != consumed ||
+        consumed > request.weight_count ||
+        request.source.extents[axis] > request.weight_count - consumed)
+      throw std::invalid_argument(
+          "Transfer integral coefficient segments do not match source axes");
+    consumed += request.source.extents[axis];
+  }
+  if (consumed != request.weight_count)
+    throw std::invalid_argument("Transfer integral has unconsumed coefficient storage");
+  for (std::size_t index = 0; index < consumed; ++index)
+    if (!std::isfinite(request.axis_weights[index]))
+      throw std::invalid_argument("Transfer integral coefficients must be finite");
+  return api.apply_integral(state, &request, &status);
 }
 
 template <class Left, class Right>
@@ -1117,6 +1192,15 @@ struct OwnedFieldSolverTopologyLabelV2 {
   std::string provenance;
 };
 
+// Native preparation authority copied from the exact hierarchy geometry. ABI patch indices
+// live in their own level index space; the wire global domain remains the coarse domain.
+struct FieldTopologyLevelGeometryV2 {
+  std::array<std::int64_t, 3> lower{};
+  std::array<std::int64_t, 3> upper{};
+  std::array<double, 3> physical_lower{};
+  std::array<double, 3> cell_spacing{};
+};
+
 class PreparedFieldTopologyV2 final {
  public:
   struct OwnedPatchMetadata {
@@ -1204,7 +1288,8 @@ class PreparedFieldTopologyV2 final {
  private:
   friend PreparedFieldTopologyV2 prepare_field_topology(
       const PopsFieldTopologyApiV2&, void*, const PopsFieldGlobalTopologyV1&,
-      const std::vector<FieldTopologyPatchInputV2>&, const PopsExecutionContextV1&);
+      const std::vector<FieldTopologyPatchInputV2>&, const PopsExecutionContextV1&,
+      const std::vector<FieldTopologyLevelGeometryV2>&);
   friend class TopologyBoundFieldSolverRequestV2;
   std::shared_ptr<const ImmutableState> state_;
 };
@@ -1260,7 +1345,9 @@ inline void validate_field_patch_metadata(const PopsFieldPatchMetadataV1& patch,
   (void)field_patch_point_count(patch);
 }
 
-inline void validate_field_global_topology(const PopsFieldGlobalTopologyV1& topology) {
+inline void validate_field_global_topology(
+    const PopsFieldGlobalTopologyV1& topology,
+    const std::vector<FieldTopologyLevelGeometryV2>& level_geometry = {}) {
   if (topology.struct_size < sizeof(PopsFieldGlobalTopologyV1) ||
       !component_text(topology.topology_recipe_identity) ||
       !component_text(topology.source_layout_identity) ||
@@ -1278,15 +1365,51 @@ inline void validate_field_global_topology(const PopsFieldGlobalTopologyV1& topo
       throw std::invalid_argument("field global topology has hidden unused-axis bounds");
     }
   }
+  for (const auto& geometry : level_geometry)
+    for (std::int32_t axis = 0; axis < 3; ++axis) {
+      if (axis < topology.dimension) {
+        if (geometry.upper[axis] < geometry.lower[axis] ||
+            !std::isfinite(geometry.physical_lower[axis]) ||
+            !std::isfinite(geometry.cell_spacing[axis]) || geometry.cell_spacing[axis] <= 0.0)
+          throw std::invalid_argument("field level geometry has invalid bounds or spacing");
+      } else if (geometry.lower[axis] != 0 || geometry.upper[axis] != 0 ||
+                 geometry.physical_lower[axis] != 0.0 || geometry.cell_spacing[axis] != 0.0) {
+        throw std::invalid_argument("field level geometry has hidden unused-axis data");
+      }
+    }
+  if (!level_geometry.empty())
+    for (std::int32_t axis = 0; axis < topology.dimension; ++axis)
+      if (level_geometry.front().lower[axis] != topology.domain_lower[axis] ||
+          level_geometry.front().upper[axis] != topology.domain_upper[axis])
+        throw std::invalid_argument("field root geometry differs from global topology domain");
   for (std::size_t index = 0; index < topology.patch_count; ++index) {
     const auto& patch = topology.patches[index];
     validate_field_patch_metadata(patch, index, topology.source_layout_identity);
     if (patch.dimension != topology.dimension)
       throw std::invalid_argument("field patch dimension differs from global topology");
-    for (std::int32_t axis = 0; axis < topology.dimension; ++axis)
-      if (patch.lower[axis] < topology.domain_lower[axis] ||
-          patch.upper[axis] > topology.domain_upper[axis])
-        throw std::invalid_argument("field patch lies outside global topology domain");
+    if (level_geometry.empty()) {
+      if (patch.level != 0)
+        throw std::invalid_argument("refined field patch has no exact level geometry");
+      for (std::int32_t axis = 0; axis < topology.dimension; ++axis)
+        if (patch.lower[axis] < topology.domain_lower[axis] ||
+            patch.upper[axis] > topology.domain_upper[axis])
+          throw std::invalid_argument("field patch lies outside global topology domain");
+      continue;
+    }
+    if (static_cast<std::size_t>(patch.level) >= level_geometry.size())
+      throw std::invalid_argument("field patch level has no exact geometry");
+    const auto& geometry = level_geometry[static_cast<std::size_t>(patch.level)];
+    for (std::int32_t axis = 0; axis < topology.dimension; ++axis) {
+      if (patch.lower[axis] < geometry.lower[axis] || patch.upper[axis] > geometry.upper[axis])
+        throw std::invalid_argument("field patch lies outside its exact level domain");
+      const double physical_lower =
+          geometry.physical_lower[axis] +
+          (static_cast<double>(patch.lower[axis]) - static_cast<double>(geometry.lower[axis])) *
+              geometry.cell_spacing[axis];
+      if (patch.physical_lower[axis] != physical_lower ||
+          patch.cell_spacing[axis] != geometry.cell_spacing[axis])
+        throw std::invalid_argument("field patch physical geometry differs from its exact level");
+    }
   }
 }
 
@@ -1466,10 +1589,11 @@ inline PreparedFieldTopologyV2 prepare_field_topology(
     const PopsFieldTopologyApiV2& api, void* state,
     const PopsFieldGlobalTopologyV1& global_topology,
     const std::vector<FieldTopologyPatchInputV2>& local_patches,
-    const PopsExecutionContextV1& execution) {
+    const PopsExecutionContextV1& execution,
+    const std::vector<FieldTopologyLevelGeometryV2>& level_geometry = {}) {
   require_operation(api.prepare_topology != nullptr, "prepare_topology");
   validate_execution_context(execution);
-  validate_field_global_topology(global_topology);
+  validate_field_global_topology(global_topology, level_geometry);
   auto storage = std::make_shared<PreparedFieldTopologyV2::ImmutableState>();
   storage->topology_recipe_identity = global_topology.topology_recipe_identity;
   storage->source_layout_identity = global_topology.source_layout_identity;

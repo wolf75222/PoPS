@@ -265,6 +265,11 @@ class Newton(Descriptor):
         del context
         return Availability.yes("native damped Newton-Krylov field outer solve")
 
+    def prepare_program_solve(self) -> Any:
+        from pops.time._program.spatial_solve import prepare_spatial_newton
+
+        return prepare_spatial_newton(self)
+
     def lower_field_nonlinear(self, *, target: str, layout: Any) -> PreparedFieldNonlinear:
         del layout
         if target not in ("system", "amr_system"):

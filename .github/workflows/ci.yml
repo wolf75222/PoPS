@@ -409,22 +409,24 @@ jobs:
           compression-level: 0
           retention-days: 1
 
-  # GATE C++ (ADC-171). Les cibles selectionnees sont partitionnees en sept shards deterministes
+  # GATE C++ (ADC-171). Les cibles selectionnees sont partitionnees en dix shards deterministes
   # dont l'union est verifiee par ci_select_tests.py avant exposition au workflow. Chaque shard
   # authentifie et reutilise le socle prechauffe, construit ses cibles explicites puis applique la
-  # regex CTest du meme shard : aucune compilation runtime commune n'est multipliee sept fois.
+  # regex CTest du meme shard : aucune compilation runtime commune n'est multipliee dix fois.
   gate-cpp-shards:
     name: ubuntu-latest / Kokkos Serial (C++) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     # Runtime objects are prewarmed in parallel above. Keep an 18-minute bounded final build for
     # contract verification, ccache hits, shard-owned test executables and links, then seven minutes
-    # for tests. A cold common runtime can no longer consume this watchdog independently seven times.
+    # for tests. A cold common runtime can no longer consume this watchdog independently eleven times.
+    # Eleven shards keep the DSO rollback fixture catalog at 900.3 modeled seconds versus
+    # 910.3325 with ten, preserving the 906-second budget. These are scheduling estimates.
     timeout-minutes: 40
     needs: [changes, set-mode, gate-cpp-prewarm]
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     # Tout evenement non-PR (push master / nightly / dispatch) lance le gate ; sur pull_request,
     # uniquement si un chemin C++ a bouge, ou si un label force explicitement Kokkos.
     if: needs.set-mode.outputs.cpp_required == 'true'
@@ -479,7 +481,7 @@ jobs:
             --explain-file "$RUNNER_TEMP/cpp-test-plan.json" \
             --github-output "$GITHUB_OUTPUT" \
             --shard-index "${{ matrix.shard }}" \
-            --shard-total 7 \
+            --shard-total 11 \
             "${force_args[@]}"
           cpp_summary=$(grep '^cpp_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
           cpp_shard_summary=$(grep '^cpp_shard_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
@@ -1119,8 +1121,8 @@ jobs:
     name: ubuntu-latest / Kokkos Serial (Python) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     # Shards are independent (`fail-fast: false`) and must all report a result.  Native-loader
-    # tests can legitimately run for tens of minutes on a cold public runner.  Six measured-duration
-    # shards keep the test critical path below the watchdog; the remaining margin covers setup and
+    # tests can legitimately run for tens of minutes on a cold public runner. Duration-weighted
+    # shards reserve room below the watchdog; the remaining margin covers setup and
     # transient runner variance without turning a stalled test into an unbounded job.
     timeout-minutes: 50
     needs: [changes, set-mode, gate-python-build]
@@ -1129,14 +1131,15 @@ jobs:
       fail-fast: false
       matrix:
         # Shard ids MUST stay contiguous 0..N-1: the harness pairs SHARD_INDEX=matrix.shard with
-        # SHARD_TOTAL=strategy.job-total. ADC-623: files are packed by MEASURED DURATION
+        # SHARD_TOTAL=strategy.job-total. ADC-623: files are packed by recorded duration weights
         # (scripts/ci_shard_binpack.py, greedy LPT over tests/python/test_durations.json), not by a
         # modulo of the file list, so the slowest shard -- the gate critical path -- is minimized.
-        # 7 shards: the measured 417-file universe packs to a 32.2-minute maximum test load, leaving
-        # setup and runner variance inside the unchanged 50-minute watchdog. To rebalance,
-        # change the COUNT here only (job names stay "... shard N"; the required `gate` aggregates
-        # them via a single matrix entry in its `needs`).
-        shard: [0, 1, 2, 3, 4, 5, 6]
+        # 18 shards: the 537-file catalog, including explicit unmeasured migration estimates,
+        # models a 33.3-minute maximum test load (17 shards exceed the 35-minute budget).
+        # This is a scheduling estimate, not an executed CI timing qualification; retain the
+        # unchanged 50-minute watchdog. To rebalance, update this count and the source budget
+        # gate. Job names stay "... shard N"; the required `gate` aggregates the matrix in `needs`.
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
 
     env:
       POPS_NATIVE_DIM: "2"
@@ -2068,7 +2071,7 @@ jobs:
           key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
 
   # PREWARM OPENMP NATIF. Une invalidation froide des en-tetes de production ne doit pas forcer
-  # chacun des sept shards C++ ni le module Python a recompiler leur socle runtime avant leurs
+  # chacun des shards C++ ni le module Python a recompiler leur socle runtime avant leurs
   # executables/bindings. Les graphes C++ et Python ont volontairement des defines/visibilites
   # differents : chaque graphe possede donc ses trois lanes semantiques exactes. Elles publient
   # uniquement ccache et le contrat compilateur/flags/revision/sources ; aucun binaire lie n'est
@@ -2235,7 +2238,7 @@ jobs:
           retention-days: 1
 
   kokkos-openmp:
-    # The OpenMP C++ proof is the same exact seven-way target partition as the Serial gate:
+    # The OpenMP C++ proof is the same exact eleven-way target partition as the Serial gate:
     # every non-MPI target belongs to exactly one shard and every built target must expose
     # an authenticated CTest label before its cases can run.  The independent Python/native-ABI
     # proof stays in its own lane because it builds one module rather than the C++ test graph.
@@ -2253,37 +2256,57 @@ jobs:
           - lane: cpp-0
             kind: cpp
             shard: 0
-            shard_total: 7
+            shard_total: 11
             ccache_maxsize: 2G
           - lane: cpp-1
             kind: cpp
             shard: 1
-            shard_total: 7
+            shard_total: 11
             ccache_maxsize: 2G
           - lane: cpp-2
             kind: cpp
             shard: 2
-            shard_total: 7
+            shard_total: 11
             ccache_maxsize: 2G
           - lane: cpp-3
             kind: cpp
             shard: 3
-            shard_total: 7
+            shard_total: 11
             ccache_maxsize: 2G
           - lane: cpp-4
             kind: cpp
             shard: 4
-            shard_total: 7
+            shard_total: 11
             ccache_maxsize: 2G
           - lane: cpp-5
             kind: cpp
             shard: 5
-            shard_total: 7
+            shard_total: 11
             ccache_maxsize: 2G
           - lane: cpp-6
             kind: cpp
             shard: 6
-            shard_total: 7
+            shard_total: 11
+            ccache_maxsize: 2G
+          - lane: cpp-7
+            kind: cpp
+            shard: 7
+            shard_total: 11
+            ccache_maxsize: 2G
+          - lane: cpp-8
+            kind: cpp
+            shard: 8
+            shard_total: 11
+            ccache_maxsize: 2G
+          - lane: cpp-9
+            kind: cpp
+            shard: 9
+            shard_total: 11
+            ccache_maxsize: 2G
+          - lane: cpp-10
+            kind: cpp
+            shard: 10
+            shard_total: 11
             ccache_maxsize: 2G
           - lane: python
             kind: python
@@ -2299,7 +2322,7 @@ jobs:
       POPS_NATIVE_DIM: "2"
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       # Chaque lane C++ fusionne le socle runtime OpenMP prechauffe avant d'ajouter les objets de
-      # son septieme du graphe. Deux Gio evitent d'evincer immediatement ce socle authentifie.
+      # sa partition du graphe. Deux Gio evitent d'evincer immediatement ce socle authentifie.
       # La lane Python conserve le meme budget pour son module de production unique.
       CCACHE_MAXSIZE: ${{ matrix.ccache_maxsize }}
       CCACHE_BASEDIR: ${{ github.workspace }}

@@ -45,9 +45,16 @@ DEFAULT_DT = 1.0e-3
 def _native_output_mode() -> Any:
     """Return the portable shared-file topology for the loaded native backend."""
 
+    import os
+
+    from pops._native_selector import select_native_dimension, selected_native_module
     from pops.output import ParallelMode
     from pops.runtime_environment import runtime_environment_report
 
+    if selected_native_module(required=False) is None:
+        launched = os.environ.get("POPS_NATIVE_DIM")
+        if launched in {"1", "2", "3"}:
+            select_native_dimension(int(launched))
     communicator = runtime_environment_report().get("communicator")
     if communicator == "serial":
         return ParallelMode.SERIAL
@@ -543,17 +550,6 @@ def build_initial_state(*, cells: int = DEFAULT_CELLS) -> dict[str, np.ndarray]:
     }
 
 
-def build_initial_fields(*, cells: int = DEFAULT_CELLS) -> dict[str, np.ndarray]:
-    """Allocate the declared field-space buffers; the Program solve supplies their values."""
-
-    zeros = np.zeros((cells, cells), dtype=np.float64)
-    return {
-        "potential": zeros.copy(),
-        "electric_x": zeros.copy(),
-        "electric_y": zeros.copy(),
-    }
-
-
 def compile_final_case(*, cells: int = DEFAULT_CELLS) -> tuple[FinalMultiphysicsCase, Any]:
     """Resolve and compile the exact final Case with its authenticated layout provider."""
 
@@ -587,8 +583,9 @@ def _snapshot(simulation: Any) -> RuntimeSnapshot:
         )
         for name in simulation.history_names()
     }
-    bound = simulation.bound_snapshot.to_dict()
-    layout_plan = bound["layout"]
+    # The single-layout engine snapshot records its layout kind.  The public runtime
+    # report carries the complete authenticated install plan and its qualified handles.
+    layout_plan = simulation.inspect().to_dict()["instance"]["layout_plan"]
     return RuntimeSnapshot(
         time=float(simulation.time()),
         macro_step=int(simulation.macro_step()),
@@ -658,7 +655,6 @@ def run_and_restart(
     simulation = _bind_artifact(
         artifact,
         initial_state=build_initial_state(cells=cells),
-        aux=build_initial_fields(cells=cells),
     )
     run_report = pops.run(
         simulation,
@@ -682,7 +678,6 @@ def run_and_restart(
     resumed = _bind_artifact(
         artifact,
         initial_state=build_initial_state(cells=cells),
-        aux=build_initial_fields(cells=cells),
     )
     resumed.restart(checkpoint_path)
     restored = _snapshot(resumed)

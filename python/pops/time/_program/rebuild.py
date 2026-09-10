@@ -83,6 +83,7 @@ def rebuild_program(
         )
         object.__setattr__(out, "clock", Clock("macro", owner=out.owner_path))
     out.dt = self.dt
+    out._next_stage_identity = self._next_stage_identity
     out._step_strategy = getattr(self, "_step_strategy", None)
     out._cadence = getattr(self, "_cadence", None)
     out._cell_local_time = getattr(self, "_cell_local_time", None)
@@ -109,7 +110,7 @@ def rebuild_program(
             return StagePoint(point.name, {
                 partition: remap_point(coordinate)
                 for partition, coordinate in point.partitions.items()
-            })
+            }, identity=point.identity)
         raise TypeError("Program rebuild encountered a value without an exact evaluation point")
     out._state_spaces = {
         reference_of(state_ref): space
@@ -246,6 +247,9 @@ def rebuild_program(
         from pops.model.handles import Handle
         if isinstance(value, Handle):
             return reference_of(value)
+        from pops._ir.expr import Expr
+        if isinstance(value, Expr):
+            return value.resolve_references(reference_of)
         from pops.time.field_context import FieldContext, FieldReadProvenance
         if isinstance(value, (FieldContext, FieldReadProvenance)):
             return remap_provenance(value)
@@ -262,6 +266,12 @@ def rebuild_program(
                 raise TypeError("Schedule rebuild must preserve the exact extension type")
             return rebuilt_schedule
         if getattr(value, "__pops_ir_immutable__", False) is True:
+            references = getattr(value, "declaration_references", None)
+            resolve = getattr(value, "resolve_references", None)
+            if callable(references) and references():
+                if not callable(resolve):
+                    raise TypeError("immutable Program metadata with declarations requires reference resolution")
+                return resolve(reference_of)
             return value
         if isinstance(value, Mapping):
             return {

@@ -59,6 +59,8 @@ OLD_MODULES = (
 PUBLIC = (
     "Program", "ProgramValue", "StageStateSet", "StencilAccess", "ResidualSolution",
     "CoupledImplicitEuler", "LocalLinear", "LocalResidual",
+    "DerivativeStrategy", "SolveRequest", "SolveRequestError", "SolveUnknown",
+    "ImplicitStage", "ImplicitDiffusionStage",
     "SolveOutcome", "FieldSolveOutcome", "SolveAction", "FailRun", "RejectAttempt",
     "SOLVE_STATUSES", "Schedule",
     "StepStrategy", "FixedDt", "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid",
@@ -89,6 +91,8 @@ PUBLIC = (
     "eliminate_redundant_field_solves", "optimize",
     "HoldCatchupBlock", "adaptive_strides", "hold_catchup_program",
     "step_adaptive_program",
+    "TemporalInterval", "TemporalProblemRegion", "ResolvedTemporalProblem",
+    "resolve_temporal_problem",
 )
 
 
@@ -130,6 +134,8 @@ def _group(module: str) -> str:
     parts = module.split(".")
     leaf = parts[2] if len(parts) > 2 else "facade"
     if leaf in PRIVATE_PACKAGES or leaf in {"_authoring", "_rhs_terms"}:
+        return leaf
+    if leaf == "method_regions":
         return leaf
     return "core"
 
@@ -213,8 +219,9 @@ def test_time_module_graph_is_acyclic_and_respects_private_layering() -> None:
         "_schedule": {"_graph", "core"},
         "_program": {
             "_authoring", "_graph", "_history", "_methods", "_rhs_terms",
-            "_schedule", "_step", "core",
+            "_schedule", "_step", "core", "method_regions",
         },
+        "method_regions": {"_graph", "_methods", "_program", "core"},
     }
     violations = []
     for source, targets in edges.items():

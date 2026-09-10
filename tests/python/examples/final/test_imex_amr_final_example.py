@@ -26,7 +26,7 @@ def _load_example():
 
 def test_example_runs_and_every_scientific_format_reopens(tmp_path: Path) -> None:
     environment = dict(os.environ)
-    environment["POPS_INCLUDE"] = str(ROOT / "include")
+    environment.setdefault("POPS_INCLUDE", str(ROOT / "include"))
     completed = subprocess.run(
         [sys.executable, str(EXAMPLE), "--output-dir", str(tmp_path / "published")],
         cwd=tmp_path,
@@ -131,6 +131,7 @@ def test_resolved_amr_lowering_report_covers_every_executed_authority() -> None:
         "amr-runtime-transfer-operation:apply_transfer_provider:coarse_fine_fill",
         "amr-runtime-transfer-operation:apply_transfer_provider:prolongation",
         "amr-runtime-transfer-operation:apply_transfer_provider:restriction",
+        "amr-runtime-transfer-operation:apply_transfer_provider:temporal_interpolation",
         "amr-runtime-transfer-operation:recompute:coarse_fine_fill",
     }
     assert any(

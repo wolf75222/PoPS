@@ -351,9 +351,17 @@ void rhs_jacvec_pair_into_at(const runtime::multiblock::BoundaryEvaluationPoint&
                              bool first_flux_only, int second_block, field_type& second_state,
                              field_type& second_result, bool second_flux_only) const {
   require_boundary_point_(point, "AMR coupled Jacobian residual");
-  if (first_block == second_block || n_blocks() != 2 || !(point.dt > 0.0))
+  if (first_block == second_block || !(point.dt > 0.0))
     throw std::invalid_argument(
-        "AMR coupled Jacobian residual requires two distinct complete Program blocks");
+        "AMR coupled Jacobian residual requires two distinct qualified Program blocks");
+  const auto& expression = facade_->prepared_amr_program_flux_expression_budget();
+  for (const int block : {first_block, second_block}) {
+    (void)sys_block(block);
+    const auto& row = expression.blocks.at(static_cast<std::size_t>(block));
+    if (row.rhs_basis_bound == 0 || row.coefficient_term_bound == 0)
+      throw std::invalid_argument(
+          "AMR coupled Jacobian endpoint lacks an active authored RHS budget");
+  }
   std::unique_lock scratch_lock(coupled_jacvec_mutex_, std::try_to_lock);
   if (!scratch_lock.owns_lock())
     throw std::logic_error("AMR coupled Jacobian scratch is already in use");
@@ -370,22 +378,51 @@ void rhs_jacvec_pair_into_at(const runtime::multiblock::BoundaryEvaluationPoint&
   field_type& second_coupled = *scratch.coupled[static_cast<std::size_t>(second_runtime)];
   first_candidate.set_val(Real(0));
   second_candidate.set_val(Real(0));
-  copy_full_(first_state, first_coupled);
-  copy_full_(second_state, second_coupled);
+  // The pair can be embedded in a larger complete carrier (for example, a packed solve vector).
+  // Freeze unrelated inputs from this exact attempt, never from accepted hierarchy storage.
+  for (int program_block = 0; program_block < n_blocks(); ++program_block) {
+    const int runtime_block = sys_block(program_block);
+    field_type& candidate = *scratch.coupled[static_cast<std::size_t>(runtime_block)];
+    const field_type* source = runtime_block == first_runtime ? &first_state
+                               : runtime_block == second_runtime
+                                   ? &second_state
+                                   : live_attempt_state_(runtime_block, active_level_);
+    if (source == nullptr)
+      throw std::logic_error(
+          "AMR coupled Jacobian unrelated carrier lacks its current attempt state");
+    copy_full_(*source, candidate);
+    scratch.program_candidates[static_cast<std::size_t>(program_block)] = &candidate;
+  }
+  // Freeze coarse/fine equation data from the same active attempt as rhs_group.
+  // Falling back to accepted hierarchy parents would differentiate another stage.
+  const bool active = !active_attempt_states_.empty();
   const auto& first_evaluation =
       first_flux_only
-          ? facade_->evaluate_prepared_amr_block_level_flux_at(first_runtime, point, first_state)
-          : facade_->evaluate_prepared_amr_block_level_at(first_runtime, point, first_state);
+          ? (active ? facade_->evaluate_prepared_amr_block_level_flux_at(
+                          first_runtime, point, first_state, active_level_ - 1,
+                          staged_parent_for_block_(first_runtime))
+                    : facade_->evaluate_prepared_amr_block_level_flux_at(
+                          first_runtime, point, first_state))
+          : (active ? facade_->evaluate_prepared_amr_block_level_at(
+                          first_runtime, point, first_state, active_level_ - 1,
+                          staged_parent_for_block_(first_runtime))
+                    : facade_->evaluate_prepared_amr_block_level_at(
+                          first_runtime, point, first_state));
   copy_valid_(first_evaluation.residual, first_candidate);
   const auto& second_evaluation =
       second_flux_only
-          ? facade_->evaluate_prepared_amr_block_level_flux_at(second_runtime, point, second_state)
-          : facade_->evaluate_prepared_amr_block_level_at(second_runtime, point, second_state);
+          ? (active ? facade_->evaluate_prepared_amr_block_level_flux_at(
+                          second_runtime, point, second_state, active_level_ - 1,
+                          staged_parent_for_block_(second_runtime))
+                    : facade_->evaluate_prepared_amr_block_level_flux_at(
+                          second_runtime, point, second_state))
+          : (active ? facade_->evaluate_prepared_amr_block_level_at(
+                          second_runtime, point, second_state, active_level_ - 1,
+                          staged_parent_for_block_(second_runtime))
+                    : facade_->evaluate_prepared_amr_block_level_at(
+                          second_runtime, point, second_state));
   copy_valid_(second_evaluation.residual, second_candidate);
 
-  std::array<field_type*, 2> candidates{};
-  candidates[static_cast<std::size_t>(first_block)] = &first_coupled;
-  candidates[static_cast<std::size_t>(second_block)] = &second_coupled;
   if (!interface_flux_ledger_ || !interface_flux_ledger_->in_transaction())
     throw std::logic_error(
         "AMR coupled Jacobian residual requires its active interface-ledger transaction");
@@ -393,19 +430,46 @@ void rhs_jacvec_pair_into_at(const runtime::multiblock::BoundaryEvaluationPoint&
       interface_flux_ledger_.get(),
       runtime_->topology_epoch(),
       nlev(),
-      {active_level_, static_cast<std::int64_t>(facade_->macro_step()), point.stage_fraction,
-       point.physical_time},
+      runtime::multiblock::clock_stamp_in_window(point, active_subcycling_window_),
       "program-jacvec-pair",
       active_subcycling_window_,
       exact_binary_rational_(static_cast<Real>(point.dt) /
                              (active_subcycling_window_.end.physical_time -
                               active_subcycling_window_.begin.physical_time)),
       true};
-  interface_flux_ledger_->begin();
+  const ExecutionLane& lane = prepared_execution_lane();
+  runtime::multiblock::BoundaryEvaluationPoint evaluation_point;
+  std::optional<typename interface_flux_ledger_type::PreparedBegin> evaluation_begin;
+  std::exception_ptr preparation_error;
+  try {
+    evaluation_point = point;
+    evaluation_point.graph_identity =
+        "pops.amr-program.paired-evaluation/" + expression.program_hash;
+    evaluation_point.rate_identity = "rhs-coherence/" + std::to_string(point.stage);
+    evaluation_point.application_identity =
+        "program-pair/" + std::to_string(first_block) + "/" + std::to_string(second_block) +
+        "/runtime-pair/" + std::to_string(first_runtime) + "/" + std::to_string(second_runtime);
+    evaluation_begin.emplace(interface_flux_ledger_->prepare_evaluation_begin());
+  } catch (...) {
+    preparation_error = std::current_exception();
+  }
+  if (all_reduce_max(preparation_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && preparation_error)
+      std::rethrow_exception(preparation_error);
+    throw std::runtime_error("AMR coupled Jacobian evaluation preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-coupled-jacobian-evaluation"),
+            evaluation_begin->exact_contract()}},
+          lane))
+    throw std::invalid_argument("AMR coupled Jacobian evaluation scope differs between ranks");
+  interface_flux_ledger_->publish_prepared_begin(*evaluation_begin);
   try {
     (void)facade_->apply_prepared_amr_program_candidates(
         active_level_, static_cast<Real>(point.dt),
-        std::span<field_type* const>(candidates.data(), candidates.size()), point, &publication);
+        std::span<field_type* const>(scratch.program_candidates.data(),
+                                     scratch.program_candidates.size()),
+        evaluation_point, &publication);
     interface_flux_ledger_->rollback();
   } catch (...) {
     if (interface_flux_ledger_->transaction_depth() > 1)

@@ -20,28 +20,37 @@ import json
 from typing import Any
 
 from pops.identity.scalar import scalar_cpp
-from pops.fields._prepared_nullspace_registry import prepared_nullspace_provider_from_attrs
-from pops.solvers._prepared_preconditioner_registry import (
-    prepared_preconditioner_provider_from_attrs,
+from pops.fields._prepared_nullspace_registry import (
+    PreparedNullspaceProvider, prepared_nullspace_provider_from_attrs,
 )
-from pops.solvers.krylov._prepared_method_registry import prepared_krylov_method_provider_from_attrs
-from pops.solvers.providers import prepared_hierarchy_solver_provider_from_attrs
+from pops.solvers._prepared_preconditioner_registry import (
+    PreparedPreconditionerProvider, prepared_preconditioner_provider_from_attrs,
+)
+from pops.solvers.krylov._prepared_method_registry import (
+    PreparedKrylovMethodProvider, prepared_krylov_method_provider_from_attrs,
+)
+from pops.solvers.providers import (
+    PreparedHierarchySolverProvider, prepared_hierarchy_solver_provider_from_attrs,
+)
 from pops.time.values import ProgramValue, _to_affine  # noqa: F401
 
 # Emission-only op tables (formerly Program class constants; the lowering owns them).
 # Ops the Phase-4b codegen lowers ONLY when a physical model is supplied (they read the model's
 # symbolic source_term / linear_source coefficients). Without a model they raise NotImplementedError.
 _MODEL_OPS = (
-    "source",
+    "diffusive_rhs", "input_fields", "source",
     "apply",
     "local_transform",
     "solve_local_linear",
     "solve_local_nonlinear",
+    "solve_spatial_nonlinear",
 )
 
 _ALLOWED_OPS = frozenset(
     {
         "state",
+        "layout_map_export",
+        "layout_map_import",
         "solve_fields",
         "solve_fields_from_blocks",
         "rhs",
@@ -64,6 +73,12 @@ _ALLOWED_OPS = frozenset(
         "acceptance_guard",
         "matrix_free_operator",
         "scalar_field",
+        "field_problem_load",
+        "field_problem_coefficients",
+        "field_problem_apply",
+        "field_component",
+        "field_gradient",
+        "field_publication",
         "vector_field",
         "laplacian",
         "gradient",
@@ -107,8 +122,15 @@ class ProgramProviderPlans:
     storage address after all package providers have been registered.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, target: str = "system", provider_halos: Any = None) -> None:
+        from pops.codegen._program_kernel_reuse import ProgramSourceKernelHelpers
+
         self._plans: dict[str, tuple[tuple[Any, Any], ...]] = {}
+        self._provider_halos = dict(provider_halos or {})
+        if target not in {"system", "amr_system"}:
+            raise ValueError("Program provider plan target must be system or amr_system")
+        self.target = target
+        self.source_kernel_helpers = ProgramSourceKernelHelpers()
 
     def bind(self, impl: Any, exprs: Any, qid: str) -> dict[str, Any]:
         if not isinstance(qid, str) or not qid:
@@ -168,7 +190,36 @@ class ProgramProviderPlans:
                 "Program provider consumer qid %r was emitted with conflicting requirements" % qid
             )
         self._plans[qid] = frozen
-        return {"qid": qid, "count": len(rows), "slots": slots}
+        return {"qid": qid, "count": len(rows), "slots": slots,
+                "target": self.target, "evaluation_id": tuple(self._plans).index(qid)}
+
+    def bind_pack(self, pack: Any, qid: str) -> dict[str, Any]:
+        """Register an already authenticated native closure's exact read pack.
+
+        This publication-only binding preserves ComponentKeys directly; the installed
+        closure owns its existing local-slot mapping and emits no Program cell locals.
+        """
+        from pops.model.provider_pack import ProviderPack
+
+        if type(pack) is not ProviderPack:
+            raise TypeError("Program closure consumer requires an exact ProviderPack")
+        if not isinstance(qid, str) or not qid:
+            raise ValueError("Program provider consumer qid must be a non-empty string")
+        rows = []
+        for key in pack:
+            contract = pack.contract(key)
+            if key.space_kind not in {"aux", "field"} or \
+                    contract.centering != "cell" or contract.layout != "cell":
+                raise ValueError("Program closure requires cell-layout auxiliary/field inputs")
+            rows.append((key, contract))
+        frozen = tuple(rows)
+        prior = self._plans.get(qid)
+        if prior is not None and prior != frozen:
+            raise ValueError(
+                "Program provider consumer qid %r was emitted with conflicting requirements" % qid)
+        self._plans[qid] = frozen
+        return {"qid": qid, "count": len(rows), "slots": {},
+                "target": self.target, "evaluation_id": tuple(self._plans).index(qid)}
 
     def cpp_install(self, target: str) -> str:
         """Emit the registry calls before the Program execution context is installed."""
@@ -207,10 +258,9 @@ class ProgramProviderPlans:
                     json.dumps(contract.representation), json.dumps(contract.centering), optional_unit,
                     json.dumps(contract.layout), optional_kind,
                 )
-                shape = (
-                    "Shape{pops::kNativeDimension, 1, [] { "
-                    "pops::Index<pops::kNativeDimension> halo{}; return halo; }()}"
-                )
+                from pops.codegen._native_auxiliary_shapes import auxiliary_shape_cpp
+                shape = auxiliary_shape_cpp(self._provider_halos.get(
+                    (key.owner_qid, key.space_kind, key.space_name, key.component), 0))
                 values.append(
                     "ConsumerValue{Dependency{%s, %s, %s}, %d}" % (
                         rendered_key, rendered_contract, shape, slot,
@@ -221,6 +271,12 @@ class ProgramProviderPlans:
                 "      std::vector<ConsumerValue>{%s}});" % ", ".join(values),
             ))
         return "\n".join(lines)
+
+    def preparation_binding(self, qid: str) -> dict[str, Any]:
+        """Return a registered consumer's prerequisite identity, without rebinding its reads."""
+        rows = self._plans[qid]
+        return {"qid": qid, "count": len(rows), "target": self.target,
+                "evaluation_id": tuple(self._plans).index(qid)}
 
 
 def program_provider_consumer_qid(model: Any, value_id: Any, block: Any = None) -> str:
@@ -273,15 +329,37 @@ def _prepared_native_components(program: Any) -> tuple[Any, ...]:
     components: list[Any] = []
     seen: set[str] = set()
     for value in walk(program._values):
+        from pops.native_calls import NativeFunction
+        for function in value.attrs.get("native_functions", ()):
+            if type(function) is not NativeFunction:
+                raise TypeError("native call build inputs require exact NativeFunction authority")
+            component = function.component
+            if component.manifest_sha256 not in seen:
+                seen.add(component.manifest_sha256)
+                components.append(component)
+        if value.op == "field_problem_apply":
+            from pops.fields._program_problem import native_field_component, validate_field_apply
+
+            validate_field_apply(value)
+            component = native_field_component()
+            identity = component.manifest_sha256
+            if identity not in seen:
+                seen.add(identity)
+                components.append(component)
+            continue
         if value.op != "solve_linear":
             continue
-        providers = [
-            prepared_krylov_method_provider_from_attrs(value.attrs),
-            prepared_preconditioner_provider_from_attrs(value.attrs),
-            prepared_nullspace_provider_from_attrs(value.attrs),
+        providers: list[PreparedNullspaceProvider | PreparedKrylovMethodProvider
+                        | PreparedPreconditionerProvider | PreparedHierarchySolverProvider] = [
+            prepared_nullspace_provider_from_attrs(value.attrs)
         ]
-        if "hierarchy_solver_provider" in value.attrs:
-            providers.append(prepared_hierarchy_solver_provider_from_attrs(value.attrs))
+        hierarchy = (prepared_hierarchy_solver_provider_from_attrs(value.attrs)
+                     if "hierarchy_solver_provider" in value.attrs else None)
+        if hierarchy is None or hierarchy.flat_execution.uses_prepared_krylov_fallback:
+            providers.extend((prepared_krylov_method_provider_from_attrs(value.attrs),
+                              prepared_preconditioner_provider_from_attrs(value.attrs)))
+        if hierarchy is not None:
+            providers.append(hierarchy)
         for provider in providers:
             component = provider.native_component
             identity = component.manifest_sha256
@@ -304,7 +382,11 @@ def _prepared_native_component_includes(program: Any) -> str:
             if header not in seen:
                 seen.add(header)
                 headers.append(header)
-    return "".join("#include <%s>  // prepared native provider\n" % header for header in headers)
+    result = "".join("#include <%s>  // prepared native provider\n" % header for header in headers)
+    from .program_lowerability import all_ops
+    if any(value.attrs.get("native_functions") for value in all_ops(program)):
+        result = "#include <pops/core/model/native_call.hpp>\n" + result
+    return result
 
 
 # Ops whose emitted kernels call pops::detail::block_inverse<N> (ADC-637): the GENERIC condensed-implicit
@@ -322,7 +404,10 @@ def _block_inverse_include(program: Any) -> str:
     """The closed-form block-inverse #include for @p program's generated .so, or "" when it carries no
     condensed-implicit op (ADC-637): only a Program using condensed_* emits pops::detail::block_inverse.
     (block_inverse.hpp itself includes dense_eig.hpp, already pulled in by the template.)"""
-    return _BLOCK_INVERSE_INCLUDE if any(v.op in _CONDENSED_OPS for v in program._values) else ""
+    result = _BLOCK_INVERSE_INCLUDE if any(v.op in _CONDENSED_OPS for v in program._values) else ""
+    if any(v.op == "solve_spatial_nonlinear" for v in program._values):
+        result += "#include <pops/runtime/program/prepared_spatial_residual.hpp>\n"
+    return result
 
 
 # --- module-level emission helpers (per-cell kernels, coeff rendering, the .so template) ---
@@ -569,6 +654,14 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
     return lines
 
 
+def _prepare_provider_values(binding: Any, program_block: Any, state_var: Any) -> list[str]:
+    """Publish Uniform consumer prerequisites once, before any rank-local Fab loop."""
+    if binding is None or not binding["count"] or binding["target"] != "system":
+        return []
+    return ["ctx.prepare_provider_values(%s, %d, %s, %d);" % (
+        json.dumps(binding["qid"]), program_block, state_var, binding["evaluation_id"])]
+
+
 def _kernel_open(
     out_var: Any,
     state_var: Any,
@@ -577,6 +670,7 @@ def _kernel_open(
     ghost_depth: int = 0,
     provider_binding: Any = None,
     program_block: Any = 0,
+    prepare_providers: bool = True,
 ) -> list:
     """Open the per-fab loop + per-cell for_each_cell over the VALID cells of @p out_var, binding the
     write handle ``outA``, the read state handle ``<state_var>A`` and the exact local provider view.
@@ -597,7 +691,9 @@ def _kernel_open(
         if ghost_depth == 0
         else "%s.fab(li).box().grow(%d)" % (out_var, ghost_depth)
     )
-    lines = [
+    preparation = (_prepare_provider_values(provider_binding, program_block, state_var)
+                   if prepare_providers else [])
+    lines = preparation + [
         "for (int li = 0; li < %s.local_size(); ++li) {" % out_var,
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> outA = %s.fab(li).view();"
         % out_var,
@@ -698,6 +794,7 @@ _PROGRAM_CPP_TEMPLATE = """\
 #endif
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/runtime/program/program_context.hpp>
+#include <pops/numerics/diffusion/prepared_diffusion.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 {prepared_native_component_includes}{block_inverse_include}#include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/mesh/storage/multifab.hpp>

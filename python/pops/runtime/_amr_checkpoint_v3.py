@@ -39,6 +39,8 @@ class _PreparedAMRRestart:
     multi: bool
     state_payload: tuple[Any, ...]
     auxiliary_checkpoint_payload: tuple[bytes, ...]
+    history_flux_snapshot_shards: tuple[bytes, ...] | None
+    exchange_checkpoint: bytes
     potential_payload: tuple[Any, ...]
     field_payload: tuple[Any, ...]
     hierarchy_mode: str
@@ -62,6 +64,8 @@ class _PreparedAMRCapture:
     local_distribution_modes: tuple[str, ...]
     local_dmaps: tuple[tuple[int, ...], ...]
     local_program_state: bytes
+    local_history_flux_snapshot_shard: bytes
+    history_flux_snapshot_shard_capacity: int
     capture_identity: str
 
 
@@ -412,6 +416,26 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
         raise RuntimeError("checkpoint requires the AMR temporal restart state")
     temporal_json = temporal.checkpoint_json(time=time, macro_step=macro_step)
     program_state = bytes(sim.program_accepted_state())
+    snapshot_provider = getattr(sim, "program_history_flux_snapshot_shard", None)
+    snapshot_capacity_provider = getattr(
+        sim, "_checkpoint_program_history_flux_snapshot_capacity", None
+    )
+    if not callable(snapshot_provider) or not callable(snapshot_capacity_provider):
+        raise TypeError("checkpoint AMR engine lacks immutable history-flux snapshot capture")
+    history_flux_snapshot_shard = snapshot_provider()
+    history_flux_snapshot_shard_capacity = snapshot_capacity_provider()
+    if type(history_flux_snapshot_shard) is not bytes:
+        raise TypeError("checkpoint AMR history-flux snapshot shard must be exact bytes")
+    if (
+        isinstance(history_flux_snapshot_shard_capacity, bool)
+        or not isinstance(history_flux_snapshot_shard_capacity, int)
+        or history_flux_snapshot_shard_capacity < 0
+    ):
+        raise TypeError("checkpoint AMR history-flux snapshot capacity must be non-negative")
+    if len(history_flux_snapshot_shard) > history_flux_snapshot_shard_capacity:
+        raise ValueError("checkpoint AMR history-flux snapshot exceeds its artifact capacity")
+    if history_flux_snapshot_shard and not program_state:
+        raise ValueError("checkpoint AMR native route returned Program history-flux snapshots")
     accepted_contract = encode_contract(sim)
     mode_provider = getattr(sim, "level_distribution_mode", None)
     owner_provider = getattr(sim, "level_owner_ranks", None)
@@ -536,6 +560,8 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
             "program_hash": str(out["program_hash"]),
             "program_cadence": cadence.to_data(),
             "program_state_present": bool(program_state),
+            "history_flux_snapshot_present": bool(history_flux_snapshot_shard),
+            "history_flux_snapshot_shard_capacity": history_flux_snapshot_shard_capacity,
             "accepted_contract": accepted_contract,
             "histories": history_plan.to_data(),
             "runtime_identities": [value.to_data() for value in owner._checkpoint_identities()],
@@ -558,6 +584,8 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
         distribution_modes,
         dmaps,
         program_state,
+        history_flux_snapshot_shard,
+        history_flux_snapshot_shard_capacity,
         capture_identity,
     )
 
@@ -582,6 +610,15 @@ def _capture_v3(owner, sim, prepared):
     if any(state != program_states[0] for state in program_states[1:]):
         raise ValueError("checkpoint AMR accepted Program image differs across source ranks")
     canonical_program_state = program_states[0]
+    from pops.runtime._checkpoint_history_flux_snapshots import capture_history_flux_snapshots
+    snapshot_canonicalizer = getattr(sim, "canonical_program_history_flux_snapshots", None)
+    capture_history_flux_snapshots(
+        prepared.topology,
+        prepared.local_history_flux_snapshot_shard,
+        prepared.history_flux_snapshot_shard_capacity,
+        snapshot_canonicalizer,
+        out,
+    )
     rank_rows = consensus(
         prepared.topology,
         "AMR rank-local distribution topology",
@@ -702,6 +739,8 @@ def _capture_v3(owner, sim, prepared):
             )
         out["auxiliary_checkpoint_%d" % level] = np.frombuffer(payload, dtype=np.uint8).copy()
     capture_histories(sim, prepared.history_plan, out)
+    from pops.runtime._checkpoint_exchanges import capture_checkpoint_continuation
+    capture_checkpoint_continuation(owner, out)
     identity = seal_checkpoint_payload(owner, out, runtime_kind="amr")
     return out, identity.token
 
@@ -1087,6 +1126,17 @@ def prepare_v3(
 
     _preflight_histories_v3(sim, d, current_ranks, spatial)
 
+    from pops.runtime._checkpoint_exchanges import prepare_checkpoint_continuation
+    from pops.runtime._checkpoint_history_flux_snapshots import prepare_history_flux_snapshots
+    snapshot_capacity_provider = getattr(
+        sim, "_checkpoint_program_history_flux_snapshot_capacity", None
+    )
+    if not callable(snapshot_capacity_provider):
+        raise TypeError("restart: AMR engine lacks immutable history-flux snapshot capacity")
+    history_flux_snapshot_shards = prepare_history_flux_snapshots(
+        d,
+        shard_capacity=snapshot_capacity_provider(),
+    )
     return _PreparedAMRRestart(
         payload=d,
         temporal_state=restored_temporal,
@@ -1105,6 +1155,8 @@ def prepare_v3(
         multi=bool(multi),
         state_payload=tuple((block, tuple(levels)) for block, levels in state_payload),
         auxiliary_checkpoint_payload=tuple(auxiliary_checkpoint_payload),
+        history_flux_snapshot_shards=history_flux_snapshot_shards,
+        exchange_checkpoint=prepare_checkpoint_continuation(owner, d),
         potential_payload=tuple(phi_payload),
         field_payload=tuple((slot, tuple(levels)) for slot, levels in field_payload),
         hierarchy_mode=hierarchy_mode,
@@ -1209,6 +1261,7 @@ def _restart_history_identity(owner, sim, *, phase):
             "slot": slot,
             "size": int(values.size),
             "dt": float(sim.history_slot_dt(name, level, slot)).hex(),
+            "sample_identity": bytes(sim.history_sample_identity(name, level)).hex(),
             "sha256": hashlib.sha256(values.tobytes(order="C")).hexdigest(),
         }
 
@@ -1367,6 +1420,10 @@ def apply_v3(owner, sim, prepared):
                 % (name, depth, ncomp, int(sim.history_depth(name)), int(sim.history_ncomp(name)))
             )
 
+    from pops.runtime._checkpoint_history_flux_snapshots import stage_history_flux_snapshots
+
+    stage_history_flux_snapshots(sim, prepared.history_flux_snapshot_shards)
+
     # (4) Restore every block/level state as saved, without re-prolongation.
     for block, levels in prepared.state_payload:
         for level, state in enumerate(levels):
@@ -1393,12 +1450,15 @@ def apply_v3(owner, sim, prepared):
             macro_step=macro_step,
             accepted_time=float(d["t"]),
         )
-    report = _restore_histories_v3(sim, d, checkpoint_topology(owner).size)
+    report = _restore_histories_v3(
+        sim, d, checkpoint_topology(owner).size, accepted_state=program_state
+    )
 
     # (7) Replay is allowed to mutate Program clocks/ring publications and regrid counters while it
     # reconstructs policy-omitted dense values. Replace those temporary values with the checkpoint's
     # exact accepted semantic state before exposing the runtime again.
     sim.restore_checkpoint_accepted_state(program_state)
+    sim._restore_checkpoint_program_exchanges(prepared.exchange_checkpoint)
     from pops.runtime._amr_checkpoint_contract import validate_restored_contract
 
     # (8) Clock last: the next cadence decision is identical to the uninterrupted run.
@@ -1548,6 +1608,7 @@ def _preflight_histories_v3(sim, d, current_ranks, spatial):
                 "restart: history '%s' requires depth >= 2 and component count >= 1" % name
             )
         policy = HistoryPersistence.from_json(str(d["history_policy_" + name]))
+        from pops.runtime._history_sample_identity import prepare_identity_payload
         from pops.runtime._system_io_history import (
             history_fill_count_from_payload,
             resolve_hierarchy_history_storage,
@@ -1646,10 +1707,12 @@ def _preflight_histories_v3(sim, d, current_ranks, spatial):
                         "restart: history '%s' level %d slot %d has size %d, expected %d"
                         % (name, level, slot, values.size, expected_values)
                     )
-            validate_history_slot_dt_payload(d, name, depth, fill_count, level=level)
+            slot_dt = validate_history_slot_dt_payload(d, name, depth, fill_count, level=level)
+            prepare_identity_payload(d, name, level, depth, initialized=fill_count > 0,
+                                     slot_dt=slot_dt)
 
 
-def _restore_histories_v3(sim, d, cur_ranks):
+def _restore_histories_v3(sim, d, cur_ranks, *, accepted_state):
     """Restore accepted-state v11 rings and replay only policy-omitted slots on a stable hierarchy.
 
     Capture resolves any selective ring whose replay window contains a scheduled regrid, cold slot,
@@ -1687,7 +1750,14 @@ def _restore_histories_v3(sim, d, cur_ranks):
     sim.set_clock(float(d["t"]), m)
 
     fired = {}
-    report = restore_histories(sim, d, fired_out=fired)
+    # Replay takes native accepted snapshots and executes the installed Program. Qualify its
+    # context against the complete restored checkpoint image before that first snapshot, after
+    # every numeric anchor and slot-provenance record has been installed. The native importer
+    # validates the live hierarchy, identities and flux payload; no layout guard is bypassed.
+    report = restore_histories(
+        sim, d, fired_out=fired,
+        before_replay=lambda: sim.restore_checkpoint_accepted_state(accepted_state),
+    )
 
     # A clean-window replay must neither record nor complete a regrid. Preflight already authenticated
     # the schedule; this guards the native execution seam as well.

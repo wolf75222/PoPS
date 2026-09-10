@@ -1,12 +1,14 @@
 """Named-flux composition through the final operator-first Module and Program APIs."""
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pops.lib.time as libtime
 import pops.model as model
 from pops.amr import (
@@ -32,9 +34,18 @@ from pops.lib.amr import StateTransfer
 from pops.lib.initial import BindArray
 from pops.math import ValueExpr, Var, sqrt
 from pops.mesh import CartesianGrid, PeriodicAxes
-from pops.numerics import DiscretizationPlan, FiniteVolume, reconstruction, riemann, variables
+from pops.numerics import (
+    DiscretizationPlan,
+    FiniteVolume,
+    NamedCenteredDivergence,
+    reconstruction,
+    riemann,
+    variables,
+)
+from pops.numerics.terms import Flux
+from pops.params import RuntimeParam
 from pops.projection import ConservativeCellAverage
-from pops.time import FixedDt, every
+from pops.time import FixedDt, Program, every
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -128,6 +139,45 @@ def _numerical_plan(module, state, *rates):
     return plan
 
 
+def _named_centered_plan(module, *rates):
+    plan = DiscretizationPlan()
+    for rate in rates:
+        contract = module.rate_contract(rate)
+        plan.rates.add(rate, NamedCenteredDivergence(flux=contract["flux"]))
+    return plan
+
+
+def test_named_centered_amr_accuracy_uses_the_exact_resolved_rate_target() -> None:
+    from types import SimpleNamespace
+    from pops.mesh._amr.transfer import AMRTransfer
+    from pops.model import Handle
+
+    module, state, _, whole, split = _named_flux_module()
+    numerics = _named_centered_plan(module, whole, split)
+    case, _, instance = _program(module, state, whole, name="named-amr-accuracy", numerics=numerics)
+    plan = numerics.resolve_for(case, instance.block_ref)
+    subject = case.resolve(instance)
+    accuracy = AMRTransfer._resolved_spatial_accuracy
+    # Both independent named sums target the same storage and carry order two / one ghost.
+    assert accuracy(subject, (plan,), 2) == (2, (1, 1))
+    assert accuracy(subject, (replace(plan, rates=plan.rates[:1]),), 2) == (2, (1, 1))
+    other_state = Handle("other", kind="state", owner=subject.owner_path)
+    assert accuracy(other_state, (plan,), 2) is None
+    foreign_case, _, foreign_instance = _program(
+        module, state, whole, name="foreign-named-amr-accuracy", numerics=numerics)
+    assert accuracy(foreign_case.resolve(foreign_instance), (plan,), 2) is None
+    # Missing typed targets must refuse; a matching spelling cannot manufacture ownership.
+    operator = plan.rates[0].rate
+    absent = type(operator)(operator.local_id, kind=operator.kind, owner=operator.owner_path)
+    malformed = replace(plan.rates[0], rate=absent)
+    with pytest.raises(ValueError, match=r"exact Rate\(State\) target"):
+        accuracy(subject, (SimpleNamespace(rates=(malformed,)),), 2)
+    foreign_plan = numerics.resolve_for(foreign_case, foreign_instance.block_ref)
+    wrong_method = replace(plan.rates[0], method=foreign_plan.rates[0].method)
+    with pytest.raises(ValueError, match="fluxes disagree"):
+        accuracy(subject, (SimpleNamespace(rates=(wrong_method,)),), 2)
+
+
 def test_default_flux_route_does_not_reclassify_named_flux_operators() -> None:
     module, state, default_flux, whole_rate, _ = _named_flux_module()
     default_rate = module.rate_operator(
@@ -179,6 +229,13 @@ def test_named_flux_rate_contract_retains_the_exact_ordered_operator_pack() -> N
         "convective", "pressure")
     assert all(handle.kind == "grid_operator" for handle in (*whole["flux"], *split["flux"]))
 
+    with pytest.raises(TypeError, match="non-empty ordered tuple"):
+        NamedCenteredDivergence(flux=())
+    with pytest.raises(TypeError, match="grid_operator handles"):
+        NamedCenteredDivergence(flux=(whole_rate,))
+    with pytest.raises(ValueError, match="does not match"):
+        NamedCenteredDivergence(flux=whole["flux"]).validate_rate_contract(split)
+
     with pytest.raises(ValueError, match="non-empty"):
         FiniteVolume(
             flux=(), variables=variables.Conservative(state),
@@ -200,24 +257,207 @@ def test_named_flux_rate_contract_retains_the_exact_ordered_operator_pack() -> N
             reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov(),
         )
 
+    numerics = _numerical_plan(module, state, whole_rate, split_rate)
     case, _, _ = _program(
-        module, state, whole_rate, name="ordered-flux-contract",
-        numerics=_numerical_plan(module, state, whole_rate, split_rate),
+        module, state, whole_rate, name="ordered-flux-contract", numerics=numerics,
     )
     frame = Rectangle(
         "ordered-flux-contract-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
     ).frame(Cartesian2D())
+    # The retained named-RHS route is a centered divergence. An authored FV
+    # descriptor must not silently relabel that native implementation.
+    from pops.codegen.lowering_coverage import LoweringRejection
+    with pytest.raises(LoweringRejection) as error:
+        pops.resolve(
+            pops.validate(case),
+            layout=Uniform(CartesianGrid(
+                frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes))),
+        )
+    assert error.value.gate == "numerical_method_realization_mismatch"
+    methods = {rate.local_id: method for rate, method in numerics.rates.items()}
+    assert methods["split_rate"].flux == split["flux"]
+
+
+def test_named_centered_divergence_is_the_exact_program_storage_authority() -> None:
+    module, state, _, whole_rate, split_rate = _named_flux_module()
+    numerics = _named_centered_plan(module, whole_rate, split_rate)
+    case, _, _ = _program(
+        module, state, whole_rate, name="named-centered-authority", numerics=numerics,
+    )
+    frame = Rectangle(
+        "named-centered-authority-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+
     resolved = pops.resolve(
         pops.validate(case),
         layout=Uniform(CartesianGrid(
-            frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes))),
+            frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes)
+        )),
     )
-    methods = {
-        row.rate.local_id: row.method.to_data()
-        for row in resolved.blocks[0].numerics.rates
-    }
-    assert [item["local_id"] for item in methods["split_rate"]["flux"]] == [
-        "convective", "pressure"]
+
+    method = resolved.blocks[0].spatial
+    assert method.to_data()["method"] == "native_named_centered_divergence"
+    assert method.runtime_configuration()["method"] == "state_storage"
+    evaluated = tuple(
+        operation
+        for operation in resolved.blocks[0].resolved_operations.operations
+        if "program_evaluation" in operation.guarantees and operation.exchanges
+    )
+    assert evaluated
+    assert all(operation.sampling == "cell_centered_divergence" for operation in evaluated)
+    from pops.codegen.module_lowering import lower_and_validate
+
+    block = resolved.blocks[0]
+    tampered_operations = tuple(
+        replace(
+            operation,
+            guarantees={
+                **operation.guarantees,
+                "numerical_method": {
+                    "method": "native_named_centered_divergence",
+                    "physical_fluxes": ("pressure",),
+                },
+            },
+        )
+        if "program_evaluation" in operation.guarantees and operation.exchanges
+        else operation
+        for operation in block.resolved_operations.operations
+    )
+    with pytest.raises(ValueError, match="checked numerical method"):
+        lower_and_validate(
+            block.model,
+            state_space=block.state_spaces[0],
+            resolved_operations=replace(
+                block.resolved_operations, operations=tampered_operations
+            ),
+        )
+    lowered, _ = lower_and_validate(
+        block.model,
+        state_space=block.state_spaces[0],
+        resolved_operations=block.resolved_operations,
+    )
+    assert lowered._m._program_only_storage_axes == ("x", "y")
+    assert lowered._m._flux == {}
+    assert lowered._m._eig == {}
+    assert set(lowered._m._flux_terms) == {"whole", "convective", "pressure"}
+
+
+def test_named_centered_divergence_does_not_poison_a_reused_formula_emitter() -> None:
+    module, state, _, whole_rate, split_rate = _named_flux_module()
+    contract = module.rate_contract(whole_rate)
+    named = _named_centered_plan(module, whole_rate, split_rate)
+    finite_volume = DiscretizationPlan()
+    for rate in (whole_rate, split_rate):
+        finite_volume.rates.add(
+            rate,
+            FiniteVolume(
+                flux=module.rate_contract(rate)["flux"],
+                variables=variables.Conservative(state),
+                reconstruction=reconstruction.FirstOrder(),
+                riemann=riemann.Rusanov(),
+            ),
+        )
+    frame = Rectangle(
+        "named-centered-reuse-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    layout = Uniform(CartesianGrid(
+        frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes)
+    ))
+
+    def resolved_block(numerics, name, flux):
+        case = pops.Case(name + "-case")
+        block = case.block("plasma", module)
+        current = Program(name + "-program")
+        temporal = current.state(block[state])
+        rate = current.rhs(state=temporal.n, terms=(flux,))
+        candidate = current.value(
+            "candidate", temporal.n + current.dt * rate, at=temporal.next.point
+        )
+        current.commit(temporal.next, candidate)
+        current.step_strategy(FixedDt(DT))
+        case.numerics(numerics, block=block)
+        case.program(current)
+        return pops.resolve(pops.validate(case), layout=layout).blocks[0]
+
+    named_block = resolved_block(
+        named, "named-centered-reuse-first", Flux(contract["flux"][0])
+    )
+    finite_volume_block = resolved_block(
+        finite_volume, "named-centered-reuse-second", Flux()
+    )
+    shared = module.to_dsl()
+    authored_flux = shared._m._flux
+    authored_eigenvalues = shared._m._eig
+    from pops.codegen.module_lowering import lower_and_validate
+
+    class CachedEmitterProvider:
+        def __pops_compiler_lowering__(self):
+            from pops.codegen import CompilerLowering
+
+            return CompilerLowering(
+                emit_model=shared, source_module=module, facade=self
+            )
+
+    provider = CachedEmitterProvider()
+    named_emitter, _ = lower_and_validate(
+        provider,
+        state_space=named_block.state_spaces[0],
+        resolved_operations=named_block.resolved_operations,
+    )
+    assert named_emitter is not shared
+    assert named_emitter._m._flux == {}
+    assert named_emitter._m._eig == {}
+    assert shared._m._flux is authored_flux
+    assert shared._m._eig is authored_eigenvalues
+
+    finite_volume_emitter, _ = lower_and_validate(
+        provider,
+        state_space=finite_volume_block.state_spaces[0],
+        resolved_operations=finite_volume_block.resolved_operations,
+    )
+    assert finite_volume_emitter._m._flux is authored_flux
+    assert finite_volume_emitter._m._eig is authored_eigenvalues
+
+    repeated_named_emitter, _ = lower_and_validate(
+        provider,
+        state_space=named_block.state_spaces[0],
+        resolved_operations=named_block.resolved_operations,
+    )
+    assert repeated_named_emitter is not shared
+    assert repeated_named_emitter._m._flux == {}
+    assert shared._m._flux is authored_flux
+    assert shared._m._eig is authored_eigenvalues
+
+
+def test_named_centered_divergence_rejects_mixed_runtime_methods() -> None:
+    module, state, _, whole_rate, split_rate = _named_flux_module()
+    mixed = DiscretizationPlan()
+    whole = module.rate_contract(whole_rate)
+    split = module.rate_contract(split_rate)
+    mixed.rates.add(whole_rate, NamedCenteredDivergence(flux=whole["flux"]))
+    mixed.rates.add(
+        split_rate,
+        FiniteVolume(
+            flux=split["flux"],
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+        ),
+    )
+    case, _, _ = _program(
+        module, state, whole_rate, name="mixed-named-centered", numerics=mixed,
+    )
+    frame = Rectangle(
+        "mixed-named-centered-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+
+    with pytest.raises(ValueError, match="distinct runtime configurations"):
+        pops.resolve(
+            pops.validate(case),
+            layout=Uniform(CartesianGrid(
+                frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes)
+            )),
+        )
 
 
 @pytest.mark.compiler
@@ -231,20 +471,26 @@ def test_split_named_flux_step_matches_whole_named_flux_step_on_public_layouts(
     module, state, _, whole_rate, split_rate = _named_flux_module()
     whole_case, whole_program, whole_state = _program(
         module, state, whole_rate, name="whole-flux-runtime",
-        numerics=_numerical_plan(module, state, whole_rate, split_rate),
+        numerics=_named_centered_plan(module, whole_rate, split_rate),
         bind_initial=True,
     )
     split_case, split_program, split_state = _program(
         module, state, split_rate, name="split-flux-runtime",
-        numerics=_numerical_plan(module, state, whole_rate, split_rate),
+        numerics=_named_centered_plan(module, whole_rate, split_rate),
         bind_initial=True,
+    )
+    whole_threshold = whole_case.value(
+        whole_case.param(RuntimeParam("refine_threshold", default=REFINE_THRESHOLD))
+    )
+    split_threshold = split_case.value(
+        split_case.param(RuntimeParam("refine_threshold", default=REFINE_THRESHOLD))
     )
     frame = Rectangle(
         "named-flux-runtime-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
     ).frame(Cartesian2D())
     grid = CartesianGrid(frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes))
 
-    def resolved_layout(state_instance, program):
+    def resolved_layout(state_instance, program, threshold):
         if layout_kind == "uniform":
             return Uniform(grid)
         transfer = AMRTransfer()
@@ -254,7 +500,7 @@ def test_split_named_flux_step_matches_whole_named_flux_step_on_public_layouts(
             hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
             tagging=AMRTagging(
                 rules=(
-                    Tag(ValueExpr(state_instance) > REFINE_THRESHOLD),
+                    Tag(ValueExpr(state_instance)["rho"] > threshold),
                     Buffer(cells=1),
                 ),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
@@ -271,12 +517,12 @@ def test_split_named_flux_step_matches_whole_named_flux_step_on_public_layouts(
     }
     whole_resolved = pops.resolve(
         pops.validate(whole_case),
-        layout=resolved_layout(whole_state, whole_program),
+        layout=resolved_layout(whole_state, whole_program, whole_threshold),
         **resolve_options,
     )
     split_resolved = pops.resolve(
         pops.validate(split_case),
-        layout=resolved_layout(split_state, split_program),
+        layout=resolved_layout(split_state, split_program, split_threshold),
         **resolve_options,
     )
     whole_artifact = pops.compile(whole_resolved)
@@ -297,6 +543,7 @@ def test_split_named_flux_step_matches_whole_named_flux_step_on_public_layouts(
         instance = pops.bind(
             artifact,
             initial_values={bindings[0].subject: np.ascontiguousarray(initial)},
+            resources={"execution_context": artifact_execution_context(artifact)},
         )
         if layout_kind == "amr":
             assert instance.n_levels() == 2

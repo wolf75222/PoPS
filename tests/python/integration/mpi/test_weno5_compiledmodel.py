@@ -14,12 +14,54 @@ import shutil
 import numpy as np
 
 import pops.runtime._engine_descriptors as engine
-from test_dsl_coupled import build_euler, compile_euler_component, GAMMA, INCLUDE
+from test_dsl_coupled import compile_euler_component, GAMMA, INCLUDE
+from pops.math import ddt, div, sqrt
+from pops.physics import Density, Energy, Model, Momentum, Pressure, Velocity
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 from tests.python.support.explicit_program import install_forward_euler_program
+from tests.python.support.physics_roles import FRAME, X_AXIS, Y_AXIS
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
 # global 300 s process-isolation budget (ADC-627, same class as test_dsl_compile_cache).
 POPS_PROCESS_TIMEOUT = 900
+
+
+def build_euler(name):
+    """Author the same Euler arithmetic as ModelSpec for the strict binary parity oracle.
+
+    Algebraically equivalent pressure and flux formulas can round differently. Matching the
+    operation grouping isolates compiled-package routing while keeping every zero-tolerance check.
+    """
+    model = Model(name, frame=FRAME)
+    state = model.state(
+        "U", components=("rho", "rho_u", "rho_v", "E"),
+        roles={"rho": Density(), "rho_u": Momentum(axis=X_AXIS),
+               "rho_v": Momentum(axis=Y_AXIS), "E": Energy()},
+    )
+    rho, rho_u, rho_v, energy = state
+    u = model.primitive("u", rho_u / rho)
+    v = model.primitive("v", rho_v / rho)
+    pressure = model.primitive(
+        "p", (GAMMA - 1.0) * (energy - 0.5 * rho * (u * u + v * v)))
+    enthalpy = (energy + pressure) / rho
+    sound = sqrt(GAMMA * pressure / rho)
+    model.primitive_state(
+        rho, u, v, pressure,
+        conservative=(rho, rho * u, rho * v,
+                      pressure / (GAMMA - 1.0) + 0.5 * rho * (u * u + v * v)),
+        roles={"rho": Density(), "u": Velocity(axis=X_AXIS),
+               "v": Velocity(axis=Y_AXIS), "p": Pressure()},
+    )
+    flux = model.flux(
+        "transport", frame=FRAME, state=state,
+        components={
+            X_AXIS: (rho_u, rho_u * u + pressure, rho_u * v, rho * enthalpy * u),
+            Y_AXIS: (rho_v, rho_v * u, rho_v * v + pressure, rho * enthalpy * v),
+        },
+        waves={X_AXIS: (u - sound, u, u, u + sound),
+               Y_AXIS: (v - sound, v, v, v + sound)},
+    )
+    model.rate("transport", equation=ddt(state) == -div(flux))
+    return model
 
 
 def _native_spec(rho0):

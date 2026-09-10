@@ -194,27 +194,29 @@ class PreparedScalarBoundarySession {
                                 const BoundaryTopology<Dim>& topology, const field_type& prototype,
                                 const ExecutionLane& lane, std::uint64_t generation)
       : PreparedScalarBoundarySession(UninitializedTag{}, geometry, topology, lane, generation) {
-    initialize_(prototype, false);
+    initialize_(prototype, false, HaloLayoutCoverage::full_domain);
   }
 
   static std::shared_ptr<PreparedScalarBoundarySession> prepare(
       const Geometry<Dim>& geometry, const BoundaryTopology<Dim>& topology,
-      const field_type& prototype, const ExecutionLane& lane, std::uint64_t generation) {
-    return prepare_impl_(geometry, topology, prototype, lane, generation, false);
+      const field_type& prototype, const ExecutionLane& lane, std::uint64_t generation,
+      HaloLayoutCoverage coverage = HaloLayoutCoverage::full_domain) {
+    return prepare_impl_(geometry, topology, prototype, lane, generation, false, coverage);
   }
 
   /// Prepare the additional transaction/evaluator scratch required by one installed block.
   static std::shared_ptr<PreparedScalarBoundarySession> prepare_block(
       const Geometry<Dim>& geometry, const BoundaryTopology<Dim>& topology,
       const field_type& prototype, const ExecutionLane& lane, std::uint64_t generation) {
-    return prepare_impl_(geometry, topology, prototype, lane, generation, true);
+    return prepare_impl_(geometry, topology, prototype, lane, generation, true,
+                         HaloLayoutCoverage::full_domain);
   }
 
  private:
   static std::shared_ptr<PreparedScalarBoundarySession> prepare_impl_(
       const Geometry<Dim>& geometry, const BoundaryTopology<Dim>& topology,
       const field_type& prototype, const ExecutionLane& lane, std::uint64_t generation,
-      bool prepare_block_scratch) {
+      bool prepare_block_scratch, HaloLayoutCoverage coverage) {
     std::shared_ptr<PreparedScalarBoundarySession> session;
     std::exception_ptr local_error;
     try {
@@ -228,7 +230,7 @@ class PreparedScalarBoundarySession {
         std::rethrow_exception(local_error);
       throw std::runtime_error("Program scalar boundary allocation failed collectively");
     }
-    session->initialize_(prototype, prepare_block_scratch);
+    session->initialize_(prototype, prepare_block_scratch, coverage);
     return session;
   }
 
@@ -289,7 +291,8 @@ class PreparedScalarBoundarySession {
         lane_borrow_(lane.borrow_immutably()),
         generation_(generation) {}
 
-  void initialize_(const field_type& prototype, bool prepare_block_scratch) {
+  void initialize_(const field_type& prototype, bool prepare_block_scratch,
+                   HaloLayoutCoverage coverage) {
     std::exception_ptr local_error;
     try {
       if (generation_ == 0)
@@ -300,7 +303,7 @@ class PreparedScalarBoundarySession {
         throw std::invalid_argument(
             "Program scalar boundary lane differs from the prototype rank space");
       schedule_.emplace(prepare_halo_schedule(
-          prototype, geometry_.domain(), topology_,
+          prototype, geometry_.domain(), topology_, coverage,
           scalar_boundary_detail::halo_budget(prototype, geometry_, topology_)));
       physical_.emplace(
           scalar_boundary_detail::physical_boundary(geometry_, prototype.ghosts(), topology_));

@@ -94,6 +94,42 @@ class RungeKuttaTableau:
 
 
 @dataclass(frozen=True, slots=True, init=False)
+class DiagonallyImplicitRungeKuttaTableau:
+    """A lower-triangular tableau for sequential evolved-state solve problems."""
+
+    A: tuple[tuple[Any, ...], ...]
+    b: tuple[Any, ...]
+    c: tuple[Any, ...]
+    name: str | None
+    __pops_ir_immutable__ = True
+
+    def __init__(self, A: Any, b: Any, c: Any = None, name: Any = None) -> None:
+        weights = _weights(b, "DIRK.b")
+        rows = _rows(A, len(weights), diagonal=True, where="DIRK.A")
+        if sum((_exact_fraction(x, "DIRK.b") for x in weights), Fraction()) != 1:
+            raise ValueError("DIRK weights b must sum exactly to 1")
+        if name is not None and (not isinstance(name, str) or not name):
+            raise ValueError("DIRK name must be a non-empty string or None")
+        object.__setattr__(self, "A", rows)
+        object.__setattr__(self, "b", weights)
+        object.__setattr__(self, "c", _nodes(rows, c, "DIRK"))
+        object.__setattr__(self, "name", name)
+
+    @property
+    def stages(self) -> int:
+        return len(self.b)
+
+    @property
+    def certificate(self) -> Any:
+        from pops.time._methods.properties import certify_implicit_runge_kutta
+        return certify_implicit_runge_kutta(self)
+
+    @property
+    def properties(self) -> Any:
+        return self.certificate.properties
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class AdditiveRungeKuttaTableau:
     """Partitioned ARK authority with explicit and diagonally-implicit coefficient arrays."""
 
@@ -141,4 +177,4 @@ class AdditiveRungeKuttaTableau:
         return self.certificate.properties
 
 
-__all__ = ["AdditiveRungeKuttaTableau", "RungeKuttaTableau"]
+__all__ = ["AdditiveRungeKuttaTableau", "DiagonallyImplicitRungeKuttaTableau", "RungeKuttaTableau"]

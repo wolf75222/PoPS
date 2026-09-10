@@ -18,6 +18,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- The PoPS programming-model migration carries qualified expression identities, signed occurrences,
+  typed accesses and exact numerical-operation coverage through resolution and native emission.
+  Uncovered terms and incompatible provider effects fail before execution.
+- Fields retain independent storage, joint solve normalization and stage-specific observations.
+  Heterogeneous interactions and imported native primitives carry typed ports, authenticated
+  derivative contracts and transactional failure handling through the shared solve protocol.
+- Transport and scalar, variable-coefficient, tensor and fitted drift-diffusion operators share
+  resolved accumulation and accepted exchange accounting. Explicit, implicit, IMEX and splitting
+  programs retain their authored stage weights through retries and AMR reconciliation.
+- AMR history transfers preserve retained samples and their conservative flux provenance through
+  regrids, rollback and restart. Composite field preparation gathers the complete hierarchy before
+  publication and authenticates each state, scratch value and retained-history ancestor.
+- Migration evidence distinguishes source contracts, native execution, numerical checks and
+  controlled performance measurements. The supported configurations and replacement boundaries
+  are recorded in `docs/development/migration_m3_m8_results.md`; legacy adapters remain until their
+  replacements satisfy the corresponding qualification requirements.
 - Native `RuntimeInstance` installation now authenticates each single-layout halo against its exact
   compiled block/read owner and the shared spatial-plus-field-plan ghost oracle. It fails before
   backend inspection when a planned buffer, cross-memory fence or clock join has no execution

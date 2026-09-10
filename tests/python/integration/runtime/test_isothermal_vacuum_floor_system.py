@@ -8,8 +8,10 @@ Builds two identical isothermal Systems that differ ONLY by vacuum_floor and sho
       bound does not perturb normal runs -- the reason it is a SEPARATE knob from positivity_floor);
   (3) vacuum_floor < 0 is rejected at the python boundary.
 
-Native bricks only (no DSL / no compiler). source=NoSource isolates the transport (where the floor
-lives): phi is identical between the two runs, so any difference comes from the velocity bound.
+The private ModelSpec adapter compiles the isothermal transport; NoSource isolates the velocity
+floor. The positive cases explicitly use periodic transport, so every face has a valid ghost source.
+The field's Dirichlet declaration does not supply a hyperbolic boundary. A separate nonperiodic
+case without that physical transport contract must fail and roll back its attempted step.
 """
 from tests.python.support.requirements import require_native_or_skip
 from pops.numerics.variables import Conservative
@@ -21,10 +23,14 @@ import numpy as np
 
 try:
     import pops.runtime._engine_descriptors as engine
-    from pops.runtime._engine_descriptors import Dirichlet
+    from pops.runtime._engine_descriptors import Dirichlet, Periodic
     from pops.runtime._system import System  # ADC-545 advanced runtime seam
 except ImportError as e:
     require_native_or_skip('module pops absent (PYTHONPATH ?) : %s' % e)
+
+# Five ModelSpec/Program builds share this process; cold native compilation under parallel
+# test load can exceed the default 300-second process budget.
+POPS_PROCESS_TIMEOUT = 900
 
 
 def chk(cond, label):
@@ -33,30 +39,39 @@ def chk(cond, label):
         raise AssertionError(label)
 
 
-def run(n, L, vacuum_floor, rho_scale, nsteps, dt):
-    """One short isothermal transport run; returns the conservative state (3, n, n)."""
-    sim = System(n=n, L=L, periodicity=(False, False))
-    sim.set_poisson(bc=Dirichlet())
+def build(n, L, vacuum_floor, rho_scale, *, periodicity):
+    """Author the transport topology explicitly; a Poisson BC never fills transport ghosts."""
+    x = (np.arange(n) + 0.5) * (L / n)
+    X, Y = np.meshgrid(x, x, indexing="ij")
+    # Keep the original sampled profiles and density scales. Transport topology is declared above;
+    # these samples do not themselves constitute a physical ghost-cell boundary condition.
+    rho = rho_scale * (1.0 + 0.5 * np.sin(np.pi * X / L) * np.sin(np.pi * Y / L))
+    u = 0.5 * np.sin(np.pi * X / L) * np.sin(np.pi * Y / L)
+    v = -0.3 * np.sin(2.0 * np.pi * X / L) * np.sin(np.pi * Y / L)
+    sim = System(n=n, L=L, periodicity=periodicity)
+    periodic = all(periodicity)
+    sim.set_poisson(bc=Periodic() if periodic else Dirichlet())
     sim.add_equation(
         "ions",
         model=engine.Model(
             state=engine.FluidState(kind="isothermal", cs2=1.0, vacuum_floor=vacuum_floor),
             transport=engine.IsothermalFlux(),
             source=engine.NoSource(),
-            elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0),
+            # Periodic Poisson requires an explicitly neutral load. This fixed background is
+            # the initial mean, conserved by periodic transport; NoSource keeps phi out of the rate.
+            elliptic=engine.BackgroundDensity(alpha=1.0, n0=float(rho.mean()) if periodic else 0.0),
         ),
         spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov(), recon=Conservative()),
         time=engine.Explicit(),
     )
-    x = (np.arange(n) + 0.5) * (L / n)
-    X, Y = np.meshgrid(x, x, indexing="ij")
-    # Smooth profiles, zero at the boundaries (Dirichlet-compatible); rho scaled to sit below/above
-    # the floor depending on rho_scale.
-    rho = rho_scale * (1.0 + 0.5 * np.sin(np.pi * X / L) * np.sin(np.pi * Y / L))
-    u = 0.5 * np.sin(np.pi * X / L) * np.sin(np.pi * Y / L)
-    v = -0.3 * np.sin(2.0 * np.pi * X / L) * np.sin(np.pi * Y / L)
     sim.set_primitive_state("ions", rho=rho, u=u, v=v)
     install_forward_euler_program(sim)
+    return sim
+
+
+def run(n, L, vacuum_floor, rho_scale, nsteps, dt):
+    """The full five-step transport oracle with an explicit periodic ghost source."""
+    sim = build(n, L, vacuum_floor, rho_scale, periodicity=(True, True))
     for _ in range(nsteps):
         sim.step(dt)
     return np.array(sim.get_state("ions")).reshape(3, n, n)
@@ -91,7 +106,24 @@ def main():
     except ValueError:
         chk(True, "(3) vacuum_floor < 0 rejected")
 
-    print("test_isothermal_vacuum_floor_system : tout est vert (3 verifications)")
+    # (4) The old nonperiodic setup declared only a field BC. Its invalid transport evaluation must
+    # be rejected without publishing any state or clock, rather than being masked by a density floor.
+    invalid = build(n, L, 0.0, 1.0e-3, periodicity=(False, False))
+    before = np.array(invalid.get_state("ions"), copy=True)
+    before_time, before_step = invalid.time(), invalid.macro_step()
+    try:
+        invalid.step(dt)
+    except RuntimeError as exc:
+        chk("status 1" in str(exc) or "status=1" in str(exc),
+            "(4) missing physical transport BC fails through the native invalid-evaluation guard")
+    else:
+        chk(False, "(4) nonperiodic transport without a physical boundary must be refused")
+    chk(np.array_equal(invalid.get_state("ions"), before),
+        "(4) invalid physical boundary preserves the complete conservative state")
+    chk((invalid.time(), invalid.macro_step()) == (before_time, before_step),
+        "(4) invalid physical boundary publishes no time or macro-step")
+
+    print("test_isothermal_vacuum_floor_system : tout est vert (4 verifications)")
 
 
 if __name__ == "__main__":

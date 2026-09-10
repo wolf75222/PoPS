@@ -20,6 +20,7 @@ from ._module_freeze import deep_freeze_model_value
 # The operator kinds of Spec 2. A kind is metadata only; the Signature carries
 # the actual type contract that Program validation checks.
 OPERATOR_KINDS = (
+    "expression",
     "local_rate",
     "local_source",
     "local_linear_operator",
@@ -40,6 +41,7 @@ OPERATOR_KINDS = (
 # / `OperatorHandle.inspect()`; the kind stays the codegen-facing selector. A kind is never absent
 # here (a KeyError would be a bug), so `operator_family` is total over OPERATOR_KINDS.
 OPERATOR_FAMILIES = {
+    "expression": "expression",
     "local_rate": "rate",
     "grid_operator": "rate",
     "local_source": "rate",
@@ -234,6 +236,26 @@ def _state_rate_signature(signature: Signature) -> None:
     )
 
 
+def _expression_signature(signature: Signature) -> None:
+    from .bundles import ProductSpace
+    from .spaces import Space
+
+    _require(all(isinstance(item, (StateSpace, FieldSpace)) for item in signature.inputs),
+             "expression inputs must be declared StateSpace or FieldSpace descriptors")
+    _require(isinstance(signature.output, (Space, ProductSpace)),
+             "expression output must be a Space or named ProductSpace")
+
+
+def _local_rate_signature(signature: Signature) -> None:
+    inputs = signature.inputs
+    _require(bool(inputs) and isinstance(inputs[0], StateSpace)
+             and all(isinstance(item, (StateSpace, FieldSpace)) for item in inputs),
+             "expected (target StateSpace, StateSpace|FieldSpace, ...) -> Rate(target)")
+    _require(isinstance(signature.output, RateSpace)
+             and signature.output.base_space == inputs[0],
+             "output must be Rate() of the first StateSpace input")
+
+
 def _field_signature(signature: Signature) -> None:
     _require(
         bool(signature.inputs)
@@ -261,8 +283,9 @@ def _local_linear_signature(signature: Signature) -> None:
 
 def _projection_signature(signature: Signature) -> None:
     _require(
-        len(signature.inputs) == 1 and isinstance(signature.inputs[0], StateSpace),
-        "expected (StateSpace,) -> the same StateSpace",
+        len(signature.inputs) in (1, 2) and isinstance(signature.inputs[0], StateSpace)
+        and (len(signature.inputs) == 1 or isinstance(signature.inputs[1], FieldSpace)),
+        "expected (StateSpace[, FieldSpace]) -> the same StateSpace",
     )
     _require(signature.output == signature.inputs[0],
              "projection output must equal its StateSpace input")
@@ -293,8 +316,9 @@ def _coupled_rate_signature(signature: Signature) -> None:
     output_bases = [rate.base_space for _, rate in bundle.items()]
     _require(all(base in signature.inputs for base in output_bases),
              "every RateBundle output must be tangent to one input StateSpace")
-    _require(len(set(output_bases)) == len(output_bases),
-             "a coupled RateBundle cannot expose the same StateSpace twice")
+    _require(all(output_bases.count(base) <= signature.inputs.count(base)
+                 for base in output_bases),
+             "coupled RateBundle outputs must not exceed their input StateSpace multiplicity")
 
 
 def _matrix_free_signature(signature: Signature) -> None:
@@ -318,8 +342,10 @@ def _unavailable_signature(_signature: Signature) -> None:
 # with no honest public output type are explicit refusal rows, never permissive
 # fall-throughs that later drop inputs or manufacture a malformed ProgramValue.
 OPERATOR_SIGNATURE_CONTRACTS = MappingProxyType({
+    "expression": SignatureContract(
+        "(State|Fields, ...) -> Space|ProductSpace", _expression_signature),
     "local_rate": SignatureContract(
-        "(State[, Fields]) -> Rate(State)", _state_rate_signature),
+        "(target State, State|Fields, ...) -> Rate(target)", _local_rate_signature),
     "local_source": SignatureContract(
         "(State[, Fields]) -> Rate(State)", _state_rate_signature),
     "grid_operator": SignatureContract(
@@ -331,7 +357,7 @@ OPERATOR_SIGNATURE_CONTRACTS = MappingProxyType({
     "local_transform": SignatureContract(
         "(State[, Fields]) -> State", _local_transform_signature),
     "projection": SignatureContract(
-        "(State,) -> State", _projection_signature),
+        "(State[, Fields]) -> State", _projection_signature),
     "coupled_rate": SignatureContract(
         "(State, State, ...) -> RateBundle", _coupled_rate_signature),
     "matrix_free_operator": SignatureContract(

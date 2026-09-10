@@ -108,6 +108,20 @@ def _install_state_transfer_routes(simulation, subject):
 
 
 def _native_hierarchy(node_type):
+    from pops.physics import Density
+    from pops.physics._facade import Model
+
+    model = Model("amr-magnitude-scalar-advection")
+    (rho,) = model.conservative_vars("n", roles=(Density(),))
+    model.flux(x=[0.3 * rho], y=[0.2 * rho])
+    model.eigenvalues(x=[0.3 + 0.0 * rho], y=[0.2 + 0.0 * rho])
+    model.primitive_vars(rho)
+    model.conservative_from([rho])
+    model.elliptic_rhs(0.0 * rho)
+    compiled = model.compile(
+        backend="production", target="amr_system", name="amr_magnitude_scalar",
+        consumer_owner_qid="tests.amr-magnitude.tracer",
+    )
     graph, threshold, subject = _resolved_leaf(node_type)
     simulation = AmrSystem(
         shape=(N, N),
@@ -122,18 +136,13 @@ def _native_hierarchy(node_type):
     # owner-qualified identity before declaring the native block, just as pops.bind does.
     simulation._s._install_block_state_route("tracer", subject)
     simulation.set_temporal_relations([2], [1], ["integral_only"])
+    simulation.set_poisson(bc=Periodic())
     simulation.add_equation(
         "tracer",
-        engine.Model(
-            engine.Scalar(),
-            engine.ExB(),
-            engine.NoSource(),
-            engine.BackgroundDensity(alpha=0.0, n0=0.0),
-        ),
+        compiled,
         spatial=engine.Spatial(),
         time=engine.Explicit(),
     )
-    simulation.set_poisson(bc=Periodic())
     flow_bootstrap_tagging(
         simulation,
         SimpleNamespace(tagging=graph),
@@ -167,5 +176,5 @@ def test_magnitude_above_lowers_and_executes_on_the_native_amr_tagger():
     assert magnitude.patch_boxes()
     assert ordinary_created is False
     assert ordinary.n_levels() == 1
-    assert ordinary.n_patches() == 0
-    assert ordinary.patch_boxes() == []
+    assert ordinary.n_patches() == 1  # n_patches counts the finest existing level: the base here
+    assert not ordinary.patch_boxes()

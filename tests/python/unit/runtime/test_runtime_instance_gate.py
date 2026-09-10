@@ -20,6 +20,7 @@ from pops.codegen._compiled_artifact import (
 )
 from pops.identity import Identity, make_identity
 from pops.model import Handle, OwnerPath
+from pops.model.ownership import OwnerKind
 from pops.output import (
     AsyncScientificOutput,
     LiveVisualization,
@@ -418,6 +419,50 @@ class _CustomNPZ:
         return NPZWriter(self._mode)
 
 
+class _ContextMatchedMonitorOperation:
+    """Retain a generic observer session while matching the sealed artifact's MPI mode.
+
+    ``LiveVisualization`` deliberately defaults generic observers to SERIAL.  This runtime gate
+    is also executed against the MPI native fixture, where a serial monitor is refused before its
+    lifecycle oracles run.  Keep the provider/session authority from the original operation, but
+    expose the real artifact-compatible mode and formatter evidence used by this fixture.
+    """
+
+    __pops_ir_immutable__ = True
+
+    def __init__(self, operation, mode: ParallelMode) -> None:
+        if type(mode) is not ParallelMode:
+            raise TypeError("context-matched monitor mode must be an exact ParallelMode")
+        data = operation.consumer_data()
+        if data["parallel_mode"] != ParallelMode.SERIAL.value:
+            raise ValueError("context-matched monitor expects a SERIAL source operation")
+        self._operation = operation
+        self._format = _CustomNPZ(mode)
+        observer = dict(data["observer"])
+        observer["format"] = self._format.consumer_data()
+        self._data = {
+            **data,
+            "parallel_mode": mode.value,
+            "observer": observer,
+        }
+
+    def consumer_data(self):
+        return dict(self._data)
+
+    def preflight(self, execution_context):
+        preflight = getattr(self._operation, "preflight", None)
+        return None if not callable(preflight) else preflight(execution_context)
+
+    def preopen_session(self, execution_context):
+        preopen = getattr(self._operation, "preopen_session", None)
+        if callable(preopen):
+            return preopen(execution_context)
+        return self._operation.open_session(execution_context)
+
+    def open_session(self, execution_context):
+        return self._operation.open_session(execution_context)
+
+
 def _scientific_output_mode(artifact: CompiledSimulationArtifact) -> ParallelMode:
     """Select an explicit publication mode compatible with the sealed native artifact."""
     communicator = artifact.platform_manifest.communicator.require(
@@ -441,12 +486,29 @@ def _with_graph(
 ):
     base = _install()
     parallel_mode = _scientific_output_mode(base.artifact)
+    if kind is ConsumerKind.MONITOR and operation is not None:
+        operation_data = operation.consumer_data()
+        if (
+            operation_data["parallel_mode"] == ParallelMode.SERIAL.value
+            and parallel_mode is not ParallelMode.SERIAL
+        ):
+            operation = _ContextMatchedMonitorOperation(operation, parallel_mode)
     if isinstance(output_format, type):
         output_format = output_format(parallel_mode)
-    layout = base.artifact.layout_plan.layouts[0].handle
+    (assignment,) = tuple(
+        row for row in base.artifact.layout_plan.assignments if row.subject_kind == "block"
+    )
+    layout = assignment.layout
+    block = assignment.subject
+    declaration = Handle("rho", kind="state", owner=OwnerPath.model("adc-687"))
+    state = declaration._with_owner(
+        block.owner_path.child(OwnerKind.BLOCK, block.local_id).instance_of(declaration.owner_path),
+        declaration_ref=declaration,
+        block_ref=block,
+    )
     clock = Clock("solution", owner=OwnerPath.consumer("adc-687"))
     quantity = ConsumerQuantity(
-        Handle("rho", kind="state", owner=OwnerPath.model("adc-687")),
+        state,
         "state:u",
         layout.qualified_id,
     )
@@ -552,6 +614,12 @@ def test_checkpoint_budget_uses_authenticated_artifact_block_metadata():
 
 def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_authority():
     from pops.runtime._checkpoint_resource_budget import _common_budget
+    from pops.runtime._continuation_transitions import ContinuationTransitionPlan
+    from pops._platform_contracts import ExecutionContext, ExecutionResource, proven_serial_manifest
+    import json
+    continuation = ContinuationTransitionPlan(json.dumps({
+        "schema_version": 1, "kind": "pops.continuation-transitions", "target": "system",
+        "evidence_stage": "resolved", "objects": []}))
 
     class Native:
         def __init__(self, live_nodes=(), name="node_17"):
@@ -586,9 +654,19 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
             self._histories = {}
             self._histories_ncomp = {}
             self._history_blocks = {}
+            self._values = ()
+
+        def to_data(self):
+            return {"kind": "cache-budget-test"}
+
+        def _serialize(self, *, include_provenance=True):
+            if not isinstance(include_provenance, bool):
+                raise TypeError("Program._serialize include_provenance must be bool")
+            return self.to_data()
 
         def temporal_manifest(self):
             return {
+                "histories": [], "clocks": [],
                 "schedules": [
                     {"node_id": 17, "schedule": {"kind": "hold"}, "cache_required": self.cache_required}
                 ]
@@ -597,12 +675,22 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
     install_plan = SimpleNamespace(
         artifact=SimpleNamespace(
             artifact_identity=SimpleNamespace(token="artifact"),
-            plan=SimpleNamespace(consumer_graph=None),
+            plan=SimpleNamespace(consumer_graph=None, continuation_transitions=continuation,
+                                 field_plans={}, blocks=(), verify=lambda: None),
         ),
         bind_identity=SimpleNamespace(token="bind"),
     )
 
+    execution_context = ExecutionContext(
+        backend=proven_serial_manifest(
+            backend="production", target="system", abi="test|c++|c++23", runtime=True),
+        communicator=ExecutionResource("communicator", "serial"),
+        datatype=ExecutionResource("datatype", "float64"),
+        device=ExecutionResource("device", "host"),
+    )
+
     def budget(owner, program):
+        owner._execution_context = execution_context
         return _common_budget(
             owner,
             install_plan,
@@ -614,6 +702,7 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
             auxiliary_components=0,
             accepted_program_bytes=0,
             source_authority_bytes=0,
+            history_flux_snapshot_bytes=0,
             structural_bytes=0,
             field_provider_manifest_characters=0,
             program=program,
@@ -2345,6 +2434,36 @@ def test_every_dt_threshold_one_ulp_after_run_end_is_not_due(tmp_path):
     assert _published_times(output_root) == [interval, 2.0 * interval]
     assert 3.0 * interval == np.nextafter(0.3, np.inf)
     assert runtime.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples == 2
+
+
+@pytest.mark.parametrize("count", (13, 52, 208))
+def test_fixed_grid_endpoint_fires_at_end_once_without_an_extra_step(tmp_path, count):
+    plan, _, manifest = _with_graph(
+        tmp_path, schedule=lambda clock: Schedule(AtEnd(AcceptedStep(clock)))
+    )
+    executor = _Executor(plan)
+    executor._step_strategy = FixedDt(0.05 / count)
+    runtime = RuntimeInstance(plan, executor=executor)
+    report = runtime._run(0.05, max_steps=count, console=False)
+    assert report.accepted_steps == count
+    assert runtime.time() == 0.05 and runtime.macro_step() == count
+    assert _published_times(tmp_path) == [0.05]
+    assert runtime.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples == 1
+
+
+def test_fixed_grid_real_remainder_still_exhausts_max_steps_without_at_end(tmp_path):
+    plan, _, manifest = _with_graph(
+        tmp_path, schedule=lambda clock: Schedule(AtEnd(AcceptedStep(clock)))
+    )
+    executor = _Executor(plan)
+    executor._step_strategy = FixedDt(0.05 / 52)
+    runtime = RuntimeInstance(plan, executor=executor)
+    target = np.nextafter(0.05, np.inf).item()
+    with pytest.raises(RuntimeError, match="max_steps exhausted before t_end"):
+        runtime._run(target, max_steps=52, console=False)
+    assert runtime.time() < target and runtime.macro_step() == 52
+    assert runtime.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples == 0
+    assert _published_times(tmp_path) == []
 
 
 def test_run_fails_explicitly_when_max_steps_cannot_reach_t_end(tmp_path):

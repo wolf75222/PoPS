@@ -9,6 +9,7 @@ from typing import Any
 from pops._native_collectives import (
     allgather_value,
     rank as native_rank,
+    require_communicator,
     require_world,
     size as native_size,
 )
@@ -288,7 +289,7 @@ class OutputPreparation:
             if self.communicator is not None:
                 raise ValueError("SERIAL output cannot carry a communicator")
         else:
-            native = require_world(self.communicator)
+            native = require_communicator(self.communicator)
             if (native_rank(native), native_size(native)) != (
                     self.request.rank, self.request.size):
                 raise ValueError("OutputRequest rank/size differs from its communicator")

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <pops/runtime/program/step_transaction.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/identity/sha256.hpp>
 #include <pops/mesh/execution/for_each.hpp>
@@ -19,10 +20,15 @@
 #include <pops/runtime/builders/compiled/generated_amr_system_block.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
+#include <pops/runtime/program/amr_history_flux_snapshot_execution.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
+#include <pops/runtime/program/prepared_amr_spatial_residual.hpp>
+#include <pops/runtime/program/prepared_condensed_sampling.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
+#include <pops/runtime/program/prepared_resource_cache.hpp>
 #include <pops/runtime/program/prepared_tensor_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
+#include <pops/runtime/program/program_owner_field_identity.hpp>
 #include <pops/runtime/program/source_mask.hpp>
 #include <pops/runtime/program/same_level_cell_temporal_provider.hpp>
 #include <pops/runtime/system/provider_storage_binding.hpp>
@@ -77,7 +83,29 @@ struct ProgramSpatialSnapshot {
 /// cell is changed.
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 class AmrProgramContext {
+  struct LevelAttemptEnvelope;
+
  public:
+  void consume_pointwise_evaluation_status(int program_block, int evaluation_id, Real status,
+                                           const char* operation_identity,
+                                           std::uint32_t reason_code = 0) const {
+    consume_native_evaluation_status(prepared_execution_lane(), program_block, evaluation_id,
+                                     static_cast<double>(status), operation_identity, reason_code);
+  }
+
+  void stage_exchange(ExchangeRecord record) const {
+    stage_exchange_batch([&](auto&& stage) { stage(std::move(record)); });
+  }
+
+  template <class Producer>
+  void stage_exchange_batch(Producer&& producer) const {
+    auto records = prepare_exchange_batch(
+        std::forward<Producer>(producer),
+        [&](ExchangeRecord& record) { record.qualify_runtime_point(boundary_evaluation_point(0)); },
+        prepared_execution_lane());
+    facade_->stage_program_exchanges(records);
+  }
+
   static_assert(Dim >= 1 && Dim <= 3, "AmrProgramContext only supports dimensions 1, 2, and 3");
   static_assert(std::is_same_v<MemorySpace, typename Kokkos::DefaultExecutionSpace::memory_space>,
                 "AmrProgramContext memory space must match its compiled AmrSystem leaf");
@@ -146,18 +174,21 @@ class AmrProgramContext {
 
   struct RhsGroupRequest {
     RhsGroupRequest(int block_value, field_type* state_value, field_type* rhs_value,
-                    int rate_id_value, int flux_only_value)
+                    int rate_id_value, int flux_only_value,
+                    std::string_view temporal_family_value = {})
         : block(block_value),
           state(state_value),
           rhs(rhs_value),
           rate_id(rate_id_value),
-          flux_only(flux_only_value) {}
+          flux_only(flux_only_value),
+          temporal_family(temporal_family_value) {}
 
     int block = -1;
     field_type* state = nullptr;
     field_type* rhs = nullptr;
     int rate_id = -1;
     int flux_only = 0;
+    std::string_view temporal_family;
   };
 
   struct CouplingStateOverride {
@@ -185,6 +216,15 @@ class AmrProgramContext {
   struct PreparedHierarchyTensorState {
     std::unique_ptr<hierarchy_tensor_solver_type> solver;
     std::vector<HierarchyTensorLevelBoundary> boundaries;
+  };
+
+  struct HierarchyFieldResource {
+    HierarchyTensorSelection selection;
+    std::string field_identity;
+    std::unique_ptr<hierarchy_tensor_solver_type> solver;
+    std::uint64_t topology_epoch = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t generation = std::numeric_limits<std::uint64_t>::max();
+    std::map<std::tuple<int, std::int64_t, int>, field_type> scratches{};
   };
 
   class LogicalEvaluationScope {
@@ -256,14 +296,27 @@ class AmrProgramContext {
     synchronize_resource_generation_();
   }
 
+  template <class Resource, class Matches, class... Args>
+  Resource& prepared_resource(std::int64_t node, int block, Matches&& matches,
+                              Args&&... args) const {
+    refresh_resources_();
+    return prepared_resources_.template acquire<Resource>(
+        node, block, active_level_, prepared_execution_lane(), std::forward<Matches>(matches),
+        std::forward<Args>(args)...);
+  }
+
   // Class-scope responsibility fragments preserve the public nested-type identities and member
   // layout of AmrProgramContext while making each semantic authority independently auditable.
 #include <pops/runtime/program/amr_program_context_spatial.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_public.inc>
+#include <pops/runtime/program/amr_program_context_diffusion.inc>
+#include <pops/runtime/program/amr_program_context_spatial_implicit.inc>
+#include <pops/runtime/program/amr_program_context_spatial_imex.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_public.inc>
 #include <pops/runtime/program/amr_program_context_spatial_operations.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_public.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_solver.inc>
+#include <pops/runtime/program/amr_program_context_general_field_public.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_private.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_polynomial.inc>
 #include <pops/runtime/program/amr_program_context_cell_temporal_configuration.inc>
@@ -275,10 +328,14 @@ class AmrProgramContext {
 #include <pops/runtime/program/amr_program_context_flux_expression_services.inc>
 #include <pops/runtime/program/amr_program_context_cell_temporal_runtime.inc>
 #include <pops/runtime/program/amr_program_context_subcycling_runtime.inc>
+#include <pops/runtime/program/amr_program_context_mapping_continuation.inc>
+#include <pops/runtime/program/amr_program_context_flux_family.inc>
 #include <pops/runtime/program/amr_program_context_flux_basis.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_runtime.inc>
+#include <pops/runtime/program/amr_program_context_shared_flux.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_runtime.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_services.inc>
+#include <pops/runtime/program/amr_program_context_general_field_services.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_services.inc>
 #include <pops/runtime/program/amr_program_context_spatial_operations_services.inc>
 
@@ -307,11 +364,23 @@ class AmrProgramContext {
   mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;
   mutable std::map<std::string, int> history_levels_;
   mutable std::map<ScratchKey, field_type> scratches_;
+  mutable PreparedResourceCache prepared_resources_;
+  struct SpatialHierarchyResource {
+    std::uint64_t epoch, generation;
+    int block;
+    std::shared_ptr<PreparedAmrSpatialResidual<Dim>> workspace;
+    std::vector<FluxExpression> previous_flux;
+  };
+  friend struct AmrSpatialReconciliationTestAccess;
+  mutable std::map<int, SpatialHierarchyResource> spatial_hierarchy_resources_;
+  mutable std::map<std::pair<std::size_t, std::size_t>, SpatialConsumedFlux> spatial_consumed_flux_;
   mutable std::mutex coupled_jacvec_mutex_;
   mutable std::unique_ptr<CoupledJacvecScratch> coupled_jacvec_scratch_;
   mutable std::map<std::int64_t, GeneratedFieldRoute> generated_field_routes_;
   std::shared_ptr<const hierarchy_tensor_registry_type> hierarchy_tensor_solver_registry_;
   mutable std::optional<HierarchyTensorSelection> hierarchy_tensor_selection_;
+  mutable std::map<std::int64_t, HierarchyFieldResource> hierarchy_field_resources_;
+  mutable std::map<std::string, std::vector<ProgramFieldLevel>> staged_field_publications_;
   mutable std::unique_ptr<hierarchy_tensor_solver_type> hierarchy_tensor_solver_;
   mutable std::vector<HierarchyTensorLevelBoundary> hierarchy_tensor_boundaries_;
   mutable std::uint64_t hierarchy_tensor_topology_epoch_ =
@@ -320,6 +389,8 @@ class AmrProgramContext {
       std::numeric_limits<std::uint64_t>::max();
   mutable PreparedVectorDistribution<Dim> vector_distribution_ =
       PreparedVectorDistribution<Dim>::distributed();
+  mutable std::map<int, LevelAttemptEnvelope> synchronized_level_envelopes_;
+  mutable bool synchronized_field_gather_ = false;
   mutable std::vector<field_type*> active_attempt_states_;
   mutable std::vector<const field_type*> active_staged_parents_;
   mutable std::vector<multiblock_flux_ledger_type*> active_incoming_flux_;
@@ -331,6 +402,8 @@ class AmrProgramContext {
   // Bases are immutable samples; a lag read clones and rebases them into the current attempt
   // rather than retaining a pointer to a prior attempt's live registry.
   mutable std::map<std::string, std::vector<FluxExpression>> history_flux_expressions_;
+  mutable std::map<std::tuple<std::size_t, int, FluxBasisProvider>, std::string>
+      declared_flux_temporal_families_;
   mutable std::map<std::string, AmrProgramPendingHistoryRemap> pending_history_remaps_;
   mutable std::map<std::string, field_type> deferred_history_lag_scratches_;
   mutable std::vector<std::size_t> active_flux_basis_counts_;
@@ -340,6 +413,7 @@ class AmrProgramContext {
   mutable ::pops::amr::ClockWindow active_subcycling_window_{};
   mutable std::uint64_t active_subcycling_attempt_ = 0;
   mutable std::unique_ptr<multiblock_subcycling_type> multiblock_subcycling_;
+  mutable bool multiblock_subcycling_has_accepted_step_ = false;
   mutable std::uint64_t multiblock_subcycling_epoch_ = std::numeric_limits<std::uint64_t>::max();
   mutable std::uint64_t multiblock_subcycling_generation_ =
       std::numeric_limits<std::uint64_t>::max();
@@ -352,6 +426,7 @@ class AmrProgramContext {
   mutable std::int64_t cell_temporal_interval_target_tick_ = 0;
   mutable std::string accepted_flux_budget_contract_;
   mutable std::string accepted_coupling_contract_;
+  mutable std::optional<AmrProgramFaceEvidenceProvenance> accepted_face_evidence_provenance_;
   mutable std::array<std::vector<::pops::amr::reflux::FaceFluxFragment<Dim, AmrProgramFacePayload>>,
                      Dim>
       accepted_face_flux_;

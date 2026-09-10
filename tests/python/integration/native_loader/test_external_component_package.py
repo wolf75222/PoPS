@@ -53,8 +53,14 @@ def _require_installed_component_package_proof() -> None:
 
     from pops import _pops
 
+    from pops._native_selector import _variant_from_manifest, selected_native_dimension
+
+    dimension = selected_native_dimension()
+    assert dimension == 2
+    variant = _variant_from_manifest(dimension)
     native_path = Path(_pops.__file__).resolve()
-    assert native_path.parent == package_root
+    assert native_path == variant.path
+    assert native_path.parent == package_root / "_native" / f"dim{dimension}"
     assert any(
         native_path.name.endswith(suffix)
         for suffix in importlib.machinery.EXTENSION_SUFFIXES
@@ -312,10 +318,15 @@ _CONSUMER = r'''#include <pops/runtime/dynamic/component_consumers.hpp>
 #include <string>
 
 int main(int argc, char** argv) {
-  if (argc != 7) return 90;
+  if (argc != 8) return 90;
   pops::component::ExpectedNativeComponent expected{
-    argv[2], argv[3], argv[4], argv[5], argv[6],
-    {{POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, sizeof(PopsNumericalFluxApiV1)}}
+    .component_id = argv[2],
+    .semantic_identity = argv[3],
+    .manifest_identity = argv[4],
+    .catalog_sha256 = argv[5],
+    .abi_key = argv[6],
+    .binary_identity = argv[7],
+    .interfaces = {{POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, sizeof(PopsNumericalFluxApiV1)}}
   };
   auto loaded = pops::component::LoadedComponent::load(argv[1], expected);
   const auto& api = loaded.table<PopsNumericalFluxApiV1>(
@@ -416,7 +427,7 @@ def test_source_component_executes_through_generic_native_loader_and_flux_consum
         str(consumer), str(installed.path), manifest.component_id,
         manifest.semantic_digest.token, manifest.manifest_digest.token,
         interfaces.NumericalFlux.to_data()["catalog_sha256"],
-        _pops.abi_key(),
+        _pops.abi_key(), installed.binary_identity.token,
     ], capture_output=True, text=True, check=False)
     assert ran.returncode == 0, ran.stderr
     loaded = installed.load()

@@ -15,6 +15,7 @@
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
 #include <pops/runtime/system/prepared_embedded_boundary.hpp>
+#include <pops/runtime/system/system_interface_core_session.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -55,6 +56,9 @@ struct SystemBlockClosures {
   using PreparedPointBoundaryResidual = std::function<void(
       const point_type&, field_type&, field_type&, const boundary_type&, const ExecutionLane&,
       const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
+  using PreparedPointPeriodicResidual =
+      std::function<void(const point_type&, field_type&, field_type&, const ExecutionLane&,
+                         const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
   using PreparedPointJvp = std::function<void(
       const point_type&, field_type&, const field_type&, field_type&, const boundary_type&,
       const ExecutionLane&, const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
@@ -103,6 +107,8 @@ struct SystemBlockClosures {
   PreparedPointBoundaryResidual boundary_core_at_point_prepared;
   PreparedPointBoundaryResidual boundary_flux_full_at_point_prepared;
   PreparedPointBoundaryResidual boundary_flux_core_at_point_prepared;
+  /// The topology-only periodic route retains native faces without a physical boundary object.
+  PreparedPointPeriodicResidual periodic_flux_at_point_prepared;
   PreparedPointBoundaryResidual boundary_residual_at_point_prepared;
   PreparedPointJvp boundary_jvp_at_point_prepared;
   std::shared_ptr<BoundaryFluxTransform> external_boundary_flux;
@@ -320,12 +326,16 @@ struct SystemInterfaceProvider {
   /// authority and the native spatial rank before this provider is published.
   std::string provider_identity;
   std::string collective_contract;
-  std::function<void(const point_type&, const std::vector<field_type*>&,
-                     const std::vector<field_type*>&, const std::vector<int>&)>
-      evaluate_rhs;
-  std::function<void(const point_type&, const std::vector<field_type*>&,
-                     const std::vector<field_type*>&, const std::vector<int>&)>
-      evaluate_core;
+  using CoreEvaluator =
+      std::function<void(const point_type&, const std::vector<field_type*>&,
+                         const std::vector<field_type*>&, const std::vector<int>&)>;
+  using CoreAdmission = std::function<void(void (*)(void*), void*)>;
+  using CoreSession = typename SystemInterfaceCoreSession<Dim>::pointer;
+  using Evaluate = std::function<void(const point_type&, const std::vector<field_type*>&,
+                                      const std::vector<field_type*>&, const std::vector<int>&,
+                                      const CoreSession&)>;
+  Evaluate evaluate_rhs;
+  Evaluate evaluate_core;
   std::function<std::size_t(const std::string&, int)> evaluation_count;
   std::function<bool(int)> has_interfaces;
   std::function<void()> discard;

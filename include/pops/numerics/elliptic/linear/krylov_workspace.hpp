@@ -6,6 +6,7 @@
 #include <pops/core/foundation/allocator.hpp>
 #include <pops/numerics/elliptic/linear/krylov_method_provider.hpp>
 #include <pops/numerics/elliptic/linear/scaled_scalar.hpp>
+#include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
 
 #include <algorithm>
@@ -28,12 +29,47 @@ namespace detail {
 struct KrylovWorkspaceAccess;
 }
 
+/// Authored dispositions for numerical recurrence failures only. Provider exceptions, invalid
+/// evaluations, malformed reports, and preparation/publication contracts remain fail-closed.
+struct KrylovFailureActions {
+  SolveAction singular = SolveAction::kFailRun;
+  SolveAction breakdown = SolveAction::kFailRun;
+  SolveAction iteration_limit = SolveAction::kFailRun;
+
+  [[nodiscard]] bool valid() const noexcept {
+    const auto failure_action = [](SolveAction action) {
+      return action == SolveAction::kFailRun || action == SolveAction::kRejectAttempt;
+    };
+    return failure_action(singular) && failure_action(breakdown) && failure_action(iteration_limit);
+  }
+
+  /// Use while constructing a numerical method report, never to rewrite an already authoritative
+  /// provider outcome. The common true-residual and provider-contract checks still run afterwards.
+  [[nodiscard]] SolveReport numerical_report(SolveReport report) const {
+    switch (report.status) {
+      case SolveStatus::kSingular:
+        report.action = singular;
+        break;
+      case SolveStatus::kBreakdown:
+        report.action = breakdown;
+        break;
+      case SolveStatus::kIterationLimit:
+        report.action = iteration_limit;
+        break;
+      default:
+        break;
+    }
+    return report;
+  }
+};
+
 template <int Dim>
 struct KrylovControls {
   PreparedKrylovMethod<Dim> method{};
   Real rel_tol = Real(1e-8);
   Real abs_tol = Real(0);
   int max_iterations = 1;
+  KrylovFailureActions failure_actions{};
 };
 
 template <int Dim>

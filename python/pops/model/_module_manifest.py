@@ -24,7 +24,7 @@ from .ownership import OwnerPath
 from .provider_pack import ProviderPack
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 _WAVE_SPEED_PROVIDERS = frozenset({"explicit_pair", "jacobian", "pressure_derived"})
 
@@ -49,11 +49,11 @@ _PARAM_ROW_KEYS = {
 _DECLARATION_ROW_KEYS = {
     "state": ({
         "components", "roles", "layout", "storage", "representation", "centering",
-        "units", "frame", "clock", "qid", "handle",
+        "units", "frame", "clock", "support", "sampling", "value_shape", "domain", "qid", "handle",
     },),
     "field": ({
         "components", "layout", "representation", "centering", "units", "frame", "clock",
-        "qid", "handle",
+        "support", "sampling", "value_shape", "domain", "qid", "handle",
     },),
     "parameter": (_PARAM_ROW_KEYS,),
     "aux": ({
@@ -90,6 +90,16 @@ def _validate_declaration_rows(
             kind=kind,
             where="%s %s" % (where, name),
         )
+        if kind in {"state", "field"}:
+            from .spaces import FieldSpace, StateSpace
+
+            descriptor = StateSpace if kind == "state" else FieldSpace
+            fields = {key: value for key, value in row.items() if key not in {"qid", "handle"}}
+            reconstructed = descriptor(name, **fields)
+            canonical = reconstructed.to_data()
+            for key in ("support", "sampling", "value_shape", "domain", "units"):
+                if canonical[key] != row[key]:
+                    raise ValueError("%s %s has noncanonical %s" % (where, name, key))
         if kind == "parameter":
             from .handles import ParamHandle
             from pops.params import validate_parameter_data
@@ -187,6 +197,7 @@ class ModuleManifest:
         "native_catalog",
         "abi_requirements",
         "params_utilization",
+        "expressions",
     )
 
     def __init__(
@@ -208,6 +219,7 @@ class ModuleManifest:
         native_catalog: Any,
         abi_requirements: Any,
         params_utilization: Any = None,
+        expressions: Any = None,
     ) -> None:
         if not isinstance(operators, OperatorRegistryManifest):
             raise TypeError("ModuleManifest operators must be an OperatorRegistryManifest")
@@ -232,6 +244,12 @@ class ModuleManifest:
         )
         _validate_declaration_rows(params, owner=owner, kind="parameter", where="module params")
         _validate_declaration_rows(aux, owner=owner, kind="aux", where="module aux")
+        if expressions is None:
+            expressions = {"operators": {}, "primitives": {}}
+        if not isinstance(expressions, Mapping) or set(expressions) != {"operators", "primitives"}:
+            raise TypeError("ModuleManifest expressions require operators and primitives mappings")
+        if any(not isinstance(value, Mapping) for value in expressions.values()):
+            raise TypeError("ModuleManifest expression tables must be mappings")
         provider_pack = ProviderPack.from_data(provider_pack).to_data()
         if wave_speed_provider is not None and wave_speed_provider not in _WAVE_SPEED_PROVIDERS:
             raise ValueError(
@@ -255,6 +273,7 @@ class ModuleManifest:
             ("native_routes", native_routes),
             ("native_catalog", native_catalog),
             ("abi_requirements", abi_requirements),
+            ("expressions", expressions),
         ):
             object.__setattr__(self, attr, _freeze_json(value, where="module %s" % attr))
         object.__setattr__(self, "operators", operators)
@@ -298,6 +317,7 @@ class ModuleManifest:
             native_catalog=_thaw_json(self.native_catalog),
             abi_requirements=requirements,
             params_utilization=_thaw_json(self.params_utilization),
+            expressions=_thaw_json(self.expressions),
         )
 
     def to_dict(self) -> Any:
@@ -320,6 +340,7 @@ class ModuleManifest:
             "native_routes": _thaw_json(self.native_routes),
             "native_catalog": _thaw_json(self.native_catalog),
             "abi_requirements": _thaw_json(self.abi_requirements),
+            "expressions": _thaw_json(self.expressions),
         }
 
     @classmethod
@@ -343,6 +364,7 @@ class ModuleManifest:
             "native_routes",
             "native_catalog",
             "abi_requirements",
+            "expressions",
         }
         row = require_exact_keys(data, expected, where="ModuleManifest")
         version = row["schema_version"]
@@ -374,6 +396,7 @@ class ModuleManifest:
             native_catalog=row["native_catalog"],
             abi_requirements=row["abi_requirements"],
             params_utilization=row["params_utilization"],
+            expressions=row["expressions"],
         )
         if result.to_dict() != dict(row):
             raise ValueError("ModuleManifest is not in canonical form")

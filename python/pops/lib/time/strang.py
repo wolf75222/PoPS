@@ -15,13 +15,16 @@ def _subflow(
     fraction: Any,
     point: Any,
     where: str,
+    partition: str,
 ) -> Any:
     """Author one exact sub-flow and authenticate its declared endpoint."""
     from pops.time.values import ProgramValue
 
     if not callable(flow):
         raise TypeError("%s must be a callable Program IR builder" % where)
-    value = flow(program, state, fraction, at=point)
+    from pops.time._evaluation_point import evaluation_partition
+    with evaluation_partition(program, partition):
+        value = flow(program, state, fraction, at=point)
     if not isinstance(value, ProgramValue) or value.vtype != "state":
         raise TypeError("%s must return a Program state value" % where)
     if value.prog is not program:
@@ -48,8 +51,8 @@ def _build_strang(program: Any, state: Any, first: Any, second: Any) -> None:
         partitions={"first": Fraction(1, 2), "second": 1},
     )
     stage = _subflow(
-        first, program, initial, Fraction(1, 2), after_first_half, "Strang first[0]")
-    stage = _subflow(second, program, stage, 1, after_second, "Strang second")
+        first, program, initial, Fraction(1, 2), after_first_half, "Strang first[0]", "first")
+    stage = _subflow(second, program, stage, 1, after_second, "Strang second", "second")
     endpoint = _subflow(
         first,
         program,
@@ -57,6 +60,7 @@ def _build_strang(program: Any, state: Any, first: Any, second: Any) -> None:
         Fraction(1, 2),
         temporal.next.point,
         "Strang first[1]",
+        "first",
     )
     program.commit(temporal.next, endpoint)
 
@@ -79,9 +83,9 @@ def _build_lie(program: Any, state: Any, first: Any, second: Any) -> None:
         "lie_first",
         partitions={"first": 1, "second": 0},
     )
-    stage = _subflow(first, program, temporal.n, 1, after_first, "Lie first")
+    stage = _subflow(first, program, temporal.n, 1, after_first, "Lie first", "first")
     endpoint = _subflow(
-        second, program, stage, 1, temporal.next.point, "Lie second")
+        second, program, stage, 1, temporal.next.point, "Lie second", "second")
     program.commit(temporal.next, endpoint)
 
 

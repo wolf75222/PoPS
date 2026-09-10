@@ -136,6 +136,15 @@ struct AbsoluteDifferenceKernel {
   }
 };
 
+struct PositiveDiagonalKernel {
+  FieldView<Real, kDim> out{};
+  FieldView<const Real, kDim> in{};
+
+  POPS_HD void operator()(const Index<kDim>& index) const {
+    out(index, 0) = (Real(1) + Real(index[0])) * in(index, 0);
+  }
+};
+
 struct NonNanFlagKernel {
   FieldView<const Real, kDim> values{};
   POPS_HD Real operator()(const Index<kDim>& index) const {
@@ -281,6 +290,9 @@ struct ConcurrentOperatorSessionState {
 class LongReasonKrylovProvider final : public TestKrylovMethodProvider {
  public:
   static constexpr std::size_t kReasonBytes = 16 * 1024 + 37;
+  enum class Behavior { kNumericalFailure, kExplicitTerminalFailure, kUnverifiedSolved };
+  explicit LongReasonKrylovProvider(Behavior behavior = Behavior::kNumericalFailure)
+      : behavior_(behavior) {}
 
   std::string_view identity() const noexcept override {
     return "pops.test.krylov.long-report-reason";
@@ -306,10 +318,17 @@ class LongReasonKrylovProvider final : public TestKrylovMethodProvider {
   SolveReport solve(TestKrylovSolveContext& context,
                     const PreparedProviderOptions&) const override {
     SolveReport report =
-        context.report(context.initial_physical_residual(), 1, SolveStatus::kIterationLimit);
+        context.report(context.initial_physical_residual(), 1,
+                       behavior_ == Behavior::kUnverifiedSolved ? SolveStatus::kSolved
+                                                                : SolveStatus::kIterationLimit);
+    if (behavior_ == Behavior::kExplicitTerminalFailure)
+      report.action = SolveAction::kFailRun;
     report.reason.assign(kReasonBytes, 'r');
     return report;
   }
+
+ private:
+  Behavior behavior_;
 };
 
 class SingleFieldKrylovProvider final : public TestKrylovMethodProvider {
@@ -1025,6 +1044,129 @@ TEST(test_krylov_workspace_reentrancy,
 }
 
 TEST(test_krylov_workspace_reentrancy,
+     authored_numerical_actions_preserve_cg_failure_rollback_and_terminal_evaluation_guards) {
+  const TestLayout boxes(std::vector<TestBox>{TestBox{Index<kDim>{0, 0}, Index<kDim>{3, 1}}});
+  const TestDistribution mapping = round_robin_distribution(boxes);
+  TestField iterate = make_field(boxes, mapping, 1, 0);
+  TestField rhs = make_field(boxes, mapping, 1, 0);
+  TestField accepted = make_field(boxes, mapping, 1, 0);
+  iterate.set_val(Real(0));
+  accepted.set_val(Real(0));
+  rhs.set_val(Real(1));
+  const OperatorEvaluationSnapshot snapshot = test_snapshot(iterate);
+  const TestKrylovMethod method = cg_krylov_method<kDim>();
+  const TestKrylovFootprint footprint{1, extent(0), false};
+  bool fatal_operator_failure = false;
+  TestAffineProblem problem(
+      iterate,
+      TestAffineOperatorProvider::trusted_reentrant(
+          [&](TestField& out, const TestField& in) {
+            if (fatal_operator_failure)
+              throw std::runtime_error("terminal numerical-policy oracle");
+            for (std::size_t local = 0; local < out.local_size(); ++local)
+              for_each_cell(out.box(local),
+                            PositiveDiagonalKernel{out.fab(local).view(), in.fab(local).view()});
+          },
+          [] { return std::size_t{0}; }),
+      TestLinearPreconditioner::identity(), LinearOperatorProperties::symmetric_positive_definite(),
+      footprint, TestNullspacePolicy::nonsingular(), [&snapshot] { return snapshot; });
+  TestKrylovWorkspace workspace(iterate, method, footprint);
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+  // A four-eigenvalue diagonal problem cannot converge in one CG iteration. The same numerical
+  // failure is retryable only if that exact status was selected, without publishing its candidate.
+  TestKrylovControls invalid{method, Real(1e-12), Real(0), 1};
+  invalid.failure_actions.iteration_limit = SolveAction::kNone;
+  EXPECT_THROW((void)detail::validate_controls(invalid), std::invalid_argument);
+  EXPECT_THROW((void)solve_prepared_affine_outcome(problem, workspace, iterate, rhs, invalid),
+               std::invalid_argument);
+  for (const KrylovFailureActions policy :
+       {KrylovFailureActions{},
+        KrylovFailureActions{SolveAction::kFailRun, SolveAction::kFailRun,
+                             SolveAction::kRejectAttempt},
+        KrylovFailureActions{SolveAction::kRejectAttempt, SolveAction::kRejectAttempt,
+                             SolveAction::kFailRun}}) {
+    auto outcome =
+        solve_prepared_affine_outcome(problem, workspace, iterate, rhs,
+                                      TestKrylovControls{method, Real(1e-12), Real(0), 1, policy});
+    EXPECT_EQ(outcome.report().status, SolveStatus::kIterationLimit);
+    EXPECT_EQ(outcome.report().action, policy.iteration_limit);
+    EXPECT_GT(outcome.report().residual_norm, Real(0.1));
+    EXPECT_EQ(max_abs_diff(iterate, accepted), Real(0));
+    const auto consumption = policy.iteration_limit == SolveAction::kRejectAttempt
+                                 ? SolveConsumption::kRejectAttempt
+                                 : SolveConsumption::kFailRun;
+    if (consumption == SolveConsumption::kFailRun)
+      EXPECT_THROW((void)outcome.consume(SolveConsumption::kRejectAttempt), std::logic_error);
+    EXPECT_EQ(outcome.consume(consumption).action, policy.iteration_limit);
+    EXPECT_EQ(max_abs_diff(iterate, accepted), Real(0));
+  }
+  const KrylovFailureActions reject{SolveAction::kRejectAttempt, SolveAction::kRejectAttempt,
+                                    SolveAction::kRejectAttempt};
+  fatal_operator_failure = true;
+  auto terminal =
+      solve_prepared_affine_outcome(problem, workspace, iterate, rhs,
+                                    TestKrylovControls{method, Real(1e-12), Real(0), 1, reject});
+  EXPECT_EQ(terminal.report().status, SolveStatus::kInvalidEvaluation);
+  EXPECT_EQ(terminal.report().action, SolveAction::kFailRun);
+  EXPECT_THROW((void)terminal.consume(SolveConsumption::kRejectAttempt), std::logic_error);
+  (void)terminal.consume(SolveConsumption::kFailRun);
+  EXPECT_EQ(max_abs_diff(iterate, accepted), Real(0));
+  fatal_operator_failure = false;
+  auto solved =
+      solve_prepared_affine_outcome(problem, workspace, iterate, rhs,
+                                    TestKrylovControls{method, Real(1e-12), Real(0), 8, reject});
+  EXPECT_TRUE(solved.report().solved_value_available());
+  EXPECT_EQ(max_abs_diff(iterate, accepted), Real(0));
+  (void)solved.consume(SolveConsumption::kAccept);
+  EXPECT_GT(max_abs_diff(iterate, accepted), Real(0.9));
+}
+
+TEST(test_krylov_workspace_reentrancy,
+     numerical_actions_do_not_downgrade_explicit_provider_failure_or_false_convergence) {
+  const TestLayout boxes(std::vector<TestBox>{TestBox{Index<kDim>{0, 0}, Index<kDim>{1, 1}}});
+  const TestDistribution mapping = round_robin_distribution(boxes);
+  TestField iterate = make_field(boxes, mapping, 1, 0);
+  TestField rhs = make_field(boxes, mapping, 1, 0);
+  iterate.set_val(Real(0));
+  rhs.set_val(Real(1));
+  const OperatorEvaluationSnapshot snapshot = test_snapshot(iterate);
+  const TestKrylovFootprint footprint{1, extent(0), false};
+  TestAffineProblem problem(
+      iterate,
+      TestAffineOperatorProvider::trusted_reentrant(
+          [](TestField& out, const TestField& in) { detail::PreparedFieldAlgebra::copy(out, in); },
+          [] { return std::size_t{0}; }),
+      TestLinearPreconditioner::identity(), LinearOperatorProperties::general(), footprint,
+      TestNullspacePolicy::nonsingular(), [&snapshot] { return snapshot; });
+  problem.prepare(snapshot);
+  for (const auto behavior : {LongReasonKrylovProvider::Behavior::kExplicitTerminalFailure,
+                              LongReasonKrylovProvider::Behavior::kUnverifiedSolved}) {
+    const TestKrylovMethod method(
+        std::make_shared<LongReasonKrylovProvider>(behavior),
+        PreparedProviderOptions{"pops.test.krylov.long-report-reason.options@1", {}});
+    TestKrylovWorkspace workspace(iterate, method, footprint);
+    workspace.bind(problem);
+    auto outcome = solve_prepared_affine_outcome(
+        problem, workspace, iterate, rhs,
+        TestKrylovControls{method,
+                           Real(1e-12),
+                           Real(0),
+                           1,
+                           {SolveAction::kRejectAttempt, SolveAction::kRejectAttempt,
+                            SolveAction::kRejectAttempt}});
+    EXPECT_EQ(outcome.report().status,
+              behavior == LongReasonKrylovProvider::Behavior::kExplicitTerminalFailure
+                  ? SolveStatus::kIterationLimit
+                  : SolveStatus::kInvalidEvaluation);
+    EXPECT_EQ(outcome.report().action, SolveAction::kFailRun);
+    EXPECT_FALSE(outcome.report().solved_value_available());
+    EXPECT_THROW((void)outcome.consume(SolveConsumption::kRejectAttempt), std::logic_error);
+    (void)outcome.consume(SolveConsumption::kFailRun);
+  }
+}
+
+TEST(test_krylov_workspace_reentrancy,
      exclusive_operator_rejects_overlapping_materialized_invocations_uniformly) {
   comm_init();
   const TestBox domain{Index<kDim>{0, 0}, Index<kDim>{3, 3}};
@@ -1299,12 +1441,22 @@ TEST(test_krylov_workspace_reentrancy,
       TestNullspacePolicy::nonsingular(), [&second_snapshot] { return second_snapshot; });
 
   std::string prepare_rejection;
-  try {
-    first_problem.prepare(first_snapshot);
-  } catch (const std::logic_error& error) {
-    prepare_rejection = error.what();
+  if (n_ranks() == 1) {
+    try {
+      first_problem.prepare(first_snapshot);
+    } catch (const std::runtime_error& error) {
+      prepare_rejection = error.what();
+    }
+    EXPECT_EQ(prepare_rejection, "rank-local frozen-resource failure");
+  } else {
+    try {
+      first_problem.prepare(first_snapshot);
+    } catch (const std::logic_error& error) {
+      prepare_rejection = error.what();
+    }
+    EXPECT_EQ(prepare_rejection,
+              "prepared resource freeze failed on at least one communicator rank");
   }
-  EXPECT_EQ(prepare_rejection, "prepared resource freeze failed on at least one communicator rank");
 
   const TestKrylovMethod method = cg_krylov_method<kDim>();
   TestKrylovWorkspace workspace(prototype, method, footprint);

@@ -104,13 +104,14 @@ int apply(void*, const PopsTransferRequestV1* request, PopsComponentStatusV1* st
   return 0;
 }
 
-const PopsTransferApiV1 transfer_table = {
-  {sizeof(PopsTransferApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
-   POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, nullptr, nullptr},
-  &apply
+const PopsTransferApiV2 transfer_table = {
+  {sizeof(PopsTransferApiV2), POPS_COMPONENT_PROTOCOL_ABI_V1,
+   POPS_NATIVE_INTERFACE_TRANSFER_V2, 2, nullptr, nullptr},
+  &apply,
+  +[](void*, const PopsTransferIntegralRequestV2*, PopsComponentStatusV1*) { return 2; }
 };
 const PopsComponentInterfaceEntryV1 interface_entry = {
-  POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1), &transfer_table
+  POPS_NATIVE_INTERFACE_TRANSFER_V2, 2, sizeof(PopsTransferApiV2), &transfer_table
 };
 const PopsComponentApiV1 component_api = {
   sizeof(PopsComponentApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,

@@ -30,8 +30,8 @@ TEST(test_amr_compiled_model, ExactTransferTablePreservesConservativeDataflow) {
   const std::array<double, 8> fine{1.0, 1.0, 2.0, 2.0, 4.0, 4.0, 8.0, 8.0};
   std::array<double, 4> coarse{};
   const std::array<std::int32_t, 2> ratio{1, 2};
-  const PopsTransferApiV1 transfer{
-      header(sizeof(PopsTransferApiV1), POPS_NATIVE_INTERFACE_TRANSFER_V1),
+  const PopsTransferApiV2 transfer{
+      header(sizeof(PopsTransferApiV2), POPS_NATIVE_INTERFACE_TRANSFER_V2, 2),
       +[](void*, const PopsTransferRequestV1* request, PopsComponentStatusV1* status) {
         const auto* source = static_cast<const double*>(request->source.data);
         auto* destination = static_cast<double*>(request->destination.data);
@@ -39,6 +39,11 @@ TEST(test_amr_compiled_model, ExactTransferTablePreservesConservativeDataflow) {
           destination[point] = 0.5 * (source[2 * point] + source[2 * point + 1]);
         *status = ok();
         return 0;
+      },
+      +[](void*, const PopsTransferIntegralRequestV2*, PopsComponentStatusV1* status) {
+        *status = {sizeof(PopsComponentStatusV1), 91, POPS_COMPONENT_ABORT_RUN_V1,
+                   "fixture only supports standard conservative transfer"};
+        return 91;
       }};
   const PopsTransferRequestV1 transfer_request{sizeof(PopsTransferRequestV1),
                                                abi::const_field_view(fine.data(), 1, 8),

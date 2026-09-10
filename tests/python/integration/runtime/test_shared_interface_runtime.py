@@ -5,6 +5,7 @@ from copy import deepcopy
 from dataclasses import replace
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -33,6 +34,7 @@ from pops.time import FailRun, FixedDt, StagePoint, TimePoint, every
 
 
 ROOT = Path(__file__).resolve().parents[4]
+INCLUDE = os.environ.get("POPS_INCLUDE") or str(ROOT / "include")
 EXAMPLE = ROOT / "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
 
 
@@ -150,7 +152,7 @@ extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{ return &ap
 def _flux_component(tmp_path: Path):
     return compile_component(
         _flux_source_component(tmp_path),
-        include=str(ROOT / "include"),
+        include=INCLUDE,
     )
 
 
@@ -183,6 +185,10 @@ def _tagger_source_component(tmp_path: Path):
         signature={"generic": True, "native_interface": interface.signature_declaration()},
         interfaces=interface.manifest_declarations(),
         capabilities=(capability,),
+        # Successful masks use only finite per-cell comparisons and fixed-order boolean OR.
+        # The explicit fail-once status publishes no Tagger result; the owning transaction
+        # must restore any hierarchy prefix already rebuilt by the previous parent.
+        determinism={"classification": "bitwise", "scope": ["same-input"]},
         target={"variants": [{
             "dimension": 2, "scalar": "float64", "device": "cpu", "features": [],
         }]},
@@ -233,7 +239,9 @@ int tag_batch(void* state, const PopsTaggerRequestV2* request, PopsComponentStat
       request->refine_equalities.size != request->refine_candidates.size ||
       request->coarsen_equalities.size != request->refine_candidates.size ||
       request->logical_time.tick < 0) return 72;
-  if (request->logical_time.tick > 0 && fail_once.fetch_add(1) == 0) {{
+  // Fail only after parent zero has replaced the hierarchy with its temporary two-level prefix.
+  if (request->logical_time.tick > 0 && request->logical_time.level == 1 &&
+      fail_once.fetch_add(1) == 0) {{
     *status = {{sizeof(PopsComponentStatusV1), 73, POPS_COMPONENT_RETRY_STEP_V1,
                 "injected rank-local Tagger failure"}};
     return 0;
@@ -290,10 +298,6 @@ extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{ return &ap
     package_path = tmp_path / "shared-tagger.pops.json"
     package_path.write_text(json.dumps(package), encoding="utf-8")
     return load(package_path).require("tagger", interface=interface)()
-
-
-def _tagger_component(tmp_path: Path):
-    return compile_component(_tagger_source_component(tmp_path), include=str(ROOT / "include"))
 
 
 def _ghost_source_component(tmp_path: Path):
@@ -365,7 +369,13 @@ int apply(void* state, const PopsGhostBoundaryRequestV1* request,
       request->region.dimension != 2 || request->region.codimension != 1 ||
       request->region.axis_count != 1 || !request->region.axes ||
       !request->region.sides || request->region.axes[0] != 0 ||
-      request->region.sides[0] != -1 || request->dependency_count != 0 ||
+      request->region.sides[0] != -1 || request->dependency_count != 1 ||
+      !request->dependencies || !request->dependencies[0].present ||
+      !request->dependencies[0].qualified_id ||
+      std::strcmp(request->dependencies[0].qualified_id, request->state_identity) != 0 ||
+      !request->dependencies[0].values.data ||
+      request->dependencies[0].values.dimension != 2 ||
+      request->dependencies[0].values.component_count != 1 ||
       request->parameter_count != 0 || !request->ghosts.data ||
       request->ghosts.dimension != 2 || request->ghosts.component_count != 1) {{
     if (status)
@@ -509,6 +519,11 @@ class _ResolvedExternalGhostBoundaryAuthority:
         assert len(matches) == 1
         providers = matches[0].producer.boundary_providers
         assert len(providers) == 1
+        # External execution retains the exact Outflow state dependency; the ABI
+        # component authenticates that same qualified input before touching scratch.
+        assert providers[0].dependencies.states == (matches[0].region.subject,)
+        assert not providers[0].dependencies.fields
+        assert not providers[0].dependencies.runtime_params
         target = providers[0].handle
         return replace(
             boundary,
@@ -609,12 +624,49 @@ def _implicit_pair_program(left_state, right_state, rate, packed_state=None):
             solver=GMRES(max_iter=8, restart=4, rel_tol=1.0e-12),
             name="shared_interface_correction",
         ).consume(action=FailRun())
+        # Keep the auxiliary solve vector as an actual committed runtime state; the
+        # solve exercises the shared Jacobian while this exact identity preserves it.
+        packed_next = program.value("packed_next", packed.n, at=packed.next.point)
+        program.commit(packed.next, packed_next)
     left_next = program.value("left_next", left.n + program.dt * left_r0, at=left.next.point)
     right_next = program.value("right_next", right.n + program.dt * right_r0, at=right.next.point)
     program.commit(left.next, left_next)
     program.commit(right.next, right_next)
     program.step_strategy(FixedDt(1.0e-3))
     return program
+
+
+def _uniform_accepted_program_image(native):
+    """Read exact Uniform persistence seams; packed Program bytes are AMR-only."""
+    return {
+        "auxiliary": bytes(native.capture_auxiliary_checkpoint_accepted_state()),
+        "cadence": (
+            native.program_cadence_window_steps(),
+            np.asarray((native.program_cadence_window_dt(),
+                        native.program_cadence_window_start_time(), native.program_last_dt()),
+                       dtype=np.float64).tobytes(),
+        ),
+        "diagnostics": tuple(
+            (name, np.asarray(value, dtype=np.float64).tobytes())
+            for name, value in sorted(native.program_diagnostics().items())
+        ),
+        "exchanges": deepcopy(native._program_exchange_records()),
+        "histories": tuple(
+            (name, native.history_ncomp(name), native.history_initialized(name),
+             native.history_fill_count(name), tuple(
+                 (np.asarray(native.history_slot_dt(name, slot), dtype=np.float64).tobytes(),
+                  np.asarray(native.history_global(name, slot), dtype=np.float64).tobytes())
+                 for slot in range(native.history_depth(name))))
+            for name in native.history_names()
+        ),
+        "held_values": tuple(
+            (node, native.program_cache_name(node), native.program_cache_ncomp(node),
+             native.program_cache_ngrow(node), native.program_cache_last_update_step(node),
+             np.asarray(native.program_cache_accumulated_dt(node), dtype=np.float64).tobytes(),
+             np.asarray(native.program_cache_global(node), dtype=np.float64).tobytes())
+            for node in native.program_cache_nodes()
+        ),
+    }
 
 
 def _shared_interface_accepted_image(runtime):
@@ -698,7 +750,7 @@ def test_runtime_instance_executes_external_ghost_with_rollback_and_retry(tmp_pa
         validated,
         layout=Uniform(CartesianGrid(frame=core.frame, cells=(8, 8))),
         components=(component,),
-        compile_options={"include": str(ROOT / "include")},
+        compile_options={"include": INCLUDE},
     )
     resolved.verify()
     artifact = pops.compile(resolved)
@@ -706,7 +758,9 @@ def test_runtime_instance_executes_external_ghost_with_rollback_and_retry(tmp_pa
         core.case.resolve(handle, block=core.tracer): value
         for handle, value in (
             (core.velocity_x_param, 1.0),
-            (core.velocity_y_param, 0.0),
+            # The imported tutorial declares Positive velocity parameters. The compared
+            # interior rows have no transverse gradient, so this preserves their exact update.
+            (core.velocity_y_param, 1.0e-12),
             (core.inlet_x_param, 0.0),
             (core.inlet_y_param, 0.0),
         )
@@ -726,7 +780,7 @@ def test_runtime_instance_executes_external_ghost_with_rollback_and_retry(tmp_pa
     before = (
         float(runtime.time()),
         int(runtime.macro_step()),
-        bytes(native.program_accepted_state()),
+        _uniform_accepted_program_image(native),
         np.asarray(runtime.get_state("tracer"), dtype=np.float64).copy(),
     )
 
@@ -741,7 +795,7 @@ def test_runtime_instance_executes_external_ghost_with_rollback_and_retry(tmp_pa
     assert rejected.value.detail == "injected ghost failure"
 
     assert (float(runtime.time()), int(runtime.macro_step())) == before[:2]
-    assert bytes(native.program_accepted_state()) == before[2]
+    assert _uniform_accepted_program_image(native) == before[2]
     np.testing.assert_array_equal(
         np.asarray(runtime.get_state("tracer"), dtype=np.float64), before[3]
     )
@@ -806,7 +860,7 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
         validated,
         layout=Uniform(CartesianGrid(frame=core.frame, cells=(8, 8))),
         components=(component,),
-        compile_options={"include": str(ROOT / "include")},
+        compile_options={"include": INCLUDE},
     )
     endpoint_interfaces = tuple(
         block.numerics.boundaries[0].interfaces[0] for block in resolved.blocks)
@@ -819,11 +873,15 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
     assert interface.left.trace_operation.value == "cell_average"
     assert interface.right.trace_operation.value == "cell_average"
     assert interface.left.required_depth == interface.right.required_depth == 1
-    for resolved_block, authored_block in zip(
-            resolved.blocks, (core.tracer, right), strict=True):
-        expected = core.case.resolve(core.inlet_x_param, block=authored_block)
-        x_min = resolved_block.numerics.boundaries[0].compile_boundary_data()["faces"][0]
-        assert x_min["values"] == [["handle_value", expected.qualified_id]]
+    for resolved_block in resolved.blocks:
+        payload = resolved_block.numerics.boundaries[0].compile_boundary_data()
+        owned_face = 1 if resolved_block.name == "tracer" else 0
+        assert payload["omitted_interface_faces"] == [owned_face]
+        assert payload["faces"][owned_face]["type"] == "external"
+        assert payload["faces"][owned_face]["values"] == []
+        if resolved_block.name == "tracer":
+            expected = core.case.resolve(core.inlet_x_param, block=core.tracer)
+            assert payload["faces"][0]["values"] == [["handle_value", expected.qualified_id]]
     artifact = pops.compile(resolved)
     initial = {
         "tracer": np.ones((1, 8, 8), dtype=np.float64),
@@ -1087,7 +1145,14 @@ def _shared_interface_amr_authoring(
 
 
 def _resolve_shared_interface_amr(
-    authoring, *, max_levels, patch_layout=None, frozen=False, regrid_interval=100
+    authoring,
+    *,
+    max_levels,
+    cells=(8, 8),
+    patch_layout=None,
+    clustering=None,
+    frozen=False,
+    regrid_interval=100,
 ):
     from pops.amr import (
         AMRClockRelation,
@@ -1103,7 +1168,7 @@ def _resolve_shared_interface_amr(
     return pops.resolve(
         pops.validate(authoring.core.case),
         layout=AMR(
-            grid=CartesianGrid(frame=authoring.core.frame, cells=(8, 8)),
+            grid=CartesianGrid(frame=authoring.core.frame, cells=cells),
             hierarchy=AMRHierarchy(
                 max_levels=max_levels,
                 ratios=tuple(2 for _ in range(max_levels - 1)),
@@ -1126,13 +1191,14 @@ def _resolve_shared_interface_amr(
                 )
             ),
             patch_layout=patch_layout,
+            clustering=clustering,
         ),
         components=tuple(
             component
             for component in (authoring.component, authoring.tagger_component)
             if component is not None
         ),
-        compile_options={"include": str(ROOT / "include")},
+        compile_options={"include": INCLUDE},
     )
 
 
@@ -1141,6 +1207,8 @@ def test_frozen_two_level_shared_interface_implicit_pair_compiles_native_route(t
         tmp_path,
         program_factory=_implicit_pair_program,
         with_checkpoint=False,
+        # The frozen base is refreshed at a consumed solve, not at operator declaration.
+        with_implicit_solve=True,
     )
     resolved = _resolve_shared_interface_amr(authoring, max_levels=2, frozen=True)
     assert resolved.resolved_hierarchy.plan.level_count == 2
@@ -1167,7 +1235,16 @@ def test_frozen_two_level_shared_interface_implicit_pair_compiles_native_route(t
     assert artifact.program is not None
     generated_path = artifact.program.dump_cpp(tmp_path / "implicit_pair.cpp")
     source = Path(generated_path).read_text(encoding="utf-8")
-    assert source.count("ctx.rhs_jacvec_pair_into_at(") == 1
+    assert source.count("ctx.rhs_jacvec_pair_into_at(") == 2
+    paired_calls = [line for line in source.splitlines() if "ctx.rhs_jacvec_pair_into_at(" in line]
+    assert "jac_up" in paired_calls[0] and "jac_rp" in paired_calls[0]
+    assert "jac_uk" in paired_calls[1] and "jac_r0" in paired_calls[1]
+    base = source.index(paired_calls[1])
+    assert source.index("pops::PureFieldAlgebra::copy(*jac_r0") < base
+    assert base < source.index("->prepare(", base)
+    # The finite-difference numerator must be formed before multiplication by dt/h.
+    assert re.search(r"axpy\(\*jac_rp\w+, pops::Real\(-1\), \*jac_r0\w+\);\s*"
+                     r"pops::PureFieldAlgebra::axpy\(\*jac_up\w+, -jc, \*jac_rp\w+\);", source)
     assert source.count("ctx.copy_component_span(") >= 7
     assert "ctx.rhs_core_into_at(" not in source
     assert "PreparedOperatorConcurrency::Exclusive" in source
@@ -1202,7 +1279,10 @@ def test_frozen_two_level_generated_program_executes_shared_interface_implicit_p
     )
 
     assert runtime.n_levels() == 2
-    initial_packed = np.asarray(runtime.get_state("implicit_vector")).copy()
+    initial_packed = tuple(
+        np.asarray(runtime.block_level_state_global("implicit_vector", level)).copy()
+        for level in range(runtime.n_levels())
+    )
     report = pops.run(runtime, t_end=1.0e-3, max_steps=1, console=False)
 
     assert report.accepted_steps == 1
@@ -1210,14 +1290,19 @@ def test_frozen_two_level_generated_program_executes_shared_interface_implicit_p
         assert runtime._executor._s._interface_evaluation_count(
             interface.qualified_id, level
         ) > 1
-    solved_packed = np.asarray(runtime.get_state("implicit_vector"))
-    assert np.isfinite(solved_packed).all()
-    np.testing.assert_array_equal(solved_packed, initial_packed)
+    for level, initial in enumerate(initial_packed):
+        solved_packed = np.asarray(runtime.block_level_state_global("implicit_vector", level))
+        assert np.isfinite(solved_packed).all()
+        np.testing.assert_array_equal(solved_packed, initial)
 
 
 def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
+    # Retrying an identical failed invocation is supported when it owns no external
+    # consumer lifecycle. The separate restart scenario below retains checkpoint coverage.
     authoring = _shared_interface_amr_authoring(
-        tmp_path, tagger_component=_tagger_component(tmp_path / "tagger")
+        tmp_path,
+        tagger_component=_tagger_source_component(tmp_path / "tagger"),
+        with_checkpoint=False,
     )
     example = authoring.example
     core = authoring.core
@@ -1266,25 +1351,50 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     )
 
     assert runtime.n_levels() == 3
+    assert not runtime.consumer_graph.nodes
+    # The required two-cell nesting buffer can merge the coarse tagged bands at L1.
+    # Sparsity belongs to the finest interface level; patch_boxes uses inclusive indices
+    # in that level's coordinates, so derive its extents from the actual authored ratios.
+    fine_level = runtime.n_levels() - 1
+    fine_shape = list(runtime.spatial_shape())
+    for transition in resolved.resolved_hierarchy.plan.transitions[:fine_level]:
+        fine_shape = [
+            extent * ratio
+            for extent, ratio in zip(fine_shape, transition.ratio, strict=True)
+        ]
     fine_boxes = tuple(
         (lower, upper)
         for box_level, lower, upper in runtime.patch_boxes()
-        if int(box_level) == 1
+        if int(box_level) == fine_level
     )
     assert fine_boxes
     assert any(
-        int(lower[0]) == 0 and int(lower[1]) == 0 and int(upper[1]) == 15
+        int(lower[0]) == 0 and int(lower[1]) == 0 and int(upper[1]) == fine_shape[1] - 1
         for lower, upper in fine_boxes
     )
     assert any(
-        int(upper[0]) == 15 and int(lower[1]) == 0 and int(upper[1]) == 15
+        int(upper[0]) == fine_shape[0] - 1
+        and int(lower[1]) == 0
+        and int(upper[1]) == fine_shape[1] - 1
         for lower, upper in fine_boxes
     )
-    assert not any(int(lower[0]) <= 7 <= int(upper[0]) for lower, upper in fine_boxes)
+    central_indices = (fine_shape[0] // 2 - 1, fine_shape[0] // 2)
+    assert not any(
+        int(lower[0]) <= center <= int(upper[0])
+        for lower, upper in fine_boxes
+        for center in central_indices
+    )
     initial_left = runtime.integral("tracer")
     initial_right = runtime.integral("right")
     initial_integral = initial_left + initial_right
 
+    def actual_interface_counts():
+        return tuple(
+            runtime._executor._s._interface_evaluation_count(interface.qualified_id, level)
+            for level in range(3)
+        )
+
+    assert actual_interface_counts() == (0, 0, 0)
     rollback_before_tagger_retry = _shared_interface_accepted_image(runtime)
     from pops._bootstrap import StepAttemptRejected
 
@@ -1296,6 +1406,10 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     assert rejected.value.phase == "amr_tagger"
     assert rejected.value.detail == "injected rank-local Tagger failure"
     _assert_same_shared_interface_image(runtime, rollback_before_tagger_retry)
+    # Instrumentation reports real executions, including discarded work. SSPRK2 evaluates twice
+    # per level substep; rollback restores scientific state without erasing those observations.
+    rejected_counts = actual_interface_counts()
+    assert rejected_counts == (2, 4, 8)
 
     retry_report = pops.run(runtime, t_end=1.0e-3, max_steps=1, console=False)
     assert retry_report.accepted_steps == 1
@@ -1303,12 +1417,12 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     refined_authority = runtime._executor._interface_authorities[interface.qualified_id]
     assert refined_authority["levels"] == (0, 1, 2)
     assert len(refined_authority["declaration_identity"]) == 64
-    assert runtime._executor._s._interface_evaluation_count(
-        interface.qualified_id, 0) == 2
-    assert runtime._executor._s._interface_evaluation_count(
-        interface.qualified_id, 1) == 4
-    assert runtime._executor._s._interface_evaluation_count(
-        interface.qualified_id, 2) == 8
+    total_counts = actual_interface_counts()
+    assert total_counts == (4, 8, 16)
+    assert tuple(
+        total - rejected
+        for total, rejected in zip(total_counts, rejected_counts, strict=True)
+    ) == (2, 4, 8)
     final_left = runtime.integral("tracer")
     final_right = runtime.integral("right")
     lost_by_left = initial_left - final_left
@@ -1319,34 +1433,83 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     final_integral = final_left + final_right
     np.testing.assert_allclose(final_integral, initial_integral, rtol=0.0, atol=2.0e-13)
 
-    # The three-level route above proves arbitrary-depth execution. Use the independently compiled
-    # two-level route for the restart transaction: replacing its only fine transition is the exact
-    # dynamic topology capability currently authenticated by the interface scheduler.
-    restart_resolved = _resolve_shared_interface_amr(authoring, max_levels=2)
+    # Keep the original independent two-level checkpoint/restart coverage alongside the full
+    # three-level dynamic replacement and post-publication Tagger rollback/retry above.
+    # This independent authoring owns the original checkpoint consumer. Its fast moving profile
+    # advances far enough to make the recorded boxes stale while the ordinary regrid cadence stays
+    # dormant. Each runtime opens its output invocation once; post-restart continuation starts at a
+    # later accepted time and has a distinct run identity, so no closed output session reopens.
+    restart_authoring = _shared_interface_amr_authoring(
+        tmp_path / "restart-authoring",
+        component=authoring.component,
+        tagger_component=authoring.tagger_component,
+        with_checkpoint=True,
+    )
+    np.testing.assert_array_equal(restart_authoring.left_initial, left_initial)
+    np.testing.assert_array_equal(restart_authoring.right_initial, right_initial)
+    # The 8-cell domain is fully covered after nesting padding on both interface bands.
+    # Double only this independent restart grid, preserving the same physical cell averages,
+    # so native tagging has unrefined interior cells into which the moving profile can grow.
+    restart_cells = 16
+    restart_initial_values = {
+        state: np.repeat(np.repeat(values, 2, axis=1), 2, axis=2)
+        for state, values in (
+            (restart_authoring.core.tracer_state, restart_authoring.left_initial),
+            (restart_authoring.right_state, restart_authoring.right_initial),
+        )
+    }
+    restart_dt = 1.0e-3
+    restart_source_steps = 2
+    # dx_fine=1/32 and the 2:1 subcycle give CFL_fine=0.32. Four fine substeps
+    # move the profile by 1.28 cells while preserving the existing stable macro-step count.
+    restart_velocity_x = 20.0
+    restart_params = dict(restart_authoring.params)
+    for block in (restart_authoring.core.tracer, restart_authoring.right):
+        restart_params[
+            restart_authoring.core.case.resolve(
+                restart_authoring.core.velocity_x_param,
+                block=block,
+            )
+        ] = restart_velocity_x
+    from pops.amr import PatchLayout
+    from pops.lib.amr import BergerRigoutsos
+
+    restart_resolved = _resolve_shared_interface_amr(
+        restart_authoring,
+        max_levels=2,
+        cells=(restart_cells, restart_cells),
+        patch_layout=PatchLayout(distribute_coarse=True, coarse_max_grid=4),
+        clustering=BergerRigoutsos(maximum_box_size=4),
+    )
     restart_artifact = pops.compile(restart_resolved)
     restart_interface = restart_resolved.blocks[0].numerics.boundaries[0].interfaces[0]
-    restart_source = example._bind_artifact(
+    restart_source = restart_authoring.example._bind_artifact(
         restart_artifact,
-        initial_values={
-            core.tracer_state: left_initial,
-            right_state: right_initial,
-        },
-        params=params,
+        initial_values=restart_initial_values,
+        params=restart_params,
     )
     assert restart_source.n_levels() == 2
+    bootstrap_boxes = tuple(restart_source.patch_boxes())
+    fine_coverage = sum(
+        (upper[0] - lower[0] + 1) * (upper[1] - lower[1] + 1)
+        for level, lower, upper in bootstrap_boxes
+        if level == 1
+    )
+    assert 0 < fine_coverage < (2 * restart_cells) ** 2
+    assert len(restart_source.consumer_graph.nodes) == 1
     restart_initial_integral = restart_source.integral("tracer") + restart_source.integral("right")
     source_report = pops.run(
         restart_source,
-        t_end=1.0e-3,
-        max_steps=1,
+        t_end=restart_source_steps * restart_dt,
+        max_steps=restart_source_steps,
         console=False,
         output_dir=tmp_path / "restart-source-output",
     )
-    assert source_report.accepted_steps == 1
+    assert source_report.accepted_steps == restart_source_steps
     assert restart_source._executor._s._interface_evaluation_count(
-        restart_interface.qualified_id, 0) == 2
+        restart_interface.qualified_id, 0) == 4
     assert restart_source._executor._s._interface_evaluation_count(
-        restart_interface.qualified_id, 1) == 4
+        restart_interface.qualified_id, 1) == 8
     checkpoint_time = float(restart_source.time())
     checkpoint_step = int(restart_source.macro_step())
     checkpoint_integral = (
@@ -1359,27 +1522,27 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
         atol=2.0e-13,
     )
     checkpoint = restart_source.checkpoint(tmp_path / "accepted-shared-interface")
+    checkpoint_boxes = tuple(restart_source.patch_boxes())
+    assert checkpoint_boxes == bootstrap_boxes
 
     # RegridOnRestart enters the native tag/cluster/regrid boundary. A deliberately rejected
     # post-transform validation must restore the fresh runtime exactly before the same restart is
     # retried and committed. This remains independent of the typed Tagger retry proved above.
-    restarted = example._bind_artifact(
+    restarted = restart_authoring.example._bind_artifact(
         restart_artifact,
-        initial_values={
-            core.tracer_state: left_initial,
-            right_state: right_initial,
-        },
-        params=params,
+        initial_values=restart_initial_values,
+        params=restart_params,
     )
     priming_report = pops.run(
         restarted,
-        t_end=1.0e-3,
+        t_end=restart_dt,
         max_steps=1,
         console=False,
         output_dir=tmp_path / "restart-candidate-output",
     )
     assert priming_report.accepted_steps == 1
     rollback_image = _shared_interface_accepted_image(restarted)
+    assert rollback_image["boxes"] == checkpoint_boxes
     from pops.runtime import _amr_checkpoint_v3 as checkpoint_codec
 
     original_conservation_check = checkpoint_codec._require_restart_conservation
@@ -1396,6 +1559,7 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
             restarted.restart(checkpoint)
         assert transformed_images
         assert transformed_images[0]["boxes"] != rollback_image["boxes"]
+        assert transformed_images[0]["boxes"] != checkpoint_boxes
         _assert_same_shared_interface_image(restarted, rollback_image)
 
         checkpoint_codec._require_restart_conservation = original_conservation_check
@@ -1403,9 +1567,11 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
         receipt = restarted._executor.last_restart_regrid_receipt()
         assert receipt is not None
         assert receipt["changed"] is True
+        assert receipt["before"]["topology_identity"] != receipt["after"]["topology_identity"]
         assert float(restarted.time()) == checkpoint_time
         assert int(restarted.macro_step()) == checkpoint_step
         assert tuple(restarted.patch_boxes()) == tuple(transformed_images[0]["boxes"])
+        assert tuple(restarted.patch_boxes()) != checkpoint_boxes
         np.testing.assert_allclose(
             [row["value"] for row in receipt["composite_integrals_after"]],
             [row["value"] for row in receipt["composite_integrals_before"]],
@@ -1424,7 +1590,13 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
             restarted._executor._s._interface_evaluation_count(restart_interface.qualified_id, level)
             for level in range(2)
         )
-        pops.run(restarted, t_end=2.0e-3, max_steps=1, console=False)
+        continuation_report = pops.run(
+            restarted,
+            t_end=float(restarted.time()) + restart_dt,
+            max_steps=1,
+            console=False,
+        )
+        assert continuation_report.run_identity != priming_report.run_identity
         counts_after_continuation = tuple(
             restarted._executor._s._interface_evaluation_count(restart_interface.qualified_id, level)
             for level in range(2)
@@ -1443,3 +1615,109 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
         )
     finally:
         checkpoint_codec._require_restart_conservation = original_conservation_check
+
+
+def _shared_copied_rate_program(left_state, right_state, rate, *, asymmetric=False):
+    program = pops.Program("shared_copied_rate_asymmetric" if asymmetric else "shared_copied_rate")
+    left, right = program.state(left_state), program.state(right_state)
+    stage = StagePoint("copied_rate", {"main": TimePoint(program.clock, 0)})
+    left_rate = program.value("left_rate", rate(left.n), at=stage)
+    right_rate = program.value("right_rate", rate(right.n), at=stage)
+    # Distinct value aliases and signed affine paths must retain one physical source identity.
+    left_copy = program.value("left_copy", left_rate, at=stage)
+    left_next = program.value(
+        "left_next", left.n + 2 * program.dt * left_rate - program.dt * left_copy,
+        at=left.next.point)
+    right_next = program.value(
+        "right_next", right.n + (0.5 if asymmetric else 1) * program.dt * right_rate,
+        at=right.next.point)
+    program.commit(left.next, left_next)
+    program.commit(right.next, right_next)
+    program.step_strategy(FixedDt(1.0e-3))
+    return program
+
+
+@pytest.mark.parametrize("asymmetric", [False, True])
+def test_shared_rhs_copies_publish_once_and_asymmetric_weights_roll_back(tmp_path, asymmetric):
+    def factory(left, right, rate):
+        return _shared_copied_rate_program(left, right, rate, asymmetric=asymmetric)
+
+    authoring = _shared_interface_amr_authoring(
+        tmp_path, program_factory=factory, with_checkpoint=False)
+    resolved = _resolve_shared_interface_amr(authoring, max_levels=2, frozen=True)
+    artifact = pops.compile(resolved)
+    runtime = authoring.example._bind_artifact(
+        artifact,
+        initial_values={authoring.core.tracer_state: authoring.left_initial,
+                        authoring.right_state: authoring.right_initial},
+        params=authoring.params)
+    before = _shared_interface_accepted_image(runtime)
+    interface = resolved.blocks[0].numerics.boundaries[0].interfaces[0]
+    initial_integral = runtime.integral("tracer") + runtime.integral("right")
+    if asymmetric:
+        with pytest.raises((ValueError, RuntimeError), match="endpoint quadrature coefficients disagree"):
+            pops.run(runtime, t_end=1.0e-3, max_steps=1, console=False)
+        _assert_same_shared_interface_image(runtime, before)
+        assert runtime._executor._s._interface_evaluation_count(interface.qualified_id, 0) == 1
+    else:
+        pops.run(runtime, t_end=1.0e-3, max_steps=1, console=False)
+        assert tuple(runtime._executor._s._interface_evaluation_count(interface.qualified_id, level)
+                     for level in range(2)) == (1, 2)
+        np.testing.assert_allclose(
+            runtime.integral("tracer") + runtime.integral("right"), initial_integral,
+            rtol=0.0, atol=2.0e-13)
+        rows = runtime._executor._s.program_interface_flux_ledger_manifest()
+        assert len(rows) == 3  # one coarse and two fine substep samples, never one per alias
+
+
+def _shared_ab2_program(left_state, right_state, rate):
+    from fractions import Fraction
+    from pops.time import Dense
+
+    program = pops.Program("shared_interface_ab2")
+    stage = StagePoint("shared_ab2_current", {"main": TimePoint(program.clock, 0)})
+    endpoints = [(name, program.state(state))
+                 for name, state in (("left", left_state), ("right", right_state))]
+    rates = [program.value(name + "_rate", rate(temporal.n), at=stage)
+             for name, temporal in endpoints]
+    # Materialize the coherent pair before either endpoint's history publication barrier.
+    for (name, temporal), current in zip(endpoints, rates, strict=True):
+        history_name = name + ".rate"
+        program.store_history(history_name, current, depth=1, checkpoint_policy=Dense())
+        previous = program.history(history_name, lag=1, space=current.space,
+                                   block=temporal.block, state_ref=temporal.state)
+        next_value = program.value(
+            name + "_next", temporal.n + program.dt * (
+                Fraction(3, 2) * current - Fraction(1, 2) * previous),
+            at=temporal.next.point)
+        program.commit(temporal.next, next_value)
+    program.step_strategy(FixedDt(1.0e-3))
+    return program
+
+
+def test_shared_rhs_signed_history_restart_preserves_earned_samples(tmp_path):
+    authoring = _shared_interface_amr_authoring(
+        tmp_path, program_factory=_shared_ab2_program, with_checkpoint=False)
+    authoring.core.case.consumers(ConsumerGraph.from_consumers((Checkpoint(
+        schedule=every(10_000, clock=authoring.program.clock), target="unused/shared-ab2"),)))
+    resolved = _resolve_shared_interface_amr(authoring, max_levels=2, frozen=True)
+    artifact = pops.compile(resolved)
+    initial = {authoring.core.tracer_state: authoring.left_initial,
+               authoring.right_state: authoring.right_initial}
+
+    def bind():
+        return authoring.example._bind_artifact(artifact, initial_values=initial,
+                                               params=authoring.params)
+
+    source = bind()
+    pops.run(source, t_end=2.0e-3, max_steps=2, console=False,
+             output_dir=tmp_path / "source-output")
+    checkpoint = source.checkpoint(tmp_path / "shared-ab2")
+    image = _shared_interface_accepted_image(source)
+    restarted = bind()
+    restarted.restart(checkpoint)
+    _assert_same_shared_interface_image(restarted, image)
+    for name, runtime in (("source", source), ("restart", restarted)):
+        pops.run(runtime, t_end=4.0e-3, max_steps=2, console=False,
+                 output_dir=tmp_path / (name + "-continuation"))
+    _assert_same_shared_interface_image(restarted, _shared_interface_accepted_image(source))

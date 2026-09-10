@@ -16,6 +16,68 @@ _RATE_METHOD_PROTOCOL = (
 )
 
 
+class UnsupportedBalanceRealizationError(ValueError):
+    """A retained equation has no selected native numerical realization."""
+
+    code = "unsupported_balance_realization"
+    phase = "resolve"
+
+    def __init__(self, rate: OperatorHandle, reason: str) -> None:
+        self.context = {"rate": rate.local_id, "reason": reason}
+        super().__init__("[%s] rate %r: %s" % (self.code, rate.local_id, reason))
+
+
+def _validate_selected_balance_coverage(model: Any, selected: Mapping, *, states: Any) -> None:
+    """Cover each chosen equation exactly once, through the whole rate or partitions."""
+    contracts = model._rate_contracts
+    state_set = None if states is None else set(states)
+    expected = model.selected_rate_contracts(states=states)
+    retained = getattr(model, "_retained_rates", {})
+    covered: dict[Any, dict[int, Any]] = {}
+    legacy: set[Any] = set()
+    extra = []
+    for rate in selected:
+        contract = contracts.get(rate)
+        if contract is None or (state_set is not None and contract["state"] not in state_set):
+            extra.append(rate)
+            continue
+        view = retained.get(rate)
+        if view is None:
+            if rate not in expected:
+                extra.append(rate)
+            else:
+                legacy.add(rate)
+            continue
+        root = view.balance.handle
+        if root not in expected:
+            extra.append(rate)
+            continue
+        counts = covered.setdefault(root, {})
+        for occurrence in view.occurrences:
+            previous = counts.get(occurrence.ordinal)
+            if previous is not None:
+                raise ValueError(
+                    "DiscretizationPlan duplicate physical balance occurrence %r[%d] "
+                    "in numerical routes %r and %r"
+                    % (root.local_id, occurrence.ordinal, previous.local_id, rate.local_id))
+            counts[occurrence.ordinal] = rate
+    missing = []
+    for root in expected:
+        view = retained.get(root)
+        if view is None:
+            if root not in legacy:
+                missing.append(root.local_id)
+            continue
+        required = set(range(len(view.balance.occurrences)))
+        if root not in covered or required != set(covered[root]):
+            omitted = sorted(required - set(covered.get(root, {})))
+            missing.append("%s occurrences %s" % (root.local_id, omitted))
+    if missing or extra:
+        raise ValueError(
+            "DiscretizationPlan rate coverage mismatch for Model %r block states: missing=%s extra=%s"
+            % (model.name, missing, sorted(rate.local_id for rate in extra)))
+
+
 def _require_rate_method(value: Any, where: str) -> Any:
     missing = [name for name in _RATE_METHOD_PROTOCOL if not callable(getattr(value, name, None))]
     if missing:
@@ -424,17 +486,20 @@ class DiscretizationPlan(Descriptor):
             raise TypeError("DiscretizationPlan requires a Model exposing typed rate contracts")
         selected = dict(self.rates.items())
         state_set = None if states is None else set(states)
-        expected = {
-            rate for rate, contract in contracts.items()
-            if state_set is None or contract["state"] in state_set
-        }
-        missing, extra = expected - set(selected), set(selected) - expected
-        if missing or extra:
-            raise ValueError(
-                "DiscretizationPlan rate coverage mismatch for Model %r block states: "
-                "missing=%s extra=%s"
-                % (model.name, sorted(row.local_id for row in missing),
-                   sorted(row.local_id for row in extra)))
+        if callable(getattr(model, "selected_rate_contracts", None)):
+            _validate_selected_balance_coverage(model, selected, states=states)
+        else:
+            expected = {
+                rate for rate, contract in contracts.items()
+                if state_set is None or contract["state"] in state_set
+            }
+            missing, extra = expected - set(selected), set(selected) - expected
+            if missing or extra:
+                raise ValueError(
+                    "DiscretizationPlan rate coverage mismatch for Model %r block states: "
+                    "missing=%s extra=%s"
+                    % (model.name, sorted(row.local_id for row in missing),
+                       sorted(row.local_id for row in extra)))
         if not selected:
             raise ValueError("DiscretizationPlan has no rate binding for Model %r" % model.name)
         for rate, method in selected.items():
@@ -462,6 +527,13 @@ class DiscretizationPlan(Descriptor):
                 continue
             if model.rate_contract(rate)["state"] not in states:
                 continue
+            view = getattr(model, "_retained_rates", {}).get(rate)
+            if view is not None:
+                reason = view.legacy_incompatibility()
+                if reason is not None:
+                    validate_balance = getattr(method, "validate_balance_view", None)
+                    if not callable(validate_balance) or validate_balance(view) is not True:
+                        raise UnsupportedBalanceRealizationError(rate, reason)
             rates.append(ResolvedRateMethod(
                 case.resolve(rate, block=block), method.resolve_references(resolve_handle)))
         def resolve_pairs(rows: Any, family: str) -> tuple[ResolvedNumericalBinding, ...]:

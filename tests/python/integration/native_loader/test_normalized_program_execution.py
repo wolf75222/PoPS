@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 import pops.lib.time as libtime
+from pops.codegen.module_lowering import lower_and_validate
 from pops.codegen.program_graph_lowering import emit_program_graph
 from pops.physics._facade import Model
 from pops.problem import Case
@@ -130,7 +131,10 @@ class _NormalizedProgram:
 def _normalize_and_lower(program: Program, model: Any) -> _NormalizedProgram:
     detached = detach_compiled_program(program)
     graph = detached.to_graph()
-    source = emit_program_graph(graph, lowering_program=detached, model=model)
+    emit_model, source_module = lower_and_validate(model, facade=model)
+    assert emit_model is model
+    assert source_module is model.module
+    source = emit_program_graph(graph, lowering_program=detached, model=emit_model)
     assert detached.to_graph().graph_hash == graph.graph_hash
     return _NormalizedProgram(
         authored=program,

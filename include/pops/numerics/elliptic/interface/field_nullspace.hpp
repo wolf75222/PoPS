@@ -45,6 +45,9 @@ struct FieldNullspaceBasis {
   /// Physical cell measure per level.  It is part of the resolved topology/layout recipe and is
   /// applied to every compatibility/gauge moment.
   std::vector<Real> cell_measure;
+  /// Number of contiguous field components in this ONE basis vector. Empty masks mean
+  /// (1,...,1) over this span: one shared kernel, never independent component gauges.
+  int component_count = 1;
 
   const MultiFab<Dim>* mask(int level) const {
     if (masks.empty())
@@ -278,6 +281,7 @@ class FieldNullspacePreflightPayload {
       append_text(basis.provenance);
       append_text(basis.recipe_identity);
       append_scalar(basis.field_component);
+      append_scalar(basis.component_count);
       append_size(basis.masks.size());
       for (std::size_t level = 0; level < basis.masks.size(); ++level)
         append_layout_fn(basis.masks[level].get(), level);
@@ -329,12 +333,14 @@ inline void validate_field_nullspace_plan_locally(FieldNullspacePreflightPayload
   for (std::size_t index = 0; index < plan.bases.size(); ++index) {
     const FieldNullspaceBasis<Dim>& basis = plan.bases[index];
     payload.require(!basis.identity.empty() && !basis.provenance.empty() &&
-                    !basis.recipe_identity.empty() && basis.field_component >= 0);
+                    !basis.recipe_identity.empty() && basis.field_component >= 0 &&
+                    basis.component_count > 0);
     for (std::size_t previous = 0; previous < index; ++previous)
       payload.require(plan.bases[previous].identity != basis.identity);
     for (const auto& mask : basis.masks) {
       if (mask != nullptr)
-        payload.require(field_nullspace_layout_is_materialized(*mask) && mask->ncomp() == 1);
+        payload.require(field_nullspace_layout_is_materialized(*mask) &&
+                        mask->ncomp() == basis.component_count);
     }
     for (const auto& coverage : basis.coverage) {
       if (coverage != nullptr)
@@ -439,7 +445,9 @@ inline void preflight_field_nullspace_fields(
         continue;
       const std::size_t resolved_level = static_cast<std::size_t>(first_level) + level;
       for (const FieldNullspaceBasis<Dim>& basis : plan.bases) {
-        payload.require(basis.field_component >= 0 && basis.field_component < field->ncomp());
+        payload.require(basis.field_component >= 0 && basis.component_count > 0 &&
+                        basis.component_count <= field->ncomp() &&
+                        basis.field_component <= field->ncomp() - basis.component_count);
         if (!basis.masks.empty()) {
           payload.require(resolved_level < basis.masks.size() &&
                           basis.masks[resolved_level] != nullptr);
@@ -595,10 +603,14 @@ struct FieldBasisMomentKernel {
   int component;
   bool masked, covered;
   Real measure;
+  int component_count = 1;
   POPS_HD Real operator()(const Index<Dim>& index) const {
-    const Real b = masked ? basis(index, 0) : Real(1);
-    const Real active = covered ? coverage(index, 0) : Real(1);
-    return value(index, component) * b * active * measure;
+    Real moment = Real(0);
+    for (int offset = 0; offset < component_count; ++offset) {
+      const Real b = masked ? basis(index, offset) : Real(1);
+      moment += value(index, component + offset) * b;
+    }
+    return moment * (covered ? coverage(index, 0) : Real(1)) * measure;
   }
 };
 
@@ -609,11 +621,16 @@ struct FieldBasisAbsMomentKernel {
   int component;
   bool masked, covered;
   Real measure;
+  int component_count = 1;
   POPS_HD Real operator()(const Index<Dim>& index) const {
-    const Real b = masked ? basis(index, 0) : Real(1);
+    Real moment = Real(0);
     const Real active = covered ? coverage(index, 0) : Real(1);
-    const Real weighted = value(index, component) * b * active * measure;
-    return weighted < Real(0) ? -weighted : weighted;
+    for (int offset = 0; offset < component_count; ++offset) {
+      const Real b = masked ? basis(index, offset) : Real(1);
+      const Real weighted = value(index, component + offset) * b * active * measure;
+      moment += weighted < Real(0) ? -weighted : weighted;
+    }
+    return moment;
   }
 };
 
@@ -622,12 +639,29 @@ struct FieldBasisGramKernel {
   FieldView<const Real, Dim> left, right, left_coverage, right_coverage;
   bool left_masked, right_masked, left_covered, right_covered;
   Real measure;
+  int left_component = 0, right_component = 0;
+  int left_count = 1, right_count = 1;
   POPS_HD Real operator()(const Index<Dim>& index) const {
-    const Real a = left_masked ? left(index, 0) : Real(1);
-    const Real b = right_masked ? right(index, 0) : Real(1);
-    const Real wa = left_covered ? left_coverage(index, 0) : Real(1);
-    const Real wb = right_covered ? right_coverage(index, 0) : Real(1);
-    return a * wa * b * wb * measure;
+    if (left_count == 1 && right_count == 1) {
+      if (left_component != right_component)
+        return Real(0);
+      const Real a = left_masked ? left(index, 0) : Real(1);
+      const Real b = right_masked ? right(index, 0) : Real(1);
+      return a * (left_covered ? left_coverage(index, 0) : Real(1)) * b *
+             (right_covered ? right_coverage(index, 0) : Real(1)) * measure;
+    }
+    const int begin = left_component > right_component ? left_component : right_component;
+    const int left_end = left_component + left_count;
+    const int right_end = right_component + right_count;
+    const int end = left_end < right_end ? left_end : right_end;
+    Real overlap = Real(0);
+    for (int component = begin; component < end; ++component) {
+      const Real a = left_masked ? left(index, component - left_component) : Real(1);
+      const Real b = right_masked ? right(index, component - right_component) : Real(1);
+      overlap += a * b;
+    }
+    return overlap * (left_covered ? left_coverage(index, 0) : Real(1)) *
+           (right_covered ? right_coverage(index, 0) : Real(1)) * measure;
   }
 };
 
@@ -638,9 +672,13 @@ struct ShiftFieldBasisKernel {
   int component;
   bool masked, covered;
   Real coefficient;
+  int component_count = 1;
   POPS_HD void operator()(const Index<Dim>& index) const {
-    const Real basis = masked ? mask(index, 0) : Real(1);
-    value(index, component) -= coefficient * basis * (covered ? coverage(index, 0) : Real(1));
+    for (int offset = 0; offset < component_count; ++offset) {
+      const Real basis = masked ? mask(index, offset) : Real(1);
+      value(index, component + offset) -=
+          coefficient * basis * (covered ? coverage(index, 0) : Real(1));
+    }
   }
 };
 
@@ -684,9 +722,12 @@ inline void validate_basis_layout(const MultiFab<Dim>& value, const MultiFab<Dim
   if (basis.identity.empty() || basis.provenance.empty() || basis.recipe_identity.empty())
     throw std::runtime_error(
         "field nullspace basis requires identity, provenance and deterministic recipe identity");
-  if (basis.field_component < 0 || basis.field_component >= value.ncomp())
+  if (basis.field_component < 0 || basis.component_count < 1 ||
+      basis.component_count > value.ncomp() ||
+      basis.field_component > value.ncomp() - basis.component_count)
     throw std::runtime_error("field nullspace basis component is outside the solved field");
-  if (mask != nullptr && (mask->ncomp() != 1 || !field_nullspace_layouts_match(value, *mask)))
+  if (mask != nullptr &&
+      (mask->ncomp() != basis.component_count || !field_nullspace_layouts_match(value, *mask)))
     throw std::runtime_error("field nullspace mask is not co-distributed with the solved field");
 }
 
@@ -817,8 +858,6 @@ inline void validate_field_nullspace_basis(
                                                std::vector<double>(gram_size, 0.0));
   for (std::size_t a = 0; a < count; ++a) {
     for (std::size_t b = a; b < count; ++b) {
-      if (plan.bases[a].field_component != plan.bases[b].field_component)
-        continue;
       for (std::size_t level = 0; level < level_layouts.size(); ++level) {
         const int resolved_level = first_level + static_cast<int>(level);
         std::vector<double>& contribution = level_grams[level];
@@ -849,7 +888,9 @@ inline void validate_field_nullspace_basis(
               detail::FieldBasisGramKernel<Dim>{
                   left_array, right_array, left_coverage_array, right_coverage_array,
                   left != nullptr, right != nullptr, left_coverage != nullptr,
-                  right_coverage != nullptr, plan.bases[a].measure(resolved_level)}));
+                  right_coverage != nullptr, plan.bases[a].measure(resolved_level),
+                  plan.bases[a].field_component, plan.bases[b].field_component,
+                  plan.bases[a].component_count, plan.bases[b].component_count}));
         }
       }
       for (std::vector<double>& contribution : level_grams)
@@ -912,13 +953,13 @@ inline std::vector<double> require_field_nullspace_compatible(
             coverage == nullptr ? FieldView<const Real, Dim>{} : coverage->fab(li).view();
         const Box<Dim> valid = rhs.box(li);
         contribution[2 * b] += static_cast<double>(for_each_cell_reduce_sum(
-            valid, detail::FieldBasisMomentKernel<Dim>{value, mask_array, coverage_array,
-                                                       basis.field_component, mask != nullptr,
-                                                       coverage != nullptr, measure}));
+            valid, detail::FieldBasisMomentKernel<Dim>{
+                       value, mask_array, coverage_array, basis.field_component, mask != nullptr,
+                       coverage != nullptr, measure, basis.component_count}));
         contribution[2 * b + 1] += static_cast<double>(for_each_cell_reduce_sum(
-            valid, detail::FieldBasisAbsMomentKernel<Dim>{value, mask_array, coverage_array,
-                                                          basis.field_component, mask != nullptr,
-                                                          coverage != nullptr, measure}));
+            valid, detail::FieldBasisAbsMomentKernel<Dim>{
+                       value, mask_array, coverage_array, basis.field_component, mask != nullptr,
+                       coverage != nullptr, measure, basis.component_count}));
       }
     }
   }
@@ -1004,16 +1045,14 @@ inline void apply_field_gauge(const std::vector<MultiFab<Dim>*>& phi_levels,
             coverage == nullptr ? FieldView<const Real, Dim>{} : coverage->fab(li).view();
         const Box<Dim> valid = phi.box(li);
         contribution[b] += static_cast<double>(for_each_cell_reduce_sum(
-            valid, detail::FieldBasisMomentKernel<Dim>{value, mask_array, coverage_array,
-                                                       basis.field_component, mask != nullptr,
-                                                       coverage != nullptr, measure}));
+            valid, detail::FieldBasisMomentKernel<Dim>{
+                       value, mask_array, coverage_array, basis.field_component, mask != nullptr,
+                       coverage != nullptr, measure, basis.component_count}));
       }
     }
   }
   for (std::size_t left = 0; left < basis_count; ++left) {
     for (std::size_t right = left; right < basis_count; ++right) {
-      if (plan.bases[left].field_component != plan.bases[right].field_component)
-        continue;
       for (std::size_t level = 0; level < phi_levels.size(); ++level) {
         const int resolved_level = first_level + static_cast<int>(level);
         MultiFab<Dim>& phi = *phi_levels[level];
@@ -1040,7 +1079,9 @@ inline void apply_field_gauge(const std::vector<MultiFab<Dim>*>& phi_levels,
                   detail::FieldBasisGramKernel<Dim>{
                       left_values, right_values, left_coverage_values, right_coverage_values,
                       left_mask != nullptr, right_mask != nullptr, left_coverage != nullptr,
-                      right_coverage != nullptr, plan.bases[left].measure(resolved_level)}));
+                      right_coverage != nullptr, plan.bases[left].measure(resolved_level),
+                      plan.bases[left].field_component, plan.bases[right].field_component,
+                      plan.bases[left].component_count, plan.bases[right].component_count}));
         }
       }
       for (std::vector<double>& values : level_values)
@@ -1070,9 +1111,10 @@ inline void apply_field_gauge(const std::vector<MultiFab<Dim>*>& phi_levels,
             mask == nullptr ? FieldView<const Real, Dim>{} : mask->fab(li).view();
         const FieldView<const Real, Dim> coverage_array =
             coverage == nullptr ? FieldView<const Real, Dim>{} : coverage->fab(li).view();
-        for_each_cell(phi.box(li), detail::ShiftFieldBasisKernel<Dim>{
-                                       value, mask_array, coverage_array, basis.field_component,
-                                       mask != nullptr, coverage != nullptr, coefficient});
+        for_each_cell(phi.box(li),
+                      detail::ShiftFieldBasisKernel<Dim>{
+                          value, mask_array, coverage_array, basis.field_component, mask != nullptr,
+                          coverage != nullptr, coefficient, basis.component_count});
       }
     }
   }

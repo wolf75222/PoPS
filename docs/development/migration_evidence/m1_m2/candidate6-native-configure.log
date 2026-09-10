@@ -1,0 +1,22 @@
+-- PoPS native spatial specialization: Dim=2
+-- PoPS Real specialization: double
+-- ccache actif : /Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/ccache (cache de compilation ; -DPOPS_USE_CCACHE=OFF pour desactiver)
+-- Kokkos trouve (install 5.2.1) : for_each_cell backend = Kokkos (OPENMP;SERIAL)
+-- Found MPI: TRUE (found version "4.0") found components: CXX
+-- MPI found (/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/mpiexec) : enabling distributed comm seam
+-- Found MPI: TRUE (found version "4.0") found components: C CXX
+-- HDF5 C compiler wrapper is unable to compile a minimal HDF5 program.
+CMake Warning at /Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/share/cmake-4.4/Modules/FindHDF5.cmake:938 (message):
+  HDF5 found for language C is not parallel but previously found language is
+  parallel.
+Call Stack (most recent call first):
+  CMakeLists.txt:420 (find_package)
+
+
+-- Parallel HDF5 found (1.14.3) : enabling native collective DataWriter
+-- FFTW3 found (/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907) : PoissonFFT local-axis production radix backend
+-- GoogleTest not found in the environment; fetching v1.17.0
+-- pops tests: 65 heavy runtime targets capped (-O0 + pops_heavy_test_tu pool)
+-- Configuring done (9.2s)
+-- Generating done (1.3s)
+-- Build files have been written to: /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native

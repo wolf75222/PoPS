@@ -1,0 +1,38 @@
+INSTALLED /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/__init__.py
+NATIVE /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so SHA256 d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518
+FIXTURE /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/tests/python/unit/runtime/test_projection_eig_predicate.py SHA256 979a7e08161e257dcd39cc67524d40b9a8ac0eaadaa55d1c372b7b9c253d6414 SOURCE_SHA bd583faf196f3c1faeedec489e04d24e959ed00b
+== (1) eval numpy eig_all_real : reel -> 1.0, paire complexe -> 0.0 ==
+  [OK ] scalaire : rotation (VP complexes) -> eig_all_real = 0.0
+  [OK ] scalaire : symetrique (VP reelles) -> eig_all_real = 1.0
+  [OK ] scalaire : triangulaire 3x3 (VP reelles) -> eig_all_real = 1.0
+  [OK ] champ 2x2 : eig_all_real == reference numpy all_real (n=64)
+  [OK ] champ : les deux verdicts (reel / complexe) apparaissent
+== (2) tolerance RELATIVE + parametre im_tol (asymetrie all_real) ==
+  [OK ] 1e8 +- i au seuil 1e-5 : paire complexe sous im_tol*scale -> reel (asymetrie)
+  [OK ] +- 1e-3 i au seuil 1e-5 -> complexe (0.0)
+  [OK ] meme matrice, im_tol=1.0 -> reel (1.0) : im_tol fait basculer le verdict
+  [OK ] im_tol=0.0 rejete (ValueError)
+  [OK ] im_tol=-0.001 rejete (ValueError)
+== (3) codegen : foncteur all_real abaisse sur EigBounds::all_real (PAS .max_im) ==
+  [OK ] brique inclut dense_eig.hpp
+  [OK ] foncteur nomme pops_eig_all_real_2x2 declare
+  [OK ] le foncteur conserve EigBounds puis appelle all_real (verrou de surete : converged)
+  [OK ] le predicat n'est PAS abaisse sur un comparatif .max_im (repli => 0.0, jamais reel)
+  [OK ] im_tol passe en argument du foncteur (seuil relatif)
+  [OK ] aucune lambda etendue (device-clean)
+  [OK ] project() appelle le foncteur
+== (7) CSE : im_tol DIFFERENT -> locales distinctes ; im_tol identique -> partagee ==
+  [OK ] cles CSE distinctes pour im_tol different
+  [OK ] cles CSE identiques pour im_tol identique
+== (6) extension ADDITIVE : projection SANS predicat inchangee (ADC-177) ==
+  [OK ] aucun include dense_eig sans predicat
+  [OK ] aucun foncteur eig sans predicat (additif)
+== (4) [compilateur] non-convergence CONSERVATRICE : all_real() == false sous repli ==
+  [OK ] repli declenche (converged == false) au cap QR 0
+  [OK ] le piege : max_im == 0 sous repli (lirait reel pour un test .max_im brut)
+  [OK ] all_real() == false sous repli -> 0.0, JAMAIS reel (conservateur)
+== (5) [compilateur] brique generee project(U) == reference numpy (cellule par cellule) ==
+  [OK ] la brique generee compile contre les en-tetes pops
+  [OK ] project(U) C++ == numpy sur 64 cellules (ecart max 0.00e+00)
+  [OK ] les deux branches (reel / complexe) exercees (26 reelles / 64)
+FAILS = 0

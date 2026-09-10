@@ -1,4 +1,8 @@
 #include <gtest/gtest.h>
+#include <bit>
+#include <iostream>
+#include <pops/numerics/elliptic/linear/generic_krylov.hpp>
+#include <pops/numerics/elliptic/nd/general_field_operator.hpp>
 
 #include <pops/core/foundation/allocator.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
@@ -500,4 +504,335 @@ TEST(test_field_nullspace, validates_hierarchy_level_capacity_without_materializ
       std::overflow_error);
   EXPECT_THROW(detail::validate_field_nullspace_level_capacity(1, -1, "synthetic hierarchy"),
                std::invalid_argument);
+}
+
+TEST(test_field_nullspace, shared_constant_mode_preserves_individual_means) {
+  constexpr int Dim = 2;
+  TwoIslandFixture<Dim> fixture;
+  auto rhs = fixture.field(2);
+  auto phi = fixture.field(2);
+  for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+    const auto f = rhs.fab(local).view();
+    const auto u = phi.fab(local).view();
+    for_each_cell(rhs.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+      f(cell, 0) = Real(1.5);
+      f(cell, 1) = Real(-1.5);
+      u(cell, 0) = Real(7.375);
+      u(cell, 1) = Real(6.625);
+    });
+  }
+  auto plan = constant_mean_zero_nullspace<Dim>("joint-lambda-kernel", "physical kernel (1,1)");
+  plan.bases.front().component_count = 2;
+  const auto distributions = fixture.distributions();
+  FieldNullspaceWorkspace<Dim> workspace(
+      plan, {&rhs},
+      std::vector<PreparedVectorDistribution<Dim>>(distributions.begin(), distributions.end()),
+      fixture.lane);
+  const auto witness = workspace.require_compatible(rhs);
+  ASSERT_EQ(witness.size(), 2U);
+  EXPECT_NEAR(witness[0], 0.0, 1e-13);
+  workspace.apply_gauge(phi);
+  Real error = Real(0);
+  for (std::size_t local = 0; local < phi.local_size(); ++local) {
+    const auto u = std::as_const(phi).fab(local).view();
+    error = std::max(
+        error, for_each_cell_reduce_max(phi.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+          return Kokkos::abs(u(cell, 0) - Real(0.375)) + Kokkos::abs(u(cell, 1) + Real(0.375));
+        }));
+  }
+  EXPECT_NEAR(error, 0.0, 1e-12);
+  for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+    const auto f = rhs.fab(local).view();
+    for_each_cell(rhs.box(local), [=] POPS_HD(const Index<Dim>& cell) { f(cell, 1) = Real(0); });
+  }
+  EXPECT_THROW(workspace.require_compatible(rhs), FieldNullspaceIncompatibleRhs);
+  auto malformed = plan;
+  malformed.bases.front().component_count = 3;
+  EXPECT_THROW((FieldNullspaceWorkspace<Dim>(malformed, {&rhs},
+                                             std::vector<PreparedVectorDistribution<Dim>>(
+                                                 distributions.begin(), distributions.end()),
+                                             fixture.lane)),
+               std::runtime_error);
+}
+
+namespace {
+struct GeneralFieldNorms {
+  double l2;
+  double linf;
+  double relative_residual;
+};
+
+template <int Components>
+GeneralFieldNorms solve_manufactured_general_field(int cells, bool constant_load = false,
+                                                   bool incompatible = false) {
+  constexpr int Dim = 2;
+  const Box<Dim> domain{Index<Dim>{0, 0}, Index<Dim>{cells - 1, cells - 1}};
+  const mesh::BoxArray<Dim> layout(std::vector<Box<Dim>>{domain});
+  const auto distribution = mesh::Distribution<Dim>::replicated(layout, one_rank_space<Dim>());
+  const auto geometry =
+      Geometry<Dim>::from_bounds(domain, RealVector<Dim>{0, 0}, RealVector<Dim>{1, 1});
+  const auto topology =
+      BoundaryTopology<Dim>::axis_periodic(std::array<bool, Dim>{Components == 1, Components == 1});
+  const Extent<Dim> ghosts{1, 1};
+  MultiFab<Dim> prototype(layout, distribution, Index<Dim>{}, Components, ghosts);
+  MultiFab<Dim> first_load(layout, distribution, Index<Dim>{}, Components, ghosts);
+  MultiFab<Dim> second_load(layout, distribution, Index<Dim>{}, Components, ghosts);
+  MultiFab<Dim> rhs(layout, distribution, Index<Dim>{}, Components, ghosts);
+  MultiFab<Dim> solution(layout, distribution, Index<Dim>{}, Components, ghosts);
+  MultiFab<Dim> exact(layout, distribution, Index<Dim>{}, Components, ghosts);
+  auto coefficients =
+      std::make_shared<MultiFab<Dim>>(layout, distribution, Index<Dim>{}, Components, ghosts);
+  prototype.set_val(Real(0));
+  solution.set_val(Real(0));
+  constexpr Real pi = Real(3.1415926535897932384626433832795);
+  for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+    const auto u = exact.fab(local).view();
+    const auto a = coefficients->fab(local).view();
+    const auto f1 = first_load.fab(local).view();
+    const auto f2 = second_load.fab(local).view();
+    for_each_cell(rhs.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+      const Real x = geometry.cell_coordinate(0, cell[0]);
+      const Real y = geometry.cell_coordinate(1, cell[1]);
+      if constexpr (Components == 1) {
+        const Real c = Kokkos::cos(Real(2) * pi * x) * Kokkos::cos(Real(2) * pi * y);
+        const Real coefficient = Real(2) + Real(0.5) * Kokkos::sin(Real(2) * pi * x);
+        const Real load = Real(8) * pi * pi * coefficient * c +
+                          Real(2) * pi * pi * Kokkos::cos(Real(2) * pi * x) *
+                              Kokkos::sin(Real(2) * pi * x) * Kokkos::cos(Real(2) * pi * y);
+        u(cell, 0) = c;
+        a(cell, 0) = coefficient;
+        f1(cell, 0) = load / Real(2);
+        f2(cell, 0) = load / Real(2);
+      } else {
+        const Real c1 = constant_load ? Real(0) : Kokkos::cos(pi * x) * Kokkos::cos(pi * y);
+        const Real c2 =
+            constant_load ? Real(0) : Kokkos::cos(Real(2) * pi * x) * Kokkos::cos(pi * y);
+        u(cell, 0) = Real(0.375) + c1;
+        u(cell, 1) = Real(-0.375) + Real(0.5) * c2;
+        a(cell, 0) = a(cell, 1) = Real(1);
+        f1(cell, 0) = Real(1.5) + (Real(2) * pi * pi + Real(2)) * c1 - c2;
+        f1(cell, 1) = Real(0);
+        f2(cell, 0) = Real(0);
+        f2(cell, 1) = incompatible
+                          ? Real(0)
+                          : Real(-1.5) + (Real(2.5) * pi * pi + Real(1)) * c2 - Real(2) * c1;
+      }
+    });
+    const auto load = rhs.fab(local).view();
+    for_each_cell(rhs.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+      for (int component = 0; component < Components; ++component)
+        load(cell, component) = f1(cell, component) + f2(cell, component);
+    });
+  }
+  using Boundary = runtime::program::PreparedScalarBoundarySession<Dim>;
+  const auto preparation_lane = ExecutionLane::world("test.general-field.coefficients");
+  auto coefficient_boundary =
+      Boundary::prepare(geometry, topology, *coefficients, preparation_lane, 1);
+  elliptic::nd::prepare_general_field_coefficients(*coefficients, *coefficient_boundary);
+  std::array<Real, Components * Components> reaction{};
+  if constexpr (Components == 2)
+    reaction = {Real(2), Real(-2), Real(-2), Real(2)};
+  std::array<elliptic::nd::PhysicalFieldBoundary, 2 * Dim> physical{};
+  physical.fill(Components == 1 ? elliptic::nd::PhysicalFieldBoundary::periodic
+                                : elliptic::nd::PhysicalFieldBoundary::homogeneous_neumann);
+  auto provider = PreparedAffineOperatorProvider<Dim>::trusted_extension(
+      {"pops.test.general-field.manufactured", 1}, {}, [=](const ExecutionLane& lane) {
+        auto scratch =
+            std::make_shared<MultiFab<Dim>>(layout, distribution, Index<Dim>{}, Components, ghosts);
+        auto boundary = Boundary::prepare(geometry, topology, *scratch, lane, 1);
+        return PreparedAffineOperatorSessionCallbacks<Dim>{
+            {},
+            [=](MultiFab<Dim>& out, const MultiFab<Dim>& in) {
+              PureFieldAlgebra::copy(*scratch, in);
+              elliptic::nd::apply_general_field<Dim, Components>(out, *scratch, *coefficients,
+                                                                 *boundary, reaction, physical);
+            },
+            [] { return std::size_t{0}; }};
+      });
+  auto nullspace = constant_mean_zero_nullspace<Dim>(
+      "manufactured-shared-kernel", "one physical constant mode", Real(1) / Real(cells * cells));
+  nullspace.bases.front().component_count = Components;
+  OperatorEvaluationSnapshot snapshot{{11, 12, 13, 14},
+                                      1,
+                                      0,
+                                      0,
+                                      1,
+                                      std::bit_cast<std::uint64_t>(1.0),
+                                      0,
+                                      1,
+                                      detail::layout_fingerprint(prototype),
+                                      {21, 22, 23, 24}};
+  const KrylovFootprint<Dim> footprint{Components, ghosts, false};
+  PreparedAffineLinearProblem<Dim> problem(
+      prototype, std::move(provider), PreparedLinearPreconditioner<Dim>::identity(),
+      LinearOperatorProperties::symmetric_positive_definite_on_nullspace_complement(), footprint,
+      PreparedNullspacePolicy<Dim>::preserving(std::move(nullspace)),
+      [&snapshot] { return snapshot; }, {}, PreparedVectorDistribution<Dim>::Replicated);
+  const auto method = cg_krylov_method<Dim>();
+  KrylovWorkspace<Dim> workspace(prototype, method, footprint,
+                                 PreparedVectorDistribution<Dim>::Replicated);
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+  const auto report = detail::solve_prepared_affine_in_place(
+      problem, workspace, solution, rhs,
+      KrylovControls<Dim>{method, Real(1e-11), Real(1e-12), 4000});
+  if (incompatible) {
+    EXPECT_EQ(report.status, SolveStatus::kIncompatibleRhs);
+    EXPECT_FALSE(report.solved());
+    return {0, 0, 0};
+  }
+  EXPECT_TRUE(report.solved()) << report.reason;
+  Real square_error = Real(0), max_error = Real(0);
+  for (std::size_t local = 0; local < solution.local_size(); ++local) {
+    const auto result = std::as_const(solution).fab(local).view();
+    const auto reference = std::as_const(exact).fab(local).view();
+    square_error +=
+        for_each_cell_reduce_sum(solution.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+          Real square = Real(0);
+          for (int component = 0; component < Components; ++component) {
+            const Real difference = result(cell, component) - reference(cell, component);
+            square += difference * difference;
+          }
+          return square;
+        });
+    max_error =
+        std::max(max_error,
+                 for_each_cell_reduce_max(solution.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+                   Real error = Real(0);
+                   for (int component = 0; component < Components; ++component)
+                     error = Kokkos::max(
+                         error, Kokkos::abs(result(cell, component) - reference(cell, component)));
+                   return error;
+                 }));
+  }
+  const GeneralFieldNorms norms{std::sqrt(static_cast<double>(square_error) / (cells * cells)),
+                                static_cast<double>(max_error),
+                                static_cast<double>(report.rel_residual)};
+  std::cout << "FIELD_MMS components=" << Components << " cells=" << cells
+            << " constant=" << constant_load << " l2=" << norms.l2 << " linf=" << norms.linf
+            << " residual=" << norms.relative_residual << '\n';
+  return norms;
+}
+}  // namespace
+
+TEST(test_field_nullspace, general_fields_complete_predeclared_refinement_matrix) {
+  comm_init();
+  if (n_ranks() != 1)
+    GTEST_SKIP() << "Declared native manufactured matrix is one MPI rank";
+  double prior_scalar_l2 = 0, prior_scalar_linf = 0, prior_joint_l2 = 0, prior_joint_linf = 0;
+  for (const int cells : {16, 32, 64}) {
+    const auto scalar = solve_manufactured_general_field<1>(cells);
+    const auto joint = solve_manufactured_general_field<2>(cells);
+    const auto constants = solve_manufactured_general_field<2>(cells, true);
+    EXPECT_LE(scalar.relative_residual, 1e-10);
+    EXPECT_LE(joint.relative_residual, 1e-10);
+    EXPECT_LE(constants.relative_residual, 1e-10);
+    EXPECT_LE(constants.linf, 1e-10);
+    if (cells > 16) {
+      EXPECT_GT(std::log2(prior_scalar_l2 / scalar.l2), 1.8);
+      EXPECT_GT(std::log2(prior_scalar_linf / scalar.linf), 1.8);
+      EXPECT_GT(std::log2(prior_joint_l2 / joint.l2), 1.8);
+      EXPECT_GT(std::log2(prior_joint_linf / joint.linf), 1.8);
+    }
+    if (cells == 64) {
+      EXPECT_LT(scalar.l2, 0.002);
+      EXPECT_LT(joint.l2, 0.002);
+    }
+    prior_scalar_l2 = scalar.l2;
+    prior_scalar_linf = scalar.linf;
+    prior_joint_l2 = joint.l2;
+    prior_joint_linf = joint.linf;
+    (void)solve_manufactured_general_field<2>(cells, true, true);
+  }
+}
+
+TEST(test_field_nullspace, general_field_preflight_refuses_rank_local_storage_before_exchange) {
+  comm_init();
+  constexpr int Dim = 2;
+  const Box<Dim> domain{Index<Dim>{0, 0}, Index<Dim>{3, 3}};
+  const mesh::BoxArray<Dim> layout(std::vector<Box<Dim>>{domain});
+  const mesh::RankSpace<Dim> ranks{Index<Dim>{}, Extent<Dim>{n_ranks(), 1}};
+  const auto distribution = mesh::Distribution<Dim>::replicated(layout, ranks);
+  const Index<Dim> local_rank{my_rank(), 0};
+  const Extent<Dim> ghosts{1, 1};
+  MultiFab<Dim> input(layout, distribution, local_rank, 1, ghosts);
+  MultiFab<Dim> output(layout, distribution, local_rank, 1, ghosts);
+  MultiFab<Dim> coefficient(layout, distribution, local_rank, my_rank() == 0 ? 2 : 1, ghosts);
+  input.set_val(Real(0));
+  coefficient.set_val(Real(1));
+  const auto geometry =
+      Geometry<Dim>::from_bounds(domain, RealVector<Dim>{0, 0}, RealVector<Dim>{1, 1});
+  const auto topology = BoundaryTopology<Dim>::axis_periodic(std::array<bool, Dim>{true, true});
+  const auto lane = ExecutionLane::world("field-preflight");
+  auto boundary = runtime::program::PreparedScalarBoundarySession<Dim>::prepare(geometry, topology,
+                                                                                input, lane, 1);
+  std::array<elliptic::nd::PhysicalFieldBoundary, 2 * Dim> laws{};
+  laws.fill(elliptic::nd::PhysicalFieldBoundary::periodic);
+  EXPECT_THROW((elliptic::nd::apply_general_field<Dim, 1>(output, input, coefficient, *boundary,
+                                                          std::array<Real, 1>{0}, laws)),
+               std::invalid_argument);
+}
+
+TEST(test_field_nullspace, three_field_cross_diffusion_uses_complete_matrix_and_strict_spd) {
+  comm_init();
+  constexpr int Dim = 2, Components = 3, cells = 16;
+  const Box<Dim> domain{Index<Dim>{0, 0}, Index<Dim>{cells - 1, cells - 1}};
+  const mesh::BoxArray<Dim> layout(std::vector<Box<Dim>>{domain});
+  const auto distribution = mesh::Distribution<Dim>::replicated(layout, one_rank_space<Dim>());
+  const Extent<Dim> ghosts{1, 1};
+  MultiFab<Dim> input(layout, distribution, Index<Dim>{}, Components, ghosts);
+  MultiFab<Dim> output(layout, distribution, Index<Dim>{}, Components, ghosts);
+  MultiFab<Dim> coefficients(layout, distribution, Index<Dim>{}, Components * Components, ghosts);
+  const auto geometry =
+      Geometry<Dim>::from_bounds(domain, RealVector<Dim>{0, 0}, RealVector<Dim>{1, 1});
+  const auto topology = BoundaryTopology<Dim>::axis_periodic(std::array<bool, Dim>{true, true});
+  const auto lane = ExecutionLane::world("field-cross-matrix");
+  using Boundary = runtime::program::PreparedScalarBoundarySession<Dim>;
+  auto boundary = Boundary::prepare(geometry, topology, input, lane, 1);
+  auto coefficient_boundary = Boundary::prepare(geometry, topology, coefficients, lane, 1);
+  constexpr std::array<Real, 9> matrix{4, 1, -1, 1, 5, 2, -1, 2, 6};
+  constexpr std::array<Real, 3> amplitudes{1, -2, 3};
+  constexpr Real pi = Real(3.1415926535897932384626433832795);
+  for (std::size_t li = 0; li < input.local_size(); ++li) {
+    const auto u = input.fab(li).view();
+    const auto a = coefficients.fab(li).view();
+    for_each_cell(input.box(li), [=] POPS_HD(const Index<Dim>& cell) {
+      const Real wave = Kokkos::cos(Real(2) * pi * geometry.cell_coordinate(0, cell[0]));
+      for (int i = 0; i < Components; ++i)
+        u(cell, i) = amplitudes[i] * wave;
+      for (int i = 0; i < Components * Components; ++i)
+        a(cell, i) = matrix[i];
+    });
+  }
+  elliptic::nd::prepare_general_field_coefficients<Dim, Components, Components * Components>(
+      coefficients, *coefficient_boundary);
+  std::array<elliptic::nd::PhysicalFieldBoundary, 2 * Dim> laws{};
+  laws.fill(elliptic::nd::PhysicalFieldBoundary::periodic);
+  const std::array<Real, 9> reaction{2, 0, 1, 0, 3, 0, 1, 0, 4};
+  elliptic::nd::apply_general_field<Dim, Components, Components * Components>(
+      output, input, coefficients, *boundary, reaction, laws);
+  const Real eigenvalue = Real(4 * cells * cells) * std::pow(std::sin(pi / Real(cells)), 2);
+  for (std::size_t li = 0; li < output.local_size(); ++li) {
+    const auto out = output.fab(li).view();
+    const Real error =
+        for_each_cell_reduce_sum(output.box(li), [=] POPS_HD(const Index<Dim>& cell) {
+          const Real wave = Kokkos::cos(Real(2) * pi * geometry.cell_coordinate(0, cell[0]));
+          Real squared = 0;
+          for (int i = 0; i < Components; ++i) {
+            Real exact = 0;
+            for (int j = 0; j < Components; ++j)
+              exact += (eigenvalue * matrix[i * Components + j] + reaction[i * Components + j]) *
+                       amplitudes[j] * wave;
+            squared += (out(cell, i) - exact) * (out(cell, i) - exact);
+          }
+          return squared;
+        });
+    EXPECT_LT(std::sqrt(error), Real(1e-9));
+  }
+  coefficients.set_val(
+      Real(1));  // Rank-one matrix: semidefinite is insufficient for this CG principal part.
+  EXPECT_THROW(
+      (elliptic::nd::prepare_general_field_coefficients<Dim, Components, Components * Components>(
+          coefficients, *coefficient_boundary)),
+      std::invalid_argument);
 }

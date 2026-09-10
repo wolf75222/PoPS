@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 from pops.codegen import Production
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
@@ -162,7 +163,11 @@ def test_final_case_consumes_explicit_signed_pair_in_hll_without_pressure(
     initial = np.ascontiguousarray(_initial_state())
     expected_rhs = _hll_rhs(initial)
     assert float(np.max(np.abs(expected_rhs - _rusanov_rhs(initial)))) > 1.0e-3
-    simulation = pops.bind(artifact, initial_state={"transport": initial})
+    simulation = pops.bind(
+        artifact,
+        initial_state={"transport": initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     report = pops.run(simulation, t_end=DT, max_steps=1)
     assert report.accepted_steps == 1
     final = np.asarray(simulation.get_state("transport"), dtype=np.float64).reshape(

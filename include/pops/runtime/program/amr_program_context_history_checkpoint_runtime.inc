@@ -1,4 +1,4 @@
-void reconcile_multiblock_reflux_(multiblock_reflux_context_type& context) const {
+void apply_multiblock_reflux_(multiblock_reflux_context_type& context) const {
   if (context.flux.published_size() == 0)
     return;
   const Geometry<Dim> geometry =
@@ -11,7 +11,7 @@ void reconcile_multiblock_reflux_(multiblock_reflux_context_type& context) const
   const ::pops::amr::reflux::MetricRefluxBudget budget{
       maximum_fine_faces, std::max<std::size_t>(context.flux.published_size(), 1),
       std::max<std::size_t>(context.flux.published_size(), 1)};
-  const std::string state_identity = std::string(context.block_identity) + "/state";
+  const std::string& state_identity = facade_->prepared_amr_block_state_identity_(context.block);
   for (const ProgramInterfaceFace& interface : program_interface_faces_(context.parent_level)) {
     ::pops::amr::reflux::CoarseFaceRefluxKey<Dim> query;
     query.owner = std::string(context.block_identity);
@@ -55,25 +55,7 @@ void reconcile_multiblock_reflux_(multiblock_reflux_context_type& context) const
 }
 
 static std::optional<std::pair<int, std::string>> decode_history_key_(std::string_view key) {
-  constexpr std::string_view prefix = "pops.amr.level-history.v1/";
-  if (!key.starts_with(prefix))
-    return std::nullopt;
-  key.remove_prefix(prefix.size());
-  const std::size_t slash = key.find('/');
-  const std::size_t colon = key.find(':', slash == std::string_view::npos ? 0 : slash);
-  if (slash == std::string_view::npos || colon == std::string_view::npos)
-    throw std::invalid_argument("AMR Program history storage key is malformed");
-  std::size_t consumed = 0;
-  const int level = std::stoi(std::string(key.substr(0, slash)), &consumed);
-  if (level < 0 || consumed != slash)
-    throw std::invalid_argument("AMR Program history storage key has an invalid level");
-  const std::string length_text(key.substr(slash + 1, colon - slash - 1));
-  consumed = 0;
-  const std::size_t length = std::stoull(length_text, &consumed);
-  const std::string name(key.substr(colon + 1));
-  if (consumed != length_text.size() || name.empty() || name.size() != length)
-    throw std::invalid_argument("AMR Program history storage key has an invalid name");
-  return std::pair<int, std::string>{level, name};
+  return checkpoint_detail::decode_history_key(key);
 }
 
 AmrProgramAcceptedState<Dim> accepted_state_() const {
@@ -90,67 +72,10 @@ AmrProgramAcceptedState<Dim> accepted_state_() const {
       clock_schedule_.accepted_ticks(static_cast<std::int64_t>(facade_->macro_step()));
   state.temporal_partition = accepted_temporal_partition_;
 
-  const auto& manager = runtime_state().hist_;
-  struct AccumulatedHistory {
-    AmrProgramHistoryDescriptor descriptor;
-    std::set<int> levels;
-  };
-  std::map<std::string, AccumulatedHistory> histories;
-  for (const auto& [key, ring] : manager.histories) {
-    const auto decoded = decode_history_key_(key);
-    if (!decoded || ring.empty())
-      throw std::runtime_error("AMR Program accepted history registry is malformed");
-    const auto& [level, name] = *decoded;
-    const int runtime_owner = manager.owner.at(key);
-    int program_owner = -1;
-    const auto& block_map = facade_->program_block_map();
-    for (std::size_t program = 0; program < block_map.size(); ++program)
-      if (block_map[program] == runtime_owner) {
-        program_owner = static_cast<int>(program);
-        break;
-      }
-    if (program_owner < 0)
-      throw std::runtime_error("AMR Program history lost its authenticated block owner");
-    AmrProgramHistoryDescriptor descriptor{name,
-                                           program_owner,
-                                           manager.state_identity.at(key),
-                                           manager.space_identity.at(key),
-                                           manager.clock_identity.at(key),
-                                           manager.interpolation_identity.at(key),
-                                           manager.depth.at(key),
-                                           ring.front().ncomp()};
-    auto [entry, inserted] =
-        histories.try_emplace(name, AccumulatedHistory{descriptor, std::set<int>{level}});
-    if (!inserted) {
-      const auto& retained = entry->second.descriptor;
-      if (retained.program_owner != descriptor.program_owner ||
-          retained.state_identity != descriptor.state_identity ||
-          retained.space_identity != descriptor.space_identity ||
-          retained.clock_identity != descriptor.clock_identity ||
-          retained.interpolation_identity != descriptor.interpolation_identity ||
-          retained.depth != descriptor.depth || retained.components != descriptor.components ||
-          !entry->second.levels.insert(level).second)
-        throw std::runtime_error("AMR Program history differs between active levels");
-    }
-    const auto& dts = manager.slot_dt.at(key);
-    if (dts.size() != ring.size())
-      throw std::runtime_error("AMR Program history dt provenance has the wrong depth");
-    for (std::size_t slot = 0; slot < ring.size(); ++slot)
-      state.history_slots.push_back({name, level, static_cast<int>(slot),
-                                     static_cast<double>(dts[slot]), manager.initialized.at(key),
-                                     manager.fill_count.at(key)});
-  }
-  for (auto& [name, accumulated] : histories) {
-    (void)name;
-    if (accumulated.levels.size() != runtime_->hierarchy().num_levels())
-      throw std::runtime_error("AMR Program history omits an active hierarchy level");
-    state.histories.push_back(std::move(accumulated.descriptor));
-  }
-  std::sort(state.history_slots.begin(), state.history_slots.end(),
-            [](const auto& left, const auto& right) {
-              return std::tie(left.name, left.level, left.slot) <
-                     std::tie(right.name, right.level, right.slot);
-            });
+  auto history_metadata = checkpoint_detail::history_metadata(
+      runtime_state().hist_, facade_->program_block_map(), runtime_->hierarchy().num_levels());
+  state.histories = std::move(history_metadata.histories);
+  state.history_slots = std::move(history_metadata.history_slots);
   state.pending_history_remaps.reserve(pending_history_remaps_.size());
   for (const auto& [key, pending] : pending_history_remaps_) {
     if (key != pending.key)
@@ -196,6 +121,11 @@ AmrProgramAcceptedState<Dim> accepted_state_() const {
                                                state.flux_budget_contract);
     state.coupling_contract =
         seal_contract("pops.amr-program.accepted-coupling.v1:sha256:", state.coupling_contract);
+  } else {
+    state.flux_budget_contract = accepted_flux_budget_contract_;
+    state.coupling_contract = accepted_coupling_contract_;
+  }
+  if (multiblock_subcycling_ && multiblock_subcycling_has_accepted_step_) {
     for (std::size_t block = 0; block < facade_->prepared_amr_multiblock_hierarchy_().block_count();
          ++block) {
       for (std::size_t parent = 0; parent + 1 < runtime_->hierarchy().num_levels(); ++parent) {
@@ -220,9 +150,14 @@ AmrProgramAcceptedState<Dim> accepted_state_() const {
       std::sort(state.accepted_face_flux[static_cast<std::size_t>(axis)].begin(),
                 state.accepted_face_flux[static_cast<std::size_t>(axis)].end(), by_key);
     }
+    if (!state.synchronization_events.empty() ||
+        std::any_of(state.accepted_face_flux.begin(), state.accepted_face_flux.end(),
+                    [](const auto& fragments) { return !fragments.empty(); }))
+      state.face_evidence_provenance = AmrProgramFaceEvidenceProvenance{
+          state.spatial_contract, state.topology_epoch, state.materialization_generation,
+          state.level_clocks.size()};
   } else {
-    state.flux_budget_contract = accepted_flux_budget_contract_;
-    state.coupling_contract = accepted_coupling_contract_;
+    state.face_evidence_provenance = accepted_face_evidence_provenance_;
     state.accepted_face_flux = accepted_face_flux_;
     state.synchronization_events = accepted_synchronization_events_;
   }
@@ -386,9 +321,11 @@ void import_accepted_state_(bool force) const {
   accepted_flux_budget_contract_.swap(state.flux_budget_contract);
   accepted_coupling_contract_.swap(state.coupling_contract);
   std::swap(accepted_face_flux_, state.accepted_face_flux);
+  accepted_face_evidence_provenance_.swap(state.face_evidence_provenance);
   interface_flux_commit_guard_.reset();
   interface_flux_ledger_.swap(restored_interface_flux);
   accepted_synchronization_events_.swap(state.synchronization_events);
+  multiblock_subcycling_has_accepted_step_ = false;
   accepted_state_revision_ = revision;
 }
 
@@ -400,6 +337,7 @@ void refresh_accepted_hierarchy_state_(bool prepare_subcycling = true) const {
   requalify_cell_temporal_configuration_();
   if (prepare_subcycling)
     prepare_multiblock_subcycling_engine_();
+  publish_history_flux_snapshots_();
   const auto state = accepted_state_();
   facade_->restore_program_accepted_state(serialize_amr_program_accepted_state(state));
   accepted_state_revision_ = facade_->program_accepted_state_revision();
@@ -407,6 +345,7 @@ void refresh_accepted_hierarchy_state_(bool prepare_subcycling = true) const {
   accepted_flux_budget_contract_ = state.flux_budget_contract;
   accepted_coupling_contract_ = state.coupling_contract;
   accepted_face_flux_ = state.accepted_face_flux;
+  accepted_face_evidence_provenance_ = state.face_evidence_provenance;
   accepted_synchronization_events_ = state.synchronization_events;
 }
 
@@ -549,6 +488,7 @@ void refresh_accepted_hierarchy_state_after_remap_(
   accepted_flux_budget_contract_.swap(image.state.flux_budget_contract);
   accepted_coupling_contract_.swap(image.state.coupling_contract);
   std::swap(accepted_face_flux_, image.state.accepted_face_flux);
+  accepted_face_evidence_provenance_.swap(image.state.face_evidence_provenance);
   accepted_synchronization_events_.swap(image.state.synchronization_events);
   static_assert(std::is_nothrow_swappable_v<decltype(pending_history_remaps_)>);
   pending_history_remaps_.swap(candidate.pending);
@@ -588,14 +528,15 @@ void restart_regrid_() const {
     throw;
   }
   multiblock_subcycling_.reset();
+  multiblock_subcycling_has_accepted_step_ = false;
   accepted_face_flux_ = {};
+  accepted_face_evidence_provenance_.reset();
   interface_flux_commit_guard_.reset();
   interface_flux_ledger_ = std::make_unique<interface_flux_ledger_type>(
       runtime_->topology_epoch(), inactive_interface_flux_budget_());
   accepted_synchronization_events_.clear();
-  // Publish the cleared image before recreating the subcycling engine. Preparing first
-  // would make accepted_state_() synthesize reflux/average_down reports for a topology
-  // that has not taken a step.
+  // Explicit RegridOnRestart starts a new continuation and clears its old step reports,
+  // as required by that public restart policy. Regular accepted-step regrid retains them.
   refresh_accepted_hierarchy_state_(false);
   prepare_multiblock_subcycling_engine_();
 }
@@ -604,6 +545,7 @@ void resync_after_restart_() const {
   if (!active_attempt_states_.empty())
     throw std::logic_error("AMR restart resynchronization crossed an active Program attempt");
   multiblock_subcycling_.reset();
+  multiblock_subcycling_has_accepted_step_ = false;
   // rebuild_hierarchy publishes a temporary newer topology epoch; restore_checkpoint_counters
   // then republishes the authenticated checkpoint epoch. The interface-flux ledger followed
   // the temporary epoch and must be requalified rather than treated as a live regression.
@@ -669,6 +611,7 @@ void validate_accepted_history_remap_metadata_() const {
   require_exact_metadata_keys(manager.clock_identity);
   require_exact_metadata_keys(manager.interpolation_identity);
   require_exact_metadata_keys(manager.slot_dt);
+  require_exact_metadata_keys(manager.slot_sample);
 
   const std::size_t live_levels = runtime_->hierarchy().num_levels();
   if (live_levels == 0)
@@ -683,6 +626,7 @@ void validate_accepted_history_remap_metadata_() const {
     const bool initialized = manager.initialized.at(key);
     const int fill_count = manager.fill_count.at(key);
     const auto& slot_dt = manager.slot_dt.at(key);
+    (void)manager.validated_samples(key);
     if (depth < 1 || ring.size() != static_cast<std::size_t>(depth) || fill_count < 0 ||
         fill_count > depth || initialized != (fill_count > 0) ||
         slot_dt.size() != static_cast<std::size_t>(depth))
@@ -770,15 +714,6 @@ void validate_accepted_history_remap_() const {
   }
 }
 
-void rethrow_accepted_history_remap_collective_failure_(std::exception_ptr local_error,
-                                                        const ExecutionLane& lane) const {
-  if (all_reduce_max(local_error ? 1L : 0L, lane) == 0)
-    return;
-  if (lane.size() == 1 && local_error)
-    std::rethrow_exception(local_error);
-  throw std::runtime_error("AMR Program accepted history remap failed collectively");
-}
-
 void refresh_resources_after_accepted_history_remap_(
     const AmrProgramHistoryRemapDescriptor& descriptor) const {
   if (facade_ != nullptr)
@@ -797,15 +732,18 @@ void refresh_resources_after_accepted_history_remap_(
   RemappedFluxCandidate remapped = prepare_history_mutation_collectively_(
       [&]() {
         RemappedFluxCandidate staged;
+        std::map<std::pair<std::string, int>, std::shared_ptr<const HistoryFluxSnapshot>>
+            projections;
         std::map<std::string, const AmrProgramHistoryRemapEntry*> plan;
         for (const AmrProgramHistoryRemapEntry& entry : descriptor.history_plan) {
           if (entry.key.empty() || !plan.emplace(entry.key, &entry).second)
             throw std::runtime_error("AMR Program history flux remap has a non-canonical plan");
-          if (entry.source == AmrProgramHistoryRemapSource::ParentDeferred &&
-              entry.parent_key.empty())
+          const bool parent_source =
+              entry.source == AmrProgramHistoryRemapSource::ParentDeferred ||
+              entry.source == AmrProgramHistoryRemapSource::ParentAlignedState;
+          if (parent_source && entry.parent_key.empty())
             throw std::runtime_error("AMR Program history flux remap has no parent provenance key");
-          if (entry.source != AmrProgramHistoryRemapSource::ParentDeferred &&
-              !entry.parent_key.empty())
+          if (!parent_source && !entry.parent_key.empty())
             throw std::runtime_error(
                 "AMR Program history flux remap has a non-canonical retained/removal parent key");
         }
@@ -832,7 +770,8 @@ void refresh_resources_after_accepted_history_remap_(
           const auto retained = history_flux_expressions_.find(key);
           const bool source_from_parent =
               planned != plan.end() &&
-              planned->second->source == AmrProgramHistoryRemapSource::ParentDeferred;
+              (planned->second->source == AmrProgramHistoryRemapSource::ParentDeferred ||
+               planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedState);
           if (!source_from_parent && retained != history_flux_expressions_.end() &&
               retained->second.size() == ring.size()) {
             staged.expressions.emplace(key, retained->second);
@@ -844,7 +783,41 @@ void refresh_resources_after_accepted_history_remap_(
             if (parent == history_flux_expressions_.end() || parent->second.size() != ring.size())
               throw std::runtime_error(
                   "AMR Program history flux remap lacks its authenticated parent sample");
-            staged.expressions.emplace(key, parent->second);
+            if (planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedState) {
+              const auto has_flux = [](const auto& slots) {
+                return std::any_of(slots.begin(), slots.end(),
+                                   [](const auto& expression) { return !expression.empty(); });
+              };
+              if (descriptor.temporal_numerator != 1 || descriptor.temporal_denominator != 1 ||
+                  !descriptor.integral_only || has_flux(parent->second) ||
+                  (retained != history_flux_expressions_.end() && has_flux(retained->second)))
+                throw std::runtime_error(
+                    "AMR Program aligned state history projection requires equal-clock state "
+                    "samples without interface-flux provenance");
+            }
+            auto projected_slots = parent->second;
+            for (auto& expression : projected_slots)
+              for (auto& [identity, term] : expression) {
+                (void)identity;
+                if (!term.basis)
+                  throw std::logic_error("AMR parent history projection has no flux basis");
+                auto basis = std::make_shared<FluxBasis>(*term.basis);
+                if (!basis->history_snapshot)
+                  throw std::invalid_argument(
+                      "AMR parent history transfer lacks its authenticated complete face source");
+                const auto projection_key =
+                    std::make_pair(basis->history_snapshot->identity, decoded->first);
+                auto projection = projections.find(projection_key);
+                if (projection == projections.end())
+                  projection =
+                      projections
+                          .emplace(projection_key, project_history_flux_snapshot_(
+                                                       basis->history_snapshot, decoded->first))
+                          .first;
+                basis->history_snapshot = projection->second;
+                term.basis = std::move(basis);
+              }
+            staged.expressions.emplace(key, std::move(projected_slots));
           }
           const auto& slots = staged.expressions.at(key);
           contract.bytes(key).scalar(static_cast<std::uint64_t>(slots.size()));
@@ -871,14 +844,16 @@ void refresh_resources_after_accepted_history_remap_(
   } catch (...) {
     metadata_error = std::current_exception();
   }
-  rethrow_accepted_history_remap_collective_failure_(metadata_error, lane);
+  collectively_rethrow_exception(metadata_error, lane,
+                                 "AMR Program accepted history remap failed collectively");
   std::exception_ptr validation_error;
   try {
     validate_accepted_history_remap_();
   } catch (...) {
     validation_error = std::current_exception();
   }
-  rethrow_accepted_history_remap_collective_failure_(validation_error, lane);
+  collectively_rethrow_exception(validation_error, lane,
+                                 "AMR Program accepted history remap failed collectively");
   std::exception_ptr synchronization_error;
   try {
     synchronize_resource_generation_();
@@ -888,10 +863,22 @@ void refresh_resources_after_accepted_history_remap_(
   // The resource-generation tail can allocate a replacement ledger after its own prepared-lane
   // work.  Converge that failure before the caller enters temporal/subcycling collectives; the
   // enclosing AcceptedSnapshot remains the rollback authority for any partial resource refresh.
-  rethrow_accepted_history_remap_collective_failure_(synchronization_error, lane);
+  collectively_rethrow_exception(synchronization_error, lane,
+                                 "AMR Program accepted history remap failed collectively");
   if (active_level_ >= nlev())
     active_level_ = 0;
   static_assert(std::is_nothrow_swappable_v<decltype(history_flux_expressions_)>);
+  prepare_remapped_history_flux_faces_(remapped.expressions);
   history_flux_expressions_.swap(remapped.expressions);
+  publish_history_flux_snapshots_();
   scratches_.clear();
+}
+
+void publish_history_flux_snapshots_() const {
+  if (history_flux_expressions_.empty() && facade_->program_history_flux_snapshots().empty())
+    return;
+  prepare_spatial_collectively([&] {
+    facade_->publish_program_history_flux_snapshots(history_flux::reachable_sources<Dim>(
+        history_flux_expressions_, facade_->configured_n_levels()));
+  });
 }

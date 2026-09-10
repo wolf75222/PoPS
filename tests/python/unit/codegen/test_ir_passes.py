@@ -195,7 +195,10 @@ def test_buffer_writing_op_with_discarded_result_kept():
     is never wrongly dropped, even with an unconsumed result."""
     P = adctime.Program("buf_writer")
     U = typed_state(P, "plasma")
-    buf = P.scalar_field("buf")
+    # Derive zero scratch from an owned scalar layout so the generated Cartesian
+    # stencil has an authenticated block without relying on a default owner.
+    seed = P.history("plasma.buf_seed", lag=1, ncomp=1, block=U.block)
+    buf = P.value("buf", 0.0 * seed)
     P.laplacian(buf, buf)  # buffer-writer: writes buf in place, RESULT DISCARDED
     A = P.matrix_free_operator("op")
 

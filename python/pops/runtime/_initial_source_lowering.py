@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-import math
 from typing import Any
+
+from pops.identity.scalar import native_binary64
 
 
 _PROJECTION_KEYS = {
@@ -24,26 +25,8 @@ _SOURCE_KEYS = {
         "projection",
     },
 }
+
 _CARTESIAN_AXIS_NAMES = ("x", "y", "z")
-
-
-def native_binary64(value: Any, *, where: str) -> float:
-    """Decode exactly one canonical finite binary64 value; no loose numeric fallback."""
-    if not isinstance(value, Mapping) or set(value) != {"binary64"} \
-            or not isinstance(value["binary64"], str):
-        raise TypeError("%s must be one canonical binary64 value" % where)
-    try:
-        result = float.fromhex(value["binary64"])
-    except (OverflowError, ValueError):
-        raise ValueError("%s contains an invalid binary64 payload" % where) from None
-    if not math.isfinite(result):
-        raise ValueError("%s must be finite" % where)
-    if value["binary64"] != result.hex():
-        raise ValueError(
-            "%s binary64 payload is not canonical; expected %r"
-            % (where, result.hex())
-        )
-    return result
 
 
 def ranked_gaussian_center(source: Mapping[str, Any], *, where: str) -> tuple[float, ...]:
@@ -69,10 +52,12 @@ def validate_initial_source(source: Any, *, where: str) -> str:
     route = source.get("native_route")
     if type(route) is not str or route not in _SOURCE_KEYS:
         raise NotImplementedError("%s route %r is not implemented" % (where, route))
-    if set(source) != _SOURCE_KEYS[route]:
+    expected_keys = _SOURCE_KEYS[route] | ({"cell_integrals"} if route == "analytic_expression"
+                                             and "cell_integrals" in source else set())
+    if set(source) != expected_keys:
         raise TypeError(
             "%s route %r requires exactly keys %s"
-            % (where, route, sorted(_SOURCE_KEYS[route]))
+            % (where, route, sorted(expected_keys))
         )
     projection = source["projection"]
     if not isinstance(projection, Mapping) or set(projection) != _PROJECTION_KEYS:
@@ -108,6 +93,17 @@ def validate_initial_source(source: Any, *, where: str) -> str:
         if isinstance(components, (str, bytes)) or not isinstance(components, Sequence) \
                 or not components:
             raise TypeError("%s analytic components must be a non-empty sequence" % where)
+        from pops.analytic import ScalarExpr
+        for raw in components:
+            expression = ScalarExpr.from_data(raw)
+            if expression.frame_id not in (None, source["frame_id"]):
+                raise ValueError("initial point expression belongs to another frame")
+            if expression.input_references() or expression.time_clocks():
+                raise ValueError("initial point expressions cannot read discrete inputs or clocks")
+        if "cell_integrals" in source:
+            from pops.analytic._cell_bounds import validate_cell_integral_contract
+            validate_cell_integral_contract(source["cell_integrals"], frame_id=source["frame_id"],
+                                            component_count=len(components))
     elif route == "field_mapped_analytic_expression":
         if not isinstance(source["frame_id"], str) or not source["frame_id"]:
             raise TypeError("%s field-mapped analytic frame_id must be non-empty" % where)

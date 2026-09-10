@@ -37,6 +37,9 @@ from tests.python.support.native_execution_context import artifact_execution_con
 
 
 _HIERARCHY_BASE_CELLS = 8
+# The resolved transfer buffer (2) plus lookahead (1) fully covers a centered N8 profile.
+# Refined configurations retain that reach and use enough cells for genuine C/F interfaces.
+_HIERARCHY_REFINED_BASE_CELLS = 16
 _HIERARCHY_DT = 0.01
 _HIERARCHY_ROTATION_RATE = 3.0
 _HIERARCHY_DENSITY = 2.0
@@ -387,14 +390,12 @@ def _public_amr_hierarchy_case(
     solver,
     *,
     max_levels=2,
-    temporal_ratios=(3,),
     bound_plasma=False,
     manufactured_plasma=False,
     base_cells=_HIERARCHY_BASE_CELLS,
 ):
     import pops
     from pops.amr import (
-        AMRClockRelation,
         AMRExecution,
         AMRHierarchy,
         AMRRegrid,
@@ -670,10 +671,6 @@ def _public_amr_hierarchy_case(
     transfer = AMRTransfer()
     transfer.state(state_instance, StateTransfer())
     transfer.state(marker_instance, StateTransfer())
-    if len(temporal_ratios) != max_levels - 1:
-        raise ValueError(
-            "one independent temporal ratio is required per AMR transition"
-        )
     layout = AMR(
         grid=CartesianGrid(
             frame=frame,
@@ -694,12 +691,8 @@ def _public_amr_hierarchy_case(
         ),
         regrid=AMRRegrid(schedule=every(100, clock=program.clock)),
         transfer=transfer,
-        execution=AMRExecution.subcycled(
-            tuple(
-                AMRClockRelation(level, level + 1, ratio)
-                for level, ratio in enumerate(temporal_ratios)
-            )
-        ),
+        # One hierarchy solve consumes every level at the same physical stage.
+        execution=AMRExecution.synchronous(),
     )
     return case, layout, state_instance
 
@@ -750,15 +743,36 @@ def _external_hierarchy_carry_metrics(so_path):
     )
 
 
-def _nonuniform_plasma_initial():
-    coordinate = (
-        np.arange(_HIERARCHY_BASE_CELLS, dtype=np.float64) + 0.5
-    ) / _HIERARCHY_BASE_CELLS
+def _nonuniform_plasma_initial(cells=_HIERARCHY_BASE_CELLS):
+    coordinate = (np.arange(cells, dtype=np.float64) + 0.5) / cells
     x, y = np.meshgrid(coordinate, coordinate, indexing="xy")
     density = 1.0 + 0.20 * np.exp(-80.0 * ((x - 0.40) ** 2 + (y - 0.55) ** 2))
     east = density * (0.25 + 0.08 * np.sin(2.0 * np.pi * y))
     north = density * (-0.15 + 0.06 * np.cos(2.0 * np.pi * x))
     return np.ascontiguousarray(np.stack((density, east, north)))
+
+
+def _assert_partial_hierarchy(simulation, *, max_levels, base_cells):
+    """Require actual child patches and uncovered valid parent cells at every transition."""
+    patches = tuple(simulation.patch_boxes())
+    parent_valid = np.ones((base_cells, base_cells), dtype=bool)
+    for child in range(1, max_levels):
+        cells = base_cells * 2 ** child
+        child_valid = np.zeros((cells, cells), dtype=bool)
+        child_patches = [(lower, upper) for level, lower, upper in patches if level == child]
+        assert child_patches, "level %d has no actual fine patches" % child
+        for lower, upper in child_patches:
+            assert all(0 <= lower[axis] <= upper[axis] < cells for axis in range(2))
+            assert all(lower[axis] % 2 == 0 and (upper[axis] + 1) % 2 == 0 for axis in range(2))
+            child_valid[lower[1]:upper[1] + 1, lower[0]:upper[0] + 1] = True
+        covered = child_valid.reshape(cells // 2, 2, cells // 2, 2).all(axis=(1, 3))
+        assert np.any(covered)
+        assert not np.any(covered & ~parent_valid), "fine patches exceed valid parent coverage"
+        assert np.any(parent_valid & ~covered), (
+            "level %d fully covers its valid parent; the C/F ledger oracle requires partial cover"
+            % child
+        )
+        parent_valid = child_valid
 
 
 def _manufactured_plasma_initial(cells):
@@ -969,6 +983,81 @@ def _patch_interior(mask, *, guard_cells=1):
     return interior
 
 
+@pytest.mark.parametrize("max_levels", (1, 2, 3))
+def test_public_hierarchy_fixture_declares_one_synchronized_physical_stage(max_levels):
+    import pops
+
+    case, layout, _ = _public_amr_hierarchy_case(CompositeTensorFAC(), max_levels=max_levels)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    assert resolved.amr_execution.to_data() == {
+        "schema_version": 2,
+        "authority_type": "amr_execution",
+        "mode": "synchronous",
+        "relations": [],
+    }
+    assert len(resolved.resolved_hierarchy.plan.transitions) == max_levels - 1
+    assert len([value for value in resolved.time._values if value.op == "solve_linear"]) == 1
+
+
+def test_condensed_hierarchy_prepares_prior_and_grown_inputs_without_retaining_scratch_pointers():
+    from test_hierarchy_scoped_solve_emit import _build
+
+    program, source = _build(CompositeTensorFAC())
+    scalar = next(value for value in program._values if value.op == "scalar_field")
+    rhs = next(value for value in program._values if value.op == "condensed_rhs")
+    assert "ctx.with_synchronized_field_gather([&]()" in source
+    assert "ctx.prepare_condensed_prior(" in source
+    assert source.index("ctx.prepare_condensed_prior(") < source.index("ctx.laplacian(cond%d_lap" % rhs.id)
+    assert "ctx.prepare_condensed_sampling<" in source
+    assert ".fab(li).grown_box()" in source
+    assert "auto sf%d = std::make_shared" % scalar.id not in source
+    assert "ctx.retained_scalar(%d," % scalar.id in source
+    assert "1, true);" in source
+    assert "1, false);" in source
+
+
+def test_scalar_first_produced_after_hierarchy_solve_is_not_a_gather_rebinding():
+    from pops.codegen.program_codegen import emit_cpp_program
+    from test_hierarchy_scoped_solve_emit import _build
+
+    program, _, model = _build(CompositeTensorFAC(), _return_model=True)
+    history = next(value for value in program._values if value.op == "history")
+    scalar = program.scalar_field("post_solve_laplacian")
+    program.laplacian(scalar, history)
+    source = emit_cpp_program(program, model=model, target="amr_system")
+    declarations = [line for line in source.splitlines()
+                    if "ctx.retained_scalar(%d," % scalar.id in line]
+    assert len(declarations) == 2  # ordinary fallback and the publish producer
+    assert all(line.rstrip().endswith("1, true);") for line in declarations)
+
+
+def test_amr_scalar_storage_preserves_unqualified_detached_compatibility():
+    from pops.codegen.program_emit_ops import _emit_op
+
+    program = Program("unqualified_scalar_storage")
+    scalar = program.scalar_field("buffer")
+    variables, lines, prelude = {}, [], []
+    _emit_op(program, scalar, None, frozenset(), variables, None, lines, prelude,
+             block_idx={}, target="amr_system")
+    assert variables[scalar.id] == "(*sf%d)" % scalar.id
+    assert any("ctx.alloc_scalar_field(1, 1)" in line for line in prelude)
+    assert not any("retained_scalar" in line for line in lines)
+
+
+def test_amr_scalar_storage_refuses_conflicting_qualified_consumers():
+    from pops.codegen.program_emit_ops import _unique_dataflow_owner_block
+    from test_hierarchy_scoped_solve_emit import _build
+
+    program, _ = _build(CompositeTensorFAC())
+    scalar = next(value for value in program._values if value.op == "scalar_field")
+    states = [value for value in program._values if value.op == "state"]
+    assert len({state.block for state in states}) == 2
+    consumers = tuple(SimpleNamespace(id=10000 + index, block=state.block, inputs=(scalar, state))
+                      for index, state in enumerate(states))
+    with pytest.raises(ValueError, match="conflicting owner blocks"):
+        _unique_dataflow_owner_block(scalar, where="scalar storage", additional_values=consumers)
+
+
 def test_header_only_hierarchy_extension_compiles_its_own_generic_provider_identity(
     tmp_path,
     isolated_native_cache,
@@ -1151,8 +1240,12 @@ class Provider final : public TensorProvider {
       const TensorRequest& request, const pops::ExecutionLane& lane) const override {
     if (!supports(request).accepted())
       throw std::invalid_argument("header-only hierarchy provider rejected the request");
-    const BuiltinTensorProvider delegate;
-    auto prepared_delegate = delegate.prepare(delegate_request(request), lane);
+    pops::runtime::program::HierarchyTensorSolverProviderRegistry<kDim> delegates;
+    auto delegate = std::make_shared<BuiltinTensorProvider>();
+    delegates.add(delegate, lane);
+    auto prepared_delegate =
+        pops::runtime::program::prepare_hierarchy_tensor_solver_collectively(
+            delegates, delegate->identity(), delegate_request(request), lane);
     std::vector<bool> level_populated;
     level_populated.reserve(request.levels.size());
     for (const auto& level : request.levels)
@@ -1312,22 +1405,22 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
     configurations = (
         # One level has an empty ratio set and must execute the provider-selected prepared Krylov
         # fallback over the frozen packed tensor, without calling the provider's direct solve.
-        (1, (), 1, False, True, _HIERARCHY_BASE_CELLS),
+        (1, 1, False, True, _HIERARCHY_BASE_CELLS),
         # The same fallback must consume the provider-authenticated zero-Dirichlet face law.  This
         # dense-oracle case distinguishes it from the generic scalar constant extrapolation.
-        (1, (), 1, True, True, _HIERARCHY_BASE_CELLS),
+        (1, 1, True, True, _HIERARCHY_BASE_CELLS),
         # Preserve the two-step outflow/reflux/history-carry composition.
-        (2, (3,), 2, True, False, _HIERARCHY_BASE_CELLS),
+        (2, 2, True, False, _HIERARCHY_REFINED_BASE_CELLS),
         # Independently quantify the nonzero two-level solve at h and h/2.
-        (2, (3,), 1, False, True, _HIERARCHY_BASE_CELLS),
-        (2, (3,), 1, False, True, 2 * _HIERARCHY_BASE_CELLS),
-        # Keep the N-level gather/publish and nonbinary temporal-ratio guard.  The nonzero N-level
-        # scientific gate remains open because the general FAC currently diverges on the MMS.
-        (3, (3, 5), 1, False, False, _HIERARCHY_BASE_CELLS),
+        (2, 1, False, True, _HIERARCHY_REFINED_BASE_CELLS),
+        (2, 1, False, True, 2 * _HIERARCHY_REFINED_BASE_CELLS),
+        # Keep N-level gather/publish with one shared physical stage. Nonbinary temporal
+        # subcycling is outside this synchronized solve contract; it must not be silently aligned.
+        # The nonzero N-level scientific gate remains open for the general FAC MMS.
+        (3, 1, False, False, _HIERARCHY_REFINED_BASE_CELLS),
     )
     for (
         max_levels,
-        temporal_ratios,
         steps,
         bound_plasma,
         manufactured_plasma,
@@ -1336,7 +1429,6 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         case, layout, plasma_state = _public_amr_hierarchy_case(
             ExternalHierarchySolver(),
             max_levels=max_levels,
-            temporal_ratios=temporal_ratios,
             bound_plasma=bound_plasma,
             manufactured_plasma=manufactured_plasma,
             base_cells=base_cells,
@@ -1357,7 +1449,7 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         simulation = pops.bind(
             compiled,
             initial_values=(
-                {plasma_state: _nonuniform_plasma_initial()}
+                {plasma_state: _nonuniform_plasma_initial(base_cells)}
                 if bound_plasma and not manufactured_plasma
                 else None
             ),
@@ -1372,6 +1464,10 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         assert bound_execution >= before_bind[2]
         assert bound_solve == before_bind[3]
         assert simulation.n_levels() == max_levels
+        if max_levels > 1:
+            _assert_partial_hierarchy(
+                simulation, max_levels=max_levels, base_cells=base_cells
+            )
 
         manufactured_oracle = None
         if manufactured_plasma:
@@ -1421,8 +1517,8 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
             assert run_fallback == bound_fallback
             assert run_solve == bound_solve + steps
 
-        # Each level owns a distinct qualified clock, while the authored temporal ratios remain
-        # independent from the spatial ratio two (and from each other in the three-level tower).
+        # Each level retains its qualified clock, with ratio-one physical windows for the
+        # synchronized solve independently of spatial refinement by two.
         program_report = simulation.program_report()
         level_clocks = [row for row in program_report.clocks if row["kind"] == "level"]
         assert {row["level"] for row in level_clocks} == set(range(max_levels))
@@ -1438,23 +1534,28 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
             {
                 "parent_level": level,
                 "child_level": level + 1,
-                "temporal_ratio": {"numerator": ratio, "denominator": 1},
+                "temporal_ratio": {"numerator": 1, "denominator": 1},
                 "remainder_policy": "integral_only",
             }
-            for level, ratio in enumerate(temporal_ratios)
+            for level in range(max_levels - 1)
         ]
 
         # This is one combined Program, not two adjacent tests: its explicit finite-volume rate
         # materializes the accepted interface-flux ledger and the same macro-step then executes the
         # hierarchy-scoped condensed solve.  Every refined level participates and synchronization
         # remains conservative reflux followed by average-down.
-        assert {row["level"] for row in program_report.flux_ledger} == set(
-            range(max_levels)
-        )
-        assert {row["phase"] for row in program_report.synchronization} == {
-            "reflux",
-            "average_down",
-        }
+        if max_levels == 1:
+            # These reports describe coarse/fine interfaces, absent in a flat hierarchy.
+            assert program_report.flux_ledger == []
+            assert program_report.synchronization == []
+        else:
+            assert {row["level"] for row in program_report.flux_ledger} == set(
+                range(max_levels)
+            )
+            assert {row["phase"] for row in program_report.synchronization} == {
+                "reflux",
+                "average_down",
+            }
 
         if bound_plasma and not manufactured_plasma:
             # ADC-639 composition: the Gaussian marker has nontrivial C/F transport fluxes while the
@@ -1480,7 +1581,15 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
                 "name": "plasma.tensor-potential",
                 "depth": 2,
                 "ncomp": 1,
-                "initialized": True,
+                "levels": [
+                    {
+                        "level": level,
+                        "fill_count": 2,
+                        "initialized": True,
+                        "slot_dt": [_HIERARCHY_DT, _HIERARCHY_DT],
+                    }
+                    for level in range(max_levels)
+                ],
             }
             for level in range(max_levels):
                 actual = np.asarray(
@@ -1492,8 +1601,8 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
 
         if not manufactured_plasma:
             # N-level orchestration guard: every qualified level receives the exact local implicit
-            # rotation for the spatial zero mode, while ratios 3 then 5 remain distinct from spatial
-            # ratio two.  The independent nonzero scientific proof is the refined MMS pair below.
+            # rotation for the spatial zero mode on synchronized clocks and spatial ratio two.
+            # The independent nonzero scientific proof is the refined MMS pair below.
             for level in range(max_levels):
                 actual = np.asarray(
                     simulation.block_level_state_global("plasma", level),
@@ -1616,15 +1725,15 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
     assert flat_periodic_fallback_proved
     assert flat_dirichlet_fallback_proved
     assert set(manufactured_errors) == {
-        _HIERARCHY_BASE_CELLS,
-        2 * _HIERARCHY_BASE_CELLS,
+        _HIERARCHY_REFINED_BASE_CELLS,
+        2 * _HIERARCHY_REFINED_BASE_CELLS,
     }
     observed_order = np.log(
-        manufactured_errors[_HIERARCHY_BASE_CELLS]
-        / manufactured_errors[2 * _HIERARCHY_BASE_CELLS]
+        manufactured_errors[_HIERARCHY_REFINED_BASE_CELLS]
+        / manufactured_errors[2 * _HIERARCHY_REFINED_BASE_CELLS]
     ) / np.log(2.0)
     assert observed_order >= 1.5, {
-        "coarse_8_relative_l2": manufactured_errors[_HIERARCHY_BASE_CELLS],
-        "coarse_16_relative_l2": manufactured_errors[2 * _HIERARCHY_BASE_CELLS],
+        "coarse_16_relative_l2": manufactured_errors[_HIERARCHY_REFINED_BASE_CELLS],
+        "coarse_32_relative_l2": manufactured_errors[2 * _HIERARCHY_REFINED_BASE_CELLS],
         "observed_order": observed_order,
     }

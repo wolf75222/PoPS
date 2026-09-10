@@ -5,14 +5,18 @@
 
 #include <pops/numerics/time/amr/levels/amr_subcycling_plan.hpp>
 #include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>
+#include <pops/parallel/collective_exception.hpp>
 #include <pops/runtime/amr/prepared_multiblock_hierarchy.hpp>
-#include <pops/runtime/program/step_transaction.hpp>
+#include <pops/runtime/program/collective_step_rejection.hpp>
 
 #include <algorithm>
+#include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -163,6 +167,11 @@ class PreparedMultiBlockAmrSubcyclingEngine {
                                                  std::move(map), std::move(exact_contract));
   }
 
+  // The facade owns this diagnostic sink for longer than the prepared engine.
+  void bind_profiler(::pops::runtime::program::Profiler* profiler) noexcept {
+    profiler_ = profiler;
+  }
+
   std::string_view exact_contract() const noexcept { return exact_contract_; }
   std::uint64_t last_accepted_attempt() const noexcept { return last_accepted_attempt_; }
 
@@ -183,15 +192,95 @@ class PreparedMultiBlockAmrSubcyclingEngine {
   /// The private `[block][level]` candidate tower is complete before the first level-group
   /// callback. Hierarchy-scoped Program gathers must read this tower by `active_level_`, not the
   /// current group's candidate pack: that pack is one level, while the gather walks every level.
-  bool has_attempt_candidates() const noexcept { return attempt_candidates_ != nullptr; }
+  bool has_attempt_candidates() const noexcept {
+    return synchronized_attempt_ != nullptr || attempt_candidates_ != nullptr;
+  }
 
   field_type& attempt_state(std::size_t block, std::size_t level) const {
-    if (attempt_candidates_ == nullptr)
-      throw std::logic_error(
-          "multi-block AMR attempt state is only available during an active advance");
-    if (block >= attempt_candidates_->size() || level >= (*attempt_candidates_)[block].size())
-      throw std::out_of_range("multi-block AMR attempt state is outside the candidate tower");
-    return (*attempt_candidates_)[block][level];
+    auto* candidates =
+        synchronized_attempt_ ? &synchronized_attempt_->candidates : attempt_candidates_;
+    if (candidates == nullptr)
+      throw std::logic_error("multi-block AMR attempt state requires an active advance");
+    return candidates->at(block).at(level);
+  }
+
+  bool has_synchronized_groups() const noexcept {
+    return synchronized_attempt_ && synchronized_attempt_->resuming;
+  }
+
+  LevelAdvanceGroup synchronized_level_group(std::size_t level) const {
+    if (!has_synchronized_groups())
+      throw std::logic_error("AMR synchronized level envelope requires an active resume callback");
+    return LevelAdvanceGroup(synchronized_attempt_->groups.at(level));
+  }
+
+  bool has_synchronized_attempt() const noexcept { return synchronized_attempt_ != nullptr; }
+  std::uint64_t synchronized_attempt() const noexcept {
+    return synchronized_attempt_ ? synchronized_attempt_->attempt : 0;
+  }
+
+  /// Prepare one detached hierarchy attempt. No clock or accepted state is published here.
+  std::uint64_t begin_synchronized(const ::pops::amr::ClockWindow& root) {
+    auto prepared = prepare_attempt_(root, "begin-synchronized");
+    prepare_synchronized_(*prepared);
+    synchronized_attempt_ = std::move(prepared);
+    return synchronized_attempt_->attempt;
+  }
+
+  /// Every resume invokes exactly one root callback against the same candidate/ledger storage.
+  template <class Advance>
+  void resume_synchronized(Advance&& advance_level) {
+    require_synchronized_("resume");
+    auto& attempt = *synchronized_attempt_;
+    attempt.busy = true;
+    attempt.resuming = true;
+    try {
+      invoke_collectively_([&] { advance_level(LevelAdvanceGroup(attempt.groups.front())); },
+                           "AMR synchronized hierarchy callback failed collectively");
+      ++attempt.resumes;
+      attempt.resuming = false;
+      attempt.busy = false;
+    } catch (...) {
+      attempt.resuming = false;
+      attempt.busy = false;
+      abort_synchronized();
+      throw;
+    }
+  }
+
+  template <class Reflux, class Validate>
+  void finish_synchronized(Reflux&& reflux, Validate&& validate) {
+    finish_synchronized(std::forward<Reflux>(reflux), std::forward<Validate>(validate),
+                        DefaultPublicationStage{});
+  }
+
+  /// Reconcile and publish once, after all continuation callbacks and external stage transfers.
+  template <class Reflux, class Validate, class Stage>
+  void finish_synchronized(Reflux&& reflux, Validate&& validate, Stage&& stage) {
+    require_synchronized_("finish");
+    auto& attempt = *synchronized_attempt_;
+    attempt.busy = true;
+    try {
+      finish_synchronized_records_(attempt, reflux);
+      publish_attempt_(attempt, validate, stage);
+      attempt.busy = false;
+      synchronized_attempt_.reset();
+    } catch (...) {
+      attempt.busy = false;
+      abort_synchronized();
+      throw;
+    }
+  }
+
+  /// Local cancellation is safe even from a callback: destruction waits for that callback to exit.
+  /// All participants must subsequently unwind or enter the same collective resume/finish phase.
+  void abort_synchronized() noexcept {
+    if (!synchronized_attempt_)
+      return;
+    if (synchronized_attempt_->busy)
+      synchronized_attempt_->cancelled = true;
+    else
+      synchronized_attempt_.reset();
   }
 
   /// Four-argument advance keeps a no-op staging path so generic callers retain their
@@ -207,95 +296,33 @@ class PreparedMultiBlockAmrSubcyclingEngine {
   /// The callback is generic; embedded-boundary policy belongs to the caller.
   template <class Advance, class Reflux, class Validate, class Stage>
   void advance(const ::pops::amr::ClockWindow& root, Advance&& advance_level, Reflux&& reflux,
-               Validate&& validate, Stage&& stage) {
-    require_live_();
-    if (root.begin.level != 0 || root.end.level != 0 ||
-        root.begin.macro_step != root.end.macro_step || !(root.begin.phase < root.end.phase) ||
-        !(root.begin.physical_time < root.end.physical_time))
-      throw std::invalid_argument("multi-block AMR root clock window is invalid");
-    if (next_attempt_ == std::numeric_limits<std::uint64_t>::max())
-      throw std::overflow_error("multi-block AMR subcycling attempt identity overflow");
-    const std::uint64_t attempt = ++next_attempt_;
-
-    const auto accepted_snapshot = hierarchy_->snapshot();
-    CandidateMatrix candidates;
-    HistoryMatrix candidate_histories;
-    ClockMatrix candidate_clocks;
-    LedgerMatrix candidate_ledgers(hierarchy_->block_count());
-    std::exception_ptr preparation_error;
-    try {
-      candidates.resize(hierarchy_->block_count());
-      candidate_histories.resize(hierarchy_->block_count());
-      candidate_clocks = accepted_clocks_;
-      for (std::size_t block = 0; block < hierarchy_->block_count(); ++block) {
-        candidate_ledgers[block].resize(relations_.size());
-        candidates[block].reserve(hierarchy_->level_count());
-        candidate_histories[block] = accepted_histories_[block];
-        for (std::size_t level = 0; level < hierarchy_->level_count(); ++level)
-          candidates[block].emplace_back(hierarchy_->state(block, level));
+               Validate&& validate, Stage&& stage, bool synchronized = false) {
+    if (synchronized) {
+      begin_synchronized(root);
+      try {
+        resume_synchronized(std::forward<Advance>(advance_level));
+        finish_synchronized(std::forward<Reflux>(reflux), std::forward<Validate>(validate),
+                            std::forward<Stage>(stage));
+      } catch (...) {
+        abort_synchronized();
+        throw;
       }
-      Kokkos::fence();
-    } catch (...) {
-      preparation_error = std::current_exception();
+      return;
     }
-    try {
-      collectively_rethrow_(*hierarchy_, preparation_error,
-                            "multi-block AMR candidate preparation failed collectively");
-    } catch (...) {
-      throw;
-    }
-
-    bool publication_started = false;
+    auto attempt = prepare_attempt_(root, "begin-recursive");
     struct AttemptTowerBind {
-      std::vector<std::vector<field_type>>*& slot;
-      explicit AttemptTowerBind(std::vector<std::vector<field_type>>*& slot,
-                                std::vector<std::vector<field_type>>& tower)
-          : slot(slot) {
+      CandidateMatrix*& slot;
+      AttemptTowerBind(CandidateMatrix*& slot, CandidateMatrix& tower) : slot(slot) {
         slot = &tower;
       }
       ~AttemptTowerBind() { slot = nullptr; }
-      AttemptTowerBind(const AttemptTowerBind&) = delete;
-      AttemptTowerBind& operator=(const AttemptTowerBind&) = delete;
-    };
-    const AttemptTowerBind attempt_tower(attempt_candidates_, candidates);
-    try {
-      std::vector<const field_type*> no_parent;
-      std::vector<ledger_type*> no_incoming_flux;
-      advance_level_recursive_(0, root, 0, no_parent, no_incoming_flux, candidates,
-                               candidate_histories, candidate_clocks, candidate_ledgers, attempt,
-                               advance_level, reflux);
-
-      for (std::size_t block = 0; block < hierarchy_->block_count(); ++block)
-        for (std::size_t level = 0; level < hierarchy_->level_count(); ++level)
-          invoke_collectively_(
-              [&] { validate(block, level, std::as_const(candidates[block][level])); },
-              "multi-block AMR candidate validation failed collectively");
-
-      std::vector<std::vector<field_type*>> packs(hierarchy_->level_count());
-      for (std::size_t level = 0; level < hierarchy_->level_count(); ++level) {
-        packs[level].reserve(hierarchy_->block_count());
-        for (std::size_t block = 0; block < hierarchy_->block_count(); ++block)
-          packs[level].push_back(&candidates[block][level]);
-        if constexpr (!std::is_same_v<std::decay_t<Stage>, DefaultPublicationStage>) {
-          invoke_collectively_([&] { stage(level, std::span<field_type*>(packs[level])); },
-                               "multi-block AMR candidate staging failed collectively");
-        }
-      }
-
-      for (std::size_t level = 0; level < hierarchy_->level_count(); ++level) {
-        publication_started = true;
-        hierarchy_->publish_program_candidates(program_map_, level, packs[level]);
-      }
-      accepted_histories_.swap(candidate_histories);
-      accepted_clocks_.swap(candidate_clocks);
-      accepted_ledgers_.swap(candidate_ledgers);
-      last_accepted_attempt_ = attempt;
-    } catch (...) {
-      const std::exception_ptr attempt_error = std::current_exception();
-      if (publication_started)
-        hierarchy_->restore(accepted_snapshot);
-      std::rethrow_exception(attempt_error);
-    }
+    } bind(attempt_candidates_, attempt->candidates);
+    std::vector<const field_type*> no_parent;
+    std::vector<ledger_type*> no_incoming_flux;
+    advance_level_recursive_(0, root, 0, no_parent, no_incoming_flux, attempt->candidates,
+                             attempt->histories, attempt->clocks, attempt->candidate_ledgers,
+                             attempt->attempt, advance_level, reflux);
+    publish_attempt_(*attempt, validate, stage);
   }
 
  private:
@@ -307,6 +334,174 @@ class PreparedMultiBlockAmrSubcyclingEngine {
   using HistoryMatrix = std::vector<std::vector<std::optional<AcceptedHistory>>>;
   using ClockMatrix = std::vector<std::vector<std::optional<::pops::amr::ClockStamp>>>;
   using LedgerMatrix = std::vector<std::vector<std::vector<ledger_type>>>;
+
+  struct AttemptStorage {
+    std::optional<typename hierarchy_type::Snapshot> accepted_snapshot;
+    ::pops::amr::ClockWindow root{};
+    std::uint64_t attempt = 0;
+    std::uint64_t topology_epoch = 0;
+    std::uint64_t materialization_generation = 0;
+    std::uint64_t accepted_revision = 0;
+    std::uint64_t resumes = 0;
+    CandidateMatrix candidates;
+    HistoryMatrix histories;
+    ClockMatrix clocks;
+    LedgerMatrix candidate_ledgers;
+    std::vector<::pops::amr::ClockWindow> windows;
+    CandidateMatrix older;
+    std::vector<std::vector<ledger_type>> ledgers;
+    std::vector<std::vector<LevelAdvanceContext>> groups;
+    bool busy = false;
+    bool resuming = false;
+    bool cancelled = false;
+  };
+
+  static void append_clock_(ExactContractBuilder& contract, const ::pops::amr::ClockStamp& clock) {
+    contract.scalar(std::int32_t{clock.level})
+        .scalar(clock.macro_step)
+        .scalar(clock.phase.numerator)
+        .scalar(clock.phase.denominator)
+        .scalar(std::bit_cast<std::uint64_t>(clock.physical_time));
+  }
+
+  void agree_attempt_(std::string_view operation, const AttemptStorage& attempt) const {
+    std::string bytes;
+    invoke_collectively_(
+        [&] {
+          ExactContractBuilder contract;
+          contract.text("pops.amr.synchronized-attempt.v1")
+              .text(operation)
+              .bytes(exact_contract_)
+              .scalar(attempt.attempt)
+              .scalar(attempt.topology_epoch)
+              .scalar(attempt.materialization_generation)
+              .scalar(attempt.accepted_revision)
+              .scalar(attempt.resumes);
+          append_clock_(contract, attempt.root.begin);
+          append_clock_(contract, attempt.root.end);
+          bytes = std::move(contract).release();
+        },
+        "AMR attempt identity preparation failed collectively");
+    if (!all_ranks_agree_exact_ordered_byte_pairs({{"amr-attempt", bytes}}, hierarchy_->lane()))
+      throw std::invalid_argument(
+          "AMR attempt operation, clock or generation differs between ranks");
+  }
+
+  std::unique_ptr<AttemptStorage> prepare_attempt_(const ::pops::amr::ClockWindow& root,
+                                                   std::string_view operation) {
+    require_no_callback_reentry_();
+    require_live_();
+    std::unique_ptr<AttemptStorage> attempt;
+    invoke_collectively_(
+        [&] {
+          if (has_attempt_candidates())
+            throw std::logic_error("multi-block AMR advance already has an active attempt");
+          if (root.begin.level != 0 || root.end.level != 0 ||
+              root.begin.macro_step != root.end.macro_step || root.begin.phase.denominator <= 0 ||
+              root.end.phase.denominator <= 0 || !(root.begin.phase < root.end.phase) ||
+              !std::isfinite(root.begin.physical_time) || !std::isfinite(root.end.physical_time) ||
+              !(root.begin.physical_time < root.end.physical_time))
+            throw std::invalid_argument("multi-block AMR root clock window is invalid");
+          if (next_attempt_ == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("multi-block AMR subcycling attempt identity overflow");
+          attempt = std::make_unique<AttemptStorage>();
+          attempt->root = root;
+          attempt->attempt = next_attempt_ + 1;
+          attempt->topology_epoch = hierarchy_->topology_runtime().topology_epoch();
+          attempt->materialization_generation =
+              hierarchy_->topology_runtime().materialization_generation();
+          attempt->accepted_revision = hierarchy_->accepted_revision();
+        },
+        "AMR attempt preflight failed collectively");
+    agree_attempt_(operation, *attempt);
+    next_attempt_ = attempt->attempt;
+    invoke_collectively_(
+        [&] {
+          attempt->accepted_snapshot.emplace(hierarchy_->snapshot());
+          attempt->candidates.resize(hierarchy_->block_count());
+          attempt->histories = accepted_histories_;
+          attempt->clocks = accepted_clocks_;
+          attempt->candidate_ledgers.resize(hierarchy_->block_count());
+          for (std::size_t block = 0; block < hierarchy_->block_count(); ++block) {
+            attempt->candidate_ledgers[block].resize(relations_.size());
+            attempt->candidates[block].reserve(hierarchy_->level_count());
+            for (std::size_t level = 0; level < hierarchy_->level_count(); ++level)
+              attempt->candidates[block].emplace_back(hierarchy_->state(block, level));
+          }
+        },
+        "multi-block AMR candidate preparation failed collectively");
+    return attempt;
+  }
+
+  // A callback may reenter on only one rank. Reject locally before any nested collective;
+  // the surrounding callback phase will communicate that failure to its peers.
+  void require_no_callback_reentry_() const {
+    if ((synchronized_attempt_ && synchronized_attempt_->busy) || attempt_candidates_)
+      throw std::logic_error("AMR continuation cannot be reentered from an active callback");
+  }
+
+  void require_synchronized_(std::string_view operation) const {
+    require_no_callback_reentry_();
+    require_live_();
+    invoke_collectively_(
+        [&] {
+          if (!synchronized_attempt_ || synchronized_attempt_->busy ||
+              synchronized_attempt_->cancelled)
+            throw std::logic_error("AMR synchronized continuation is absent, busy or cancelled");
+          const auto& attempt = *synchronized_attempt_;
+          if (attempt.topology_epoch != hierarchy_->topology_runtime().topology_epoch() ||
+              attempt.materialization_generation !=
+                  hierarchy_->topology_runtime().materialization_generation() ||
+              attempt.accepted_revision != hierarchy_->accepted_revision())
+            throw std::invalid_argument("AMR synchronized continuation hierarchy has changed");
+          if ((operation == "finish" && attempt.resumes == 0) ||
+              attempt.resumes == std::numeric_limits<std::uint64_t>::max())
+            throw std::logic_error("AMR synchronized continuation has an invalid resume count");
+        },
+        "AMR synchronized continuation preflight failed collectively");
+    agree_attempt_(operation, *synchronized_attempt_);
+  }
+
+  template <class Validate, class Stage>
+  void publish_attempt_(AttemptStorage& attempt, Validate& validate, Stage& stage) {
+    auto& candidates = attempt.candidates;
+    for (std::size_t block = 0; block < hierarchy_->block_count(); ++block)
+      for (std::size_t level = 0; level < hierarchy_->level_count(); ++level)
+        invoke_collectively_(
+            [&] { validate(block, level, std::as_const(candidates[block][level])); },
+            "multi-block AMR candidate validation failed collectively");
+    std::vector<std::vector<field_type*>> packs;
+    invoke_collectively_(
+        [&] {
+          packs.resize(hierarchy_->level_count());
+          for (std::size_t level = 0; level < hierarchy_->level_count(); ++level) {
+            packs[level].reserve(hierarchy_->block_count());
+            for (std::size_t block = 0; block < hierarchy_->block_count(); ++block)
+              packs[level].push_back(&candidates[block][level]);
+          }
+        },
+        "multi-block AMR publication pack preparation failed collectively");
+    if constexpr (!std::is_same_v<std::decay_t<Stage>, DefaultPublicationStage>)
+      for (std::size_t level = 0; level < hierarchy_->level_count(); ++level)
+        invoke_collectively_([&] { stage(level, std::span<field_type*>(packs[level])); },
+                             "multi-block AMR candidate staging failed collectively");
+    bool publication_started = false;
+    try {
+      for (std::size_t level = 0; level < hierarchy_->level_count(); ++level) {
+        publication_started = true;
+        hierarchy_->publish_program_candidates(program_map_, level, packs[level]);
+      }
+      accepted_histories_.swap(attempt.histories);
+      accepted_clocks_.swap(attempt.clocks);
+      accepted_ledgers_.swap(attempt.candidate_ledgers);
+      last_accepted_attempt_ = attempt.attempt;
+    } catch (...) {
+      const auto error = std::current_exception();
+      if (publication_started)
+        hierarchy_->restore(*attempt.accepted_snapshot);
+      std::rethrow_exception(error);
+    }
+  }
 
   PreparedMultiBlockAmrSubcyclingEngine(hierarchy_type& hierarchy,
                                         std::vector<relation_type> relations,
@@ -343,168 +538,15 @@ class PreparedMultiBlockAmrSubcyclingEngine {
 
   template <class Callback>
   void invoke_collectively_(Callback&& callback, std::string_view message) const {
-    enum class ExceptionKind : long { None = 0, StepRejected = 1, Ordinary = 2 };
-    ExceptionKind kind = ExceptionKind::None;
-    std::string rejection_payload;
-    std::exception_ptr local_error;
-    try {
-      callback();
-    } catch (const ::pops::runtime::program::StepAttemptRejected& rejected) {
-      try {
-        rejection_payload = encode_step_rejection_(rejected);
-        kind = ExceptionKind::StepRejected;
-      } catch (...) {
-        kind = ExceptionKind::Ordinary;
-        local_error = std::current_exception();
-      }
-    } catch (...) {
-      kind = ExceptionKind::Ordinary;
-      local_error = std::current_exception();
-    }
-    try {
-      Kokkos::fence();
-    } catch (...) {
-      kind = ExceptionKind::Ordinary;
-      local_error = std::current_exception();
-    }
-
-    const auto communicator = hierarchy_->lane().communicator();
-    const long ordinary = kind == ExceptionKind::Ordinary ? 1L : 0L;
-    const long rejected = kind == ExceptionKind::StepRejected ? 1L : 0L;
-    if (all_reduce_max(ordinary, communicator) != 0) {
-      if (hierarchy_->lane().size() == 1 && local_error)
-        std::rethrow_exception(local_error);
-      throw std::runtime_error(std::string(message));
-    }
-    if (all_reduce_max(rejected, communicator) == 0)
-      return;
-
-    // When every rank rejected, authenticate the complete typed envelope exactly. When only a
-    // subset rejected, the first rejecting rank is the deterministic control authority. Its byte
-    // envelope is broadcast with reductions on the lane communicator so every participant follows
-    // the same collective sequence without requiring ownership of the communicator observer.
-    std::string selected_payload;
-    if (all_reduce_min(rejected, communicator) != 0) {
-      if (!all_ranks_agree_exact_ordered_byte_pairs({{"step-rejection", rejection_payload}},
-                                                    communicator))
-        throw std::runtime_error("collective step rejection fields differ between ranks");
-      selected_payload = std::move(rejection_payload);
-    } else {
-      const long local_root = rejected != 0 ? static_cast<long>(hierarchy_->lane().rank())
-                                            : static_cast<long>(hierarchy_->lane().size());
-      const long root = all_reduce_min(local_root, communicator);
-      if (root < 0 || root >= static_cast<long>(hierarchy_->lane().size()))
-        throw std::runtime_error("collective step rejection lost its typed envelope");
-
-      const bool authoritative = hierarchy_->lane().rank() == root;
-      const long invalid_length =
-          authoritative && rejection_payload.size() >
-                               static_cast<std::size_t>(std::numeric_limits<long>::max())
-              ? 1L
-              : 0L;
-      if (all_reduce_max(invalid_length, communicator) != 0)
-        throw std::length_error("collective step rejection envelope exceeds long capacity");
-      const long encoded_length = all_reduce_max(
-          authoritative ? static_cast<long>(rejection_payload.size()) : 0L, communicator);
-      if (encoded_length <= 0)
-        throw std::runtime_error("collective step rejection envelope is empty");
-
-      long allocation_failed = 0;
-      try {
-        if (authoritative)
-          selected_payload = rejection_payload;
-        selected_payload.resize(static_cast<std::size_t>(encoded_length));
-      } catch (...) {
-        allocation_failed = 1;
-      }
-      if (all_reduce_max(allocation_failed, communicator) != 0)
-        throw std::bad_alloc();
-      broadcast_bytes_inplace(selected_payload.data(), selected_payload.size(),
-                              static_cast<int>(root), communicator);
-      const long typed_envelope_mismatch =
-          rejected != 0 && rejection_payload != selected_payload ? 1L : 0L;
-      if (all_reduce_max(typed_envelope_mismatch, communicator) != 0)
-        throw std::runtime_error("collective step rejection fields differ between rejecting ranks");
-    }
-    const StepRejectionEnvelope envelope = decode_step_rejection_(selected_payload);
-    throw ::pops::runtime::program::StepAttemptRejected(envelope.status, envelope.disposition,
-                                                        envelope.reason_code, envelope.phase,
-                                                        envelope.detail);
-  }
-
-  struct StepRejectionEnvelope {
-    SolveStatus status = SolveStatus::kInvalidInput;
-    ::pops::runtime::program::StepAttemptDisposition disposition =
-        ::pops::runtime::program::StepAttemptDisposition::kReject;
-    std::uint32_t reason_code = 0;
-    std::string phase;
-    std::string detail;
-  };
-
-  static void append_u64_(std::string& bytes, std::uint64_t value) {
-    for (int shift = 56; shift >= 0; shift -= 8)
-      bytes.push_back(static_cast<char>((value >> shift) & 0xffu));
-  }
-
-  static std::uint64_t read_u64_(std::string_view bytes, std::size_t& cursor) {
-    if (cursor > bytes.size() || bytes.size() - cursor < 8)
-      throw std::runtime_error("collective step rejection envelope is truncated");
-    std::uint64_t value = 0;
-    for (int byte = 0; byte < 8; ++byte)
-      value = (value << 8u) | static_cast<unsigned char>(bytes[cursor++]);
-    return value;
-  }
-
-  static void append_text_(std::string& bytes, std::string_view value) {
-    append_u64_(bytes, static_cast<std::uint64_t>(value.size()));
-    bytes.append(value.data(), value.size());
-  }
-
-  static std::string read_text_(std::string_view bytes, std::size_t& cursor) {
-    const std::uint64_t encoded_size = read_u64_(bytes, cursor);
-    if (encoded_size > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
-      throw std::overflow_error("collective step rejection text exceeds size_t");
-    const std::size_t size = static_cast<std::size_t>(encoded_size);
-    if (cursor > bytes.size() || size > bytes.size() - cursor)
-      throw std::runtime_error("collective step rejection text is truncated");
-    std::string value(bytes.substr(cursor, size));
-    cursor += size;
-    return value;
-  }
-
-  static std::string encode_step_rejection_(
-      const ::pops::runtime::program::StepAttemptRejected& rejected) {
-    std::string bytes("pops.step-rejection.v1");
-    append_u64_(bytes, static_cast<std::uint64_t>(rejected.status()));
-    append_u64_(bytes, static_cast<std::uint64_t>(rejected.disposition()));
-    append_u64_(bytes, rejected.reason_code());
-    append_text_(bytes, rejected.phase());
-    append_text_(bytes, rejected.detail());
-    return bytes;
-  }
-
-  static StepRejectionEnvelope decode_step_rejection_(std::string_view bytes) {
-    constexpr std::string_view prefix = "pops.step-rejection.v1";
-    if (!bytes.starts_with(prefix))
-      throw std::runtime_error("collective step rejection envelope has another schema");
-    std::size_t cursor = prefix.size();
-    const std::uint64_t status = read_u64_(bytes, cursor);
-    const std::uint64_t disposition = read_u64_(bytes, cursor);
-    const std::uint64_t reason_code = read_u64_(bytes, cursor);
-    if (status > static_cast<std::uint64_t>(SolveStatus::kSafeguardFailure) ||
-        disposition >
-            static_cast<std::uint64_t>(::pops::runtime::program::StepAttemptDisposition::kReject) ||
-        reason_code > std::numeric_limits<std::uint32_t>::max())
-      throw std::runtime_error("collective step rejection envelope has invalid enum fields");
-    StepRejectionEnvelope result;
-    result.status = static_cast<SolveStatus>(status);
-    result.disposition = static_cast<::pops::runtime::program::StepAttemptDisposition>(disposition);
-    result.reason_code = static_cast<std::uint32_t>(reason_code);
-    result.phase = read_text_(bytes, cursor);
-    result.detail = read_text_(bytes, cursor);
-    if (cursor != bytes.size())
-      throw std::runtime_error("collective step rejection envelope has trailing bytes");
-    return result;
+    ::pops::runtime::program::collective_step_rejection_phase(
+        hierarchy_->lane().communicator(),
+        {"pops.step-rejection.v1", "step-rejection", false, false}, message,
+        [&] {
+          callback();
+          if (synchronized_attempt_ && synchronized_attempt_->cancelled)
+            throw std::runtime_error("AMR synchronized continuation was cancelled");
+        },
+        [] { Kokkos::fence(); });
   }
 
   void require_live_() const {
@@ -561,6 +603,109 @@ class PreparedMultiBlockAmrSubcyclingEngine {
     collectively_rethrow_(*hierarchy_, local_error,
                           "multi-block AMR parent-time interpolation failed collectively");
     return staged;
+  }
+
+  void prepare_synchronized_(AttemptStorage& storage) {
+    const auto& root = storage.root;
+    auto& candidates = storage.candidates;
+    const auto attempt = storage.attempt;
+    const std::size_t levels = hierarchy_->level_count();
+    const std::size_t blocks = hierarchy_->block_count();
+    auto& windows = storage.windows;
+    auto& older = storage.older;
+    auto& ledgers = storage.ledgers;
+    auto& groups = storage.groups;
+    invoke_collectively_(
+        [&] {
+          windows.push_back(root);
+          for (std::size_t level = 0; level < relations_.size(); ++level) {
+            const auto children = relations_[level].partition(windows.back());
+            if (children.size() != 1 ||
+                children.front().window.begin.physical_time != root.begin.physical_time ||
+                children.front().window.end.physical_time != root.end.physical_time)
+              throw std::invalid_argument(
+                  "synchronized composite field stage requires every child state "
+                  "on its parent physical-time window; offending parent level " +
+                  std::to_string(level));
+            windows.push_back(children.front().window);
+          }
+          older = candidates;
+          ledgers.resize(levels - 1);
+          for (auto& level : ledgers) {
+            level.reserve(blocks);
+            for (std::size_t block = 0; block < blocks; ++block) {
+              level.emplace_back(flux_budget_);
+              level.back().begin(attempt);
+            }
+          }
+          groups.resize(levels);
+          for (std::size_t level = 0; level < levels; ++level)
+            for (std::size_t block = 0; block < blocks; ++block)
+              groups[level].push_back(LevelAdvanceContext{
+                  block, hierarchy_->block_identity(block), level, 0, attempt, windows[level],
+                  candidates[block][level], level == 0 ? nullptr : &older[block][level - 1],
+                  level == 0 ? nullptr : &ledgers[level - 1][block],
+                  level + 1 == levels ? nullptr : &ledgers[level][block]});
+          Kokkos::fence();
+        },
+        "AMR synchronized envelope preparation failed collectively");
+  }
+
+  template <class Reflux>
+  void finish_synchronized_records_(AttemptStorage& storage, Reflux& reflux) {
+    const std::size_t levels = hierarchy_->level_count();
+    const std::size_t blocks = hierarchy_->block_count();
+    auto& candidates = storage.candidates;
+    auto& histories = storage.histories;
+    auto& clocks = storage.clocks;
+    auto& candidate_ledgers = storage.candidate_ledgers;
+    auto& windows = storage.windows;
+    auto& older = storage.older;
+    auto& ledgers = storage.ledgers;
+    const auto attempt = storage.attempt;
+    invoke_collectively_(
+        [&] {
+          for (std::size_t level = 0; level < levels; ++level)
+            for (std::size_t block = 0; block < blocks; ++block) {
+              histories[block][level].emplace(AcceptedHistory{
+                  older[block][level], field_type(candidates[block][level]), windows[level]});
+              clocks[block][level] = windows[level].end;
+            }
+        },
+        "AMR synchronized history preparation failed collectively");
+    for (std::size_t child = levels; child-- > 1;) {
+      const std::size_t parent = child - 1;
+      const auto ratio =
+          hierarchy_->topology_runtime().hierarchy().layout(child).ratio_from_parent();
+      const ::pops::amr::reflux::FaceRefinementMapping<Dim> mapping{
+          hierarchy_->topology_runtime().hierarchy().layout(parent).domain().lo,
+          hierarchy_->topology_runtime().hierarchy().layout(child).domain().lo};
+      for (std::size_t block = 0; block < blocks; ++block) {
+        invoke_collectively_([&] { ledgers[parent][block].commit(); },
+                             "AMR synchronized flux-ledger commit failed collectively");
+        RefluxContext context{block,
+                              hierarchy_->block_identity(block),
+                              parent,
+                              attempt,
+                              windows[parent],
+                              candidates[block][parent],
+                              candidates[block][child],
+                              ledgers[parent][block],
+                              ratio,
+                              mapping};
+        invoke_collectively_([&] { reflux(context); },
+                             "AMR synchronized reflux failed collectively");
+        execute_average_down_collectively(hierarchy_->topology_runtime(), child,
+                                          std::as_const(candidates[block][child]),
+                                          candidates[block][parent], hierarchy_->lane(), profiler_);
+        invoke_collectively_(
+            [&] {
+              histories[block][parent]->newer = field_type(candidates[block][parent]);
+              candidate_ledgers[block][parent].push_back(std::move(ledgers[parent][block]));
+            },
+            "AMR synchronized accepted-record preparation failed collectively");
+      }
+    }
   }
 
   template <class Advance, class Reflux>
@@ -653,12 +798,17 @@ class PreparedMultiBlockAmrSubcyclingEngine {
                            "multi-block AMR reflux callback failed collectively");
       execute_average_down_collectively(hierarchy_->topology_runtime(), level + 1,
                                         std::as_const(candidates[block][level + 1]),
-                                        candidates[block][level], hierarchy_->lane());
-      histories[block][level]->newer = field_type(candidates[block][level]);
-      candidate_ledgers[block][level].push_back(std::move(outgoing_flux[block]));
+                                        candidates[block][level], hierarchy_->lane(), profiler_);
+      invoke_collectively_(
+          [&] {
+            histories[block][level]->newer = field_type(candidates[block][level]);
+            candidate_ledgers[block][level].push_back(std::move(outgoing_flux[block]));
+          },
+          "multi-block AMR accepted-record preparation failed collectively");
     }
   }
 
+  ::pops::runtime::program::Profiler* profiler_ = nullptr;
   hierarchy_type* hierarchy_ = nullptr;
   std::string hierarchy_contract_;
   std::vector<relation_type> relations_;
@@ -672,6 +822,7 @@ class PreparedMultiBlockAmrSubcyclingEngine {
   std::uint64_t next_attempt_ = 0;
   std::uint64_t last_accepted_attempt_ = 0;
   std::vector<std::vector<field_type>>* attempt_candidates_ = nullptr;
+  std::unique_ptr<AttemptStorage> synchronized_attempt_;
 };
 
 }  // namespace pops::numerics::time::amr

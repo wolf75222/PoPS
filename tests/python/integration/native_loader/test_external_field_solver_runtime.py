@@ -574,7 +574,11 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
         "dirty": tuple(simulation._executor._s.dirty_auxiliary_provider_identities()),
     }
     fault_marker.write_text("fail the topology rematerialization solve", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="field"):
+    with pytest.raises(
+        RuntimeError,
+        match="prepared solve failed: status=invalid_evaluation action=fail_run "
+        "reason=native FieldSolver v2 marked a non-finite active solution as solved",
+    ):
         pops.run(simulation, t_end=1.6e-1, max_steps=1)
     assert simulation.time() == accepted_before_fault["time"]
     assert simulation.macro_step() == accepted_before_fault["step"]
@@ -658,6 +662,7 @@ def test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retr
     }
     assert accepted_before["potential"].size == 64
     assert np.all(accepted_before["potential"] == 0.0)
+    assert accepted_before["providers"][0]["materialized"] is False
 
     with pytest.raises(
         RuntimeError,
@@ -680,10 +685,11 @@ def test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retr
         simulation._executor._temporal_restart_state.to_data(),
         sort_keys=True,
     ) == accepted_before["temporal"]
-    assert (
-        simulation.inspect().to_dict()["instance"]["field_providers"]
-        == accepted_before["providers"]
-    )
+    # The bound provider cache survives rejection; accepted numeric fields and
+    # topology reports still roll back exactly. Preparation is not publication.
+    assert simulation.inspect().to_dict()["instance"]["field_providers"] == [
+        {**provider, "materialized": True} for provider in accepted_before["providers"]
+    ]
     failed = simulation._executor._last_step_transaction_report
     assert (failed.status, failed.phase, failed.action) == (
         "failed",

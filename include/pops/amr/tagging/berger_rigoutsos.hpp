@@ -43,9 +43,12 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
         if (source.patches[global_patch].length(axis) > std::numeric_limits<int>::max())
           throw std::length_error(
               "Berger-Rigoutsos patch axis exceeds deterministic signature indexing");
-      const TagMask<Dim>& owner = owner_for_patch_(canonical, source, global_patch);
-      cluster_rec_(owner, source.patches[global_patch], options, work, raw);
     }
+
+    // Patch and rank boundaries are storage choices, not refinement decisions. One
+    // authenticated tag union must therefore feed one deterministic clustering tree.
+    const TagUnion tags{canonical, source};
+    cluster_rec_(tags, source.domain, options, work, raw);
 
     std::vector<Box<Dim>> boxes;
     for (const Box<Dim>& box : raw) {
@@ -54,8 +57,7 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
       Extent<Dim> maximum{};
       for (int axis = 0; axis < Dim; ++axis)
         maximum[axis] = options.max_box_size[static_cast<std::size_t>(axis)];
-      const mesh::BoxArray<Dim> pieces =
-          mesh::BoxArray<Dim>::from_domain(box, maximum);
+      const mesh::BoxArray<Dim> pieces = mesh::BoxArray<Dim>::from_domain(box, maximum);
       boxes.insert(boxes.end(), pieces.boxes().begin(), pieces.boxes().end());
     }
     std::sort(boxes.begin(), boxes.end(), lexicographic_less_);
@@ -159,6 +161,8 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
         throw std::invalid_argument("Berger-Rigoutsos box sizes must be strictly positive");
       if (options.min_box_size[axis] > options.max_box_size[axis])
         throw std::invalid_argument("Berger-Rigoutsos minimum box size cannot exceed its maximum");
+      if (options.nesting_buffer[axis] < 0)
+        throw std::invalid_argument("Berger-Rigoutsos nesting buffer must be non-negative");
     }
     if (options.budget.shards == 0 || options.budget.recursion_nodes == 0 ||
         options.budget.cell_visits == 0 || options.budget.output_boxes == 0 ||
@@ -242,17 +246,29 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
     return left * right;
   }
 
-  static const TagMask<Dim>& owner_for_patch_(const std::vector<const TagMask<Dim>*>& shards,
-                                              const hierarchy::LevelLayoutIdentity<Dim>& source,
-                                              std::size_t global_patch) {
-    if (source.distribution_mode == mesh::DistributionMode::replicated)
-      return *shards.front();
-    const std::size_t rank = source.rank_space.linear_rank(source.owners.at(global_patch));
-    return *shards.at(rank);
-  }
+  struct TagUnion {
+    const std::vector<const TagMask<Dim>*>& shards;
+    const hierarchy::LevelLayoutIdentity<Dim>& source;
 
-  static Scan scan_(const TagMask<Dim>& mask, const Box<Dim>& region, Work& work) {
-    work.visit_cells(static_cast<std::size_t>(region.numPts()));
+    const hierarchy::LevelLayoutIdentity<Dim>& level_identity() const noexcept { return source; }
+
+    template <class Function>
+    void for_each_cell_in(const Box<Dim>& region, Function&& function) const {
+      const std::size_t count =
+          source.distribution_mode == mesh::DistributionMode::replicated ? 1 : shards.size();
+      for (std::size_t shard = 0; shard < count; ++shard)
+        shards[shard]->for_each_cell_in(region, function);
+    }
+
+    void account_cells(const Box<Dim>& region, Work& work) const {
+      // Sparse parent levels do not allocate or scan the holes in their bounding domain.
+      for (const Box<Dim>& patch : source.patches)
+        work.visit_cells(static_cast<std::size_t>(patch.intersect(region).numPts()));
+    }
+  };
+
+  static Scan scan_(const TagUnion& mask, const Box<Dim>& region, Work& work) {
+    mask.account_cells(region, work);
     Scan scan;
     bool found = false;
     mask.for_each_cell_in(region, [&](const Index<Dim>& index, bool tagged) {
@@ -272,13 +288,19 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
     return scan;
   }
 
-  static std::array<std::vector<std::int64_t>, Dim> signatures_(const TagMask<Dim>& mask,
+  static std::array<std::vector<std::int64_t>, Dim> signatures_(const TagUnion& mask,
                                                                 const Box<Dim>& region,
                                                                 Work& work) {
-    work.visit_cells(static_cast<std::size_t>(region.numPts()));
+    mask.account_cells(region, work);
     std::array<std::vector<std::int64_t>, Dim> signatures;
-    for (int axis = 0; axis < Dim; ++axis)
+    for (int axis = 0; axis < Dim; ++axis) {
+      // The canonical tag union may span several individually representable patches.
+      // Only a signature that is actually needed must fit the signed cut indices.
+      if (region.length(axis) > std::numeric_limits<int>::max())
+        throw std::length_error(
+            "Berger-Rigoutsos signature axis exceeds deterministic cut indexing");
       signatures[axis].assign(static_cast<std::size_t>(region.length(axis)), 0);
+    }
     mask.for_each_cell_in(region, [&](const Index<Dim>& index, bool tagged) {
       if (!tagged)
         return;
@@ -331,7 +353,56 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
     return {best, score};
   }
 
-  static void cluster_rec_(const TagMask<Dim>& mask, const Box<Dim>& candidate,
+  static bool nesting_covered_(const Box<Dim>& region,
+                               const hierarchy::LevelLayoutIdentity<Dim>& source,
+                               const ClusterOptions<Dim>& options, Work& work) {
+    std::vector<Box<Dim>> canonical{region};
+    for (int axis = 0; axis < Dim; ++axis) {
+      std::vector<Box<Dim>> next;
+      for (Box<Dim> piece : canonical) {
+        const std::int64_t lower =
+            static_cast<std::int64_t>(piece.lo[axis]) - options.nesting_buffer[axis];
+        const std::int64_t upper =
+            static_cast<std::int64_t>(piece.hi[axis]) + options.nesting_buffer[axis];
+        const std::int64_t domain_lower = source.domain.lo[axis];
+        const std::int64_t domain_upper = source.domain.hi[axis];
+        const std::int64_t length = source.domain.length(axis);
+        if (!options.periodic_axes[axis]) {
+          piece.lo[axis] = static_cast<int>(std::max(lower, domain_lower));
+          piece.hi[axis] = static_cast<int>(std::min(upper, domain_upper));
+        } else if (upper - lower + 1 >= length) {
+          piece.lo[axis] = source.domain.lo[axis];
+          piece.hi[axis] = source.domain.hi[axis];
+        } else {
+          const std::int64_t relative = lower - domain_lower;
+          const std::int64_t wrapped = domain_lower + ((relative % length) + length) % length;
+          const std::int64_t end = wrapped + upper - lower;
+          piece.lo[axis] = static_cast<int>(wrapped);
+          piece.hi[axis] = static_cast<int>(std::min(end, domain_upper));
+          if (end > domain_upper) {
+            Box<Dim> remainder = piece;
+            remainder.lo[axis] = source.domain.lo[axis];
+            remainder.hi[axis] = static_cast<int>(domain_lower + end - domain_upper - 1);
+            next.push_back(remainder);
+          }
+        }
+        next.push_back(piece);
+      }
+      canonical = std::move(next);
+    }
+    work.visit_cells(checked_product_(canonical.size(), source.patches.size()));
+    for (const Box<Dim>& required : canonical) {
+      mesh::ExactCellCount covered;
+      for (const Box<Dim>& parent : source.patches)
+        if (!covered.add(mesh::ExactCellCount::from_box(required.intersect(parent))))
+          throw std::overflow_error("Berger-Rigoutsos nesting coverage exceeds exact count");
+      if (covered != mesh::ExactCellCount::from_box(required))
+        return false;
+    }
+    return true;
+  }
+
+  static void cluster_rec_(const TagUnion& mask, const Box<Dim>& candidate,
                            const ClusterOptions<Dim>& options, Work& work,
                            std::vector<Box<Dim>>& output) {
     work.visit_node();
@@ -339,6 +410,25 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
     if (scan.tagged == 0)
       return;
     const Box<Dim>& region = scan.bounds;
+    if (!nesting_covered_(region, mask.level_identity(), options, work)) {
+      // Recluster unsupported candidates down to the parent-valid stencil domain. Using
+      // the complete patch union keeps valid refinement across parent patch seams.
+      int split_axis = 0;
+      for (int axis = 1; axis < Dim; ++axis)
+        if (region.length(axis) > region.length(split_axis))
+          split_axis = axis;
+      if (region.length(split_axis) == 1)
+        return;
+      Box<Dim> lower = region;
+      Box<Dim> upper = region;
+      const int cut = static_cast<int>(static_cast<std::int64_t>(region.lo[split_axis]) +
+                                       region.length(split_axis) / 2);
+      lower.hi[split_axis] = cut - 1;
+      upper.lo[split_axis] = cut;
+      cluster_rec_(mask, lower, options, work, output);
+      cluster_rec_(mask, upper, options, work, output);
+      return;
+    }
     const long double efficiency =
         static_cast<long double>(scan.tagged) / static_cast<long double>(region.numPts());
 

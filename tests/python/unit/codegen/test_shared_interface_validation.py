@@ -386,7 +386,7 @@ def test_validation_and_codegen_share_noncontiguous_stage_coherence_plan() -> No
         assert "ctx.neg_div_flux_default_into(" not in source
         assert "ctx.rhs_into(" not in source
         group = next(line for line in source.splitlines() if "ctx.rhs_group(" in line)
-        requests = re.findall(r"\{(\d+), &u\d+, &r\d+, \d+, 1\}", group)
+        requests = re.findall(r'\{(\d+), &u\d+, &r\d+, \d+, 1(?:, "[^"]+")?\}', group)
         assert requests == ["0", "1"]
 
 
@@ -415,7 +415,10 @@ def test_same_stage_repeated_blocks_form_two_deterministic_rhs_rounds() -> None:
         source = emit_cpp_program(program, target=target)
         groups = [line for line in source.splitlines() if "ctx.rhs_group(" in line]
         assert len(groups) == 2
-        assert [re.findall(r"\{(\d+), &u\d+, &r\d+, \d+, 1\}", group) for group in groups] == [
+        assert [
+            re.findall(r'\{(\d+), &u\d+, &r\d+, \d+, 1(?:, "[^"]+")?\}', group)
+            for group in groups
+        ] == [
             ["0", "1"],
             ["0", "1"],
         ]

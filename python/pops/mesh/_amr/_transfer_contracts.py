@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any
 
 from pops.identity import Identity, make_identity
-from .._layout_plan_contracts import LayoutHandle
+from .._layout_plan_contracts import LayoutHandle, LayoutPlan
 from ._contracts import canonical_handle
 from .hierarchy import CanonicalOptions, NestingRequirementSource
 
@@ -831,13 +831,46 @@ class ResolvedAMRTransfer:
     requirement_manifest: tuple[Identity, ...]
     entries: tuple[ResolvedTransfer, ...]
     nesting_requirement: NestingRequirementSource
+    # Only the zero-transition result carries this proof. Refined identities remain unchanged.
+    flat_physical_subjects: tuple[Any, ...] = ()
+    flat_layout_plan: LayoutPlan | None = field(default=None, repr=False)
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
         if not isinstance(self.layout_plan_id, str) or not self.layout_plan_id:
             raise TypeError("AMRTransfer.layout_plan_id must be non-empty")
+        if type(self.nesting_requirement) is not NestingRequirementSource \
+                or self.nesting_requirement.provider.kind != "amr_transfer_requirement":
+            raise TypeError("AMRTransfer.nesting_requirement must be a transfer source")
+        flat_subjects = tuple(self.flat_physical_subjects)
+        flat = self.flat_layout_plan is not None
+        if flat:
+            if type(self.flat_layout_plan) is not LayoutPlan \
+                    or self.flat_layout_plan.qualified_id != self.layout_plan_id:
+                raise ValueError("flat AMR transfer requires its exact LayoutPlan authority")
+            if not flat_subjects or self.requirement_manifest or self.entries:
+                raise ValueError("flat AMR transfer requires physical subjects and no transfer actions")
+            seen = set()
+            dimensions = set()
+            for subject in flat_subjects:
+                subject = _generic_handle(subject, where="flat AMR physical subject", kind="state")
+                if subject.qualified_id in seen:
+                    raise ValueError("duplicate flat AMR physical subject")
+                seen.add(subject.qualified_id)
+                layout = self.flat_layout_plan.normalized(self.flat_layout_plan.layout_for(subject))
+                if not layout.adaptive or layout.transition_ratios or len(layout.levels) != 1:
+                    raise ValueError("empty AMR transfer requires an authenticated flat adaptive layout")
+                dimensions.add(layout.geometry.dimension)
+            if len(dimensions) != 1:
+                raise ValueError("flat AMR physical subjects require one exact layout dimension")
+            dimension = dimensions.pop()
+            if self.nesting_requirement.minimum_buffer != (0,) * dimension \
+                    or self.nesting_requirement.minimum_lookahead != 0:
+                raise ValueError("flat AMR transfer nesting must have no inter-level requirement")
+        elif flat_subjects:
+            raise ValueError("flat AMR physical subjects require explicit layout authority")
         manifest = tuple(self.requirement_manifest)
-        if not manifest or any(
+        if (not manifest and not flat) or any(
             type(item) is not Identity or item.domain != "amr-transfer-requirement"
             for item in manifest
         ):
@@ -846,7 +879,7 @@ class ResolvedAMRTransfer:
         if len(manifest) != len({item.token for item in manifest}):
             raise ValueError("AMRTransfer requirement manifest contains duplicates")
         entries = tuple(self.entries)
-        if not entries or any(type(entry) is not ResolvedTransfer for entry in entries):
+        if (not entries and not flat) or any(type(entry) is not ResolvedTransfer for entry in entries):
             raise TypeError("AMRTransfer.entries must contain resolved transfers")
         entries = tuple(
             sorted(
@@ -861,24 +894,27 @@ class ResolvedAMRTransfer:
         )
         if covered != [item.token for item in manifest]:
             raise ValueError("AMRTransfer entries do not exactly cover requirement manifest")
-        if type(self.nesting_requirement) is not NestingRequirementSource \
-                or self.nesting_requirement.provider.kind != "amr_transfer_requirement":
-            raise TypeError("AMRTransfer.nesting_requirement must be a transfer source")
         object.__setattr__(self, "requirement_manifest", manifest)
         object.__setattr__(self, "entries", entries)
+        object.__setattr__(self, "flat_physical_subjects", tuple(sorted(
+            flat_subjects, key=lambda subject: subject.qualified_id)))
 
     @property
     def identity(self) -> Identity:
         return make_identity("amr-transfer", self.canonical_identity())
 
     def canonical_identity(self) -> dict[str, Any]:
-        return {
+        data = {
             "schema_version": 1,
             "layout_plan_id": self.layout_plan_id,
             "requirement_manifest": [item.to_data() for item in self.requirement_manifest],
             "entries": [entry.to_data() for entry in self.entries],
             "nesting_requirement": self.nesting_requirement.canonical_identity(),
         }
+        if self.flat_layout_plan is not None:
+            data.update(schema_version=2, flat_physical_subjects=[
+                subject.canonical_identity() for subject in self.flat_physical_subjects])
+        return data
 
     def for_subject(self, subject: Any, operation: TransferOperation) -> ResolvedTransfer:
         subject_id = _generic_handle(subject, where="ResolvedAMRTransfer.for_subject").qualified_id

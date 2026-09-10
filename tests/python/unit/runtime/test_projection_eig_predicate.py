@@ -54,7 +54,9 @@ from types import SimpleNamespace
 from pops._ir.expr import Const, Var
 from pops._ir.ops import abs_, eig_all_real
 from pops._ir.visitors import _key
-from pops.physics._model import HyperbolicModel
+from pops.codegen.module_lowering import lower_and_validate
+from pops.model import ProviderPack
+from pops.physics._facade import Model
 from tests.python.support.requirements import repo_include
 
 dsl = SimpleNamespace(
@@ -63,7 +65,7 @@ dsl = SimpleNamespace(
     abs_=abs_,
     eig_all_real=eig_all_real,
     _key=_key,
-    HyperbolicModel=HyperbolicModel,
+    Model=Model,
 )
 
 INCLUDE = repo_include()
@@ -71,6 +73,14 @@ TOL_EVAL = 1e-12
 TOL_CPP = 1e-10
 
 fails = 0
+
+
+def _emit_brick(model, **options):
+    """Resolve the canonical model and exact provider packs before brick emission."""
+    emitter, source_module = lower_and_validate(model, facade=model)
+    assert source_module is model.module
+    assert type(emitter._m._auxiliary_provider_pack) is ProviderPack
+    return emitter._m.emit_cpp_brick(**options)
 
 
 def chk(cond, label):
@@ -176,12 +186,12 @@ def build_pred_model(tag, im_tol=0.5, target=9.0):
     """Modele jouet 3 variables. Matrice [[q0,-q1],[q1,q0]] (VP q0 +- i|q1|). Projection branchless :
     si le spectre N'EST PAS reel (paire complexe), mettre q2 a une cible ; sinon q2 inchange.
     complexe = 1 - eig_all_real ; q2 <- q2*eig_all_real + cible*(1 - eig_all_real)."""
-    m = dsl.HyperbolicModel("toypred_" + tag)
+    m = dsl.Model("toypred_" + tag)
     q0, q1, q2 = m.conservative_vars("q0", "q1", "q2")
-    m.set_flux(x=[q0, q1, q2], y=[0.5 * q0, 0.5 * q1, 0.5 * q2])
-    m.set_eigenvalues(x=[dsl.Const(1.0)], y=[dsl.Const(0.5)])
-    m.set_primitive_state("q0", "q1", "q2")
-    m.set_conservative_from([q0, q1, q2])
+    m.flux(x=[q0, q1, q2], y=[0.5 * q0, 0.5 * q1, 0.5 * q2])
+    m.eigenvalues(x=[dsl.Const(1.0)], y=[dsl.Const(0.5)])
+    m.primitive_vars(q0=q0, q1=q1, q2=q2)
+    m.conservative_from([q0, q1, q2])
     is_real = dsl.eig_all_real([[q0, -q1], [q1, q0]], im_tol=im_tol)
     m.projection([q0, q1, q2 * is_real + target * (1.0 - is_real)])
     return m, im_tol, target
@@ -190,7 +200,7 @@ def build_pred_model(tag, im_tol=0.5, target=9.0):
 def test_codegen():
     print("== (3) codegen : foncteur all_real abaisse sur EigBounds::all_real (PAS .max_im) ==")
     m, im_tol, _ = build_pred_model("cg")
-    src = m.emit_cpp_brick(name="ToyPredCg")
+    src = _emit_brick(m, name="ToyPredCg")
     chk("#include <pops/numerics/linalg/dense_eig.hpp>" in src, "brique inclut dense_eig.hpp")
     chk(
         "static POPS_HD pops::Real pops_eig_all_real_2x2(" in src,
@@ -224,14 +234,14 @@ def test_cse_im_tol():
 
 def test_additive():
     print("== (6) extension ADDITIVE : projection SANS predicat inchangee (ADC-177) ==")
-    m = dsl.HyperbolicModel("toyplain_pred")
+    m = dsl.Model("toyplain_pred")
     q0, q1 = m.conservative_vars("q0", "q1")
-    m.set_flux(x=[q0, q1], y=[0.5 * q0, 0.5 * q1])
-    m.set_eigenvalues(x=[dsl.Const(1.0)], y=[dsl.Const(0.5)])
-    m.set_primitive_state("q0", "q1")
-    m.set_conservative_from([q0, q1])
+    m.flux(x=[q0, q1], y=[0.5 * q0, 0.5 * q1])
+    m.eigenvalues(x=[dsl.Const(1.0)], y=[dsl.Const(0.5)])
+    m.primitive_vars(q0=q0, q1=q1)
+    m.conservative_from([q0, q1])
     m.projection([(q0 + dsl.abs_(q0)) / 2.0, q1])  # clamp ADC-177, aucun predicat
-    src = m.emit_cpp_brick(name="ToyPlainPred")
+    src = _emit_brick(m, name="ToyPlainPred")
     chk("dense_eig.hpp" not in src, "aucun include dense_eig sans predicat")
     chk("pops_eig_" not in src, "aucun foncteur eig sans predicat (additif)")
 
@@ -254,7 +264,8 @@ def test_fallback_conservative(cxx, tmp):
         )
     exe = os.path.join(tmp, "fallback_main")
     cp = subprocess.run(
-        [cxx, "-std=c++20", "-I", INCLUDE, main, "-o", exe], capture_output=True, text=True
+        [cxx, "-std=c++20", "-DPOPS_NATIVE_DIM=2", "-I", INCLUDE, main, "-o", exe],
+        capture_output=True, text=True
     )
     if cp.returncode != 0:
         chk(False, "compilation du test de repli (voir stderr)")
@@ -275,7 +286,7 @@ def test_cpp_brick_vs_numpy(cxx, tmp):
     m, im_tol, target = build_pred_model("cpp", im_tol=0.5, target=9.0)
     hpp = os.path.join(tmp, "pred_brick.hpp")
     with open(hpp, "w") as f:
-        f.write(m.emit_cpp_brick(name="ToyPredCpp"))
+        f.write(_emit_brick(m, name="ToyPredCpp"))
 
     rng = np.random.default_rng(3620)
     n = 64
@@ -293,7 +304,7 @@ def test_cpp_brick_vs_numpy(cxx, tmp):
             '#include "pred_brick.hpp"\n'
             "int main(int argc, char** argv) {\n"
             "  pops_generated::ToyPredCpp m;\n"
-            "  pops::Aux a{};\n"
+            "  pops::ProviderValues<0> a{};\n"
             '  std::FILE* fp = std::fopen(argv[1], "w");\n'
             "  for (int i = 2; i < argc; i += 3) {\n"
             "    pops::StateVec<3> U{atof(argv[i]), atof(argv[i+1]), atof(argv[i+2])};\n"
@@ -305,8 +316,13 @@ def test_cpp_brick_vs_numpy(cxx, tmp):
             "}\n"
         )
     exe = os.path.join(tmp, "pred_main")
+    from pops.codegen.toolchain import _native_kokkos_include_dirs
+    kokkos_includes = [flag for directory in _native_kokkos_include_dirs()
+                       for flag in ("-I", directory)]
     cp = subprocess.run(
-        [cxx, "-std=c++20", "-I", INCLUDE, main, "-o", exe], capture_output=True, text=True
+        [cxx, "-std=c++20", "-DPOPS_NATIVE_DIM=2", *kokkos_includes,
+         "-I", INCLUDE, main, "-o", exe],
+        capture_output=True, text=True
     )
     if cp.returncode != 0:
         chk(False, "compilation de la brique generee (voir stderr)")

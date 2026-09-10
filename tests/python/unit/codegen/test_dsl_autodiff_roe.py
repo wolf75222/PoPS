@@ -207,9 +207,9 @@ L, R = left, right
 
 
 def iso_bare():
-    """Build every exact flux axis before exercising the two-state Roe guards."""
+    """Keep one authoring facade for all choices before native lowering."""
     board, rho, mx, my = iso_model("iso_rej")
-    return board, lower_model(board), rho, mx, my
+    return board, board._dsl, rho, mx, my
 
 
 m0_board, m0, rho0, mx0, my0 = iso_bare()
@@ -282,8 +282,6 @@ def iso_roe_hand(name):
         },
         waves={X_AXIS: (u - c0, u, u + c0), Y_AXIS: (v - c0, v, v + c0)},
     )
-    m = lower_model(m)
-
     def dissipation(norm, tang):
         """Lignes (densite, normale, tangentielle) de d = |A_roe| dU, moyennes de Roe explicites."""
         sqL, sqR = L(sqrt(rho)), R(sqrt(rho))
@@ -309,10 +307,9 @@ def iso_roe_hand(name):
 
     dDx, dNx, dTx = dissipation(u, v)  # dir x : normale = u (indice 1), tangentielle = v (indice 2)
     dDy, dNy, dTy = dissipation(v, u)  # dir y : normale = v (indice 2), tangentielle = u (indice 1)
-    m.roe_dissipation(x=[dDx, dNx, dTx], y=[dDy, dTy, dNy])
-    # ``Model.compile`` owns the one canonical Module/provider-pack binding for
-    # native emission; lower_model selected only the executable emitter above.
-    return m
+    m._dsl.roe_dissipation(x=[dDx, dNx, dTx], y=[dDy, dTy, dNy])
+    # Bind the complete authored provider once, after every formula is present.
+    return lower_model(m)
 
 
 def iso_roe_roles(name):

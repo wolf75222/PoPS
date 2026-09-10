@@ -734,6 +734,7 @@ class GhostProducerPlan:
         # NumericalFlux component by interface uniqueness.
         result["interfaces"] = compiled["interfaces"]
         result["interface_endpoints"] = compiled["interface_endpoints"]
+        result["omitted_interface_faces"] = compiled["omitted_interface_faces"]
         result["interface_component_bindings"] = compiled[
             "interface_component_bindings"]
         result["periodic_identifications"] = compiled["periodic_identifications"]

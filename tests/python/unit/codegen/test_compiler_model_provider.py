@@ -78,6 +78,7 @@ def test_third_party_provider_enters_resolution_and_lowering_through_public_prot
 
     assert isinstance(provider, CompilerLowerable)
     assert _resolve_problem_model(provider) is provider
+    assert require_compiler_lowering(provider).owns_emitter is False
     emit_model, source_module = lower_and_validate(provider)
     assert emit_model is provider._delegate
     assert source_module is provider._delegate.module
@@ -101,7 +102,20 @@ def test_module_is_a_real_compiler_provider_adapter():
     lowering = require_compiler_lowering(module)
     assert lowering.source_module is module
     assert lowering.facade is module
+    assert lowering.owns_emitter is True
     assert _resolve_problem_model(module) is module
+
+
+def test_board_provider_owns_only_its_fresh_single_state_emitter():
+    from tests.python.unit.numerics.test_discretization_plan import (
+        _declarations,
+        _multistate_declarations,
+    )
+
+    _, single, *_ = _declarations()
+    multiple, *_ = _multistate_declarations()
+    assert require_compiler_lowering(single).owns_emitter is True
+    assert require_compiler_lowering(multiple).owns_emitter is False
 
 
 def test_frozen_module_remains_the_canonical_compiler_ir():
@@ -113,6 +127,23 @@ def test_frozen_module_remains_the_canonical_compiler_ir():
     lowering = require_compiler_lowering(model)
     assert isinstance(lowering.source_module, Module)
     assert lowering.source_module is module
+    assert lowering.owns_emitter is False
+
+
+def test_compiler_emitter_ownership_promise_is_an_exact_opt_in_bool():
+    module = Module("emitter-ownership")
+    default = CompilerLowering(
+        emit_model=_CheckEmitter(), source_module=module, facade=object()
+    )
+    assert default.owns_emitter is False
+    for invalid in (0, 1, None, "true"):
+        with pytest.raises(TypeError, match="owns_emitter must be an exact bool"):
+            CompilerLowering(
+                emit_model=_CheckEmitter(),
+                source_module=module,
+                facade=object(),
+                owns_emitter=invalid,
+            )
 
 
 def test_facade_and_formula_carrier_share_one_minimal_flux_provider_pack():

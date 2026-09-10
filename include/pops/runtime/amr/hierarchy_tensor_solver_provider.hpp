@@ -231,6 +231,10 @@ class PreparedHierarchyTensorSolver {
   virtual int level_count() const noexcept = 0;
   virtual field_type& assembly_target(std::string_view field_slot_identity, int level) = 0;
   virtual field_type& solution(int level) = 0;
+  /// Exact active-domain mask for observations; providers must explicitly supply coverage.
+  virtual const field_type& active_cell_mask(int) const {
+    throw std::logic_error("hierarchy solver has no authenticated observation coverage");
+  }
   virtual void stage_initial_guess(int level, const field_type* guess) = 0;
 
   FieldView<Real, Dim> assembly_target_view(std::string_view field_slot_identity, int level,

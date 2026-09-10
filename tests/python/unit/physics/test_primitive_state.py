@@ -207,14 +207,20 @@ def test_isothermal_primitive_roundtrip_and_step():
 
 
 def test_scalar_conversion_is_identity():
+    from pops.physics._facade import Model as NativeModel
+
     rho, _, _, _ = _fields()
+    model = NativeModel("scalar_conversion_identity")
+    (density,) = model.conservative_vars("rho", roles=(Density(),))
+    model.flux(x=[0.3 * density], y=[0.2 * density])
+    model.eigenvalues(x=[0.3 + 0.0 * density], y=[0.2 + 0.0 * density])
+    model.primitive_vars(density)
+    model.conservative_from([density])
     runtime = _runtime(
         "tracer",
-        engine.Model(
-            state=engine.Scalar(),
-            transport=engine.ExB(),
-            source=engine.NoSource(),
-            elliptic=engine.ChargeDensity(charge=1.0),
+        model.compile(
+            backend="production", target="system", name="scalar_conversion_identity",
+            consumer_owner_qid="tests.primitive-state.scalar",
         ),
     )
     primitive, = runtime.variable_names("tracer", "primitive")
@@ -296,7 +302,13 @@ def test_production_model_primitive_roundtrip_and_step():
     assert component.backend == "production"
     assert component.prim_names == ("rho", "u", "v", "p")
 
-    simulation = pops.bind(artifact, initial_state={"gas": initial.copy()})
+    from tests.python.support.native_execution_context import artifact_execution_context
+
+    simulation = pops.bind(
+        artifact,
+        initial_state={"gas": initial.copy()},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     bound = np.asarray(simulation.state_global("gas"), dtype=np.float64).reshape(initial.shape)
     bound_rho = bound[0]
     bound_u = bound[1] / bound_rho

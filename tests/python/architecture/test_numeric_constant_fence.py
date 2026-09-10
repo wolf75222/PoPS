@@ -54,22 +54,30 @@ _SCANNED_HEADERS = (
 
 # inline constexpr <numeric type> kName = ... ;  (the numeric-typed defaults; skips const char*, etc.)
 _CONSTEXPR_RE = re.compile(
-    r"inline\s+constexpr\s+(?:Real|int|double|float|bool|std::size_t|size_t|unsigned)\s+"
-    r"(k[A-Za-z0-9_]+)\s*=")
+    r"inline\s+constexpr\s+(Real|int|double|float|bool|std::size_t|size_t|unsigned)\s+"
+    r"(k[A-Za-z0-9_]+)\s*=\s*([^;]+);", re.DOTALL)
+
+
+def _header_source(rel: str) -> str:
+    path = _ROOT / rel
+    assert path.exists(), "scanned header missing: %s" % path
+    return re.sub(r"/\*.*?\*/|//[^\n]*", "", path.read_text(), flags=re.DOTALL)
+
+
+def _numeric_declarations(source: str):
+    for match in _CONSTEXPR_RE.finditer(source):
+        kind, name, value = match.groups()
+        # A compile-time type trait selects a precision; it is not a numerical default.
+        # Literal bool policies, including both FFT options, remain classified.
+        if kind == "bool" and re.fullmatch(r"std::is_same_v\s*<[^<>]+>", value.strip()):
+            continue
+        yield name, value.strip()
 
 
 def _scan_constants() -> set:
     names = set()
     for rel in _SCANNED_HEADERS:
-        path = _ROOT / rel
-        assert path.exists(), "scanned header missing: %s" % path
-        for line in path.read_text().splitlines():
-            stripped = line.strip()
-            if stripped.startswith("//") or stripped.startswith("*"):
-                continue  # a commented-out declaration is not a live constant
-            m = _CONSTEXPR_RE.search(line)
-            if m:
-                names.add(m.group(1))
+        names.update(name for name, _value in _numeric_declarations(_header_source(rel)))
     return names
 
 
@@ -118,13 +126,15 @@ def _load_static_report() -> dict:
     return report
 
 
-_CONSTEXPR_VALUE_RE = re.compile(
-    r"inline\s+constexpr\s+(?:Real|int|double|float|bool|std::size_t|size_t|unsigned)\s+"
-    r"(k[A-Za-z0-9_]+)\s*=\s*(.+?);")
-
-
-def _parse_cpp_value(rhs: str):
+def _parse_cpp_value(rhs: str, references=None):
     rhs = rhs.strip()
+    if references is not None and rhs in references:
+        return references[rhs]
+    precision_choice = re.fullmatch(r"kRealIsBinary64\s*\?\s*(.*?)\s*:\s*(.*)", rhs)
+    if precision_choice:
+        # _static_report is the source-only binary64 report; native float32 reports are
+        # checked separately against their executed specialization.
+        return _parse_cpp_value(precision_choice.group(1), references)
     m = re.fullmatch(r"Real\((.*)\)", rhs)
     if m:
         rhs = m.group(1).strip()
@@ -141,16 +151,28 @@ def _parse_cpp_value(rhs: str):
 
 
 def _scan_constant_values() -> dict:
+    source = "\n".join(_header_source(rel) for rel in _SCANNED_HEADERS)
+    binary64 = re.search(r"struct\s+PrecisionDefaults<double>\s*\{(.*?)\};", source, re.DOTALL)
+    assert binary64 is not None, "binary64 numerical default specialization is missing"
+    references = {
+        "numerical_defaults_detail::PrecisionDefaults<Real>::" + name: _parse_cpp_value(value)
+        for name, value in re.findall(
+            r"static\s+constexpr\s+double\s+(\w+)\s*=\s*([^;]+);", binary64.group(1))
+    }
     values = {}
-    for rel in _SCANNED_HEADERS:
-        for line in (_ROOT / rel).read_text().splitlines():
-            stripped = line.strip()
-            if stripped.startswith("//") or stripped.startswith("*"):
-                continue
-            m = _CONSTEXPR_VALUE_RE.search(line)
-            if m:
-                values[m.group(1)] = _parse_cpp_value(m.group(2))
+    for name, value in _numeric_declarations(source):
+        values[name] = _parse_cpp_value(value, references)
     return values
+
+
+def test_scanner_distinguishes_type_traits_from_literal_boolean_policies():
+    declarations = dict(_numeric_declarations(
+        "inline constexpr bool kPrecision = std::is_same_v<Real, double>;\n"
+        "inline constexpr bool kPolicy = false;\n"
+        "inline constexpr Real kTolerance =\n Real(1e-8);"))
+    assert declarations == {"kPolicy": "false", "kTolerance": "Real(1e-8)"}
+    assert _parse_cpp_value(declarations["kPolicy"]) is False
+    assert _parse_cpp_value(declarations["kTolerance"]) == 1e-8
 
 
 # Report (section, key) -> the scanned constant whose value it must equal. Compile-time-ranked AMR

@@ -13,8 +13,12 @@ Imports only the standard library so it can be exercised without the compiled
 from __future__ import annotations
 
 from collections.abc import Mapping
+import math
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pops._ir.quantity import PhysicalSupport
 
 
 def _freeze_metadata(value: Any) -> Any:
@@ -45,8 +49,9 @@ def _semantic_tag(value: Any, where: str) -> str:
     return value
 
 
-def _component_units(components: tuple[str, ...], units: Any) -> tuple[None, ...]:
-    """Accept only the explicit unitless representation until a typed unit protocol exists."""
+def _component_units(components: tuple[str, ...], units: Any) -> tuple[Any, ...]:
+    """Keep unknown dimensions distinct from an explicitly dimensionless quantity."""
+    from pops._ir.quantity import PhysicalDimension
     if units is None:
         return (None,) * len(components)
     if isinstance(units, Mapping):
@@ -62,12 +67,11 @@ def _component_units(components: tuple[str, ...], units: Any) -> tuple[None, ...
         values = tuple(units)
         if len(values) != len(components):
             raise ValueError("Space units must have one entry per component")
-    if any(value is not None for value in values):
-        raise TypeError(
-            "Space units are unsupported until a typed unit protocol participates in "
-            "validation, identity, lowering, and runtime reports"
-        )
-    return values
+    normalized = tuple(PhysicalDimension.from_data(dict(value))
+                       if isinstance(value, Mapping) else value for value in values)
+    if any(value is not None and not isinstance(value, PhysicalDimension) for value in normalized):
+        raise TypeError("Space units require PhysicalDimension values; None means unknown")
+    return normalized
 
 
 class _ImmutableTypeValue:
@@ -98,9 +102,13 @@ class Space(_ImmutableTypeValue):
     layout: str
     representation: str
     centering: str
-    units: tuple[None, ...]
+    units: tuple[Any, ...]
     frame: str
     clock: str
+    support: PhysicalSupport | None
+    sampling: str
+    value_shape: tuple[int, ...]
+    domain: str
 
     def __init__(
         self,
@@ -113,6 +121,10 @@ class Space(_ImmutableTypeValue):
         units: Any = None,
         frame: Any = "model",
         clock: Any = "simulation",
+        support: Any = None,
+        sampling: Any = "unspecified",
+        value_shape: Any = None,
+        domain: Any = "real",
     ) -> None:
         if not isinstance(name, str) or not name:
             raise ValueError("Space name must be a non-empty string")
@@ -133,6 +145,22 @@ class Space(_ImmutableTypeValue):
         object.__setattr__(self, "units", _component_units(normalized, units))
         object.__setattr__(self, "frame", _semantic_tag(frame, "Space frame"))
         object.__setattr__(self, "clock", _semantic_tag(clock, "Space clock"))
+        from pops._ir.quantity import PhysicalSupport
+        if isinstance(support, Mapping):
+            support = PhysicalSupport.from_data(dict(support))
+        if support is not None and not isinstance(support, PhysicalSupport):
+            raise TypeError("Space support must be PhysicalSupport or None (unknown)")
+        shape = ((len(normalized),) if normalized else ()) if value_shape is None else tuple(value_shape)
+        if any(isinstance(n, bool) or not isinstance(n, int) or n < 1 for n in shape):
+            raise TypeError("Space value_shape requires positive integer extents")
+        if shape and math.prod(shape) != len(normalized):
+            raise ValueError("Space value_shape must cover exactly its declared components")
+        if value_shape is not None and not shape and len(normalized) > 1:
+            raise ValueError("a scalar value_shape requires exactly one component")
+        object.__setattr__(self, "support", support)
+        object.__setattr__(self, "sampling", _semantic_tag(sampling, "Space sampling"))
+        object.__setattr__(self, "value_shape", shape)
+        object.__setattr__(self, "domain", _semantic_tag(domain, "Space domain"))
 
     def _key(self) -> Any:
         return (
@@ -145,6 +173,7 @@ class Space(_ImmutableTypeValue):
             self.units,
             self.frame,
             self.clock,
+            self.support, self.sampling, self.value_shape, self.domain,
         )
 
     def __eq__(self, other: Any) -> bool:
@@ -167,9 +196,13 @@ class Space(_ImmutableTypeValue):
             "layout": self.layout,
             "representation": self.representation,
             "centering": self.centering,
-            "units": list(self.units),
+            "units": [None if value is None else value.to_data() for value in self.units],
             "frame": self.frame,
             "clock": self.clock,
+            "support": None if self.support is None else self.support.to_data(),
+            "sampling": self.sampling,
+            "value_shape": list(self.value_shape),
+            "domain": self.domain,
         }
 
     # Operator-first signature sugar: ``U >> Fields`` and ``(U, Fields) >> Rate(U)``.
@@ -204,7 +237,9 @@ class StateSpace(Space):
     def __init__(self, name: Any = "U", components: Any = (), roles: Any = None, layout: str = "cell",
                  storage: str = "multifab", *, representation: Any = "conservative",
                  centering: Any = None, units: Any = None, frame: Any = "model",
-                 clock: Any = "simulation") -> None:
+                 clock: Any = "simulation", support: Any = None,
+                 sampling: Any = "unspecified", value_shape: Any = None,
+                 domain: Any = "real") -> None:
         super().__init__(
             name,
             components,
@@ -213,7 +248,8 @@ class StateSpace(Space):
             centering=centering,
             units=units,
             frame=frame,
-            clock=clock,
+            clock=clock, support=support, sampling=sampling,
+            value_shape=value_shape, domain=domain,
         )
         object.__setattr__(self, "roles", _freeze_metadata(roles or {}))
         if not isinstance(storage, str) or not storage:
@@ -268,7 +304,8 @@ class RateSpace(Space):
             centering=base.centering,
             units=base.units,
             frame=base.frame,
-            clock=base.clock,
+            clock=base.clock, support=base.support, sampling=base.sampling,
+            value_shape=base.value_shape if base.components else None, domain=base.domain,
         )
         object.__setattr__(self, "base_name", base_name)
         object.__setattr__(self, "base_space", base)

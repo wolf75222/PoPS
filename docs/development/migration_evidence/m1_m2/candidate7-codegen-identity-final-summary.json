@@ -1,0 +1,85 @@
+{
+  "source_commit": "1c73f30e481232f4dbb355885b6bf1280aff5047",
+  "production_commit": "bd583faf196f3c1faeedec489e04d24e959ed00b",
+  "source_root": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification-codegen-final",
+  "source_clean": true,
+  "production_diff_vs_wheel_source": [],
+  "python_command": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/bin/python",
+  "environment": {
+    "PYTHONPATH": "unset",
+    "POPS_NATIVE_DIM": "2",
+    "REQUIRE_NATIVE_TESTS": "1",
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "Kokkos_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907",
+    "POPS_KOKKOS_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907"
+  },
+  "selector": {
+    "directories": [
+      "tests/python/unit/codegen",
+      "tests/python/unit/identity"
+    ],
+    "marker": "not process_isolated",
+    "deselect": [
+      "tests/python/unit/codegen/test_composite_tensor_fac_provider.py::test_header_only_hierarchy_extension_compiles_its_own_generic_provider_identity"
+    ],
+    "maxfail": 5
+  },
+  "results": {
+    "exit_code": 0,
+    "passed": 1107,
+    "failed": 0,
+    "deselected": 30,
+    "warnings": 2,
+    "elapsed_seconds": 725.41
+  },
+  "junit_case_count": 1107,
+  "properties": [
+    {
+      "test": "tests.python.unit.codegen.test_program_source_kernel_reuse::test_native_shared_source_helper_preserves_two_block_updates[False]",
+      "passed": true,
+      "properties": {
+        "compile_elapsed_seconds": "2.003255542003899",
+        "program_binary_bytes": "198416",
+        "source_implementation_count": "1",
+        "source_evaluations_per_step": "2"
+      }
+    },
+    {
+      "test": "tests.python.unit.codegen.test_program_source_kernel_reuse::test_native_shared_source_helper_preserves_two_block_updates[True]",
+      "passed": true,
+      "properties": {
+        "compile_elapsed_seconds": "3.327155250008218",
+        "program_binary_bytes": "235328",
+        "source_implementation_count": "2",
+        "source_evaluations_per_step": "2"
+      }
+    }
+  ],
+  "native_variants": [
+    {
+      "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=e5962c24087c9ed408fe23a030a1cbe0c7139c9c979b7dd6cdc5af614b159ae2;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=3fcb294ba5c1a4eb24d6db2fa5222fa6b8420176ffa10b9c985f2b6eec96e654;dim=2",
+      "dimension": 2,
+      "extension": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+      "has_kokkos": true,
+      "has_mpi": true,
+      "member": "pops/_native/dim2/_pops.cpython-312-darwin.so",
+      "sha256": "d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518",
+      "version": "1.0.0"
+    }
+  ],
+  "wheel_sha256": "4bc8fda4395f510f9e56710dbce6e769030730d48752ef67fc0eaa1c2ac49792",
+  "proof_file": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/m2-build-seventh-proof.json",
+  "proof_sha256": "233170261eee8cbcc82b1a77242a114432841c2e927177857150b7c12b87246f",
+  "test_hashes": {
+    "tests/python/unit/codegen/test_ir_strict_scalar_boundaries.py": "198fb5dda76f598b7c541ead213e54ef3e44ccfd480694b72f6dd3dfecec85c7",
+    "tests/python/unit/codegen/test_program_source_kernel_reuse.py": "16ac9d19a8708ffff255269995c2ddc9fdbbf6356c47c4f12444eb1353d42817"
+  },
+  "junit": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-codegen-identity-final.xml",
+  "log": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-codegen-identity-final.log",
+  "limitations": [
+    "Excludes only process_isolated-marked cases and the original unsupported generic hierarchy header node.",
+    "Two pytest warnings concern xunit2 record_property compatibility; recorded properties are present in XML.",
+    "Compilation timings are observed compile API wall times from this run, not an isolated cold-build benchmark or a performance-gain claim."
+  ]
+}

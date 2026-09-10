@@ -190,23 +190,27 @@ print("== (C1) AMR mono-bloc : transport + borne globale + last_dt_bound ==")
 
 def build_amr(n=24, *, second_block=False):
     amr = AmrSystem(_amr_config_2d(n))
-    if second_block:
-        amr.set_temporal_relations([2], [1], ["integral_only"])
+    from pops.runtime._modelspec_compile import compile_modelspec_package
+    packages = {}
+    for name in (("ions", "e2") if second_block else ("ions",)):
+        packages[name] = compile_modelspec_package(
+            engine.Model(
+                state=engine.FluidState("isothermal", cs2=0.5),
+                transport=engine.IsothermalFlux(), source=engine.NoSource(),
+                elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0),
+            ), name=name, target="amr_system",
+        )
+    from pops.runtime._amr_package_lane import ensure_native_block_state_route
+    for name, package in packages.items():
+        ensure_native_block_state_route(amr._s, name, package)
+    amr.set_temporal_relations([2], [1], ["integral_only"])
     amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-    amr.add_equation("ions", engine.Model(
-                         state=engine.FluidState("isothermal", cs2=0.5),
-                         transport=engine.IsothermalFlux(),
-                         source=engine.NoSource(),
-                         elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0)),
+    amr.add_equation("ions", packages["ions"],
                      spatial=engine.Spatial(limiter=Minmod()),
                      time=engine.Explicit())
     amr.set_density("ions", gaussian(n))
     if second_block:
-        amr.add_equation("e2", engine.Model(
-                             state=engine.FluidState("isothermal", cs2=0.5),
-                             transport=engine.IsothermalFlux(),
-                             source=engine.NoSource(),
-                             elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0)),
+        amr.add_equation("e2", packages["e2"],
                          spatial=engine.Spatial(limiter=Minmod()),
                          time=engine.Explicit())
         amr.set_density("e2", gaussian(n))
@@ -216,6 +220,7 @@ def build_amr(n=24, *, second_block=False):
 
 amr = build_amr()
 chk(amr.last_dt_bound() == "", "AMR avant tout pas : last_dt_bound() == ''")
+amr.mark_bound()
 dta = amr.step_cfl(0.4)
 chk(np.isfinite(dta) and dta > 0, f"AMR dt transport fini ({dta:.3e})")
 chk(amr.last_dt_bound() == "transport:ions",
@@ -223,6 +228,7 @@ chk(amr.last_dt_bound() == "transport:ions",
 amr2 = build_amr()
 cap_amr = 0.5 * dta
 amr2.add_dt_bound("cap_amr", lambda: cap_amr)
+amr2.mark_bound()
 dta2 = amr2.step_cfl(0.4)
 chk(abs(dta2 - cap_amr) < 1e-15, f"AMR dt == borne globale ({dta2:.3e})")
 chk(amr2.last_dt_bound() == "global:cap_amr",
@@ -231,6 +237,7 @@ chk(amr2.last_dt_bound() == "global:cap_amr",
 print("== (C2) AMR multi-blocs : borne globale via AmrRuntime ==")
 amr3 = build_amr(second_block=True)  # 2e bloc -> moteur multi-blocs (AmrRuntime)
 amr3.add_dt_bound("cap_multi", lambda: cap_amr)
+amr3.mark_bound()
 dta3 = amr3.step_cfl(0.4)
 chk(dta3 <= cap_amr + 1e-15, f"AMR multi-blocs dt <= borne ({dta3:.3e})")
 chk(amr3.last_dt_bound() == "global:cap_multi",
@@ -311,11 +318,13 @@ try:
     cm_dt_amr = scalar_model("scal_dt_amr", stab_dt=1e-4).compile(
         os.path.join(tmp, "scal_dt_amr.so"), INCLUDE, backend="production", target="amr_system")
     amr_dsl = AmrSystem(_amr_config_2d(16))
+    amr_dsl.set_temporal_relations([2], [1], ["integral_only"])
     amr_dsl.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     amr_dsl.add_equation("s", model=cm_dt_amr, spatial=engine.Spatial(limiter=Minmod()),
                          time=engine.Explicit())
     install_forward_euler_program(amr_dsl)
     amr_dsl.set_density("s", gaussian(16))
+    amr_dsl.mark_bound()
     dt_amr = amr_dsl.step_cfl(cfl)
     chk(abs(dt_amr - 1e-4) < 1e-12, f"AMR DSL dt = 1e-4 ({dt_amr:.3e})")
     chk(amr_dsl.last_dt_bound() == "stability_dt:s",

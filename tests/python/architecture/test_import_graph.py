@@ -12,7 +12,7 @@ The sub-packages form a directed acyclic dependency stack:
     physics   -> _ir, identity, model, problem
     time      -> _ir, identity, model, params
     initial   -> identity, model                 (layout-plan consumer protocol)
-    mesh      -> analytic, domain, frames, identity, model, params
+    mesh      -> _ir, analytic, domain, frames, identity, model, params
     amr       -> _ir, identity, mesh, model, time
     layouts   -> amr, mesh
     boundary  -> _ir, analytic, domain, identity, model, representations
@@ -60,7 +60,9 @@ ALLOWED = {
     "physics": {"_ir", "identity", "model", "problem"},
     "time": {"_ir", "identity", "model", "params"},
     "initial": {"identity", "model"},
-    "mesh": {"analytic", "domain", "frames", "identity", "model", "params"},
+    # Physical maps consume the same immutable support/unit leaves as their quantity ports.
+    # The IR remains a lower layer; compiler and runtime dependencies are still forbidden.
+    "mesh": {"_ir", "analytic", "domain", "frames", "identity", "model", "params"},
     "amr": {"_ir", "identity", "mesh", "model", "time"},
     "layouts": {"amr", "mesh"},
     "boundary": {"_ir", "analytic", "domain", "identity", "model", "representations"},

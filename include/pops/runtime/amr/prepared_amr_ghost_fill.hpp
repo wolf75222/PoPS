@@ -355,8 +355,7 @@ class PreparedAmrGhostFill {
               ::pops::amr::transfer::TransferKind::CoarseFineGhostInterpolation &&
           preparation.interpolation_kind !=
               ::pops::amr::transfer::TransferKind::FifthOrderCoarseFineGhostInterpolation &&
-          preparation.interpolation_kind !=
-              ::pops::amr::transfer::TransferKind::ConstantInjection)
+          preparation.interpolation_kind != ::pops::amr::transfer::TransferKind::ConstantInjection)
         throw std::invalid_argument(
             "prepared AMR ghost fill requires an authenticated coarse/fine interpolation kind");
       coarse_fine.emplace(coarse_field, fine_field, preparation.coarse_domain,
@@ -393,16 +392,9 @@ class PreparedAmrGhostFill {
         for (const auto& region : plan.fine_destination_regions) {
           ::pops::amr::transfer::IndexMapping<Dim> mapping{};
           mapping.coarse_origin = preparation.coarse_domain.lo;
-          for (int axis = 0; axis < Dim; ++axis) {
-            const std::int64_t origin =
-                static_cast<std::int64_t>(preparation.fine_domain.lo[axis]) -
-                region.periodic_source_from_destination[axis];
-            if (origin < std::numeric_limits<int>::min() ||
-                origin > std::numeric_limits<int>::max())
-              throw std::overflow_error(
-                  "prepared AMR ghost periodic interpolation origin exceeds native indices");
-            mapping.fine_origin[axis] = static_cast<int>(origin);
-          }
+          // Periodic sources have already been copied into the child's unwrapped parent
+          // staging chart. Interpolation must use that same chart for every destination.
+          mapping.fine_origin = preparation.fine_domain.lo;
           patch.interpolations.push_back(
               InterpolationSlot{region.destination, mapping, std::nullopt});
         }
@@ -531,12 +523,27 @@ class PreparedAmrGhostFill {
             ::pops::amr::transfer::TransferProvider<Dim, ::pops::amr::transfer::Centering::Cell>(
                 preparation.interpolation_kind);
         const auto components = ::pops::amr::transfer::ComponentRange{0, 0, coarse_fine->ncomp()};
+        ::pops::amr::transfer::PhysicalParentBoundary<Dim> physical_boundary{};
+        physical_boundary.domain = preparation.coarse_domain;
+        for (int axis = 0; axis < Dim; ++axis) {
+          physical_boundary.lower[axis] =
+              preparation.topology.is_physical(Face<Dim>{axis, BoundarySide::lower});
+          physical_boundary.upper[axis] =
+              preparation.topology.is_physical(Face<Dim>{axis, BoundarySide::upper});
+        }
         for (ScratchPatch& patch : scratch) {
           const auto source = std::as_const(patch.coarse).view();
           auto destination = requested_fine.fab_global(patch.fine_patch).view();
-          for (InterpolationSlot& slot : patch.interpolations)
-            slot.transfer.emplace(provider.prepare(source, destination, slot.destination,
-                                                   preparation.ratio, slot.mapping, components));
+          for (InterpolationSlot& slot : patch.interpolations) {
+            if (preparation.interpolation_kind ==
+                ::pops::amr::transfer::TransferKind::CoarseFineGhostInterpolation)
+              slot.transfer.emplace(provider.prepare_physical_boundary_ghosts(
+                  source, destination, slot.destination, preparation.ratio, slot.mapping,
+                  components, physical_boundary));
+            else
+              slot.transfer.emplace(provider.prepare(source, destination, slot.destination,
+                                                     preparation.ratio, slot.mapping, components));
+          }
         }
       } catch (...) {
         binding_failure = 1;
@@ -634,10 +641,10 @@ class PreparedAmrGhostFill {
       for (PeerStorage& peer : peers)
         if (peer.receive != nullptr) {
           if (post_code == MPI_SUCCESS)
-            post_code =
-                MPI_Irecv(peer.host_receive.data(), static_cast<int>(peer.receive->elements),
-                          pops::mpi_real_datatype(), peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
-                          lane->native_handle(), &receive_requests[receive_index]);
+            post_code = MPI_Irecv(
+                peer.host_receive.data(), static_cast<int>(peer.receive->elements),
+                pops::mpi_real_datatype(), peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
+                lane->native_handle(), &receive_requests[receive_index]);
           ++receive_index;
         }
       if (!gate(post_code == MPI_SUCCESS ? 0L : 1L))
@@ -648,10 +655,10 @@ class PreparedAmrGhostFill {
       for (PeerStorage& peer : peers)
         if (peer.send != nullptr) {
           if (post_code == MPI_SUCCESS)
-            post_code =
-                MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send->elements), pops::mpi_real_datatype(),
-                          peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
-                          lane->native_handle(), &send_requests[send_index]);
+            post_code = MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send->elements),
+                                  pops::mpi_real_datatype(), peer.mpi_rank,
+                                  ExecutionLane::parallel_copy_message_tag, lane->native_handle(),
+                                  &send_requests[send_index]);
           ++send_index;
         }
       if (!gate(post_code == MPI_SUCCESS ? 0L : 1L))

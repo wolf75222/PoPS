@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pytest
 from pops.analytic import coordinates
 from pops.amr import (
@@ -189,18 +190,23 @@ def _assert_public_patch_geometry(simulation):
 def _assert_native_patch_box_binding_is_inclusive(simulation):
     """Exercise the AMR-only Python/native [lo, hi] adapter through a live hierarchy."""
     native = simulation._executor._s
-    full_fine_box = ((1, (0, 0), (31, 31)),)
+    full_fine_box = ((1, (0, 0), (63, 63)),)
     native.rebuild_hierarchy(full_fine_box, (0,))
     assert tuple(native.patch_boxes()) == full_fine_box
 
-    # The last cell is a valid singleton under the inclusive convention.
-    last_cell = ((1, (31, 31), (31, 31)),)
-    native.rebuild_hierarchy(last_cell, (0,))
-    assert tuple(native.patch_boxes()) == last_cell
+    # A ratio-two fine patch must contain complete parent cells.  The final
+    # 2x2 footprint proves that both high indices remain inclusive.
+    last_parent_cell = ((1, (62, 62), (63, 63)),)
+    native.rebuild_hierarchy(last_parent_cell, (0,))
+    assert tuple(native.patch_boxes()) == last_parent_cell
 
     # Re-import the native output verbatim: no half-open normalization is permitted.
     native.rebuild_hierarchy(native.patch_boxes(), (0,))
-    assert tuple(native.patch_boxes()) == last_cell
+    assert tuple(native.patch_boxes()) == last_parent_cell
+
+    with pytest.raises(ValueError, match="complete anisotropic parent cells"):
+        native.rebuild_hierarchy(((1, (63, 63), (63, 63)),), (0,))
+    assert tuple(native.patch_boxes()) == last_parent_cell
 
     with pytest.raises(TypeError, match="native dimension"):
         native.rebuild_hierarchy(((1, (0,), (31, 31)),), (0,))
@@ -217,7 +223,11 @@ def test_public_amr_patch_boxes_are_parallel_to_physical_bounds_and_read_only(
 ):
     del isolated_native_cache, kokkos_root
     for block_count in (1, 2):
-        simulation = pops.bind(pops.compile(_resolved(native_cxx, block_count)))
+        artifact = pops.compile(_resolved(native_cxx, block_count))
+        simulation = pops.bind(
+            artifact,
+            resources={"execution_context": artifact_execution_context(artifact)},
+        )
         if block_count == 2:
             centers = (np.arange(N, dtype=np.float64) + 0.5) / N
             x_coord, y_coord = np.meshgrid(centers, centers, indexing="xy")

@@ -2,6 +2,7 @@
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/layout/refinement.hpp>
+#include <pops/mesh/parallel/region_transfer.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
@@ -177,6 +178,33 @@ mesh::BoxArray<Dim> source_carrier_boxes(const mesh::BoxArray<Dim>& target_boxes
 }
 
 template <int Dim>
+mesh::BoxArray<Dim> physical_carrier_boxes(const mesh::BoxArray<Dim>& targets,
+                                           const Box<Dim>& source_domain,
+                                           const Box<Dim>& target_domain,
+                                           const SystemLayoutTransferSpec<Dim>& spec) {
+  std::vector<Box<Dim>> boxes;
+  boxes.reserve(targets.size());
+  for (const Box<Dim>& target : targets.boxes()) {
+    Box<Dim> carrier = source_domain;
+    for (int source_axis = 0; source_axis < Dim; ++source_axis) {
+      const int target_axis = spec.physical_source_to_target[source_axis];
+      if (target_axis < 0)
+        continue;
+      carrier.lo[source_axis] =
+          checked_index(static_cast<std::int64_t>(source_domain.lo[source_axis]) +
+                            target.lo[target_axis] - target_domain.lo[target_axis],
+                        "physical carrier lower bound");
+      carrier.hi[source_axis] =
+          checked_index(static_cast<std::int64_t>(source_domain.lo[source_axis]) +
+                            target.hi[target_axis] - target_domain.lo[target_axis],
+                        "physical carrier upper bound");
+    }
+    boxes.push_back(carrier);
+  }
+  return mesh::BoxArray<Dim>(std::move(boxes));
+}
+
+template <int Dim>
 mesh::Distribution<Dim> rebind_distribution(const mesh::BoxArray<Dim>& layout,
                                             const mesh::Distribution<Dim>& model) {
   if (layout.size() != model.box_count())
@@ -284,7 +312,7 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
   system_impl_type* target = nullptr;
   std::shared_ptr<component::LoadedComponent> component_handle;
   component::LoadedComponent::PreparedState component_state;
-  const PopsTransferApiV1* transfer_api = nullptr;
+  const PopsTransferApiV2* transfer_api = nullptr;
   SystemLayoutTransferSpec<Dim> spec;
   SystemLayoutTransferExecution execution;
   PopsExecutionContextV1 execution_abi{};
@@ -294,6 +322,10 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
   int components = 0;
   field_type source_snapshot;
   std::optional<CopySchedule<Dim>> source_copy_schedule;
+  // Lane precedes its immutable transport borrower so destruction releases the borrower first.
+  std::optional<ExecutionLane> source_lane;
+  std::vector<mesh::parallel::RegionTransferJob<Dim>> source_region_jobs;
+  std::optional<mesh::parallel::RegionTransport<Dim>> source_transport;
   std::vector<std::string> source_patch_identities;
   std::vector<std::string> target_patch_identities;
   std::uint64_t active_generation = 0;
@@ -321,11 +353,18 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
     target_block_index = target->blocks_.index(spec.target_block);
     components = source->sp[static_cast<std::size_t>(source_block_index)].ncomp;
     const mesh::BoxArray<Dim> carrier =
-        source_carrier_boxes<Dim>(target->ba, source->dom, target->dom, spec.refinement_ratio);
+        spec.physical_contract
+            ? physical_carrier_boxes<Dim>(target->ba, source->dom, target->dom, spec)
+            : source_carrier_boxes<Dim>(target->ba, source->dom, target->dom,
+                                        spec.refinement_ratio);
     source_snapshot = field_type(carrier, rebind_distribution(carrier, target->dm),
                                  target->local_rank, components, Extent<Dim>{});
-    source_copy_schedule.emplace(prepare_exact_copy_schedule(source_snapshot, source_state()));
-    source_copy_schedule->require_local_execution();
+    if (spec.physical_contract) {
+      prepare_physical_jobs();
+    } else {
+      source_copy_schedule.emplace(prepare_exact_copy_schedule(source_snapshot, source_state()));
+      source_copy_schedule->require_local_execution();
+    }
     source_patch_identities.reserve(carrier.size());
     target_patch_identities.reserve(carrier.size());
     for (std::size_t global = 0; global < carrier.size(); ++global) {
@@ -338,6 +377,22 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
 
   field_type& source_state() { return source->sp[static_cast<std::size_t>(source_block_index)].U; }
   field_type& target_state() { return target->sp[static_cast<std::size_t>(target_block_index)].U; }
+  field_type& source_transfer_state() {
+    if (spec.program_invocation.empty())
+      return source_state();
+    const auto& fields = source->program_.program_map_fields(spec.program_invocation, false);
+    if (fields.size() != 1)
+      throw std::logic_error("Uniform source map port has multiple levels");
+    return *fields.front();
+  }
+  field_type& target_transfer_state() {
+    if (spec.program_invocation.empty())
+      return target_state();
+    const auto& fields = target->program_.program_map_fields(spec.program_invocation, true);
+    if (fields.size() != 1)
+      throw std::logic_error("Uniform target map port has multiple levels");
+    return *fields.front();
+  }
 
   void validate_static_contract() const {
     if (source_owner == target_owner || source == nullptr || target == nullptr)
@@ -356,24 +411,39 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
         spec.target_representation != kCellAverageRepresentation)
       throw std::invalid_argument(
           "prepared conservative transfer requires exact cell-average representations");
-    if (spec.synchronization_identity != kBeforeStepSynchronization)
-      throw std::invalid_argument(
-          "prepared System transfer requires exact before-step synchronization");
-    if (spec.operation != POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1)
+    const bool moment = spec.operation == POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1;
+    const bool pullback = spec.operation == POPS_TRANSFER_OPERATION_PHYSICAL_PULLBACK_V1;
+    const bool physical = moment || pullback;
+    const bool known_synchronization =
+        spec.synchronization_identity == kBeforeStepSynchronization ||
+        spec.synchronization_identity == "pops://synchronization/after-source-step@1" ||
+        spec.synchronization_identity == "pops://synchronization/program-point@1";
+    if (!known_synchronization ||
+        (!physical && spec.synchronization_identity != kBeforeStepSynchronization))
+      throw std::invalid_argument("prepared System transfer synchronization is unsupported");
+    if (!physical && spec.operation != POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1)
       throw std::invalid_argument("prepared System transfer operation is unsupported");
-    for (int axis = 0; axis < Dim; ++axis) {
-      const auto position = static_cast<std::size_t>(axis);
-      if (spec.refinement_ratio[position] <= 0)
-        throw std::invalid_argument("prepared System transfer ratios must be positive");
-      if (source->cfg.lower[axis] != target->cfg.lower[axis] ||
-          source->cfg.upper[axis] != target->cfg.upper[axis] ||
-          source->periodicity[position] != target->periodicity[position])
-        throw std::invalid_argument(
-            "prepared System conservative transfer requires one exact physical domain/topology");
-      const std::int64_t expected = target->dom.length(axis) * spec.refinement_ratio[position];
-      if (source->dom.length(axis) != expected)
-        throw std::invalid_argument(
-            "prepared System transfer ratio does not authenticate the source/target extents");
+    if ((spec.synchronization_identity == "pops://synchronization/program-point@1") !=
+        !spec.program_invocation.empty())
+      throw std::invalid_argument("Program-point mapping requires its exact invocation identity");
+    if (physical != spec.physical_contract)
+      throw std::invalid_argument("prepared physical transfer requires explicit support metadata");
+    if (physical) {
+      validate_physical_contract(moment);
+    } else {
+      for (int axis = 0; axis < Dim; ++axis) {
+        if (spec.refinement_ratio[axis] <= 0)
+          throw std::invalid_argument("prepared System transfer ratios must be positive");
+        if (source->cfg.lower[axis] != target->cfg.lower[axis] ||
+            source->cfg.upper[axis] != target->cfg.upper[axis] ||
+            source->periodicity[axis] != target->periodicity[axis])
+          throw std::invalid_argument(
+              "prepared System transfer requires exact shared physical domain/topology");
+        const std::int64_t expected = target->dom.length(axis) * spec.refinement_ratio[axis];
+        if (source->dom.length(axis) != expected)
+          throw std::invalid_argument(
+              "prepared System transfer ratio does not authenticate the source/target extents");
+      }
     }
     if (!source->dm.matches_layout(source->ba) || !target->dm.matches_layout(target->ba))
       throw std::invalid_argument("prepared System transfer received an invalid native layout");
@@ -397,7 +467,144 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
         spec.provider_manifest_identity != api.manifest_identity)
       throw std::invalid_argument(
           "prepared System transfer provider identity differs from its loaded component");
-    (void)component_handle->table<PopsTransferApiV1>(POPS_NATIVE_INTERFACE_TRANSFER_V1, 1u);
+    (void)component_handle->table<PopsTransferApiV2>(POPS_NATIVE_INTERFACE_TRANSFER_V2, 2u);
+  }
+
+  void validate_physical_contract(bool moment) const {
+    if (execution.memory_space != POPS_MEMORY_SPACE_HOST_V1)
+      throw std::invalid_argument("physical maps require host memory");
+    if (source->dm.rank_space() != target->dm.rank_space() ||
+        source->local_rank != target->local_rank ||
+        source->dm.rank_space().size() != static_cast<std::size_t>(communicator.size()) ||
+        source->dm.rank_space().linear_rank(source->local_rank) !=
+            static_cast<std::size_t>(communicator.rank()))
+      throw std::invalid_argument("physical maps require the authenticated field rank space");
+    if (communicator.size() > 1 && (source->dm.replicated() || target->dm.replicated()))
+      throw std::invalid_argument("distributed physical maps require uniquely owned patches");
+    std::array<bool, Dim> retained{};
+    int source_active = 0;
+    int target_active = 0;
+    int shared = 0;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int source_flag = spec.physical_source_active[axis];
+      const int target_flag = spec.physical_target_active[axis];
+      if ((source_flag != 0 && source_flag != 1) || (target_flag != 0 && target_flag != 1) ||
+          spec.refinement_ratio[axis] != 1)
+        throw std::invalid_argument("physical support flags or identity ratios are invalid");
+      source_active += source_flag;
+      target_active += target_flag;
+      for (const auto& entry : {std::pair{source, source_flag}, std::pair{target, target_flag}})
+        if (entry.second == 0 &&
+            (entry.first->dom.length(axis) != 1 || entry.first->cfg.lower[axis] != 0.0 ||
+             entry.first->cfg.upper[axis] != 1.0 || !entry.first->periodicity[axis]))
+          throw std::invalid_argument(
+              "hidden storage axes must be periodic unit-measure singletons");
+      const int destination_axis = spec.physical_source_to_target[axis];
+      if (destination_axis < -1 || destination_axis >= Dim ||
+          (source_flag == 0 && destination_axis != -1))
+        throw std::invalid_argument("physical source-to-target axis is invalid");
+      if (destination_axis < 0)
+        continue;
+      if (spec.physical_target_active[destination_axis] != 1 || retained[destination_axis])
+        throw std::invalid_argument("physical shared axes must be active and injective");
+      retained[destination_axis] = true;
+      ++shared;
+      if (source->dom.length(axis) != target->dom.length(destination_axis) ||
+          source->cfg.lower[axis] != target->cfg.lower[destination_axis] ||
+          source->cfg.upper[axis] != target->cfg.upper[destination_axis] ||
+          source->periodicity[axis] != target->periodicity[destination_axis])
+        throw std::invalid_argument(
+            "physical shared axes require exact geometry, extents and topology");
+    }
+    if (moment ? (source_active <= target_active || shared != target_active)
+               : (target_active <= source_active || shared != source_active))
+      throw std::invalid_argument("physical reduction/broadcast requires strict nested supports");
+    for (const auto* field : {source, target}) {
+      const std::size_t count = field->ba.size();
+      const std::size_t pairs =
+          count < 2
+              ? 0
+              : checked_product(count, count - 1, "physical patch validation exceeds size_t") / 2;
+      if (!field->ba.tiles_exactly(field->dom, {count, pairs}))
+        throw std::invalid_argument("physical patches must tile their domains exactly");
+    }
+  }
+
+  void prepare_physical_jobs() {
+    std::size_t elements = 0;
+    const auto& source_field = source_state();
+    for (std::size_t destination_patch = 0; destination_patch < source_snapshot.layout().size();
+         ++destination_patch) {
+      std::uint64_t covered = 0;
+      for (std::size_t source_patch = 0; source_patch < source_field.layout().size();
+           ++source_patch) {
+        const Box<Dim> region = source_snapshot.layout()[destination_patch].intersect(
+            source_field.layout()[source_patch]);
+        if (region.empty())
+          continue;
+        const std::uint64_t count = checked_elements(region, components);
+        if (count > std::numeric_limits<std::size_t>::max() - elements ||
+            count > std::numeric_limits<std::uint64_t>::max() - covered)
+          throw std::overflow_error("physical carrier region count exceeds capacity");
+        elements += static_cast<std::size_t>(count);
+        covered += count;
+        source_region_jobs.push_back(
+            {source_patch, destination_patch,
+             source->dm.replicated() ? source->local_rank : source->dm.owner(source_patch),
+             target->dm.replicated() ? target->local_rank : target->dm.owner(destination_patch),
+             region, region});
+      }
+      if (covered != checked_elements(source_snapshot.layout()[destination_patch], components))
+        throw std::invalid_argument("physical source patches do not exactly cover a carrier");
+    }
+    source_transport.emplace(mesh::parallel::RegionTransferPlan<Dim>{
+        source->dm.rank_space(),
+        source->local_rank,
+        components,
+        source_region_jobs,
+        {source_region_jobs.size(), source->dm.rank_space().size(), elements, elements, elements}});
+  }
+
+  void prepare_transport_collectively() {
+    if (!spec.physical_contract || !communicator.active())
+      return;
+#ifdef POPS_HAS_MPI
+    const auto authority = ExecutionCommunicator::borrowed(execution.communicator_identity,
+                                                           communicator.native_handle());
+    source_lane.emplace(ExecutionLane::duplicate_collectively(authority, spec.mapping_identity));
+    source_transport->prepare_collectively(*source_lane);
+#endif
+  }
+
+  void capture_source() {
+    if (!spec.physical_contract) {
+      parallel_copy(source_snapshot, source_transfer_state(), *source_copy_schedule);
+      return;
+    }
+    if (source_lane) {
+      source_transport->execute(
+          [this](const auto& job) {
+            return std::as_const(source_transfer_state()).fab_global(job.source_patch).view();
+          },
+          [this](const auto& job) {
+            return source_snapshot.fab_global(job.destination_patch).view();
+          });
+      return;
+    }
+    // Serial execution has no MPI lane. The same authenticated region list addresses each
+    // carrier independently, including carriers that repeat a source region for a broadcast.
+    device_fence();
+    for (const auto& job : source_region_jobs) {
+      const auto input = source_transfer_state().fab_global(job.source_patch).view();
+      const auto output = source_snapshot.fab_global(job.destination_patch).view();
+      const int width = components;
+      for_each_cell(
+          job.source_region, KOKKOS_LAMBDA(const Index<Dim>& index) {
+            for (int component = 0; component < width; ++component)
+              output(index, component) = input(index, component);
+          });
+    }
+    device_fence();
   }
 
   std::string consensus_payload() const {
@@ -406,11 +613,18 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
          {&spec.mapping_identity, &spec.provider_identity, &spec.provider_component_identity,
           &spec.provider_manifest_identity, &spec.source_layout_identity,
           &spec.target_layout_identity, &spec.source_block, &spec.target_block,
-          &spec.source_representation, &spec.target_representation, &spec.synchronization_identity})
+          &spec.source_representation, &spec.target_representation, &spec.synchronization_identity,
+          &spec.program_invocation})
       append_text(bytes, *field);
     for (const std::int32_t ratio : spec.refinement_ratio)
       append_i32(bytes, ratio);
     append_i32(bytes, spec.operation);
+    append_i32(bytes, spec.physical_contract ? 1 : 0);
+    for (int axis = 0; axis < Dim; ++axis) {
+      append_i32(bytes, spec.physical_source_to_target[axis]);
+      append_i32(bytes, spec.physical_source_active[axis]);
+      append_i32(bytes, spec.physical_target_active[axis]);
+    }
     append_text(bytes, execution.execution_identity);
     append_i32(bytes, static_cast<std::int32_t>(execution.context_version));
     append_i32(bytes, execution.memory_space);
@@ -429,6 +643,12 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
     append_text(bytes, api.catalog_sha256 == nullptr ? "" : api.catalog_sha256);
     append_text(bytes, api.abi_key == nullptr ? "" : api.abi_key);
     for (int axis = 0; axis < Dim; ++axis) {
+      append_i32(bytes, source->dom.lo[axis]);
+      append_i32(bytes, source->dom.hi[axis]);
+      append_i32(bytes, target->dom.lo[axis]);
+      append_i32(bytes, target->dom.hi[axis]);
+      append_i32(bytes, source->periodicity[axis] ? 1 : 0);
+      append_i32(bytes, target->periodicity[axis] ? 1 : 0);
       append_double(bytes, source->cfg.lower[axis]);
       append_double(bytes, source->cfg.upper[axis]);
       append_double(bytes, target->cfg.lower[axis]);
@@ -442,9 +662,9 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
 
   void prepare_provider() {
     transfer_api =
-        &component_handle->table<PopsTransferApiV1>(POPS_NATIVE_INTERFACE_TRANSFER_V1, 1u);
+        &component_handle->table<PopsTransferApiV2>(POPS_NATIVE_INTERFACE_TRANSFER_V2, 2u);
     component_state =
-        component_handle->prepare_fresh_state(POPS_NATIVE_INTERFACE_TRANSFER_V1, 1u, execution_abi);
+        component_handle->prepare_fresh_state(POPS_NATIVE_INTERFACE_TRANSFER_V2, 2u, execution_abi);
   }
 
   void validate_active(std::uint64_t generation, std::uint64_t attempt, const char* where) const {
@@ -482,16 +702,15 @@ std::shared_ptr<PreparedSystemLayoutTransfer<Dim>> PreparedSystemLayoutTransfer<
                                      std::move(execution), communicator);
   });
   const std::string payload = pending->consensus_payload();
-  if (!all_ranks_agree_exact_ordered_byte_pairs({{"prepared-system-layout-transfer-v2", payload}},
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"prepared-system-layout-transfer-v3", payload}},
                                                 communicator))
     throw std::invalid_argument(
         "prepared System layout-transfer contract differs between MPI ranks");
+  pending->prepare_transport_collectively();
   collectively_validate(communicator, "native Transfer provider preparation",
                         [&] { pending->prepare_provider(); });
-  collectively_validate(communicator, "prepared System layout-transfer warmup", [&] {
-    parallel_copy(pending->source_snapshot, pending->source_state(),
-                  *pending->source_copy_schedule);
-  });
+  collectively_validate(communicator, "prepared System layout-transfer warmup",
+                        [&] { pending->capture_source(); });
   return std::shared_ptr<PreparedSystemLayoutTransfer>(
       new PreparedSystemLayoutTransfer(std::move(pending)));
 }
@@ -524,16 +743,25 @@ template <int Dim>
 void PreparedSystemLayoutTransfer<Dim>::capture(std::uint64_t generation, std::uint64_t attempt) {
   collectively_validate(p_->communicator, "layout-transfer capture", [&] {
     p_->validate_active(generation, attempt, "layout-transfer capture");
-    if (p_->applied)
+    if (p_->applied && p_->spec.program_invocation.empty())
       throw std::logic_error(
           "layout-transfer retry requires rollback of the enclosing transaction");
+    if (!p_->spec.program_invocation.empty()) {
+      (void)p_->source_transfer_state();
+      (void)p_->target_transfer_state();
+      const auto& a = *p_->source->program_.cadence_continuation_;
+      const auto& b = *p_->target->program_.cadence_continuation_;
+      if (a.partition.start != b.partition.start || a.partition.end != b.partition.end ||
+          a.accepted_macro_step != b.accepted_macro_step)
+        throw std::logic_error("Program map peers have different exact temporal windows");
+    }
     if (p_->captured_attempt != 0 && p_->captured_attempt != attempt)
       throw std::logic_error("layout-transfer source was already captured for another attempt");
   });
-  collectively_validate(p_->communicator, "layout-transfer source capture", [&] {
-    parallel_copy(p_->source_snapshot, p_->source_state(), *p_->source_copy_schedule);
-  });
+  collectively_validate(p_->communicator, "layout-transfer source capture",
+                        [&] { p_->capture_source(); });
   p_->captured_attempt = attempt;
+  p_->applied = false;
 }
 
 template <int Dim>
@@ -549,8 +777,48 @@ SystemLayoutTransferReceipt PreparedSystemLayoutTransfer<Dim>::apply(std::uint64
 
   std::uint64_t local_source_elements = 0;
   std::uint64_t local_target_elements = 0;
+  SystemLayoutTransferReceipt receipt;
+  collectively_validate(p_->communicator, "layout-transfer receipt and port preparation", [&] {
+    // Every allocation and count belongs to the collective preflight. In particular,
+    // a rank-local receipt allocation must never strand peers in the count reductions
+    // after the target or a suspended continuation has already been published.
+    (void)p_->source_transfer_state();
+    const MultiFab<Dim>& destination = p_->target_transfer_state();
+    for (std::size_t local = 0; local < p_->source_snapshot.local_size(); ++local) {
+      const auto global = p_->source_snapshot.global_index(local);
+      const auto destination_local = destination.local_index_of(global);
+      if (destination_local == MultiFab<Dim>::not_local)
+        throw std::logic_error(
+            "prepared layout-transfer source/target ownership diverged after bind");
+      const auto source_count =
+          checked_elements(p_->source_snapshot.fab(local).box(), p_->components);
+      const auto target_count =
+          checked_elements(destination.fab(destination_local).box(), p_->components);
+      if (source_count > std::numeric_limits<std::uint64_t>::max() - local_source_elements ||
+          target_count > std::numeric_limits<std::uint64_t>::max() - local_target_elements)
+        throw std::overflow_error("layout-transfer receipt element count overflow");
+      local_source_elements += source_count;
+      local_target_elements += target_count;
+    }
+    receipt.applied = true;
+    receipt.program_invocation = p_->spec.program_invocation;
+    receipt.mapping_identity = p_->spec.mapping_identity;
+    receipt.provider_identity = p_->spec.provider_identity;
+    receipt.provider_component_identity = p_->spec.provider_component_identity;
+    receipt.provider_manifest_identity = p_->spec.provider_manifest_identity;
+    receipt.source_layout_identity = p_->spec.source_layout_identity;
+    receipt.target_layout_identity = p_->spec.target_layout_identity;
+    receipt.source_block = p_->spec.source_block;
+    receipt.target_block = p_->spec.target_block;
+    receipt.execution_identity = p_->execution.execution_identity;
+    receipt.operation = p_->spec.operation;
+    receipt.generation = generation;
+    receipt.attempt = attempt;
+  });
+  receipt.source_element_count = collective_elements(local_source_elements, p_->communicator);
+  receipt.destination_element_count = collective_elements(local_target_elements, p_->communicator);
   collectively_validate(p_->communicator, "native Transfer apply", [&] {
-    MultiFab<Dim>& destination = p_->target_state();
+    MultiFab<Dim>& destination = p_->target_transfer_state();
     try {
       for (std::size_t local = 0; local < p_->source_snapshot.local_size(); ++local) {
         const std::size_t global = p_->source_snapshot.global_index(local);
@@ -577,21 +845,13 @@ SystemLayoutTransferReceipt PreparedSystemLayoutTransfer<Dim>::apply(std::uint64
                                       Dim,
                                       static_cast<PopsTransferOperationV1>(p_->spec.operation),
                                       p_->execution_abi};
-        PopsComponentStatusV1 status{sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1,
-                                     nullptr};
+        PopsComponentStatusV1 status = component::unwritten_component_status();
         const int code = component::apply_transfer(*p_->transfer_api, p_->component_state.get(),
                                                    request, status);
         if (!component::component_status_is_well_formed(status) || code != 0 || status.code != 0 ||
             status.action != POPS_COMPONENT_CONTINUE_V1)
           throw std::runtime_error(status.reason == nullptr ? "native Transfer provider failed"
                                                             : status.reason);
-        const std::uint64_t source_count = checked_elements(source_box, p_->components);
-        const std::uint64_t target_count = checked_elements(destination_box, p_->components);
-        if (source_count > std::numeric_limits<std::uint64_t>::max() - local_source_elements ||
-            target_count > std::numeric_limits<std::uint64_t>::max() - local_target_elements)
-          throw std::overflow_error("layout-transfer receipt element count overflow");
-        local_source_elements += source_count;
-        local_target_elements += target_count;
       }
       device_fence();
     } catch (...) {
@@ -600,23 +860,11 @@ SystemLayoutTransferReceipt PreparedSystemLayoutTransfer<Dim>::apply(std::uint64
     }
   });
   p_->applied = true;
+  if (!p_->spec.program_invocation.empty()) {
+    p_->source->program_.release_program_map(p_->spec.program_invocation, false);
+    p_->target->program_.release_program_map(p_->spec.program_invocation, true);
+  }
 
-  SystemLayoutTransferReceipt receipt;
-  receipt.applied = true;
-  receipt.mapping_identity = p_->spec.mapping_identity;
-  receipt.provider_identity = p_->spec.provider_identity;
-  receipt.provider_component_identity = p_->spec.provider_component_identity;
-  receipt.provider_manifest_identity = p_->spec.provider_manifest_identity;
-  receipt.source_layout_identity = p_->spec.source_layout_identity;
-  receipt.target_layout_identity = p_->spec.target_layout_identity;
-  receipt.source_block = p_->spec.source_block;
-  receipt.target_block = p_->spec.target_block;
-  receipt.execution_identity = p_->execution.execution_identity;
-  receipt.operation = p_->spec.operation;
-  receipt.generation = generation;
-  receipt.attempt = attempt;
-  receipt.source_element_count = collective_elements(local_source_elements, p_->communicator);
-  receipt.destination_element_count = collective_elements(local_target_elements, p_->communicator);
   return receipt;
 }
 

@@ -22,7 +22,7 @@ DEFAULT_MAX_DEPTH = 64
 DEFAULT_MAX_NODES = 4096
 DEFAULT_MAX_STACK = 64
 
-_SCALAR_UNARY_OPS = frozenset({"neg", "sqrt", "abs", "sin", "cos", "exp", "log"})
+_SCALAR_UNARY_OPS = frozenset({"neg", "sqrt", "abs", "sin", "cos", "exp", "log", "erf", "erfc"})
 _SCALAR_BINARY_OPS = frozenset({
     "add", "sub", "mul", "div", "pow", "atan2", "hypot", "minimum", "maximum",
 })

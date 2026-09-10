@@ -25,12 +25,16 @@ class CoupledImplicitEuler:
     inputs: Any
     coefficient: Any = 1
     at: Any = None
+    derivative: Any = None
 
     def __post_init__(self) -> None:
         from pops.model import OperatorHandle
 
         if not isinstance(self.operator, OperatorHandle):
             raise TypeError("CoupledImplicitEuler operator must be a typed OperatorHandle")
+        from pops.time.solve_request import DerivativeStrategy
+        if self.derivative is not None and type(self.derivative) is not DerivativeStrategy:
+            raise TypeError("CoupledImplicitEuler derivative must be a DerivativeStrategy")
         inputs = _frozen_product(self.inputs, where="CoupledImplicitEuler inputs")
         if not inputs:
             raise ValueError("CoupledImplicitEuler inputs must be non-empty")
@@ -48,7 +52,7 @@ class CoupledImplicitEuler:
     def build_with(self, *, program: Any, prepared_solver: Any, name: Any = None) -> Any:
         return program._solve_coupled_implicit(
             self.operator, self.inputs, prepared=prepared_solver, name=name, at=self.at,
-            coefficient=self.coefficient)
+            coefficient=self.coefficient, derivative=self.derivative)
 
 
 @dataclass(frozen=True, slots=True)

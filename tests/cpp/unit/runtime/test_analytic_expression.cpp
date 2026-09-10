@@ -186,21 +186,26 @@ void check_initial_materializers() {
   const pops::Geometry<Dim> geometry = unit_geometry(box);
   auto values = one_patch_field(box, 1);
 
-  {
-    std::vector<pops::analytic::AnalyticProgram> programs;
-    programs.push_back(compile_analytic_expression(AnalyticNode::constant(Real(3.25))));
-    const auto prepared =
-        pops::analytic::prepare_cell_average_materialization(values, geometry, programs);
-    EXPECT_EQ(pops::analytic::materialize_cell_average(prepared, lane.communicator()),
-              box.numPts());
+  const std::array literals{Real(2), Real(.25), Real(-.5), Real(3.25), Real(0), -Real(0)};
+  for (Real literal : literals) {
+    {
+      std::vector<pops::analytic::AnalyticProgram> programs;
+      programs.push_back(compile_analytic_expression(AnalyticNode::constant(literal)));
+      const auto prepared =
+          pops::analytic::prepare_cell_average_materialization(values, geometry, programs);
+      EXPECT_EQ(pops::analytic::materialize_cell_average(prepared, lane.communicator()),
+                box.numPts());
+    }
+    const auto& field = values.fab(0);
+    auto constant_host = field.create_host_mirror();
+    field.copy_to_host(constant_host);
+    for_each_host_index(box, [&](const pops::Index<Dim>& index) {
+      const Real actual = constant_host(host_offset(field.grown_box(), index));
+      EXPECT_EQ(actual, literal);  // No ULP allowance for an exact constant integral.
+      EXPECT_EQ(std::signbit(actual), std::signbit(literal));
+    });
   }
-
   const auto& field = values.fab(0);
-  auto constant_host = field.create_host_mirror();
-  field.copy_to_host(constant_host);
-  for (const pops::Index<Dim>& index : std::array{box.lo, box.hi})
-    EXPECT_DOUBLE_EQ(constant_host(host_offset(field.grown_box(), index)), Real(3.25));
-
   pops::RealVector<Dim> center{};
   for (int axis = 0; axis < Dim; ++axis)
     center[axis] = Real(0.5);
@@ -211,6 +216,17 @@ void check_initial_materializers() {
   field.copy_to_host(gaussian_host);
   for (const pops::Index<Dim>& index : std::array{box.lo, box.hi})
     EXPECT_DOUBLE_EQ(gaussian_host(host_offset(field.grown_box(), index)), Real(1.25));
+  const auto integral = binary(AnalyticOp::Mul, AnalyticNode::constant(Real(1.25)),
+                               AnalyticNode{AnalyticOp::Input, Real(2 * Dim), {}});
+  const std::vector<pops::analytic::AnalyticProgram> exact_programs{
+      compile_analytic_expression(integral)};
+  const auto exact =
+      pops::analytic::prepare_cell_average_materialization(values, geometry, exact_programs, true);
+  EXPECT_EQ(pops::analytic::materialize_cell_average(exact, lane.communicator()), box.numPts());
+  auto integral_host = field.create_host_mirror();
+  field.copy_to_host(integral_host);
+  for (const pops::Index<Dim>& index : std::array{box.lo, box.hi})
+    EXPECT_DOUBLE_EQ(integral_host(host_offset(field.grown_box(), index)), Real(1.25));
 }
 
 TEST(AnalyticExpression, DiocotronRingIsARegularTypedExpression) {
@@ -414,3 +430,139 @@ TEST(AnalyticExpression, ZOnATwoDimensionalTargetFailsClosedBeforePublication) {
 }
 
 }  // namespace
+
+namespace {
+template <int Dim>
+void exact_polynomial_projection_control() {
+  const auto lane = pops::ExecutionLane::world("test.generic-polynomial-cell-integral");
+  const auto c = [](Real value) { return AnalyticNode::constant(value); };
+  const auto bound = [](int slot) { return AnalyticNode{AnalyticOp::Input, Real(slot), {}}; };
+  auto integral = c(1);
+  for (int axis = 0; axis < Dim; ++axis) {
+    const auto lo = bound(2 * axis), hi = bound(2 * axis + 1);
+    const auto cubic_difference = binary(AnalyticOp::Sub, binary(AnalyticOp::Pow, hi, c(3)),
+                                         binary(AnalyticOp::Pow, lo, c(3)));
+    integral = binary(AnalyticOp::Mul, std::move(integral),
+                      binary(AnalyticOp::Add, binary(AnalyticOp::Sub, hi, lo),
+                             binary(AnalyticOp::Div, cubic_difference, c(3))));
+  }
+  const std::vector<pops::analytic::AnalyticProgram> programs{
+      compile_analytic_expression(integral),
+      compile_analytic_expression(binary(AnalyticOp::Mul, c(2), integral))};
+  for (int n : {4, 8}) {
+    const auto box = pops::Box<Dim>::from_extents(uniform_extent<Dim>(n));
+    const auto geometry = unit_geometry(box);
+    auto values = one_patch_field(box, 2);
+    const auto prepared =
+        pops::analytic::prepare_cell_average_materialization(values, geometry, programs, true);
+    EXPECT_EQ(pops::analytic::materialize_cell_average(prepared, lane.communicator()),
+              2 * box.numPts());
+    const auto& field = values.fab(0);
+    auto host = field.create_host_mirror();
+    field.copy_to_host(host);
+    long double total = 0;
+    for_each_host_index(box, [&](const auto& index) {
+      Real expected = 1;
+      for (int axis = 0; axis < Dim; ++axis) {
+        const Real lo = geometry.face_coordinate(axis, index[axis]);
+        const Real hi = geometry.face_coordinate(axis, index[axis] + 1);
+        expected *= Real(1) + (hi * hi + hi * lo + lo * lo) / Real(3);
+      }
+      const Real value = host(host_offset(field.grown_box(), index, 0));
+      EXPECT_NEAR(value, expected, Real(64) * std::numeric_limits<Real>::epsilon());
+      EXPECT_EQ(host(host_offset(field.grown_box(), index, 1)), Real(2) * value);
+      total += value;
+    });
+    EXPECT_NEAR(static_cast<Real>(total / box.numPts()), std::pow(Real(4) / Real(3), Dim),
+                Real(128) * std::numeric_limits<Real>::epsilon());
+  }
+}
+}  // namespace
+
+TEST(AnalyticExpression, ExplicitPolynomialIntegralsUseGenericRankedBoundsAndComponents) {
+  exact_polynomial_projection_control<1>();
+  exact_polynomial_projection_control<2>();
+  exact_polynomial_projection_control<3>();
+}
+
+TEST(AnalyticExpression, ExactIntegralRefusesForeignInputsAndNonfiniteValuesBeforePublication) {
+  constexpr int Dim = 2;
+  const auto box = pops::Box<Dim>::from_extents(pops::Extent<Dim>{4, 3});
+  const auto geometry = unit_geometry(box);
+  auto values = one_patch_field(box, 1);
+  values.set_val(Real(7));
+  const auto lane = pops::ExecutionLane::world("test.exact-integral-refusal");
+  const std::vector<pops::analytic::AnalyticProgram> point{
+      compile_analytic_expression(AnalyticNode::x())};
+  EXPECT_THROW(pops::analytic::prepare_cell_average_materialization(values, geometry, point, true),
+               std::invalid_argument);
+  const std::vector<pops::analytic::AnalyticProgram> foreign{
+      compile_analytic_expression(AnalyticNode{AnalyticOp::Input, Real(2 * Dim + 1), {}})};
+  EXPECT_THROW(
+      pops::analytic::prepare_cell_average_materialization(values, geometry, foreign, true),
+      std::invalid_argument);
+  const std::vector<pops::analytic::AnalyticProgram> nonfinite{compile_analytic_expression(
+      binary(AnalyticOp::Div, AnalyticNode::constant(1), AnalyticNode::constant(0)))};
+  const auto prepared =
+      pops::analytic::prepare_cell_average_materialization(values, geometry, nonfinite, true);
+  EXPECT_THROW(pops::analytic::materialize_cell_average(prepared, lane.communicator()),
+               std::runtime_error);
+  const auto& field = values.fab(0);
+  auto host = field.create_host_mirror();
+  field.copy_to_host(host);
+  for_each_host_index(box, [&](const auto& index) {
+    EXPECT_EQ(host(host_offset(field.grown_box(), index)), Real(7));
+  });
+}
+
+TEST(AnalyticExpression, ExactGaussianProjectionRetainsNeutralityAcrossRefinement) {
+  constexpr int Dim = 2;
+  const auto lane = pops::ExecutionLane::world("test.exact-gaussian-projection");
+  pops::analytic::GaussianCellAverageProfile<Dim> profile{
+      pops::RealVector<Dim>{Real(.35), Real(.55)}, Real(0), Real(1), Real(80)};
+  const Real root = std::sqrt(profile.inverse_width);
+  const Real pi = std::acos(Real(-1));
+  Real integral = Real(1);
+  AnalyticNode radius = AnalyticNode::constant(Real(0));
+  for (int axis = 0; axis < Dim; ++axis) {
+    const Real center = profile.center[axis];
+    integral *= std::sqrt(pi) / (Real(2) * root) *
+                (std::erf(root * (Real(1) - center)) + std::erf(root * center));
+    const auto coordinate = axis == 0 ? AnalyticNode::x() : AnalyticNode::y();
+    const auto delta = binary(AnalyticOp::Sub, coordinate, AnalyticNode::constant(center));
+    radius = binary(AnalyticOp::Add, std::move(radius), binary(AnalyticOp::Mul, delta, delta));
+  }
+  profile.background = Real(1) - integral;
+  const auto expression = binary(
+      AnalyticOp::Add, AnalyticNode::constant(profile.background),
+      unary(AnalyticOp::Exp, binary(AnalyticOp::Mul, AnalyticNode::constant(-profile.inverse_width),
+                                    std::move(radius))));
+  const std::vector<pops::analytic::AnalyticProgram> programs{
+      compile_analytic_expression(expression)};
+  const Real tolerance = Real(128) * std::numeric_limits<Real>::epsilon();
+  for (int n : {16, 32}) {
+    const auto box = pops::Box<Dim>::from_extents(uniform_extent<Dim>(n));
+    const auto geometry = unit_geometry(box);
+    auto values = one_patch_field(box, 1);
+    const auto moment = [&] {
+      auto host = values.fab(0).create_host_mirror();
+      values.fab(0).copy_to_host(host);
+      long double total = 0;
+      for_each_host_index(box, [&](const auto& index) {
+        total += static_cast<long double>(host(host_offset(values.fab(0).grown_box(), index))) - 1;
+      });
+      return static_cast<Real>(total / box.numPts());
+    };
+    const auto generic =
+        pops::analytic::prepare_cell_average_materialization(values, geometry, programs);
+    (void)pops::analytic::materialize_cell_average(generic, lane.communicator());
+    // The original quadrature defect exceeds the compatibility tolerance in binary64;
+    // it is below the supported float tolerance. Exact projection is checked for every Real.
+    if (n == 16 && std::numeric_limits<Real>::digits >= 53)
+      EXPECT_GT(std::abs(moment()), tolerance);
+    const auto exact =
+        pops::analytic::prepare_cell_average_materialization(values, geometry, programs, &profile);
+    EXPECT_EQ(pops::analytic::materialize_cell_average(exact, lane.communicator()), box.numPts());
+    EXPECT_LE(std::abs(moment()), tolerance) << "N=" << n;
+  }
+}

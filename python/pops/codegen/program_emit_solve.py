@@ -28,7 +28,6 @@ from pops.solvers.providers import (
     PreparedHierarchySolverEmitRequest,
     prepared_hierarchy_solver_provider_from_attrs,
 )
-from pops.time.points import StagePoint, TimePoint
 
 from pops.codegen.program_emit_kernels import (
     _apply_in_arg,
@@ -36,6 +35,7 @@ from pops.codegen.program_emit_kernels import (
     _emit_field_combine,
 )
 from pops.codegen.krylov_contract import (
+    _authenticated_operator_footprint,
     validated_krylov_footprint,
     validated_prepared_problem_contract,
 )
@@ -144,6 +144,22 @@ def _append_solve_report_guard(
         "(void)%s.consume(pops::SolveConsumption::kAccept);" % outcome)
 
 
+def _krylov_failure_actions_cpp(program: Any, solve: Any) -> str:
+    """Propagate the authored status filter before native numerical report construction.
+
+    Only recurrence failures have a caller-selected disposition. Native evaluation,
+    authentication, and report-validity failures retain their own terminal authority.
+    """
+    kind, statuses = _consumed_solve_action(program, solve)
+    actions = (
+        "pops::SolveAction::kRejectAttempt"
+        if kind == "reject_attempt" and status in statuses
+        else "pops::SolveAction::kFailRun"
+        for status in ("singular", "breakdown", "iteration_limit")
+    )
+    return "pops::KrylovFailureActions{%s}" % ", ".join(actions)
+
+
 def _validate_matrix_free_contract(v: Any, model: Any) -> None:
     """Validate matrix-free facts that need either the final node or physical model metadata."""
     if v.op == "rhs_jacvec":
@@ -221,42 +237,16 @@ def _validate_matrix_free_contract(v: Any, model: Any) -> None:
 
 
 def _rhs_stage_fraction(value: Any) -> Fraction:
-    """Return the exact explicit residual coordinate carried by one RHS-like IR value.
-
-    A partitioned stage may expose distinct explicit and implicit coordinates.  Conservative RHS
-    evaluation belongs to the explicit partition, exactly as in the top-level RHS emitter.  This
-    helper deliberately accepts only the typed temporal IR: a missing/opaque point is a codegen
-    error, never a reason to invent stage zero for a matrix-free callback that will outlive the
-    authoring scope.
-    """
-    point = getattr(value, "point", None)
-    if type(point) is TimePoint:
-        stage_point = point
-    elif type(point) is StagePoint:
-        try:
-            stage_point = point.time
-        except ValueError:
-            try:
-                stage_point = point.time_for("explicit")
-            except (KeyError, TypeError, ValueError) as exc:
-                raise ValueError(
-                    "rhs_jacvec r0 requires an exact explicit StagePoint coordinate"
-                ) from exc
-    else:
-        raise ValueError(
-            "rhs_jacvec r0 requires an exact TimePoint or StagePoint in the Program IR")
-    try:
-        return Fraction(stage_point.step) + Fraction(stage_point.offset.to_python())
-    except (AttributeError, TypeError, ValueError, ZeroDivisionError) as exc:
-        raise ValueError(
-            "rhs_jacvec r0 carries no exact stage fraction") from exc
+    """Use the same qualified residual coordinate as the top-level RHS emitter."""
+    from pops.time._evaluation_point import evaluation_stage_fraction
+    return evaluation_stage_fraction(value, ark_partition="explicit")
 
 
-def _rhs_evaluation_identity(program: Any, value: Any) -> int:
+def _rhs_evaluation_identity(program: Any, value: Any, model: Any = None) -> int:
     """Return the exact rate or compiler-reserved atomic-group identity for one RHS."""
     grouped = sorted(
         (round_.barrier_index, round_.values)
-        for round_ in plan_rhs_coherence(program, list(program._values)).rounds
+        for round_ in plan_rhs_coherence(program, list(program._values), model=model).rounds
         if len(round_.values) > 1
     )
     for offset, (_barrier, values) in enumerate(grouped):
@@ -266,28 +256,9 @@ def _rhs_evaluation_identity(program: Any, value: Any) -> int:
 
 
 def _solve_stage_fraction(value: Any) -> Fraction:
-    """Return the exact solve evaluation coordinate, preferring the implicit partition."""
-    point = getattr(value, "point", None)
-    if type(point) is TimePoint:
-        time_point = point
-    elif type(point) is StagePoint:
-        try:
-            time_point = point.time
-        except ValueError:
-            for partition in ("implicit", "explicit"):
-                try:
-                    time_point = point.time_for(partition)
-                    break
-                except (KeyError, TypeError, ValueError):
-                    continue
-            else:
-                raise ValueError("solve_linear carries no exact implicit stage coordinate")
-    else:
-        raise ValueError("solve_linear requires an exact TimePoint or StagePoint")
-    try:
-        return Fraction(time_point.step) + Fraction(time_point.offset.to_python())
-    except (AttributeError, TypeError, ValueError, ZeroDivisionError) as exc:
-        raise ValueError("solve_linear carries no exact stage fraction") from exc
+    """Respect a split subflow or the solve's exact implicit ARK coordinate."""
+    from pops.time._evaluation_point import evaluation_stage_fraction
+    return evaluation_stage_fraction(value, ark_partition="implicit")
 
 
 def _rhs_jacvec_field_slot(r0: Any, field_plans: Any) -> str:
@@ -364,7 +335,7 @@ def _coupled_interface_jacvec_plan(
 
 
 def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
-                               lines: Any = None, *, field_plans: Any = None,
+                               lines: Any = None, *, field_plans: Any = None, model: Any = None,
                                target: str = "system",
                                has_shared_interface_implicit_jacvec: bool = False) -> None:
     """Lower a matrix_free_operator to an authenticated factory of C++ execution sessions. Each
@@ -401,6 +372,11 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     out_sf = v.attrs["apply_out"]
     block = v.attrs["apply_block"]
     result = v.attrs["apply_result"]
+    if target == "amr_system" and v.attrs.get("scope") == "hierarchy" and any(w.op == "field_problem_apply" for w in block):
+        from pops.solvers._composite_field import _field_apply
+        _field_apply(v)
+        # The authenticated hierarchy provider owns its complete apply and persistent resources.
+        return
     coupled_jacvec = _coupled_interface_jacvec_plan(
         v,
         block,
@@ -447,12 +423,12 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     # NOTHING per Krylov iteration (the runtime r/p/Ap scratch in generic_krylov.hpp is likewise
     # alloc-once). _emit_field_combine writes the affine into `out` through it. It carries the
     # operator's component count so the axpy / lincomb cover ALL components (a vector / state apply).
-    op_ncomp = int(v.attrs["ncomp"])
+    op_ncomp, op_input_ghosts = _authenticated_operator_footprint(v)
     acc_sp = "acc%d" % apply_id
     prelude.append(
         "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-        "ctx.alloc_scalar_field(%d, 1));"
-        % (acc_sp, op_ncomp))
+        "ctx.alloc_scalar_field(%d, %d));"
+        % (acc_sp, op_ncomp, op_input_ghosts))
     captures.append(acc_sp)
     session_fields.append(acc_sp)
     # The ApplyFn is constructed at install time, outside ``ctx.install([=](double dt) {...})``,
@@ -472,15 +448,17 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     frozen_coefficients = {}
     freeze_pairs = []
     for w in block:
-        if w.op == "apply_laplacian_coeff":
+        if w.op in ("apply_laplacian_coeff", "field_problem_apply"):
             coeffs = w.inputs[2]
-            sp = var[coeffs.id]
+            sp = (var[("field_pointer", coeffs.id)] if w.op == "field_problem_apply"
+                  else var[coeffs.id])
             if sp not in frozen_coefficients:
                 frozen = "frozen_A%d_%d" % (apply_id, len(frozen_coefficients))
                 prelude.append(
                     "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-                    "ctx.alloc_scalar_field(pops::kNativeDimension * "
-                    "pops::kNativeDimension, 1));" % frozen)
+                    "ctx.alloc_scalar_field(%s, 1));" % (frozen,
+                    str(int(coeffs.attrs["ncomp"])) if w.op == "field_problem_apply"
+                    else "pops::kNativeDimension * pops::kNativeDimension"))
                 frozen_coefficients[sp] = frozen
                 freeze_pairs.append((sp, frozen))
                 captures.append(frozen)
@@ -650,7 +628,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         stage = _rhs_stage_fraction(r0_in)
         if coupled_pair is None or w is coupled_pair[0]:
             evaluation_identity = (
-                _rhs_evaluation_identity(program, r0_in)
+                _rhs_evaluation_identity(program, r0_in, model=model)
                 if coupled_pair is not None else int(r0_in.id)
             )
             prepare_refresh.append(
@@ -663,6 +641,20 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             "pops::PureFieldAlgebra::copy(*%s, %s);" % (r0, var[r0_in.id]))
         if coupled_pair is None or w is coupled_pair[0]:
             prepare_refresh.append("*%s = %s;" % (cdt, _coeff_cpp(w.attrs["c_dt"])))
+    if coupled_pair is not None:
+        # The authored r0 values carry per-block residuals. The paired apply also
+        # includes the shared-interface scheduler, so its frozen base must be
+        # evaluated by that exact same function. Retain the authored values for
+        # their ordinary Program consumers; only the solve-owned captures change.
+        first, second = coupled_pair
+        first_entry, second_entry = jac_scratch[first.id], jac_scratch[second.id]
+        first_sources, second_sources = first.attrs.get("sources"), second.attrs.get("sources")
+        first_flux_only = "false" if first_sources is None or "default" in first_sources else "true"
+        second_flux_only = "false" if second_sources is None or "default" in second_sources else "true"
+        prepare_refresh.append(
+            "ctx.rhs_jacvec_pair_into_at(*%s, %d, *%s, *%s, %s, %d, *%s, *%s, %s);"
+            % (first_entry[6], first_entry[10], first_entry[0], first_entry[1], first_flux_only,
+               second_entry[10], second_entry[0], second_entry[1], second_flux_only))
     tensor_ops = [w for w in block if w.op == "apply_laplacian_coeff"]
     tensor_boundary = None
     tensor_point = None
@@ -721,12 +713,49 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         jac_entry = jac_scratch[jac_ops[0].id]
         stencil_boundary = boundary_sessions[jac_entry[-2]]
         stencil_point = jac_entry[6]
-    elif has_stencil:
-        stencil_boundary = "operator_mesh_boundary_session%d" % apply_id
-        session_dynamic.append(
-            (stencil_boundary,
-             "ctx_owner->prepare_mesh_boundary_session("
-             "*session_%s, ctx_owner->prepared_execution_lane())" % acc_sp))
+    mesh_stencil_boundaries = {}
+
+    def stencil_boundary_for(value: Any) -> str:
+        if stencil_boundary is not None:
+            return stencil_boundary
+        # Halo sessions authenticate components and ghosts as well as the mesh.  Bind each
+        # consumer to its actual input allocation; the accumulator is an exact prototype of
+        # the external Krylov input/output.  Scratch producers may have different widths.
+        token = sub[value.id]
+        prototype = acc_sp if token in ("in", "out") else token
+        if prototype not in mesh_stencil_boundaries:
+            name = "operator_mesh_boundary_session%d_%d" % (
+                apply_id, len(mesh_stencil_boundaries))
+            mesh_stencil_boundaries[prototype] = name
+            session_dynamic.append(
+                (name,
+                 "ctx_owner->prepare_mesh_boundary_session("
+                 "*session_%s, ctx_owner->prepared_execution_lane())" % prototype))
+        return mesh_stencil_boundaries[prototype]
+    general_fields = {}
+    for w in block:
+        if w.op != "field_problem_apply":
+            continue
+        if target != "system":
+            raise NotImplementedError("general field tuple requires the qualified Uniform System route")
+        from pops.fields._program_problem import validate_field_apply
+        validate_field_apply(w)
+        frozen = frozen_coefficients[var[("field_pointer", w.inputs[2].id)]]
+        unknown = "field_input_A%d_%d" % (apply_id, w.id)
+        prelude.append(
+            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+            "ctx.alloc_scalar_field(%d, 1));" % (unknown, int(w.attrs["ncomp"])))
+        captures.append(unknown)
+        session_fields.append(unknown)
+        boundary = "field_boundary_A%d_%d" % (apply_id, w.id)
+        session_dynamic.append((boundary, "ctx_owner->prepare_mesh_boundary_session("
+            "*session_%s, ctx_owner->prepared_execution_lane())" % unknown))
+        coefficient_boundary = boundary
+        if w.inputs[2].attrs["ncomp"] != w.attrs["ncomp"]:
+            coefficient_boundary = "field_coeff_boundary_A%d_%d" % (apply_id, w.id)
+            session_dynamic.append((coefficient_boundary, "ctx_owner->prepare_mesh_boundary_session("
+                "*session_%s, ctx_owner->prepared_execution_lane())" % frozen))
+        general_fields[w.id] = (frozen, unknown, boundary, coefficient_boundary, int(w.attrs["ncomp"]), int(w.inputs[2].attrs["ncomp"]))
     var[("operator_prepare_refresh", apply_id)] = tuple(prepare_refresh)
     # 2) The lambda body: the laplacian / gradient ops + the result write into `out`.
     body = ["const pops::Real dt = *%s;" % apply_dt]
@@ -746,31 +775,48 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             sub[w.id] = sub[o.id]
             point_arg = ", *%s" % stencil_point if stencil_point else ""
             body.append("ctx.laplacian(*%s, %s, *%s%s);"
-                        % (sub[o.id], _apply_in_arg(sub, i), stencil_boundary, point_arg))
+                        % (sub[o.id], _apply_in_arg(sub, i), stencil_boundary_for(i), point_arg))
         elif w.op == "gradient":
             o, p = w.inputs
             sub[w.id] = sub[o.id]
             point_arg = ", *%s" % stencil_point if stencil_point else ""
             body.append("ctx.gradient(*%s, %s, *%s%s);"
-                        % (sub[o.id], _apply_in_arg(sub, p), stencil_boundary, point_arg))
+                        % (sub[o.id], _apply_in_arg(sub, p), stencil_boundary_for(p), point_arg))
         elif w.op == "divergence":
             o, flux = w.inputs
             sub[w.id] = sub[o.id]
             point_arg = ", *%s" % stencil_point if stencil_point else ""
             body.append("ctx.divergence(*%s, %s, *%s%s);"
-                        % (sub[o.id], _apply_in_arg(sub, flux), stencil_boundary,
+                        % (sub[o.id], _apply_in_arg(sub, flux), stencil_boundary_for(flux),
                            point_arg))
         elif w.op == "apply_laplacian_coeff":
             # out = div(A grad in), with one exact row-major Dim*Dim tensor field.
             o, i, coeffs = w.inputs
             tensor = frozen_coefficients[var[coeffs.id]]
             sub[w.id] = sub[o.id]
-            boundary = tensor_boundary or stencil_boundary
+            boundary = tensor_boundary or stencil_boundary_for(i)
             point = tensor_point if tensor_boundary else stencil_point
             point_arg = ", *%s" % point if point else ""
             body.append("ctx.tensor_laplacian(*%s, %s, *%s, *%s%s);"
                         % (sub[o.id], _apply_in_arg(sub, i), tensor,
                            boundary, point_arg))
+        elif w.op == "field_problem_apply":
+            o, i, _coefficients = w.inputs
+            frozen, unknown, boundary, _coefficient_boundary, _width, coefficient_width = general_fields[w.id]
+            sub[w.id] = sub[o.id]
+            output = "out" if sub[o.id] == "out" else "*%s" % sub[o.id]
+            ncomp = int(w.attrs["ncomp"])
+            from pops.fields._program_expression import decode_field_literal
+            reaction = ", ".join("static_cast<pops::Real>(%s)" % decode_field_literal(value).to_cpp()
+                                 for value in w.attrs["reaction"])
+            physical = w.attrs["physical_boundary"]
+            body.append("pops::PureFieldAlgebra::copy(*%s, %s);" % (unknown, _apply_in_arg(sub, i)))
+            body.append("pops::elliptic::nd::apply_general_field<pops::kNativeDimension, %d, %d>("
+                "%s, *%s, *%s, *%s, std::array<pops::Real, %d>{%s}, "
+                "[] { std::array<pops::elliptic::nd::PhysicalFieldBoundary, "
+                "2 * pops::kNativeDimension> result{}; "
+                "result.fill(pops::elliptic::nd::PhysicalFieldBoundary::%s); return result; }());"
+                % (ncomp, coefficient_width, output, unknown, frozen, boundary, ncomp * ncomp, reaction, physical))
         elif w.op == "rhs_jacvec":
             if coupled_pair is not None and coupled_widths is not None:
                 sub[w.id] = sub[w.inputs[0].id]
@@ -830,21 +876,25 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                 body.append(
                     "  ctx.copy_component_span(*%s, 0, in, 0, %d);"
                     % (first_up, first_width))
+                # Subtract residuals before scaling: adding v between two O(1/h)
+                # terms loses the correction even for a linear flux.
                 body.append(
-                    "  pops::PureFieldAlgebra::lincomb(*%s, pops::Real(1), *%s, -jc, *%s);"
-                    % (first_up, first_up, first_rp))
+                    "  pops::PureFieldAlgebra::axpy(*%s, pops::Real(-1), *%s);"
+                    % (first_rp, first_r0))
                 body.append(
-                    "  pops::PureFieldAlgebra::axpy(*%s, jc, *%s);"
-                    % (first_up, first_r0))
+                    "  pops::PureFieldAlgebra::axpy(*%s, -jc, *%s);"
+                    % (first_up, first_rp))
                 body.append(
                     "  ctx.copy_component_span(*%s, 0, in, %d, %d);"
                     % (second_up, first_width, second_width))
+                # Subtract residuals before scaling: adding v between two O(1/h)
+                # terms loses the correction even for a linear flux.
                 body.append(
-                    "  pops::PureFieldAlgebra::lincomb(*%s, pops::Real(1), *%s, -jc, *%s);"
-                    % (second_up, second_up, second_rp))
+                    "  pops::PureFieldAlgebra::axpy(*%s, pops::Real(-1), *%s);"
+                    % (second_rp, second_r0))
                 body.append(
-                    "  pops::PureFieldAlgebra::axpy(*%s, jc, *%s);"
-                    % (second_up, second_r0))
+                    "  pops::PureFieldAlgebra::axpy(*%s, -jc, *%s);"
+                    % (second_up, second_rp))
                 body.append(
                     "  ctx.copy_component_span(out, 0, *%s, 0, %d);"
                     % (first_up, first_width))
@@ -993,6 +1043,9 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         local = "session_%s" % name
         prelude.append("  auto %s = %s;" % (local, expression))
         session_capture_initializers.append("%s = %s" % (name, local))
+    for frozen, _unknown, _boundary, boundary, width, coefficient_width in general_fields.values():
+        session_refresh.append("pops::elliptic::nd::prepare_general_field_coefficients<pops::kNativeDimension, %d, %d>(*%s, *%s);"
+                               % (width, coefficient_width, frozen, boundary))
     if tensor_boundary is not None:
         session_refresh.append(
             "%s->refresh_point(*%s);" % (tensor_boundary, tensor_point)
@@ -1130,6 +1183,24 @@ def _require_system_matrix_free_stencil(
     if target != "system" or not _apply_graph_has_nearest_neighbour_stencil(operator):
         return
     indices = program._block_indices()
+    field_ops = tuple(node for node in operator.attrs.get("apply_block", ())
+                      if node.op == "field_problem_apply")
+    if field_ops:
+        from pops.fields._program_problem import validate_field_apply
+        for node in field_ops:
+            validate_field_apply(node)
+        # The field owns its storage. Every exact load-producing block is a layout witness,
+        # never a chosen field owner. Native direct loads additionally require co-distribution.
+        rhs = solve.inputs[1]
+        if rhs.op != "field_problem_load" or not rhs.inputs:
+            raise NotImplementedError("general field native storage currently requires explicit state layout witnesses")
+        owners = tuple(dict.fromkeys(value.block for value in rhs.inputs))
+        if any(owner not in indices for owner in owners):
+            raise ValueError("general field load has an unauthenticated Cartesian layout witness")
+        for owner in owners:
+            lines.append("ctx.require_cartesian_generated_operator(%d, %s);"
+                         % (indices[owner], json.dumps("field_problem_stencil")))
+        return
     owner = solve.block
     if owner not in indices:
         raise ValueError(
@@ -1154,6 +1225,9 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
 
     Uniform and level-scoped AMR solves use the generic context seam. A prepared hierarchy provider
     owns the refined native emission and declares its exact flat Krylov fallback contract."""
+    from pops.codegen.program_field_reuse import publish_field_solve, reuse_field_solve
+    if reuse_field_solve(v, var, lines, target=target):
+        return
     op_value = v.inputs[0]
     rhs_in = v.inputs[1]
     guess_in = v.inputs[2] if v.attrs["has_guess"] else None
@@ -1192,7 +1266,8 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     # level-0 scratch remains the actual solve argument, while every downstream consumer resolves the
     # published field through the context's current-level seam.  Flat AMR returns the scratch itself.
     if direct_provider_execution:
-        var[v.id] = "ctx.hierarchy_solution()"
+        var[v.id] = ("ctx.hierarchy_field_solution(%d)" % v.id if "hierarchy_field_identity" in v.attrs
+                     else "ctx.hierarchy_solution()")
     else:
         var[v.id] = ("ctx.linear_solution(*%s)" % sol_sp
                      if target == "amr_system" and v.attrs.get("scope") == "hierarchy"
@@ -1377,8 +1452,9 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
            vector_distribution_arg))
     controls_name = "krylov_controls%d" % v.id
     prelude.append(
-        "const pops::KrylovControls<pops::kNativeDimension> %s{%s, %s, %s, %d};"
-        % (controls_name, method_expr, tol, abs_tol, max_iter))
+        "const pops::KrylovControls<pops::kNativeDimension> %s{%s, %s, %s, %d, %s};"
+        % (controls_name, method_expr, tol, abs_tol, max_iter,
+           _krylov_failure_actions_cpp(program, v)))
 
     prepare_refresh = var.get(("operator_prepare_refresh", op_value.id))
     dt_captures = var.get(("operator_dt_captures", op_value.id))
@@ -1410,3 +1486,23 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         % (kr, problem_name, workspace_name, sol_sp, rhs_tok, controls_name))
     _append_solve_report_guard(
         program, v, kr, lines, label="solve_linear", phase="solve")
+    publish_field_solve(v, var, lines, target=target)
+    if v.vtype == "state" and v.attrs.get("scope") != "hierarchy":
+        # Krylov coordinates carry the operator's exact stencil halo, which may be
+        # zero for a pointwise operator. A physical State keeps its own storage
+        # contract. Materialize only when these halos differ, after consumption;
+        # a failed solve must never copy a candidate into readable state storage.
+        block_indices = program._block_indices()
+        if v.block not in block_indices:
+            raise ValueError("state solve result has no authenticated Program block")
+        owner = block_indices[v.block]
+        state_result = "solved_state%d" % v.id
+        lines.append("auto* %s = %s.get();" % (state_result, sol_sp))
+        lines.append("if (%s->ghosts() != ctx.state(%d).ghosts()) {" % (sol_sp, owner))
+        lines.append(
+            "  auto& materialized = ctx.scratch_state(%d, 0, ctx.state(%d));"
+            % (int(v.id), owner))
+        lines.append("  pops::PureFieldAlgebra::copy(materialized, *%s);" % sol_sp)
+        lines.append("  %s = &materialized;" % state_result)
+        lines.append("}")
+        var[v.id] = "(*%s)" % state_result

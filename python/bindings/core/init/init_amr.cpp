@@ -7,6 +7,7 @@
 
 #include <pops/runtime/amr/prepared_tagging_execution.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
+#include "amr_layout_transfer_binding.hpp"
 
 #include <array>
 #include <cstdint>
@@ -28,6 +29,19 @@ namespace {
 
 using AmrSystem = pops::AmrSystem<pops::kNativeDimension>;
 using AmrSystemConfig = pops::AmrSystemConfig<pops::kNativeDimension>;
+
+std::vector<std::vector<std::uint8_t>> history_flux_snapshot_shards_from_python(
+    const py::sequence& payloads) {
+  std::vector<std::vector<std::uint8_t>> shards;
+  shards.reserve(static_cast<std::size_t>(py::len(payloads)));
+  for (const py::handle payload : payloads) {
+    if (!py::isinstance<py::bytes>(payload))
+      throw py::type_error("history-flux snapshot shards must be exact bytes");
+    const std::string bytes = py::cast<std::string>(payload);
+    shards.emplace_back(bytes.begin(), bytes.end());
+  }
+  return shards;
+}
 
 pops::PreparedProviderOptionValue prepared_provider_option_from_python(const py::handle& value,
                                                                        std::string_view key) {
@@ -313,19 +327,15 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              const std::vector<std::string>& face_analytic_clocks) {
             reject_unqualified_periodic_identifications<pops::kNativeDimension>(
                 periodic_identifications, "ranked Cartesian AMR boundary authority");
-            std::vector<bool> omitted(face_types.size(), false);
-            for (int ordinal : omitted_interface_faces) {
-              if (ordinal < 0 || static_cast<std::size_t>(ordinal) >= face_types.size() ||
-                  face_types[static_cast<std::size_t>(ordinal)] != "external" ||
-                  omitted[static_cast<std::size_t>(ordinal)])
-                throw py::value_error(
-                    "every omitted AMR interface face must be one unique external ranked face");
-              omitted[static_cast<std::size_t>(ordinal)] = true;
-            }
-            system.install_hyperbolic_boundary(
-                name, identity, required_depth, face_types, face_values, face_identities,
-                component_roles, state_identity, face_representations, face_converter_identities,
-                face_analytic_opcodes, face_analytic_literals, face_analytic_clocks);
+            auto boundary = pops::prepare_hyperbolic_boundary<pops::kNativeDimension>(
+                                face_types, face_values, face_identities, component_roles, false,
+                                face_representations, face_converter_identities,
+                                face_analytic_opcodes, face_analytic_literals, face_analytic_clocks)
+                                .with_omitted_interface_faces(omitted_interface_faces);
+            system.install_prepared_hyperbolic_boundary(
+                name, identity, required_depth, state_identity,
+                std::make_shared<pops::PreparedHyperbolicBoundary<pops::kNativeDimension>>(
+                    std::move(boundary)));
           },
           py::arg("name"), py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
           py::arg("face_values"), py::arg("face_identities"), py::arg("component_roles"),
@@ -536,13 +546,13 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       .def(
           "_install_native_block",
           [](AmrSystem& system, const std::string& name, const std::string& so_path,
-             const std::string& expected_model_identity, const std::string& expected_binary_identity,
-             const std::string& limiter, const std::string& riemann, const std::string& recon,
-             const std::string& time, double gamma, int substeps, int stride,
-             const std::vector<double>& params, double positivity_floor, double weno_epsilon,
-             bool wave_speed_cache, int newton_max_iters, double newton_rel_tol,
-             double newton_abs_tol, double newton_fd_eps, double newton_damping,
-             bool newton_diagnostics) {
+             const std::string& expected_model_identity,
+             const std::string& expected_binary_identity, const std::string& limiter,
+             const std::string& riemann, const std::string& recon, const std::string& time,
+             double gamma, int substeps, int stride, const std::vector<double>& params,
+             double positivity_floor, double weno_epsilon, bool wave_speed_cache,
+             int newton_max_iters, double newton_rel_tol, double newton_abs_tol,
+             double newton_fd_eps, double newton_damping, bool newton_diagnostics) {
             NewtonOptions newton = newton_options_from_abi(
                 newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);
             system.add_native_block(name, so_path, expected_model_identity,
@@ -558,8 +568,7 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("stride") = 1, py::arg("params") = std::vector<double>{},
           py::arg("positivity_floor") = 0.0,
           py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon),
-          py::arg("wave_speed_cache") = false,
-          py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
+          py::arg("wave_speed_cache") = false, py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
           py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
           py::arg("newton_fd_eps") = static_cast<double>(kNewtonDefaultFdEps),
@@ -866,6 +875,9 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
           "Return the artifact-authenticated Program face/interface flux capacity.")
       .def("_checkpoint_program_state_capacity", &AmrSystem::checkpoint_program_state_capacity,
            "Return the artifact-authenticated POPSAND4/source-authority byte capacities.")
+      .def("_checkpoint_program_history_flux_snapshot_capacity",
+           &AmrSystem::checkpoint_program_history_flux_snapshot_capacity,
+           "Return the artifact-authenticated capacity of one history-flux snapshot shard.")
       .def(
           "restore_restart_auxiliary_checkpoint_accepted_state",
           [](AmrSystem& s, py::object payloads) {
@@ -912,9 +924,28 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
       // are accepted; there are intentionally no source-specific bootstrap entry points.
       .def("_bind_bootstrap_subject", &AmrSystem::bind_bootstrap_subject, py::arg("subject_id"),
            py::arg("runtime_block"), py::arg("source_route"))
-      .def("_stage_bootstrap_analytic_state", &AmrSystem::stage_bootstrap_analytic_state,
+      .def("_stage_bootstrap_analytic_state",
+           py::overload_cast<const std::string&, const std::string&, const std::string&,
+                             const std::string&, const std::string&,
+                             const pops::analytic::AnalyticOpcodeRows&,
+                             const pops::analytic::AnalyticLiteralRows&>(
+               &AmrSystem::stage_bootstrap_analytic_state),
            py::arg("subject_id"), py::arg("runtime_block"), py::arg("space"), py::arg("centering"),
            py::arg("projection"), py::arg("opcodes"), py::arg("literals"))
+      .def(
+          "_stage_bootstrap_analytic_state",
+          [](AmrSystem& s, const std::string& subject, const std::string& block,
+             const std::string& space, const std::string& centering, const std::string& projection,
+             py::sequence center, double background, double amplitude, double inverse_width) {
+            const pops::analytic::GaussianCellAverageProfile<pops::kNativeDimension> profile{
+                ranked_real_vector_from_python<pops::kNativeDimension>(center,
+                                                                       "AMR Gaussian center"),
+                background, amplitude, inverse_width};
+            s.stage_bootstrap_analytic_state(subject, block, space, centering, projection, profile);
+          },
+          py::arg("subject_id"), py::arg("runtime_block"), py::arg("space"), py::arg("centering"),
+          py::arg("projection"), py::arg("center"), py::arg("background"), py::arg("amplitude"),
+          py::arg("inverse_width"))
       .def(
           "_stage_bootstrap_array",
           [](AmrSystem& s, const std::string& subject_id, const std::string& runtime_block,
@@ -966,7 +997,52 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
 void bind_amr_stepping(py::class_<AmrSystem>& cls) {
   cls.def("step", &AmrSystem::step, py::arg("dt"))
       .def("advance", &AmrSystem::advance, py::arg("dt"), py::arg("nsteps"))
+      .def("_advance_program_region", &AmrSystem::advance_program_region)
       .def("_begin_step_transaction", &AmrSystem::begin_step_transaction)
+      .def("_begin_nested_step_transaction", &AmrSystem::begin_nested_step_transaction)
+      .def("_step_transaction_depth", &AmrSystem::step_transaction_depth)
+      .def("_continuation_transition_rows", &AmrSystem::continuation_transition_rows)
+      .def("_checkpoint_program_exchanges",
+           [](const AmrSystem& system) {
+             const auto bytes = system.checkpoint_program_exchanges();
+             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+           })
+      .def("_validate_checkpoint_program_exchanges",
+           [](const AmrSystem&, py::bytes payload) {
+             const std::string_view bytes(
+                 PyBytes_AS_STRING(payload.ptr()),
+                 static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
+             (void)pops::runtime::program::AcceptedExchangeLedger::from_checkpoint(
+                 std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(bytes.data()),
+                                               bytes.size()));
+           })
+      .def("_restore_checkpoint_program_exchanges",
+           [](AmrSystem& system, py::bytes payload) {
+             const std::string_view bytes(
+                 PyBytes_AS_STRING(payload.ptr()),
+                 static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
+             system.restore_checkpoint_program_exchanges(std::span<const std::uint8_t>(
+                 reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()));
+           })
+      .def("_program_exchange_records",
+           [](const AmrSystem& system) {
+             py::list result;
+             for (const auto& record : system.program_exchange_records()) {
+               py::dict row;
+               row["operation_identity"] = record.operation_identity;
+               row["occurrence_identity"] = record.occurrence_identity;
+               row["evaluation_context"] = record.evaluation_context;
+               row["quadrature_identity"] = record.quadrature_identity;
+               row["orientation"] = record.orientation;
+               row["face_measure"] = record.face_measure;
+               row["numerical_flux"] = record.numerical_flux;
+               row["temporal_weight"] = record.temporal_weight;
+               row["multiplicity"] = record.multiplicity;
+               row["integrated_amount"] = record.integrated_amount();
+               result.append(std::move(row));
+             }
+             return result;
+           })
       .def("_commit_step_transaction", &AmrSystem::commit_step_transaction)
       .def("_step_change_l2", &AmrSystem::step_change_l2)
       .def("_finalize_step_transaction", &AmrSystem::finalize_step_transaction)
@@ -1007,6 +1083,9 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       .def("macro_step", &AmrSystem::macro_step)
       .def("set_clock", &AmrSystem::set_clock, py::arg("t"), py::arg("macro_step"))
       .def("field_provider_slots", &AmrSystem::field_provider_slots)
+      .def("field_provider_materialized", &AmrSystem::field_provider_materialized,
+           py::arg("provider_slot"),
+           "Collective-free readiness of one exact registered AMR field provider.")
       .def("checkpoint_phi_provider_slot", &AmrSystem::checkpoint_phi_provider_slot)
       .def("field_provider_checkpoint_manifest", &AmrSystem::field_provider_checkpoint_manifest,
            "Collective-free immutable manifest for every exact AMR field provider.")
@@ -1084,6 +1163,19 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
              const auto bytes = s.program_accepted_state();
              return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
            })
+      .def("program_history_flux_snapshot_shard",
+           [](const AmrSystem& s) {
+             const auto bytes = s.program_history_flux_snapshot_shard();
+             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+           })
+      .def(
+          "canonical_program_history_flux_snapshots",
+          [](const AmrSystem& s, const py::sequence& payloads, int source_rank_count) {
+            const auto bytes = s.canonical_program_history_flux_snapshots(
+                history_flux_snapshot_shards_from_python(payloads), source_rank_count);
+            return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+          },
+          py::arg("payloads"), py::arg("source_rank_count"))
       .def(
           "restore_program_accepted_state",
           [](AmrSystem& s, py::bytes payload) {
@@ -1108,6 +1200,13 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
                 std::vector<std::uint8_t>(bytes.begin(), bytes.end()), names, depths, ncomps);
           },
           py::arg("payload"), py::arg("names"), py::arg("depths"), py::arg("ncomps"))
+      .def(
+          "restore_program_history_flux_snapshots",
+          [](AmrSystem& s, const py::sequence& payloads, int source_rank_count) {
+            s.restore_program_history_flux_snapshots(
+                history_flux_snapshot_shards_from_python(payloads), source_rank_count);
+          },
+          py::arg("payloads"), py::arg("source_rank_count"))
       .def("program_accepted_state_manifest", &AmrSystem::program_accepted_state_manifest)
       .def("program_clock_manifest", &AmrSystem::program_clock_manifest)
       .def("program_temporal_partition_manifest", &AmrSystem::program_temporal_partition_manifest)
@@ -1148,6 +1247,8 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
 // Data + IO accessors: block/patch introspection, mass/density/potential, level/var shape.
 void bind_amr_data(py::class_<AmrSystem>& cls) {
   cls.def("n_blocks", &AmrSystem::n_blocks)
+      .def("_interface_evaluation_count", &AmrSystem::interface_evaluation_count,
+           py::arg("identity"), py::arg("level") = 0)
       .def("block_names", &AmrSystem::block_names)
       .def("variable_names", &AmrSystem::variable_names,
            "Installed variable names of one authenticated AMR block. kind = 'conservative' | "
@@ -1481,6 +1582,21 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           },
           py::arg("name"), py::arg("level"), py::arg("slot_dt"), py::arg("initialized"),
           py::arg("fill_count"))
+      .def(
+          "history_sample_identity",
+          [](const AmrSystem& s, const std::string& name, int level) {
+            const auto bytes = s.history_sample_identity(name, level);
+            return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+          },
+          py::arg("name"), py::arg("level"))
+      .def(
+          "restore_history_sample_identity",
+          [](AmrSystem& s, const std::string& name, int level, py::bytes encoded) {
+            const std::string bytes = encoded;
+            s.restore_history_sample_identity(
+                name, level, std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+          },
+          py::arg("name"), py::arg("level"), py::arg("encoded"))
       .def("history_slot_dt", &AmrSystem::history_slot_dt, py::arg("name"), py::arg("level"),
            py::arg("slot"))
       .def("restore_history_slot_dt", &AmrSystem::restore_history_slot_dt, py::arg("name"),
@@ -1626,4 +1742,5 @@ void init_amr(py::module_& m) {
   bind_amr_stepping(cls);
   bind_amr_program(cls);
   bind_amr_data(cls);
+  amr_layout_transfer_binding::bind(m, cls);
 }

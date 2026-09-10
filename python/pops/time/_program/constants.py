@@ -47,7 +47,7 @@ class _ProgramConstants:
     # identity); scalar_field /
     # state / history (scratch/state bindings other ops fill or alias); and the sub-block ops below.
     _REMOVABLE_OPS = frozenset({
-        "rhs", "source", "implicit_source", "apply", "local_transform", "linear_combine",
+        "rhs", "diffusive_rhs", "source", "implicit_source", "apply", "local_transform", "linear_combine",
         "linear_source", "solve_local_linear",
         "cell_compare", "where", "reduce", "scalar_op", "compare",
     })
@@ -58,7 +58,7 @@ class _ProgramConstants:
     # the allow-list above (hence live); listed here only to drive the sub-block reference walk.
     _SUBBLOCK_OPS = frozenset({
         "while", "branch", "range", "subcycle", "matrix_free_operator", "solve_local_nonlinear",
-        "post_synchronization",
+        "post_synchronization", "solve_spatial_nonlinear",
     })
 
     # Ops PROVEN PURE for common-subexpression elimination (Spec 3 s28, ADC-465): each allocates a
@@ -90,9 +90,9 @@ class _ProgramConstants:
     # same state input -- conservatively, ANY commit, in-place state mutation (project), boundary fill,
     # history store, or a second field solve into the shared aux counts as a state/aux barrier.
     _STATE_BARRIER_OPS = frozenset({
-        "project", "fill_boundary", "store_history",
+        "project", "fill_boundary", "store_history", "input_fields",
         "solve_fields", "solve_fields_from_blocks", "solve_coupled_implicit",
-        "solve_implicit_source",
+        "solve_implicit_source", "solve_spatial_nonlinear",
     })
 
     _OPTIMIZE_PASSES = (
@@ -102,21 +102,21 @@ class _ProgramConstants:
     )
 
     _SCRATCH_OPS = frozenset({
-        "rhs", "source", "implicit_source", "apply", "local_transform", "linear_combine",
+        "rhs", "diffusive_rhs", "source", "implicit_source", "apply", "local_transform", "linear_combine",
         "linear_source", "solve_local_linear",
-        "solve_local_nonlinear", "solve_coupled_implicit", "solve_implicit_source",
+        "solve_local_nonlinear", "solve_coupled_implicit", "solve_implicit_source", "solve_spatial_nonlinear",
         "cell_compare", "where", "coupled_rate",
     })
 
     _PERCELL_KERNEL_OPS = frozenset({
-        "rhs", "source", "implicit_source", "apply", "linear_combine", "linear_source",
+        "rhs", "diffusive_rhs", "source", "implicit_source", "apply", "linear_combine", "linear_source",
         "solve_local_linear",
         "solve_local_nonlinear", "solve_coupled_implicit", "cell_compare", "where", "coupled_rate",
         "local_transform", "project", "fill_boundary",
     })
     _HEAVY_KERNEL_OPS = frozenset({
         "solve_fields", "solve_fields_from_blocks", "solve_linear", "solve_coupled_implicit",
-        "solve_implicit_source",
+        "solve_implicit_source", "solve_spatial_nonlinear",
     })
 
     # GPU heuristic thresholds (Spec 3 s28 detectors, ADC-465). A warning report, never a hard error:

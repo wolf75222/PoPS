@@ -134,7 +134,7 @@ def test_callable_body_change_invalidates():
 
         @mod.operator(name="op", signature=(u, f) >> model.Rate(u), kind="local_rate")
         def op(state, fields):
-            return "alpha"
+            return (state[0] + fields[0],)
 
         return mod
 
@@ -145,7 +145,7 @@ def test_callable_body_change_invalidates():
 
         @mod.operator(name="op", signature=(u, f) >> model.Rate(u), kind="local_rate")
         def op(state, fields):
-            return "beta"
+            return (2 * state[0] + fields[0],)
 
         return mod
 

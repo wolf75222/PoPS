@@ -254,6 +254,19 @@ def _emit_cpp_program_impl(
     if model_graph is not None and type(model_graph) is not ProgramModelGraph:
         raise TypeError("model_graph must be an exact ProgramModelGraph")
     authority = model_graph if model_graph is not None else model
+    # Even an RHS-only Program must cross the same authenticated provider boundary.
+    # Otherwise no expression kernel calls ProgramProviderPlans.bind(), allowing a
+    # raw facade to bypass the exact Module/provider authority check entirely.
+    from pops.codegen.component_provider_packs import require_emitter_provider_carrier
+
+    emitters = (() if authority is None else
+                tuple(authority.models_by_owner.values())
+                if type(authority) is ProgramModelGraph else (authority,))
+    for emitter in emitters:
+        implementation = getattr(emitter, "_m", emitter)
+        if getattr(implementation, "_auxiliary_provider_pack", None) is None:
+            raise ValueError("Program emission requires the exact auxiliary ProviderPack; compile through Module")
+        require_emitter_provider_carrier(implementation, where="Program emission")
     if target not in ("system", "amr_system"):
         raise ValueError("emit_cpp_program: target 'system' | 'amr_system' (got %r)" % (target,))
     if type(has_shared_interface_implicit_jacvec) is not bool:
@@ -271,7 +284,14 @@ def _emit_cpp_program_impl(
     _check_lowerable(program, authority, field_plans or {}, target=target)
     from pops.codegen.program_emit_kernels import ProgramProviderPlans
 
-    provider_plans = ProgramProviderPlans()
+    from pops.codegen._native_auxiliary_shapes import native_auxiliary_halos
+    provider_halos = {}
+    for emitter in emitters:
+        for key, width in native_auxiliary_halos(getattr(emitter, "_m", emitter)).items():
+            if key in provider_halos and provider_halos[key] != width:
+                raise ValueError("Program provider has conflicting exact native halo shapes")
+            provider_halos[key] = width
+    provider_plans = ProgramProviderPlans(target=target, provider_halos=provider_halos)
     prelude, body, post_synchronization, operator_authorities = _emit_body(
         program,
         authority,
@@ -289,6 +309,14 @@ def _emit_cpp_program_impl(
     from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
 
     field_boundaries = emit_field_boundaries(program, authority, field_plans or {}, target)
+    # All emitted regions must register their shared numerical helpers before
+    # the translation-unit definitions and provider installations are rendered.
+    amr_hierarchy_bodies = (
+        _emit_amr_hierarchy_bodies(
+            program, authority, field_plans or {},
+            has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
+            provider_plans=provider_plans)
+        if target == "amr_system" else None)
     return _PROGRAM_CPP_TEMPLATE.format(
         name=json.dumps(program.name),
         hash=program._ir_hash(),
@@ -301,7 +329,8 @@ def _emit_cpp_program_impl(
         module_metadata=_emit_module_metadata(program, authority),
         program_params=_emit_program_params(program, authority),
         field_boundaries=field_boundaries,
-        model_helpers=_emit_program_model_helpers(program, authority),
+        model_helpers=(_emit_program_model_helpers(program, authority)
+                       + provider_plans.source_kernel_helpers.cpp()),
         block_names=_emit_block_names(program),
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
         system_install=_emit_system_install(
@@ -313,17 +342,7 @@ def _emit_cpp_program_impl(
             target,
             prelude,
             body,
-            _emit_amr_hierarchy_bodies(
-                program,
-                authority,
-                field_plans or {},
-                has_shared_interface_implicit_jacvec=(
-                    has_shared_interface_implicit_jacvec
-                ),
-                provider_plans=provider_plans,
-            )
-            if target == "amr_system"
-            else None,
+            amr_hierarchy_bodies,
             provider_plans.cpp_install(target),
             post_synchronization,
         ),
@@ -590,7 +609,7 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
                 "that declares its named source / linear source; pass model= "
                 "(compile_problem threads it through)" % (v.op, v.name)
             )
-        if v.op == "solve_local_nonlinear":  # recurse: the residual sub-block ops must lower too
+        if v.op in ("solve_local_nonlinear", "solve_spatial_nonlinear"):
             for w in v.attrs["residual_block"]:
                 _check_op_lowerable(program, w, model, field_plans)
         return  # _emit_op lowers it from the model's symbolic coefficients

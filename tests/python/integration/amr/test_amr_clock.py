@@ -15,15 +15,16 @@ VERROUILLE :
   T4 - set_clock(.., -1) leve (macro_step >= 0 exige).
   T5 - macro_step() == 0 avant tout pas (parite System).
 
-LIMITE HONNETE. AmrSystem.checkpoint/restart reste NON cable (etats fins par patch absents de l'ABI,
-cf. test docstring de AmrSystem.checkpoint). Ce test ne valide donc PAS une reprise bit-identique de
-l'ETAT (impossible) ; il valide l'horloge + la cadence, qui sont independantes et utiles seules
-(p.ex. pour piloter une sortie write a cadence fixe et reprendre la phase regrid/stride).
+LIMITE. Ce test valide l'horloge, pas une reprise complete des etats fins et des curseurs temporels.
+Une modification de la seule horloge native ne constitue pas une transaction de restart et le
+runtime refuse de reprendre les pas si son etat temporel accepte n'est plus synchronise.
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
 import numpy as np
+import pops
+import pytest
 
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
@@ -38,8 +39,21 @@ def _bump(n, amp):
     return r + (1.0 - r.mean())  # moyenne nulle -> Sum q n solvable en periodique
 
 
-def _scalar_charge(q, B0=1.0):
-    return engine.Model(engine.Scalar(), engine.ExB(), engine.NoSource(), engine.ChargeDensity(charge=q))
+def _scalar_charge(name, q):
+    from pops.physics import Density
+    from pops.physics._facade import Model
+
+    model = Model("%s-scalar-advection" % name)
+    (rho,) = model.conservative_vars("n", roles=(Density(),))
+    model.flux(x=[0.3 * rho], y=[0.2 * rho])
+    model.eigenvalues(x=[0.3 + 0.0 * rho], y=[0.2 + 0.0 * rho])
+    model.primitive_vars(rho)
+    model.conservative_from([rho])
+    model.elliptic_rhs(q * rho)
+    return model.compile(
+        backend="production", target="amr_system", name=name,
+        consumer_owner_qid="tests.amr-clock.%s" % name,
+    )
 
 
 def _amr_config(n: int, *, regrid_every: int) -> AmrSystemConfig:
@@ -57,16 +71,26 @@ def _build_stride(n=32):
     """AMR multi-blocs : un bloc a stride=2 (cadence hold-then-catch-up) -> la cadence depend du
     compteur de macro-pas, ce que macro_step()/set_clock() exposent et restaurent."""
     sim = AmrSystem(_amr_config(n, regrid_every=0))
+    # Native package installation seals the complete state-route set. Resolve
+    # both actual Case identities before attaching either block package.
+    model = pops.Model("amr-clock-state")
+    state = model.state("U", components=("n",))
+    case = pops.Case("amr-clock")
+    blocks = {name: case.block(name, model, states=(state,)) for name in ("ions", "slow")}
+    validated = pops.validate(case)
+    for name, block in blocks.items():
+        sim._s._install_block_state_route(name, validated.resolve(block[state]).qualified_id)
     sim.set_temporal_relations([2], [1], ["integral_only"])
-    sim.add_equation("ions", _scalar_charge(+1.0),
+    sim.set_poisson(bc=Periodic())
+    sim.add_equation("ions", _scalar_charge("amr_clock_ions", +1.0),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()))
-    sim.add_equation("slow", _scalar_charge(-1.0),
+    sim.add_equation("slow", _scalar_charge("amr_clock_slow", -1.0),
                   spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()),
                   time=engine.Explicit(stride=2))  # bloc lent : cadence stride=2
-    sim.set_poisson(bc=Periodic())
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("slow", _bump(n, 0.20))
     install_forward_euler_program(sim)
+    sim.mark_bound()  # seals the installed Program's exact accepted-state capacity
     return sim
 
 
@@ -91,9 +115,13 @@ def test_amr_set_clock_roundtrip():
 
 
 def test_amr_clock_resumes_from_restored():
-    """T3 : apres set_clock(.., K) le compteur REPREND depuis K (K + 2 apres 2 pas)."""
+    """T3 : une horloge acceptee restauree reprend depuis K (K + 2 apres 2 pas)."""
     sim = _build_stride()
-    sim.set_clock(0.0, 3)  # restauration AVANT le 1er pas (build paresseux : phase poussee au 1er step)
+    for _ in range(3):
+        sim.step(1e-3)
+    # Keep the matching accepted Python temporal state. A raw native clock
+    # assignment alone is not a complete checkpoint/restart transaction.
+    sim.set_clock(sim.time(), 3)
     sim.step(1e-3)
     sim.step(1e-3)
     assert sim.macro_step() == 5, "macro_step() = %d (attendu 3 + 2)" % sim.macro_step()
@@ -102,12 +130,16 @@ def test_amr_clock_resumes_from_restored():
 def test_amr_set_clock_rejects_negative():
     """T4 : set_clock(.., macro_step < 0) leve (parite System)."""
     sim = _build_stride()
-    raised = False
-    try:
+    with pytest.raises(ValueError, match="clock requires finite time and non-negative step"):
         sim.set_clock(0.0, -1)
-    except RuntimeError:
-        raised = True
-    assert raised, "set_clock(.., -1) aurait du lever"
+
+
+def test_clock_only_restore_cannot_bypass_temporal_restart_authority():
+    sim = _build_stride()
+    sim.set_clock(0.0, 3)
+    with pytest.raises(RuntimeError, match="temporal state is desynchronized"):
+        sim.step(1e-3)
+    assert sim.time() == 0.0 and sim.macro_step() == 3
 
 
 if __name__ == "__main__":
@@ -119,4 +151,6 @@ if __name__ == "__main__":
     print("OK T3 : le compteur reprend depuis la valeur restauree")
     test_amr_set_clock_rejects_negative()
     print("OK T4 : set_clock(.., -1) rejete")
+    test_clock_only_restore_cannot_bypass_temporal_restart_authority()
+    print("OK : une horloge native seule ne contourne pas l'autorite de restart")
     print("test_amr_clock : OK")

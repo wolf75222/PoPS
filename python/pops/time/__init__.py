@@ -58,6 +58,11 @@ from pops.time._step.strategy import (  # noqa: F401
 from pops.time.solve_problem import (  # noqa: F401
     CoupledImplicitEuler, LocalLinear, LocalResidual,
 )
+from pops.time.solve_request import (  # noqa: F401
+    DerivativeStrategy, SolveRequest, SolveRequestError, SolveUnknown,
+)
+from pops.time.implicit_stage import ImplicitStage  # noqa: F401
+from pops.time.implicit_diffusion import ImplicitDiffusionStage  # noqa: F401
 from pops.time._step.transaction import (  # noqa: F401
     ALL_PROVISIONAL_STORES, AcceptanceGuard, BlockProjection, GuardRole,
     ProjectAndRecheck, ProvisionalStore, StepTransactionPlan, StepTransactionReport,
@@ -81,6 +86,8 @@ from pops.time.stencil import StencilAccess  # noqa: F401
 
 __all__ = ["Program", "ProgramValue", "StageStateSet", "StencilAccess", "ResidualSolution",
            "CoupledImplicitEuler", "LocalLinear", "LocalResidual",
+           "DerivativeStrategy", "SolveRequest", "SolveRequestError", "SolveUnknown",
+           "ImplicitStage", "ImplicitDiffusionStage",
            "SolveOutcome", "FieldSolveOutcome", "SolveAction", "FailRun", "RejectAttempt",
            "SOLVE_STATUSES", "Schedule",
            "StepStrategy", "FixedDt", "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid",
@@ -111,3 +118,8 @@ __all__ = ["Program", "ProgramValue", "StageStateSet", "StencilAccess", "Residua
            "eliminate_redundant_field_solves", "optimize",
            "HoldCatchupBlock", "adaptive_strides", "hold_catchup_program",
            "step_adaptive_program"]
+
+from .method_regions import (TemporalInterval, TemporalProblemRegion, ResolvedTemporalProblem,
+                             resolve_temporal_problem)
+__all__ += ["TemporalInterval", "TemporalProblemRegion", "ResolvedTemporalProblem",
+            "resolve_temporal_problem"]

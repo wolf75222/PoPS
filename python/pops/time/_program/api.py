@@ -25,6 +25,7 @@ from pops.time._program.local import _ProgramLocal
 from pops.time._program.passes import _ProgramPasses
 from pops.time._program.solve import _ProgramSolve
 from pops.time._program.time_handles import _ProgramTimeHandles
+from pops.time._program.physical_maps import _ProgramPhysicalMaps
 from pops.time.references import bind_program_block, block_name
 from pops.time._step.transaction import (
     ALL_PROVISIONAL_STORES,
@@ -40,6 +41,7 @@ from pops.time.values import _Coeff, ProgramValue  # noqa: F401  (ProgramValue u
 @register_program_type
 class Program(
     _ProgramTimeHandles,
+    _ProgramPhysicalMaps,
     _ProgramCore,
     _ProgramLocal,
     _ProgramCondensed,
