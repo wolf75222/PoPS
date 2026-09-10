@@ -1150,7 +1150,7 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh")
+            "test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh:test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack")
       elseif(_test STREQUAL "test_program_runtime")
         pops_add_mpi_rank_test(
           ${_test} ${_np}

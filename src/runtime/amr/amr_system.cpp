@@ -3904,6 +3904,14 @@ struct AmrSystem<Dim>::Impl {
   std::vector<std::unique_ptr<AcceptedSnapshot>> parent_step_transactions;
   std::unique_ptr<AcceptedSnapshot> restart_transaction;
   bool restart_transaction_committed = false;
+  // A restart may replace accepted rings with topology-qualified provisional storage. Only the
+  // exact incoming accepted image, revalidated against the live rings at commit, can publish it.
+  bool restart_history_replacement_pending = false;
+  bool restart_history_authority_restored = false;
+  std::vector<std::uint8_t> restart_history_authority;
+  // Outside AcceptedSnapshot: selective replay restores internal snapshots while the enclosing
+  // restart must retain which final numeric slots have actually been written.
+  std::map<std::string, std::vector<std::uint8_t>> restart_history_restored_slots;
 
   explicit Impl(const AmrSystemConfig<Dim>& config)
       : cfg(config),
@@ -8397,6 +8405,54 @@ struct AmrSystem<Dim>::Impl {
              std::tie(right.name, right.level, right.slot);
     });
     return result;
+  }
+
+  void require_history_mutation_before_restart_commit() const {
+    if (restart_transaction_committed)
+      throw std::logic_error("AMR history mutation cannot change a committed restart");
+  }
+
+  void require_restart_history_restoration(const ExecutionLane& lane) const {
+    std::exception_ptr history_error;
+    try {
+      if (restart_history_replacement_pending) {
+        if (!restart_history_authority_restored || restart_history_authority.empty() ||
+            program_accepted_bytes_runtime_owned ||
+            program_accepted_bytes != restart_history_authority)
+          throw std::logic_error(
+              "AMR restart history replacement lacks its restored accepted image");
+        const auto interface_budget = accepted_state_interface_flux_ledger_budget();
+        const auto accepted = runtime::program::deserialize_amr_program_accepted_state<Dim>(
+            restart_history_authority, &interface_budget);
+        runtime::program::require_live_amr_program_checkpoint(accepted, *engine);
+        require_accepted_state_authority_contracts(accepted);
+        if (history_descriptors() != accepted.histories ||
+            history_slot_provenance() != accepted.history_slots)
+          throw std::logic_error("AMR restart history replacement changed its restored provenance");
+        if (restart_history_restored_slots.size() != program.hist_.histories.size())
+          throw std::logic_error("AMR restart history replacement lacks its numeric slot registry");
+        for (const auto& [key, ring] : program.hist_.histories) {
+          const auto& restored = restart_history_restored_slots.at(key);
+          if (restored.size() != ring.size() ||
+              !std::all_of(restored.begin(), restored.end(),
+                           [](std::uint8_t done) { return done == 1; }))
+            throw std::logic_error(
+                "AMR restart history replacement has an unrestored numeric slot");
+        }
+        for (const auto& [key, pending] : program.hist_.store_pending) {
+          (void)key;
+          if (pending)
+            throw std::logic_error("AMR restart history replacement contains an unaccepted store");
+        }
+      }
+    } catch (...) {
+      history_error = std::current_exception();
+    }
+    if (all_reduce_max(history_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && history_error)
+        std::rethrow_exception(history_error);
+      throw std::runtime_error("AMR restart history replacement is not ready collectively");
+    }
   }
 
   runtime::program::AmrProgramHistoryDescriptor history_descriptor(std::string_view name) const {
@@ -17803,6 +17859,10 @@ void AmrSystem<Dim>::begin_restart_transaction() {
   p_->materialize_all_fields_atomically();
   p_->restart_transaction = p_->prepare_accepted_snapshot_collectively("restart transaction");
   p_->restart_transaction_committed = false;
+  p_->restart_history_replacement_pending = false;
+  p_->restart_history_authority_restored = false;
+  p_->restart_history_authority.clear();
+  p_->restart_history_restored_slots.clear();
 }
 
 template <int Dim>
@@ -17813,15 +17873,21 @@ void AmrSystem<Dim>::commit_restart_transaction() {
   const long invalid = !p_->restart_transaction || p_->restart_transaction_committed ? 1L : 0L;
   if (all_reduce_max(invalid, lane) != 0)
     throw std::logic_error("AmrSystem has no collective uncommitted restart transaction");
+  p_->require_restart_history_restoration(lane);
   p_->restart_transaction_committed = true;
 }
 
 template <int Dim>
 void AmrSystem<Dim>::finalize_restart_transaction() noexcept {
-  if (p_->native_package_phase != Impl::NativePackagePhase::idle)
+  if (p_->native_package_phase != Impl::NativePackagePhase::idle ||
+      !p_->restart_transaction_committed)
     return;
   p_->restart_transaction.reset();
   p_->restart_transaction_committed = false;
+  p_->restart_history_replacement_pending = false;
+  p_->restart_history_authority_restored = false;
+  p_->restart_history_authority.clear();
+  p_->restart_history_restored_slots.clear();
 }
 
 template <int Dim>
@@ -17835,6 +17901,10 @@ void AmrSystem<Dim>::rollback_restart_transaction() {
 
   std::unique_ptr<typename Impl::AcceptedSnapshot> snapshot = std::move(p_->restart_transaction);
   p_->restart_transaction_committed = false;
+  p_->restart_history_replacement_pending = false;
+  p_->restart_history_authority_restored = false;
+  p_->restart_history_authority.clear();
+  p_->restart_history_restored_slots.clear();
   std::exception_ptr restore_error;
   try {
     snapshot->restore(*p_);
@@ -17854,10 +17924,14 @@ void AmrSystem<Dim>::rollback_restart_transaction() {
 template <int Dim>
 void AmrSystem<Dim>::preflight_regrid_on_restart() {
   const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR restart regrid preflight");
-  const long invalid = !p_->restart_transaction || p_->external_step_transaction ? 1L : 0L;
+  const long invalid =
+      !p_->restart_transaction || p_->restart_transaction_committed || p_->external_step_transaction
+          ? 1L
+          : 0L;
   if (all_reduce_max(invalid, lane) != 0)
     throw std::logic_error(
         "AmrSystem restart regrid preflight requires one active restart transaction");
+  p_->require_restart_history_restoration(lane);
   std::exception_ptr preflight_error;
   try {
     p_->program.preflight_regrid_on_restart("AmrSystem::preflight_regrid_on_restart:");
@@ -17874,9 +17948,15 @@ void AmrSystem<Dim>::preflight_regrid_on_restart() {
 template <int Dim>
 void AmrSystem<Dim>::regrid_on_restart() {
   const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR restart regrid");
-  const long invalid = !p_->restart_transaction || p_->external_step_transaction ? 1L : 0L;
+  const long invalid =
+      !p_->restart_transaction || p_->restart_transaction_committed || p_->external_step_transaction
+          ? 1L
+          : 0L;
   if (all_reduce_max(invalid, lane) != 0)
     throw std::logic_error("AmrSystem restart regrid requires one active restart transaction");
+  p_->require_restart_history_restoration(lane);
+  std::vector<std::uint8_t> transformed_history_authority;
+  std::map<std::string, std::vector<std::uint8_t>> transformed_history_slots;
   const std::uint64_t prior_topology_epoch = p_->engine->topology_epoch();
   std::exception_ptr regrid_error;
   bool reconstruction_started = false;
@@ -17895,6 +17975,13 @@ void AmrSystem<Dim>::regrid_on_restart() {
         p_->last_topology_rematerialization_generation != p_->engine->materialization_generation())
       throw std::runtime_error(
           "AmrSystem restart regrid did not rematerialize derived providers on its final topology");
+    if (p_->restart_history_replacement_pending) {
+      // This declared native transformation consumed a complete restored image. Its own atomic
+      // history remap published every resulting slot; seal that result for the final commit.
+      transformed_history_authority = p_->program_accepted_bytes;
+      for (const auto& [key, ring] : p_->program.hist_.histories)
+        transformed_history_slots.emplace(key, std::vector<std::uint8_t>(ring.size(), 1));
+    }
   } catch (...) {
     if (reconstruction_started) {
       p_->multiblock_hierarchy->abort_interface_topology_replacement_();
@@ -17909,6 +17996,10 @@ void AmrSystem<Dim>::regrid_on_restart() {
     if (published_lane.size() == 1 && regrid_error)
       std::rethrow_exception(regrid_error);
     throw std::runtime_error("AMR restart regrid failed on at least one MPI rank");
+  }
+  if (p_->restart_history_replacement_pending) {
+    p_->restart_history_authority.swap(transformed_history_authority);
+    p_->restart_history_restored_slots.swap(transformed_history_slots);
   }
 }
 
@@ -19073,6 +19164,7 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
   if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
     throw std::logic_error("AMR hierarchy rebuild requires its prepared hierarchy lane");
   const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
+  const bool restart_replacement = p_->restart_transaction && !p_->restart_transaction_committed;
   // The carrier contract is rooted in the durable package lane.  A rebuild may use the prepared
   // lane for its outer collective validation, but recreating the carrier beneath that already
   // duplicated lane would change the exact lane identity and make an otherwise authentic
@@ -19083,6 +19175,8 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
   std::string request_contract;
   std::exception_ptr validation_error;
   try {
+    if (p_->restart_transaction_committed)
+      throw std::logic_error("AMR hierarchy rebuild cannot mutate a committed restart");
     if (boxes.size() != owner_ranks.size())
       throw std::invalid_argument(
           "AmrSystem::rebuild_hierarchy boxes and owner ranks must align exactly");
@@ -19110,8 +19204,9 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
     level_owners.resize(static_cast<std::size_t>(active_levels));
     ExactContractBuilder request;
     request.text("pops.amr-system.rebuild-hierarchy")
-        .scalar(std::uint32_t{2})
+        .scalar(std::uint32_t{3})
         .scalar(std::int32_t{Dim})
+        .scalar(restart_replacement)
         .scalar(static_cast<std::uint64_t>(boxes.size()));
     for (std::size_t index = 0; index < boxes.size(); ++index) {
       const AmrPatch<Dim>& patch = boxes[index];
@@ -19234,11 +19329,15 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
           const int fill_count = source.fill_count.at(key);
           const bool pending = source.store_pending.at(key);
           const auto& dts = source.slot_dt.at(key);
+          require_amr_history_provenance(dts, depth, initialized, fill_count,
+                                         "AMR restart hierarchy rebuild");
+          const auto& samples = source.validated_samples(key);
+          for (std::size_t slot = 0; slot < samples.size(); ++slot)
+            runtime::program::validate_history_sample_provenance(samples[slot], initialized,
+                                                                 dts[slot]);
           if (depth < 1 || ring.size() != static_cast<std::size_t>(depth) ||
-              dts.size() != ring.size() || initialized || fill_count != 0 || pending ||
-              !std::all_of(
-                  dts.begin(), dts.end(), [](Real dt) { return dt == Real(0); }) ||
-              owner < 0 || static_cast<std::size_t>(owner) >= p_->blocks.size() ||
+              (!restart_replacement && initialized) || pending || owner < 0 ||
+              static_cast<std::size_t>(owner) >= p_->blocks.size() ||
               source.state_identity.at(key).empty() || source.space_identity.at(key).empty() ||
               source.clock_identity.at(key).empty() ||
               source.interpolation_identity.at(key).empty() || ring.empty() ||
@@ -19393,6 +19492,12 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
     if (provisional_histories) {
       static_assert(std::is_nothrow_swappable_v<runtime::program::HistoryManager<Dim>>);
       std::swap(p_->program.hist_, *provisional_histories);
+      if (restart_replacement) {
+        p_->restart_history_replacement_pending = true;
+        p_->restart_history_authority_restored = false;
+        p_->restart_history_authority.clear();
+        p_->restart_history_restored_slots.clear();
+      }
     }
     p_->pending_provider_restore.reset();
     p_->pending_provider_registry_restore.reset();
@@ -19758,6 +19863,7 @@ int AmrSystem<Dim>::history_fill_count(const std::string& name, int level) const
 template <int Dim>
 void AmrSystem<Dim>::set_history_initialized(const std::string& name, int level, bool initialized) {
   p_->ensure_engine();
+  p_->require_history_mutation_before_restart_commit();
   const int fill = initialized ? p_->history_descriptor(name).depth : 0;
   const std::string key = p_->history_level_key(name, level);
   auto& identities = p_->program.hist_.slot_sample.at(key);
@@ -19776,6 +19882,7 @@ template <int Dim>
 void AmrSystem<Dim>::restore_history_fill_count(const std::string& name, int level,
                                                 int fill_count) {
   p_->ensure_engine();
+  p_->require_history_mutation_before_restart_commit();
   const int depth = p_->history_descriptor(name).depth;
   if (fill_count < 0 || fill_count > depth)
     throw std::invalid_argument("AMR history fill count lies outside its exact ring depth");
@@ -19795,6 +19902,7 @@ template <int Dim>
 void AmrSystem<Dim>::restore_history_metadata(const std::string& name, int level, bool initialized,
                                               int fill_count) {
   p_->ensure_engine();
+  p_->require_history_mutation_before_restart_commit();
   const int depth = p_->history_descriptor(name).depth;
   if (fill_count < 0 || fill_count > depth)
     throw std::invalid_argument("AMR history fill count lies outside its exact ring depth");
@@ -19818,6 +19926,7 @@ void AmrSystem<Dim>::restore_history_provenance(const std::string& name, int lev
                                                 const std::vector<double>& slot_dt,
                                                 bool initialized, int fill_count) {
   p_->ensure_engine();
+  p_->require_history_mutation_before_restart_commit();
   const int depth = p_->history_descriptor(name).depth;
   if (slot_dt.size() != static_cast<std::size_t>(depth))
     throw std::invalid_argument("AMR history provenance differs from its exact ring depth");
@@ -19886,6 +19995,7 @@ template <int Dim>
 void AmrSystem<Dim>::restore_history(const std::string& name, int level, int slot,
                                      const std::vector<double>& values) {
   p_->ensure_engine();
+  p_->require_history_mutation_before_restart_commit();
   const auto descriptor = p_->history_descriptor(name);
   if (slot < 0 || slot >= descriptor.depth)
     throw std::out_of_range("AMR history slot lies outside its exact ring depth");
@@ -19901,9 +20011,14 @@ void AmrSystem<Dim>::restore_history(const std::string& name, int level, int slo
   // The separately authenticated whole-ledger restore follows all numeric anchor writes.
   auto& sample = p_->program.hist_.slot_sample.at(key).at(static_cast<std::size_t>(slot));
   auto& field = p_->program.hist_.histories.at(key)[static_cast<std::size_t>(slot)];
+  std::uint8_t* restored = nullptr;
+  if (p_->restart_history_replacement_pending)
+    restored = &p_->restart_history_restored_slots.at(key).at(static_cast<std::size_t>(slot));
   write_field(field, p_->engine->hierarchy().layout(static_cast<std::size_t>(level)).domain(),
               values, descriptor.components);
   sample = {};
+  if (restored)
+    *restored = 1;
 }
 
 template <int Dim>
@@ -19931,6 +20046,7 @@ void AmrSystem<Dim>::restore_history_sample_identity(const std::string& name, in
   auto candidate = analytic::collectively_prepare_exact_analytic_request(
       "AmrSystem::restore_history_sample_identity",
       [&] {
+        p_->require_history_mutation_before_restart_commit();
         key = p_->history_level_key(name, level);
         const auto depth = static_cast<std::size_t>(p_->history_descriptor(name).depth);
         if (p_->program.hist_.slot_sample.at(key).size() != depth)
@@ -19970,6 +20086,7 @@ template <int Dim>
 void AmrSystem<Dim>::restore_history_slot_dt(const std::string& name, int level, int slot,
                                              double dt) {
   p_->ensure_engine();
+  p_->require_history_mutation_before_restart_commit();
   const int depth = p_->history_descriptor(name).depth;
   if (slot < 0 || slot >= depth || !std::isfinite(dt) || dt < 0.0)
     throw std::invalid_argument("AMR history dt restore requires a valid slot and finite dt >= 0");
@@ -19991,6 +20108,7 @@ template <int Dim>
 int AmrSystem<Dim>::rebuild_history_slots(const std::string& name,
                                           const std::vector<int>& stored_slots) {
   p_->ensure_engine();
+  p_->require_history_mutation_before_restart_commit();
   const auto descriptor = p_->history_descriptor(name);
   if (!p_->program.step_)
     throw std::logic_error("AMR history replay requires an installed compiled Program");
@@ -20097,9 +20215,16 @@ int AmrSystem<Dim>::rebuild_history_slots(const std::string& name,
     const auto& image = reconstructed[static_cast<std::size_t>(slot)];
     if (image.size() != keys.size())
       throw std::logic_error("AMR history anchors do not bracket every omitted slot");
-    for (std::size_t level = 0; level < keys.size(); ++level)
+    for (std::size_t level = 0; level < keys.size(); ++level) {
+      std::uint8_t* restored = nullptr;
+      if (p_->restart_history_replacement_pending)
+        restored =
+            &p_->restart_history_restored_slots.at(keys[level]).at(static_cast<std::size_t>(slot));
       copy_full_field_in_place(image[level], p_->program.hist_.histories.at(
                                                  keys[level])[static_cast<std::size_t>(slot)]);
+      if (restored)
+        *restored = 1;
+    }
     ++recomputed;
   }
   p_->last_replay_regrid_steps.clear();
@@ -20922,6 +21047,13 @@ void AmrSystem<Dim>::restore_checkpoint_accepted_state(const std::vector<std::ui
   std::exception_ptr local_error;
   long local_failure = 0;
   try {
+    if (p_->restart_transaction_committed)
+      throw std::logic_error(
+          "AMR checkpoint accepted-state restore cannot mutate a committed restart");
+    if (p_->restart_history_replacement_pending &&
+        (p_->restart_history_authority.empty() || state != p_->restart_history_authority))
+      throw std::invalid_argument(
+          "AMR checkpoint accepted-state restore differs from its materialized history authority");
     p_->require_program_checkpoint_capacity(state.size(), "AMR checkpoint accepted-state restore");
     interface_budget.emplace(p_->accepted_state_interface_flux_ledger_budget());
     decoded.emplace(
@@ -21012,8 +21144,11 @@ void AmrSystem<Dim>::restore_checkpoint_accepted_state(const std::vector<std::ui
   } catch (...) {
     resync_error = std::current_exception();
   }
-  if (all_reduce_max(resync_error ? 1L : 0L, lane.communicator()) == 0)
+  if (all_reduce_max(resync_error ? 1L : 0L, lane.communicator()) == 0) {
+    if (p_->restart_history_replacement_pending)
+      p_->restart_history_authority_restored = true;
     return;
+  }
 
   if (p_->restart_transaction) {
     if (lane.size() == 1 && resync_error)
@@ -21059,18 +21194,18 @@ void AmrSystem<Dim>::materialize_program_restart_histories(const std::vector<std
                                                            const std::vector<int>& depths,
                                                            const std::vector<int>& ncomps) {
   p_->ensure_engine();
-  if (!p_->restart_transaction)
-    throw std::logic_error("AMR Program restart histories require one active restart transaction");
-  if (names.size() != depths.size() || names.size() != ncomps.size())
-    throw std::invalid_argument(
-        "AMR Program restart history names, depths and component counts must align");
-
   // This protocol invokes restart authority requalification before its final consensus, so it
   // must retain the stable multiblock lane rather than a replaceable graph-lane reference.
   const ExecutionLane& lane = p_->multiblock_hierarchy->lane();
   std::exception_ptr decode_error;
   std::optional<runtime::program::AmrProgramAcceptedState<Dim>> decoded_preflight;
   try {
+    if (!p_->restart_transaction || p_->restart_transaction_committed)
+      throw std::logic_error(
+          "AMR Program restart histories require one uncommitted restart transaction");
+    if (names.size() != depths.size() || names.size() != ncomps.size())
+      throw std::invalid_argument(
+          "AMR Program restart history names, depths and component counts must align");
     const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
     decoded_preflight.emplace(
         runtime::program::deserialize_amr_program_accepted_state<Dim>(state, &interface_budget));
@@ -21089,6 +21224,8 @@ void AmrSystem<Dim>::materialize_program_restart_histories(const std::vector<std
     throw std::invalid_argument("AMR Program restart history bytes differ between prepared ranks");
 
   runtime::program::HistoryManager<Dim> candidate;
+  std::vector<std::uint8_t> candidate_authority;
+  std::map<std::string, std::vector<std::uint8_t>> candidate_restored_slots;
   std::string contract;
   std::exception_ptr preparation_error;
   try {
@@ -21141,6 +21278,8 @@ void AmrSystem<Dim>::materialize_program_restart_histories(const std::vector<std
           field.set_val(Real(0));
           ring.push_back(std::move(field));
         }
+        candidate_restored_slots.emplace(
+            key, std::vector<std::uint8_t>(static_cast<std::size_t>(descriptor.depth), 0));
         candidate.histories.emplace(key, std::move(ring));
         candidate.depth.emplace(key, descriptor.depth);
         candidate.initialized.emplace(key, false);
@@ -21160,6 +21299,7 @@ void AmrSystem<Dim>::materialize_program_restart_histories(const std::vector<std
       }
     }
     contract = std::move(exact).release();
+    candidate_authority = state;
   } catch (...) {
     preparation_error = std::current_exception();
   }
@@ -21174,6 +21314,10 @@ void AmrSystem<Dim>::materialize_program_restart_histories(const std::vector<std
           lane.communicator()))
     throw std::invalid_argument("AMR Program restart history contracts differ between MPI ranks");
   p_->program.hist_ = std::move(candidate);
+  p_->restart_history_authority.swap(candidate_authority);
+  p_->restart_history_restored_slots.swap(candidate_restored_slots);
+  p_->restart_history_replacement_pending = true;
+  p_->restart_history_authority_restored = false;
 }
 
 template <int Dim>

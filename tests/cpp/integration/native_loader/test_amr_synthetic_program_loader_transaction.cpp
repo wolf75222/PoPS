@@ -111,10 +111,11 @@ std::vector<double> initial_state(const pops::Extent<Dim>& shape) {
   return result;
 }
 
-std::string loader_source(bool interface_blocks = false) {
+std::string loader_source(bool interface_blocks = false, bool histories = false) {
   // clang-format off
   return std::string("#define POPS_TEST_INTERFACE_BLOCKS ") +
-      (interface_blocks ? "1\n" : "0\n") + R"CPP(
+      (interface_blocks ? "1\n" : "0\n") + "#define POPS_TEST_HISTORIES " +
+      (histories ? "1\n" : "0\n") + R"CPP(
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
@@ -229,9 +230,13 @@ extern "C" const char* pops_program_abi_key() { return POPS_ABI_KEY_LITERAL; }
 extern "C" const char* pops_program_route_manifest() { return pops::kRouteRegistrySignature; }
 extern "C" const char* pops_program_name() { return "source-built-synthetic-loader-transaction"; }
 extern "C" const char* pops_program_hash() {
+#if POPS_TEST_HISTORIES
+  return "tests.synthetic-loader/program/history-restart-v1";
+#else
   return POPS_TEST_INTERFACE_BLOCKS
       ? "tests.synthetic-loader/program/interface-publication-v1"
       : "tests.synthetic-loader/program/loader-transaction-v1";
+#endif
 }
 extern "C" int pops_program_operator_authority_count() { return 0; }
 extern "C" std::uint64_t pops_program_operator_authority_word(int, int) { return 0; }
@@ -253,15 +258,25 @@ extern "C" std::uint64_t pops_program_flux_rhs_basis_bound(int block) {
 extern "C" std::uint64_t pops_program_flux_coefficient_term_bound(int block) {
   return block == 0 ? UINT64_C(1) : UINT64_C(0);
 }
-extern "C" int pops_program_checkpoint_history_count() { return 0; }
-extern "C" const char* pops_program_checkpoint_history_name(int) { return ""; }
+extern "C" int pops_program_checkpoint_history_count() { return POPS_TEST_HISTORIES ? 2 : 0; }
+extern "C" const char* pops_program_checkpoint_history_name(int history) {
+  return POPS_TEST_HISTORIES ? (history == 0 ? "tracer.first" : "tracer.second") : "";
+}
 extern "C" int pops_program_checkpoint_history_owner(int) { return 0; }
-extern "C" const char* pops_program_checkpoint_history_state_identity(int) { return ""; }
-extern "C" const char* pops_program_checkpoint_history_space_identity(int) { return ""; }
-extern "C" const char* pops_program_checkpoint_history_clock_identity(int) { return ""; }
-extern "C" const char* pops_program_checkpoint_history_interpolation_identity(int) { return ""; }
-extern "C" int pops_program_checkpoint_history_depth(int) { return 0; }
-extern "C" int pops_program_checkpoint_history_components(int) { return 0; }
+extern "C" const char* pops_program_checkpoint_history_state_identity(int) {
+  return POPS_TEST_HISTORIES ? ("tests.synthetic-loader/state/tracer") : "";
+}
+extern "C" const char* pops_program_checkpoint_history_space_identity(int) {
+  return POPS_TEST_HISTORIES ? ("cell.conservative") : "";
+}
+extern "C" const char* pops_program_checkpoint_history_clock_identity(int) {
+  return POPS_TEST_HISTORIES ? ("tests.synthetic-loader.clock") : "";
+}
+extern "C" const char* pops_program_checkpoint_history_interpolation_identity(int) {
+  return POPS_TEST_HISTORIES ? ("none") : "";
+}
+extern "C" int pops_program_checkpoint_history_depth(int) { return POPS_TEST_HISTORIES ? 2 : 0; }
+extern "C" int pops_program_checkpoint_history_components(int) { return POPS_TEST_HISTORIES ? 1 : 0; }
 extern "C" int pops_program_checkpoint_logical_clock_count() { return 1; }
 extern "C" const char* pops_program_checkpoint_logical_clock_identity(int clock) {
   return clock == 0 ? "tests.synthetic-loader.clock" : "";
@@ -301,6 +316,24 @@ extern "C" void pops_install_program_amr(
   auto context = pops::runtime::program::make_program_execution_provider(system);
   auto inject_retry = std::make_shared<bool>(true);
   context->configure_primary_clock("tests.synthetic-loader.clock");
+#if POPS_TEST_HISTORIES
+  context->install([context](double dt) {
+    context->for_each_program_resource_level([&](int) {
+      for (const char* name : {"tracer.first", "tracer.second"})
+        context->register_history(name, 1, 1, 0, "tests.synthetic-loader/state/tracer",
+                                  "cell.conservative", "tests.synthetic-loader.clock", "none");
+    });
+    context->advance_hierarchy(dt, [context](double) {
+      auto& accepted = context->state(0);
+      auto& candidate = context->scratch_state(1000, 0, accepted);
+      context->lincomb(candidate, pops::Real(2), accepted, pops::Real(0), accepted);
+      context->store_history("tracer.first", accepted, 0);
+      context->store_history("tracer.second", candidate, 0);
+      context->rotate_histories("tests.synthetic-loader.clock");
+      context->commit_many({{&accepted, &candidate}});
+    });
+  }, context);
+#else
   context->install(
       [context, inject_retry](double macro_dt) {
         context->advance_hierarchy(macro_dt, [context, inject_retry](double level_dt) {
@@ -347,13 +380,14 @@ extern "C" void pops_install_program_amr(
   system->install_program_restart_hooks(
       [] {}, [] {}, [] {},
       [context] { return context->accepted_context_snapshot(); });
+#endif
 }
 )CPP";
   // clang-format on
 }
 
 void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& shared_object,
-                          const std::vector<double>& state) {
+                          const std::vector<double>& state, bool synchronous = false) {
   auto lane = std::make_shared<pops::ExecutionLane>(
       pops::ExecutionLane::duplicate_world_collectively("test.synthetic-loader.package"));
   auto execution = std::make_shared<const pops::component::PreparedExecutionContextV1>(
@@ -364,7 +398,7 @@ void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& share
   system.add_native_block(
       kBlock, shared_object, "2222222222222222222222222222222222222222222222222222222222222222",
       authenticated.binary_identity(), "minmod", "rusanov", "conservative", "explicit", 1.4, 1);
-  system.set_temporal_relations({2}, {1}, {"integral_only"});
+  system.set_temporal_relations({synchronous ? 1 : 2}, {1}, {"integral_only"});
   system.bind_bootstrap_subject(kStateRoute, kBlock, "bound_level_zero");
   system.stage_bootstrap_array(kStateRoute, kBlock, "cell", "cell", 1, system.spatial_shape(),
                                state);
@@ -468,11 +502,6 @@ std::vector<double> select_indices(const std::vector<double>& values,
 
 TEST(test_amr_synthetic_program_loader_transaction,
      InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh) {
-#if defined(POPS_HAS_KOKKOS)
-  int argc = 0;
-  char** argv = nullptr;
-  Kokkos::ScopeGuard guard(argc, argv);
-#endif
   const std::string stem = std::string(POPS_TEST_TMPDIR) + "/amr_interface_publication_" +
                            std::to_string(pops::my_rank()) + "_" +
                            std::to_string(static_cast<long>(std::clock()));
@@ -679,11 +708,6 @@ TEST(test_amr_synthetic_program_loader_transaction,
 
 TEST(test_amr_synthetic_program_loader_transaction,
      SourceBuiltArtifactLoadsBudgetRollsBackAndRetries) {
-#if defined(POPS_HAS_KOKKOS)
-  int argc = 0;
-  char** argv = nullptr;
-  Kokkos::ScopeGuard guard(argc, argv);
-#endif
   const std::string stem = std::string(POPS_TEST_TMPDIR) + "/amr_synthetic_loader_" +
                            std::to_string(pops::my_rank()) + "_" +
                            std::to_string(static_cast<long>(std::clock()));
@@ -829,4 +853,200 @@ TEST(test_amr_synthetic_program_loader_transaction,
     EXPECT_TRUE(fragments.empty());
   EXPECT_TRUE(source_only.synchronization_events.empty());
   EXPECT_FALSE(source_only.face_evidence_provenance);
+}
+
+TEST(test_amr_synthetic_program_loader_transaction,
+     InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack) {
+  const std::string stem = std::string(POPS_TEST_TMPDIR) + "/amr_history_restart_" +
+                           std::to_string(pops::my_rank()) + "_" +
+                           std::to_string(static_cast<long>(std::clock()));
+  const std::string source_path = stem + ".cpp";
+  const std::string shared_object = stem + ".so";
+  {
+    std::ofstream source(source_path);
+    source << loader_source(false, true);
+  }
+  const auto package = pops::test::native_dso::compile_shared(
+      source_path, shared_object, "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");
+  if (!package.ok) {
+    pops::test::native_dso::report_compile_failure("test_amr_history_restart", package);
+    FAIL() << "history restart fixture artifact did not compile";
+  }
+  const auto settings = config();
+  pops::AmrSystem<Dim> system(settings);
+  build_refined_system(system, shared_object, initial_state(settings.shape), true);
+  ASSERT_EQ(system.installed_program_hash(), "tests.synthetic-loader/program/history-restart-v1");
+  ASSERT_EQ(system.n_levels(), 2);
+  const std::vector<std::string> names{"tracer.first", "tracer.second"};
+  struct History {
+    std::string name;
+    int level;
+    bool initialized;
+    int fill;
+    std::vector<std::vector<double>> values;
+    std::vector<double> dt;
+    std::vector<std::uint8_t> samples;
+    bool operator==(const History&) const = default;
+  };
+  struct Image {
+    std::vector<pops::AmrPatch<Dim>> boxes;
+    std::vector<int> owners;
+    std::vector<std::vector<double>> states;
+    std::vector<History> histories;
+    std::vector<std::uint8_t> accepted, exchanges, flux_shard;
+    int regrids, step;
+    std::uint64_t epoch;
+    double time, last_dt;
+    bool operator==(const Image&) const = default;
+  };
+  const auto capture = [&] {
+    Image image;
+    image.boxes = system.patch_boxes();
+    image.owners = system.level_owner_ranks(1);
+    if (system.level_distribution_mode(1) == "replicated")
+      std::fill(image.owners.begin(), image.owners.end(), -1);
+    image.accepted = system.program_accepted_state();
+    image.exchanges = system.checkpoint_program_exchanges();
+    image.flux_shard = system.program_history_flux_snapshot_shard();
+    image.regrids = system.checkpoint_regrid_count();
+    image.epoch = system.checkpoint_topology_epoch();
+    image.step = system.macro_step();
+    image.time = system.time();
+    image.last_dt = system.program_last_dt();
+    for (int level = 0; level < system.n_levels(); ++level)
+      image.states.push_back(system.block_level_state_global(kBlock, level));
+    for (const auto& name : names)
+      for (int level = 0; level < system.n_levels(); ++level) {
+        History history{name,
+                        level,
+                        system.history_initialized(name, level),
+                        system.history_fill_count(name, level),
+                        {},
+                        {},
+                        system.history_sample_identity(name, level)};
+        for (int slot = 0; slot < system.history_depth(name); ++slot) {
+          history.values.push_back(system.history_global(name, level, slot));
+          history.dt.push_back(system.history_slot_dt(name, level, slot));
+        }
+        image.histories.push_back(std::move(history));
+      }
+    return image;
+  };
+  constexpr double first_dt = 0.125;
+  constexpr double second_dt = 0.1875;
+  system.step(first_dt);
+  ASSERT_EQ(system.history_names(), names);
+  const Image checkpoint = capture();
+  ASSERT_EQ(checkpoint.histories.size(), 4u);
+  for (const auto& history : checkpoint.histories) {
+    ASSERT_TRUE(history.initialized);
+    ASSERT_EQ(history.fill, 1);
+    ASSERT_EQ(history.values.size(), 2u);
+    EXPECT_EQ(history.dt, (std::vector<double>{first_dt, first_dt}));
+  }
+  // These are state histories: the exact native archive is empty, not an omitted RHS payload.
+  ASSERT_TRUE(checkpoint.flux_shard.empty());
+  system.step(second_dt);
+  const Image uninterrupted = capture();
+  ASSERT_NE(uninterrupted.histories, checkpoint.histories);
+  for (const auto& history : uninterrupted.histories)
+    ASSERT_EQ(history.fill, 2);
+
+  // Arbitrary topology edits still cannot discard initialized history provenance.
+  EXPECT_THROW(system.rebuild_hierarchy(checkpoint.boxes, checkpoint.owners), std::exception);
+  EXPECT_EQ(capture(), uninterrupted);
+  system.begin_restart_transaction();
+  ASSERT_NO_THROW(system.rebuild_hierarchy(checkpoint.boxes, checkpoint.owners));
+  EXPECT_THROW(system.commit_restart_transaction(), std::exception);
+  system.finalize_restart_transaction();  // A rejected commit must retain rollback ownership.
+  ASSERT_NO_THROW(system.rollback_restart_transaction());
+  EXPECT_EQ(capture(), uninterrupted);
+
+  const auto materialize = [&] {
+    system.rebuild_hierarchy(checkpoint.boxes, checkpoint.owners);
+    system.restore_checkpoint_counters(checkpoint.regrids, checkpoint.epoch);
+    system.materialize_program_restart_histories(checkpoint.accepted, names, {2, 2}, {1, 1});
+  };
+  const auto restore = [&](bool omit_one_payload) {
+    for (int level = 0; level < system.n_levels(); ++level)
+      system.set_block_level_state(kBlock, level, checkpoint.states.at(level));
+    system.restore_program_cadence_window(0.0, 0, 0.0, checkpoint.last_dt, checkpoint.time,
+                                          checkpoint.step);
+    system.set_clock(checkpoint.time, checkpoint.step);
+    for (const auto& history : checkpoint.histories) {
+      for (int slot = 0; slot < static_cast<int>(history.values.size()); ++slot) {
+        // All metadata is authentic. One rank omits one numeric write in the final ring, which
+        // must not become accepted just because its freshly allocated values happen to be finite.
+        if (omit_one_payload && pops::my_rank() == 0 && history.name == names.back() &&
+            history.level == 1 && slot == 1)
+          continue;
+        system.restore_history(history.name, history.level, slot, history.values.at(slot));
+      }
+      system.restore_history_provenance(history.name, history.level, history.dt,
+                                        history.initialized, history.fill);
+      system.restore_history_sample_identity(history.name, history.level, history.samples);
+    }
+    system.restore_checkpoint_program_exchanges(checkpoint.exchanges);
+    system.restore_checkpoint_accepted_state(checkpoint.accepted);
+  };
+  system.begin_restart_transaction();
+  ASSERT_NO_THROW(materialize());
+  EXPECT_THROW(system.commit_restart_transaction(), std::exception);
+  ASSERT_NO_THROW(restore(true));  // Metadata import before selective replay remains legitimate.
+  EXPECT_THROW(system.preflight_regrid_on_restart(), std::exception);
+  EXPECT_THROW(system.regrid_on_restart(), std::exception);
+  EXPECT_THROW(system.commit_restart_transaction(), std::exception);
+  system.finalize_restart_transaction();
+  ASSERT_NO_THROW(system.rollback_restart_transaction());
+  EXPECT_EQ(capture(), uninterrupted);
+
+  system.begin_restart_transaction();
+  ASSERT_NO_THROW(materialize());
+  ASSERT_NO_THROW(restore(false));
+  // A second materialization invalidates both the imported authority and numeric completion.
+  ASSERT_NO_THROW(
+      system.materialize_program_restart_histories(checkpoint.accepted, names, {2, 2}, {1, 1}));
+  EXPECT_THROW(system.commit_restart_transaction(), std::exception);
+  ASSERT_NO_THROW(restore(false));
+  EXPECT_EQ(capture(), checkpoint);
+  ASSERT_NO_THROW(system.commit_restart_transaction());
+  EXPECT_THROW(system.rebuild_hierarchy(checkpoint.boxes, checkpoint.owners), std::exception);
+  EXPECT_THROW(
+      system.materialize_program_restart_histories(checkpoint.accepted, names, {2, 2}, {1, 1}),
+      std::exception);
+  const auto& row = checkpoint.histories.front();
+  EXPECT_THROW(system.restore_history(row.name, row.level, 0, row.values.front()), std::exception);
+  EXPECT_THROW(system.set_history_initialized(row.name, row.level, row.initialized),
+               std::exception);
+  EXPECT_THROW(system.restore_history_fill_count(row.name, row.level, row.fill), std::exception);
+  EXPECT_THROW(system.restore_history_metadata(row.name, row.level, row.initialized, row.fill),
+               std::exception);
+  EXPECT_THROW(
+      system.restore_history_provenance(row.name, row.level, row.dt, row.initialized, row.fill),
+      std::exception);
+  EXPECT_THROW(system.restore_history_slot_dt(row.name, row.level, 0, row.dt.front()),
+               std::exception);
+  EXPECT_THROW(system.restore_history_sample_identity(row.name, row.level, row.samples),
+               std::exception);
+  EXPECT_THROW(system.rebuild_history_slots(row.name, {0, 1}), std::exception);
+  EXPECT_EQ(capture(), checkpoint);
+  system.finalize_restart_transaction();
+  system.step(second_dt);
+  EXPECT_EQ(capture(), uninterrupted);
+
+  // The declared post-restore regrid consumes a complete incoming image and creates a new
+  // authenticated history image. The final commit must validate that transformed authority.
+  system.begin_restart_transaction();
+  ASSERT_NO_THROW(materialize());
+  ASSERT_NO_THROW(restore(false));
+  ASSERT_NO_THROW(system.preflight_regrid_on_restart());
+  ASSERT_NO_THROW(system.regrid_on_restart());
+  EXPECT_GT(system.checkpoint_topology_epoch(), checkpoint.epoch);
+  EXPECT_NE(system.patch_boxes(), checkpoint.boxes);
+  for (const auto& history : checkpoint.histories) {
+    EXPECT_EQ(system.history_fill_count(history.name, history.level), history.fill);
+    EXPECT_EQ(system.history_sample_identity(history.name, history.level), history.samples);
+  }
+  ASSERT_NO_THROW(system.commit_restart_transaction());
+  system.finalize_restart_transaction();
 }
