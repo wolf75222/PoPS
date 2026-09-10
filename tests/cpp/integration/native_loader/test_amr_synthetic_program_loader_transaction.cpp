@@ -1011,12 +1011,25 @@ TEST(test_amr_synthetic_program_loader_transaction,
     system.set_clock(checkpoint.time, checkpoint.step);
     for (const auto& history : checkpoint.histories) {
       for (int slot = 0; slot < static_cast<int>(history.values.size()); ++slot) {
-        // All metadata is authentic. One rank omits one numeric write in the final ring, which
-        // must not become accepted just because its freshly allocated values happen to be finite.
-        if (omit_one_payload && pops::my_rank() == 0 && history.name == names.back() &&
-            history.level == 1 && slot == 1)
-          continue;
-        system.restore_history(history.name, history.level, slot, history.values.at(slot));
+        // Every rank must enter restore_history's collective engine preflight. Reject only the
+        // numeric payload on rank zero, after that preflight and before its slot is marked written.
+        if (omit_one_payload && history.name == names.back() && history.level == 1 && slot == 1) {
+          SCOPED_TRACE("rank-local numeric rejection after collective history preflight");
+          const bool reject_payload = pops::my_rank() == 0;
+          const std::vector<double> missing_payload;
+          std::string refusal;
+          try {
+            system.restore_history(history.name, history.level, slot,
+                                   reject_payload ? missing_payload : history.values.at(slot));
+          } catch (const std::invalid_argument& error) {
+            refusal = error.what();
+          }
+          EXPECT_EQ(refusal, reject_payload
+                                 ? "AMR history restore payload has the wrong exact-ranked size"
+                                 : "");
+        } else {
+          system.restore_history(history.name, history.level, slot, history.values.at(slot));
+        }
       }
       system.restore_history_provenance(history.name, history.level, history.dt,
                                         history.initialized, history.fill);
