@@ -100,6 +100,7 @@ api pops/numerics/elliptic/interface/field_nullspace_prepare.hpp
 api pops/numerics/elliptic/interface/field_nullspace_builtins.hpp
 api pops/numerics/elliptic/interface/field_provider.hpp
 api pops/numerics/elliptic/linear/generic_krylov.hpp
+sdk-support pops/numerics/elliptic/linear/collective_prepared_owner.hpp
 api pops/numerics/elliptic/linear/krylov_method_provider.hpp
 api pops/numerics/elliptic/linear/krylov_workspace.hpp
 api pops/numerics/elliptic/linear/prepared_affine_problem.hpp

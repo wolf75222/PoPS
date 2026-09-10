@@ -1388,16 +1388,19 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     nullspace_policy_expr = nullspace_provider.emit(
         node=v, prelude=prelude, contracts=nullspace_contracts
     )
-    vector_distribution_expr = "ctx.program_resource_vector_distribution()"
+    # These context lookups may communicate. They must finish before entering a factory whose
+    # callback is strictly local. Copying the resulting distribution happens inside that callback.
+    communicator_name = "prepared_krylov_communicator%d" % v.id
+    vector_distribution_expr = "prepared_vector_distribution%d" % v.id
+    prelude.append("const auto %s = ctx.prepared_execution_communicator();" % communicator_name)
+    prelude.append("const auto& %s = ctx.program_resource_vector_distribution();"
+                   % vector_distribution_expr)
     preconditioner_expr = _prepared_preconditioner(
         v, prelude, sol_sp, vector_distribution_expr)
     problem_name = "prepared_problem%d" % v.id
     freeze_expr = var.get(("operator_freeze", op_value.id))
     if not isinstance(freeze_expr, str):
         raise ValueError("matrix-free operator has no prepared resource contract")
-    vector_distribution_arg = ", " + vector_distribution_expr
-    problem_authority_args = ""
-    workspace_authority_args = ""
     workspace_lane_identity = (
         "pops.program.amr.krylov-workspace"
         if target == "amr_system"
@@ -1408,48 +1411,41 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         if target == "amr_system"
         else "pops.program.krylov-workspace.%d" % int(v.id)
     )
+    problem_lane_identity = "pops.prepared-affine-problem"
+    materialization_token_expr = json.dumps(workspace_materialization_token)
     if target == "amr_system":
-        communicator_name = "prepared_krylov_communicator%d" % v.id
+        problem_lane_identity = "pops.program.amr.prepared-problem.%d" % int(v.id)
         materialization_token_name = "krylov_workspace_materialization_token%d" % v.id
-        prelude.append(
-            "const auto %s = ctx.prepared_execution_communicator();"
-            % communicator_name
-        )
         prelude.append(
             "const std::string %s = ctx.program_resource_materialization_identity(\"%s\");"
             % (materialization_token_name, workspace_materialization_token)
         )
-        problem_authority_args = (
-            "%s, \"pops.program.amr.prepared-problem.%d\", "
-            % (communicator_name, int(v.id))
-        )
-        workspace_authority_args = (
-            "%s, \"%s\", %s, "
-            % (communicator_name, workspace_lane_identity, materialization_token_name)
-        )
-    else:
-        workspace_authority_args = (
-            "ctx.prepared_execution_communicator(), \"%s\", \"%s\", "
-            % (workspace_lane_identity, workspace_materialization_token)
-        )
+        materialization_token_expr = materialization_token_name
+    # Once every rank reaches a factory, its empty shared storage and every fallible constructor
+    # argument are prepared before communicator duplication. This boundary does not authenticate
+    # arbitrary earlier prelude allocations; the enclosing installer still owns caller entry.
     prelude.append(
         "auto %s = "
-        "std::make_shared<pops::PreparedAffineLinearProblem<pops::kNativeDimension>>("
-        "%s*%s, %s, %s, %s, %s, %s, "
+        "pops::PreparedAffineLinearProblem<pops::kNativeDimension>::make_shared_collectively("
+        "%s, %s, [&]() { return "
+        "pops::PreparedAffineLinearProblem<pops::kNativeDimension>::ConstructionInputs{"
+        "std::cref(*%s), %s, %s, %s, %s, %s, "
         "[ctx_owner, %s]() { "
         "return ctx_owner->probe_operator_evaluation({%s}, %s->topology, {%s}, %s->revision); }, "
-        "%s%s);"
-        % (problem_name, problem_authority_args, sol_sp, lam, preconditioner_expr,
-           properties_expr, footprint_name,
-           nullspace_policy_expr,
+        "%s, %s}; });"
+        % (problem_name, communicator_name, json.dumps(problem_lane_identity), sol_sp,
+           lam, preconditioner_expr, properties_expr, footprint_name, nullspace_policy_expr,
            snapshot_name, authority_cpp, snapshot_name, resources_cpp, snapshot_name,
-           freeze_expr, vector_distribution_arg))
+           freeze_expr, vector_distribution_expr))
     workspace_name = "krylov_workspace%d" % v.id
     prelude.append(
-        "auto %s = std::make_shared<pops::KrylovWorkspace<pops::kNativeDimension>>("
-        "%s*%s, %s, %s%s);"
-        % (workspace_name, workspace_authority_args, sol_sp, method_expr, footprint_name,
-           vector_distribution_arg))
+        "auto %s = pops::KrylovWorkspace<pops::kNativeDimension>::make_shared_collectively("
+        "%s, %s, [&]() { return "
+        "pops::KrylovWorkspace<pops::kNativeDimension>::ConstructionInputs{"
+        "%s, std::cref(*%s), %s, %s, %s}; });"
+        % (workspace_name, communicator_name, json.dumps(workspace_lane_identity),
+           materialization_token_expr, sol_sp, method_expr, footprint_name,
+           vector_distribution_expr))
     controls_name = "krylov_controls%d" % v.id
     prelude.append(
         "const pops::KrylovControls<pops::kNativeDimension> %s{%s, %s, %s, %d, %s};"

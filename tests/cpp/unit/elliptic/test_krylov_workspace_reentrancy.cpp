@@ -835,6 +835,156 @@ TEST(test_krylov_workspace_reentrancy,
 #endif
 }
 
+// The injection belongs only to the shared candidate allocator. It neither replaces global new
+// nor reaches a numerical/provider allocation after the constructor has entered its private lane.
+struct CandidateAllocationState {
+  bool fail_once = false;
+  int allocations = 0;
+};
+
+template <class T>
+struct CandidateAllocator {
+  using value_type = T;
+  CandidateAllocationState* state;
+  explicit CandidateAllocator(CandidateAllocationState& value) noexcept : state(&value) {}
+  template <class U>
+  CandidateAllocator(const CandidateAllocator<U>& other) noexcept : state(other.state) {}
+  T* allocate(std::size_t count) {
+    ++state->allocations;
+    if (std::exchange(state->fail_once, false))
+      throw std::bad_alloc();
+    return std::allocator<T>{}.allocate(count);
+  }
+  void deallocate(T* pointer, std::size_t count) noexcept {
+    std::allocator<T>{}.deallocate(pointer, count);
+  }
+  template <class U>
+  bool operator==(const CandidateAllocator<U>& other) const noexcept {
+    return state == other.state;
+  }
+};
+
+void verify_shared_construction_failure_and_retry(bool fail_problem) {
+  comm_init();
+  const auto embedding = ExecutionLane::duplicate_world_collectively("test.shared-construction");
+#ifdef POPS_HAS_MPI
+  const auto parent =
+      ExecutionCommunicator::borrowed(embedding.identity(), embedding.native_handle());
+#else
+  const auto parent = ExecutionCommunicator::world();
+#endif
+  const TestLayout boxes(std::vector<TestBox>{TestBox{Index<kDim>{0, 0}, Index<kDim>{1, 1}}});
+  const TestDistribution mapping = round_robin_distribution(boxes);
+  TestField iterate = make_field(boxes, mapping, 1, 0);
+  TestField rhs = make_field(boxes, mapping, 1, 0);
+  rhs.set_val(Real(1));
+  OperatorEvaluationSnapshot snapshot = test_snapshot(iterate);
+  const TestKrylovFootprint footprint{1, extent(0), false};
+  const auto method = cg_krylov_method<kDim>();
+
+  for (const bool fail_allocation : {true, false}) {
+    SCOPED_TRACE(fail_allocation ? "shared owner allocation" : "typed input preparation");
+    iterate.set_val(Real(0));
+    CandidateAllocationState problem_allocation{fail_problem && fail_allocation && my_rank() == 0};
+    CandidateAllocationState workspace_allocation{!fail_problem && fail_allocation &&
+                                                  my_rank() == 0};
+    bool fail_problem_input = fail_problem && !fail_allocation && my_rank() == 0;
+    bool fail_workspace_input = !fail_problem && !fail_allocation && my_rank() == 0;
+    int problem_inputs = 0;
+    int workspace_inputs = 0;
+    auto make_problem = [&]() {
+      return TestAffineProblem::make_shared_collectively(
+          parent, "test.shared-problem",
+          [&]() {
+            ++problem_inputs;
+            if (std::exchange(fail_problem_input, false))
+              throw std::invalid_argument("injected problem input preparation");
+            return TestAffineProblem::ConstructionInputs{
+                std::cref(iterate),
+                TestAffineOperatorProvider::trusted_reentrant(
+                    [](TestField& out, const TestField& in) {
+                      detail::PreparedFieldAlgebra::copy(out, in);
+                    },
+                    [] { return std::size_t{0}; }),
+                TestLinearPreconditioner::identity(),
+                LinearOperatorProperties::symmetric_positive_definite(),
+                footprint,
+                TestNullspacePolicy::nonsingular(),
+                [&snapshot] { return snapshot; },
+                {},
+                TestVectorDistribution::Distributed};
+          },
+          CandidateAllocator<std::optional<TestAffineProblem>>{problem_allocation});
+    };
+    auto make_workspace = [&]() {
+      return TestKrylovWorkspace::make_shared_collectively(
+          parent, "test.shared-workspace",
+          [&]() {
+            ++workspace_inputs;
+            if (std::exchange(fail_workspace_input, false))
+              throw std::invalid_argument("injected workspace input preparation");
+            return TestKrylovWorkspace::ConstructionInputs{"test.shared-workspace.materialization",
+                                                           std::cref(iterate), method, footprint,
+                                                           TestVectorDistribution::Distributed};
+          },
+          CandidateAllocator<std::optional<TestKrylovWorkspace>>{workspace_allocation});
+    };
+    std::string diagnostic;
+    try {
+      if (fail_problem)
+        (void)make_problem();
+      else
+        (void)make_workspace();
+    } catch (const std::exception& error) {
+      diagnostic = error.what();
+    }
+    // Both failures must leave the supplied parent usable and publish the same refusal. In the
+    // allocation branch the failing rank cannot even prepare its typed arguments, let alone T.
+    EXPECT_EQ(all_reduce_min(diagnostic.empty() ? 0L : 1L, parent.communicator()), 1L);
+    EXPECT_TRUE(all_ranks_agree_exact_ordered_byte_pairs(
+        {{std::string_view("shared-construction-refusal"), std::string_view(diagnostic)}},
+        parent.communicator()));
+    EXPECT_EQ(fail_problem ? problem_inputs : workspace_inputs,
+              fail_allocation && my_rank() == 0 ? 0 : 1);
+    EXPECT_EQ(fail_problem ? problem_allocation.allocations : workspace_allocation.allocations, 1);
+    EXPECT_EQ(max_abs_diff(iterate, rhs), Real(1));
+
+    // The same allocator and input closures retry successfully. Copies of the aliasing owner keep
+    // the in-place object and private communicator alive after the original handle is released.
+    auto problem = make_problem();
+    auto workspace = make_workspace();
+    auto retained_problem = problem;
+    auto retained_workspace = workspace;
+    std::weak_ptr<TestAffineProblem> problem_lifetime = problem;
+    std::weak_ptr<TestKrylovWorkspace> workspace_lifetime = workspace;
+    problem.reset();
+    workspace.reset();
+    EXPECT_FALSE(problem_lifetime.expired());
+    EXPECT_FALSE(workspace_lifetime.expired());
+    retained_problem->prepare(snapshot);
+    retained_workspace->bind(*retained_problem);
+    const SolveReport report =
+        detail::solve_prepared_affine_in_place(*retained_problem, *retained_workspace, iterate, rhs,
+                                               TestKrylovControls{method, Real(1e-12), Real(0), 3});
+    EXPECT_EQ(report.status, SolveStatus::kSolved);
+    EXPECT_EQ(max_abs_diff(iterate, rhs), Real(0));
+    retained_workspace.reset();
+    retained_problem.reset();
+    EXPECT_TRUE(workspace_lifetime.expired());
+    EXPECT_TRUE(problem_lifetime.expired());
+  }
+}
+
+TEST(test_krylov_workspace_reentrancy,
+     shared_problem_allocation_and_input_failures_converge_before_constructor_and_retry) {
+  verify_shared_construction_failure_and_retry(true);
+}
+
+TEST(test_krylov_workspace_reentrancy,
+     shared_workspace_allocation_and_input_failures_converge_before_constructor_and_retry) {
+  verify_shared_construction_failure_and_retry(false);
+}
+
 TEST(test_krylov_workspace_reentrancy,
      distinct_workspaces_run_fresh_operator_and_preconditioner_sessions_concurrently) {
   comm_init();

@@ -1112,6 +1112,8 @@ if(POPS_HAS_MPI)
     "test_krylov_workspace_reentrancy.prepared_problem_and_workspace_execute_on_an_embedding_owned_congruent_communicator:"
     "test_krylov_workspace_reentrancy.noncongruent_split_communicator_is_rejected_explicitly:"
     "test_krylov_workspace_reentrancy.rank_local_problem_construction_failure_is_published_before_lane_unwind:"
+    "test_krylov_workspace_reentrancy.shared_problem_allocation_and_input_failures_converge_before_constructor_and_retry:"
+    "test_krylov_workspace_reentrancy.shared_workspace_allocation_and_input_failures_converge_before_constructor_and_retry:"
     "test_krylov_workspace_reentrancy.workspace_rebind_reserves_mutation_during_blocking_operator_prepare:"
     "test_krylov_workspace_reentrancy.problem_prepare_reserves_mutation_during_blocking_resource_freeze"
   )

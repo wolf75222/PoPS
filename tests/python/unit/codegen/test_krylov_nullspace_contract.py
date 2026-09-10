@@ -189,6 +189,28 @@ def test_constant_nullspace_codegen_emits_the_prepared_policy_and_gauge_snapshot
         assert "ctx.program_resource_field_level())" in emitted
         assert ".level_distribution.assign(static_cast<std::size_t>(ctx.nlev())" not in emitted
         assert "krylov_nullspace_grid" not in emitted
+        # The nullspace remains authored and level-qualified, but its allocating policy/provider
+        # conversions happen inside the typed preparation callback, before constructor collectives.
+        problem = next(line for line in emitted.splitlines() if
+                       "PreparedAffineLinearProblem<pops::kNativeDimension>::make_shared_collectively"
+                       in line)
+        workspace = next(line for line in emitted.splitlines() if
+                         "KrylovWorkspace<pops::kNativeDimension>::make_shared_collectively" in line)
+        for call in (problem, workspace):
+            assert "[&]() { return " in call
+            assert "::ConstructionInputs{std::cref(" in call or ", std::cref(" in call
+            assert "ctx.prepared_execution_communicator()" not in call
+            assert "ctx.program_resource_vector_distribution()" not in call
+            assert "ctx.program_resource_materialization_identity(" not in call
+        assert "::preserving(std::move(krylov_nullspace_plan" in problem
+        problem_id = problem.split("auto prepared_problem", 1)[1].split(" =", 1)[0]
+        parent = "prepared_krylov_communicator" + problem_id
+        assert "make_shared_collectively(%s, " % parent in problem
+        assert "make_shared_collectively(%s, " % parent in workspace
+        assert emitted.index("const auto %s = ctx.prepared_execution_communicator();" % parent) < (
+            emitted.index(problem.strip()))
+        assert emitted.index("const auto& prepared_vector_distribution%s = " % problem_id) < (
+            emitted.index(problem.strip()))
 
 
 def test_registered_header_provider_owns_contract_validation_and_native_plan_emission(

@@ -9,6 +9,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
+#include <pops/numerics/elliptic/linear/collective_prepared_owner.hpp>
 #include <pops/numerics/elliptic/linear/prepared_vector_metric.hpp>
 #include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/parallel/comm.hpp>
@@ -1718,6 +1719,41 @@ class PreparedAffineLinearProblem {
   static_assert(std::is_nothrow_move_constructible_v<OperatorSnapshotProbe>);
   static_assert(std::is_nothrow_move_constructible_v<PreparedVectorDistribution<Dim>>);
   static_assert(std::is_nothrow_move_constructible_v<PreparedVectorMetric<Dim>>);
+
+  /// Exact, already-owned inputs for the collective shared-owner factory. Construct this record
+  /// in the factory callback, including provider conversions and any allocating function copies.
+  struct ConstructionInputs {
+    std::reference_wrapper<const MultiFab<Dim>> prototype;
+    PreparedAffineOperatorProvider<Dim> operator_provider;
+    PreparedLinearPreconditioner<Dim> preconditioner;
+    LinearOperatorProperties properties;
+    KrylovFootprint<Dim> footprint;
+    PreparedNullspacePolicy<Dim> nullspace_policy;
+    OperatorSnapshotProbe snapshot_probe;
+    PreparedResourceFn freeze_resources;
+    PreparedVectorDistribution<Dim> vector_distribution;
+    PreparedVectorMetric<Dim> metric{};
+  };
+
+  /// All parent ranks must enter this factory in canonical order. The callback performs local
+  /// work only; prepare collective context authorities before entry and keep their borrows alive.
+  template <class Prepare,
+            class Allocator = std::allocator<std::optional<PreparedAffineLinearProblem>>>
+  [[nodiscard]] static std::shared_ptr<PreparedAffineLinearProblem> make_shared_collectively(
+      const ExecutionCommunicator& parent, std::string_view lane_identity, Prepare&& prepare,
+      const Allocator& allocator = {}) {
+    static_assert(std::is_nothrow_move_constructible_v<ConstructionInputs>);
+    auto candidate =
+        detail::prepare_shared_candidate<PreparedAffineLinearProblem, ConstructionInputs>(
+            parent, std::forward<Prepare>(prepare), allocator);
+    auto& input = candidate.inputs;
+    candidate.owner->emplace(parent, lane_identity, input.prototype.get(),
+                             std::move(input.operator_provider), std::move(input.preconditioner),
+                             input.properties, input.footprint, std::move(input.nullspace_policy),
+                             std::move(input.snapshot_probe), std::move(input.freeze_resources),
+                             std::move(input.vector_distribution), std::move(input.metric));
+    return {candidate.owner, std::addressof(**candidate.owner)};
+  }
 
   PreparedAffineLinearProblem(const MultiFab<Dim>& prototype,
                               PreparedAffineOperatorProvider<Dim> operator_provider,

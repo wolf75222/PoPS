@@ -4,6 +4,7 @@
 /// @brief Persistent storage for prepared affine Krylov solves.
 
 #include <pops/core/foundation/allocator.hpp>
+#include <pops/numerics/elliptic/linear/collective_prepared_owner.hpp>
 #include <pops/numerics/elliptic/linear/krylov_method_provider.hpp>
 #include <pops/numerics/elliptic/linear/scaled_scalar.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
@@ -81,6 +82,32 @@ class KrylovWorkspace {
 
   static int max_batched_basis_extent(std::size_t robust_payload_width) {
     return max_krylov_batched_basis_extent(robust_payload_width);
+  }
+
+  /// The materialization token is owned here so an allocating copy cannot precede lane entry.
+  struct ConstructionInputs {
+    std::string materialization_token;
+    std::reference_wrapper<const MultiFab<Dim>> prototype;
+    PreparedKrylovMethod<Dim> method;
+    KrylovFootprint<Dim> footprint;
+    PreparedVectorDistribution<Dim> vector_distribution;
+    PreparedVectorMetric<Dim> metric{};
+  };
+
+  /// All parent ranks must enter this factory in canonical order. The callback performs local
+  /// work only; prepare collective context authorities before entry and keep their borrows alive.
+  template <class Prepare, class Allocator = std::allocator<std::optional<KrylovWorkspace>>>
+  [[nodiscard]] static std::shared_ptr<KrylovWorkspace> make_shared_collectively(
+      const ExecutionCommunicator& parent, std::string_view lane_identity, Prepare&& prepare,
+      const Allocator& allocator = {}) {
+    static_assert(std::is_nothrow_move_constructible_v<ConstructionInputs>);
+    auto candidate = detail::prepare_shared_candidate<KrylovWorkspace, ConstructionInputs>(
+        parent, std::forward<Prepare>(prepare), allocator);
+    auto& input = candidate.inputs;
+    candidate.owner->emplace(parent, lane_identity, std::string_view(input.materialization_token),
+                             input.prototype.get(), std::move(input.method), input.footprint,
+                             std::move(input.vector_distribution), std::move(input.metric));
+    return {candidate.owner, std::addressof(**candidate.owner)};
   }
 
   KrylovWorkspace(const MultiFab<Dim>& prototype, PreparedKrylovMethod<Dim> method,
