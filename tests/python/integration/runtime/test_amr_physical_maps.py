@@ -228,9 +228,85 @@ def test_amr_internal_maps_resolve_to_native_hierarchy_continuations(tmp_path):
 
 def _internal_map_image(instance):
     import numpy as np
-    return {(name, level): np.asarray(instance.block_level_state_global(name, level)).copy()
-            for name in ("population", "integral", "extended")
-            for level in range(instance._executor.executor_for_block(name).n_levels())}
+    from pops.runtime._checkpoint_spatial import require_checkpoint_spatial_contract
+
+    images = {}
+    for name in ("population", "integral", "extended"):
+        engine = instance._executor.executor_for_block(name)
+        spatial = require_checkpoint_spatial_contract(engine)
+        assert spatial.dimension == 2
+        assert tuple(engine.spatial_shape()) == spatial.shape
+        assert engine._s.block_n_vars(name) == 2
+        assert tuple(engine._s.variable_names(name)) == ("first", "second")
+        for level in range(engine.n_levels()):
+            shape = spatial.shape_at_level(level)
+            flat = np.asarray(instance.block_level_state_global(name, level))
+            # The AMR binding returns vector<double>, packed as component*cells + x-fastest
+            # offset. Unlike Uniform's ranked accessor, this contract is strictly one-dimensional.
+            assert flat.ndim == 1, "AMR global state must retain its flat native contract"
+            assert flat.size == 2 * spatial.cells_at_level(level), "AMR global state size mismatch"
+            images[name, level] = flat.reshape((2, *reversed(shape))).copy()
+    return images
+
+
+@pytest.fixture
+def internal_map_snapshot_fixture():
+    from types import SimpleNamespace
+    from pops.identity import make_identity
+    from pops.runtime._checkpoint_spatial import CheckpointSpatialContract
+
+    engines, flat_states, shapes = {}, {}, {}
+    for name, shape, ratio in (("population", (2, 3), (2, 2)),
+                               ("integral", (3, 1), (2, 1)),
+                               ("extended", (2, 3), (2, 2))):
+        spatial = CheckpointSpatialContract(
+            dimension=2, shape=shape, lower=(0., 0.), upper=(1., 1.),
+            periodicity=(True, True), refinement_ratios=(ratio,),
+            native_layout_identity=make_identity("native-spatial-layout", {"name": name}).token)
+        engines[name] = SimpleNamespace(
+            _checkpoint_spatial_contract=spatial,
+            spatial_shape=lambda shape=shape: shape,
+            n_levels=lambda: 2,
+            _s=SimpleNamespace(block_n_vars=lambda _name: 2,
+                               variable_names=lambda _name: ("first", "second")))
+        for level in range(2):
+            nx, ny = spatial.shape_at_level(level)
+            shapes[name, level] = (2, ny, nx)
+            # Distinct component and coordinate values expose transposition or component mixing.
+            flat_states[name, level] = [float(1000 * component + 100 * y + x)
+                                        for component in range(2)
+                                        for y in range(ny) for x in range(nx)]
+    instance = SimpleNamespace(
+        _executor=SimpleNamespace(executor_for_block=engines.__getitem__),
+        block_level_state_global=lambda name, level: flat_states[name, level])
+    return instance, flat_states, shapes
+
+
+def test_internal_amr_snapshot_decodes_exact_component_and_anisotropic_axes(
+        internal_map_snapshot_fixture):
+    instance, flat_states, shapes = internal_map_snapshot_fixture
+    images = _internal_map_image(instance)
+    assert set(images) == set(shapes) and len(images) == 6
+    for key, actual in images.items():
+        assert actual.shape == shapes[key]
+        for component in range(2):
+            for y in range(actual.shape[1]):
+                for x in range(actual.shape[2]):
+                    assert actual[component, y, x] == 1000 * component + 100 * y + x
+    images["population", 0][0, 0, 0] = -1.
+    assert flat_states["population", 0][0] == 0.
+
+
+@pytest.mark.parametrize("defect", ("ranked", "truncated"))
+def test_internal_amr_snapshot_rejects_wrong_native_shape(internal_map_snapshot_fixture, defect):
+    import numpy as np
+
+    instance, flat_states, shapes = internal_map_snapshot_fixture
+    key = ("integral", 1)
+    flat_states[key] = (np.asarray(flat_states[key]).reshape(shapes[key])
+                        if defect == "ranked" else flat_states[key][:-1])
+    with pytest.raises(AssertionError, match="AMR global state"):
+        _internal_map_image(instance)
 
 
 @pytest.mark.compiler
