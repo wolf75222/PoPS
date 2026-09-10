@@ -454,6 +454,123 @@ TEST(AmrLayoutTransfer, CoverageForgeryAndBudgetsFailBeforeCandidatePublication)
   transfer->rollback_transaction(1);
 }
 
+TEST(AmrLayoutTransfer, ProgramPointPreparationAuthenticatesSynchronizationAndInvocation) {
+  runtime();
+  auto lane = pops::ExecutionLane::duplicate_world_collectively("test::amr-program-point-contract");
+  auto component = provider(lane);
+  auto high = high_hierarchy(lane), low = low_hierarchy(lane);
+  const auto spec = specification(high, low);
+  for (const auto* synchronization :
+       {"pops://synchronization/before-step@1", "pops://synchronization/after-source-step@1"}) {
+    auto ordinary = spec;
+    ordinary.authentication.synchronization_identity = synchronization;
+    EXPECT_NO_THROW(Transfer::prepare(high.endpoint(), low.endpoint(), ordinary, component,
+                                      execution(lane), lane));
+    ordinary.authentication.program_invocation = "test::program::half-step-map";
+    EXPECT_THROW(Transfer::prepare(high.endpoint(), low.endpoint(), ordinary, component,
+                                   execution(lane), lane),
+                 std::exception);
+  }
+  auto missing = spec;
+  missing.authentication.synchronization_identity = "pops://synchronization/program-point@1";
+  EXPECT_THROW(
+      Transfer::prepare(high.endpoint(), low.endpoint(), missing, component, execution(lane), lane),
+      std::exception);
+  for (const auto* invocation : {"", "test::program::half-step-map"}) {
+    auto unknown = spec;
+    unknown.authentication.synchronization_identity = "pops://synchronization/unknown@1";
+    unknown.authentication.program_invocation = invocation;
+    EXPECT_THROW(Transfer::prepare(high.endpoint(), low.endpoint(), unknown, component,
+                                   execution(lane), lane),
+                 std::exception);
+  }
+  // A declared Program-point route can prepare topology before either live port exists.
+  auto point = missing;
+  point.authentication.program_invocation = "test::program::half-step-map";
+  EXPECT_NO_THROW(
+      Transfer::prepare(high.endpoint(), low.endpoint(), point, component, execution(lane), lane));
+}
+
+TEST(AmrLayoutTransfer, ProgramPointStageFailureIsCollectiveThenRetriesCurrentFields) {
+  runtime();
+  auto lane = pops::ExecutionLane::duplicate_world_collectively("test::amr-program-point-stage");
+  auto component = provider(lane);
+  auto high = high_hierarchy(lane), low = low_hierarchy(lane);
+  auto spec = specification(high, low);
+  auto& map = spec.authentication;
+  map.synchronization_identity = "pops://synchronization/program-point@1";
+  map.program_invocation = "test::program::half-step-map";
+  auto transfer =
+      Transfer::prepare(high.endpoint(), low.endpoint(), spec, component, execution(lane), lane);
+  auto staged = high;
+  fill(staged, true, 4);
+  auto source = staged.endpoint(), target = low.endpoint();
+  source.stage_identity = map.program_invocation + "::source";
+  target.stage_identity = map.program_invocation + "::target";
+  // These belong to two hierarchy attempts, independently of the router generation below.
+  source.stage_generation = 19;
+  target.stage_generation = 23;
+  auto candidates = low.state;
+  const auto calls_before = provider_integral_calls(*component, lane);
+  transfer->begin_transaction(1);
+  const auto forged_port = [&](Endpoint endpoint, bool input, int defect) {
+    if (lane.rank() == 0) {
+      if (defect == 0)
+        endpoint.stage_identity = "accepted-current";
+      else if (defect == 1)
+        endpoint.stage_identity =
+            "test::other-invocation" + std::string(input ? "::source" : "::target");
+      else if (defect == 2)
+        endpoint.stage_identity = map.program_invocation + (input ? "::target" : "::source");
+      else
+        endpoint.stage_generation = 0;
+    }
+    return endpoint;
+  };
+  for (int defect = 0; defect != 4; ++defect) {
+    const auto wrong = forged_port(source, true, defect);
+    EXPECT_THROW(transfer->capture(wrong, 1, 1), std::exception);
+    EXPECT_THROW(transfer->expected_receipt_contract(wrong, target), std::exception);
+  }
+  transfer->capture(source, 1, 1);
+  for (int defect = 0; defect != 4; ++defect) {
+    const auto wrong = forged_port(target, false, defect);
+    EXPECT_THROW(transfer->apply(wrong, pointers(candidates), 1, 1), std::exception);
+    EXPECT_THROW(transfer->expected_receipt_contract(source, wrong), std::exception);
+  }
+  EXPECT_EQ(provider_integral_calls(*component, lane), calls_before);
+  for (const auto& field : candidates)
+    for (std::size_t local = 0; local < field.local_size(); ++local) {
+      const auto& fab = field.fab(local);
+      auto values = fab.create_host_mirror();
+      fab.copy_to_host(values);
+      for (std::size_t index = 0; index < values.size(); ++index)
+        EXPECT_DOUBLE_EQ(values(index), 7);
+    }
+  const auto receipt = transfer->apply(target, pointers(candidates), 1, 1);
+  EXPECT_EQ(receipt.transfer.program_invocation, map.program_invocation);
+  EXPECT_EQ(receipt.source_stage_identity, source.stage_identity);
+  EXPECT_EQ(receipt.target_stage_identity, target.stage_identity);
+  EXPECT_EQ(receipt.source_stage_generation, 19u);
+  EXPECT_EQ(receipt.target_stage_generation, 23u);
+  EXPECT_EQ(provider_integral_calls(*component, lane) - calls_before, receipt.canonical_jobs);
+  check_low(low, candidates, -1);
+  transfer->reject_attempt(1, 1);
+  candidates = low.state;
+  auto replacement = staged;
+  fill(replacement, true, 5);
+  source = replacement.endpoint();
+  source.stage_identity = map.program_invocation + "::source";
+  source.stage_generation = 20;
+  target.stage_generation = 24;
+  transfer->capture(source, 1, 2);
+  const auto retry = transfer->apply(target, pointers(candidates), 1, 2);
+  EXPECT_EQ(retry.source_stage_generation, 20u);
+  EXPECT_EQ(retry.target_stage_generation, 24u);
+  check_low(low, candidates, -2);
+  transfer->rollback_transaction(1);
+}
+
 TEST(AmrLayoutTransfer, CompositePullbackUsesIndependentLevelsAndRepeatedSourceCarriers) {
   runtime();
   auto lane =

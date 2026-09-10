@@ -500,8 +500,13 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
       throw std::invalid_argument(
           "AMR physical transfer authentication/representation is incomplete");
     if (map.synchronization_identity != "pops://synchronization/before-step@1" &&
-        map.synchronization_identity != "pops://synchronization/after-source-step@1")
+        map.synchronization_identity != "pops://synchronization/after-source-step@1" &&
+        map.synchronization_identity != "pops://synchronization/program-point@1")
       throw std::invalid_argument("AMR physical synchronization identity is unknown");
+    if ((map.synchronization_identity == "pops://synchronization/program-point@1") !=
+        !map.program_invocation.empty())
+      throw std::invalid_argument(
+          "AMR Program-point mapping requires its exact invocation identity");
     const bool reduce = map.operation == POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1;
     if (!reduce && map.operation != POPS_TRANSFER_OPERATION_PHYSICAL_PULLBACK_V1)
       throw std::invalid_argument("AMR physical transfer operation is unknown");
@@ -839,6 +844,14 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
   void validate_endpoint(const AmrTransferEndpoint<Dim>& endpoint, bool source) const {
     const auto& levels = source ? source_levels : target_levels;
     require_text(endpoint.stage_identity);
+    // Preparation authenticates topology before a Program is suspended. Actual reads/writes
+    // require the declared invocation's live port; router and stage generations are independent.
+    const auto& invocation = spec.authentication.program_invocation;
+    if (!invocation.empty() &&
+        (endpoint.stage_identity != invocation + (source ? "::source" : "::target") ||
+         endpoint.stage_generation == 0))
+      throw std::invalid_argument(
+          "AMR Program-point endpoint differs from its qualified stage port");
     if (endpoint.levels.size() != levels.size() ||
         endpoint_bytes(endpoint, levels) != (source ? source_contract : target_contract))
       throw std::invalid_argument(
