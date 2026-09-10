@@ -392,6 +392,81 @@ extern "C" void pops_install_program_amr(
   // clang-format on
 }
 
+// Native package consensus authenticates the actual binary bytes. Compile exactly once and
+// distribute that image; independent links may embed distinct UUIDs or local dylib paths even
+// when their C++ inputs are identical.
+std::unique_ptr<pops::dynlib::AuthenticatedNativeFile> compile_exact_loader_artifact(
+    const std::string& source_path, const std::string& shared_object,
+    const pops::ExecutionLane& lane, bool interface_blocks = false, bool histories = false) {
+  const auto broadcast = [&](std::string& payload) {
+    const bool length_overflow =
+        lane.rank() == 0 &&
+        payload.size() > static_cast<std::size_t>(std::numeric_limits<long>::max());
+    if (pops::all_reduce_max(length_overflow ? 1L : 0L, lane) != 0)
+      throw std::length_error("AMR fixture artifact exceeds the fixture length domain");
+    const long count =
+        pops::all_reduce_max(lane.rank() == 0 ? static_cast<long>(payload.size()) : 0L, lane);
+    long allocation_failed = 0;
+    try {
+      payload.resize(static_cast<std::size_t>(count));
+    } catch (const std::exception&) {
+      allocation_failed = 1;
+    }
+    if (pops::all_reduce_max(allocation_failed, lane) != 0)
+      throw std::runtime_error("AMR fixture artifact allocation failed collectively");
+    pops::broadcast_bytes_inplace(payload.data(), payload.size(), lane, 0);
+  };
+  std::string image;
+  std::string preparation_error;
+  if (lane.rank() == 0) {
+    try {
+      {
+        std::ofstream source(source_path);
+        source.exceptions(std::ios::badbit | std::ios::failbit);
+        source << loader_source(interface_blocks, histories);
+      }
+      const auto package = pops::test::native_dso::compile_shared(
+          source_path, shared_object, "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");
+      if (!package.ok) {
+        pops::test::native_dso::report_compile_failure(
+            "test_amr_synthetic_program_loader_transaction", package);
+        throw std::runtime_error("authenticated AMR fixture artifact did not compile");
+      }
+      std::ifstream binary(shared_object, std::ios::binary);
+      binary.exceptions(std::ios::badbit);
+      if (!binary)
+        throw std::runtime_error("cannot read the compiled AMR fixture artifact");
+      image.assign(std::istreambuf_iterator<char>(binary), std::istreambuf_iterator<char>());
+    } catch (const std::exception& error) {
+      preparation_error = error.what();
+    }
+  }
+  broadcast(preparation_error);
+  if (!preparation_error.empty())
+    throw std::runtime_error("AMR fixture artifact preparation failed: " + preparation_error);
+  // Independent links can carry different UUIDs. Every rank authenticates and loads the exact
+  // rank-zero binary image, even when its local artifact path differs.
+  broadcast(image);
+  std::unique_ptr<pops::dynlib::AuthenticatedNativeFile> authenticated;
+  try {
+    if (lane.rank() != 0) {
+      std::ofstream binary(shared_object, std::ios::binary);
+      binary.exceptions(std::ios::badbit | std::ios::failbit);
+      binary.write(image.data(), static_cast<std::streamsize>(image.size()));
+    }
+    authenticated = std::make_unique<pops::dynlib::AuthenticatedNativeFile>(shared_object);
+  } catch (const std::exception& error) {
+    preparation_error = error.what();
+  }
+  if (pops::all_reduce_max(preparation_error.empty() ? 0L : 1L, lane) != 0)
+    throw std::runtime_error("AMR fixture artifact materialization failed collectively: " +
+                             preparation_error);
+  if (!pops::all_ranks_agree_exact_ordered_byte_pairs(
+          {{"AMR fixture artifact", authenticated->content_sha256()}}, lane))
+    throw std::runtime_error("AMR fixture artifact bytes differ between ranks");
+  return authenticated;
+}
+
 void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& shared_object,
                           const std::vector<double>& state, bool synchronous = false) {
   auto lane = std::make_shared<pops::ExecutionLane>(
@@ -515,69 +590,7 @@ TEST(test_amr_synthetic_program_loader_transaction,
   const std::string shared_object = stem + ".so";
   auto lane = std::make_shared<pops::ExecutionLane>(
       pops::ExecutionLane::duplicate_world_collectively("test.interface-publication.package"));
-  const auto broadcast = [&](std::string& payload) {
-    const bool length_overflow =
-        lane->rank() == 0 &&
-        payload.size() > static_cast<std::size_t>(std::numeric_limits<long>::max());
-    if (pops::all_reduce_max(length_overflow ? 1L : 0L, *lane) != 0)
-      throw std::length_error("AMR publication artifact exceeds the fixture length domain");
-    const long count =
-        pops::all_reduce_max(lane->rank() == 0 ? static_cast<long>(payload.size()) : 0L, *lane);
-    long allocation_failed = 0;
-    try {
-      payload.resize(static_cast<std::size_t>(count));
-    } catch (const std::exception&) {
-      allocation_failed = 1;
-    }
-    if (pops::all_reduce_max(allocation_failed, *lane) != 0)
-      throw std::runtime_error("AMR publication artifact allocation failed collectively");
-    pops::broadcast_bytes_inplace(payload.data(), payload.size(), *lane, 0);
-  };
-  std::string image;
-  std::string preparation_error;
-  if (lane->rank() == 0) {
-    try {
-      {
-        std::ofstream source(source_path);
-        source.exceptions(std::ios::badbit | std::ios::failbit);
-        source << loader_source(true);
-      }
-      const auto package = pops::test::native_dso::compile_shared(
-          source_path, shared_object, "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");
-      if (!package.ok) {
-        pops::test::native_dso::report_compile_failure("test_amr_interface_publication", package);
-        throw std::runtime_error(
-            "authenticated two-block AMR publication artifact did not compile");
-      }
-      std::ifstream binary(shared_object, std::ios::binary);
-      binary.exceptions(std::ios::badbit);
-      if (!binary)
-        throw std::runtime_error("cannot read the compiled AMR publication artifact");
-      image.assign(std::istreambuf_iterator<char>(binary), std::istreambuf_iterator<char>());
-    } catch (const std::exception& error) {
-      preparation_error = error.what();
-    }
-  }
-  broadcast(preparation_error);
-  ASSERT_TRUE(preparation_error.empty()) << preparation_error;
-  // Independent links can carry different UUIDs. Every rank authenticates and loads the exact
-  // rank-zero binary image, even when its local artifact path differs.
-  broadcast(image);
-  std::unique_ptr<pops::dynlib::AuthenticatedNativeFile> authenticated;
-  try {
-    if (lane->rank() != 0) {
-      std::ofstream binary(shared_object, std::ios::binary);
-      binary.exceptions(std::ios::badbit | std::ios::failbit);
-      binary.write(image.data(), static_cast<std::streamsize>(image.size()));
-    }
-    authenticated = std::make_unique<pops::dynlib::AuthenticatedNativeFile>(shared_object);
-  } catch (const std::exception& error) {
-    preparation_error = error.what();
-  }
-  ASSERT_EQ(pops::all_reduce_max(preparation_error.empty() ? 0L : 1L, *lane), 0L)
-      << preparation_error;
-  ASSERT_TRUE(pops::all_ranks_agree_exact_ordered_byte_pairs(
-      {{"AMR publication artifact", authenticated->content_sha256()}}, *lane));
+  const auto authenticated = compile_exact_loader_artifact(source_path, shared_object, *lane, true);
   const auto system_config = config();
   const auto initial = initial_state(system_config.shape);
   pops::AmrSystem<Dim> system(system_config);
@@ -719,16 +732,12 @@ TEST(test_amr_synthetic_program_loader_transaction,
                            std::to_string(static_cast<long>(std::clock()));
   const std::string source_path = stem + ".cpp";
   const std::string shared_object = stem + ".so";
+  auto artifact_lane =
+      pops::ExecutionLane::duplicate_world_collectively("test.synthetic-loader.artifact");
   {
-    std::ofstream source(source_path);
-    source << loader_source();
-  }
-  const auto package = pops::test::native_dso::compile_shared(
-      source_path, shared_object, "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");
-  if (!package.ok) {
-    pops::test::native_dso::report_compile_failure("test_amr_synthetic_program_loader_transaction",
-                                                   package);
-    FAIL() << "synthetic source-built AMR loader transaction artifact did not compile";
+    SCOPED_TRACE("compile and authenticate one exact artifact across ranks");
+    ASSERT_NO_THROW((void)compile_exact_loader_artifact(source_path, shared_object, artifact_lane,
+                                                        false, false));
   }
 
   const auto system_config = config();
@@ -868,16 +877,14 @@ TEST(test_amr_synthetic_program_loader_transaction,
                            std::to_string(static_cast<long>(std::clock()));
   const std::string source_path = stem + ".cpp";
   const std::string shared_object = stem + ".so";
+  auto artifact_lane =
+      pops::ExecutionLane::duplicate_world_collectively("test.synthetic-loader.artifact");
   {
-    std::ofstream source(source_path);
-    source << loader_source(false, true);
+    SCOPED_TRACE("compile and authenticate one exact artifact across ranks");
+    ASSERT_NO_THROW((void)compile_exact_loader_artifact(source_path, shared_object, artifact_lane,
+                                                        false, true));
   }
-  const auto package = pops::test::native_dso::compile_shared(
-      source_path, shared_object, "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");
-  if (!package.ok) {
-    pops::test::native_dso::report_compile_failure("test_amr_history_restart", package);
-    FAIL() << "history restart fixture artifact did not compile";
-  }
+
   const auto settings = config();
   pops::AmrSystem<Dim> system(settings);
   {
