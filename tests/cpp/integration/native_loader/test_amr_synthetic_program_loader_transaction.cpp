@@ -317,12 +317,18 @@ extern "C" void pops_install_program_amr(
   auto inject_retry = std::make_shared<bool>(true);
   context->configure_primary_clock("tests.synthetic-loader.clock");
 #if POPS_TEST_HISTORIES
-  context->install([context](double dt) {
+  // Match the generated installer: materialize the frozen history descriptors before bind seals
+  // checkpoint capacity, and refresh all level-qualified rings whenever the hierarchy changes.
+  const auto register_histories = [context] {
     context->for_each_program_resource_level([&](int) {
       for (const char* name : {"tracer.first", "tracer.second"})
         context->register_history(name, 1, 1, 0, "tests.synthetic-loader/state/tracer",
                                   "cell.conservative", "tests.synthetic-loader.clock", "none");
     });
+  };
+  register_histories();
+  context->install([context, register_histories](double dt) {
+    register_histories();
     context->advance_hierarchy(dt, [context](double) {
       auto& accepted = context->state(0);
       auto& candidate = context->scratch_state(1000, 0, accepted);
@@ -332,7 +338,7 @@ extern "C" void pops_install_program_amr(
       context->rotate_histories("tests.synthetic-loader.clock");
       context->commit_many({{&accepted, &candidate}});
     });
-  }, context);
+  }, context, register_histories);
 #else
   context->install(
       [context, inject_retry](double macro_dt) {
@@ -874,10 +880,25 @@ TEST(test_amr_synthetic_program_loader_transaction,
   }
   const auto settings = config();
   pops::AmrSystem<Dim> system(settings);
-  build_refined_system(system, shared_object, initial_state(settings.shape), true);
+  {
+    SCOPED_TRACE("install, bootstrap, and seal frozen history capacity");
+    ASSERT_NO_THROW(
+        build_refined_system(system, shared_object, initial_state(settings.shape), true));
+  }
   ASSERT_EQ(system.installed_program_hash(), "tests.synthetic-loader/program/history-restart-v1");
   ASSERT_EQ(system.n_levels(), 2);
   const std::vector<std::string> names{"tracer.first", "tracer.second"};
+  ASSERT_EQ(system.history_names(), names);
+  for (const auto& name : names) {
+    ASSERT_EQ(system.history_depth(name), 2);
+    ASSERT_EQ(system.history_levels(name), (std::vector<int>{0, 1}));
+    for (int level = 0; level < system.n_levels(); ++level) {
+      EXPECT_FALSE(system.history_initialized(name, level));
+      EXPECT_EQ(system.history_fill_count(name, level), 0);
+      for (int slot = 0; slot < 2; ++slot)
+        EXPECT_DOUBLE_EQ(system.history_slot_dt(name, level, slot), 0.0);
+    }
+  }
   struct History {
     std::string name;
     int level;
@@ -934,9 +955,13 @@ TEST(test_amr_synthetic_program_loader_transaction,
   };
   constexpr double first_dt = 0.125;
   constexpr double second_dt = 0.1875;
-  system.step(first_dt);
-  ASSERT_EQ(system.history_names(), names);
-  const Image checkpoint = capture();
+  Image checkpoint;
+  {
+    SCOPED_TRACE("first accepted step and complete checkpoint capture");
+    ASSERT_NO_THROW(system.step(first_dt));
+    ASSERT_EQ(system.history_names(), names);
+    ASSERT_NO_THROW(checkpoint = capture());
+  }
   ASSERT_EQ(checkpoint.histories.size(), 4u);
   for (const auto& history : checkpoint.histories) {
     ASSERT_TRUE(history.initialized);
@@ -946,8 +971,12 @@ TEST(test_amr_synthetic_program_loader_transaction,
   }
   // These are state histories: the exact native archive is empty, not an omitted RHS payload.
   ASSERT_TRUE(checkpoint.flux_shard.empty());
-  system.step(second_dt);
-  const Image uninterrupted = capture();
+  Image uninterrupted;
+  {
+    SCOPED_TRACE("second accepted step and uninterrupted image capture");
+    ASSERT_NO_THROW(system.step(second_dt));
+    ASSERT_NO_THROW(uninterrupted = capture());
+  }
   ASSERT_NE(uninterrupted.histories, checkpoint.histories);
   for (const auto& history : uninterrupted.histories)
     ASSERT_EQ(history.fill, 2);
@@ -1031,8 +1060,11 @@ TEST(test_amr_synthetic_program_loader_transaction,
   EXPECT_THROW(system.rebuild_history_slots(row.name, {0, 1}), std::exception);
   EXPECT_EQ(capture(), checkpoint);
   system.finalize_restart_transaction();
-  system.step(second_dt);
-  EXPECT_EQ(capture(), uninterrupted);
+  {
+    SCOPED_TRACE("continue the fully restored checkpoint");
+    ASSERT_NO_THROW(system.step(second_dt));
+    EXPECT_EQ(capture(), uninterrupted);
+  }
 
   // The declared post-restore regrid consumes a complete incoming image and creates a new
   // authenticated history image. The final commit must validate that transformed authority.
