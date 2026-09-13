@@ -6,6 +6,7 @@ Central profiles also advance through scheduled regrids and checkpoint/restart. 
 exports its arrays and independent mathematical oracle, including the nonzero far tails.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
 import json
@@ -326,7 +327,8 @@ def _evidence_metadata(
     (binding,) = artifact.plan.initial_condition_plan.bindings
     source = binding.source.options.to_data()
     return {
-        "schema": "pops.exact-analytic-initial-arrays.v1",
+        "schema": "pops.exact-analytic-initial-arrays.v2",
+        "metadata_encoding": "json-with-bytes-hex.v1",
         "target": target,
         "native_dimension": dim,
         "base_cells_per_axis": n,
@@ -363,6 +365,17 @@ def _evidence_metadata(
     }
 
 
+def _evidence_json_default(value):
+    # Match runtime._bound_snapshot's typed byte projection. Identity.to_data() keeps
+    # its digest as bytes; decode this tag with bytes.fromhex() before Identity.from_data().
+    # Leave JSON-native values to json.dumps, including its nonfinite-number rejection.
+    if isinstance(value, bytes):
+        return {"bytes_hex": value.hex()}
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise TypeError(f"unsupported analytic evidence metadata type: {type(value).__name__}")
+
+
 def _export_image(tmp_path, record_property, phase, image, expected, metadata):
     states, clock = image
     identifier = (
@@ -382,12 +395,66 @@ def _export_image(tmp_path, record_property, phase, image, expected, metadata):
         "array_dtypes": {str(level): str(state.dtype) for level, state in states.items()},
     }
     np.savez(
-        path, metadata=np.asarray(json.dumps(details, sort_keys=True, allow_nan=False)), **arrays
+        path,
+        metadata=np.asarray(
+            json.dumps(details, default=_evidence_json_default, sort_keys=True, allow_nan=False)
+        ),
+        **arrays,
     )
     record_property(identifier + "-" + phase, str(path))
     record_property(
         identifier + "-" + phase + "-sha256", hashlib.sha256(path.read_bytes()).hexdigest()
     )
+
+
+def test_evidence_metadata_json_roundtrip(tmp_path):
+    from types import MappingProxyType
+
+    from pops.identity import Identity, make_identity
+
+    identity = make_identity("runtime-backend-manifest", {"backend": "serial"})
+    metadata = {
+        "native_route": "analytic",
+        "profile": "gaussian",
+        "target": "uniform_system",
+        "native_dimension": 1,
+        "base_cells_per_axis": 1,
+        "tail_sign": None,
+        "mixture_weight": 1.0,
+        "rank": 0,
+        "artifact_identity": identity.to_data(),
+        "nested": [MappingProxyType({"payload": bytes(range(256))})],
+    }
+    state = np.asarray([1.25], dtype=np.float64)
+    properties = {}
+    _export_image(
+        tmp_path,
+        properties.__setitem__,
+        "control",
+        ({0: state}, {"time": 0.001}),
+        {0: state.copy()},
+        metadata,
+    )
+    (path,) = tmp_path.glob("*.npz")
+    with np.load(path, allow_pickle=False) as exported:
+        details = json.loads(exported["metadata"].item())
+        restored = details["artifact_identity"]
+        restored["digest"] = bytes.fromhex(restored["digest"]["bytes_hex"])
+        assert Identity.from_data(restored) == identity
+        assert bytes.fromhex(details["nested"][0]["payload"]["bytes_hex"]) == bytes(range(256))
+        assert details["time"] == 0.001
+        for key in ("actual_level_0", "expected_level_0"):
+            assert exported[key].dtype == state.dtype
+            np.testing.assert_array_equal(exported[key], state)
+    assert hashlib.sha256(path.read_bytes()).hexdigest() in properties.values()
+    with pytest.raises(TypeError, match="unsupported analytic evidence metadata type"):
+        json.dumps({"opaque": object()}, default=_evidence_json_default, allow_nan=False)
+    with pytest.raises(ValueError):
+        json.dumps(
+            {"nested": MappingProxyType({"nonfinite": math.nan})},
+            default=_evidence_json_default,
+            allow_nan=False,
+        )
 
 
 def _legacy_image(target, n, dim, weight, *, tail_sign=None):
