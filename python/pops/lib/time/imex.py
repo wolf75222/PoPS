@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from pops.time._methods.tableau import AdditiveRungeKuttaTableau, RungeKuttaTableau
+from pops.time._evaluation_point import evaluation_partition
 from pops.time import LocalLinear, LocalResidual
 from pops.solvers import DenseLU
 
@@ -149,7 +150,8 @@ def _build_imex(
                     coefficient: Any = diagonal,
                     name: str = residual_name,
                 ) -> Any:
-                    source = owner.source(implicit_operator, state=iterate)
+                    with evaluation_partition(owner, "implicit"):
+                        source = owner.source(implicit_operator, state=iterate)
                     return owner.value(
                         name,
                         iterate - frozen_predictor - (owner.dt * coefficient) * source,
@@ -191,10 +193,11 @@ def _build_imex(
                 program, explicit_operator, stage, fields, name="%sk_exp_%d" % (tag, i), point=point
             )
         )
-        if nonlinear:
-            implicit_rate = program.source(implicit_operator, state=stage)
-        else:
-            implicit_rate = program.apply(linear, stage)
+        with evaluation_partition(program, "implicit"):
+            if nonlinear:
+                implicit_rate = program.source(implicit_operator, state=stage)
+            else:
+                implicit_rate = program.apply(linear, stage)
         implicit_rates.append(program.value("%sk_imp_%d" % (tag, i), implicit_rate, at=point))
 
     final = u0

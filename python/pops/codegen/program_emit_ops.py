@@ -401,11 +401,14 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     # is off (record early-returns), changes no numerics; ops emitting no statement (pure inline
     # token: cfl / compare) are skipped by the len guard below. _start marks this op's first line.
     _profile_start = len(lines)
-    if "evaluation_partition" in v.attrs and v.op in {
-            "source", "implicit_source", "local_transform", "apply",
-            "solve_local_linear", "solve_local_nonlinear", "solve_implicit_source"}:
+    if v.op in {"source", "implicit_source", "local_transform", "apply",
+                "solve_local_linear", "solve_local_nonlinear", "solve_implicit_source"}:
         from pops.time._evaluation_point import evaluation_stage_fraction
-        stage = evaluation_stage_fraction(v)
+        # Unqualified sources use explicit ARK coordinates; an authored partition takes precedence.
+        # Solves use implicit coordinates. Generic apply/transform require unambiguous intent.
+        ark_partition = ("explicit" if v.op == "source" else
+                         None if v.op in {"apply", "local_transform"} else "implicit")
+        stage = evaluation_stage_fraction(v, ark_partition=ark_partition)
         lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
     if v.op == "post_synchronization":
         var[v.id] = "/* post_synchronization */"
