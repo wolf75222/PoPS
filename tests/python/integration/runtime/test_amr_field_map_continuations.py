@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pops
@@ -9,6 +10,19 @@ import pytest
 
 from tests.python.integration.runtime.test_interstage_physical_maps import resolve_interstage_maps
 from tests.python.integration.runtime.test_amr_physical_maps import _internal_map_image
+
+
+def _collective_checkpoint_path(path: Path) -> Path:
+    """Share rank zero's unique pytest case path without sharing rank-local fixture output."""
+    from pops import _pops
+
+    comm = _pops.mpi_world()
+    if int(comm.size) == 1:
+        return path
+    from pops._native_collectives import broadcast_value
+
+    shared = broadcast_value(comm, str(path) if int(comm.rank) == 0 else None, root=0)
+    return Path(shared)
 
 
 def _history_image(instance):
@@ -100,7 +114,8 @@ def test_native_repeated_amr_field_maps_consume_current_stage_and_restart(tmp_pa
     # depth=1 declares the maximum lag: each physical ring contains two slots, and
     # fill_count counts accepted stores, saturating at that two-slot capacity.
     assert all(row[2] and row[3] == 1 and len(row[4]) == 2 for row in first_histories)
-    checkpoint = instance.checkpoint(tmp_path / "field-map-continuation")
+    checkpoint = instance.checkpoint(
+        _collective_checkpoint_path(tmp_path / "field-map-continuation"))
     pops.run(instance, t_end=0.02, max_steps=1)
     uninterrupted = _internal_map_image(instance)
     uninterrupted_histories = _history_image(instance)
