@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 import numpy as np
 import pops
@@ -56,4 +57,34 @@ def _state_summary(runtime: Any, block: str) -> dict[str, Any]:
         "component_means": np.mean(values, axis=tuple(range(1, values.ndim))).tolist(),
         "minimum": float(np.min(values)),
         "maximum": float(np.max(values)),
+    }
+
+
+def _amr_state_summary(
+    runtime: Any, block: str, *, component_names: tuple[str, ...]
+) -> dict[str, Any]:
+    """Summarize a Cartesian AMR block using its active composite cell measure.
+
+    Dense level buffers include covered coarse cells and unpopulated fine cells. They cannot be
+    concatenated into a physical state summary. The native integral masks the covered cells and
+    combines all active levels; dividing by the physical domain volume gives the spatial mean.
+    """
+    hierarchy = runtime.amr.patch_table()
+    if not hierarchy.built or hierarchy.domain_bounds is None:
+        raise RuntimeError("AMR state summary requires a built hierarchy with physical bounds")
+    lower, upper = hierarchy.domain_bounds
+    lengths = tuple(high - low for low, high in zip(lower, upper, strict=True))
+    if not lengths or any(not math.isfinite(length) or length <= 0 for length in lengths):
+        raise RuntimeError("AMR state summary requires finite positive Cartesian domain lengths")
+    volume = math.prod(lengths)
+    integrals = [float(runtime.integral(block, component))
+                 for component in range(len(component_names))]
+    return {
+        "block": block,
+        "representation": "composite_amr",
+        "levels": hierarchy.n_levels,
+        "component_names": list(component_names),
+        "domain_volume": volume,
+        "component_integrals": integrals,
+        "component_means": [value / volume for value in integrals],
     }

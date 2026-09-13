@@ -45,7 +45,7 @@ from pops.spaces import CellState
 from pops.time import FixedDt, every
 
 from .my_time_schemes import ssprk2
-from .runtime import _execution_resources, _state_summary
+from .runtime import _amr_state_summary, _execution_resources
 from .restart_checks import (
     _snapshot,
     _require_same_snapshot,
@@ -239,7 +239,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "levels": runtime.n_levels(),
         "fine_patches": patches.n_patches,
         "regrids": regrid.regrid_count,
-        "state": _state_summary(runtime, "tracer"),
+        "state": _amr_state_summary(runtime, "tracer", component_names=("u",)),
         "exit_code": 0,
         "output_dir": str(args.work_dir / "scalar-amr"),
     }

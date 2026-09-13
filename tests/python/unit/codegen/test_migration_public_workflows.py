@@ -23,6 +23,46 @@ from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen.program_emit_kernels import _prepared_native_components
 
 
+def test_amr_summary_uses_composite_integrals_and_physical_volume():
+    from types import SimpleNamespace
+    from scientific.runtime import _amr_state_summary
+
+    calls = []
+
+    def integral(block, component):
+        calls.append((block, component))
+        # A volume-six hierarchy has component integrals 12 and -3. An unweighted
+        # average of level buffers, including covered coarse cells, is not its mean.
+        return (12.0, -3.0)[component]
+
+    runtime = SimpleNamespace(
+        integral=integral,
+        amr=SimpleNamespace(patch_table=lambda: SimpleNamespace(
+            built=True, domain_bounds=((1.0, -1.0), (3.0, 2.0)), n_levels=3)),
+    )
+    summary = _amr_state_summary(runtime, "tracer", component_names=("u", "v"))
+    assert calls == [("tracer", 0), ("tracer", 1)]
+    assert summary["representation"] == "composite_amr"
+    assert summary["levels"] == 3
+    assert summary["domain_volume"] == 6.0
+    assert summary["component_integrals"] == [12.0, -3.0]
+    assert summary["component_means"] == [2.0, -0.5]
+    assert summary["component_names"] == ["u", "v"]
+
+
+def test_uniform_state_summary_retains_ranked_component_means_and_extrema():
+    from types import SimpleNamespace
+    import numpy as np
+    from scientific.runtime import _state_summary
+
+    values = np.array([[[1.0, 3.0]], [[-2.0, 4.0]]])
+    runtime = SimpleNamespace(state_global=lambda block: values)
+    assert _state_summary(runtime, "fluid") == {
+        "block": "fluid", "shape": [2, 1, 2], "component_means": [2.0, 1.0],
+        "minimum": -2.0, "maximum": 4.0,
+    }
+
+
 @pytest.mark.parametrize(
     "workflow",
     (
