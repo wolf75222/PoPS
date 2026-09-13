@@ -213,5 +213,5 @@ def test_physical_commutation_refuses_changed_x_range(tmp_path, lower, upper):
             periodicity=target.periodicity,
             coordinate_system=target.coordinate_system,
         )
-        with pytest.raises(ValueError, match="exactly aligned physical x geometry/topology"):
+        with pytest.raises(ValueError, match="exactly aligned shared coordinate geometry/topology"):
             validate_physical_geometry(requirement, source, changed_target)
