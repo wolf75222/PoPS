@@ -23,38 +23,9 @@ inline std::string shell_quote(const std::string& value) {
   return quoted;
 }
 
-inline void append_include_flags(std::string& command, const char* value) {
-  std::string token;
-  const std::string flags = value != nullptr ? value : "";
-  for (std::size_t index = 0; index <= flags.size(); ++index) {
-    if (index == flags.size() || flags[index] == ' ') {
-      if (!token.empty())
-        command += " -I" + shell_quote(token);
-      token.clear();
-    } else {
-      token.push_back(flags[index]);
-    }
-  }
-}
-
-inline void append_definition_flags(std::string& command, const char* value) {
-  std::string token;
-  const std::string flags = value != nullptr ? value : "";
-  for (std::size_t index = 0; index <= flags.size(); ++index) {
-    if (index == flags.size() || flags[index] == ' ') {
-      if (!token.empty())
-        command += " -D" + shell_quote(token);
-      token.clear();
-    } else {
-      token.push_back(flags[index]);
-    }
-  }
-}
-
-// POPS_NATIVE_MPI_* is serialized by PopsMpiContract.cmake with `|`: unlike the historical
-// space-splitting Kokkos test seam, this preserves paths and definitions containing spaces. Each
-// record becomes exactly one compiler argv item. CMake's explicit SHELL: records are already a
-// trusted toolchain fragment and retain their intended word splitting.
+// Kokkos and MPI records use `|` to preserve paths and definitions containing spaces.
+// Each record becomes one compiler argument; explicit SHELL: toolchain fragments retain
+// their intended word splitting.
 inline void append_serialized_flags(std::string& command, const char* value,
                                     const std::string& prefix = {}) {
   const std::string records = value != nullptr ? value : "";
@@ -101,14 +72,9 @@ inline CompileResult compile_shared(const std::string& source_path, const std::s
   command += " -D" + shell_quote(std::string("POPS_HEADER_SIG=\"") + POPS_TEST_HEADER_SIG + "\"");
 #endif
 #if defined(POPS_HAS_KOKKOS)
-  append_include_flags(command, POPS_TEST_KOKKOS_INC);
-  std::string options = POPS_TEST_KOKKOS_OPTS;
-  for (std::size_t position = options.find("SHELL:"); position != std::string::npos;
-       position = options.find("SHELL:"))
-    options.erase(position, 6);
-  if (!options.empty())
-    command += " " + options;
-  append_definition_flags(command, POPS_TEST_KOKKOS_DEFS);
+  append_serialized_flags(command, POPS_TEST_KOKKOS_INC, "-I");
+  append_serialized_flags(command, POPS_TEST_KOKKOS_DEFS, "-D");
+  append_serialized_flags(command, POPS_TEST_KOKKOS_OPTS);
   command += " -DPOPS_HAS_KOKKOS";
 #endif
 #if defined(POPS_HAS_MPI)

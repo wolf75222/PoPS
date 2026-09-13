@@ -15,6 +15,8 @@ if(NOT GTest_FOUND)
   # `cmake --install` for the PoPS SDK (and must not require unbuilt gmock archives when a package
   # consumer smoke installs the header-only core).
   set(INSTALL_GTEST OFF CACHE BOOL "Do not install PoPS' private GoogleTest dependency" FORCE)
+  # Only GoogleTest is used; avoid configuring the unused GoogleMock subproject.
+  set(BUILD_GMOCK OFF CACHE BOOL "Do not build PoPS' unused private GoogleMock dependency" FORCE)
   FetchContent_Declare(
     googletest
     GIT_REPOSITORY https://github.com/google/googletest.git
@@ -364,10 +366,17 @@ function(pops_native_loader_definitions out)
   # host test executable.  Keep this authority in one helper: a native-loader suite must never
   # compile a serial DSO and then skip or silently accept it in a Kokkos build.
   if(POPS_HAS_KOKKOS)
+    if(NOT DEFINED POPS_NATIVE_KOKKOS_INCLUDE OR
+       NOT DEFINED POPS_NATIVE_KOKKOS_DEFINITIONS OR
+       NOT DEFINED POPS_NATIVE_KOKKOS_OPTIONS OR
+       NOT POPS_NATIVE_KOKKOS_INCLUDE)
+      message(FATAL_ERROR
+        "Runtime-compiled test DSOs require the complete finite POPS_NATIVE_KOKKOS_* authority")
+    endif()
     list(APPEND _definitions
-      POPS_TEST_KOKKOS_INC="$<JOIN:$<TARGET_PROPERTY:Kokkos::kokkos,INTERFACE_INCLUDE_DIRECTORIES>, >"
-      POPS_TEST_KOKKOS_DEFS="$<JOIN:$<TARGET_PROPERTY:Kokkos::kokkos,INTERFACE_COMPILE_DEFINITIONS>, >"
-      POPS_TEST_KOKKOS_OPTS="$<JOIN:$<TARGET_PROPERTY:Kokkos::kokkos,INTERFACE_COMPILE_OPTIONS>, >")
+      POPS_TEST_KOKKOS_INC="${POPS_NATIVE_KOKKOS_INCLUDE}"
+      POPS_TEST_KOKKOS_DEFS="${POPS_NATIVE_KOKKOS_DEFINITIONS}"
+      POPS_TEST_KOKKOS_OPTS="${POPS_NATIVE_KOKKOS_OPTIONS}")
   endif()
   if(POPS_HAS_MPI)
     if(NOT POPS_NATIVE_MPI_ABI OR NOT POPS_NATIVE_MPI_INCLUDE OR

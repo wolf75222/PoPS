@@ -67,6 +67,36 @@ if(_pops_conflicts_FILENAMES)
     "The parallel HDF5 runtime has conflicting native dependencies: ${_pops_conflicts_text}")
 endif()
 
+# Authenticate the complete loader closure of the selected MPI runtime, not only libraries whose
+# basename happens to contain `mpi`.  OpenMPI, for example, loads libopen-pal; it is a required
+# part of the exact process identity even though its name would otherwise look unrelated.  The
+# same filtered dependency walk is used for HDF5 and MPI so companion runtimes are accepted only
+# when they resolve to the exact path and bytes selected by PoPS.
+file(GET_RUNTIME_DEPENDENCIES
+  LIBRARIES ${_pops_expected_mpi_files}
+  DIRECTORIES ${_pops_search_directories}
+  PRE_INCLUDE_REGEXES ${_pops_expected_mpi_regexes}
+  PRE_EXCLUDE_REGEXES ".*"
+  RESOLVED_DEPENDENCIES_VAR _pops_expected_resolved
+  UNRESOLVED_DEPENDENCIES_VAR _pops_expected_unresolved
+  CONFLICTING_DEPENDENCIES_PREFIX _pops_expected_conflicts)
+if(_pops_expected_unresolved)
+  list(JOIN _pops_expected_unresolved ", " _pops_expected_unresolved_text)
+  message(FATAL_ERROR
+    "The selected MPI runtime has unresolved native dependencies: "
+    "${_pops_expected_unresolved_text}")
+endif()
+if(_pops_expected_conflicts_FILENAMES)
+  list(JOIN _pops_expected_conflicts_FILENAMES ", " _pops_expected_conflicts_text)
+  message(FATAL_ERROR
+    "The selected MPI runtime has conflicting native dependencies: "
+    "${_pops_expected_conflicts_text}")
+endif()
+set(_pops_expected_runtime_closure
+  ${_pops_expected_mpi_files}
+  ${_pops_expected_resolved})
+list(REMOVE_DUPLICATES _pops_expected_runtime_closure)
+
 set(_pops_resolved_identities "")
 foreach(_pops_dependency IN LISTS _pops_resolved)
   file(REAL_PATH "${_pops_dependency}" _pops_dependency_real)
@@ -76,7 +106,7 @@ foreach(_pops_dependency IN LISTS _pops_resolved)
 endforeach()
 
 set(_pops_expected_identities "")
-foreach(_pops_expected IN LISTS _pops_expected_mpi_files)
+foreach(_pops_expected IN LISTS _pops_expected_runtime_closure)
   file(REAL_PATH "${_pops_expected}" _pops_expected_real)
   file(SHA256 "${_pops_expected_real}" _pops_expected_sha256)
   list(APPEND _pops_expected_identities
@@ -103,7 +133,7 @@ if(_pops_unexpected_mpi)
 endif()
 
 set(_pops_missing_mpi "")
-foreach(_pops_expected IN LISTS _pops_expected_mpi_files)
+foreach(_pops_expected IN LISTS _pops_expected_runtime_closure)
   file(REAL_PATH "${_pops_expected}" _pops_expected_real)
   file(SHA256 "${_pops_expected_real}" _pops_expected_sha256)
   set(_pops_expected_identity "${_pops_expected_real}::${_pops_expected_sha256}")
