@@ -70,7 +70,8 @@ def test_shared_endpoint_frequency_contract_refuses_unproved_providers(
     from pops.numerics import reconstruction, riemann
     from pops.numerics.transport_frequency import transport_frequency_contract
 
-    flux = getattr(riemann, flux_name)(**({} if waves is None else {"waves": waves}))
+    wave_provider = None if waves is None else getattr(riemann.waves, waves.title())()
+    flux = getattr(riemann, flux_name)(**({} if wave_provider is None else {"waves": wave_provider}))
     selected = SimpleNamespace(reconstruction=getattr(reconstruction, reconstruction_name)(), riemann=flux)
     with pytest.raises(ValueError, match="combined diffusion"):
         transport_frequency_contract(selected)
