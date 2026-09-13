@@ -30,7 +30,9 @@ CELLS = 16
 STEP_COUNTS = (8, 16, 32, 64)
 FINAL_TIME = 1.0
 INITIAL = np.array((1.0, 0.3))
-# name, expected order, rate evaluations and implicit solves per accepted step.
+# name, expected order, authored rate applications and implicit solves per accepted step.
+# One application of the full balance contains both source occurrences. These are authored
+# counts, not measured native kernel counts (unused stage results may be eliminated).
 METHODS = (
     ("forward_euler", 1, 1, 0),
     ("ssprk2", 2, 2, 0),
@@ -121,13 +123,57 @@ def run_artifact(artifact, steps):
     return float(np.linalg.norm(values[:, 0, 0] - exact_solution()))
 
 
+def rate_evaluation_inventory(program, method):
+    """Authenticate this fixture's rate applications after source-only balance lowering.
+
+    A physical source balance lowers into source occurrences and one weighted combination;
+    counting only the old ``rhs`` spelling loses the explicit IMEX partition. Counting each
+    source as a full rate instead doubles the unsplit shear generator. Linear-source declaration
+    nodes perform no evaluation and must not be counted as implicit applications.
+    """
+    source_rates = [value for value in program._values
+                    if value.op == "linear_combine" and "physical_balance" in value.attrs]
+    linear_rates = [value for value in program._values if value.op == "apply"]
+    expected_sources = ("upper_source",) if method.startswith("imex_") else (
+        "upper_source", "lower_source")
+    for rate in source_rates:
+        assert tuple((occurrence.payload.local_id, occurrence.coefficient)
+                     for occurrence in rate.attrs["physical_balance"].occurrences) == tuple(
+                         (name, 1) for name in expected_sources)
+        assert tuple(value.op for value in rate.inputs) == ("source",) * len(expected_sources)
+        assert tuple(value.attrs["source"] for value in rate.inputs) == expected_sources
+        assert all(dict(coefficient) == {0: 1} for coefficient in rate.attrs["coeffs"])
+        assert len(rate.attrs["coeffs"]) == len(expected_sources)
+        assert len({value.inputs[0].id for value in rate.inputs}) == 1
+    assert sum(value.op == "source" for value in program._values) == (
+        len(source_rates) * len(expected_sources))
+    assert not any(value.op == "rhs" for value in program._values)
+    expected_linear = "lower" if method.startswith("imex_") else "combined"
+    assert all(value.attrs["linear_source"] == expected_linear for value in linear_rates)
+    if method.startswith("imex_"):
+        assert len(source_rates) == len(linear_rates)
+        for explicit, implicit in zip(source_rates, linear_rates, strict=True):
+            assert explicit.inputs[0].inputs[0].id == implicit.inputs[0].id
+    elif method in ("backward_euler", "implicit_midpoint"):
+        assert not source_rates
+    else:
+        assert not linear_rates
+    return {
+        "source_balance_applications": len(source_rates),
+        "source_occurrences": len(source_rates) * len(expected_sources),
+        "linear_operator_applications": len(linear_rates),
+    }
+
+
 @pytest.mark.parametrize("method,order,evaluations,solves", METHODS, ids=[row[0] for row in METHODS])
 def test_native_temporal_order_matrix(method, order, evaluations, solves,
         isolated_native_cache, native_cxx, kokkos_root, record_property):
     case, layout, program = author_case(method)
     assert program.validate()
     operations = [value.op for value in program._values]
-    assert operations.count("rhs") + operations.count("apply") == evaluations
+    inventory = rate_evaluation_inventory(program, method)
+    assert (inventory["source_balance_applications"] +
+            inventory["linear_operator_applications"]) == evaluations
     assert operations.count("solve_local_linear") == solves
     assert operations.count("solve_outcome") == solves
     assert len(program.commits()) == 1
@@ -139,6 +185,7 @@ def test_native_temporal_order_matrix(method, order, evaluations, solves,
         "step_counts": STEP_COUNTS, "final_time": FINAL_TIME, "errors_l2": errors,
         "observed_orders": orders, "declared_order": order,
         "rate_evaluations_per_step": evaluations, "implicit_solves_per_step": solves,
+        "authored_rate_inventory": inventory,
         "cost_status": "operation_counts_only_no_performance_claim"}))
     assert all(a > b > 0 for a, b in zip(errors[:-1], errors[1:], strict=True)), errors
     assert all(order - 0.25 < actual < order + 0.25 for actual in orders), (errors, orders)
