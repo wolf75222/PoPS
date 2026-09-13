@@ -48,6 +48,7 @@ def test_groups_use_separate_authenticated_packages_and_retain_failures(tmp_path
         assert verify[-3:] == ["--expect-dim", str(dimension), "--expect-serial"]
         assert environment == pytest_environment
         assert environment["POPS_NATIVE_DIM"] == str(dimension)
+        assert environment["POPS_INCLUDE"] == str(runner.ROOT / "include")
         assert environment["PYTHONPATH"].endswith(f"/packages/dim{dimension}")
         assert environment["POPS_CI_PYTEST_TIMINGS_DIR"].endswith(f"/timings/dim{dimension}")
         assert "pytest" in command and command[-1] == path

@@ -42,7 +42,11 @@ def run_groups(groups: dict[int, list[str]], packages: Path, timings: Path) -> i
         receipts.mkdir(parents=True, exist_ok=True)
         (receipts / "selected.txt").write_text("\n".join(paths) + "\n", encoding="utf-8")
         environment = os.environ.copy()
+        # Build artifacts carry Python/native files, whereas wheel installation adds
+        # package-owned headers. Relocating this build tree breaks the historical
+        # three-parent include search; use this checkout's signature-checked headers.
         environment.update(POPS_NATIVE_DIM=str(dimension), PYTHONNOUSERSITE="1",
+                           POPS_INCLUDE=str(ROOT / "include"),
                            PYTHONPATH=os.pathsep.join((str(ROOT / "scripts"), str(package))),
                            POPS_CI_PYTEST_TIMINGS_DIR=str(receipts))
         environment.pop("POPS_NATIVE_VARIANTS_ROOT", None)
