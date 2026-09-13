@@ -48,7 +48,7 @@ from pops.time import (
     StagePoint,
     TimePoint,
 )
-from pops.time._evaluation_point import evaluation_partition
+from pops.time import evaluation_partition
 
 
 OUTPUT_ROOT = Path("outputs/advection_imex_amr")

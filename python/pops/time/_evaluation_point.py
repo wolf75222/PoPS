@@ -18,7 +18,13 @@ _EVALUATIONS = frozenset({
 
 @contextmanager
 def evaluation_partition(program: Any, partition: str):
-    """Scope a factory's physical subflow; only resulting evaluation IR retains the claim."""
+    """Qualify evaluations authored in ``program`` with a named stage partition.
+
+    For example, ``with evaluation_partition(program, "implicit")`` makes an
+    enclosed ``program.apply(...)`` use the implicit coordinate of its StagePoint.
+    State endpoints keep their own points. Nested scopes restore the prior partition
+    on exit, and evaluations authored in another Program do not inherit this scope.
+    """
     if not isinstance(partition, str) or not partition:
         raise ValueError("evaluation partition must be a non-empty string")
     token = _ACTIVE_PARTITION.set((program, partition))

@@ -51,7 +51,7 @@ from pops.time import (
     TimePoint,
     every,
 )
-from pops.time._evaluation_point import evaluation_partition
+from pops.time import evaluation_partition
 
 
 DEFAULT_CELLS = 8

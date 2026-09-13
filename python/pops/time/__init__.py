@@ -68,6 +68,7 @@ from pops.time._step.transaction import (  # noqa: F401
     ProjectAndRecheck, ProvisionalStore, StepTransactionPlan, StepTransactionReport,
 )
 from pops.time.points import Clock, StagePoint, TimePoint  # noqa: F401
+from pops.time._evaluation_point import evaluation_partition  # noqa: F401
 from pops.time._schedule.api import (  # noqa: F401
     AMRLevel, AcceptedStep, AccumulateDt, Always, AtEnd, AtStart, Attempt,
     ClockTick, Domain, Error, Event, EventHandle, Every, EveryDt, Hold, OffPolicy,
@@ -96,7 +97,7 @@ __all__ = ["Program", "ProgramValue", "StageStateSet", "StencilAccess", "Residua
            "ProgramGraph", "GraphProgramValue", "StateRead", "Unknown", "OperatorCall",
            "Solve", "Branch", "Loop", "Region", "RegionCapture",
            "Synchronize", "Commit", "ValueRef",
-           "Clock", "TimePoint", "StagePoint",
+           "Clock", "TimePoint", "StagePoint", "evaluation_partition",
            "RungeKuttaTableau", "AdditiveRungeKuttaTableau",
            "MethodCertificate", "MethodProperties", "AdditiveMethodCertificate",
            "AdditiveMethodProperties", "ProgramMethodCertificate", "SSPCertificate",

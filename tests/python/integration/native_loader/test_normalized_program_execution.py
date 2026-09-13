@@ -27,7 +27,7 @@ from pops.time import (
     StagePoint,
     TimePoint,
 )
-from pops.time._evaluation_point import evaluation_partition
+from pops.time import evaluation_partition
 from pops.time._program.detach import detach_compiled_program
 from tests.python.support.requirements import (
     default_cxx,

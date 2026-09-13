@@ -7,11 +7,19 @@ import pops
 import pytest
 
 from pops.numerics.terms import Flux
-from pops.time import Program, StagePoint, TimePoint
-from pops.time._evaluation_point import evaluation_partition, evaluation_stage_fraction
+from pops.time import Program, StagePoint, TimePoint, evaluation_partition
+from pops.time._evaluation_point import evaluation_stage_fraction
 from pops.time._program.detach import detach_compiled_program
 from pops.codegen.program_emit_solve import _rhs_stage_fraction, _solve_stage_fraction
 from tests.python.unit.time.test_time_std_imex_lie_ab import _authoring
+
+
+def test_public_evaluation_partition_is_exported_for_inline_schemes():
+    import pops.time as time
+    from pops.time._evaluation_point import evaluation_partition as implementation
+
+    assert "evaluation_partition" in time.__all__
+    assert time.evaluation_partition is implementation
 
 
 def _emitted_node_body(source, value_id):

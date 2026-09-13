@@ -13,7 +13,7 @@ from pops.physics._facade import Model
 from pops.problem import Case
 from pops.solvers import DenseLU
 from pops.time import FailRun, LocalLinear, Program, StagePoint, TimePoint
-from pops.time._evaluation_point import evaluation_partition
+from pops.time import evaluation_partition
 from pops.time._methods.properties import certify_program_graph
 from pops.time._methods.tableau import AdditiveRungeKuttaTableau, RungeKuttaTableau
 
