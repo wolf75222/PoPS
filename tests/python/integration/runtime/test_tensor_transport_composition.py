@@ -129,7 +129,8 @@ def _bind(dt, *, implicit=False):
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
     context = artifact_execution_context(artifact)
     initial = np.ascontiguousarray(fourier_oracle()[0])
-    runtime = pops.bind(artifact, initial_state={"mixture": initial},
+    subject = artifact.plan.initial_condition_plan.bindings[0].subject
+    runtime = pops.bind(artifact, initial_values={subject: initial},
                         resources={"execution_context": context})
     return runtime, context, initial
 
