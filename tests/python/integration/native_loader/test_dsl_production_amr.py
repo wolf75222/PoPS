@@ -25,13 +25,15 @@ hierarchie AMR (AmrRuntimeBlock + reflux conservatif + regrid), MEME chemin que 
 
 S'auto-saute explicitement sur une machine locale sans toolchain native. Dans une lane native de
 release, toute capacite manquante est un echec, jamais une couverture silencieusement retiree.
+
+Les phases Poisson, Roe et garde-fous sont executees par les fichiers voisins
+``test_dsl_production_amr_{poisson,roe,guards}.py`` pour separer leurs compilations a froid.
 """
 from pops.numerics.variables import Conservative, Primitive
 from pops.numerics.riemann import HLLC, Roe
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
 import os
-import shutil
 import subprocess
 import tempfile
 
@@ -55,8 +57,8 @@ from tests.python.support.requirements import (
 )
 
 GAMMA = 1.4
-# Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
-# global 300 s process-isolation budget (ADC-627, same class as test_dsl_compile_cache).
+# Independent Poisson, Roe and refusal phases have separate process test files.
+# The shared transport/HLLC/WENO5 package still performs several cold native compiles.
 POPS_PROCESS_TIMEOUT = 900
 INCLUDE = repo_include()
 
@@ -293,8 +295,10 @@ def _install_compiled_amr(system, component, *, weno5=False):
 
 
 def _component_at(component, so_path):
-    """Detach valid metadata while substituting a deliberately mismatched ABI package path."""
-    return CompiledModel(
+    """Authenticate the recompiled bytes before exercising the native ABI guard."""
+    from pops.identity import binary_identity
+
+    detached = CompiledModel(
         so_path=so_path,
         backend=component.backend,
         target=component.target,
@@ -320,6 +324,9 @@ def _component_at(component, so_path):
         elliptic_field_names=component.elliptic_field_names,
         definition_identity=component.definition_identity,
     )
+    # Hash this replacement file; an absent or original identity would test an earlier guard.
+    detached.binary_identity = binary_identity(so_path)
+    return detached
 
 
 def _parity_riemann(cm_t, spec_t, n, L, dt, riem, recon, label):
@@ -354,161 +361,172 @@ def run_roe_parity(directory, n=48):
         _parity_riemann(component, spec, n, 1.0, 2e-4, Roe(), reconstruction, label)
 
 
-def main():
+def require_toolchain():
     cxx = default_cxx()
     missing = missing_native_compile_requirement(INCLUDE, cxx)
     if missing is not None:
         require_native_or_skip(missing)
     assert cxx is not None
+    return cxx
 
-    n, L = 48, 1.0
-    tmp = tempfile.mkdtemp()
+
+def _compile_transport(tmp):
+    et = _build_euler_transport()
+    cm_t = et.compile(os.path.join(tmp, "euler_transport_amr.so"), INCLUDE,
+                      backend="production", target="amr_system")
+    assert isinstance(cm_t, CompiledModel)
+    assert cm_t.backend == "production" and cm_t.target == "amr_system"
+    assert cm_t.caps.get("amr") is True, "production caps amr=True (Phase D)"
+    spec_t = _transport_spec()
+    return et, cm_t, spec_t
+
+
+def run_transport_parity(tmp, n=48):
+    """Share the transport package across Rusanov, HLLC and WENO5 checks."""
+    L = 1.0
+    _, cm_t, spec_t = _compile_transport(tmp)
+    A = _amr(n, L, lambda s: _install_compiled_amr(s, cm_t))
+    B = _amr(n, L, lambda s: s.add_equation(
+        "gas", spec_t, spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
+        time=engine.Explicit()))
+    assert A.n_patches() == B.n_patches(), "n_patches initial production != add_block"
+    dt = 2e-4
+    for _ in range(12):
+        A.step(dt)
+        B.step(dt)
+    da, db = np.array(A.density()), np.array(B.density())
+    assert da.size == db.size and da.size > 0
+    nrm = float(np.max(np.abs(db)))
+    assert nrm > 1e-6, "densite natif triviale"
+    dmax = float(np.max(np.abs(da - db)))
+    assert dmax == 0.0, ("transport pur AMR : densite production != add_block (dmax %.2e, "
+                         "attendu 0)" % dmax)
+    assert A.n_patches() == B.n_patches(), "n_patches final production != add_block"
+    print("OK  (1) transport pur AMR : densite production BIT-IDENTIQUE a add_block (dmax=0)")
+
+    _parity_riemann(cm_t, spec_t, n, L, dt, HLLC(), Conservative(), "hllc/conservative")
+    _parity_riemann(cm_t, spec_t, n, L, dt, HLLC(), Primitive(),    "hllc/primitive")
+
+    # --- (3w) WENO5 multilevel : fournisseur C/F natif ordre 5 / halo 3. -----------------------
+    # Les routes production et ModelSpec doivent toutes deux construire une vraie hierarchie,
+    # avancer, et rester finies. La selection native refuse tout fournisseur d'ordre inferieur.
+    weno_systems = [
+        _amr(n, L, install)
+        for install in (
+            lambda s: _install_compiled_amr(s, cm_t, weno5=True),
+            lambda s: s.add_equation(
+                "gas", spec_t,
+                spatial=engine.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()),
+                time=engine.Explicit()),
+        )
+    ]
+    for weno_system in weno_systems:
+        # n_patches() counts fine patches only, not hierarchy levels.  A single clustered
+        # fine patch is already a genuine two-level hierarchy; assert both facts explicitly.
+        assert weno_system.n_levels() == 2, "WENO5 doit produire exactement deux niveaux"
+        assert weno_system.n_patches() > 0, "WENO5 doit activer une hierarchie multilevel"
+        weno_system.step(dt)
+        assert np.isfinite(np.asarray(weno_system.density())).all()
+    print("OK  (3w) WENO5 multilevel utilise le fournisseur coarse/fine ordre 5")
+
+    # add_equation chemin nominal (rusanov + conservatif) accepte et tourne :
+    E = AmrSystem(n=n, L=L, periodicity=(True, True))
+    E.set_temporal_relations([2], [1], ["integral_only"])
+    E.set_poisson("charge_density", "geometric_mg")
+    E.add_equation("gas", cm_t,
+                   spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
+    install_prepared_threshold_union(E, (("gas", "rho", 1.2),))
+    E.set_conservative_state("gas", _euler_state(_bubble(n)))
+    install_forward_euler_program(E)
+    E._s.mark_bound()
+    for _ in range(4):
+        E.step(dt)
+    assert np.isfinite(np.array(E.density())).all() and E.mass() > 1e-6
+    print("OK  (3b) AmrSystem.add_equation(production, rusanov) tourne et reste physique")
+
+
+def run_abi_rejection(tmp, n=48, *, model=None, component=None):
+    """Exercise only authenticated AMR binary loading and the ABI mismatch guard."""
+    cxx = require_toolchain()
+    L = 1.0
+    if model is None:
+        model, component, _ = _compile_transport(tmp)
+    et, cm_t = model, component
+    # --- (5) GARDE-FOU ABI : loader AMR a cle pops_native_abi_key falsifiee -> rejet ---
+    bad_abi = _compile_wrong_abi(et, os.path.join(tmp, "ep_amr_wrongabi.so"), cxx)
+    bad_component = _component_at(cm_t, bad_abi)
+    s = AmrSystem(n=n, L=L, periodicity=(True, True))
+    raised = False
     try:
-        # --- (1) PARITE STRICTE : transport pur (elliptic_rhs = 0), dmax == 0 ---
-        et = _build_euler_transport()
-        cm_t = et.compile(os.path.join(tmp, "euler_transport_amr.so"), INCLUDE,
-                          backend="production", target="amr_system")
-        assert isinstance(cm_t, CompiledModel)
-        assert cm_t.backend == "production" and cm_t.target == "amr_system"
-        assert cm_t.caps.get("amr") is True, "production caps amr=True (Phase D)"
-        spec_t = _transport_spec()
+        s.add_equation(
+            "gas",
+            bad_component,
+            spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
+            time=engine.Explicit(),
+        )
+    except RuntimeError as ex:
+        raised = True
+        assert "ABI" in str(ex), "message inattendu : %s" % ex
+    assert raised, "add_native_block a accepte un loader AMR a cle d'ABI fausse (UB silencieux)"
+    print("OK  (5) cle d'ABI divergente REJETEE par AmrSystem.add_native_block")
 
-        A = _amr(n, L, lambda s: _install_compiled_amr(s, cm_t))
-        B = _amr(n, L, lambda s: s.add_equation(
-            "gas", spec_t, spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
-            time=engine.Explicit()))
-        assert A.n_patches() == B.n_patches(), "n_patches initial production != add_block"
-        dt = 2e-4
-        for _ in range(12):
-            A.step(dt)
-            B.step(dt)
-        da, db = np.array(A.density()), np.array(B.density())
-        assert da.size == db.size and da.size > 0
-        nrm = float(np.max(np.abs(db)))
-        assert nrm > 1e-6, "densite natif triviale"
-        dmax = float(np.max(np.abs(da - db)))
-        assert dmax == 0.0, ("transport pur AMR : densite production != add_block (dmax %.2e, "
-                             "attendu 0)" % dmax)
-        assert A.n_patches() == B.n_patches(), "n_patches final production != add_block"
-        print("OK  (1) transport pur AMR : densite production BIT-IDENTIQUE a add_block (dmax=0)")
 
-        # --- (2) Exact public field/source authority on two independently installed engines. ---
-        _euler_poisson_public_parity(n, dt)
+def run_guards(tmp, n=48):
+    """Share one model across the pressure, target and native ABI refusal checks."""
+    L = 1.0
+    et, cm_t, _ = _compile_transport(tmp)
+    # La garde-fou pressure reste active : un modele SANS primitive 'p' doit etre rejete.
+    # Modele isotherme 3 variables (rho, rho_u, rho_v) avec primitives (rho, u, v) sans 'p' :
+    # il compile, mais add_equation(flux=hllc) doit lever ValueError (pression requise).
+    m_iso = Model("isothermal_no_p")
+    rho_i, rhou_i, rhov_i = m_iso.conservative_vars("rho", "rho_u", "rho_v")
+    cs2 = 0.5
+    ui = rhou_i / rho_i
+    vi = rhov_i / rho_i
+    pui = m_iso.primitive("u", ui)
+    pvi = m_iso.primitive("v", vi)
+    m_iso.flux(x=[rhou_i, rhou_i * pui + cs2 * rho_i, rhou_i * pvi],
+               y=[rhov_i, rhov_i * pui, rhov_i * pvi + cs2 * rho_i])
+    m_iso.eigenvalues(x=[pui - sqrt(cs2), pui, pui + sqrt(cs2)],
+                      y=[pvi - sqrt(cs2), pvi, pvi + sqrt(cs2)])
+    m_iso.primitive_vars(rho_i, pui, pvi)
+    m_iso.conservative_from([rho_i, rho_i * pui, rho_i * pvi])
+    m_iso.elliptic_rhs(0.0 * rho_i)
+    cm_iso = m_iso.compile(os.path.join(tmp, "isothermal_amr.so"), INCLUDE,
+                           backend="production", target="amr_system")
+    assert "p" not in cm_iso.prim_names, "modele isotherme ne devrait pas avoir 'p'"
+    raised = False
+    try:
+        s_nop = AmrSystem(n=n, L=L, periodicity=(True, True))
+        s_nop.add_equation("gas", cm_iso,
+                           spatial=engine.Spatial(minmod=True, flux=HLLC()))
+    except ValueError as ex:
+        raised = True
+        assert "hllc" in str(ex).lower()
+    assert raised, "add_equation a accepte hllc sans primitive 'p'"
+    print("OK  (3) garde-fou pression hllc/roe SANS primitive 'p' : rejet explicite")
 
-        # --- (3) PARITE hllc/roe/primitive : la facade add_equation ACCEPTE et donne un resultat
-        #     bit-identique a add_block (Gap 1 parite : le moteur AMR supporte ces schemas).
-        #     Reutilise cm_t (transport pur, phi=0) : parite STRICTE dmax==0 (zero bruit FP),
-        #     meme garantie que le test C++ test_amr_riemann_native. cm_t a une primitive 'p'
-        #     (declaree dans _euler_formulas via _build_euler_transport) -> garde-fou pression OK.
-
-        _parity_riemann(cm_t, spec_t, n, L, dt, HLLC(), Conservative(), "hllc/conservative")
-        _parity_riemann(cm_t, spec_t, n, L, dt, HLLC(), Primitive(),    "hllc/primitive")
-        _parity_riemann(cm_t, spec_t, n, L, dt, Roe(),  Conservative(), "roe/conservative")
-        _parity_riemann(cm_t, spec_t, n, L, dt, Roe(),  Primitive(),    "roe/primitive")
-
-        # La garde-fou pressure reste active : un modele SANS primitive 'p' doit etre rejete.
-        # Modele isotherme 3 variables (rho, rho_u, rho_v) avec primitives (rho, u, v) sans 'p' :
-        # il compile, mais add_equation(flux=hllc) doit lever ValueError (pression requise).
-        m_iso = Model("isothermal_no_p")
-        rho_i, rhou_i, rhov_i = m_iso.conservative_vars("rho", "rho_u", "rho_v")
-        cs2 = 0.5
-        ui = rhou_i / rho_i
-        vi = rhov_i / rho_i
-        pui = m_iso.primitive("u", ui)
-        pvi = m_iso.primitive("v", vi)
-        m_iso.flux(x=[rhou_i, rhou_i * pui + cs2 * rho_i, rhou_i * pvi],
-                   y=[rhov_i, rhov_i * pui, rhov_i * pvi + cs2 * rho_i])
-        m_iso.eigenvalues(x=[pui - sqrt(cs2), pui, pui + sqrt(cs2)],
-                          y=[pvi - sqrt(cs2), pvi, pvi + sqrt(cs2)])
-        m_iso.primitive_vars(rho_i, pui, pvi)
-        m_iso.conservative_from([rho_i, rho_i * pui, rho_i * pvi])
-        m_iso.elliptic_rhs(0.0 * rho_i)
-        cm_iso = m_iso.compile(os.path.join(tmp, "isothermal_amr.so"), INCLUDE,
-                               backend="production", target="amr_system")
-        assert "p" not in cm_iso.prim_names, "modele isotherme ne devrait pas avoir 'p'"
-        raised = False
-        try:
-            s_nop = AmrSystem(n=n, L=L, periodicity=(True, True))
-            s_nop.add_equation("gas", cm_iso,
-                               spatial=engine.Spatial(minmod=True, flux=HLLC()))
-        except ValueError as ex:
-            raised = True
-            assert "hllc" in str(ex).lower()
-        assert raised, "add_equation a accepte hllc sans primitive 'p'"
-        print("OK  (3) garde-fou pression hllc/roe SANS primitive 'p' : rejet explicite")
-
-        # --- (3w) WENO5 multilevel : fournisseur C/F natif ordre 5 / halo 3. -----------------------
-        # Les routes production et ModelSpec doivent toutes deux construire une vraie hierarchie,
-        # avancer, et rester finies. La selection native refuse tout fournisseur d'ordre inferieur.
-        weno_systems = [
-            _amr(n, L, install)
-            for install in (
-                lambda s: _install_compiled_amr(s, cm_t, weno5=True),
-                lambda s: s.add_equation(
-                    "gas", spec_t,
-                    spatial=engine.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()),
-                    time=engine.Explicit()),
-            )
-        ]
-        for weno_system in weno_systems:
-            # n_patches() counts fine patches only, not hierarchy levels.  A single clustered
-            # fine patch is already a genuine two-level hierarchy; assert both facts explicitly.
-            assert weno_system.n_levels() == 2, "WENO5 doit produire exactement deux niveaux"
-            assert weno_system.n_patches() > 0, "WENO5 doit activer une hierarchie multilevel"
-            weno_system.step(dt)
-            assert np.isfinite(np.asarray(weno_system.density())).all()
-        print("OK  (3w) WENO5 multilevel utilise le fournisseur coarse/fine ordre 5")
-
-        # add_equation chemin nominal (rusanov + conservatif) accepte et tourne :
-        E = AmrSystem(n=n, L=L, periodicity=(True, True))
-        E.set_temporal_relations([2], [1], ["integral_only"])
-        E.set_poisson("charge_density", "geometric_mg")
-        E.add_equation("gas", cm_t,
+    # --- (4) GARDE-FOUS de compilation / dispatch ---
+    sys_cm = et.compile(os.path.join(tmp, "ep_sys_cm.so"), INCLUDE,
+                        backend="production", target="system")  # target System par defaut
+    s = AmrSystem(n=n, L=L, periodicity=(True, True))
+    raised = False
+    try:
+        s.add_equation("gas", sys_cm,
                        spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
-        install_prepared_threshold_union(E, (("gas", "rho", 1.2),))
-        E.set_conservative_state("gas", _euler_state(_bubble(n)))
-        install_forward_euler_program(E)
-        E._s.mark_bound()
-        for _ in range(4):
-            E.step(dt)
-        assert np.isfinite(np.array(E.density())).all() and E.mass() > 1e-6
-        print("OK  (3b) AmrSystem.add_equation(production, rusanov) tourne et reste physique")
+    except ValueError as ex:
+        raised = True
+        assert "target='system'" in str(ex) or "amr_system" in str(ex)
+    assert raised, "AmrSystem.add_equation a accepte un CompiledModel target='system'"
+    print("OK  (4) compile(target=) garde-fous + CompiledModel target='system' refuse sur AMR")
+    run_abi_rejection(tmp, n, model=et, component=cm_t)
 
-        # --- (4) GARDE-FOUS de compilation / dispatch ---
-        sys_cm = et.compile(os.path.join(tmp, "ep_sys_cm.so"), INCLUDE,
-                            backend="production", target="system")  # target System par defaut
-        s = AmrSystem(n=n, L=L, periodicity=(True, True))
-        raised = False
-        try:
-            s.add_equation("gas", sys_cm,
-                           spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
-        except ValueError as ex:
-            raised = True
-            assert "target='system'" in str(ex) or "amr_system" in str(ex)
-        assert raised, "AmrSystem.add_equation a accepte un CompiledModel target='system'"
-        print("OK  (4) compile(target=) garde-fous + CompiledModel target='system' refuse sur AMR")
 
-        # --- (5) GARDE-FOU ABI : loader AMR a cle pops_native_abi_key falsifiee -> rejet ---
-        bad_abi = _compile_wrong_abi(et, os.path.join(tmp, "ep_amr_wrongabi.so"), cxx)
-        bad_component = _component_at(cm_t, bad_abi)
-        s = AmrSystem(n=n, L=L, periodicity=(True, True))
-        raised = False
-        try:
-            s.add_equation(
-                "gas",
-                bad_component,
-                spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
-                time=engine.Explicit(),
-            )
-        except RuntimeError as ex:
-            raised = True
-            assert "ABI" in str(ex), "message inattendu : %s" % ex
-        assert raised, "add_native_block a accepte un loader AMR a cle d'ABI fausse (UB silencieux)"
-        print("OK  (5) cle d'ABI divergente REJETEE par AmrSystem.add_native_block")
-
-        print("test_dsl_production_amr : tout est vert")
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+def main():
+    require_toolchain()
+    with tempfile.TemporaryDirectory() as tmp:
+        run_transport_parity(tmp)
+    print("test_dsl_production_amr : transport, HLLC et WENO5 verts")
 
 
 def _compile_wrong_abi(model, dst_so, cxx):

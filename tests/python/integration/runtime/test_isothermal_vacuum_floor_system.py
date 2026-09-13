@@ -12,6 +12,8 @@ The private ModelSpec adapter compiles the isothermal transport; NoSource isolat
 floor. The positive cases explicitly use periodic transport, so every face has a valid ghost source.
 The field's Dirichlet declaration does not supply a hyperbolic boundary. A separate nonperiodic
 case without that physical transport contract must fail and roll back its attempted step.
+The normal-density pair and missing-boundary rollback run in the neighboring
+``test_isothermal_vacuum_floor_inactive.py`` and ``test_isothermal_vacuum_boundary_rollback.py``.
 """
 from tests.python.support.requirements import require_native_or_skip
 from pops.numerics.variables import Conservative
@@ -28,8 +30,8 @@ try:
 except ImportError as e:
     require_native_or_skip('module pops absent (PYTHONPATH ?) : %s' % e)
 
-# Five ModelSpec/Program builds share this process; cold native compilation under parallel
-# test load can exceed the default 300-second process budget.
+# Keep the two quasi-vacuum ModelSpec/Program builds together. Normal-density parity and
+# missing-boundary rollback execute in independent process files, with the same physical inputs.
 POPS_PROCESS_TIMEOUT = 900
 
 
@@ -77,20 +79,12 @@ def run(n, L, vacuum_floor, rho_scale, nsteps, dt):
     return np.array(sim.get_state("ions")).reshape(3, n, n)
 
 
-def main():
+def run_inactive_floor():
+    """The floor must leave both five-step normal-density trajectories bit-identical."""
     n, L = 24, 1.0
     dt = 1.0e-3
     nsteps = 5
     floor = 1.0e-2
-
-    # (1) quasi-vacuum: rho ~ 1.5e-3 << floor -> bounded velocity changes the momentum flux.
-    s_off = run(n, L, 0.0, 1.0e-3, nsteps, dt)
-    s_on = run(n, L, floor, 1.0e-3, nsteps, dt)
-    chk(np.all(np.isfinite(s_off)) and np.all(np.isfinite(s_on)), "(1) both runs finite")
-    dmax_vac = float(np.max(np.abs(s_on - s_off)))
-    chk(dmax_vac > 1e-9,
-        "(1) vacuum_floor wired: bounded velocity changes the trajectory at rho<<floor (dmax=%.3e)"
-        % dmax_vac)
 
     # (2) normal density: rho ~ 1.5 >> floor -> floor inactive -> bit-identical.
     t_off = run(n, L, 0.0, 1.0, nsteps, dt)
@@ -99,13 +93,11 @@ def main():
     chk(dmax_norm == 0.0,
         "(2) floor inactive at rho>>floor: bit-identical to vacuum_floor=0 (dmax=%.3e)" % dmax_norm)
 
-    # (3) validation at the python boundary.
-    try:
-        engine.FluidState(kind="isothermal", cs2=1.0, vacuum_floor=-1.0)
-        chk(False, "(3) vacuum_floor < 0 rejected")
-    except ValueError:
-        chk(True, "(3) vacuum_floor < 0 rejected")
 
+def run_missing_boundary_rollback():
+    """A missing transport boundary must refuse the step and publish no state or clock."""
+    n, L = 24, 1.0
+    dt = 1.0e-3
     # (4) The old nonperiodic setup declared only a field BC. Its invalid transport evaluation must
     # be rejected without publishing any state or clock, rather than being masked by a density floor.
     invalid = build(n, L, 0.0, 1.0e-3, periodicity=(False, False))
@@ -123,7 +115,30 @@ def main():
     chk((invalid.time(), invalid.macro_step()) == (before_time, before_step),
         "(4) invalid physical boundary publishes no time or macro-step")
 
-    print("test_isothermal_vacuum_floor_system : tout est vert (4 verifications)")
+
+def main():
+    n, L = 24, 1.0
+    dt = 1.0e-3
+    nsteps = 5
+    floor = 1.0e-2
+
+    # (1) quasi-vacuum: rho ~ 1.5e-3 << floor -> bounded velocity changes the momentum flux.
+    s_off = run(n, L, 0.0, 1.0e-3, nsteps, dt)
+    s_on = run(n, L, floor, 1.0e-3, nsteps, dt)
+    chk(np.all(np.isfinite(s_off)) and np.all(np.isfinite(s_on)), "(1) both runs finite")
+    dmax_vac = float(np.max(np.abs(s_on - s_off)))
+    chk(dmax_vac > 1e-9,
+        "(1) vacuum_floor wired: bounded velocity changes the trajectory at rho<<floor (dmax=%.3e)"
+        % dmax_vac)
+
+    # (3) validation at the python boundary.
+    try:
+        engine.FluidState(kind="isothermal", cs2=1.0, vacuum_floor=-1.0)
+        chk(False, "(3) vacuum_floor < 0 rejected")
+    except ValueError:
+        chk(True, "(3) vacuum_floor < 0 rejected")
+
+    print("test_isothermal_vacuum_floor_system : floor actif et validation verts")
 
 
 if __name__ == "__main__":
