@@ -28,6 +28,8 @@ def component_case(n, dt, scheme):
         components={axis: tuple(speed*q for q in state)
                     for axis, speed in zip(frame.axes, SPEEDS, strict=True)},
         waves={axis: (speed, speed) for axis, speed in zip(frame.axes, SPEEDS, strict=True)})
+    model.wave_speeds(flux, frame=frame, values={
+        axis: (speed, speed) for axis, speed in zip(frame.axes, SPEEDS, strict=True)})
     diffusion = model.diffusive_flux("conduction", state=state,
         value=tuple(nu*math.grad(q) for nu, q in zip(DIFFUSIVITIES, state, strict=True)))
     rate = model.rate("balance", equation=math.ddt(state)==-math.div(flux)+math.div(diffusion))

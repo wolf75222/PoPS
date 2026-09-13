@@ -116,10 +116,19 @@ def _program(state_instance, _rate, _field, *, policy, with_balance):
 
 
 def _balance_consumers(_case, block, _state, program):
+    from pops.runtime_environment import runtime_environment_report
+
+    communicator = runtime_environment_report().get("communicator")
+    if communicator == "serial":
+        output_mode = ParallelMode.SERIAL
+    elif communicator == "MPI_COMM_WORLD":
+        output_mode = ParallelMode.ROOT
+    else:
+        raise RuntimeError("Balance fixture needs a proved native communicator")
     schedule = pops.time.every(2, clock=program.clock)
     return (
         ScientificOutput(
-            format=NPZ(ParallelMode.ROOT),
+            format=NPZ(output_mode),
             schedule=schedule,
             diagnostics=(
                 Balance(

@@ -507,7 +507,8 @@ def test_m1_balance_views_preserve_signed_occurrences_and_real_input_bodies():
     view = next(op for op in resolved.operations
                 if op.identity.endswith("::target::" + selected.local_id))
     assert view.consumes == (operation.consumes[2],)
-    assert view.refusal == "unsupported_physical_balance"
+    assert view.native_route == "program:source_balance"
+    assert view.refusal is None
 
 
 def test_m1_joint_projection_retains_shared_context_and_resolved_native_route():

@@ -167,7 +167,16 @@ def main():
         # Both sides must consume the same authenticated FixedDt segment.  Reopening twelve
         # one-step intervals would make every local endpoint ``time + dt`` and bypass the final
         # accumulated-roundoff correction exercised by the public run.
-        prod_steps = prod.run(12 * dt, max_steps=12)
+        from pops.runtime._step_strategy import prepare_program_run
+        from pops.runtime._native_step_target import native_step_target
+
+        prepared = prepare_program_run(prod)
+        prepared.begin(prod._temporal_restart_state, time=prod.time(), macro_step=prod.macro_step())
+        target = native_step_target(prod)
+        prod_steps = 0
+        while prod.time() < 12 * dt and prod_steps < 12:
+            prepared.run_step(target, t_end=12 * dt)
+            prod_steps += 1
         report = pops.run(public, t_end=12 * dt, max_steps=12)
         Up = np.array(prod.get_state("gas")).reshape(4, n, n)
         Ur = np.array(public.state_global("gas")).reshape(4, n, n)

@@ -140,6 +140,8 @@ def initial():
 def test_native_full_coupled_solve_iterates_and_conserves(compiled, record_property):
     route, artifact, native, elapsed = compiled
     before = native.interaction_calls()
+    before_jacobian = native.jacobian_calls()
+    before_approximate = native.approximate_calls()
     simulation = pops.bind(artifact, initial_state=initial(),
         resources={"execution_context": artifact_execution_context(artifact)})
     report = pops.run(simulation, t_end=.1, max_steps=100)
@@ -157,14 +159,16 @@ def test_native_full_coupled_solve_iterates_and_conserves(compiled, record_prope
     local_cells = sum(np.prod(np.asarray(upper)-np.asarray(lower)) for lower, upper in simulation.local_boxes("left"))
     calls = native.interaction_calls() - before
     assert calls >= 2*100*local_cells
+    jacobian_calls = native.jacobian_calls() - before_jacobian
+    approximate_calls = native.approximate_calls() - before_approximate
     if route == "finite_difference":
-        assert native.jacobian_calls() == 0 and native.approximate_calls() == 0
+        assert jacobian_calls == 0 and approximate_calls == 0
     else:
-        assert native.jacobian_calls() > 0
-        assert (native.approximate_calls() > 0) == (route == "approximate")
+        assert jacobian_calls > 0
+        assert (approximate_calls > 0) == (route == "approximate")
     record_property("selected_derivative", route)
     record_property("actual_residual_native_calls_local", calls)
-    record_property("actual_jacobian_calls_local", native.jacobian_calls())
+    record_property("actual_jacobian_calls_local", jacobian_calls)
     record_property("compile_seconds", elapsed)
     record_property("program_binary_bytes", Path(artifact.program.so_path).stat().st_size)
 
@@ -178,16 +182,19 @@ def test_failed_imported_iterate_cannot_publish_any_recipient(compiled, record_p
     state["right"][2, -1, -1] = -1
     simulation = pops.bind(artifact, initial_state=state,
         resources={"execution_context": artifact_execution_context(artifact)})
-    world = require_two_rank_partition(simulation, n=16)
+    context = artifact_execution_context(artifact)
+    world = (None if context.communicator.identity == "serial"
+             else require_two_rank_partition(simulation, n=16))
     from pops._bootstrap import StepAttemptRejected
     with pytest.raises(StepAttemptRejected, match="[Ee]valuation|invalid|reject") as failure:
         pops.run(simulation, t_end=.001, max_steps=1)
     from pops._native_collectives import allgather_value
-    categories = allgather_value(world, type(failure.value).__name__)
+    categories = ((type(failure.value).__name__,) if world is None
+                  else allgather_value(world, type(failure.value).__name__))
     assert len(set(categories)) == 1
     for name in ("left", "right"):
         np.testing.assert_array_equal(simulation.state_global(name), state[name])
     assert simulation._executor_for_block("left")._program_exchange_records() == []
-    record_property("native_mpi_ranks", int(world.size))
+    record_property("native_mpi_ranks", 1 if world is None else int(world.size))
     record_property("invalid_input_global_cell", [15, 15])
     record_property("failure_category_all_ranks", categories)

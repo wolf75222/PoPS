@@ -250,7 +250,8 @@ def test_problem_input_adapter_uses_existing_solve_entry_only():
         def default_program_solver(self):
             return CG(max_iter=4)
 
-        def bind_program_inputs(self, *, program: Program, values, at):
+        def bind_program_inputs(self, *, program: Program, values, at, solver):
+            assert solver == self.default_program_solver()
             assert values == (request.problem.rhs,)
             assert at == request.problem.rhs.point
             return request

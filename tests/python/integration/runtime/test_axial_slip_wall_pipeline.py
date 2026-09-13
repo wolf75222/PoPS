@@ -100,9 +100,9 @@ def test_axial_role_compiles_binds_and_round_trips_native_metadata(
 
     assert list(runtime._executor._s.variable_roles("fluid", "conservative")) == [
         "density",
-        "momentum_x",
-        "momentum_y",
-        "axial_z",
+        "momentum:0",
+        "momentum:1",
+        "axial:2",
     ]
     installed = runtime._executor._boundary_authorities["fluid"]
     assert [face["type"] for face in installed["faces"]] == ["slip_wall"] * 4

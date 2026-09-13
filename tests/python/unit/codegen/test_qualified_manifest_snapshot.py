@@ -40,7 +40,7 @@ def test_manifest_and_provider_roundtrip_preserve_physical_qualification():
 
 
 @pytest.mark.parametrize("key,value", [("value_shape", [2]), ("domain", ""),
-                                     ("support", {"kind": "physical_support", "coordinates": []})])
+                                     ("support", {"kind": "physical_support", "coordinates": [["x", ""]]})])
 def test_manifest_rejects_malformed_physical_type(key, value):
     payload = copy.deepcopy(_module().manifest().to_dict())
     payload["state_spaces"]["density"][key] = value

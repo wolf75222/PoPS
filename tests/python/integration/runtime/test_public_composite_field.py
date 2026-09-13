@@ -250,7 +250,13 @@ def test_public_joint_field_amr_source_gate(n):
                          "ctx.publish_staged_field_components();", "ctx.observe_hierarchy_field_gradient(",
                          "ctx.reduce_hierarchy_field_component("):
             assert required in code
-        assert code.index(".observe(hierarchy_dt)") < code.index("ctx.publish_staged_field_components();") < code.index(".publish(hierarchy_dt)")
+        solve = code.index("HierarchyBarrierKind::linear_solve")
+        observe = code.index("ctx.observe_hierarchy_field_gradient(", solve)
+        stage = code.index("ctx.stage_field_components(", observe)
+        publication = code.index("HierarchyBarrierKind::field_publication", stage)
+        publish = code.index("ctx.publish_staged_field_components();", publication)
+        assert solve < observe < stage < publication < publish
+        assert "ctx.suspend_hierarchy_barrier(" in code
 
 
 @pytest.mark.compiler
