@@ -17,7 +17,9 @@ from pops.native_components import PreparedNativeComponent
 @pytest.mark.native_loader
 def test_joint_face_species_energy_constraint_and_distinct_contexts_execute(tmp_path, record_property):
     from pathlib import Path
-    from pops.codegen.toolchain import pops_loader_build_flags, _probe_cxx_std, loader_cxx_std
+    from pops.codegen.toolchain import (
+        pops_loader_build_flags, _probe_cxx_std, loader_cxx_std, pops_include,
+    )
     from pops.native_components import compiler_include_roots, verify_prepared_native_dependencies
 
     external = tmp_path / "external"
@@ -73,9 +75,8 @@ extern "C" int face(const double* left,const double* right,double distance,doubl
     source += '\nreturn 0;\n}\nextern "C" long count() { return species_energy::calls.load(); }\n'
     source_path, binary, depfile = tmp_path / "face.cpp", tmp_path / "face.so", tmp_path / "face.d"
     source_path.write_text(source)
-    # Use the exact selected package headers, not a different checkout ABI.
-    import pops
-    include = Path(pops.__file__).resolve().parent / "include"
+    # Resolve headers through the same explicit build-tree or installed-wheel contract as JIT.
+    include = Path(pops_include())
     staged = component.stage_verified(tmp_path / "stage")
     compiler, cflags, lflags = pops_loader_build_flags()
     standard = _probe_cxx_std(compiler, loader_cxx_std())
