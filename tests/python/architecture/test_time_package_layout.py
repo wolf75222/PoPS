@@ -69,7 +69,7 @@ PUBLIC = (
     "ProgramGraph", "GraphProgramValue", "StateRead", "Unknown", "OperatorCall",
     "Solve", "Branch", "Loop", "Region", "RegionCapture",
     "Synchronize", "Commit", "ValueRef",
-    "Clock", "TimePoint", "StagePoint",
+    "Clock", "TimePoint", "StagePoint", "evaluation_partition",
     "RungeKuttaTableau", "AdditiveRungeKuttaTableau",
     "MethodCertificate", "MethodProperties", "AdditiveMethodCertificate",
     "AdditiveMethodProperties", "ProgramMethodCertificate", "SSPCertificate",
