@@ -63,17 +63,6 @@ void collective(const ExecutionLane& lane, const char* operation, Function&& fun
   if (all_reduce_max(error ? 1L : 0L, lane)) {
     if (lane.size() == 1 && error)
       std::rethrow_exception(error);
-    if (error) {
-      try {
-        std::rethrow_exception(error);
-      } catch (const std::exception& cause) {
-        throw std::runtime_error(std::string(operation) + " failed on a lane rank " +
-                                 std::to_string(lane.rank()) + ": " + cause.what());
-      } catch (...) {
-        throw std::runtime_error(std::string(operation) + " failed on a lane rank " +
-                                 std::to_string(lane.rank()) + ": non-standard exception");
-      }
-    }
     throw std::runtime_error(std::string(operation) + " failed on a lane rank");
   }
 }
@@ -1185,10 +1174,11 @@ void PreparedAmrLayoutTransfer<Dim>::capture(const AmrTransferEndpoint<Dim>& sou
     p_->require_attempt(generation, attempt);
     if (p_->applied || (p_->captured_attempt && p_->captured_attempt != attempt))
       throw std::logic_error("AMR transfer capture requires an unapplied exact attempt");
-    p_->validate_endpoint(source, true);
   });
   // A failed recapture must not leave an earlier stage image available for publication.
   p_->captured_attempt = 0;
+  collective(*p_->lane, "AMR transfer capture endpoint validation",
+             [&] { p_->validate_endpoint(source, true); });
   p_->agree_stage(source, attempt);
   std::size_t active_elements = 0;
   collective(*p_->lane, "AMR transfer source packing", [&] {

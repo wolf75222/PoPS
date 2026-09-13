@@ -522,6 +522,15 @@ TEST(AmrLayoutTransfer, EvolvingReplicaValuesAndMasksRejectBeforePublicationAndR
   transfer->begin_transaction(1);
   for (std::uint64_t attempt : {1u, 2u}) {
     transfer->capture(source, 1, attempt);
+    if (attempt == 1) {
+      auto changed_endpoint = source;
+      if (lane.rank() == 1)
+        ++changed_endpoint.hierarchy_generation;
+      EXPECT_THROW(transfer->capture(changed_endpoint, 1, attempt), std::exception);
+      EXPECT_THROW(transfer->apply(target, pointers(candidates), 1, attempt), std::exception);
+      unchanged();
+      transfer->capture(source, 1, attempt);
+    }
     // Divergence in an active second component must invalidate even a previous capture.
     if (lane.rank() == 1) {
       auto& fab = high.state[0].fab_global(0);
