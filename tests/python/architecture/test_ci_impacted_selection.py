@@ -1372,14 +1372,14 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "Restore prewarm ccache" not in python_prewarm_block
     assert "Save prewarm ccache" not in python_prewarm_block
     assert "CCACHE_CACHE_KEY" not in python_prewarm_block
-    assert "matrix.shard == 0 && 110 || matrix.shard < 3 && 80 || matrix.shard == 3 && 60 || 50" in python_shards_block
+    assert "matrix.shard == 0 && 110 || matrix.shard < 4 && 80 || matrix.shard == 4 && 60 || 50" in python_shards_block
     assert "steps.test-plan.outputs.test_timeout_minutes" in python_shards_block
     assert "scripts/ci_pytest_timings.py" in python_shards_block
     assert "scripts/ci_python_dimensions.py --selected-file" in python_shards_block
     assert '--packages-root "$PWD/.pops-ci/python-packages" --timings-dir "$timings"' in python_shards_block
     assert 'PYTHONUNBUFFERED: "1"' in python_shards_block
     assert 'cp "$timings/selected.txt" "$timings/timings.tsv"' not in python_shards_block
-    assert "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]" in python_shards_block
+    assert "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]" in python_shards_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_shards_block
     assert "timeout-minutes: 30" in python_cache_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_cache_block

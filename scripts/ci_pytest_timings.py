@@ -15,7 +15,7 @@ from pathlib import Path
 import time
 
 ORDINARY_BUDGET_SECONDS = 35 * 60
-SHARD_TOTAL = 31
+SHARD_TOTAL = 32
 
 
 def selected_budget(paths: list[str], durations: dict[str, float]) -> int:
@@ -32,10 +32,10 @@ def selected_budget(paths: list[str], durations: dict[str, float]) -> int:
 
 
 def job_budget(shard: int) -> int:
-    """LPT places the four longest indivisible files first, even for subsets."""
+    """LPT places the five longest indivisible files first, even for subsets."""
     if not 0 <= shard < SHARD_TOTAL:
         raise ValueError("Python shard index is outside the configured matrix")
-    return {0: 110, 1: 80, 2: 80, 3: 60}.get(shard, 50)
+    return {0: 110, 1: 80, 2: 80, 3: 80, 4: 60}.get(shard, 50)
 
 
 class TimingReceipts:

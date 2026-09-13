@@ -92,7 +92,7 @@ def test_full_manifest_pack_stays_within_python_shard_test_budget():
             minutes = timing.selected_budget(shard, durations)
             assert minutes + 5 <= timing.job_budget(index), (index, minutes, shard)
             if sum(durations[path] for path in shard) > timing.ORDINARY_BUDGET_SECONDS:
-                assert index < 4 and len(shard) == 1
+                assert index < 5 and len(shard) == 1
             else:
                 assert minutes == 45
 
