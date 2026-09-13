@@ -8,11 +8,14 @@ from pops.codegen.program_partition_stability import has_independent_diffusion_t
 
 
 def retained_transport_selection(value, model):
-    if value.op != "rhs" or not value.attrs.get("flux", True) \
-            or not has_independent_diffusion_transport(model):
+    if not has_independent_diffusion_transport(model):
+        return None
+    if value.op != "rhs" or not value.attrs.get("flux", True):
         return None
     impl = _model_impl(model)
     plan = getattr(model, "_resolved_operations", getattr(impl, "_resolved_operations", None))
+    if plan is None:
+        raise ValueError("accepted transport requires a resolved operation plan")
     matches = [operation for operation in plan.operations
                if operation.guarantees.get("program_evaluation", {}).get("node_id") == value.id
                and operation.guarantees.get("program_evaluation", {}).get("operation") == "rhs"]
