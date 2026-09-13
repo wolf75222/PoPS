@@ -96,10 +96,11 @@ def composition_case(*, n=N, dt=VALID_DT, dimension=2, implicit=False, competing
     return case, layout, model
 
 
-def fourier_oracle(n=N):
+def fourier_oracle(n=N, *, dt=VALID_DT, implicit=False):
     """Exact symbols of upwind transport and the declared negative-adjoint G/H operator."""
     y, x = np.meshgrid((np.arange(n)+.5)/n, (np.arange(n)+.5)/n, indexing="ij")
     initial = np.broadcast_to(np.array((2., 3.))[:, None, None], (2, n, n)).copy()
+    expected = initial.copy()
     transport = np.zeros_like(initial)
     diffusion = np.zeros_like(initial)
     for wave, amplitudes in (((1, 1), (.3, .1)), ((2, -1), (-.07j, -.2j))):
@@ -111,14 +112,21 @@ def fourier_oracle(n=N):
         gradient = n*np.sin(theta)
         stabilization = 2*n*np.sin(theta/2)**2
         adjoint = -(gradient@TENSOR@gradient+np.diag(TENSOR)@(stabilization**2))
+        predictor = (1+dt*upwind)*amplitudes
+        if implicit:
+            updated = np.linalg.solve(np.eye(2)-dt*adjoint*GRADIENT_JACOBIAN, predictor)
+        else:
+            updated = predictor+dt*adjoint*(GRADIENT_JACOBIAN@amplitudes)
         initial += np.real(amplitudes[:, None, None]*phase)
+        expected += np.real(updated[:, None, None]*phase)
         transport += np.real(upwind*amplitudes[:, None, None]*phase)
-        diffusion += np.real(adjoint*(GRADIENT_JACOBIAN@amplitudes)[:, None, None]*phase)
-    return initial, transport, diffusion
+        diffusive_state = updated if implicit else amplitudes
+        diffusion += np.real(adjoint*(GRADIENT_JACOBIAN@diffusive_state)[:, None, None]*phase)
+    return initial, expected, transport, diffusion
 
 
-def _bind(dt):
-    case, layout, _ = composition_case(dt=dt)
+def _bind(dt, *, implicit=False):
+    case, layout, _ = composition_case(dt=dt, implicit=implicit)
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
     context = artifact_execution_context(artifact)
     initial = np.ascontiguousarray(fourier_oracle()[0])
@@ -127,17 +135,25 @@ def _bind(dt):
     return runtime, context, initial
 
 
+@pytest.mark.parametrize("implicit", (False, True), ids=("explicit", "implicit"))
 def test_separate_transport_tensor_update_and_signed_ledgers(
-    isolated_native_cache, native_cxx, kokkos_root, record_property,
+    isolated_native_cache, native_cxx, kokkos_root, record_property, implicit,
 ):
     del isolated_native_cache, native_cxx, kokkos_root
-    runtime, context, initial = _bind(VALID_DT)
-    _, transport, diffusion = fourier_oracle()
+    runtime, context, initial = _bind(VALID_DT, implicit=implicit)
+    _, expected, transport, diffusion = fourier_oracle(implicit=implicit)
     assert np.linalg.norm(transport) > .1 and np.linalg.norm(diffusion) > .1
     report = pops.run(runtime, t_end=VALID_DT, max_steps=1, console=False)
     assert report.accepted_steps == 1 and report.rejected_steps == 0
     actual = np.asarray(runtime.state_global("mixture")).reshape(initial.shape)
-    np.testing.assert_allclose(actual, initial+VALID_DT*(transport+diffusion), rtol=0, atol=3e-13)
+    np.testing.assert_allclose(actual, expected, rtol=0, atol=3e-13)
+    if implicit:
+        diagnostics = runtime.program_report().diagnostics
+        residuals = [name for name in diagnostics if name.endswith(".residual_norm")]
+        assert residuals, "the accepted implicit tensor solve must report its actual residual"
+        for name in residuals:
+            reference = diagnostics[name.removesuffix(".residual_norm")+".reference_residual_norm"]
+            assert diagnostics[name] <= 1e-12*max(1., reference)
     records = _global_exchange_records(runtime, context)
     assert len(records) == 2*2*4*N*N  # components, physical fluxes, cell-face incidences
     increments = {kind: np.zeros_like(initial) for kind in ("transport", "diffusion")}
@@ -174,7 +190,8 @@ def test_separate_transport_tensor_update_and_signed_ledgers(
              else len(allgather_value(context.communicator.handle, None)))
     record_property("mpi_ranks", ranks)
     record_property("cells_per_axis", N)
-    record_property("maximum_update_defect", float(np.max(abs(actual-initial-VALID_DT*(transport+diffusion)))))
+    record_property("tensor_partition", "implicit" if implicit else "explicit")
+    record_property("maximum_update_defect", float(np.max(abs(actual-expected))))
 
 
 def test_independent_bounds_do_not_admit_a_sum_exceeding_the_combined_bound(
