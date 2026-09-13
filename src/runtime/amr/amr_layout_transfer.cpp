@@ -22,6 +22,7 @@ namespace {
 
 constexpr std::string_view kCartesian = "pops://measure/cartesian-cells@1";
 constexpr std::string_view kRelative = "pops://measure/cellwise-constant-relative-volume@1";
+constexpr std::size_t kReplicaConsensusChunkBytes = 4096;
 
 void add(std::size_t& value, std::size_t increment, std::size_t limit, const char* message) {
   if (value > limit || increment > limit - value)
@@ -62,6 +63,17 @@ void collective(const ExecutionLane& lane, const char* operation, Function&& fun
   if (all_reduce_max(error ? 1L : 0L, lane)) {
     if (lane.size() == 1 && error)
       std::rethrow_exception(error);
+    if (error) {
+      try {
+        std::rethrow_exception(error);
+      } catch (const std::exception& cause) {
+        throw std::runtime_error(std::string(operation) + " failed on a lane rank " +
+                                 std::to_string(lane.rank()) + ": " + cause.what());
+      } catch (...) {
+        throw std::runtime_error(std::string(operation) + " failed on a lane rank " +
+                                 std::to_string(lane.rank()) + ": non-standard exception");
+      }
+    }
     throw std::runtime_error(std::string(operation) + " failed on a lane rank");
   }
 }
@@ -193,6 +205,14 @@ struct LevelContract {
   bool relative_measure;
 };
 
+// Replica sets have one physical owner. Active masks/values must agree; each target replica
+// retains its own inactive, covered and ghost stage values when the integral is published.
+template <int Dim>
+Index<Dim> physical_owner(const LevelContract<Dim>& level, std::size_t patch) {
+  return level.distribution.replicated() ? level.distribution.rank_space().coordinate(0)
+                                         : level.distribution.owner(patch);
+}
+
 template <int Dim>
 std::vector<LevelContract<Dim>> endpoint_contract(const AmrTransferEndpoint<Dim>& endpoint,
                                                   const ExecutionLane& lane) {
@@ -212,8 +232,6 @@ std::vector<LevelContract<Dim>> endpoint_contract(const AmrTransferEndpoint<Dim>
     if (state.ncomp() <= 0 || state.rank_space().size() != static_cast<std::size_t>(lane.size()) ||
         state.rank_space().linear_rank(state.local_rank()) != static_cast<std::size_t>(lane.rank()))
       throw std::invalid_argument("AMR transfer endpoint differs from its execution rank space");
-    if (state.distribution().replicated() && lane.size() != 1)
-      throw std::invalid_argument("AMR transfer requires unique distributed patch ownership");
     for (const auto* mask : {view.coverage, view.activity, view.relative_measure})
       if (mask && (mask->ncomp() != 1 || mask->layout() != state.layout() ||
                    mask->distribution() != state.distribution() ||
@@ -420,6 +438,7 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
   struct PatchStorage {
     std::size_t level, patch, flat;
     std::vector<double> values, coverage, activity, measure, publication, accumulation;
+    std::vector<double> replica_contract;
   };
   AmrPhysicalTransferSpec<Dim> spec;
   std::shared_ptr<component::LoadedComponent> provider_component;
@@ -433,10 +452,12 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
   std::string source_stage;
   std::uint64_t source_stage_generation = 0;
   std::optional<ExecutionLane> lane;
-  MultiFab<Dim> packed_source, captured_source;
+  MultiFab<Dim> packed_source, captured_source, replicated_results;
   std::vector<PatchStorage> source_storage, target_storage;
+  std::vector<char> replica_consensus;
   std::vector<Contribution> contributions;
-  std::optional<mesh::parallel::RegionTransport<Dim>> transport;
+  std::optional<mesh::parallel::RegionTransport<Dim>> transport, replica_transport;
+  std::size_t replica_jobs = 0;
   int components = 0;
   std::size_t transported = 0, bytes = 0;
   std::uint64_t generation = 0, last_generation = 0, captured_attempt = 0;
@@ -585,6 +606,8 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
     budget_bytes(multiply(cells(box), static_cast<std::size_t>(components)),
                  (source ? 2 : 1) * sizeof(double));
     budget_bytes(1, sizeof(PatchStorage) + sizeof(Box<Dim>) + sizeof(Index<Dim>));
+    if (contract.distribution.replicated())
+      budget_bytes(multiply(cells(box), (source ? components : 0) + std::size_t{3}));
   }
 
   void prepare_storage(const AmrTransferEndpoint<Dim>& source,
@@ -596,13 +619,15 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
       for (std::size_t patch = 0; patch < contract.layout.size(); ++patch) {
         const auto flat = boxes.size();
         boxes.push_back(contract.layout[patch]);
-        owners.push_back(contract.distribution.replicated() ? contract.rank
-                                                            : contract.distribution.owner(patch));
+        owners.push_back(physical_owner(contract, patch));
         account_patch(contract, contract.layout[patch], true);
         if (!source.levels[level].state->contains_local(patch))
           continue;
         const auto& view = source.levels[level];
         PatchStorage stored{level, patch, flat};
+        if (contract.distribution.replicated())
+          stored.replica_contract.resize(
+              multiply(cells(contract.layout[patch]), static_cast<std::size_t>(components) + 3));
         stored.values.resize(view.state->fab_global(patch).size());
         stored.coverage.resize(view.coverage->fab_global(patch).size());
         if (view.activity)
@@ -619,6 +644,9 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
     packed_source = MultiFab<Dim>(
         layout, mesh::Distribution<Dim>::partitioned(layout, rank_space, std::move(owners)),
         source_levels.front().rank, components, Extent<Dim>{});
+    std::vector<Box<Dim>> replicas;
+    std::vector<mesh::parallel::RegionTransferJob<Dim>> replica_schedule;
+    std::size_t replica_elements = 0;
     for (std::size_t level = 0; level < target_levels.size(); ++level) {
       const auto& contract = target_levels[level];
       for (std::size_t patch = 0; patch < contract.layout.size(); ++patch) {
@@ -626,7 +654,25 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
         account_patch(contract, contract.layout[patch], false);
         if (!view.state->contains_local(patch))
           continue;
-        PatchStorage stored{level, patch, 0};
+        PatchStorage stored{level, patch, replicas.size()};
+        if (contract.distribution.replicated()) {
+          const auto& box = contract.layout[patch];
+          stored.replica_contract.resize(multiply(cells(box), 3));
+          replicas.push_back(box);
+          budget_bytes(multiply(cells(box), static_cast<std::size_t>(components)));
+          budget_bytes(1, sizeof(Box<Dim>));
+          for (std::size_t rank = 1; rank < rank_space.size(); ++rank) {
+            if (replica_schedule.size() >= spec.budget.canonical_jobs)
+              throw std::length_error("AMR replica canonical-job budget exceeded");
+            replica_schedule.push_back({stored.flat, stored.flat, rank_space.coordinate(0),
+                                        rank_space.coordinate(rank), box, box});
+            const auto elements = multiply(cells(box), static_cast<std::size_t>(components));
+            add(replica_elements, elements, spec.budget.transported_elements,
+                "AMR replica transport-element budget exceeded");
+            budget_bytes(elements, 6 * sizeof(double));
+            budget_bytes(16, sizeof(mesh::parallel::RegionTransferJob<Dim>));
+          }
+        }
         stored.coverage.resize(view.coverage->fab_global(patch).size());
         if (view.activity)
           stored.activity.resize(view.activity->fab_global(patch).size());
@@ -637,6 +683,28 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
             multiply(cells(contract.layout[patch]), static_cast<std::size_t>(components)));
         target_storage.push_back(std::move(stored));
       }
+    }
+    replica_jobs = replica_schedule.size();
+    transported = replica_elements;
+    const auto has_replicas = [](const auto& levels) {
+      return std::any_of(levels.begin(), levels.end(),
+                         [](const auto& level) { return level.distribution.replicated(); });
+    };
+    if (rank_space.size() > 1 && (has_replicas(source_levels) || has_replicas(target_levels))) {
+      budget_bytes(2 * kReplicaConsensusChunkBytes, sizeof(char));
+      replica_consensus.resize(2 * kReplicaConsensusChunkBytes);
+    }
+    if (replica_jobs) {
+      mesh::BoxArray<Dim> replica_layout(std::move(replicas));
+      replicated_results = MultiFab<Dim>(
+          replica_layout, mesh::Distribution<Dim>::replicated(replica_layout, rank_space),
+          source_levels.front().rank, components, Extent<Dim>{});
+      replica_transport.emplace(mesh::parallel::RegionTransferPlan<Dim>{
+          rank_space,
+          source_levels.front().rank,
+          components,
+          std::move(replica_schedule),
+          {replica_jobs, rank_space.size(), replica_elements, replica_elements, replica_elements}});
     }
   }
 
@@ -667,8 +735,7 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
     for (std::size_t tl = 0; tl < target_levels.size(); ++tl) {
       const auto& target = target_levels[tl];
       for (std::size_t tp = 0; tp < target.layout.size(); ++tp) {
-        const auto target_owner =
-            target.distribution.replicated() ? target.rank : target.distribution.owner(tp);
+        const auto target_owner = physical_owner(target, tp);
         for (std::size_t ordinal = 0; ordinal < cells(target.layout[tp]); ++ordinal) {
           const auto target_cell = cell_at(target.layout[tp], ordinal);
           if (!finest_owner(target_levels, tl, target_cell))
@@ -705,7 +772,7 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
               }
               if (region.empty())
                 continue;
-              if (jobs.size() >= spec.budget.canonical_jobs)
+              if (jobs.size() >= spec.budget.canonical_jobs - replica_jobs)
                 throw std::length_error("AMR transfer canonical-job budget exceeded");
               std::size_t weight_count = 0;
               for (int axis = 0; axis < Dim; ++axis)
@@ -766,9 +833,7 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
               carriers.push_back(region);
               owners.push_back(target_owner);
               jobs.push_back(
-                  {source_flat, carrier,
-                   source.distribution.replicated() ? source.rank : source.distribution.owner(sp),
-                   target_owner, region, region});
+                  {source_flat, carrier, physical_owner(source, sp), target_owner, region, region});
               contributions.push_back(std::move(contribution));
             }
           }
@@ -913,28 +978,53 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
     return coverage == 0 ? 0 : active * measure;
   }
 
-  std::size_t active_element_census(const AmrTransferEndpoint<Dim>& endpoint, bool source) const {
+  std::size_t active_element_census(const AmrTransferEndpoint<Dim>& endpoint, bool source) {
     std::size_t result = 0;
-    for (std::size_t level = 0; level < endpoint.levels.size(); ++level) {
-      const auto& view = endpoint.levels[level];
-      for (std::size_t local = 0; local < view.state->local_size(); ++local) {
-        const auto patch = view.state->global_index(local);
-        PatchStorage masks{level, patch, 0};
-        masks.coverage.resize(view.coverage->fab_global(patch).size());
-        if (view.activity)
-          masks.activity.resize(view.activity->fab_global(patch).size());
-        if (view.relative_measure)
-          masks.measure.resize(view.relative_measure->fab_global(patch).size());
-        read_masks(view, masks);
-        const auto& box = view.state->fab(local).box();
-        for (std::size_t ordinal = 0; ordinal < cells(box); ++ordinal)
-          if (cell_measure(view, masks, cell_at(box, ordinal), source) > 0)
-            add(result, static_cast<std::size_t>(components),
-                std::numeric_limits<std::size_t>::max(),
-                "AMR expected active element count overflow");
-      }
+    const auto& levels = source ? source_levels : target_levels;
+    auto& storage = source ? source_storage : target_storage;
+    for (auto& masks : storage) {
+      const auto& view = endpoint.levels[masks.level];
+      read_masks(view, masks);
+      const auto& level = levels[masks.level];
+      const auto& box = level.layout[masks.patch];
+      for (std::size_t ordinal = 0; ordinal < cells(box); ++ordinal)
+        if (cell_measure(view, masks, cell_at(box, ordinal), source) > 0 &&
+            physical_owner(level, masks.patch) == level.rank)
+          add(result, static_cast<std::size_t>(components), std::numeric_limits<std::size_t>::max(),
+              "AMR expected active element count overflow");
     }
     return result;
+  }
+
+  void agree_replicas(bool source, bool values = false) {
+    if (lane->size() == 1)
+      return;
+    const auto& levels = source ? source_levels : target_levels;
+    const auto& storage = source ? source_storage : target_storage;
+    for (const auto& stored : storage) {
+      if (stored.replica_contract.empty())
+        continue;
+      const auto count = cells(levels[stored.level].layout[stored.patch]);
+      const auto width = std::size_t{3} + (values ? components : 0);
+      // Preparation authenticated identical level/patch order and payload lengths. Entries
+      // with distributed ownership never enter this sequence. Exact byte minima/maxima use
+      // prepared bounded scratch; there is no field gather, hash proof or execute allocation.
+      const auto* bytes = reinterpret_cast<const char*>(stored.replica_contract.data());
+      const auto size = multiply(multiply(count, width), sizeof(double));
+      auto* minimum = replica_consensus.data();
+      auto* maximum = minimum + kReplicaConsensusChunkBytes;
+      for (std::size_t begin = 0; begin < size;) {
+        const auto chunk = std::min(size - begin, kReplicaConsensusChunkBytes);
+        std::copy_n(bytes + begin, chunk, minimum);
+        std::copy_n(minimum, chunk, maximum);
+        all_reduce_min_inplace(minimum, chunk, *lane);
+        all_reduce_max_inplace(maximum, chunk, *lane);
+        if (!std::equal(minimum, minimum + chunk, maximum))
+          throw std::invalid_argument(values ? "AMR transfer replicated source values/masks differ"
+                                             : "AMR transfer replicated endpoint masks differ");
+        begin += chunk;
+      }
+    }
   }
 
   AmrLayoutTransferReceipt receipt_contract(std::uint64_t source_count,
@@ -971,7 +1061,7 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
     receipt.source_stage_generation = source_stage_epoch;
     receipt.target_stage_identity = target_stage_identity;
     receipt.target_stage_generation = target_stage_epoch;
-    receipt.canonical_jobs = contributions.size();
+    receipt.canonical_jobs = contributions.size() + replica_jobs;
     receipt.transported_elements = transported;
     receipt.prepared_bytes = bytes;
     return receipt;
@@ -983,6 +1073,24 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
       read_fab(view.activity->fab_global(storage.patch), storage.activity);
     if (view.relative_measure)
       read_fab(view.relative_measure->fab_global(storage.patch), storage.measure);
+    if (!storage.replica_contract.empty()) {
+      const auto& box = view.state->fab_global(storage.patch).box();
+      for (std::size_t ordinal = 0; ordinal < cells(box); ++ordinal) {
+        const auto cell = cell_at(box, ordinal);
+        storage.replica_contract[3 * ordinal] =
+            storage.coverage[offset(view.coverage->fab_global(storage.patch).grown_box(), cell)];
+        storage.replica_contract[3 * ordinal + 1] =
+            view.activity
+                ? storage
+                      .activity[offset(view.activity->fab_global(storage.patch).grown_box(), cell)]
+                : 1;
+        storage.replica_contract[3 * ordinal + 2] =
+            view.relative_measure
+                ? storage.measure[offset(
+                      view.relative_measure->fab_global(storage.patch).grown_box(), cell)]
+                : 1;
+      }
+    }
   }
 };
 
@@ -1025,6 +1133,8 @@ std::shared_ptr<PreparedAmrLayoutTransfer<Dim>> PreparedAmrLayoutTransfer<Dim>::
   prepared.lane.emplace(ExecutionLane::duplicate_collectively(
       authority, prepared.spec.authentication.mapping_identity));
   prepared.transport->prepare_collectively(*prepared.lane);
+  if (prepared.replica_transport)
+    prepared.replica_transport->prepare_collectively(*prepared.lane);
   return result;
 }
 
@@ -1038,6 +1148,8 @@ AmrLayoutTransferReceipt PreparedAmrLayoutTransfer<Dim>::expected_receipt_contra
     local_source = p_->active_element_census(source, true);
     local_target = p_->active_element_census(target, false);
   });
+  p_->agree_replicas(true);
+  p_->agree_replicas(false);
   p_->agree_stage(source, 0);
   p_->agree_stage(target, 0);
   const auto source_count = global_count(local_source, *p_->lane);
@@ -1075,6 +1187,8 @@ void PreparedAmrLayoutTransfer<Dim>::capture(const AmrTransferEndpoint<Dim>& sou
       throw std::logic_error("AMR transfer capture requires an unapplied exact attempt");
     p_->validate_endpoint(source, true);
   });
+  // A failed recapture must not leave an earlier stage image available for publication.
+  p_->captured_attempt = 0;
   p_->agree_stage(source, attempt);
   std::size_t active_elements = 0;
   collective(*p_->lane, "AMR transfer source packing", [&] {
@@ -1087,7 +1201,8 @@ void PreparedAmrLayoutTransfer<Dim>::capture(const AmrTransferEndpoint<Dim>& sou
       for (std::size_t ordinal = 0; ordinal < count; ++ordinal) {
         const auto cell = cell_at(fab.box(), ordinal);
         const double measure = p_->cell_measure(view, stored, cell, true);
-        if (measure > 0)
+        const auto& level = p_->source_levels[stored.level];
+        if (measure > 0 && physical_owner(level, stored.patch) == level.rank)
           add(active_elements, static_cast<std::size_t>(p_->components),
               std::numeric_limits<std::size_t>::max(), "AMR active source count overflow");
         const auto origin = offset(fab.grown_box(), cell);
@@ -1097,12 +1212,17 @@ void PreparedAmrLayoutTransfer<Dim>::capture(const AmrTransferEndpoint<Dim>& sou
           if (!std::isfinite(value))
             throw std::invalid_argument("AMR active physical source is non-finite");
           stored.publication[component * count + ordinal] = value;
+          if (!stored.replica_contract.empty())
+            stored.replica_contract[3 * count + component * count + ordinal] =
+                measure == 0 ? 0 : stored.values[component * source_stride + origin];
         }
       }
-      write_fab(p_->packed_source.fab_global(stored.flat), stored.publication);
+      if (p_->packed_source.contains_local(stored.flat))
+        write_fab(p_->packed_source.fab_global(stored.flat), stored.publication);
     }
     Kokkos::fence();
   });
+  p_->agree_replicas(true, true);
   p_->transport->execute(
       [&](const auto& job) {
         return std::as_const(p_->packed_source).fab_global(job.source_patch).view();
@@ -1163,6 +1283,7 @@ AmrLayoutTransferBudget PreparedAmrLayoutTransfer<Dim>::capacity_budget(
     charge(grown, multiply(static_cast<std::size_t>(components) + 3, sizeof(double)));
     charge(multiply(valid, static_cast<std::size_t>(components)), (input ? 2 : 1) * sizeof(double));
     charge(valid, sizeof(typename Impl::PatchStorage) + sizeof(Box<Dim>) + sizeof(Index<Dim>));
+    charge(multiply(valid, (input ? components : 0) + std::size_t{3}), sizeof(double));
   };
   patch_capacity(source, source_cells, true);
   patch_capacity(target, target_cells, false);
@@ -1184,7 +1305,23 @@ AmrLayoutTransferBudget PreparedAmrLayoutTransfer<Dim>::capacity_budget(
           5 * digits + 2,
       limit, "AMR Transfer name capacity overflow");
   charge(jobs, names);
-  return {target_cells, jobs, jobs, transported, bytes};
+  const auto ranks = target.levels.front().state->rank_space().size();
+  if (!ranks)
+    throw std::invalid_argument("AMR Transfer capacity requires a nonempty target rank space");
+  // A future decomposition can place each target cell in a replicated one-cell patch.
+  // Bound that fanout even when the currently bound hierarchy happens to be partitioned.
+  const auto replica_jobs = multiply(target_cells, ranks - 1);
+  const auto replica_elements = multiply(replica_jobs, static_cast<std::size_t>(components));
+  if (ranks > 1)
+    charge(2 * kReplicaConsensusChunkBytes, sizeof(char));
+  charge(multiply(target_cells, static_cast<std::size_t>(components)), sizeof(double));
+  charge(target_cells, sizeof(Box<Dim>));
+  charge(replica_elements, 6 * sizeof(double));
+  charge(replica_jobs, 16 * sizeof(mesh::parallel::RegionTransferJob<Dim>));
+  std::size_t total_jobs = jobs, total_elements = transported;
+  add(total_jobs, replica_jobs, limit, "AMR Transfer capacity replica jobs overflow");
+  add(total_elements, replica_elements, limit, "AMR Transfer capacity replica elements overflow");
+  return {target_cells, jobs, total_jobs, total_elements, bytes};
 }
 
 template <int Dim>
@@ -1214,12 +1351,19 @@ AmrLayoutTransferReceipt PreparedAmrLayoutTransfer<Dim>::apply(
   });
   p_->agree_stage(target, attempt);
   std::size_t active_elements = 0;
-  collective(*p_->lane, "AMR transfer intersection integrals", [&] {
+  collective(*p_->lane, "AMR transfer target mask staging", [&] {
     for (auto& stored : p_->target_storage) {
       p_->read_masks(target.levels[stored.level], stored);
       read_fab(candidates[stored.level]->fab_global(stored.patch), stored.publication);
       std::fill(stored.accumulation.begin(), stored.accumulation.end(), 0.0);
+      const auto& view = target.levels[stored.level];
+      const auto& box = p_->target_levels[stored.level].layout[stored.patch];
+      for (std::size_t ordinal = 0; ordinal < cells(box); ++ordinal)
+        (void)p_->cell_measure(view, stored, cell_at(box, ordinal), false);
     }
+  });
+  p_->agree_replicas(false);
+  collective(*p_->lane, "AMR transfer intersection integrals", [&] {
     for (std::size_t global = 0; global < p_->contributions.size(); ++global) {
       auto& contribution = p_->contributions[global];
       if (contribution.owner != p_->target_levels.front().rank)
@@ -1261,6 +1405,30 @@ AmrLayoutTransferReceipt PreparedAmrLayoutTransfer<Dim>::apply(
       for (int component = 0; component < p_->components; ++component)
         stored.accumulation[component * count + location] += contribution.result[component];
     }
+  });
+  if (p_->replica_transport) {
+    collective(*p_->lane, "AMR transfer replica result staging", [&] {
+      if (p_->lane->rank() == 0)
+        for (const auto& stored : p_->target_storage)
+          if (p_->target_levels[stored.level].distribution.replicated())
+            write_fab(p_->replicated_results.fab_global(stored.flat), stored.accumulation);
+      Kokkos::fence();
+    });
+    p_->replica_transport->execute(
+        [&](const auto& job) {
+          return std::as_const(p_->replicated_results).fab_global(job.source_patch).view();
+        },
+        [&](const auto& job) {
+          return p_->replicated_results.fab_global(job.destination_patch).view();
+        });
+    collective(*p_->lane, "AMR transfer replica result capture", [&] {
+      if (p_->lane->rank() != 0)
+        for (auto& stored : p_->target_storage)
+          if (p_->target_levels[stored.level].distribution.replicated())
+            read_fab(p_->replicated_results.fab_global(stored.flat), stored.accumulation);
+    });
+  }
+  collective(*p_->lane, "AMR transfer physical candidate staging", [&] {
     for (auto& stored : p_->target_storage) {
       const auto& view = target.levels[stored.level];
       const auto& fab = candidates[stored.level]->fab_global(stored.patch);
@@ -1270,8 +1438,10 @@ AmrLayoutTransferReceipt PreparedAmrLayoutTransfer<Dim>::apply(
         const double measure = p_->cell_measure(view, stored, cell, false);
         if (measure == 0)
           continue;
-        add(active_elements, static_cast<std::size_t>(p_->components),
-            std::numeric_limits<std::size_t>::max(), "AMR active target count overflow");
+        const auto& level = p_->target_levels[stored.level];
+        if (physical_owner(level, stored.patch) == level.rank)
+          add(active_elements, static_cast<std::size_t>(p_->components),
+              std::numeric_limits<std::size_t>::max(), "AMR active target count overflow");
         for (int component = 0; component < p_->components; ++component) {
           const double value = stored.accumulation[component * count + ordinal] / measure;
           if (!std::isfinite(value))
@@ -1327,7 +1497,7 @@ void PreparedAmrLayoutTransfer<Dim>::rollback_transaction(std::uint64_t generati
 }
 template <int Dim>
 std::size_t PreparedAmrLayoutTransfer<Dim>::canonical_jobs() const noexcept {
-  return p_->contributions.size();
+  return p_->contributions.size() + p_->replica_jobs;
 }
 template <int Dim>
 std::size_t PreparedAmrLayoutTransfer<Dim>::transported_elements() const noexcept {

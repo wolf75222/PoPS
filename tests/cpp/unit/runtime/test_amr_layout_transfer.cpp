@@ -11,6 +11,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -225,13 +226,16 @@ struct Hierarchy {
 };
 
 void add_level(Hierarchy& hierarchy, pops::Extent<Dim> domain, pops::Box<Dim> patch, int owner,
-               const pops::ExecutionLane& lane) {
+               const pops::ExecutionLane& lane, bool replicated = false) {
   auto ranks = shape(1);
   ranks[0] = lane.size();
   pops::mesh::RankSpace<Dim> rank_space({}, ranks);
   pops::mesh::BoxArray<Dim> layout({patch});
-  const auto distribution = pops::mesh::Distribution<Dim>::partitioned(
-      layout, rank_space, {rank_space.coordinate(static_cast<std::size_t>(owner))});
+  const auto distribution =
+      replicated
+          ? pops::mesh::Distribution<Dim>::replicated(layout, rank_space)
+          : pops::mesh::Distribution<Dim>::partitioned(
+                layout, rank_space, {rank_space.coordinate(static_cast<std::size_t>(owner))});
   hierarchy.state.emplace_back(layout, distribution, rank_space.coordinate(lane.rank()), 2,
                                pops::Extent<Dim>{});
   hierarchy.coverage.emplace_back(layout, distribution, rank_space.coordinate(lane.rank()), 1,
@@ -259,30 +263,33 @@ void fill(Hierarchy& hierarchy, bool high, double refined_value = 3) {
     }
 }
 
-Hierarchy high_hierarchy(const pops::ExecutionLane& lane) {
+Hierarchy high_hierarchy(const pops::ExecutionLane& lane, bool replicated_base = false,
+                         int fine_owner = 1) {
   Hierarchy high;
   high.identity = "test::high-support";
   auto base_shape = shape(1);
   base_shape[0] = 2;
   if constexpr (Dim > 1)
     base_shape[1] = 2;
-  add_level(high, base_shape, pops::Box<Dim>::from_extents(base_shape), 0, lane);
+  add_level(high, base_shape, pops::Box<Dim>::from_extents(base_shape), 0, lane, replicated_base);
   auto fine_shape = base_shape;
   fine_shape[0] *= 2;
   if constexpr (Dim > 1)
     fine_shape[1] *= 2;
-  add_level(high, fine_shape, pops::Box<Dim>::from_extents(base_shape), 1 % lane.size(), lane);
+  add_level(high, fine_shape, pops::Box<Dim>::from_extents(base_shape), fine_owner % lane.size(),
+            lane);
   fill(high, true);
   return high;
 }
 
-Hierarchy low_hierarchy(const pops::ExecutionLane& lane) {
+Hierarchy low_hierarchy(const pops::ExecutionLane& lane, bool replicated_base = false) {
   Hierarchy low;
   low.identity = "test::low-support";
   auto base_shape = shape(1);
   if constexpr (Dim > 1)
     base_shape[Dim - 1] = 2;
-  add_level(low, base_shape, pops::Box<Dim>::from_extents(base_shape), 1 % lane.size(), lane);
+  add_level(low, base_shape, pops::Box<Dim>::from_extents(base_shape), 1 % lane.size(), lane,
+            replicated_base);
   if constexpr (Dim > 1) {
     auto fine_shape = base_shape;
     fine_shape[Dim - 1] *= 2;
@@ -328,20 +335,30 @@ std::vector<Field*> pointers(std::vector<Field>& fields) {
   return result;
 }
 
-void check_low(const Hierarchy& low, const std::vector<Field>& candidate, double fine_value) {
+void check_low(const Hierarchy& low, const std::vector<Field>& candidate, double fine_value,
+               double preserved_value = 7) {
   for (std::size_t level = 0; level < candidate.size(); ++level)
     for (std::size_t local = 0; local < candidate[level].local_size(); ++local) {
       const auto& fab = candidate[level].fab(local);
       auto values = fab.create_host_mirror();
       fab.copy_to_host(values);
-      const auto count = static_cast<std::size_t>(fab.box().numPts());
-      for (std::size_t ordinal = 0; ordinal < count; ++ordinal)
+      const auto count = static_cast<std::size_t>(fab.grown_box().numPts());
+      for (std::size_t ordinal = 0; ordinal < count; ++ordinal) {
+        auto remainder = ordinal;
+        pops::Index<Dim> cell{};
+        for (int axis = 0; axis < Dim; ++axis) {
+          cell[axis] =
+              fab.grown_box().lo[axis] + static_cast<int>(remainder % fab.grown_box().length(axis));
+          remainder /= fab.grown_box().length(axis);
+        }
         for (std::size_t component = 0; component < 2; ++component) {
-          const bool covered = Dim > 1 && level == 0 && ordinal == 0;
-          const double expected =
-              covered ? 7 : ((Dim == 1 || level > 0) ? fine_value : 2) + 10 * component;
+          const bool covered = Dim > 1 && level == 0 && cell == fab.box().lo;
+          const double expected = !fab.box().contains(cell) || covered
+                                      ? preserved_value
+                                      : ((Dim == 1 || level > 0) ? fine_value : 2) + 10 * component;
           EXPECT_DOUBLE_EQ(values(component * count + ordinal), expected);
         }
+      }
     }
   // Detached publication never changes the accepted target state.
   for (const auto& field : low.state)
@@ -350,85 +367,206 @@ void check_low(const Hierarchy& low, const std::vector<Field>& candidate, double
       auto values = fab.create_host_mirror();
       fab.copy_to_host(values);
       for (std::size_t ordinal = 0; ordinal < values.size(); ++ordinal)
-        EXPECT_DOUBLE_EQ(values(ordinal), 7);
+        EXPECT_DOUBLE_EQ(values(ordinal), preserved_value);
     }
 }
 
 TEST(AmrLayoutTransfer, ActiveCompositeMeasureStageRebindingRetryAndRestartFence) {
   runtime();
-  auto lane = pops::ExecutionLane::duplicate_world_collectively("test::amr-layout-transfer");
+  std::size_t partitioned_jobs = 0, partitioned_elements = 0;
+  for (bool replicated : {false, true}) {
+    auto lane = pops::ExecutionLane::duplicate_world_collectively("test::amr-layout-transfer");
+    auto component = provider(lane);
+    auto high = high_hierarchy(lane, replicated), low = low_hierarchy(lane, replicated);
+    auto spec = specification(high, low);
+    const auto capacity = [](const Hierarchy& hierarchy) {
+      std::size_t cells = 0;
+      for (const auto& geometry : hierarchy.geometries)
+        cells += static_cast<std::size_t>(geometry.domain().numPts());
+      return cells;
+    };
+    spec.budget = Transfer::capacity_budget(high.endpoint(), low.endpoint(), capacity(high),
+                                            capacity(low), spec.authentication.source_block.size(),
+                                            spec.authentication.target_block.size());
+    EXPECT_THROW(Transfer::capacity_budget(high.endpoint(), low.endpoint(), 1, 1, 4, 3),
+                 std::invalid_argument);
+    EXPECT_THROW(
+        Transfer::capacity_budget(high.endpoint(), low.endpoint(),
+                                  std::numeric_limits<std::size_t>::max(), capacity(low), 4, 3),
+        std::exception);
+    auto transfer =
+        Transfer::prepare(high.endpoint(), low.endpoint(), spec, component, execution(lane), lane);
+    EXPECT_GT(transfer->canonical_jobs(), 0u);
+    EXPECT_GT(transfer->transported_elements(), 0u);
+    EXPECT_LE(transfer->prepared_bytes(), spec.budget.prepared_bytes);
+    auto candidates = low.state;
+    transfer->begin_transaction(1);
+    const auto expected = transfer->expected_receipt_contract(high.endpoint(), low.endpoint());
+    EXPECT_FALSE(expected.transfer.applied);
+    EXPECT_EQ(expected.source_active_elements, Dim == 1 ? 6u : 14u);
+    EXPECT_EQ(expected.destination_active_elements, Dim == 1 ? 2u : 6u);
+    const auto calls_before = provider_integral_calls(*component, lane);
+    transfer->capture(high.endpoint(), 1, 1);
+    const auto receipt = transfer->apply(low.endpoint(), pointers(candidates), 1, 1);
+    const auto fanout_jobs = replicated ? static_cast<std::size_t>(lane.size() - 1) : 0;
+    EXPECT_EQ(provider_integral_calls(*component, lane) - calls_before + fanout_jobs,
+              receipt.canonical_jobs);
+    EXPECT_EQ(receipt.canonical_jobs, transfer->canonical_jobs());
+    if (replicated) {
+      EXPECT_EQ(receipt.canonical_jobs, partitioned_jobs + fanout_jobs);
+      const auto base_cells = static_cast<std::size_t>(low.state[0].layout()[0].numPts());
+      EXPECT_EQ(receipt.transported_elements, partitioned_elements + 2 * base_cells * fanout_jobs);
+    } else {
+      partitioned_jobs = receipt.canonical_jobs;
+      partitioned_elements = receipt.transported_elements;
+    }
+    EXPECT_EQ(receipt.source_active_elements, Dim == 1 ? 6u : 14u);
+    EXPECT_EQ(receipt.destination_active_elements, Dim == 1 ? 2u : 6u);
+    EXPECT_EQ(receipt.physical_contract_identity, spec.physical_contract_identity);
+    EXPECT_EQ(receipt.source_active_elements, expected.source_active_elements);
+    EXPECT_EQ(receipt.destination_active_elements, expected.destination_active_elements);
+    EXPECT_EQ(receipt.source_hierarchy_identity, expected.source_hierarchy_identity);
+    EXPECT_EQ(receipt.target_hierarchy_generation, expected.target_hierarchy_generation);
+    EXPECT_EQ(receipt.target_stage_identity, expected.target_stage_identity);
+    EXPECT_EQ(receipt.transported_elements, expected.transported_elements);
+    check_low(low, candidates, 0);
+
+    transfer->reject_attempt(1, 1);
+    candidates = low.state;
+    // New addresses are intentional: the prepared transport must borrow this stage, not retain U.
+    auto staged = high;
+    fill(staged, true, 4);
+    auto stage = staged.endpoint();
+    stage.stage_identity = "test::qualified-stage::corrector";
+    stage.stage_generation = 19;
+    transfer->capture(stage, 1, 2);
+    const auto retry = transfer->apply(low.endpoint(), pointers(candidates), 1, 2);
+    EXPECT_EQ(retry.source_stage_identity, stage.stage_identity);
+    EXPECT_EQ(retry.source_stage_generation, 19u);
+    check_low(low, candidates, -1);
+    transfer->rollback_transaction(1);
+
+    // Restoration may repartition a fine level while retaining the replicated coarse image.
+    auto restarted = high_hierarchy(lane, replicated, 0);
+    fill(restarted, true, 4);
+    restarted.generation = staged.generation + 1;
+    transfer->begin_transaction(2);
+    EXPECT_THROW(transfer->capture(restarted.endpoint(), 2, 1), std::exception);
+    transfer->rollback_transaction(2);
+    auto restored = Transfer::prepare(restarted.endpoint(), low.endpoint(), spec, component,
+                                      execution(lane), lane);
+    candidates = low.state;
+    restored->begin_transaction(1);
+    restored->capture(restarted.endpoint(), 1, 1);
+    (void)restored->apply(low.endpoint(), pointers(candidates), 1, 1);
+    check_low(low, candidates, -1);
+    restored->finalize_transaction(1);
+  }
+}
+
+TEST(AmrLayoutTransfer, EvolvingReplicaValuesAndMasksRejectBeforePublicationAndRetry) {
+  runtime();
+  auto lane = pops::ExecutionLane::duplicate_world_collectively("test::amr-transfer-replicas");
+  RecordProperty("mpi_ranks", lane.size());
+  RecordProperty("kokkos_execution_space", Kokkos::DefaultExecutionSpace::name());
+  RecordProperty("kokkos_concurrency", Kokkos::DefaultExecutionSpace().concurrency());
+  if (lane.size() == 1)
+    GTEST_SKIP() << "Replica disagreement requires two ranks";
   auto component = provider(lane);
-  auto high = high_hierarchy(lane), low = low_hierarchy(lane);
-  auto spec = specification(high, low);
-  const auto capacity = [](const Hierarchy& hierarchy) {
-    std::size_t cells = 0;
-    for (const auto& geometry : hierarchy.geometries)
-      cells += static_cast<std::size_t>(geometry.domain().numPts());
-    return cells;
+  auto high = high_hierarchy(lane, true), low = low_hierarchy(lane, true);
+  const double preserved_value = 7 + lane.rank();
+  for (auto& field : low.state) {
+    field = Field(field.layout(), field.distribution(), field.local_rank(), 2, shape(1));
+    field.set_val(preserved_value);
+  }
+  auto activity = low.coverage, measure = low.coverage;
+  auto source_activity = high.coverage, source_measure = high.coverage;
+  for (auto* masks : {&activity, &measure, &source_activity, &source_measure})
+    for (auto& field : *masks)
+      field.set_val(1);
+  const auto with_measure = [](const Hierarchy& hierarchy, const std::vector<Field>& activity,
+                               const std::vector<Field>& measure) {
+    auto endpoint = hierarchy.endpoint();
+    endpoint.measure_identity = "pops://measure/cellwise-constant-relative-volume@1";
+    for (std::size_t level = 0; level < endpoint.levels.size(); ++level) {
+      endpoint.levels[level].activity = &activity[level];
+      endpoint.levels[level].relative_measure = &measure[level];
+    }
+    return endpoint;
   };
-  spec.budget = Transfer::capacity_budget(high.endpoint(), low.endpoint(), capacity(high),
-                                          capacity(low), spec.authentication.source_block.size(),
-                                          spec.authentication.target_block.size());
-  EXPECT_THROW(Transfer::capacity_budget(high.endpoint(), low.endpoint(), 1, 1, 4, 3),
-               std::invalid_argument);
-  EXPECT_THROW(
-      Transfer::capacity_budget(high.endpoint(), low.endpoint(),
-                                std::numeric_limits<std::size_t>::max(), capacity(low), 4, 3),
-      std::exception);
-  auto transfer =
-      Transfer::prepare(high.endpoint(), low.endpoint(), spec, component, execution(lane), lane);
-  EXPECT_GT(transfer->canonical_jobs(), 0u);
-  EXPECT_GT(transfer->transported_elements(), 0u);
-  EXPECT_LE(transfer->prepared_bytes(), spec.budget.prepared_bytes);
+  auto source = with_measure(high, source_activity, source_measure);
+  auto target = with_measure(low, activity, measure);
+  const auto spec = specification(high, low);
+  auto transfer = Transfer::prepare(source, target, spec, component, execution(lane), lane);
   auto candidates = low.state;
+  const auto unchanged = [&] {
+    for (const auto& field : candidates)
+      for (std::size_t local = 0; local < field.local_size(); ++local) {
+        const auto& fab = field.fab(local);
+        auto values = fab.create_host_mirror();
+        fab.copy_to_host(values);
+        for (std::size_t index = 0; index < values.size(); ++index)
+          EXPECT_DOUBLE_EQ(values(index), preserved_value);
+      }
+  };
+  const auto restore_source = [&] {
+    fill(high, true);
+    auto& fab = high.state[0].fab_global(0);
+    auto values = fab.create_host_mirror();
+    fab.copy_to_host(values);
+    // Covered source state is not part of the physical field and need not agree or be finite.
+    values(0) = lane.rank() == 1 ? std::numeric_limits<double>::quiet_NaN() : 1000;
+    fab.copy_from_host(values);
+  };
+  restore_source();
   transfer->begin_transaction(1);
-  const auto expected = transfer->expected_receipt_contract(high.endpoint(), low.endpoint());
-  EXPECT_FALSE(expected.transfer.applied);
-  EXPECT_EQ(expected.source_active_elements, Dim == 1 ? 6u : 14u);
-  EXPECT_EQ(expected.destination_active_elements, Dim == 1 ? 2u : 6u);
-  const auto calls_before = provider_integral_calls(*component, lane);
-  transfer->capture(high.endpoint(), 1, 1);
-  const auto receipt = transfer->apply(low.endpoint(), pointers(candidates), 1, 1);
-  EXPECT_EQ(provider_integral_calls(*component, lane) - calls_before, receipt.canonical_jobs);
-  EXPECT_EQ(receipt.source_active_elements, Dim == 1 ? 6u : 14u);
-  EXPECT_EQ(receipt.destination_active_elements, Dim == 1 ? 2u : 6u);
-  EXPECT_EQ(receipt.physical_contract_identity, spec.physical_contract_identity);
-  EXPECT_EQ(receipt.source_active_elements, expected.source_active_elements);
-  EXPECT_EQ(receipt.destination_active_elements, expected.destination_active_elements);
-  EXPECT_EQ(receipt.source_hierarchy_identity, expected.source_hierarchy_identity);
-  EXPECT_EQ(receipt.target_hierarchy_generation, expected.target_hierarchy_generation);
-  EXPECT_EQ(receipt.target_stage_identity, expected.target_stage_identity);
-  EXPECT_EQ(receipt.transported_elements, expected.transported_elements);
-  check_low(low, candidates, 0);
-
-  transfer->reject_attempt(1, 1);
-  candidates = low.state;
-  // New addresses are intentional: the prepared transport must borrow this stage, not retain U.
-  auto staged = high;
-  fill(staged, true, 4);
-  auto stage = staged.endpoint();
-  stage.stage_identity = "test::qualified-stage::corrector";
-  stage.stage_generation = 19;
-  transfer->capture(stage, 1, 2);
-  const auto retry = transfer->apply(low.endpoint(), pointers(candidates), 1, 2);
-  EXPECT_EQ(retry.source_stage_identity, stage.stage_identity);
-  EXPECT_EQ(retry.source_stage_generation, 19u);
-  check_low(low, candidates, -1);
+  for (std::uint64_t attempt : {1u, 2u}) {
+    transfer->capture(source, 1, attempt);
+    // Divergence in an active second component must invalidate even a previous capture.
+    if (lane.rank() == 1) {
+      auto& fab = high.state[0].fab_global(0);
+      auto values = fab.create_host_mirror();
+      fab.copy_to_host(values);
+      values(static_cast<std::size_t>(fab.box().numPts()) + 1) += 1;
+      fab.copy_from_host(values);
+    }
+    EXPECT_THROW(transfer->capture(source, 1, attempt), std::invalid_argument);
+    EXPECT_THROW(transfer->apply(target, pointers(candidates), 1, attempt), std::exception);
+    unchanged();
+    restore_source();
+    if (attempt == 1) {
+      if (lane.rank() == 1)
+        source_measure[0].set_val(0.5);
+      EXPECT_THROW(transfer->capture(source, 1, attempt), std::invalid_argument);
+      unchanged();
+      source_measure[0].set_val(1);
+    }
+    transfer->capture(source, 1, attempt);
+    auto& changed_mask = attempt == 1 ? activity[0] : measure[0];
+    if (lane.rank() == 1)
+      changed_mask.set_val(attempt == 1 ? 0 : 0.5);
+    EXPECT_THROW(transfer->expected_receipt_contract(source, target), std::invalid_argument);
+    const auto calls = provider_integral_calls(*component, lane);
+    EXPECT_THROW(transfer->apply(target, pointers(candidates), 1, attempt), std::invalid_argument);
+    EXPECT_EQ(provider_integral_calls(*component, lane), calls);
+    unchanged();
+    changed_mask.set_val(1);
+    (void)transfer->apply(target, pointers(candidates), 1, attempt);
+    check_low(low, candidates, 0, preserved_value);
+    transfer->reject_attempt(1, attempt);
+    candidates = low.state;
+  }
+  // Replicated inactive and covered cells keep their old values; only active integrals publish.
+  activity[0].set_val(0);
+  transfer->capture(source, 1, 3);
+  const auto inactive = transfer->apply(target, pointers(candidates), 1, 3);
+  EXPECT_EQ(inactive.destination_active_elements, Dim == 1 ? 0u : 4u);
+  const auto& coarse = candidates[0].fab_global(0);
+  auto values = coarse.create_host_mirror();
+  coarse.copy_to_host(values);
+  for (std::size_t index = 0; index < values.size(); ++index)
+    EXPECT_DOUBLE_EQ(values(index), preserved_value);
   transfer->rollback_transaction(1);
-
-  auto restarted = staged;
-  ++restarted.generation;
-  transfer->begin_transaction(2);
-  EXPECT_THROW(transfer->capture(restarted.endpoint(), 2, 1), std::exception);
-  transfer->rollback_transaction(2);
-  auto restored = Transfer::prepare(restarted.endpoint(), low.endpoint(), spec, component,
-                                    execution(lane), lane);
-  candidates = low.state;
-  restored->begin_transaction(1);
-  restored->capture(restarted.endpoint(), 1, 1);
-  (void)restored->apply(low.endpoint(), pointers(candidates), 1, 1);
-  check_low(low, candidates, -1);
-  restored->finalize_transaction(1);
 }
 
 TEST(AmrLayoutTransfer, CoverageForgeryAndBudgetsFailBeforeCandidatePublication) {
@@ -573,57 +711,59 @@ TEST(AmrLayoutTransfer, ProgramPointStageFailureIsCollectiveThenRetriesCurrentFi
 
 TEST(AmrLayoutTransfer, CompositePullbackUsesIndependentLevelsAndRepeatedSourceCarriers) {
   runtime();
-  auto lane =
-      pops::ExecutionLane::duplicate_world_collectively("test::amr-layout-transfer-pullback");
-  auto component = provider(lane);
-  auto high = high_hierarchy(lane), low = low_hierarchy(lane);
-  auto spec = specification(high, low);
-  auto reduction =
-      Transfer::prepare(high.endpoint(), low.endpoint(), spec, component, execution(lane), lane);
-  auto lower_values = low.state;
-  reduction->begin_transaction(1);
-  reduction->capture(high.endpoint(), 1, 1);
-  (void)reduction->apply(low.endpoint(), pointers(lower_values), 1, 1);
-  reduction->finalize_transaction(1);
-  low.state = lower_values;
-  auto& map = spec.authentication;
-  map.mapping_identity = "test::physical-pullback";
-  map.operation = POPS_TRANSFER_OPERATION_PHYSICAL_PULLBACK_V1;
-  std::swap(map.source_layout_identity, map.target_layout_identity);
-  std::swap(map.source_block, map.target_block);
-  std::swap(map.physical_source_active, map.physical_target_active);
-  map.physical_source_to_target.fill(-1);
-  if constexpr (Dim > 1)
-    map.physical_source_to_target[Dim - 1] = 0;
-  for (auto& weights : spec.base_bin_weights)
-    weights.clear();
-  spec.physical_contract_identity = "test::physical-pullback-contract";
-  auto pullback_component = provider(lane, 0, true);
-  auto broadcast = Transfer::prepare(low.endpoint(), high.endpoint(), spec, pullback_component,
-                                     execution(lane), lane);
-  auto candidate = high.state;
-  broadcast->begin_transaction(1);
-  broadcast->capture(low.endpoint(), 1, 1);
-  const auto receipt = broadcast->apply(high.endpoint(), pointers(candidate), 1, 1);
-  EXPECT_EQ(receipt.source_active_elements, Dim == 1 ? 2u : 6u);
-  EXPECT_EQ(receipt.destination_active_elements, Dim == 1 ? 6u : 14u);
-  EXPECT_GE(receipt.transported_elements, receipt.source_active_elements);
-  for (std::size_t level = 0; level < candidate.size(); ++level)
-    for (std::size_t local = 0; local < candidate[level].local_size(); ++local) {
-      const auto& fab = candidate[level].fab(local);
-      auto values = fab.create_host_mirror();
-      fab.copy_to_host(values);
-      const auto count = static_cast<std::size_t>(fab.box().numPts());
-      for (std::size_t ordinal = 0; ordinal < count; ++ordinal)
-        for (std::size_t component = 0; component < 2; ++component) {
-          const bool covered = level == 0 && ordinal == 0;
-          const double expected =
-              covered ? 1000 + 5 * component
-                      : ((Dim == 1 || level > 0) ? 0 : 2 * (ordinal % 2)) + 10 * component;
-          EXPECT_DOUBLE_EQ(values(component * count + ordinal), expected);
-        }
-    }
-  broadcast->rollback_transaction(1);
+  for (bool replicated : {false, true}) {
+    auto lane =
+        pops::ExecutionLane::duplicate_world_collectively("test::amr-layout-transfer-pullback");
+    auto component = provider(lane);
+    auto high = high_hierarchy(lane, replicated), low = low_hierarchy(lane, replicated);
+    auto spec = specification(high, low);
+    auto reduction =
+        Transfer::prepare(high.endpoint(), low.endpoint(), spec, component, execution(lane), lane);
+    auto lower_values = low.state;
+    reduction->begin_transaction(1);
+    reduction->capture(high.endpoint(), 1, 1);
+    (void)reduction->apply(low.endpoint(), pointers(lower_values), 1, 1);
+    reduction->finalize_transaction(1);
+    low.state = lower_values;
+    auto& map = spec.authentication;
+    map.mapping_identity = "test::physical-pullback";
+    map.operation = POPS_TRANSFER_OPERATION_PHYSICAL_PULLBACK_V1;
+    std::swap(map.source_layout_identity, map.target_layout_identity);
+    std::swap(map.source_block, map.target_block);
+    std::swap(map.physical_source_active, map.physical_target_active);
+    map.physical_source_to_target.fill(-1);
+    if constexpr (Dim > 1)
+      map.physical_source_to_target[Dim - 1] = 0;
+    for (auto& weights : spec.base_bin_weights)
+      weights.clear();
+    spec.physical_contract_identity = "test::physical-pullback-contract";
+    auto pullback_component = provider(lane, 0, true);
+    auto broadcast = Transfer::prepare(low.endpoint(), high.endpoint(), spec, pullback_component,
+                                       execution(lane), lane);
+    auto candidate = high.state;
+    broadcast->begin_transaction(1);
+    broadcast->capture(low.endpoint(), 1, 1);
+    const auto receipt = broadcast->apply(high.endpoint(), pointers(candidate), 1, 1);
+    EXPECT_EQ(receipt.source_active_elements, Dim == 1 ? 2u : 6u);
+    EXPECT_EQ(receipt.destination_active_elements, Dim == 1 ? 6u : 14u);
+    EXPECT_GE(receipt.transported_elements, receipt.source_active_elements);
+    for (std::size_t level = 0; level < candidate.size(); ++level)
+      for (std::size_t local = 0; local < candidate[level].local_size(); ++local) {
+        const auto& fab = candidate[level].fab(local);
+        auto values = fab.create_host_mirror();
+        fab.copy_to_host(values);
+        const auto count = static_cast<std::size_t>(fab.box().numPts());
+        for (std::size_t ordinal = 0; ordinal < count; ++ordinal)
+          for (std::size_t component = 0; component < 2; ++component) {
+            const bool covered = level == 0 && ordinal == 0;
+            const double expected =
+                covered ? 1000 + 5 * component
+                        : ((Dim == 1 || level > 0) ? 0 : 2 * (ordinal % 2)) + 10 * component;
+            EXPECT_DOUBLE_EQ(values(component * count + ordinal), expected);
+          }
+      }
+    broadcast->rollback_transaction(1);
+  }
 }
 
 TEST(AmrLayoutTransfer, ProviderFailureRollsBackDetachedCandidateAndLegacyProviderIsRefused) {
