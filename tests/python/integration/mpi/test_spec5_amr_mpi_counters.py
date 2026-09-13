@@ -6,9 +6,10 @@ added) times its non-numeric phases into the facade-owned ``pops::runtime::progr
 exchange) and ``average_down`` (restrict fine onto coarse) -- plus integer counters (``regrid`` /
 ``fill_boundary`` per-run counts; under MPI np>1 also ``mpi_reductions`` / ``mpi_messages``). Before
 this change NO C++ path emitted those scopes, so :meth:`PerformanceSummary.by_amr_mpi` always returned
-the honest "unavailable" sentinel. This test builds a SMALL native multi-block ``AmrSystem`` (native
-bricks, no DSL compile -- the real engine), enables profiling, runs enough macro-steps that a regrid
-fires (``regrid_every=1`` + an energy bump so the union tags refine), then asserts:
+the honest "unavailable" sentinel. This test builds a SMALL native multi-block ``AmrSystem`` (two
+compiled ModelSpec packages and an explicit time Program), enables profiling, runs enough
+macro-steps that a regrid fires (``regrid_every=1`` + an energy bump so the union tags refine),
+then asserts:
 
   * ``profile_report()`` now contains the ``regrid`` / ``fill_boundary`` / ``average_down`` scopes
     with count > 0 ;
@@ -35,6 +36,10 @@ from pops.runtime._engine_descriptors import Periodic  # noqa: E402
 
 from pops.runtime._profile import PerformanceSummary, Profile  # noqa: E402
 from tests.python.support.explicit_program import install_forward_euler_program  # noqa: E402
+
+# Two compressible AMR packages and their shared time Program compile on a cold runner.
+# This single-rank test passed CI in 270.35s before a later run exceeded the default 300s cap.
+POPS_PROCESS_TIMEOUT = 900
 
 
 def _amr_config(n: int, *, regrid_every: int) -> AmrSystemConfig:
