@@ -460,6 +460,17 @@ def _compile_exact_flux(tmp_path: Path):
     return manifest, compile_component(component)
 
 
+def test_source_component_binary_identity_is_independent_of_build_directory(tmp_path):
+    # Independent compiles use different package and private build directories, just as MPI
+    # ranks do. Compare the complete authenticated bytes, including loader metadata and UUID.
+    _, first = _compile_exact_flux(tmp_path / "first")
+    _, second = _compile_exact_flux(tmp_path / "second")
+    assert first.source_package == second.source_package
+    assert first.binary == second.binary
+    assert first.binary_identity == second.binary_identity
+    assert first.artifact_identity == second.artifact_identity
+
+
 def _write_fixed_package(
     root: Path,
     *,

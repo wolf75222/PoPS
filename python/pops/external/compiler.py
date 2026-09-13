@@ -108,6 +108,9 @@ def compile_component(
     include = include or pops_include()
     signature = _check_headers_match_module(include)
     compiler, cflags, lflags = pops_loader_build_flags(cxx)
+    from pops.codegen.compile_link_flags import deterministic_component_link_flags
+
+    lflags = deterministic_component_link_flags(lflags)
     cflags = [*cflags, '-DPOPS_HEADER_SIG="%s"' % signature]
     standard = _probe_cxx_std(compiler, loader_cxx_std())
     host_abi = getattr(_pops, "abi_key", None)
