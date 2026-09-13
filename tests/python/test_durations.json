@@ -545,7 +545,7 @@
         "tests/python/unit/codegen/test_transport_quadrature.py"
       ]
     },
-    "estimated_count": 424,
+    "estimated_count": 425,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -858,6 +858,7 @@
       "tests/python/unit/problem/test_state_handle_space.py",
       "tests/python/unit/problem/test_total_semantic_field_accounting.py",
       "tests/python/unit/reporting/test_report_tree.py",
+      "tests/python/unit/runtime/test_amr_accepted_state_inspector.py",
       "tests/python/unit/runtime/test_amr_bind_lowering.py",
       "tests/python/unit/runtime/test_amr_checkpoint_contract.py",
       "tests/python/unit/runtime/test_amr_refinement_ratio_rank.py",
@@ -1070,7 +1071,7 @@
       "scope": "M0-M7 migration additions",
       "timing_limit": "The inherited scalar-advection pipeline estimate is not refreshed from the local OMP qualification, where a full run exceeded 4299 s. CI Serial hardware/cache behavior differs; no observed CI fit is claimed. Preserve the indivisible full scientific test and refresh its estimate from the next complete CI artifact."
     },
-    "total_files": 541,
+    "total_files": 543,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -1213,7 +1214,8 @@
       },
       "scalar_pipeline_basis": "90-minute scheduling estimate for the indivisible inherited full-profile scalar-advection pipeline; older candidate5 example report retained approximately3938s and later local attempts exceeded4299s. This is not a timing measurement of the current CI file or proof of source equivalence.",
       "watchdogs": "Only the four largest indivisible files need long-job reservations. Their test-step budget derives from selected weights; ordinary selections retain a45-minute test limit inside50-minute jobs."
-    }
+    },
+    "accepted_state_inspector_basis": "0.5-second scheduling estimate for five source-only parser cases; observed local pytest receipt 0.16s is not GitHub wall time."
   },
   "tests/python/integration/runtime/test_interface_boundary_flux_ownership.py": 160.0,
   "tests/python/integration/runtime/test_amr_physical_maps.py": 1050.0,
@@ -1221,5 +1223,6 @@
   "tests/python/integration/runtime/test_tensor_transport_composition.py": 1200.0,
   "tests/python/unit/codegen/test_partition_stability.py": 5.0,
   "tests/python/unit/codegen/test_tensor_transport_composition.py": 30.0,
-  "tests/python/unit/codegen/test_transport_quadrature.py": 5.0
+  "tests/python/unit/codegen/test_transport_quadrature.py": 5.0,
+  "tests/python/unit/runtime/test_amr_accepted_state_inspector.py": 0.5
 }
