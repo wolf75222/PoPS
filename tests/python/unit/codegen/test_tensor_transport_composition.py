@@ -1,0 +1,48 @@
+"""Resolved methods retain independent transport and tensor ownership on one block."""
+import pops
+import pytest
+from pops.codegen.module_codegen import _emit_bricks
+from pops.codegen.module_lowering import lower_and_validate
+from pops.codegen.program_codegen import emit_cpp_program
+from tests.python.integration.runtime.test_tensor_transport_composition import composition_case
+
+
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_separate_transport_and_tensor_emit_both_operators_and_required_halos(dimension):
+    case, layout, model = composition_case(dimension=dimension)
+    authored_flux = model._dsl._m._flux
+    authored_eigenvalues = model._dsl._m._eig
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    operations = next(iter(resolved.resolved_operations.values()))
+    emitter = lower_and_validate(model, resolved_operations=operations)[0]
+    code = emit_cpp_program(resolved.time, model=emitter)
+    body = _emit_bricks(emitter._m)[1]
+    assert "PreparedDiffusion<pops::kNativeDimension, 2, true>" in code
+    assert "ctx.neg_div_flux_default_into(" in code
+    assert "program_state_ghost_depth = 2;" in body
+    assert "program_only_storage = true" not in body
+    assert max(operations.halo_requirements().values()) == 2
+    selected = [row.guarantees.get("numerical_method") for row in operations.operations]
+    assert any(method and method.get("method") == "tensor_diffusion" for method in selected)
+    assert any(method and method.get("method") == "finite_volume" for method in selected)
+    assert model._dsl._m._flux is authored_flux and model._dsl._m._eig is authored_eigenvalues
+    assert not hasattr(model._dsl._m, "_program_state_ghost_depth")
+
+
+def test_implicit_tensor_partition_is_not_charged_to_explicit_transport_bound():
+    case, layout, model = composition_case(implicit=True)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    operations = next(iter(resolved.resolved_operations.values()))
+    emitter = lower_and_validate(model, resolved_operations=operations)[0]
+    code = emit_cpp_program(resolved.time, model=emitter)
+    assert "PreparedDiffusion<pops::kNativeDimension, 2, true>" in code
+    assert "ctx.neg_div_flux_default_into(" in code
+    assert "pops::runtime::program::PreparedSpatialResidual<" in code
+    assert ".explicit_frequency()" not in code
+    assert "program_state_ghost_depth = 2;" in _emit_bricks(emitter._m)[1]
+
+
+def test_competing_native_transport_configurations_are_still_refused():
+    case, layout, _ = composition_case(competing_transport=True)
+    with pytest.raises(ValueError, match="distinct runtime configurations"):
+        pops.resolve(pops.validate(case), layout=layout)
