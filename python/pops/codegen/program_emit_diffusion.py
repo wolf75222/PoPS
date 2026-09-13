@@ -146,7 +146,7 @@ def _emit_diffusive_preparation(v, state_var, prepared_var, node_model,
 
 
 def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
-                        prepared_var=None):
+                        prepared_var=None, *, defer_explicit_bound=False):
     if target not in {"system", "amr_system"}:
         raise ValueError("diffusion execution requires a Uniform or AMR native install scope")
     if "evaluation_partition" in v.attrs:
@@ -258,8 +258,9 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
         frequency+=" + ctx.max_wave_speed(%d,%s)*(%s)" % (bidx,state_var,inverse_spacing)
     if explicit:
         lines.append("const pops::Real diffusion_frequency_%d=%s;" % (v.id,frequency))
-        lines.append("if (!(std::isfinite(dt) && dt>=0 && dt*diffusion_frequency_%d<=1+32*std::numeric_limits<pops::Real>::epsilon()))" % v.id)
-        lines.append('  ctx.consume_pointwise_evaluation_status(%d,%d,2,"combined_transport_diffusion_stability",502);' % (bidx,v.id))
+        if not defer_explicit_bound:
+            lines.append("if (!(std::isfinite(dt) && dt>=0 && dt*diffusion_frequency_%d<=1+32*std::numeric_limits<pops::Real>::epsilon()))" % v.id)
+            lines.append('  ctx.consume_pointwise_evaluation_status(%d,%d,2,"combined_transport_diffusion_stability",502);' % (bidx,v.id))
     for ordinal,row in enumerate(sources,1):
         temporary="diffusive_source_%d_%d" % (v.id,ordinal)
         lines.append("auto& %s=ctx.rhs_scratch(%d,%d,%s);" % (temporary,v.id,ordinal,state_var))

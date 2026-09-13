@@ -1051,9 +1051,16 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
             geometry, model, reconstruction, numerical, positivity_floor);
       };
 
+  constexpr int storage_ghost_depth = [] {
+    if constexpr (requires { Model::program_state_ghost_depth; }) {
+      static_assert(Model::program_state_ghost_depth >= 0);
+      return std::max(Reconstruction::n_ghost, Model::program_state_ghost_depth);
+    }
+    return Reconstruction::n_ghost;
+  }();
   Extent<Dim> required_ghosts{};
   for (int axis = 0; axis < Dim; ++axis)
-    required_ghosts[axis] = Reconstruction::n_ghost;
+    required_ghosts[axis] = storage_ghost_depth;
 
   const Model model = request.model;
   const std::string model_contract = exact_model_contract(model);

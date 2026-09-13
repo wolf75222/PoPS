@@ -45,6 +45,10 @@ class StateStorage(Descriptor):
             "ghost_depth": self.ghost_depth,
         }
 
+    def runtime_storage_requirements(self) -> dict[str, int]:
+        """Pointwise Program rates can share storage with a native transport operator."""
+        return {"ghost_depth": self.ghost_depth}
+
     def runtime_configuration(self) -> dict[str, Any]:
         return self.to_data()
 

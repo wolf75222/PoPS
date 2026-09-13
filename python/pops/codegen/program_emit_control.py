@@ -245,7 +245,7 @@ def _stage_fraction(value: Any) -> Fraction:
 
 def _emit_contiguous_rhs_group(
         values: Sequence[Any], block_idx: Mapping[Any, int], var: dict[Any, str],
-        lines: list[str], group_identity: int, target: Any = "system") -> None:
+        lines: list[str], group_identity: int, target: Any = "system", model: Any = None) -> None:
     """Emit one complete same-StagePoint residual group before any result is consumable."""
     from pops.codegen.program_emit_ops import _required_block_index, _rhs_flux_temporal_family
 
@@ -269,6 +269,12 @@ def _emit_contiguous_rhs_group(
             index, var[state.id], var[value.id], int(value.id), 0 if default_source else 1,
             family))
     lines.append("ctx.rhs_group(%d, {%s});" % (group_identity, ", ".join(requests)))
+    from pops.codegen.program_models import model_for_node
+    from pops.codegen.program_partition_stability import emit_transport_frequency
+    if model is not None:
+        for value in values:
+            emit_transport_frequency(value, var, lines, model=model_for_node(model, value),
+                                     block_index=block_idx[value.block])
 
 
 def _emit_commit_group(commits: Any, bases: Any, var: Any, *, phase: int) -> list[str]:
@@ -417,7 +423,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                     "RHS coherence barrier lacks materialized state value ids %s"
                     % unavailable)
             _emit_contiguous_rhs_group(
-                group, block_idx, var, lines, next_group_identity, target)
+                group, block_idx, var, lines, next_group_identity, target, model)
             next_group_identity += 1
         v = values[index]
         if v.id in rhs_grouped or v.op == "post_synchronization":
@@ -458,9 +464,12 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         index += 1
     from .program_interaction_exchanges import emit_accepted_interaction_exchanges
     lines += emit_accepted_interaction_exchanges(program, var, block_idx, target=target)
+    from pops.codegen.program_partition_stability import require_deferred_partition_bounds
+    require_deferred_partition_bounds(var)
     from pops.codegen.program_diffusion_exchanges import emit_accepted_diffusive_exchanges
     lines.extend(emit_accepted_diffusive_exchanges(
-        program, target=target, block_indices=block_idx))
+        program, target=target, block_indices=block_idx,
+        partition_stability_checked=var.get(("partition_stability_checked",), ())))
     # All outputs stay provisional until the one atomic publication group.
     lines.extend(_emit_commit_group(program._commits, bases, var, phase=0))
     # Rotate the history rings ONCE at the very end of the step (after the commit), so the next step

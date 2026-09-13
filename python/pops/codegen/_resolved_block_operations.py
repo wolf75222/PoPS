@@ -92,6 +92,8 @@ def build_block_resolved_operations(block: Any, program: Any):
     if block.numerics is not None:
         for row in block.numerics.rates:
             selected[row.rate.registered_operator_name] = row.method
+    separately_selected_diffusion = any(
+        getattr(method, "category", None) == "diffusion" for method in selected.values())
     declarations = {"operation:%s" % _reference(module.operator_handle(op.name)): op
                     for op in module.operator_registry()}
     operations, requests = [], list(base.evaluations)
@@ -116,6 +118,10 @@ def build_block_resolved_operations(block: Any, program: Any):
                       "stencil_known": radius is not None or definition.kind not in {
                           "grid_operator", "local_rate"},
                       "boundary_authorities": boundary_data}
+        if separately_selected_diffusion and getattr(method, "category", None) == "finite_volume":
+            from pops.numerics.transport_frequency import transport_frequency_contract
+
+            guarantees["explicit_transport_frequency"] = transport_frequency_contract(method)
         balance = definition.lowering.get("physical_balance")
         if balance is not None:
             guarantees["accumulation"] = _projection(balance.accumulation.resolve_references(

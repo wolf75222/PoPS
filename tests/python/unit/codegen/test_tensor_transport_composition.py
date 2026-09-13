@@ -46,3 +46,80 @@ def test_competing_native_transport_configurations_are_still_refused():
     case, layout, _ = composition_case(competing_transport=True)
     with pytest.raises(ValueError, match="distinct runtime configurations"):
         pops.resolve(pops.validate(case), layout=layout)
+
+
+@pytest.mark.parametrize("flux", ("rusanov", "hll"))
+def test_shared_endpoint_frequency_contract_authenticates_supported_fluxes(flux):
+    from types import SimpleNamespace
+    from pops.numerics import reconstruction, riemann
+    from pops.numerics.transport_frequency import transport_frequency_contract
+
+    selected = SimpleNamespace(reconstruction=reconstruction.FirstOrder(),
+                               riemann=riemann.Rusanov() if flux == "rusanov" else riemann.HLL())
+    assert transport_frequency_contract(selected)["provider"] == "native_endpoint_model_wave_envelope"
+
+
+@pytest.mark.parametrize("reconstruction_name,flux_name,waves", (
+    ("WENO5", "Rusanov", None), ("FirstOrder", "Roe", None),
+    ("FirstOrder", "HLLC", None), ("FirstOrder", "HLL", "einfeldt"),
+    ("FirstOrder", "HLL", "davis"),
+))
+def test_shared_endpoint_frequency_contract_refuses_unproved_providers(
+        reconstruction_name, flux_name, waves):
+    from types import SimpleNamespace
+    from pops.numerics import reconstruction, riemann
+    from pops.numerics.transport_frequency import transport_frequency_contract
+
+    flux = getattr(riemann, flux_name)(**({} if waves is None else {"waves": waves}))
+    selected = SimpleNamespace(reconstruction=getattr(reconstruction, reconstruction_name)(), riemann=flux)
+    with pytest.raises(ValueError, match="combined diffusion"):
+        transport_frequency_contract(selected)
+
+
+def test_separate_transport_and_joint_diffusion_keep_both_transport_multiplicities():
+    from pops import math
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    from pops.numerics import Diffusion, DiscretizationPlan, FiniteVolume, reconstruction, riemann, variables
+    from pops.layouts import Uniform
+    from pops.mesh import CartesianGrid, PeriodicAxes
+    from pops.initial import InitialCondition
+    from pops.lib.initial import BindArray
+    from pops.projection import ConservativeCellAverage
+    from pops.time import FixedDt
+
+    frame = Rectangle("domain", lower=(0., 0.), upper=(1., 1.)).frame(Cartesian2D())
+    model = pops.Model("multiple_roots", frame=frame)
+    state = model.state("U", components=("u",))
+    flux = model.flux("transport", frame=frame, state=state,
+                      components={axis: (.2*state[0],) for axis in frame.axes},
+                      waves={axis: (.2,) for axis in frame.axes})
+    diffusion = model.diffusive_flux("conduction", state=state, value=.1*math.grad(state))
+    transport = model.rate("transport_root", equation=math.ddt(state) == -math.div(flux))
+    joint = model.rate("joint_root", equation=math.ddt(state) == -math.div(flux)+math.div(diffusion))
+    fv = FiniteVolume(flux=flux, variables=variables.Conservative(state),
+                      reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov())
+    case = pops.Case("multiple_roots")
+    block = case.block("inventory", model, states=(state,))
+    methods = DiscretizationPlan()
+    methods.rates.add(transport, fv)
+    methods.rates.add(joint, Diffusion(flux=diffusion, transport=fv))
+    case.numerics(methods, block=block)
+    program = pops.Program("sum")
+    q = program.state(block[state])
+    update = program.value("accepted", q.n+program.dt*(transport(q.n)+joint(q.n)), at=q.next.point)
+    program.commit(q.next, update)
+    program.step_strategy(FixedDt(.001))
+    case.program(program)
+    case.initials.add(InitialCondition(state=block[state], value=BindArray(),
+                                      projection=ConservativeCellAverage()))
+    layout = Uniform(CartesianGrid(frame=frame, cells=(16, 16), periodic=PeriodicAxes(frame.axes)))
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    operations = next(iter(resolved.resolved_operations.values()))
+    emitter = lower_and_validate(model, resolved_operations=operations)[0]
+    code = emit_cpp_program(resolved.time, model=emitter)
+    assert code.count("ctx.max_wave_speed(") == 2
+    assert ".explicit_frequency() + ctx.max_wave_speed" in code
+    assert any("transport_frequency_" in line and "diffusion_frequency_" in line
+               for line in code.splitlines())
+    assert code.count("combined_transport_diffusion_stability") == 1

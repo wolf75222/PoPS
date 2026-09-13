@@ -177,7 +177,7 @@ def test_separate_transport_tensor_update_and_signed_ledgers(
     record_property("maximum_update_defect", float(np.max(abs(actual-initial-VALID_DT*(transport+diffusion)))))
 
 
-def test_independent_bounds_do_not_admit_an_unstable_explicit_sum(
+def test_independent_bounds_do_not_admit_a_sum_exceeding_the_combined_bound(
     isolated_native_cache, native_cxx, kokkos_root,
 ):
     del isolated_native_cache, native_cxx, kokkos_root

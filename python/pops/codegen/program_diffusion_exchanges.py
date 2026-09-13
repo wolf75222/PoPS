@@ -52,7 +52,7 @@ def _single_forward_euler_with_frozen_inputs(program, rows):
     return evolving == 1
 
 
-def accepted_diffusive_quadrature(program):
+def accepted_diffusive_quadrature(program, *, partition_stability_checked=()):
     """Stop at each fresh residual: a predictor's ancestry is not an accepted exchange."""
     selected = {}
 
@@ -90,15 +90,18 @@ def accepted_diffusive_quadrature(program):
         from pops.time import certify_program_graph
         certificate = certify_program_graph(program.to_graph())
         if (certificate.properties.ssp is None or certificate.properties.ssp.coefficient != 1) \
-                and not _single_forward_euler_with_frozen_inputs(program, rows):
+                and not _single_forward_euler_with_frozen_inputs(program, rows) \
+                and not all(rate.id in partition_stability_checked for rate, _ in rows):
             raise ValueError("explicit diffusive exchange currently requires a certified SSP coefficient-one affine step")
         if any(set(weight) != {1} or weight[1] < 0 for _,weight in rows):
             raise ValueError("diffusive accepted quadrature must retain nonnegative exact dt weights")
     return rows
 
 
-def emit_accepted_diffusive_exchanges(program, *, target="system", block_indices=None):
-    rows = accepted_diffusive_quadrature(program)
+def emit_accepted_diffusive_exchanges(program, *, target="system", block_indices=None,
+                                     partition_stability_checked=()):
+    rows = accepted_diffusive_quadrature(
+        program, partition_stability_checked=partition_stability_checked)
     if rows and target not in {"system", "amr_system"}:
         raise ValueError("diffusive accepted exchanges require a native install scope")
     lines = []

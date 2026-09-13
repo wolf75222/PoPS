@@ -234,6 +234,11 @@ AdvectionModel<Dim> advection_model() {
   return {pops::nd::ScalarAdvection<Dim>::prepare(velocity)};
 }
 
+template <int Dim>
+struct ProgramHaloAdvectionModel : AdvectionModel<Dim> {
+  static constexpr int program_state_ghost_depth = 2;
+};
+
 template <int Dim, int GhostDepth = 1>
 struct ProgramStateModel {
   using State = pops::StateVec<1>;
@@ -700,6 +705,34 @@ TEST(GeneratedAmrSystemBlock, ProgramStateHaloRequirementReachesUniformAndAmrFac
   for (int axis = 0; axis < Dim; ++axis) {
     EXPECT_EQ(uniform.ghosts[axis], 2);
     EXPECT_EQ(adaptive.ghosts[axis], 2);
+  }
+}
+
+TEST(GeneratedAmrSystemBlock, ComposedProgramHalosPreserveHyperbolicReconstructionRequirements) {
+  constexpr int Dim = pops::kNativeDimension;
+  using Model = ProgramHaloAdvectionModel<Dim>;
+  const Model model{advection_model<Dim>()};
+  pops::Extent<Dim> shape{};
+  pops::RealVector<Dim> lower{}, upper{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    shape[axis] = 4;
+    upper[axis] = 1;
+  }
+  const auto geometry =
+      pops::Geometry<Dim>::from_bounds(pops::Box<Dim>::from_extents(shape), lower, upper);
+  for (const auto* limiter : {"none", "weno5"}) {
+    const auto uniform =
+        pops::prepare_generated_system_block(pops::CompiledSystemBlockPreparation<Dim, Model>{
+            "composed-state", model, {limiter, "rusanov", "conservative", "explicit"},
+            geometry, {}, {}, {}});
+    const auto adaptive = pops::prepare_compiled_amr_system_block<Dim>(
+        "composed-state", model, limiter, "rusanov", "conservative", "imex", 1.4, 1, 1,
+        0.0, static_cast<double>(pops::kWenoEpsilon), false, "test.composed-state/native_model");
+    const int expected = std::string_view(limiter) == "none" ? 2 : 3;
+    for (int axis = 0; axis < Dim; ++axis) {
+      EXPECT_EQ(uniform.ghosts[axis], expected);
+      EXPECT_EQ(adaptive.ghosts[axis], expected);
+    }
   }
 }
 

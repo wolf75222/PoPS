@@ -234,7 +234,7 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic>,
     return false;
   }();
   static constexpr int program_state_ghost_depth = [] {
-    if constexpr (program_only_storage)
+    if constexpr (requires { Hyperbolic::program_state_ghost_depth; })
       return Hyperbolic::program_state_ghost_depth;
     return 0;
   }();

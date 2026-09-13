@@ -674,9 +674,16 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
         "provider-free generated System block cannot retain provider state");
   }
 
+  constexpr int storage_ghost_depth = [] {
+    if constexpr (requires { Model::program_state_ghost_depth; }) {
+      static_assert(Model::program_state_ghost_depth >= 0);
+      return std::max(Reconstruction::n_ghost, Model::program_state_ghost_depth);
+    }
+    return Reconstruction::n_ghost;
+  }();
   Extent<Dim> ghosts{};
   for (int axis = 0; axis < Dim; ++axis)
-    ghosts[axis] = Reconstruction::n_ghost;
+    ghosts[axis] = storage_ghost_depth;
   const auto spatial =
       nd::prepare_cartesian_operator<Dim, Model, Reconstruction, Numerical, Variables>(
           request.geometry, request.model, reconstruction, numerical,

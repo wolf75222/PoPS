@@ -9,8 +9,6 @@ def prepare_state_storage_requirements(
 ):
     """Carry the resolved neighborhood into the private native storage model."""
     impl = getattr(emitter, "_m", emitter)
-    if not getattr(impl, "_program_only_storage_axes", ()):
-        return emitter
     depth = 1  # Minimum native state-storage extent, including pointwise source Programs.
     if resolved_operations is not None:
         from pops.codegen.resolved_operations import ResolvedOperationPlan

@@ -380,32 +380,44 @@ class ResolvedDiscretizationPlan:
         return {**self._payload(), "identity": self.identity.token}
 
     def primary_spatial(self) -> Any:
-        """Compatibility projection for the current per-block native spatial ABI.
+        """Project independently evaluated rates onto one native transport installation.
 
-        The resolved plan retains every per-rate binding. The native engine currently accepts one
-        spatial method per block. Rates may name different physical fluxes while selecting the
-        same native reconstruction/Riemann/variable configuration; that exact physical ownership
-        remains on each resolved rate row. Genuinely different runtime configurations fail
-        explicitly instead of picking the first.
+        A method may explicitly declare that its Program operation only needs state storage.
+        Such a method contributes its resolved halos without competing with a block's native
+        reconstruction/Riemann/variable selection. Every per-rate numerical binding remains
+        authoritative; genuinely different transport configurations still fail closed.
         """
         methods = [row.method for row in self.rates]
         configurations = []
+        storage_depths = []
         for method in methods:
             provider = getattr(method, "runtime_configuration", None)
             configuration = provider() if callable(provider) else method.to_data()
             if not isinstance(configuration, dict):
-                raise TypeError(
-                    "rate method runtime_configuration() must return a dict"
-                )
+                raise TypeError("rate method runtime_configuration() must return a dict")
             configurations.append(configuration)
-        first = configurations[0]
-        if any(configuration != first for configuration in configurations[1:]):
+            requirements = getattr(method, "runtime_storage_requirements", None)
+            requirements = requirements() if callable(requirements) else None
+            if requirements is not None:
+                if (not isinstance(requirements, Mapping)
+                        or set(requirements) != {"ghost_depth"}
+                        or type(requirements["ghost_depth"]) is not int
+                        or requirements["ghost_depth"] < 1):
+                    raise TypeError("runtime storage requirements need one positive ghost_depth")
+                storage_depths.append(requirements["ghost_depth"])
+            else:
+                storage_depths.append(None)
+        installed = [index for index, depth in enumerate(storage_depths) if depth is None]
+        if not installed:
+            return methods[max(range(len(methods)), key=storage_depths.__getitem__)]
+        first = installed[0]
+        if any(configurations[index] != configurations[first] for index in installed[1:]):
             raise ValueError(
                 "native runtime requires one finite-volume method per block; resolved rates select "
                 "distinct runtime configurations and cannot be lowered without a per-operator "
                 "native ABI"
             )
-        return methods[0]
+        return methods[first]
 
     def amr_stencil_requirement(self, *, owner: Any, dimension: int) -> Any:
         """Project the exact spatial methods onto the open AMR nesting protocol."""

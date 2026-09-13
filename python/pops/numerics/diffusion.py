@@ -63,38 +63,9 @@ class Diffusion(Descriptor):
         return True
 
     def _transport_frequency_contract(self):
-        """Authenticate the numerical face envelope used by the combined restriction.
+        from .transport_frequency import transport_frequency_contract
 
-        This is a sufficient scalar monotonicity condition and a declared-speed
-        restriction for systems; it does not prove arbitrary system invariants.
-        Higher-order reconstructions need their own combined stability analysis.
-        """
-        from .reconstruction import authenticated_reconstruction_route
-        from .riemann._contract import riemann_capability_contract
-        from pops.runtime.routes import resolve
-        transport = self.transport
-        if transport is None:
-            raise ValueError("combined diffusion frequency requires a transport selection")
-        reconstruction = authenticated_reconstruction_route(transport.reconstruction)
-        flux = transport.riemann
-        contract = riemann_capability_contract(flux)
-        route = resolve("riemann", flux.scheme, context="combined diffusion face envelope")
-        if (flux.brick_type != "native" or flux.native_id != route.native_entry
-                or not contract.requires("stability_bound")):
-            raise ValueError("combined diffusion needs an authenticated native face stability envelope")
-        if reconstruction.metadata["formal_order"] != 1:
-            raise ValueError("combined diffusion has no prepared stability contract for higher-order reconstruction")
-        # These native policies use the endpoint model envelope already exposed
-        # by ctx.max_wave_speed. Roe/contact/reconstructed states need a different
-        # provider, rather than an unproved multiplier of that cellwise bound.
-        if route.native_entry not in ("pops::RusanovFlux", "pops::HLLFlux"):
-            raise ValueError("combined diffusion has no prepared frequency provider for this numerical flux")
-        if flux.options.get("waves") in ("einfeldt", "davis"):
-            raise ValueError("combined diffusion requires the endpoint model envelope; this face wave provider needs a separate frequency realization")
-        return {"provider": "native_endpoint_model_wave_envelope",
-                "reconstruction": reconstruction.native_entry,
-                "numerical_flux": route.native_entry,
-                "system_invariants": "not_guaranteed"}
+        return transport_frequency_contract(self.transport)
 
     def validate_rate_contract(self, contract):
         if contract["state"] != self.law.state:
@@ -136,6 +107,10 @@ class Diffusion(Descriptor):
                 "transport": None if self.transport is None else self.transport.to_data(),
                 "transport_frequency_contract": None if self.transport is None else self._transport_frequency_contract(),
                 "explicit_restriction": "sum_transport_frequencies_plus_diffusive_row_frequency<=1/dt"}
+
+    def runtime_storage_requirements(self):
+        """An independent Program diffusion operation installs no hyperbolic operator."""
+        return {"ghost_depth": self.ghost_depth} if self.transport is None else None
 
     def runtime_configuration(self):
         if self.transport is not None:

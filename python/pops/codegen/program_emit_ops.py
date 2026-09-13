@@ -843,7 +843,16 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         var[v.id] = var[scalar_in.id]
     elif v.op == "diffusive_rhs":
         from pops.codegen.program_emit_diffusion import _emit_diffusive_rhs
-        _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target)
+        from pops.codegen.program_partition_stability import has_independent_diffusion_transport
+        defer_bound = (has_independent_diffusion_transport(node_model)
+                       and any(node is v for node in program._values)
+                       and v.attrs.get("schedule") is None)
+        _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
+                            defer_explicit_bound=defer_bound)
+        var[("partition_frequency", v.id)] = "diffusion_frequency_%d" % v.id
+        if defer_bound:
+            key = ("partition_stability_deferred",)
+            var[key] = var.get(key, frozenset()) | frozenset((v.id,))
     elif v.op == "rhs":
         state_in = v.inputs[0]  # rhs inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id
@@ -966,6 +975,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 plan_exprs=plan_exprs,
             )
             lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);" % (var[v.id], ssrc))
+        if want_flux:
+            from pops.codegen.program_partition_stability import emit_transport_frequency
+            emit_transport_frequency(v, var, lines, model=node_model, block_index=bidx)
     elif v.op == "implicit_source":
         state_in = v.inputs[0]
         var[v.id] = "r%d" % v.id
@@ -1352,6 +1364,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             program, v, base, var, model, lines, prelude, block_idx, field_plans,
             target=target)
     elif v.op == "linear_combine":
+        from pops.codegen.program_partition_stability import (
+            emit_partition_stability, has_independent_diffusion_transport,
+        )
+        if node_model is not None and has_independent_diffusion_transport(node_model):
+            emit_partition_stability(v, var, lines, block_index=bidx, include_transport=True)
         terms = list(zip(v.inputs, v.attrs["coeffs"], strict=True))
         if v.id in committed_ids:
             # Commit: block state <- c_base * base + sum(non-base coeff * term), in place.
