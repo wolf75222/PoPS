@@ -266,9 +266,11 @@ struct NativeFixture {
       config.periodicity[axis] = probe == nullptr;
     }
     config.boxes = {pops::Box<kDim>::from_extents(config.shape)};
-    system = std::make_unique<NativeSystem>(config);
+    // Materialize MPI before System derives its ownership rank space from n_ranks().
+    // The GoogleTest entry point also supports serial runs and does not initialize MPI itself.
     lane = std::make_shared<pops::ExecutionLane>(
         pops::ExecutionLane::duplicate_world_collectively(identity));
+    system = std::make_unique<NativeSystem>(config);
     system->install_prepared_boundary_execution_lane(lane);
     for (const auto* name : {"left", "right"})
       system->install_block_state_route(name, identity + "/" + name + "/state");
