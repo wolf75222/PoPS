@@ -384,104 +384,26 @@ def _continued_metadata_for_rank_change(
 
 
 def _accepted_tagging_hysteresis_span(payload: Any) -> tuple[bytes, int]:
-    """Extract the opaque persistent-tagging bytes and their authenticated offset."""
-    encoded = (
-        bytes(payload)
-        if isinstance(payload, (bytes, bytearray, memoryview))
-        else np.asarray(payload, dtype=np.uint8).reshape(-1).tobytes()
-    )
-    cursor = 0
+    """Read the versioned tagging prefix; native restore authenticates the full image."""
+    from tests.python.support.amr_accepted_state import accepted_tagging_hysteresis_span
 
-    def read_size() -> int:
-        nonlocal cursor
-        if cursor + 8 > len(encoded):
-            raise AssertionError("accepted-state payload is truncated before a size field")
-        value = int.from_bytes(encoded[cursor : cursor + 8], "little")
-        cursor += 8
-        return value
-
-    def skip_string() -> None:
-        nonlocal cursor
-        size = read_size()
-        cursor += size
-        if cursor > len(encoded):
-            raise AssertionError("accepted-state string is truncated")
-
-    if encoded[:8] not in (b"POPSAND4", b"POPSAND5"):
-        raise AssertionError("checkpoint does not contain exact-ranked accepted-state v4/v5")
-    cursor = 8
-    cursor += 8  # native dimension
-    skip_string()  # exact spatial contract
-    cursor += 2 * 8  # topology epoch, materialization generation
-    level_count = read_size()
-    clock_bytes = level_count * 40
-    if cursor + clock_bytes > len(encoded):
-        raise AssertionError("accepted-state level clocks are truncated")
-    cursor += clock_bytes
-    logical_clock_count = read_size()
-    for _ in range(logical_clock_count):
-        name_size = read_size()
-        if cursor + name_size + 8 > len(encoded):
-            raise AssertionError("accepted-state logical-clock map is truncated")
-        cursor += name_size + 8
-    history_count = read_size()
-    for _ in range(history_count):
-        skip_string()
-        cursor += 8  # Program owner
-        for _identity in range(4):
-            skip_string()
-        cursor += 2 * 8  # depth, component count
-    history_slot_count = read_size()
-    for _ in range(history_slot_count):
-        skip_string()
-        cursor += 5 * 8  # level, slot, outgoing dt, initialized, fill count
-    pending_count = read_size()
-    for _ in range(pending_count):
-        skip_string()
-        cursor += 12 * 8  # two encoded i32, four u64, three i64, two real, consumed
-    if cursor > len(encoded):
-        raise AssertionError("accepted-state pending history remaps are truncated")
-    history_flux_size = read_size()
-    cursor += history_flux_size
-    if cursor > len(encoded):
-        raise AssertionError("accepted-state history-flux payload is truncated")
-    cursor += 8  # CellTemporalPartitionKind
-    provider_size = read_size()
-    cursor += provider_size
-    cursor += 3 * 8  # topology epoch, synchronization tick, tick denominator
-    cell_count = read_size()
-    cursor += cell_count * 32  # level, cell id, rung, accepted tick (four i64 words)
-    if cursor > len(encoded):
-        raise AssertionError("accepted-state temporal partition is truncated")
-    tagging_size = read_size()
-    if cursor + tagging_size > len(encoded):
-        raise AssertionError("accepted-state persistent-tagging payload is truncated")
-    return encoded[cursor : cursor + tagging_size], cursor
+    encoded = (bytes(payload) if isinstance(payload, (bytes, bytearray, memoryview))
+               else np.asarray(payload, dtype=np.uint8).reshape(-1).tobytes())
+    return accepted_tagging_hysteresis_span(encoded, dimension=2)
 
 
 def _accepted_tagging_hysteresis(payload: Any) -> bytes:
-    """Extract the opaque persistent-tagging bytes from exact-ranked accepted-state v4."""
     tagging, _ = _accepted_tagging_hysteresis_span(payload)
     return tagging
 
 
 def _replace_accepted_tagging_hysteresis(payload: Any, replacement: bytes) -> bytes:
-    """Return the same POPSAND4 image with only its final tagging payload replaced."""
-    encoded = (
-        bytes(payload)
-        if isinstance(payload, (bytes, bytearray, memoryview))
-        else np.asarray(payload, dtype=np.uint8).reshape(-1).tobytes()
-    )
-    tagging, offset = _accepted_tagging_hysteresis_span(encoded)
-    size_offset = offset - 8
-    if size_offset < 0:
-        raise AssertionError("accepted-state tagging size precedes the payload")
-    return (
-        encoded[:size_offset]
-        + len(replacement).to_bytes(8, "little")
-        + replacement
-        + encoded[offset + len(tagging) :]
-    )
+    """Replace only the tagging frame, preserving every trailing accepted authority byte."""
+    from tests.python.support.amr_accepted_state import replace_accepted_tagging_hysteresis
+
+    encoded = (bytes(payload) if isinstance(payload, (bytes, bytearray, memoryview))
+               else np.asarray(payload, dtype=np.uint8).reshape(-1).tobytes())
+    return replace_accepted_tagging_hysteresis(encoded, replacement, dimension=2)
 
 
 def _assert_active_tagging_hysteresis(encoded: bytes) -> None:
