@@ -132,13 +132,16 @@ def test_pytest_timing_receipts_survive_failure_and_interruption(tmp_path, inter
             while time.monotonic() < deadline:
                 snapshot = receipt / "timings.json"
                 state = json.loads(snapshot.read_text()) if snapshot.exists() else {}
-                if state.get("active_phase") == "call":
+                # The failing test also publishes a call phase. Interrupt only the
+                # following test, after the failure report and teardown are durable.
+                if (state.get("active_node") == f"{test_file.name}::test_active"
+                        and state.get("active_phase") == "call"):
                     break
                 if process.poll() is not None:
                     pytest.fail(process.communicate()[0])
                 time.sleep(.02)
             else:
-                pytest.fail("timing plugin did not publish the active call")
+                pytest.fail(f"timing plugin did not reach test_active's call: {state}")
         finally:
             process.terminate()
     output = process.communicate(timeout=15)[0]
@@ -152,7 +155,9 @@ def test_pytest_timing_receipts_survive_failure_and_interruption(tmp_path, inter
     row = next(iter(state["files"].values()))
     if interrupted:
         assert state["complete"] is False and row["complete"] is False
+        assert row["finished"] == 1 and row["collected"] == 2
         assert state["active_node"].endswith("::test_active")
+        assert state["active_phase"] == "call"
         assert any(event.get("phase") == "setup" for event in events)
         assert not any(event["event"] == "session_finish" for event in events)
     else:
