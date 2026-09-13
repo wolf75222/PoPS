@@ -489,18 +489,20 @@ TEST(SystemInterfaceCoreSession,
     const auto& state = fixture.system->block_state(block);
     ASSERT_EQ(faces.size(), state.local_size());
     const auto axis_values = [&]<int Axis>() {
-      pops::Real measure = 1;
-      for (int tangent = 0; tangent < kDim; ++tangent)
-        if (tangent != Axis)
-          measure *= fixture.system->prepared_block_geometry().spacing(tangent);
-      for (std::size_t local = 0; local < faces.size(); ++local) {
-        EXPECT_EQ(faces[local].cell_box(), state.box(local));
-        EXPECT_EQ(faces[local].ncomp(), state.ncomp());
-        const auto& fab = faces[local].template field<Axis>();
-        auto host = fab.create_host_mirror();
-        fab.copy_to_host(host);
-        for (std::size_t i = 0; i < host.size(); ++i)
-          EXPECT_EQ(host(i), Axis == 0 ? value * pops::Real(0.25) * measure : pops::Real(0));
+      if constexpr (Axis < kDim) {
+        pops::Real measure = 1;
+        for (int tangent = 0; tangent < kDim; ++tangent)
+          if (tangent != Axis)
+            measure *= fixture.system->prepared_block_geometry().spacing(tangent);
+        for (std::size_t local = 0; local < faces.size(); ++local) {
+          EXPECT_EQ(faces[local].cell_box(), state.box(local));
+          EXPECT_EQ(faces[local].ncomp(), state.ncomp());
+          const auto& fab = faces[local].template field<Axis>();
+          auto host = fab.create_host_mirror();
+          fab.copy_to_host(host);
+          for (std::size_t i = 0; i < host.size(); ++i)
+            EXPECT_EQ(host(i), Axis == 0 ? value * pops::Real(0.25) * measure : pops::Real(0));
+        }
       }
     };
     axis_values.template operator()<0>();

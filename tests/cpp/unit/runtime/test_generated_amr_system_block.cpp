@@ -1570,18 +1570,20 @@ TEST(GeneratedAmrSystemBlock, RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsA
                                 pops::Real value) {
     ASSERT_EQ(faces.size(), field.local_size());
     const auto axis_values = [&]<int Axis>() {
-      pops::Real measure = 1;
-      for (int tangent = 0; tangent < Dim; ++tangent)
-        if (tangent != Axis)
-          measure *= context->geometry().spacing(tangent);
-      for (std::size_t local = 0; local < faces.size(); ++local) {
-        EXPECT_EQ(faces[local].cell_box(), field.box(local));
-        EXPECT_EQ(faces[local].ncomp(), field.ncomp());
-        const auto& fab = faces[local].template field<Axis>();
-        auto host = fab.create_host_mirror();
-        fab.copy_to_host(host);
-        for (std::size_t i = 0; i < host.size(); ++i)
-          EXPECT_EQ(host(i), value * pops::Real(Axis + 1) * measure);
+      if constexpr (Axis < Dim) {
+        pops::Real measure = 1;
+        for (int tangent = 0; tangent < Dim; ++tangent)
+          if (tangent != Axis)
+            measure *= context->geometry().spacing(tangent);
+        for (std::size_t local = 0; local < faces.size(); ++local) {
+          EXPECT_EQ(faces[local].cell_box(), field.box(local));
+          EXPECT_EQ(faces[local].ncomp(), field.ncomp());
+          const auto& fab = faces[local].template field<Axis>();
+          auto host = fab.create_host_mirror();
+          fab.copy_to_host(host);
+          for (std::size_t i = 0; i < host.size(); ++i)
+            EXPECT_EQ(host(i), value * pops::Real(Axis + 1) * measure);
+        }
       }
     };
     axis_values.template operator()<0>();

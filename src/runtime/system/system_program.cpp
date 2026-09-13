@@ -645,12 +645,13 @@ void System<Dim>::block_rhs_group(
   // physical transport while another selects the legacy path or refuses locally.
   if (prepared_boundary_execution_lane_) {
     const auto& lane = *prepared_boundary_execution_lane_;
-    const auto minimum_route = all_reduce_min(static_cast<long>(group_route), lane);
-    const auto maximum_route = all_reduce_max(static_cast<long>(group_route), lane);
-    if (minimum_route != maximum_route)
-      throw std::runtime_error("System RHS group execution authority differs across MPI ranks");
-    if (all_reduce_min(capture ? 1L : 0L, lane) != all_reduce_max(capture ? 1L : 0L, lane))
-      throw std::runtime_error("System grouped face retention presence differs across MPI ranks");
+    // Share the existing route agreement; optional capture adds no collective round.
+    const long authority = 2L * group_route + (capture ? 1L : 0L);
+    const auto minimum_authority = all_reduce_min(authority, lane);
+    const auto maximum_authority = all_reduce_max(authority, lane);
+    if (minimum_authority != maximum_authority)
+      throw std::runtime_error(
+          "System RHS group execution authority or face retention differs across MPI ranks");
   }
   if (group_route != 0 || capture)
     runtime::program::collective_boundary_provider_phase(
