@@ -100,6 +100,7 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
   std::vector<const level_evaluation_type*> evaluations;
   std::vector<field_type> candidates;
   std::vector<field_type> backups;
+  std::vector<std::vector<nd::FaceField<Dim>>> retained_candidates;
   std::string request_contract;
   std::exception_ptr preparation_error;
   try {
@@ -114,6 +115,8 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
     evaluations.assign(requests.size(), nullptr);
     candidates.reserve(requests.size());
     backups.reserve(requests.size());
+    retained_candidates.resize(requests.size());
+    std::set<std::vector<nd::FaceField<Dim>>*> unique_face_outputs;
     std::set<int> unique_runtime_blocks;
     std::set<int> unique_rates;
     std::set<const field_type*> unique_outputs;
@@ -132,6 +135,15 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
           !unique_outputs.insert(request.rhs).second)
         throw std::invalid_argument("AMR Program RHS group contains an unsupported request");
       require_same_field_contract_(*request.state, *request.rhs, "AMR Program grouped residual");
+      if (request.retained_faces != nullptr) {
+        if (!unique_face_outputs.insert(request.retained_faces).second)
+          throw std::invalid_argument("AMR grouped face retention outputs must be unique");
+        if (facade_->prepared_amr_multiblock_hierarchy_().has_interface_flux_provider() ||
+            facade_->prepared_amr_block_level_active_mask(runtime_block, active_level_) != nullptr)
+          throw std::invalid_argument(
+              "AMR grouped face retention requires Cartesian prepared physical closures "
+              "without shared interfaces or embedded boundaries");
+      }
       ordered.push_back(&request);
       runtime_blocks.push_back(runtime_block);
       points.push_back(boundary_evaluation_point(request.rate_id));
@@ -141,7 +153,8 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
       exact.scalar(std::int32_t{runtime_block})
           .scalar(std::int32_t{request.rate_id})
           .scalar(std::uint32_t{static_cast<unsigned int>(request.flux_only)})
-          .text(request.temporal_family);
+          .text(request.temporal_family)
+          .presence(request.retained_faces != nullptr);
     }
     request_contract = std::move(exact).release();
   } catch (...) {
@@ -192,6 +205,15 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
                                    runtime_blocks[index], points[index], *request.state));
       evaluations[index] = &evaluation;
       copy_valid_(evaluation.residual, candidates[index]);
+      if (request.retained_faces != nullptr) {
+        if (evaluation.integrated_face_fluxes.size() != request.rhs->local_size())
+          throw std::invalid_argument("AMR grouped face retention differs from local patches");
+        for (std::size_t local = 0; local < request.rhs->local_size(); ++local)
+          if (evaluation.integrated_face_fluxes[local].cell_box() != request.rhs->box(local) ||
+              evaluation.integrated_face_fluxes[local].ncomp() != request.rhs->ncomp())
+            throw std::invalid_argument("AMR grouped face retention differs from local fields");
+        retained_candidates[index] = evaluation.integrated_face_fluxes;
+      }
       device_fence();
     } catch (...) {
       evaluation_error = std::current_exception();
@@ -320,6 +342,12 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
     facade_->publish_prepared_amr_block_level_batch(
         std::span<const std::pair<int, int>>(evaluation_targets));
   }
+  // All fallible preparation and residual publication has completed. A later failed group
+  // leaves these detached observations intact, just like its previously published residuals.
+  static_assert(std::is_nothrow_swappable_v<std::vector<nd::FaceField<Dim>>>);
+  for (std::size_t index = 0; index < ordered.size(); ++index)
+    if (ordered[index]->retained_faces != nullptr)
+      ordered[index]->retained_faces->swap(retained_candidates[index]);
 }
 
 void neg_div_flux_default_into(int program_block, field_type& stage_state, field_type& rhs,

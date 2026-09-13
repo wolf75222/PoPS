@@ -175,13 +175,15 @@ class AmrProgramContext {
   struct RhsGroupRequest {
     RhsGroupRequest(int block_value, field_type* state_value, field_type* rhs_value,
                     int rate_id_value, int flux_only_value,
-                    std::string_view temporal_family_value = {})
+                    std::string_view temporal_family_value = {},
+                    std::vector<nd::FaceField<Dim>>* retained_faces_value = nullptr)
         : block(block_value),
           state(state_value),
           rhs(rhs_value),
           rate_id(rate_id_value),
           flux_only(flux_only_value),
-          temporal_family(temporal_family_value) {}
+          temporal_family(temporal_family_value),
+          retained_faces(retained_faces_value) {}
 
     int block = -1;
     field_type* state = nullptr;
@@ -189,6 +191,7 @@ class AmrProgramContext {
     int rate_id = -1;
     int flux_only = 0;
     std::string_view temporal_family;
+    std::vector<nd::FaceField<Dim>>* retained_faces = nullptr;
   };
 
   struct CouplingStateOverride {

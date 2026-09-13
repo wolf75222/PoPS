@@ -1564,8 +1564,36 @@ TEST(GeneratedAmrSystemBlock, RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsA
   pops::MultiFab<Dim> grouped_first = context->rhs_scratch_like(stage);
   pops::MultiFab<Dim> grouped_second = context->rhs_scratch_like(peer_stage);
   context->neg_div_flux_default_into(1, peer_stage, peer_flux, 17);
-  context->rhs_group(
-      18, {{0, &stage, &grouped_first, 19, 0}, {1, &peer_stage, &grouped_second, 20, 1}});
+  using Faces = std::vector<pops::nd::FaceField<Dim>>;
+  Faces first_faces, second_faces;
+  const auto expect_faces = [&](const Faces& faces, const pops::MultiFab<Dim>& field,
+                                pops::Real value) {
+    ASSERT_EQ(faces.size(), field.local_size());
+    const auto axis_values = [&]<int Axis>() {
+      pops::Real measure = 1;
+      for (int tangent = 0; tangent < Dim; ++tangent)
+        if (tangent != Axis)
+          measure *= context->geometry().spacing(tangent);
+      for (std::size_t local = 0; local < faces.size(); ++local) {
+        EXPECT_EQ(faces[local].cell_box(), field.box(local));
+        EXPECT_EQ(faces[local].ncomp(), field.ncomp());
+        const auto& fab = faces[local].template field<Axis>();
+        auto host = fab.create_host_mirror();
+        fab.copy_to_host(host);
+        for (std::size_t i = 0; i < host.size(); ++i)
+          EXPECT_EQ(host(i), value * pops::Real(Axis + 1) * measure);
+      }
+    };
+    axis_values.template operator()<0>();
+    if constexpr (Dim >= 2)
+      axis_values.template operator()<1>();
+    if constexpr (Dim >= 3)
+      axis_values.template operator()<2>();
+  };
+  context->rhs_group(18, {{0, &stage, &grouped_first, 19, 0, {}, &first_faces},
+                          {1, &peer_stage, &grouped_second, 20, 1, {}, &second_faces}});
+  expect_faces(first_faces, stage, pops::Real(2));
+  expect_faces(second_faces, peer_stage, pops::Real(4));
   EXPECT_EQ(pops::difference_sum_sq_all_local(full, grouped_first), pops::Real(0));
   EXPECT_EQ(pops::difference_sum_sq_all_local(peer_flux, grouped_second), pops::Real(0));
 
@@ -1585,9 +1613,16 @@ TEST(GeneratedAmrSystemBlock, RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsA
   pops::MultiFab<Dim> first_late_output = context->rhs_scratch_like(stage);
   first_late_output.set_val(pops::Real(31));
   malformed_output.set_val(pops::Real(37));
-  EXPECT_THROW(context->rhs_group(21, {{0, &stage, &first_late_output, 22, 0},
-                                       {1, &malformed_peer, &malformed_output, 23, 0}}),
-               std::exception);
+  // The first block now materializes different faces before its peer fails. Retained faces
+  // must stay independent of reused prepared storage and must not partially publish this group.
+  stage.set_val(pops::Real(6));
+  EXPECT_THROW(
+      context->rhs_group(21, {{0, &stage, &first_late_output, 22, 0, {}, &first_faces},
+                              {1, &malformed_peer, &malformed_output, 23, 0, {}, &second_faces}}),
+      std::exception);
+  expect_faces(first_faces, stage, pops::Real(2));
+  expect_faces(second_faces, peer_stage, pops::Real(4));
+  stage.set_val(pops::Real(2));
   EXPECT_EQ(pops::reduce_min_local(first_late_output), pops::Real(31));
   EXPECT_EQ(pops::reduce_max_local(first_late_output), pops::Real(31));
   EXPECT_EQ(pops::reduce_min_local(malformed_output), pops::Real(37));
@@ -1612,8 +1647,10 @@ TEST(GeneratedAmrSystemBlock, RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsA
   system.install_prepared_amr_program_flux_expression_budget(
       "tests.generated-amr/rhs-group-atomic@1", std::vector<FluxBudget>(2, FluxBudget{1, 1}), 0, 0);
   context->advance_hierarchy(0.01, [&](double) {
-    context->rhs_group(
-        30, {{0, &stage, &active_first, 31, 0}, {1, &peer_stage, &active_second, 32, 1}});
+    context->rhs_group(30, {{0, &stage, &active_first, 31, 0, {}, &first_faces},
+                            {1, &peer_stage, &active_second, 32, 1, {}, &second_faces}});
+    expect_faces(first_faces, stage, pops::Real(2));
+    expect_faces(second_faces, peer_stage, pops::Real(4));
     active_failure_first.set_val(pops::Real(41));
     active_failure_second.set_val(pops::Real(43));
     EXPECT_THROW(context->rhs_group(33, {{0, &stage, &active_failure_first, 34, 0},
@@ -1652,6 +1689,13 @@ TEST(GeneratedAmrSystemBlock, RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsA
                  std::exception);
     EXPECT_EQ(pops::reduce_min_local(divergent_output), pops::Real(17));
     EXPECT_EQ(pops::reduce_max_local(divergent_output), pops::Real(17));
+    EXPECT_EQ(system.prepared_amr_level_evaluation(0).point.stage, 31);
+    Faces* divergent_capture = pops::my_rank() == 0 ? &first_faces : nullptr;
+    EXPECT_THROW(
+        context->rhs_group(42, {{0, &stage, &divergent_output, 43, 0, {}, divergent_capture}}),
+        std::exception);
+    EXPECT_EQ(pops::reduce_min_local(divergent_output), pops::Real(17));
+    expect_faces(first_faces, stage, pops::Real(2));
     EXPECT_EQ(system.prepared_amr_level_evaluation(0).point.stage, 31);
   }
 

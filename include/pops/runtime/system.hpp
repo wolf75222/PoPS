@@ -1022,6 +1022,13 @@ class System {
                                    const std::vector<MultiFab<Dim>*>& states,
                                    const std::vector<MultiFab<Dim>*>& rhs,
                                    const std::vector<int>& flux_only);
+  /// Optional exact face observations for a Cartesian prepared group. Shared-interface, legacy
+  /// and embedded-boundary capture is refused before evaluation; no-capture callers are unchanged.
+  POPS_EXPORT void block_rhs_group(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::vector<int>& blocks,
+      const std::vector<MultiFab<Dim>*>& states, const std::vector<MultiFab<Dim>*>& rhs,
+      const std::vector<int>& flux_only,
+      const typename SystemInterfaceProvider<Dim>::RetainedFaces& retained_faces);
   POPS_EXPORT void block_rhs_core_into_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
       MultiFab<Dim>& R, bool flux_only, const System* prepared_system, int prepared_block,
@@ -1488,7 +1495,8 @@ class System {
                                                   /// @}
 
  private:
-  typename SystemInterfaceProvider<Dim>::CoreEvaluator prepare_interface_core_evaluator_();
+  typename SystemInterfaceProvider<Dim>::CoreEvaluator prepare_interface_core_evaluator_(
+      typename SystemInterfaceProvider<Dim>::CoreFaceEvaluator* retained_evaluator = nullptr);
   void prepare_bound_physical_group_();
   friend class runtime::program::ProgramContext<Dim>;
   friend class PreparedSystemLayoutTransfer<Dim>;

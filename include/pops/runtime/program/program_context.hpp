@@ -113,18 +113,21 @@ class ProgramContext {
 
   struct RhsGroupRequest {
     RhsGroupRequest(int block_value, field_type* state_value, field_type* rhs_value,
-                    int rate_id_value, int flux_only_value)
+                    int rate_id_value, int flux_only_value,
+                    std::vector<nd::FaceField<Dim>>* retained_faces_value = nullptr)
         : block(block_value),
           state(state_value),
           rhs(rhs_value),
           rate_id(rate_id_value),
-          flux_only(flux_only_value) {}
+          flux_only(flux_only_value),
+          retained_faces(retained_faces_value) {}
 
     int block = -1;
     field_type* state = nullptr;
     field_type* rhs = nullptr;
     int rate_id = -1;
     int flux_only = 0;
+    std::vector<nd::FaceField<Dim>>* retained_faces = nullptr;
   };
 
   struct CouplingStateOverride {
@@ -507,6 +510,8 @@ class ProgramContext {
     std::vector<field_type*> states;
     std::vector<field_type*> residuals;
     std::vector<int> flux_only;
+    std::vector<std::vector<nd::FaceField<Dim>>*> retained_faces;
+    retained_faces.reserve(requests.size());
     blocks.reserve(requests.size());
     states.reserve(requests.size());
     residuals.reserve(requests.size());
@@ -524,10 +529,11 @@ class ProgramContext {
       states.push_back(request.state);
       residuals.push_back(request.rhs);
       flux_only.push_back(request.flux_only);
+      retained_faces.push_back(request.retained_faces);
     }
     count_kernel_(static_cast<std::int64_t>(requests.size()));
     system_->block_rhs_group(boundary_evaluation_point(group_id), blocks, states, residuals,
-                             flux_only);
+                             flux_only, retained_faces);
   }
 
   void require_cartesian_generated_operator(int program_block, const std::string& operation) const {

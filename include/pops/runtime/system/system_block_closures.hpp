@@ -108,6 +108,7 @@ struct SystemBlockClosures {
   PreparedPointBoundaryResidual boundary_flux_full_at_point_prepared;
   PreparedPointBoundaryResidual boundary_flux_core_at_point_prepared;
   /// The topology-only periodic route retains native faces without a physical boundary object.
+  PreparedPointPeriodicResidual periodic_full_at_point_prepared;
   PreparedPointPeriodicResidual periodic_flux_at_point_prepared;
   PreparedPointBoundaryResidual boundary_residual_at_point_prepared;
   PreparedPointJvp boundary_jvp_at_point_prepared;
@@ -329,6 +330,10 @@ struct SystemInterfaceProvider {
   using CoreEvaluator =
       std::function<void(const point_type&, const std::vector<field_type*>&,
                          const std::vector<field_type*>&, const std::vector<int>&)>;
+  using RetainedFaces = std::vector<std::vector<nd::FaceField<Dim>>*>;
+  using CoreFaceEvaluator = std::function<void(const point_type&, const std::vector<field_type*>&,
+                                               const std::vector<field_type*>&,
+                                               const std::vector<int>&, const RetainedFaces&)>;
   using CoreAdmission = std::function<void(void (*)(void*), void*)>;
   using CoreSession = typename SystemInterfaceCoreSession<Dim>::pointer;
   using Evaluate = std::function<void(const point_type&, const std::vector<field_type*>&,

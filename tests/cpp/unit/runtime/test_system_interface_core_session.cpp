@@ -456,15 +456,14 @@ TEST(SystemInterfaceCoreSession, real_system_cannot_consume_another_system_activ
 TEST(SystemInterfaceCoreSession,
      real_physical_group_without_interfaces_retains_transport_and_ghost_hook) {
   int evaluations = 0;
-  bool fail_once = true;
+  int failure_evaluation = 1;
   std::set<const void*> transports;
   NativeFactoryProbe probe;
   probe.observe_transport = [&](const void* address) { transports.insert(address); };
   probe.ghost = [&](const auto&, auto&, const auto&, const auto& lane) {
     ++evaluations;
-    const bool fail = std::exchange(fail_once, false);
     pops::runtime::program::collective_boundary_provider_phase(lane, "native ghost test", [&] {
-      if (fail && lane.rank() == lane.size() - 1)
+      if (evaluations == failure_evaluation && lane.rank() == lane.size() - 1)
         throw std::runtime_error("injected external ghost failure");
     });
   };
@@ -477,16 +476,91 @@ TEST(SystemInterfaceCoreSession,
   EXPECT_THROW(fixture.evaluate(fixture.point()), std::runtime_error);
   EXPECT_EQ(evaluations, 1);
   fixture.expect_outputs(pops::Real(-17));
-  fixture.evaluate(fixture.point());
-  EXPECT_EQ(evaluations, 3);
+
+  using Faces = std::vector<pops::nd::FaceField<kDim>>;
+  Faces left_faces, right_faces;
+  const auto capture = [&](NativeFixture& target, Faces* left, Faces* right,
+                           std::vector<int> modes = {1, 1}) {
+    target.system->block_rhs_group(
+        target.point(), {0, 1}, {&target.system->block_state(0), &target.system->block_state(1)},
+        {target.left_output.get(), target.right_output.get()}, modes, {left, right});
+  };
+  const auto expect_faces = [&](const Faces& faces, int block, pops::Real value) {
+    const auto& state = fixture.system->block_state(block);
+    ASSERT_EQ(faces.size(), state.local_size());
+    const auto axis_values = [&]<int Axis>() {
+      pops::Real measure = 1;
+      for (int tangent = 0; tangent < kDim; ++tangent)
+        if (tangent != Axis)
+          measure *= fixture.system->prepared_block_geometry().spacing(tangent);
+      for (std::size_t local = 0; local < faces.size(); ++local) {
+        EXPECT_EQ(faces[local].cell_box(), state.box(local));
+        EXPECT_EQ(faces[local].ncomp(), state.ncomp());
+        const auto& fab = faces[local].template field<Axis>();
+        auto host = fab.create_host_mirror();
+        fab.copy_to_host(host);
+        for (std::size_t i = 0; i < host.size(); ++i)
+          EXPECT_EQ(host(i), Axis == 0 ? value * pops::Real(0.25) * measure : pops::Real(0));
+      }
+    };
+    axis_values.template operator()<0>();
+    if constexpr (kDim >= 2)
+      axis_values.template operator()<1>();
+    if constexpr (kDim >= 3)
+      axis_values.template operator()<2>();
+  };
+  capture(fixture, &left_faces, &right_faces);
+  EXPECT_EQ(evaluations, 3);  // One native evaluation per block, including capture.
   fixture.expect_outputs(pops::Real(0));
+  expect_faces(left_faces, 0, pops::Real(1));
+  expect_faces(right_faces, 1, pops::Real(2));
   ASSERT_EQ(transports.size(), 2);
   const auto prepared = transports;
+
   fixture.reset_outputs();
-  fixture.evaluate(fixture.point());
+  fixture.system->block_state(0).set_val(pops::Real(6));
+  failure_evaluation = 5;  // First block succeeds with different faces; second block fails.
+  EXPECT_THROW(capture(fixture, &left_faces, &right_faces), std::runtime_error);
   EXPECT_EQ(evaluations, 5);
+  fixture.expect_outputs(pops::Real(-17));
+  expect_faces(left_faces, 0, pops::Real(1));
+  expect_faces(right_faces, 1, pops::Real(2));
+  capture(fixture, &left_faces, &right_faces);
+  EXPECT_EQ(evaluations, 7);
   fixture.expect_outputs(pops::Real(0));
+  expect_faces(left_faces, 0, pops::Real(6));
+  expect_faces(right_faces, 1, pops::Real(2));
   EXPECT_EQ(transports, prepared);
+
+  if (fixture.lane->size() > 1) {
+    fixture.reset_outputs();
+    auto* divergent = fixture.lane->rank() == 0 ? &left_faces : nullptr;
+    EXPECT_THROW(capture(fixture, divergent, &right_faces), std::runtime_error);
+    EXPECT_EQ(evaluations, 7);
+    fixture.expect_outputs(pops::Real(-17));
+    expect_faces(left_faces, 0, pops::Real(6));
+  }
+
+  // The interface scheduler owns additional physical samples. A request for incomplete core
+  // faces must fail before any native evaluation; ordinary interface groups still execute.
+  NativeFixture shared("physical-group-shared-capture-refusal");
+  shared.reset_outputs();
+  EXPECT_THROW(capture(shared, &left_faces, &right_faces), std::exception);
+  EXPECT_EQ(shared.completed, 0);
+  shared.expect_outputs(pops::Real(-17));
+  expect_faces(left_faces, 0, pops::Real(6));
+  shared.evaluate(shared.point());
+  EXPECT_EQ(shared.completed, 1);
+  shared.expect_outputs(pops::Real(0));
+
+  // A generated periodic group has exact prepared transport even without physical boundaries.
+  // Both full and flux-only requests retain the same actual finite-volume face integrals.
+  NativeFixture periodic("periodic-group-capture", false);
+  periodic.system->mark_bound();
+  capture(periodic, &left_faces, &right_faces, {0, 1});
+  periodic.expect_outputs(pops::Real(0));
+  expect_faces(left_faces, 0, pops::Real(1));
+  expect_faces(right_faces, 1, pops::Real(2));
 }
 
 TEST(SystemInterfaceCoreSession, real_system_rank_local_boundary_discard_retains_runtime_lane) {

@@ -152,6 +152,7 @@ struct System<Dim>::Impl {
 
   block_store_type blocks_;
   typename SystemInterfaceProvider<Dim>::CoreEvaluator prepared_boundary_group_core_;
+  typename SystemInterfaceProvider<Dim>::CoreFaceEvaluator prepared_boundary_group_faces_;
   std::vector<Species>& sp = blocks_.blocks;
   std::vector<PreparedBoundaryHookContract> prepared_boundary_hook_contracts_;
   boundary_registry_type boundary_registry_;
