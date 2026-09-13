@@ -415,7 +415,8 @@
       "bytes": 45297
     },
     {
-      "path": "scalar-candidate5-to7-equivalence.md",
+      "path": "scalar-candidate5-to7-equivalence.original.txt",
+      "original_path": "scalar-candidate5-to7-equivalence.md",
       "sha256": "56ee8fb9a008b73049609ef4b9d0a54b716505ecc893d203f245c2b1d7581843",
       "bytes": 4197
     }
