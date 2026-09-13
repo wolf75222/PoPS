@@ -13,10 +13,14 @@ _DIAGNOSTIC = (
 
 
 def has_independent_diffusion_transport(model):
-    impl = _model_impl(model)
+    # Optional planning must also accept legacy groups with no numerical plan. Only
+    # a selected resolved path needs the complete emitter authority checked below.
+    facade = getattr(model, "_dsl", model)
+    impl = getattr(facade, "_m", facade)
     plan = getattr(model, "_resolved_operations", getattr(impl, "_resolved_operations", None))
     if plan is None:
         return False
+    _model_impl(model)
     transport = False
     diffusion = False
     authenticated = True
