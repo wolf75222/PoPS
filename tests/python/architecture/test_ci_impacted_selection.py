@@ -220,26 +220,62 @@ def test_plan_python_bindings_change_runs_all(tmp_path):
     assert outputs["python_mode"] == "all"
 
 
-@pytest.mark.parametrize(
-    "header",
-    [
+@pytest.mark.parametrize("header,test", [
+    (
         "include/pops/numerics/elliptic/linear/krylov_method_provider.hpp",
-        "include/pops/core/identity/prepared_provider_options.hpp",
-        "include/pops/mesh/layout/field_distribution.hpp",
-        "include/pops/mesh/storage/field_replica_consensus.hpp",
-    ],
-)
-def test_plan_python_native_elliptic_protocol_runs_all_external_provider_e2es(
-    tmp_path, header
-):
+        "tests/python/integration/native_loader/test_prepared_krylov_method_component.py",
+    ),
+    (
+        "include/pops/numerics/elliptic/interface/field_nullspace.hpp",
+        "tests/python/integration/native_loader/test_prepared_nullspace_component.py",
+    ),
+])
+def test_plan_python_native_protocol_follows_embedded_cpp_dependencies(tmp_path, header, test):
     outputs, selected = _run_plan_python(tmp_path, [header])
     assert outputs["python_mode"] == "subset"
-    assert "elliptic-native-provider-contract" in outputs["python_why"]
-    assert {
-        "tests/python/integration/native_loader/test_prepared_krylov_method_component.py",
-        "tests/python/integration/native_loader/test_prepared_nullspace_component.py",
-        "tests/python/integration/native_loader/test_prepared_preconditioner_component.py",
-    } <= set(selected)
+    assert "native-include-closure" in outputs["python_why"]
+    assert test in selected
+
+
+def test_plan_python_native_core_change_stays_broad(tmp_path):
+    outputs, _ = _run_plan_python(tmp_path, ["include/pops/core/identity/prepared_provider_options.hpp"])
+    assert outputs["python_mode"] == "all"
+
+
+def test_plan_python_direct_test_avoids_unrelated_native_smoke(tmp_path):
+    edited = "tests/python/unit/codegen/test_dsl_cse.py"
+    outputs, selected = _run_plan_python(tmp_path, [edited])
+    assert outputs["python_mode"] == "subset"
+    assert edited in selected
+    assert "tests/python/unit/codegen/test_dsl_compose.py" in selected
+    assert "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py" not in selected
+    assert "tests/python/unit/runtime/test_capabilities.py" not in selected
+
+
+def test_plan_python_unknown_file_cannot_hide_in_known_selection(tmp_path):
+    outputs, _ = _run_plan_python(tmp_path, [
+        "tests/python/unit/codegen/test_dsl_cse.py", "new_build_owner/input.cfg",
+    ])
+    assert outputs["python_mode"] == "all"
+    assert "unmapped-or-unreadable-input" in outputs["python_why"]
+
+
+def test_plan_python_native_header_follows_emitter_import_consumers(tmp_path):
+    sel = _load("ci_select_tests")
+    header = "include/pops/numerics/elliptic/interface/field_newton_krylov.hpp"
+    changed = tmp_path / "changed-native.txt"
+    changed.write_text(header + "\n")
+    selection = sel.compute_python_selection(str(changed), False)
+    assert "native-emitter:python/pops/codegen/program_emit_kernels.py" in selection.why
+    downstream = cic.impacted_tests(["python/pops/codegen/program_emit_kernels.py"], repo_root=REPO_ROOT)
+    assert downstream & set(selection.all_tests) <= set(selection.selected_tests)
+
+
+def test_plan_python_isolated_sdk_operator_has_no_native_python_consumer(tmp_path):
+    outputs, selected = _run_plan_python(tmp_path, ["include/pops/numerics/spatial/operators/polar_operator.hpp"])
+    assert outputs["python_mode"] == "none"
+    assert "native-input-checked" in outputs["python_why"]
+    assert selected == []
 
 
 def test_plan_python_changelog_only_selects_none(tmp_path):
@@ -813,40 +849,28 @@ def test_python_mpi_orchestrator_contract_is_fail_closed():
 
 
 @pytest.mark.parametrize(
-    ("event", "inputs", "expected"),
+    ("result", "required", "accepted"),
     (
-        ("pull_request", {"cpp_paths": True},
-         (False, True, True, True, False, False)),
-        ("pull_request", {"python_paths": True},
-         (False, False, True, True, False, False)),
-        ("pull_request", {"architecture_paths": True},
-         (False, False, False, True, False, False)),
-        ("pull_request", {},
-         (False, False, False, False, False, False)),
-        ("pull_request", {"ci_kokkos": True},
-         (False, True, True, True, False, False)),
-        ("pull_request", {"ci_full": True},
-         (True, True, True, True, True, True)),
-        ("pull_request", {"force_full": True},
-         (True, True, True, True, True, True)),
-        ("push", {},
-         (False, True, True, True, False, False)),
-        ("push", {"full_paths": True},
-         (True, True, True, True, True, True)),
-        ("workflow_call", {},
-         (True, True, True, True, True, True)),
+        ("success", "true", True),
+        ("success", "false", True),
+        ("skipped", "false", True),
+        ("skipped", "true", False),
+        ("failure", "true", False),
+        ("failure", "false", False),
+        ("cancelled", "true", False),
+        ("cancelled", "false", False),
+        ("success", "", False),
     ),
 )
-def test_ci_route_authority_covers_pr_labels_push_and_full(event, inputs, expected):
-    decision = route_mode.decide_routes(event_name=event, **inputs)
-    assert (
-        decision.full,
-        decision.cpp_required,
-        decision.python_required,
-        decision.architecture_required,
-        decision.mpi_required,
-        decision.openmp_required,
-    ) == expected
+def test_ci_gate_check_cli_enforces_planned_requirements(result, required, accepted):
+    args = ["check", "--gate", "set-mode", "success", "true",
+            "--gate", "planned-job", result, required]
+    if accepted:
+        assert route_mode.main(args) == 0
+    else:
+        with pytest.raises(SystemExit) as error:
+            route_mode.main(args)
+        assert error.value.code == 2
 
 
 def test_ci_gate_verdict_is_fail_closed_but_allows_an_unrouted_skip():
@@ -863,69 +887,26 @@ def test_ci_gate_verdict_is_fail_closed_but_allows_an_unrouted_skip():
 
 def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    assert "mpi: ${{ steps.filter.outputs.mpi }}" in workflow
-    for mpi_input in (
-        "include/pops/parallel/**",
-        "include/pops/runtime/**",
-        "src/runtime/**",
-        "src/CMakeLists.txt",
-        "python/CMakeLists.txt",
-        "python/bindings/**",
-        "python/pops/_native_collectives.py",
-        "python/pops/_platform_contracts.py",
-        "python/pops/codegen/**",
-        "python/pops/output/**",
-        "python/pops/runtime/**",
-        "python/pops/runtime_environment.py",
-        "scripts/ci_select_tests.py",
-        "tests/**/mpi/**",
-    ):
-        assert mpi_input in workflow
-    for selector_input in (
-        "schemas/**",
-        "tests/cpp/build_durations.json",
-        "tests/cpp/test_durations.json",
-        "tests/test_manifest.toml",
-        "scripts/generate_component_catalog.py",
-        "scripts/ci_select_tests.py",
-        "scripts/ci_shard_binpack.py",
-        ".github/workflows/ci.yml",
-    ):
-        assert selector_input in workflow
-
-    filter_text = workflow.split("\n          filters: |\n", 1)[1].split(
-        "\n  # Autorite unique de routage", 1)[0]
-    cpp_filter = filter_text.split("            cpp:\n", 1)[1].split(
-        "\n            python:\n", 1)[0]
-    python_filter = filter_text.split("            python:\n", 1)[1].split(
-        "\n            python_arch:\n", 1)[0]
-    for cpp_control in (
-        "tests/cpp/test_sources.cmake",
-        "tests/cpp/build_durations.json",
-        "tests/cpp/test_durations.json",
-        "tests/test_manifest.toml",
-        "scripts/ci_select_tests.py",
-        "scripts/ci_shard_binpack.py",
-        "scripts/ci_include_graph.py",
-        "scripts/ci_python_module_objects.py",
-        "scripts/ci_route_mode.py",
-        ".github/actions/setup-kokkos/**",
-        ".github/workflows/ci.yml",
-    ):
-        assert cpp_control in cpp_filter
-    for python_control in (
-        "tests/python/test_durations.json",
-        "tests/test_manifest.toml",
-        "pyproject.toml",
-        "scripts/ci_select_tests.py",
-        "scripts/ci_shard_binpack.py",
-        "scripts/ci_import_closure.py",
-        "scripts/ci_python_module_objects.py",
-        "scripts/ci_route_mode.py",
-        ".github/actions/setup-kokkos/**",
-        ".github/workflows/ci.yml",
-    ):
-        assert python_control in python_filter
+    changes_block = workflow.split("\n  changes:\n", 1)[1].split("\n  set-mode:\n", 1)[0]
+    set_mode = workflow.split("\n  set-mode:\n", 1)[1].split("\n  gate-cpp-prewarm:\n", 1)[0]
+    assert "dorny/paths-filter" not in workflow
+    assert "filters: |" not in workflow
+    assert "git fetch" not in workflow
+    assert "git diff" not in workflow
+    assert "fetch-depth: 0" in changes_block
+    assert "scripts/ci_plan.py changes" in changes_block
+    assert 'PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}' in changes_block
+    assert 'PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}' in changes_block
+    assert '--base "$PR_BASE_SHA" --head "$PR_HEAD_SHA"' in changes_block
+    assert '--output-file ci-input/changed-files.txt' in changes_block
+    assert 'name: ci-input' in changes_block
+    assert 'if-no-files-found: error' in changes_block
+    assert 'name: ci-input' in set_mode
+    assert 'scripts/ci_plan.py plan' in set_mode
+    assert '--changed-files ci-input/changed-files.txt' in set_mode
+    assert '--output-dir ci-plan --github-output "$GITHUB_OUTPUT"' in set_mode
+    assert 'name: ci-plan' in set_mode
+    assert 'if-no-files-found: error' in set_mode
 
     cpp_prewarm_block = workflow.split("\n  gate-cpp-prewarm:\n", 1)[1].split(
         "\n  # GATE C++", 1)[0]
@@ -950,8 +931,11 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "ctest --preset ci-kokkos -N --show-only=json-v1" in cpp_shards_block
     assert "scripts/ci_select_tests.py verify-cpp-target-labels" in cpp_shards_block
     assert "--standalone-regex-file" in cpp_shards_block
-    assert 'if [ "${{ matrix.shard }}" -eq 0 ]; then' in cpp_shards_block
+    assert 'if [ "${{ matrix.shard }}" = "0" ]; then' in cpp_shards_block
     assert "name: Standalone CTest contracts" in cpp_shards_block
+    standalone_step = cpp_shards_block.split("- name: Standalone CTest contracts", 1)[1].split(
+        "- name:", 1)[0]
+    assert "if: matrix.shard == 0 && needs.set-mode.outputs.full == 'true'" in standalone_step
     assert 'standalone_regex=$(<"$standalone_regex_file")' in cpp_shards_block
     assert '-R "$standalone_regex"' in cpp_shards_block
     assert "installed_package_consumer|hdf5_without_mpi_rejected" not in cpp_shards_block
@@ -961,7 +945,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     )
     assert "timeout-minutes: 40" in cpp_shards_block
     assert "timeout-minutes: 30" in cpp_shards_block
-    assert "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]" in cpp_shards_block
+    assert "shard: ${{ fromJSON(needs.set-mode.outputs.cpp_matrix) }}" in cpp_shards_block
     assert "--shard-total 11" in cpp_shards_block
     assert "needs: [changes, set-mode, gate-cpp-prewarm]" in cpp_shards_block
     assert "actions/download-artifact@v8" in cpp_shards_block
@@ -1285,10 +1269,11 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "\n  # GATE C++", 1)[0]
     for output in (
         "cpp_required", "python_required", "architecture_required",
-        "mpi_required", "openmp_required",
+        "mpi_required", "openmp_required", "compile_cache_required",
+        "cpp_prewarm_required", "cpp_matrix", "python_matrix", "python_dimensions",
     ):
         assert f"{output}: ${{{{ steps.decide.outputs.{output} }}}}" in set_mode_block
-    assert "python3 scripts/ci_route_mode.py decide" in set_mode_block
+    assert "python3 scripts/ci_plan.py plan" in set_mode_block
 
     cpp_verdict = workflow.split("\n  gate-cpp:\n", 1)[1].split(
         "\n  # GATE PYTHON ARCHITECTURE", 1)[0]
@@ -1379,13 +1364,49 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert '--packages-root "$PWD/.pops-ci/python-packages" --timings-dir "$timings"' in python_shards_block
     assert 'PYTHONUNBUFFERED: "1"' in python_shards_block
     assert 'cp "$timings/selected.txt" "$timings/timings.tsv"' not in python_shards_block
-    expected_shards = list(range(_load("ci_pytest_timings").SHARD_TOTAL))
-    assert "shard: %s" % expected_shards in python_shards_block
+    assert "shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}" in python_shards_block
+    assert 'SHARD_TOTAL: "37"' in python_shards_block
+    assert "strategy.job-total" not in python_shards_block
+    for family, block in (("cpp", cpp_shards_block), ("python", python_shards_block)):
+        assert "name: ci-plan" in block
+        assert f"--changed-files ci-plan/{family}-changed-files.txt" in block
+        assert 'if [ "${{ needs.set-mode.outputs.full }}" = "true" ]; then' in block
+        assert "github.event.pull_request.base.sha" not in block
+        assert "contains(github.event.pull_request.labels" not in block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_shards_block
     assert "timeout-minutes: 30" in python_cache_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_cache_block
-    for block in (python_build_block, python_shards_block, python_cache_block):
-        assert "if: needs.set-mode.outputs.python_required == 'true'" in block
+    assert "if: needs.set-mode.outputs.python_required == 'true'" in python_shards_block
+    assert "if: needs.set-mode.outputs.compile_cache_required == 'true'" in python_cache_block
+    for block in (python_prewarm_block, python_build_block):
+        assert "dimension: ${{ fromJSON(needs.set-mode.outputs.python_dimensions) }}" in block
+        assert "dimension: [1, 2]" not in block
+        assert (
+            "if: needs.set-mode.outputs.python_required == 'true' || "
+            "needs.set-mode.outputs.compile_cache_required == 'true'"
+        ) in block
+    assert 'mapfile -t architecture_tests < ci-plan/architecture-tests.txt' in architecture_block
+    assert 'test "${#architecture_tests[@]}" -gt 0' in architecture_block
+    assert 'python3 -m pytest -q "${architecture_tests[@]}"' in architecture_block
+    assert "python3 -m pytest tests/python/architecture" not in architecture_block
+    assert "if: needs.set-mode.outputs.cpp_prewarm_required == 'true'" in cpp_prewarm_block
+    assert "always() && !cancelled()" in cpp_shards_block
+    assert "needs.changes.result == 'success'" in cpp_shards_block
+    assert "needs.set-mode.result == 'success'" in cpp_shards_block
+    assert "needs.gate-cpp-prewarm.result == 'success'" in cpp_shards_block
+    assert (
+        "needs.set-mode.outputs.cpp_prewarm_required == 'false' && "
+        "needs.gate-cpp-prewarm.result == 'skipped'"
+    ) in cpp_shards_block
+    assert cpp_shards_block.count("if: needs.set-mode.outputs.cpp_prewarm_required == 'true'") == 2
+    assert 'if [ "${{ needs.set-mode.outputs.cpp_prewarm_required }}" = "true" ]; then' in cpp_shards_block
+    assert (
+        '"${{ needs.set-mode.outputs.python_required == \'true\' || '
+        'needs.set-mode.outputs.compile_cache_required == \'true\' }}"'
+    ) in gate_block
+    cache_verdict = gate_block.split("--gate gate-python-compile-cache", 1)[1].split("--gate mpi", 1)[0]
+    assert "needs.set-mode.outputs.compile_cache_required" in cache_verdict
+    assert "needs.set-mode.outputs.python_required" not in cache_verdict
 
     # GitHub rejects `runner.*` in a job-level `env` mapping before creating any job.  Keep the
     # runner-specific cache prefix at step scope and the compile-cache temporary workspace-owned.

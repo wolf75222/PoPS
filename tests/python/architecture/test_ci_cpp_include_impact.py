@@ -201,11 +201,13 @@ def test_leaf_header_selects_a_strict_subset_containing_its_suite(tmp_path):
         assert smoke in targets
 
 
-def test_global_includer_header_selects_all(tmp_path):
-    """A header in the heavy-TU closure escalates to FULL (soundness rule)."""
-    outputs, _ = _run_plan_cpp(tmp_path, ["include/pops/runtime/system.hpp"])
-    assert outputs["cpp_mode"] == "all"
-    assert outputs["cpp_count"] == outputs["cpp_total"]
+def test_runtime_header_selects_its_actual_consumers(tmp_path):
+    """Runtime ownership is shared by its linked consumers, not every test binary."""
+    outputs, targets = _run_plan_cpp(tmp_path, ["include/pops/runtime/system.hpp"])
+    assert outputs["cpp_mode"] == "subset"
+    assert "test_system_abstraction" in targets
+    assert "test_splitting" not in targets
+    assert int(outputs["cpp_count"]) < int(outputs["cpp_total"])
 
 
 def test_nonexistent_header_fails_open_to_all(tmp_path):
@@ -404,11 +406,11 @@ def test_cpp_duration_catalog_inventory_authenticates_metadata(
         sel.validate_cpp_duration_catalogs(["test_alpha"])
 
 
-def test_amr_program_header_plan_covers_both_analytic_targets_exactly_once(tmp_path):
-    """The ADC-760 reproducer must produce one authenticated, exact one-shard plan."""
+def test_analytic_header_plan_covers_both_analytic_targets_exactly_once(tmp_path):
+    """Both analytic consumers retain authenticated duration entries and exact coverage."""
     output = _run_plan_cpp_shard(
         tmp_path,
-        ["include/pops/runtime/program/amr_program_context.hpp"],
+        ["include/pops/runtime/analytic/expression.hpp"],
         shard_index=0,
         shard_total=1,
     )
@@ -694,13 +696,8 @@ def test_compositional_union_prunes_a_mixed_change(tmp_path):
     assert kinds["python/pops/time/_program/api.py"] == "none"
 
 
-def test_global_header_in_a_mixed_change_still_forces_all(tmp_path):
-    """A global-includer header anywhere in the change escalates the union to FULL (soundness).
-
-    This is the literal ADC-427 shape: ``system.hpp`` / the program-context headers are global
-    includers (compiled into every target via the runtime TUs and the emitter), so the sound
-    selection is ALL -- the plan spells out the per-file reason for each.
-    """
+def test_runtime_headers_in_mixed_change_union_actual_consumers(tmp_path):
+    """Shared runtime headers keep their real graph impact in a mixed change."""
     changed = [
         "CHANGELOG.md",
         "include/pops/runtime/program/amr_program_context.hpp",
@@ -711,16 +708,15 @@ def test_global_header_in_a_mixed_change_still_forces_all(tmp_path):
         "python/pops/time/_program/api.py",
         "tests/python/unit/time/test_time_condensed_schur.py",
     ]
-    outputs, _targets, plan = _run_plan_cpp_explain(tmp_path, changed)
-    assert outputs["cpp_mode"] == "all"
-    assert outputs["cpp_count"] == outputs["cpp_total"]
+    outputs, targets, plan = _run_plan_cpp_explain(tmp_path, changed)
+    assert outputs["cpp_mode"] == "subset"
+    assert "test_splitting" not in targets
     for header in (
         "include/pops/runtime/system.hpp",
         "include/pops/runtime/program/program_context.hpp",
         "include/pops/runtime/program/amr_program_context.hpp",
     ):
-        assert plan["impact"][header]["kind"] == "all"
-        assert plan["impact"][header]["reason"] == "header-in-global-includer-closure"
+        assert plan["impact"][header]["kind"] == "include-impact"
     # The narrow files still carry their real per-file impact in the plan (auditable).
     assert plan["impact"]["src/runtime/system/system_fields.cpp"]["kind"] == (
         "runtime-tu-targets"
@@ -776,6 +772,79 @@ def test_runtime_object_lib_map_uses_central_sources_and_test_consumers():
     assert "src/runtime/amr/amr_system.cpp" in sources["pops_runtime_amr"]
     assert consumers["pops_runtime_system"], "no system consumers parsed"
     assert consumers["pops_runtime_amr"], "no amr consumers parsed"
+
+
+def test_source_closure_follows_private_headers_and_quoted_project_includes(tmp_path, monkeypatch):
+    (tmp_path / "include/pops").mkdir(parents=True)
+    (tmp_path / "src/private").mkdir(parents=True)
+    (tmp_path / "include/pops/operator.hpp").write_text("// operator\n")
+    (tmp_path / "src/main.cpp").write_text('#include "private/owner.hpp"\n')
+    (tmp_path / "src/private/owner.hpp").write_text('#include "pops/operator.hpp"\n')
+    monkeypatch.setattr(graph, "ROOT", tmp_path)
+    monkeypatch.setattr(graph, "INCLUDE_DIR", tmp_path / "include")
+    assert graph.source_closure("src/main.cpp") == {"pops/operator.hpp"}
+
+
+def test_solver_header_selects_direct_and_linked_runtime_consumers(tmp_path):
+    header = "include/pops/numerics/elliptic/interface/field_newton_krylov.hpp"
+    outputs, targets, plan = _run_plan_cpp_explain(tmp_path, [header])
+    assert outputs["cpp_mode"] == "subset"
+    assert "test_prepared_field_solver_nd" in targets
+    assert "test_splitting" not in targets
+    assert "test_polar_fluid_transport" not in targets
+    sources, consumers = sel._runtime_object_lib_map()
+    reached = {
+        lib for lib, paths in sources.items()
+        if any(header in graph.source_dependencies(path) for path in paths)
+    }
+    assert reached, "representative solver must have an out-of-line native consumer"
+    expected = set().union(*(consumers[lib] for lib in reached))
+    serial = {suite["name"] for suite in _serial_suites()}
+    assert expected & serial <= set(targets)
+    assert plan["impact"][header]["kind"] == "include-impact"
+
+
+def test_runtime_source_map_closes_archive_aliases_and_core_dependencies():
+    sources, consumers = sel._runtime_object_lib_map()
+    assert "src/runtime/program/step_transaction.cpp" in sources["pops_runtime_core_objects"]
+    assert consumers["pops_runtime_amr"] <= consumers["pops_runtime_system"]
+    assert consumers["pops_runtime_system"] <= consumers["pops_runtime_core_objects"]
+    assert {"test_amr_tensor_fac_provider", "test_generated_amr_system_block", "test_multiblock_interface_scheduler", "test_amr_composite_poisson", "test_amr_spatial_parity"} <= consumers["pops_runtime_amr"]
+    assert "test_prepared_embedded_boundary_nd" in consumers["pops_runtime_system"]
+
+
+def test_unknown_test_source_mixed_with_known_header_falls_back(tmp_path):
+    outputs, _ = _run_plan_cpp(tmp_path, [
+        "include/pops/numerics/time/schemes/splitting.hpp",
+        "tests/cpp/unit/future/test_new_unregistered.cpp",
+    ])
+    assert outputs["cpp_mode"] == "all"
+
+
+def test_direct_cpp_unit_test_does_not_pull_unrelated_smoke(tmp_path):
+    outputs, targets = _run_plan_cpp(tmp_path, ["tests/cpp/unit/numerics/test_splitting.cpp"])
+    assert outputs["cpp_mode"] == "subset"
+    assert targets == ["test_splitting"]
+
+
+def test_unconsumed_sdk_header_remains_broad_in_mixed_change(tmp_path):
+    outputs, _ = _run_plan_cpp(tmp_path, [
+        "include/pops/numerics/spatial/operators/polar_operator.hpp",
+        "tests/cpp/unit/numerics/test_splitting.cpp",
+    ])
+    assert outputs["cpp_mode"] == "all"
+
+
+def test_source_closure_follows_declared_cpp_support_search_path(tmp_path, monkeypatch):
+    (tmp_path / "include/pops").mkdir(parents=True)
+    (tmp_path / "tests/cpp/support").mkdir(parents=True)
+    (tmp_path / "tests/cpp/unit").mkdir(parents=True)
+    (tmp_path / "include/pops/operator.hpp").write_text("// operator\n")
+    (tmp_path / "tests/cpp/support/test_harness.hpp").write_text("#include <pops/operator.hpp>\n")
+    (tmp_path / "tests/cpp/unit/test_owner.cpp").write_text('#include "test_harness.hpp"\n')
+    monkeypatch.setattr(graph, "ROOT", tmp_path)
+    monkeypatch.setattr(graph, "INCLUDE_DIR", tmp_path / "include")
+    assert graph.source_closure("tests/cpp/unit/test_owner.cpp") == {"pops/operator.hpp"}
 
 
 if __name__ == "__main__":

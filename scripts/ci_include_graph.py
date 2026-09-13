@@ -11,10 +11,9 @@ implementation instead of two divergent copies.
 
 Scope and conventions
 ----------------------
-* Only ``#include <pops/...>`` edges are modelled (angle-bracket, project headers). System
-  headers and the test-local ``"test_harness.hpp"`` / ``"gtest_compat.hpp"`` relative includes
-  are deliberately ignored: they are not part of the ``include/pops`` header graph and are
-  handled by the caller's broad-file rules.
+* Public graph nodes use ``#include <pops/...>``. Source closures also follow quoted
+  local includes, so private runtime and test-support dependencies reach their actual
+  consuming sources. System headers remain outside the project graph.
 * Header identifiers are paths RELATIVE to ``include/`` (i.e. ``pops/...``), matching the text
   of the ``#include`` directive, so a changed file ``include/pops/x/y.hpp`` maps to the graph
   node ``pops/x/y.hpp`` by stripping the ``include/`` prefix.
@@ -32,6 +31,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from pathlib import Path
+from functools import lru_cache
 
 ROOT = Path(__file__).resolve().parents[1]
 INCLUDE_DIR = ROOT / "include"
@@ -94,25 +94,68 @@ def transitive_closure(roots: Iterable[str]) -> set[str]:
     return seen
 
 
-def source_closure(source_rel: str) -> set[str]:
-    """Return the ``pops/...`` header closure reachable from a single source file.
+@lru_cache(maxsize=None)
+def _source_dependencies(root: str, include_dir: str, source_rel: str) -> frozenset[str]:
+    """Source-only dependency snapshot, including local quoted private headers.
 
-    ``source_rel`` is a repo-relative path (e.g. a suite's ``tests/cpp/...cpp``). Its direct
-    ``pops/...`` includes seed a transitive closure over ``include/pops``. Raises
-    ``GraphError`` if the source file is missing (fail-open: the caller escalates to FULL).
+    CI plans one immutable checkout per process. The root is part of the cache key so
+    synthetic repositories and separate checkouts cannot share graph entries.
     """
-    path = ROOT / source_rel
-    if not path.is_file():
+    repo = Path(root)
+    include = Path(include_dir)
+    start = repo / source_rel
+    if not start.is_file():
         raise GraphError(f"source file not found: {source_rel}")
-    return transitive_closure(pops_includes(_read(path)))
+    seen: set[Path] = set()
+    pending = [start.resolve()]
+    while pending:
+        path = pending.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        if not path.is_file():
+            continue
+        try:
+            text = _read(path)
+        except OSError as exc:
+            raise GraphError(f"cannot read {path}: {exc}") from exc
+        pending.extend((include / node).resolve() for node in pops_includes(text))
+        for quoted in re.findall(r'#\s*include\s*"([^"\n]+)"', text):
+            # Production private headers use paths relative to their translation unit;
+            # quoted project includes may also resolve against the public include root.
+            candidates = [path.parent / quoted, include / quoted]
+            if source_rel.startswith("tests/cpp/"):
+                # pops_add_gtest_suite declares this include directory for every
+                # C++ suite; bare test_harness.hpp and support helpers resolve here.
+                candidates.append(repo / "tests/cpp/support" / quoted)
+            for candidate in candidates:
+                candidate = candidate.resolve()
+                if candidate.is_relative_to(repo) and candidate.is_file():
+                    pending.append(candidate)
+                    break
+    return frozenset(str(path.relative_to(repo)) for path in seen if path.is_relative_to(repo))
+
+
+def source_dependencies(source_rel: str) -> set[str]:
+    """Repo-relative source and public/private header dependencies of a source file."""
+    return set(_source_dependencies(str(ROOT), str(INCLUDE_DIR), source_rel))
+
+
+def source_closure(source_rel: str) -> set[str]:
+    """Public ``pops/...`` headers reached through public or local quoted includes."""
+    return {
+        path[len("include/"):]
+        for path in source_dependencies(source_rel)
+        if path.startswith("include/pops/")
+    }
 
 
 def runtime_and_binding_includes() -> set[str]:
     """Collect direct ``pops/...`` includes of native runtime and pybind adapter sources.
 
-    Covers ``src/runtime/**`` production sources and seam templates plus the actual adapter TUs
-    under ``python/bindings/**``. These translation units are compiled into or linked by
-    effectively every test target, so their transitive closure is the GLOBAL-INCLUDERS set below.
+    Covers ``src/runtime/**`` production sources and seam templates plus adapter TUs.
+    This aggregate supports architecture fences. Test selection uses the actual linked
+    consumers of each runtime source instead of treating the aggregate as globally shared.
     """
     roots: set[str] = set()
     for pattern in ("*.cpp", "*.cpp.in", "*.hpp", "*.h"):
@@ -125,8 +168,9 @@ def runtime_and_binding_includes() -> set[str]:
 def emitter_includes() -> set[str]:
     """Collect the ``pops/...`` includes the DSL codegen emits into generated ``.cpp``.
 
-    These live as ``#include <pops/...>`` string literals in ``python/pops/**``; they land in
-    every generated translation unit, so they are part of the global-includers roots.
+    These live as ``#include <pops/...>`` string literals in ``python/pops/**``. The aggregate
+    is useful for production-header architecture fences; individual emitter dependencies
+    also provide the native-to-Python test-selection bridge.
     """
     roots: set[str] = set()
     for py in POPS_CODEGEN.rglob("*.py"):
@@ -137,8 +181,8 @@ def emitter_includes() -> set[str]:
 def cpp_support_includes() -> set[str]:
     """Collect the ``pops/...`` includes of the shared ``tests/cpp/support/**`` headers.
 
-    The support headers (``test_harness.hpp`` etc.) are pulled into nearly every test source,
-    so any production header they reach is a global includer too.
+    This aggregate is retained for architecture fences. Individual source closures follow
+    the support headers actually included by that source.
     """
     support = CPP_TESTS_DIR / "support"
     roots: set[str] = set()
@@ -153,9 +197,8 @@ def cpp_support_includes() -> set[str]:
 def global_includer_roots() -> set[str]:
     """Direct ``pops/...`` includes of the heavy shared TUs, seams, emitter and cpp support.
 
-    A header in the TRANSITIVE CLOSURE of this set is compiled into or linked by effectively
-    every test target; a change to it must select ALL suites (the soundness rule). The union is
-    the seed; ``ci_select_tests`` closes it transitively.
+    Historical name retained for architecture callers. This is a production-root union,
+    not proof that every test consumes every header. Selection follows source ownership.
     """
     return (
         runtime_and_binding_includes()
