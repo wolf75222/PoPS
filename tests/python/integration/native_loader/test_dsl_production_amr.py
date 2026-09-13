@@ -186,7 +186,8 @@ def _euler_poisson_public_parity(n, dt):
 
     resolved, initial = _public_euler_poisson_plan(n, dt)
     artifact = pops.compile(resolved)
-    public = pops.bind(artifact, initial_state={"gas": initial},
+    subject = artifact.plan.initial_condition_plan.bindings[0].subject
+    public = pops.bind(artifact, initial_values={subject: initial},
         resources={"execution_context": artifact_execution_context(artifact)})
     # The immutable plan is shared; installation allocates separate state, field, and Program storage.
     native = _install_adaptive_native_engine(public._install_plan)
