@@ -77,14 +77,16 @@ class PreparedCartesianOperatorScratch {
 
 namespace cartesian_operator_detail {
 
-/// Validate every mapped provider before either regular or masked face kernels can read it.
-template <int Dim, int Count>
+/// Validate the same model-qualified slots sampled by bind_flux_providers_at in face kernels.
+template <class Model, int Dim, int Count>
 void require_provider_face_storage(const Box<Dim>& cells,
                                    const ProviderStorageView<Dim, Count>& providers) {
   // Provider values are sampled at the two adjacent cells, independently of the wider
   // reconstruction stencil for the state. A compact plan does not prove storage extent.
   const auto required = cells.grow(1);
-  for (int slot = 0; slot < Count; ++slot) {
+  static_assert(Count == flux_provider_count<Model>);
+  static_assert(qualified_flux_provider_requirements_valid<Model>());
+  const auto require_slot = [&](int slot) {
     const auto& field = providers.storage[slot];
     const int component = providers.storage_components[slot];
     if (field.data == nullptr || component < 0 || component >= field.ncomp)
@@ -95,6 +97,14 @@ void require_provider_face_storage(const Box<Dim>& cells,
         throw std::invalid_argument(
             "prepared ND provider map does not cover the model-qualified face traces");
     }
+  };
+  if constexpr (has_qualified_flux_provider_requirements<Model>) {
+    for (const auto& requirement : Model::flux_provider_requirements)
+      require_slot(requirement.storage_slot);
+  } else {
+    // Hand-written models without a qualified consumer plan retain their complete slot ABI.
+    for (int slot = 0; slot < Count; ++slot)
+      require_slot(slot);
   }
 }
 
@@ -475,7 +485,7 @@ class PreparedCartesianOperator {
     requires(Count == flux_provider_count<Model>)
   {
     require_state_patch_(state);
-    cartesian_operator_detail::require_provider_face_storage(state.box(), providers);
+    cartesian_operator_detail::require_provider_face_storage<Model>(state.box(), providers);
     cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
 
     FaceField<Dim, MemorySpace> candidate(state.box(), n_vars);
@@ -495,7 +505,7 @@ class PreparedCartesianOperator {
     if (&output == &candidate || &output == &statuses || &candidate == &statuses)
       throw std::invalid_argument("prepared ND hyperbolic face output and scratch must not alias");
     require_state_patch_(state);
-    cartesian_operator_detail::require_provider_face_storage(state.box(), providers);
+    cartesian_operator_detail::require_provider_face_storage<Model>(state.box(), providers);
     cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
     cartesian_operator_detail::require_face_output(candidate, state.box(), n_vars);
     cartesian_operator_detail::require_face_output(statuses, state.box(), 1);

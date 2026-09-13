@@ -293,6 +293,68 @@ struct ProviderAdvection : nd::ScalarAdvection<Dim> {
   }
 };
 
+struct SelectedFaceProviderAdvection : nd::ScalarAdvection<2> {
+  static constexpr int n_providers = 2;
+  static constexpr int n_flux_providers = 1;
+  inline static constexpr std::array<QualifiedProviderRequirement, 1> flux_provider_requirements{{
+      {"model", "aux", "inputs", "velocity", "cell-average", "cell", "", "layout", "",
+       "producer", true, 1}}};
+  POPS_HD State flux(const State& state, const auto& providers, int) const {
+    return {state[0] * providers.template provider<1>()};
+  }
+  POPS_HD Real max_wave_speed(const State&, const auto& providers, int) const {
+    return Kokkos::abs(providers.template provider<1>());
+  }
+};
+
+struct NoFaceProviderAdvection : SelectedFaceProviderAdvection {
+  static constexpr int n_flux_providers = 0;
+  inline static constexpr std::array<QualifiedProviderRequirement, 0> flux_provider_requirements{};
+  POPS_HD State flux(const State& state, const auto&, int) const { return {state[0] * Real(3)}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(3); }
+};
+
+template <class Model>
+void check_selected_face_providers() {
+  const Box<2> box = Box<2>::from_extents(Extent<2>{4, 4});
+  const auto geometry = unit_geometry(box);
+  const auto op = nd::prepare_cartesian_operator<2>(geometry, Model{});
+  const auto masked = nd::prepare_masked_cartesian_operator<2>(
+      Model{}, op.metric(), NoSlope{}, RusanovFlux{});
+  Fab<2> state(box, 1, uniform_extent<2>(NoSlope::n_ghost));
+  state.set_val(Real(2));
+  Fab<2> projection_only(box, 1), velocity(box, 1, uniform_extent<2>(1));
+  velocity.set_val(Real(3));
+  ProviderStorageView<2, 2> mapped{};
+  mapped.storage[0] = std::as_const(projection_only).view();
+  if constexpr (Model::n_flux_providers != 0)
+    mapped.storage[1] = std::as_const(velocity).view();
+  nd::FaceField<2> output(box, 1), candidate(box, 1), status(box, 1);
+  Fab<2> active(box, 1, uniform_extent<2>(1)), residual(box, 1);
+  active.set_val(Real(1));
+  // Projection-only storage requires no face halo. A null unused slot also proves the device
+  // binder does not sample it after the host guard accepts the selected face provider plan.
+  for (bool null_unused : {false, true}) {
+    if (null_unused)
+      mapped.storage[0] = {};
+    ASSERT_NO_THROW(op.materialize_face_fluxes(state, mapped, output));
+    ASSERT_NO_THROW(op.materialize_face_fluxes(state, mapped, output, candidate, status));
+    check_constant_face_axis<0, 2>(
+        output, std::array<Real, 2>{Real(6) * geometry.spacing(1), Real(6) * geometry.spacing(0)});
+    ASSERT_NO_THROW(masked.assemble_residual(state, mapped, active, residual));
+    for (const auto value : valid_values(residual))
+      EXPECT_NEAR(value, Real(0), Real(1e-13));
+  }
+  if constexpr (Model::n_flux_providers != 0) {
+    mapped.storage[1] = std::as_const(projection_only).view();
+    EXPECT_THROW(op.materialize_face_fluxes(state, mapped, output), std::invalid_argument);
+    EXPECT_THROW(masked.assemble_residual(state, mapped, active, residual), std::invalid_argument);
+    mapped.storage[1] = std::as_const(velocity).view();
+    mapped.storage_components[1] = 1;
+    EXPECT_THROW(op.materialize_face_fluxes(state, mapped, output), std::invalid_argument);
+  }
+}
+
 template <int Dim>
 void check_mapped_provider_face_extent() {
   const Box<Dim> box = Box<Dim>::from_extents(uniform_extent<Dim>(4));
@@ -359,6 +421,11 @@ void check_mapped_provider_face_extent() {
 }
 
 }  // namespace
+
+TEST(test_prepared_cartesian_nd, face_provider_plan_excludes_projection_only_storage) {
+  check_selected_face_providers<SelectedFaceProviderAdvection>();
+  check_selected_face_providers<NoFaceProviderAdvection>();
+}
 
 TEST(test_prepared_cartesian_nd, mapped_provider_face_extent_is_checked_before_publication) {
   check_mapped_provider_face_extent<1>();
