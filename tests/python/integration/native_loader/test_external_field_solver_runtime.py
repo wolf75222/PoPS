@@ -605,7 +605,20 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
     assert report.final_time == pytest.approx(6.0e-2)
     assert simulation.amr.explain_regrid().regrid_count > regrids_before
     assert tuple(simulation.patch_boxes()) != boxes_before
-    np.testing.assert_array_equal(simulation.field_potential_global(slot), 7.0)
+    # Each gather exposes one level, so covered coarse cells are inactive, not composite values.
+    # Native dense images are x-fastest; select active cells from the accepted fine geometry.
+    coarse_active = np.ones((n, n), dtype=bool)
+    fine_active = np.zeros((2 * n, 2 * n), dtype=bool)
+    for level, lower, upper in simulation.patch_boxes():
+        assert level == 1
+        fine_active[lower[1]:upper[1] + 1, lower[0]:upper[0] + 1] = True
+        coarse_active[lower[1] // 2:upper[1] // 2 + 1,
+                      lower[0] // 2:upper[0] // 2 + 1] = False
+    for level, active in enumerate((coarse_active, fine_active)):
+        assert np.any(active)
+        potential = np.asarray(simulation.field_potential_level_global(slot, level))
+        assert np.all(np.isfinite(potential))
+        np.testing.assert_array_equal(potential.reshape(active.shape)[active], 7.0)
     # Initial topology materialization publishes generation 1; the initially-due Program solve is
     # generation 2. Hold/Skip is then off-cadence, while failed and retried step-2 topology
     # transactions each construct a fresh solver and attempt exactly generation 1.
