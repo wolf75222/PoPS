@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -51,7 +50,8 @@ def _mpi_field_program(state: Any, rate: Any, field: Any) -> Any:
     # consecutive attempts, including the one without a layout-changing regrid.  The loader
     # suite's Every(5)/Hold-or-Skip helper instead tests off-cadence topology refresh.
     program = ForwardEuler(state, rate=rate, fields=field, solve_action=FailRun())
-    program.step_strategy(FixedDt(8.0e-2))
+    # At n=16 and refinement ratio 2, dx_fine=1/32 and speed=1 give Courant 0.64.
+    program.step_strategy(FixedDt(2.0e-2))
     return program
 
 
@@ -149,9 +149,27 @@ def _publish_component(
     return component
 
 
-def _world_digest(value: Any) -> tuple[str, ...]:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    return tuple(allgather_value(_COMM, hashlib.sha256(payload).hexdigest()))
+def _provider_reports_agree(runtime: Any, value: dict[str, Any]) -> bool:
+    # Global provider facts agree; patch reports describe each rank's own pieces.
+    reports = tuple(allgather_value(_COMM, value))
+    common = [
+        {key: item for key, item in row.items() if key != "patches"}
+        for row in reports
+    ]
+    owners = tuple(
+        tuple(runtime._executor.level_owner_ranks(level))
+        for level in range(runtime.n_levels())
+    )
+    patch_ids = [patch["patch_identity"] for row in reports for patch in row["patches"]]
+    return (
+        bool(common[0]["materialized_layout_identity"])
+        and all(row == common[0] for row in common)
+        and all(
+            len(row["patches"]) == sum(level.count(rank) for level in owners)
+            for rank, row in enumerate(reports)
+        )
+        and len(patch_ids) == len(set(patch_ids)) == sum(map(len, owners))
+    )
 
 
 def _level_state(runtime: Any, level: int) -> np.ndarray:
@@ -244,14 +262,17 @@ def test_external_amr_field_bridge_executes_and_refuses_collectively() -> None:
         )
         model = scalar_advection_field_model("external-amr-field-mpi")
         x_axis, y_axis = model.frame.axes
+        # Match the moving serial oracle: leave room for the mandatory nesting
+        # buffer and release the old footprint when the Gaussian moves at regrid.
         resolved = resolve_periodic_field_program(
             model,
             _mpi_field_program,
             name="external-amr-field-mpi",
             block_name="material",
             target="amr_system",
-            n=8,
+            n=16,
             regrid_every=2,
+            coarsen_below_threshold=True,
             field_solver=provider,
             initial_profile=Gaussian(
                 frame=model.frame,
@@ -301,25 +322,27 @@ def test_external_amr_field_bridge_executes_and_refuses_collectively() -> None:
         )
 
         boxes_initial = tuple(runtime.patch_boxes())
-        first = pops.run(runtime, t_end=8.0e-2, max_steps=1, console=False)
+        first = pops.run(runtime, t_end=2.0e-2, max_steps=1, console=False)
         first_provider = runtime.inspect().to_dict()["instance"]["field_providers"][0]
         first_layout = first_provider["materialized_layout_identity"]
+        first_provider_agreement = _provider_reports_agree(runtime, first_provider)
         chk(
             first.accepted_steps == 1
             and first_provider["materialized"]
-            and len(set(_world_digest(first_provider))) == 1,
+            and first_provider_agreement,
             "the first composite solve publishes one exact provider report on every rank",
         )
 
         regrids_before = runtime.amr.explain_regrid().regrid_count
-        second = pops.run(runtime, t_end=2.4e-1, max_steps=2, console=False)
+        second = pops.run(runtime, t_end=6.0e-2, max_steps=2, console=False)
         second_provider = runtime.inspect().to_dict()["instance"]["field_providers"][0]
+        second_provider_agreement = _provider_reports_agree(runtime, second_provider)
         chk(
             second.accepted_steps == 2
             and runtime.amr.explain_regrid().regrid_count > regrids_before
             and tuple(runtime.patch_boxes()) != boxes_initial
             and second_provider["materialized_layout_identity"] != first_layout
-            and len(set(_world_digest(second_provider))) == 1,
+            and second_provider_agreement,
             "a layout-changing regrid rematerializes the exact component pair collectively",
         )
 
@@ -327,7 +350,7 @@ def test_external_amr_field_bridge_executes_and_refuses_collectively() -> None:
         before_collective_failure = _accepted_snapshot(runtime, slot)
         collective_error = None
         try:
-            pops.run(runtime, t_end=3.2e-1, max_steps=1, console=False)
+            pops.run(runtime, t_end=8.0e-2, max_steps=1, console=False)
         except RuntimeError as exc:
             collective_error = str(exc)
         collective_errors = tuple(allgather_value(_COMM, collective_error))
@@ -342,7 +365,7 @@ def test_external_amr_field_bridge_executes_and_refuses_collectively() -> None:
             "collective FailRun restores levels, potential, clock, topology and provider evidence",
         )
         _set_marker(collective_fault, False)
-        retry = pops.run(runtime, t_end=3.2e-1, max_steps=1, console=False)
+        retry = pops.run(runtime, t_end=8.0e-2, max_steps=1, console=False)
         chk(
             retry.accepted_steps == 1 and runtime.macro_step() == 4,
             "the exact accepted state remains retryable after collective rollback",
@@ -352,7 +375,7 @@ def test_external_amr_field_bridge_executes_and_refuses_collectively() -> None:
         before_divergence = _accepted_snapshot(runtime, slot)
         divergent_error = None
         try:
-            pops.run(runtime, t_end=4.0e-1, max_steps=1, console=False)
+            pops.run(runtime, t_end=1.0e-1, max_steps=1, console=False)
         except RuntimeError as exc:
             divergent_error = str(exc)
         divergent_errors = tuple(allgather_value(_COMM, divergent_error))
@@ -369,7 +392,7 @@ def test_external_amr_field_bridge_executes_and_refuses_collectively() -> None:
             "non-finite candidate refusal publishes no field, state, clock or topology mutation",
         )
         _set_marker(divergent_fault, False)
-        finite_retry = pops.run(runtime, t_end=4.0e-1, max_steps=1, console=False)
+        finite_retry = pops.run(runtime, t_end=1.0e-1, max_steps=1, console=False)
         chk(
             finite_retry.accepted_steps == 1 and runtime.macro_step() == 5,
             "the exact accepted state remains retryable after non-finite candidate rollback",

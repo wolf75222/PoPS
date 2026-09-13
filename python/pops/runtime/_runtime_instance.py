@@ -1726,9 +1726,9 @@ class RuntimeInstance:
                         )
                     if local_seal_failures and callable(add_note):
                         add_note("; ".join(local_seal_failures))
-            # Prove restoration of the complete run-entry authority before a consumer-free serial
-            # invocation is allowed to reuse its deterministic identity.  Cleanup still runs when
-            # restoration fails, but the identity remains sealed fail-closed.
+            # Prove restoration of the complete run-entry authority before a consumer-free
+            # invocation can reuse its deterministic identity.  The publisher requires every MPI
+            # rank to agree; cleanup still runs when restoration fails, with the identity sealed.
             entry_restored = False
             if steps == 0:
                 restore_error = None

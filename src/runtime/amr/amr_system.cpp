@@ -3553,6 +3553,7 @@ struct AmrSystem<Dim>::Impl {
     std::optional<std::size_t> checkpoint_history_flux_snapshot_capacity;
     std::map<std::string, std::vector<field_type>> field_potentials;
     std::set<std::string> field_plan_slots;
+    std::map<std::string, std::optional<FieldLogicalTimePoint>> field_boundary_points;
     std::vector<std::string> dirty_auxiliary_providers;
     std::uint64_t last_topology_rematerialization_epoch = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t last_topology_rematerialization_generation =
@@ -3604,6 +3605,7 @@ struct AmrSystem<Dim>::Impl {
             "AmrSystem cannot snapshot an active topology field rematerialization");
       for (const auto& [slot, plan] : owner.field_plans) {
         field_plan_slots.insert(slot);
+        field_boundary_points.emplace(slot, plan.boundary_point);
         if (plan.accepted_potential.empty())
           continue;
         auto& levels = field_potentials[slot];
@@ -3619,6 +3621,7 @@ struct AmrSystem<Dim>::Impl {
 
     struct PreparedFieldRestore {
       FieldPlan* plan = nullptr;
+      std::optional<FieldLogicalTimePoint> boundary_point;
     };
 
     struct PreparedAcceptedRestore {
@@ -3740,7 +3743,8 @@ struct AmrSystem<Dim>::Impl {
         fields.reserve(snapshot.field_plan_slots.size());
         for (const std::string& slot : snapshot.field_plan_slots) {
           FieldPlan& plan = owner.field_plans.at(slot);
-          fields.push_back(PreparedFieldRestore{.plan = &plan});
+          fields.push_back(PreparedFieldRestore{
+              .plan = &plan, .boundary_point = snapshot.field_boundary_points.at(slot)});
         }
         if (!snapshot_materialized && !snapshot.field_potentials.empty())
           throw std::logic_error(
@@ -3768,6 +3772,7 @@ struct AmrSystem<Dim>::Impl {
           std::is_nothrow_swappable_v<decltype(owner.last_topology_rematerialization_witness)>);
       static_assert(std::is_nothrow_swappable_v<std::vector<std::unique_ptr<field_type>>>);
       static_assert(std::is_nothrow_swappable_v<decltype(owner.active_field_slot)>);
+      static_assert(std::is_nothrow_swappable_v<std::optional<FieldLogicalTimePoint>>);
       if (!prepared.program_restore)
         std::terminate();
       if (prepared.carrier_restore) {
@@ -3780,6 +3785,7 @@ struct AmrSystem<Dim>::Impl {
         // when an epoch number is restored. Release every lane borrow before destroying the
         // restored hierarchy lane; rollback rematerializes the selected detached image afterward.
         field.plan->discard_materialization();
+        field.plan->boundary_point.swap(field.boundary_point);
       }
       owner.active_field_slot.swap(prepared.active_field_slot);
       if (prepared.program_context_restore)
@@ -5604,7 +5610,11 @@ struct AmrSystem<Dim>::Impl {
       plan.hierarchy_policy.validate();
       request.provider_options = plan.solver_options;
       request.reaction = static_cast<Real>(plan.has_reaction ? plan.reaction : 0.0);
-      request.use_contract = exact_field_plan_contract(slot, plan);
+      // Materialization survives accepted steps. Its topology identity must not depend on the
+      // invocation point at the last build: rollback rebuilds the same hierarchy at a later point.
+      // set_field_logical_timepoint authenticates every live point separately before evaluation.
+      request.use_contract =
+          exact_field_plan_contract(slot, plan, /*include_live_boundary_point=*/false);
       request.spatial_contract.assign(engine->spatial_contract());
       request.hierarchy.levels.reserve(engine->hierarchy().num_levels());
       request.hierarchy.ratios.reserve(engine->hierarchy().num_levels() - 1);

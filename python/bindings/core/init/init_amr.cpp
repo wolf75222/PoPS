@@ -725,6 +725,8 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
               item["provenance"] = row.provenance;
               item["material_points"] = row.material_points;
               item["connected_components"] = row.connected_components;
+              item["source_layout_identity"] = row.source_layout_identity;
+              item["materialized_layout_identity"] = row.materialized_layout_identity;
               report.append(std::move(item));
             }
             return report;

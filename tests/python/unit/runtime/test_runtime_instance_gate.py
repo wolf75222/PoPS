@@ -2481,6 +2481,46 @@ def test_run_fails_explicitly_when_max_steps_cannot_reach_t_end(tmp_path):
     assert tuple(tmp_path.glob("*.npz")) == ()
 
 
+def test_consumer_free_mpi_run_retries_after_rolled_back_step_failure(monkeypatch):
+    from pops.runtime import _runtime_consumers
+
+    class _FailingExecutor(_Executor):
+        fail = True
+
+        def step(self, dt):
+            super().step(dt)
+            if self.fail:
+                raise RuntimeError("injected step failure")
+
+    plan = _install()
+    executor = _FailingExecutor(plan)
+    runtime = RuntimeInstance(plan, executor=executor)
+    publisher = runtime._publisher
+    publisher._size = 2
+    publisher._communicator = SimpleNamespace(identity="MPI_COMM_WORLD")
+
+    def consensus_rows(_communicator, envelope):
+        return envelope, {**envelope, "rank": 1}
+
+    monkeypatch.setattr(_runtime_consumers, "allgather_value", consensus_rows)
+    entry_temporal = executor._temporal_restart_state.to_data()
+    with pytest.raises(RuntimeError, match="injected step failure"):
+        runtime._run(t_end=1.0, max_steps=1, console=False)
+    failed_identity = executor.last_run_identity
+    assert runtime.time() == 0.0 and runtime.macro_step() == 0
+    assert executor._temporal_restart_state.to_data() == entry_temporal
+    assert publisher.post_commit_reports == ()
+
+    executor.fail = False
+    report = runtime._run(t_end=1.0, max_steps=1, console=False)
+    assert report.accepted_steps == 1
+    assert executor.last_run_identity == failed_identity
+    assert runtime.time() == 1.0 and runtime.macro_step() == 1
+    assert failed_identity.token in publisher._closed_observer_runs
+    assert publisher._observer_workers == {}
+    assert publisher.post_commit_reports == ()
+
+
 def test_failed_run_keeps_identity_sealed_when_entry_rollback_fails():
     class _RollbackFailureExecutor(_Executor):
         def _restore_temporal_restart_state(self, _state):
@@ -3458,7 +3498,7 @@ def test_root_lane_construction_failure_reaches_world_consensus_before_exit(
     assert publisher._observer_run_phases[run_identity.token] == "opening"
 
 
-def test_only_consumer_free_serial_failed_run_releases_its_identity_for_retry():
+def test_only_effect_free_failed_run_releases_its_identity_for_retry():
     from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
 
     class _Lane:
@@ -3603,11 +3643,16 @@ def test_mpi_size_one_consumer_free_failed_run_releases_its_identity():
     publisher.begin_post_commit_consumers(run_identity)
 
 
-def test_mpi_multi_rank_consumer_free_failed_run_keeps_its_identity(monkeypatch):
+@pytest.mark.parametrize(
+    "peer_proof", ("ready", "not-restored", "different-run", "invalid", "lost", "malformed")
+)
+def test_mpi_multi_rank_consumer_free_failed_run_requires_unanimous_retry_proof(
+    monkeypatch, peer_proof
+):
     from pops.runtime import _runtime_consumers
     from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
 
-    run_identity = make_identity("run", {"case": "mpi-multi-rank-sealed"})
+    run_identity = make_identity("run", {"case": "mpi-multi-rank-retry-proof"})
     publisher = object.__new__(RuntimeConsumerPublisher)
     publisher._rank = 0
     publisher._size = 2
@@ -3631,18 +3676,46 @@ def test_mpi_multi_rank_consumer_free_failed_run_keeps_its_identity(monkeypatch)
     def consensus_rows(_communicator, envelope):
         peer = dict(envelope)
         peer["rank"] = 1
+        if "reusable" in envelope:
+            if peer_proof == "not-restored":
+                peer["reusable"] = False
+            elif peer_proof == "different-run":
+                peer["run_identity"] = make_identity("run", {"case": "other-run"}).token
+            elif peer_proof == "invalid":
+                peer["reusable"] = 1
+            elif peer_proof == "lost":
+                raise RuntimeError("injected release consensus loss")
+            elif peer_proof == "malformed":
+                peer.pop("reusable")
         return envelope, peer
 
     monkeypatch.setattr(_runtime_consumers, "allgather_value", consensus_rows)
     entry_fence = publisher.failed_run_effect_fence()
     publisher.begin_post_commit_consumers(run_identity)
-    publisher.close_failed_run_consumers(
-        run_identity,
-        release_identity=True,
-        entry_effect_fence=entry_fence,
-    )
-    assert run_identity.token in publisher._closed_observer_runs
-    assert publisher._observer_run_phases[run_identity.token] == "closed"
+
+    def close_failed_run():
+        publisher.close_failed_run_consumers(
+            run_identity,
+            release_identity=True,
+            entry_effect_fence=entry_fence,
+        )
+
+    if peer_proof in {"lost", "malformed"}:
+        with pytest.raises(_runtime_consumers._ObserverCollectiveLost):
+            close_failed_run()
+        assert run_identity.token in publisher._closed_observer_runs
+        with pytest.raises(RuntimeError, match="sealed after collective proof loss"):
+            publisher.begin_post_commit_consumers(run_identity)
+        return
+    close_failed_run()
+    assert (run_identity.token not in publisher._closed_observer_runs) is (peer_proof == "ready")
+    if peer_proof == "ready":
+        assert run_identity.token not in publisher._observer_run_phases
+        publisher.begin_post_commit_consumers(run_identity)
+    else:
+        assert publisher._observer_run_phases[run_identity.token] == "closed"
+        with pytest.raises(RuntimeError, match="already closed"):
+            publisher.begin_post_commit_consumers(run_identity)
 
 
 def test_runtime_instance_exposes_only_exact_native_program_accepted_state():

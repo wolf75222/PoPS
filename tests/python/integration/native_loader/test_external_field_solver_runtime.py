@@ -123,8 +123,10 @@ int prepare_topology(void* value, const PopsFieldTopologyRequestV2* request,
   }}
   const bool multilevel = saw_level_one;
   if ({str(require_multilevel).lower()} && !saw_level_zero) return 6;
+  // The first derived-field recompute precedes fine-level creation.  Require
+  // real distributed ownership already on L0; the MPI oracle checks L1 after bind.
   if ({str(require_distributed).lower()} &&
-      (!saw_level_zero || !saw_level_one || !saw_owner_zero || !saw_owner_one)) return 11;
+      (!saw_level_zero || !saw_owner_zero || !saw_owner_one)) return 11;
   if ({str(require_multilevel).lower()} && !previous_multilevel_signature.empty() &&
       topology_signature != previous_multilevel_signature &&
       previous_multilevel_layout == request->topology.materialized_layout_identity) return 10;
