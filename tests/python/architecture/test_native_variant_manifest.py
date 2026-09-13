@@ -230,7 +230,7 @@ assert str(source_python) not in unselected
     assert root_residue.is_file()
 
 
-def test_ci_consumes_only_the_authenticated_dim2_native_variant():
+def test_ci_consumes_only_authenticated_explicit_native_variants():
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     conftest = PYTEST_CONFTEST.read_text(encoding="utf-8")
 
@@ -242,7 +242,7 @@ def test_ci_consumes_only_the_authenticated_dim2_native_variant():
         assert retired_root_contract not in workflow
 
     for required_contract in (
-        "pops-module-dim2-",
+        "pops-module-dim${{ matrix.dimension }}-",
         "pops-module-openmp-dim2-",
         "--exclude='_native/***'",
         "scripts/verify_installed_native.py",
@@ -257,9 +257,6 @@ def test_ci_consumes_only_the_authenticated_dim2_native_variant():
         assert required_contract in workflow
 
     native_jobs = (
-        ("gate-python-prewarm", "gate-python-build"),
-        ("gate-python-build", "gate-python"),
-        ("gate-python", "gate-python-compile-cache"),
         ("gate-python-compile-cache", "gate-mpi-prewarm"),
         ("gate-mpi-prewarm", "gate"),
         ("mpi", "gate-openmp-prewarm"),
@@ -271,6 +268,10 @@ def test_ci_consumes_only_the_authenticated_dim2_native_variant():
         if next_job is not None:
             job = job.split(f"\n  {next_job}:\n", 1)[0]
         assert 'POPS_NATIVE_DIM: "2"' in job, job_name
+
+    build = workflow.split("\n  gate-python-build:\n", 1)[1].split("\n  gate-python:\n", 1)[0]
+    assert 'POPS_NATIVE_DIM: ${{ matrix.dimension }}' in build
+    assert 'dimension: [1, 2]' in build
 
     assert 'value = environment.get("POPS_NATIVE_DIM")' in conftest
     assert 'select_native_dimension(native_dimension)' in conftest

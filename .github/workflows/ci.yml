@@ -158,6 +158,8 @@ jobs:
               - 'scripts/gen_solver_kernel.py'
               - 'scripts/ci_select_tests.py'
               - 'scripts/ci_shard_binpack.py'
+              - 'scripts/ci_python_dimensions.py'
+              - 'tests/python/native_dimensions.json'
               - 'scripts/ci_import_closure.py'
               - 'scripts/ci_python_module_objects.py'
               - 'scripts/ci_route_mode.py'
@@ -186,6 +188,8 @@ jobs:
               - 'scripts/ci_python_module_objects.py'
               - 'scripts/ci_select_tests.py'
               - 'scripts/ci_shard_binpack.py'
+              - 'scripts/ci_python_dimensions.py'
+              - 'tests/python/native_dimensions.json'
               - 'scripts/ci_route_mode.py'
               - '.github/actions/**'
               - '.github/workflows/**'
@@ -757,7 +761,7 @@ jobs:
   # final ci-dessous reconfigure officiellement tout le module, authentifie les trois contrats,
   # consomme les hits puis effectue lui-meme le link. Un cache module exact evite meme ce prewarm.
   gate-python-prewarm:
-    name: ubuntu-latest / Kokkos Serial (Python prewarm ${{ matrix.lane }})
+    name: ubuntu-latest / Kokkos Serial (Python prewarm Dim${{ matrix.dimension }} ${{ matrix.lane }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes, set-mode]
@@ -765,12 +769,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        dimension: [1, 2]
         lane: [system, amr-runtime, amr-fields]
 
     env:
       # This source-matrix lane builds one explicit native specialization.  Runtime plans remain
       # dimension-derived; the low-level CI build selector must never be inferred from artifacts.
-      POPS_NATIVE_DIM: "2"
+      POPS_NATIVE_DIM: ${{ matrix.dimension }}
       CCACHE_DIR: ${{ github.workspace }}/.ccache-py
       CCACHE_MAXSIZE: 2G
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -802,7 +807,7 @@ jobs:
         with:
           path: build-kokkos-py/python/pops
           lookup-only: true
-          key: pops-module-dim2-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml', '.github/actions/setup-kokkos/**', 'scripts/ci_python_module_objects.py') }}-kokkos4.4.01-15dc143e
+          key: pops-module-dim${{ matrix.dimension }}-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml', '.github/actions/setup-kokkos/**', 'scripts/ci_python_module_objects.py') }}-kokkos4.4.01-15dc143e
 
       - name: Configure identical production module graph
         if: steps.module-cache-probe.outputs.cache-hit != 'true'
@@ -883,7 +888,7 @@ jobs:
         if: steps.module-cache-probe.outputs.cache-hit != 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: gate-python-prewarm-${{ matrix.lane }}
+          name: gate-python-prewarm-dim${{ matrix.dimension }}-${{ matrix.lane }}
           path: |
             ${{ runner.temp }}/python-prewarm-ccache-${{ matrix.lane }}.tar
             ${{ runner.temp }}/python-prewarm-contract-${{ matrix.lane }}.json
@@ -891,11 +896,11 @@ jobs:
           compression-level: 0
           retention-days: 1
 
-  # GATE PYTHON BUILD : construit UNE SEULE FOIS le module _pops partage par les shards de tests.
+  # GATE PYTHON BUILD : construit une fois chaque dimension native partagee par les shards.
   # Les tests DSL compilent encore leurs loaders/.so a runtime dans chaque shard, mais le gros build
   # pybind11 n'est plus multiplie par le nombre de shards.
   gate-python-build:
-    name: ubuntu-latest / Kokkos Serial (Python build)
+    name: ubuntu-latest / Kokkos Serial (Python build Dim${{ matrix.dimension }})
     runs-on: ubuntu-latest
     # A changed production header invalidates most -O3 runtime objects.  Bound a
     # genuinely cold build rather than relying on partial ccache state from an
@@ -907,8 +912,13 @@ jobs:
     # `ci-kokkos` force aussi ce gate pour valider l'infra Kokkos sans passer en full.
     if: needs.set-mode.outputs.python_required == 'true'
 
+    strategy:
+      fail-fast: false
+      matrix:
+        dimension: [1, 2]
+
     env:
-      POPS_NATIVE_DIM: "2"
+      POPS_NATIVE_DIM: ${{ matrix.dimension }}
       # ccache dedie au module Python (.ccache-py) : meme separation que l'ancien job build-and-test.
       CCACHE_DIR: ${{ github.workspace }}/.ccache-py
       CCACHE_MAXSIZE: 2G
@@ -921,7 +931,7 @@ jobs:
       CCACHE_SLOPPINESS: locale
       # Unique per attempt so a bounded build can persist every valid object it produced, even when
       # a later step fails. Restore prefixes deliberately remain compatible with PR/master history.
-      CCACHE_CACHE_KEY: python-build-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      CCACHE_CACHE_KEY: python-build-dim${{ matrix.dimension }}-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - uses: actions/checkout@v7
@@ -950,8 +960,8 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
           restore-keys: |
-            ccache-${{ runner.os }}-python-build-${{ github.ref }}-
-            ccache-${{ runner.os }}-python-build-refs/heads/master-
+            ccache-${{ runner.os }}-python-build-dim${{ matrix.dimension }}-${{ github.ref }}-
+            ccache-${{ runner.os }}-python-build-dim${{ matrix.dimension }}-refs/heads/master-
             ccache-${{ runner.os }}-python-${{ github.ref }}-
             ccache-${{ runner.os }}-python-refs/heads/master-
             ccache-${{ runner.os }}-python-
@@ -960,7 +970,7 @@ jobs:
         run: ccache --zero-stats
 
       # ADC-621 EVICTION GUARD for the pure-python fast path. The expensive artifact is the
-      # compiled, manifest-authenticated Dim=2 leaf; on a PR that touches NO native-affecting
+      # compiled, manifest-authenticated dimension leaf; on a PR that touches NO native-affecting
       # input we want to reuse it instead of recompiling. The key hashes EVERY input that can change
       # the .so, so a stale binary can never be served:
       #   * include/** + src/** + python/bindings/** -- native runtime and pybind adapter sources;
@@ -972,18 +982,18 @@ jobs:
       # pure-Python/type source copies (build-kokkos-py/python/pops/**/*.{py,pyi} + py.typed) are NOT
       # keyed here -- they are re-synced from the PR checkout after a hit (next step), so the cache
       # serves only the binary.
-      - name: Cache authenticated Dim=2 native package
+      - name: Cache authenticated Dim=${{ matrix.dimension }} native package
         id: modcache
         uses: actions/cache@v6
         with:
           path: build-kokkos-py/python/pops
-          key: pops-module-dim2-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml', '.github/actions/setup-kokkos/**', 'scripts/ci_python_module_objects.py') }}-kokkos4.4.01-15dc143e
+          key: pops-module-dim${{ matrix.dimension }}-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml', '.github/actions/setup-kokkos/**', 'scripts/ci_python_module_objects.py') }}-kokkos4.4.01-15dc143e
 
       - name: Download parallel prewarm caches
         if: steps.modcache.outputs.cache-hit != 'true'
         uses: actions/download-artifact@v8
         with:
-          pattern: gate-python-prewarm-*
+          pattern: gate-python-prewarm-dim${{ matrix.dimension }}-*
           path: ${{ github.workspace }}/.pops-ci/python-prewarm
 
       - name: Merge parallel prewarm caches
@@ -1013,14 +1023,14 @@ jobs:
           # Overwrite the (unkeyed, possibly stale) copied Python/type sources with THIS checkout.
           # -I (ignore-times) forces a content sync even if an mtime+size collision would fool the
           # default quick check.  The explicit _native exclusion protects both variants.json and
-          # its authenticated dim2 leaf from --delete; no root extension is accepted as a fallback.
+          # its authenticated dimension leaf from --delete; no root extension is accepted as a fallback.
           rsync -aI --delete --include='*/' --include='*.py' --include='*.pyi' \
             --include='py.typed' --exclude='_native/***' --exclude='*' \
             python/pops/ build-kokkos-py/python/pops/
           {
             echo "### gate-python-build (module _pops, Kokkos Serial)"
             echo ""
-            echo "FAST PATH: exact native-package cache hit -> retained variants.json + dim2 leaf,"
+            echo "FAST PATH: exact native-package cache hit -> retained variants.json + selected dimension leaf,"
             echo "re-synced the pure-python sources, skipped the cmake build."
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -1095,7 +1105,7 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
 
-      - name: Authenticate Dim=2 Python native variant
+      - name: Authenticate Dim=${{ matrix.dimension }} Python native variant
         env:
           PYTHONPATH: ${{ github.workspace }}/build-kokkos-py/python
           PYTHONNOUSERSITE: "1"
@@ -1106,7 +1116,7 @@ jobs:
       - name: Upload Python module artifact
         uses: actions/upload-artifact@v7
         with:
-          name: gate-python-build-kokkos-py
+          name: gate-python-build-kokkos-py-dim${{ matrix.dimension }}
           path: build-kokkos-py/python/**
           if-no-files-found: error
           retention-days: 1
@@ -1143,7 +1153,6 @@ jobs:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
 
     env:
-      POPS_NATIVE_DIM: "2"
       PYTHONUNBUFFERED: "1"
       # ccache reste utile aux tests DSL qui compilent des loaders/.so a runtime dans chaque shard.
       CCACHE_DIR: ${{ github.workspace }}/.ccache-py
@@ -1199,6 +1208,8 @@ jobs:
             --github-output "$GITHUB_OUTPUT" \
             "${force_args[@]}"
           echo "tests_file=$RUNNER_TEMP/python-tests.txt" >> "$GITHUB_OUTPUT"
+          python3 scripts/ci_python_dimensions.py \
+            --selected-file "$RUNNER_TEMP/python-tests.txt" --github-output "$GITHUB_OUTPUT"
           python3 scripts/ci_pytest_timings.py \
             --selected-file "$RUNNER_TEMP/python-tests.txt" \
             --shard-index "$SHARD_INDEX" --github-output "$GITHUB_OUTPUT"
@@ -1247,20 +1258,19 @@ jobs:
           python-version: '3.12'
           cache: pip
 
-      - name: Download Python module artifact
-        if: steps.test-plan.outputs.python_shard_count != '0'
+      - name: Download Dim1 Python module artifact
+        if: steps.test-plan.outputs.dim1_count != '0'
         uses: actions/download-artifact@v8
         with:
-          name: gate-python-build-kokkos-py
-          path: build-kokkos-py/python
+          name: gate-python-build-kokkos-py-dim1
+          path: .pops-ci/python-packages/dim1
 
-      - name: Verify Python module artifact
-        if: steps.test-plan.outputs.python_shard_count != '0'
-        run: |
-          test -d build-kokkos-py/python/pops
-          PYTHONPATH="$PWD/build-kokkos-py/python" PYTHONNOUSERSITE=1 \
-            python3 scripts/verify_installed_native.py \
-              --expect-dim "$POPS_NATIVE_DIM" --expect-serial
+      - name: Download Dim2 Python module artifact
+        if: steps.test-plan.outputs.dim2_count != '0'
+        uses: actions/download-artifact@v8
+        with:
+          name: gate-python-build-kokkos-py-dim2
+          path: .pops-ci/python-packages/dim2
 
       - name: Cache ccache (Python runtime loaders)
         if: steps.test-plan.outputs.python_shard_count != '0'
@@ -1282,7 +1292,6 @@ jobs:
           # The full gate exercises the serial HDF5 writer used by the final examples. h5py remains
           # an optional user dependency; CI installs that capability explicitly instead of skipping.
           pip install --upgrade pip numpy pytest h5py
-          export PYTHONPATH="$PWD/scripts:$PWD/build-kokkos-py/python"
           # PoPS est Kokkos-only : les tests DSL qui compilent un loader/.so production ou son ABI
           # incluent les en-tetes pops (-> for_each, #error sans Kokkos). Ils lisent le Kokkos a utiliser
           # via Kokkos_ROOT / POPS_KOKKOS_ROOT : on pointe le MEME Kokkos Serial que le module _pops.
@@ -1292,7 +1301,7 @@ jobs:
           mkdir -p "$POPS_CACHE_DIR"
           SECONDS=0
           # ADC-366 sharded runner. The selected file list is produced by scripts/ci_select_tests.py,
-          # then pytest owns collection, fixtures, markers and reporting.
+          # then one pytest process per declared dimension owns collection and reporting.
           : "${SHARD_INDEX:=0}" "${SHARD_TOTAL:=1}"
           timings="$RUNNER_TEMP/pytimings"; mkdir -p "$timings"
           selected="${{ steps.test-plan.outputs.tests_file }}"
@@ -1303,9 +1312,8 @@ jobs:
           mapfile -t selected_tests < "$selected"
           printf '%s\n' "${selected_tests[@]}" > "$timings/selected.txt"
           set +e
-          export POPS_CI_PYTEST_TIMINGS_DIR="$timings"
-          python3 -u -m pytest -v -ra --durations=20 \
-            -p ci_pytest_timings --junitxml="$timings/junit.xml" "${selected_tests[@]}"
+          python3 scripts/ci_python_dimensions.py --selected-file "$selected" \
+            --packages-root "$PWD/.pops-ci/python-packages" --timings-dir "$timings"
           rc=$?
           set -e
           test_s=$SECONDS
@@ -1412,7 +1420,7 @@ jobs:
       - name: Download Python module artifact
         uses: actions/download-artifact@v8
         with:
-          name: gate-python-build-kokkos-py
+          name: gate-python-build-kokkos-py-dim2
           path: build-kokkos-py/python
 
       - name: Verify Python module artifact
