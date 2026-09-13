@@ -388,7 +388,15 @@ def test_named_centered_divergence_does_not_poison_a_reused_formula_emitter() ->
     shared = module.to_dsl()
     authored_flux = shared._m._flux
     authored_eigenvalues = shared._m._eig
+    from pops._ir.visitors import _key
     from pops.codegen.module_lowering import lower_and_validate
+
+    def formula_keys(formulas):
+        return {axis: tuple(_key(value) for value in values)
+                for axis, values in formulas.items()}
+
+    flux_keys = formula_keys(authored_flux)
+    eigenvalue_keys = formula_keys(authored_eigenvalues)
 
     class CachedEmitterProvider:
         def __pops_compiler_lowering__(self):
@@ -415,8 +423,12 @@ def test_named_centered_divergence_does_not_poison_a_reused_formula_emitter() ->
         state_space=finite_volume_block.state_spaces[0],
         resolved_operations=finite_volume_block.resolved_operations,
     )
-    assert finite_volume_emitter._m._flux is authored_flux
-    assert finite_volume_emitter._m._eig is authored_eigenvalues
+    # Every resolved route owns its formula containers before storage metadata is attached.
+    assert finite_volume_emitter is not shared
+    assert finite_volume_emitter._m._flux is not authored_flux
+    assert finite_volume_emitter._m._eig is not authored_eigenvalues
+    assert formula_keys(finite_volume_emitter._m._flux) == flux_keys
+    assert formula_keys(finite_volume_emitter._m._eig) == eigenvalue_keys
 
     repeated_named_emitter, _ = lower_and_validate(
         provider,
@@ -427,6 +439,10 @@ def test_named_centered_divergence_does_not_poison_a_reused_formula_emitter() ->
     assert repeated_named_emitter._m._flux == {}
     assert shared._m._flux is authored_flux
     assert shared._m._eig is authored_eigenvalues
+    assert formula_keys(shared._m._flux) == flux_keys
+    assert formula_keys(shared._m._eig) == eigenvalue_keys
+    assert formula_keys(finite_volume_emitter._m._flux) == flux_keys
+    assert formula_keys(finite_volume_emitter._m._eig) == eigenvalue_keys
 
 
 def test_named_centered_divergence_rejects_mixed_runtime_methods() -> None:
