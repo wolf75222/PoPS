@@ -498,7 +498,7 @@ def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
     conditional_end = re.compile(r"^\s*#\s*endif\b")
     offenders = []
     conditional_sources = []
-    for source in (REPO_ROOT / "tests/cpp").rglob("*.cpp"):
+    for source in sorted((REPO_ROOT / "tests/cpp").rglob("*.cpp")):
         text = source.read_text(encoding="utf-8")
         if runtime_only.search(text):
             offenders.append(source.relative_to(REPO_ROOT).as_posix())
