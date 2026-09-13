@@ -60,6 +60,7 @@ ALGORITHMS_DOC = ROOT / "docs/ALGORITHMS.md"
 LEGACY_DIRECT_AMR_STEP_TESTS = set()
 NONLINEAR_AMR_TEST = ROOT / "tests/python/integration/amr/test_amr_newton_full.py"
 V3_FEATURES_TEST = ROOT / "tests/python/unit/runtime/test_v3_features.py"
+V3_COMPILED_CAPABILITIES_TEST = ROOT / "tests/python/unit/runtime/test_v3_compiled_capabilities.py"
 RAW_TEMPORAL_FIXTURE = ROOT / "tests/python/support/explicit_program.py"
 RAW_TEMPORAL_FIXTURE_MODULE = "tests.python.support.explicit_program"
 RAW_SSPRK_INSTALLERS = frozenset({"install_ssprk2_program", "install_ssprk3_program"})
@@ -653,6 +654,7 @@ def test_prepared_amr_subcycle_plan_is_the_only_spatial_reflux_route():
 def test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker():
     nonlinear = NONLINEAR_AMR_TEST.read_text(encoding="utf-8")
     v3 = V3_FEATURES_TEST.read_text(encoding="utf-8")
+    v3_compiled = V3_COMPILED_CAPABILITIES_TEST.read_text(encoding="utf-8")
     assert "IMEX(" in nonlinear
     assert "LocalNewton(" in nonlinear
     assert 'getattr(node, "op", None) == "solve_outcome"' in nonlinear
@@ -665,7 +667,8 @@ def test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker():
     assert "engine.IMEX(" not in nonlinear
     assert "expect_native_rejection" not in nonlinear
     assert "expect_amr_newton_rejection" not in v3
-    d2_guard = _python_function_source(v3, "expect_imex_program_required")
+    assert "expect_amr_newton_rejection" not in v3_compiled
+    d2_guard = _python_function_source(v3_compiled, "expect_imex_program_required")
     assert "engine.IMEX(" in d2_guard
     assert "except TypeError as error" in d2_guard
     assert "exact registered StepStrategy" in d2_guard

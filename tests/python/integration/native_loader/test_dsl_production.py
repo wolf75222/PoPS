@@ -247,8 +247,10 @@ def _compile_wrong_abi(model, dst_so, cxx):
 
 
 def _component_at(component, so_path):
-    """Detach valid metadata while substituting the deliberately bad package path."""
-    return CompiledModel(
+    """Authenticate the recompiled bytes so refusal reaches the native ABI guard."""
+    from pops.identity import binary_identity
+
+    detached = CompiledModel(
         so_path=so_path,
         backend=component.backend,
         target=component.target,
@@ -281,6 +283,10 @@ def _component_at(component, so_path):
         definition_identity=component.definition_identity,
         module_manifest=component.module_manifest,
     )
+    # This binary is deliberately ABI-incompatible, but its identity must match its
+    # actual bytes. Missing or copied identity metadata would exercise an earlier guard.
+    detached.binary_identity = binary_identity(so_path)
+    return detached
 
 
 if __name__ == "__main__":
