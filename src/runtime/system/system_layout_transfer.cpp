@@ -576,15 +576,15 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
 #endif
   }
 
-  void capture_source() {
+  void capture_source(const field_type& source_field) {
     if (!spec.physical_contract) {
-      parallel_copy(source_snapshot, source_transfer_state(), *source_copy_schedule);
+      parallel_copy(source_snapshot, source_field, *source_copy_schedule);
       return;
     }
     if (source_lane) {
       source_transport->execute(
-          [this](const auto& job) {
-            return std::as_const(source_transfer_state()).fab_global(job.source_patch).view();
+          [&source_field](const auto& job) {
+            return source_field.fab_global(job.source_patch).view();
           },
           [this](const auto& job) {
             return source_snapshot.fab_global(job.destination_patch).view();
@@ -595,7 +595,7 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
     // carrier independently, including carriers that repeat a source region for a broadcast.
     device_fence();
     for (const auto& job : source_region_jobs) {
-      const auto input = source_transfer_state().fab_global(job.source_patch).view();
+      const auto input = source_field.fab_global(job.source_patch).view();
       const auto output = source_snapshot.fab_global(job.destination_patch).view();
       const int width = components;
       for_each_cell(
@@ -709,8 +709,10 @@ std::shared_ptr<PreparedSystemLayoutTransfer<Dim>> PreparedSystemLayoutTransfer<
   pending->prepare_transport_collectively();
   collectively_validate(communicator, "native Transfer provider preparation",
                         [&] { pending->prepare_provider(); });
+  // Warm the prepared transport against the accepted storage used to define its layout.
+  // A Program-point route has no suspended stage port until execution reaches its barrier.
   collectively_validate(communicator, "prepared System layout-transfer warmup",
-                        [&] { pending->capture_source(); });
+                        [&] { pending->capture_source(pending->source_state()); });
   return std::shared_ptr<PreparedSystemLayoutTransfer>(
       new PreparedSystemLayoutTransfer(std::move(pending)));
 }
@@ -759,7 +761,7 @@ void PreparedSystemLayoutTransfer<Dim>::capture(std::uint64_t generation, std::u
       throw std::logic_error("layout-transfer source was already captured for another attempt");
   });
   collectively_validate(p_->communicator, "layout-transfer source capture",
-                        [&] { p_->capture_source(); });
+                        [&] { p_->capture_source(p_->source_transfer_state()); });
   p_->captured_attempt = attempt;
   p_->applied = false;
 }
