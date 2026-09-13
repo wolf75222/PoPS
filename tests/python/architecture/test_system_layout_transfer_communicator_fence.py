@@ -46,9 +46,12 @@ def test_layout_transfer_retains_the_resolved_context_for_every_hot_collective()
     assert "CommunicatorView world;" not in implementation
     assert "p_->world" not in hot_path
     assert "world_communicator_view()" not in hot_path
-    assert "p_->capture_source();" in hot_path
-    capture = _function(implementation, "void capture_source()")
-    assert "parallel_copy(source_snapshot, source_transfer_state(), *source_copy_schedule)" in capture
+    assert "p_->capture_source(p_->source_transfer_state());" in hot_path
+    capture = _function(implementation, "void capture_source(const field_type& source_field)")
+    assert "parallel_copy(source_snapshot, source_field, *source_copy_schedule)" in capture
+    binding = _function(source, "PreparedSystemLayoutTransfer<Dim>::prepare(")
+    assert "pending->capture_source(pending->source_state());" in binding
+    assert "source_transfer_state()" not in binding
     source_port = _function(implementation, "field_type& source_transfer_state()")
     assert "program_map_fields(spec.program_invocation, false)" in source_port
     assert "source_state()" in source_port
