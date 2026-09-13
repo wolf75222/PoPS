@@ -25,6 +25,11 @@ from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtim
 from pops.solvers.elliptic import CartesianCG
 from tests.python.support.explicit_program import install_forward_euler_program
 
+# This indivisible two-block/Poisson scenario compiles its native packages and explicit
+# Program before stepping. A successful cold CI run took 291 s, leaving no reliable
+# headroom under the default 300 s process limit. Keep the full scenario bounded.
+POPS_PROCESS_TIMEOUT = 600
+
 fails = 0
 
 

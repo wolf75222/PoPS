@@ -2023,7 +2023,8 @@ jobs:
             fi
             return "$status"
           }
-          native_script_bootstrap="from pops._native_selector import select_native_dimension; select_native_dimension(2); import runpy, sys; runpy.run_path(sys.argv[1], run_name='__main__')"
+          # Match direct Python script imports and argv after selecting the native dimension.
+          native_script_bootstrap="from pops._native_selector import select_native_dimension; select_native_dimension(2); import os, runpy, sys; sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); runpy.run_path(sys.argv[0], run_name='__main__')"
           while IFS=$'\t' read -r mpi_ranks mpi_test; do
             test -n "$mpi_ranks" && test -f "$mpi_test"
             echo "Running Python MPI contract: ${mpi_test} (np=${mpi_ranks})"

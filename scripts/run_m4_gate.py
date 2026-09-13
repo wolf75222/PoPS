@@ -660,11 +660,15 @@ def _required_environment() -> dict[str, str]:
 def _mpi_python_command(mpi_exec: str, nproc: int, relative: str) -> list[str]:
     if shutil.which(mpi_exec) is None:
         raise RuntimeError("required MPI launcher %r is unavailable" % mpi_exec)
+    # run_path does not supply the script directory or strip the -c wrapper argv.
+    # Restore direct-script semantics so sibling MPI helpers remain importable.
     bootstrap = (
         "from pops._native_selector import select_native_dimension; "
         "select_native_dimension(2); "
-        "import runpy, sys; "
-        "runpy.run_path(sys.argv[1], run_name='__main__')"
+        "import os, runpy, sys; "
+        "sys.argv = sys.argv[1:]; "
+        "sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); "
+        "runpy.run_path(sys.argv[0], run_name='__main__')"
     )
     return [
         mpi_exec,

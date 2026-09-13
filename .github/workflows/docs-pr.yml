@@ -39,7 +39,7 @@ jobs:
             echo "### Docs PR mode"
             echo ""
             echo "- reset lint : yes"
-            echo "- `_pops` / Sphinx / Doxygen build : no"
+            echo '- `_pops` / Sphinx / Doxygen build : no'
             echo "- Kokkos build : no"
           } >> "$GITHUB_STEP_SUMMARY"
 

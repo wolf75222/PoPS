@@ -779,7 +779,7 @@ def test_m4_mpi_entrypoint_accepts_only_the_required_prerequisite_guard(monkeypa
     command = runner._mpi_python_command("mpiexec", 2, mpi_proof["nodeid"].split("::", 1)[0])
     assert command[:5] == ["mpiexec", "-n", "2", runner.sys.executable, "-c"]
     assert "select_native_dimension(2)" in command[5]
-    assert "runpy.run_path(sys.argv[1], run_name='__main__')" in command[5]
+    assert "runpy.run_path(sys.argv[0], run_name='__main__')" in command[5]
     assert command[6] == str(ROOT / mpi_proof["nodeid"].split("::", 1)[0])
     trusted = ast.parse(
         "from tests.python.support.requirements import require_mpi_or_skip\n"
