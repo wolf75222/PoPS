@@ -128,7 +128,8 @@ def _public_euler_poisson_plan(n, dt):
     rate = model.rate("Euler_Poisson", equation=ddt(state) == -div(flux) + gravity)
     model.select_balance(rate)
     problem = FieldProblem("gravity", unknowns=(potential,),
-        equations=(-laplacian(potential) == rho - 1,),
+        # Preserve GravityCoupling(sign=-1): the prepared operator owns -laplacian.
+        equations=(-laplacian(potential) == -(rho - 1),),
         boundaries=(FieldBoundary(potential,
             bcs.BoundaryCondition(bcs.AllPhysicalBoundaries(), bcs.Periodic())),),
         gauge=SharedMeanGauge((potential,)))
@@ -197,7 +198,29 @@ def _euler_poisson_public_parity(n, dt):
     prepared = prepare_program_run(native)
     prepared.begin(native._temporal_restart_state, time=native.time(), macro_step=native.macro_step())
     target = native_step_target(native)
-    for _ in range(12):
+    initial_energy = float(native.composite_reduce("gas", "sum", 3, []))
+    prepared.run_step(target, t_end=12 * dt)
+    first = np.asarray(native.block_level_state_global("gas", 0)).reshape(4, n, n)
+    # Independent sign/work witness: the density bubble is centered at (.5,.5), starts
+    # at rest, and has spatially constant pressure/energy. Its first momentum increment
+    # therefore comes only from gravity; its initial gravitational work is exactly zero.
+    # Accepted AMR state restricts covered fine cells onto this complete coarse grid.
+    centers = (np.arange(n) + .5) / n - .5
+    x, y = np.meshgrid(centers, centers)
+    radius_squared = x*x + y*y
+    annulus = (radius_squared > .05**2) & (radius_squared < .3**2)
+    radial_momentum = float(np.sum((x*first[1] + y*first[2])[annulus]) / (n*n))
+    assert radial_momentum < -1e-10, "negative Poisson load must accelerate the bubble inward"
+    np.testing.assert_allclose(first[3], initial[3], rtol=0, atol=1e-12)
+    assert abs(native.mass() - mass) < 1e-12 * (abs(mass) + 1)
+    prepared.run_step(target, t_end=12 * dt)
+    # Periodic conservative transport cannot create total energy. On the second step,
+    # inward momentum does positive gravity work, so use the native masked-volume
+    # composite inventory to catch a reversed or missing source-work term independently.
+    second_energy = float(native.composite_reduce("gas", "sum", 3, []))
+    roundoff = 64 * np.finfo(np.float64).eps * abs(initial_energy)
+    assert second_energy - initial_energy > roundoff, "inward gravity must do positive work"
+    for _ in range(10):
         prepared.run_step(target, t_end=12 * dt)
     # Advancing one engine must not mutate the other through the shared immutable install plan.
     assert public.time() == 0 and public.macro_step() == 0
