@@ -239,6 +239,22 @@ def _euler_poisson_public_parity(n, dt):
     print("OK  (2) Euler-Poisson AMR: native installer/public bind preserve all state, mass and patches")
 
 
+def _euler_state(density):
+    """Complete Euler state at rest with unit pressure; density alone leaves energy zero."""
+    state = np.zeros((4, *density.shape), dtype=np.float64)
+    state[0] = density
+    state[3] = 1.0 / (GAMMA - 1.0)
+    assert np.isfinite(state).all() and np.min(state[0]) > 0
+    assert np.all((GAMMA - 1.0) * state[3] > 0)
+    return state
+
+
+def _transport_spec():
+    return engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
+                        transport=engine.CompressibleFlux(), source=engine.NoSource(),
+                        elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0))
+
+
 def _amr(n, L, branch, refine=1.2):
     cfg = AmrSystemConfig()
     cfg.shape = (n, n)
@@ -252,7 +268,7 @@ def _amr(n, L, branch, refine=1.2):
     install_prepared_threshold_union(s, (("gas", "rho", refine),))
     rho = np.asarray(_bubble(n), dtype=float)
     rho += 1.0 - float(rho.mean())
-    s.set_density("gas", rho)
+    s.set_conservative_state("gas", _euler_state(rho))
     install_forward_euler_program(s)
     # This advanced-runtime fixture assembles the native hierarchy directly, without pops.bind.
     # Seal its installed Program checkpoint budget before the first accepted-state publication.
@@ -306,6 +322,38 @@ def _component_at(component, so_path):
     )
 
 
+def _parity_riemann(cm_t, spec_t, n, L, dt, riem, recon, label):
+    """add_equation(riemann, recon) BIT-IDENTIQUE a add_block (dmax==0)."""
+    R = _amr(n, L, lambda s: s.add_equation(
+        "gas", cm_t,
+        spatial=engine.Spatial(limiter=Minmod(), flux=riem, recon=recon)))
+    S = _amr(n, L, lambda s: s.add_equation(
+        "gas", spec_t,
+        spatial=engine.Spatial(minmod=True, flux=riem, recon=recon),
+        time=engine.Explicit()))
+    for _ in range(12):
+        R.step(dt)
+        S.step(dt)
+    dr, ds = np.array(R.density()), np.array(S.density())
+    dmax = float(np.max(np.abs(dr - ds)))
+    assert dmax == 0.0, ("%s: add_equation != add_block (dmax=%.2e)" % (label, dmax))
+    assert np.isfinite(dr).all() and float(np.max(np.abs(ds))) > 1e-6
+    print("OK  (3) %s : add_equation BIT-IDENTIQUE a add_block (dmax=%.0f)" % (label, dmax))
+
+
+def run_roe_parity(directory, n=48):
+    """Run only both Roe reconstruction parities, sharing one native AMR package."""
+    os.makedirs(directory, exist_ok=True)
+    model = _build_euler_transport()
+    component = model.compile(os.path.join(directory, "euler_transport_amr.so"), INCLUDE,
+                              backend="production", target="amr_system")
+    assert component.native_dimension == 2 and component.has_roe
+    spec = _transport_spec()
+    for reconstruction, label in ((Conservative(), "roe/conservative"),
+                                  (Primitive(), "roe/primitive")):
+        _parity_riemann(component, spec, n, 1.0, 2e-4, Roe(), reconstruction, label)
+
+
 def main():
     cxx = default_cxx()
     missing = missing_native_compile_requirement(INCLUDE, cxx)
@@ -323,9 +371,7 @@ def main():
         assert isinstance(cm_t, CompiledModel)
         assert cm_t.backend == "production" and cm_t.target == "amr_system"
         assert cm_t.caps.get("amr") is True, "production caps amr=True (Phase D)"
-        spec_t = engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
-                           transport=engine.CompressibleFlux(), source=engine.NoSource(),
-                           elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0))
+        spec_t = _transport_spec()
 
         A = _amr(n, L, lambda s: _install_compiled_amr(s, cm_t))
         B = _amr(n, L, lambda s: s.add_equation(
@@ -355,28 +401,10 @@ def main():
         #     meme garantie que le test C++ test_amr_riemann_native. cm_t a une primitive 'p'
         #     (declaree dans _euler_formulas via _build_euler_transport) -> garde-fou pression OK.
 
-        def parity_riemann(riem, recon, label):
-            """add_equation(riemann, recon) BIT-IDENTIQUE a add_block (dmax==0)."""
-            R = _amr(n, L, lambda s: s.add_equation(
-                "gas", cm_t,
-                spatial=engine.Spatial(limiter=Minmod(), flux=riem, recon=recon)))
-            S = _amr(n, L, lambda s: s.add_equation(
-                "gas", spec_t,
-                spatial=engine.Spatial(minmod=True, flux=riem, recon=recon),
-                time=engine.Explicit()))
-            for _ in range(12):
-                R.step(dt)
-                S.step(dt)
-            dr, ds = np.array(R.density()), np.array(S.density())
-            dmax = float(np.max(np.abs(dr - ds)))
-            assert dmax == 0.0, ("%s: add_equation != add_block (dmax=%.2e)" % (label, dmax))
-            assert np.isfinite(dr).all() and float(np.max(np.abs(ds))) > 1e-6
-            print("OK  (3) %s : add_equation BIT-IDENTIQUE a add_block (dmax=%.0f)" % (label, dmax))
-
-        parity_riemann(HLLC(), Conservative(), "hllc/conservative")
-        parity_riemann(HLLC(), Primitive(),    "hllc/primitive")
-        parity_riemann(Roe(),  Conservative(), "roe/conservative")
-        parity_riemann(Roe(),  Primitive(),    "roe/primitive")
+        _parity_riemann(cm_t, spec_t, n, L, dt, HLLC(), Conservative(), "hllc/conservative")
+        _parity_riemann(cm_t, spec_t, n, L, dt, HLLC(), Primitive(),    "hllc/primitive")
+        _parity_riemann(cm_t, spec_t, n, L, dt, Roe(),  Conservative(), "roe/conservative")
+        _parity_riemann(cm_t, spec_t, n, L, dt, Roe(),  Primitive(),    "roe/primitive")
 
         # La garde-fou pressure reste active : un modele SANS primitive 'p' doit etre rejete.
         # Modele isotherme 3 variables (rho, rho_u, rho_v) avec primitives (rho, u, v) sans 'p' :
@@ -438,7 +466,7 @@ def main():
         E.add_equation("gas", cm_t,
                        spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
         install_prepared_threshold_union(E, (("gas", "rho", 1.2),))
-        E.set_density("gas", _bubble(n))
+        E.set_conservative_state("gas", _euler_state(_bubble(n)))
         install_forward_euler_program(E)
         E._s.mark_bound()
         for _ in range(4):
@@ -447,7 +475,7 @@ def main():
         print("OK  (3b) AmrSystem.add_equation(production, rusanov) tourne et reste physique")
 
         # --- (4) GARDE-FOUS de compilation / dispatch ---
-        sys_cm = ep.compile(os.path.join(tmp, "ep_sys_cm.so"), INCLUDE,
+        sys_cm = et.compile(os.path.join(tmp, "ep_sys_cm.so"), INCLUDE,
                             backend="production", target="system")  # target System par defaut
         s = AmrSystem(n=n, L=L, periodicity=(True, True))
         raised = False
@@ -461,8 +489,8 @@ def main():
         print("OK  (4) compile(target=) garde-fous + CompiledModel target='system' refuse sur AMR")
 
         # --- (5) GARDE-FOU ABI : loader AMR a cle pops_native_abi_key falsifiee -> rejet ---
-        bad_abi = _compile_wrong_abi(ep, os.path.join(tmp, "ep_amr_wrongabi.so"), cxx)
-        bad_component = _component_at(cm_p, bad_abi)
+        bad_abi = _compile_wrong_abi(et, os.path.join(tmp, "ep_amr_wrongabi.so"), cxx)
+        bad_component = _component_at(cm_t, bad_abi)
         s = AmrSystem(n=n, L=L, periodicity=(True, True))
         raised = False
         try:
