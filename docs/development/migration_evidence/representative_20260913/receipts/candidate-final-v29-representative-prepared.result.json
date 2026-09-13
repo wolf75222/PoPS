@@ -1,0 +1,35 @@
+{
+  "command": [
+    "/usr/bin/time",
+    "-l",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v29-dim2-env/bin/python",
+    "-B",
+    "-m",
+    "pytest",
+    "-q",
+    "--tb=short",
+    "tests/python/unit/time/test_time_gmres.py",
+    "tests/python/unit/codegen/test_composite_tensor_fac_provider.py::test_header_only_hierarchy_extension_compiles_its_own_generic_provider_identity",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v29-representative-prepared-pytest",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v29-representative-prepared.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v29-proof",
+  "source_head_before": "77c1eb300b9a35ed018d0a31c7f7efa0a793c014",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T10:11:25.125493+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "2",
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1",
+    "CMAKE_BUILD_PARALLEL_LEVEL": "2",
+    "POPS_BUILD_CORES": "2",
+    "POPS_HEAVY_MODULE_TU_POOL": "2"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 351.6829772500205,
+  "source_head_after": "77c1eb300b9a35ed018d0a31c7f7efa0a793c014",
+  "source_status_after": "",
+  "log_sha256": "f9bc6ac4bffa9e58d3d369f573fcc8eb5864a40a78412c9d4f79e09f5551be7f"
+}

@@ -1,0 +1,25 @@
+{
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/python",
+    "-B",
+    "-m",
+    "pytest",
+    "-q",
+    "--tb=short",
+    "tests/python/unit/codegen/test_compile_link_flags.py",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-component-flags-r1.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "3eb2722e4618d25f1586632b592ee20b4dc505fa",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T11:15:13.401879+00:00",
+  "environment": {
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/python:/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 0.6900906250230037,
+  "source_head_after": "3eb2722e4618d25f1586632b592ee20b4dc505fa",
+  "source_status_after": "",
+  "log_sha256": "cd9f00546c34cfb5721e29ec23a1ed6cb673c65a1f499cca23fbf0be701ed940"
+}

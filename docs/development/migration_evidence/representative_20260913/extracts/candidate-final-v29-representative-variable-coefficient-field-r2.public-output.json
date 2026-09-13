@@ -1,0 +1,17 @@
+{
+  "data": {
+    "accepted_steps": 1,
+    "artifact": "pops.artifact.v1:sha256:e53f974fe8f1edbe5dac5bccb5b9eee5257a5db171a883d30a42ea437f7b425c",
+    "coefficient_range": [
+      1.2548036798991924,
+      1.7451963201008076
+    ],
+    "final_time": 0.125,
+    "potential_l2": 0.004309022837832237,
+    "potential_mean": -1.3552527156068805e-20,
+    "workflow": "variable-coefficient-field"
+  },
+  "original_log": "candidate-final-v29-representative-variable-coefficient-field-r2.log",
+  "original_log_sha256": "491bab6c7589ce9f88ad915f1fb0dbe626053e5402de1bad98c8802ec5fe9114",
+  "schema": "pops.public-cli-output-extract.v1"
+}

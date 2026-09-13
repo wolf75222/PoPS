@@ -1,0 +1,82 @@
+{
+  "not_a_new_execution": true,
+  "original_path": "candidate-final-v28-matrix-v18-amr-field-map-continuations-dim2-result.json",
+  "original_sha256": "292cef2e8827f9c9c687d41fae8807272c3723245fece4df7ac952a43491da00",
+  "receipt_fields": {
+    "case_results": [
+      {
+        "failure": null,
+        "name": "test_public_amr_maps_and_repeated_field_solves_share_one_region_driver[False]",
+        "seconds": 6.037
+      },
+      {
+        "failure": null,
+        "name": "test_public_amr_maps_and_repeated_field_solves_share_one_region_driver[True]",
+        "seconds": 5.827
+      },
+      {
+        "failure": null,
+        "name": "test_native_repeated_amr_field_maps_consume_current_stage_and_restart[False]",
+        "seconds": 128.67
+      },
+      {
+        "failure": null,
+        "name": "test_native_repeated_amr_field_maps_consume_current_stage_and_restart[True]",
+        "seconds": 24.868
+      },
+      {
+        "failure": null,
+        "name": "test_native_failed_field_map_attempt_rolls_back_then_reuses_context",
+        "seconds": 91.681
+      }
+    ],
+    "checkout_clean": true,
+    "command": [
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v28-dim2-env/bin/python",
+      "-B",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/unit-diagnostic-live-runner.py",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v28-matrix-v18-amr-field-map-continuations-dim2-live.json"
+    ],
+    "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v28-proof",
+    "elapsed_seconds": 259.06344620796153,
+    "environment": {
+      "Kokkos_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+      "OMP_NUM_THREADS": "2",
+      "OMP_PROC_BIND": "false",
+      "POPS_CACHE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v28-matrix-v18-amr-field-map-continuations-dim2-cache",
+      "POPS_DIFFUSION_QUALIFICATION_EVIDENCE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v28-matrix-v18-amr-field-map-continuations-dim2-measurements",
+      "POPS_FIELD_QUALIFICATION_EVIDENCE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v28-matrix-v18-amr-field-map-continuations-dim2-field-measurements",
+      "POPS_INCLUDE": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v28-dim2-env/lib/python3.12/site-packages/pops/include",
+      "POPS_INCLUDE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v28-dim2-env/lib/python3.12/site-packages/pops/include",
+      "POPS_KEEP_GENERATED": "1",
+      "POPS_KOKKOS_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+      "POPS_NATIVE_DIM": "2",
+      "POPS_NATIVE_REQUIRED": "1",
+      "POPS_PROVE_INSTALLED_COMPONENT_PACKAGE": "0",
+      "POPS_QUALIFICATION_DIM": "2",
+      "POPS_REQUIRE_NATIVE_TESTS": "1",
+      "POPS_TEST_INTERACTION_BANDS": "2",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "PYTHONNOUSERSITE": "1",
+      "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+      "REQUIRE_NATIVE_TESTS": "1"
+    },
+    "expected_tests": 5,
+    "passed": true,
+    "proofs_equal": true,
+    "results": {
+      "errors": 0,
+      "failures": 0,
+      "incomplete_markers": 0,
+      "skips": 0,
+      "tests": 5
+    },
+    "returncode": 0,
+    "runner_sha256": "976c65cf2df670a4ab777d85455bf8089a1776854d032ce06a1b121d4b86be4b",
+    "runner_unchanged": true,
+    "selection": "Entire declared modules, no filtering, no reduced workload, no process timeout",
+    "source": "fc1ff0c3563f097971a458b10d5fe45d676ffd22",
+    "sources_unchanged": true
+  },
+  "schema": "pops.evidence.transparent-extract.v1"
+}

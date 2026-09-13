@@ -1,0 +1,200 @@
+{
+  "not_a_new_execution": true,
+  "original_path": "candidate-final-v4-matrix-interactions-matrix-mpi-result.json",
+  "original_sha256": "7e212da05c70aa713634b79d1e1638be9b65d1dab7768b50c43adf8507828722",
+  "receipt_fields": {
+    "case_results": [
+      {
+        "failure": null,
+        "name": "test_native_footprint_preserves_detached_typed_argument_authority",
+        "seconds": 3.387
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_numerical_matrix[n16-transparent]",
+        "seconds": 21.364
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_numerical_matrix[n16-native]",
+        "seconds": 22.666
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_numerical_matrix[n32-transparent]",
+        "seconds": 12.593
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_numerical_matrix[n32-native]",
+        "seconds": 13.615
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_numerical_matrix[n64-transparent]",
+        "seconds": 12.278
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_numerical_matrix[n64-native]",
+        "seconds": 13.44
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_timing_matrix[cost-n16-unshared]",
+        "seconds": 43.878
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_timing_matrix[cost-n16-shared]",
+        "seconds": 34.163
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_timing_matrix[cost-n32-unshared]",
+        "seconds": 35.063
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_timing_matrix[cost-n32-shared]",
+        "seconds": 26.664
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_timing_matrix[cost-n64-unshared]",
+        "seconds": 35.377
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_timing_matrix[cost-n64-shared]",
+        "seconds": 26.29
+      },
+      {
+        "failure": null,
+        "name": "test_native_footprint_preserves_detached_typed_argument_authority",
+        "seconds": 3.383
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_numerical_matrix[n16-transparent]",
+        "seconds": 21.366
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_numerical_matrix[n16-native]",
+        "seconds": 22.666
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_numerical_matrix[n32-transparent]",
+        "seconds": 12.593
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_numerical_matrix[n32-native]",
+        "seconds": 13.615
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_numerical_matrix[n64-transparent]",
+        "seconds": 12.278
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_numerical_matrix[n64-native]",
+        "seconds": 13.44
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_timing_matrix[cost-n16-unshared]",
+        "seconds": 43.878
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_timing_matrix[cost-n16-shared]",
+        "seconds": 34.163
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_timing_matrix[cost-n32-unshared]",
+        "seconds": 35.063
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_timing_matrix[cost-n32-shared]",
+        "seconds": 26.664
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_timing_matrix[cost-n64-unshared]",
+        "seconds": 35.377
+      },
+      {
+        "failure": null,
+        "name": "test_full_interaction_timing_matrix[cost-n64-shared]",
+        "seconds": 26.289
+      }
+    ],
+    "checkout_clean": true,
+    "command": [
+      "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/mpiexec",
+      "-n",
+      "2",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v4-dim2-env/bin/python",
+      "-B",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/frozen-native-mpi-pytest-driver.py",
+      "candidate-final-v4-matrix-interactions-matrix-mpi",
+      "-p",
+      "no:cacheprovider",
+      "-q",
+      "-o",
+      "xfail_strict=true",
+      "tests/python/unit/codegen/test_native_interaction_matrix.py",
+      "--tb=short"
+    ],
+    "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v4-proof",
+    "driver_sha256": "a9425c0213a9504669f1a508a718d5d8e3289a222509bf6fb10333afd4f29c1d",
+    "elapsed_seconds": 302.54638050001813,
+    "environment": {
+      "Kokkos_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+      "OMP_NUM_THREADS": "2",
+      "OMP_PROC_BIND": "false",
+      "POPS_CACHE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v4-matrix-interactions-matrix-mpi-cache",
+      "POPS_DIFFUSION_QUALIFICATION_EVIDENCE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v4-matrix-interactions-matrix-mpi-measurements",
+      "POPS_FIELD_QUALIFICATION_EVIDENCE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v4-matrix-interactions-matrix-mpi-field-measurements",
+      "POPS_INCLUDE": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v4-dim2-env/lib/python3.12/site-packages/pops/include",
+      "POPS_INCLUDE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v4-dim2-env/lib/python3.12/site-packages/pops/include",
+      "POPS_KEEP_GENERATED": "1",
+      "POPS_KOKKOS_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+      "POPS_NATIVE_DIM": "2",
+      "POPS_NATIVE_REQUIRED": "1",
+      "POPS_QUALIFICATION_DIM": "2",
+      "POPS_REQUIRE_NATIVE_TESTS": "1",
+      "POPS_TEST_INTERACTION_BANDS": "2",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "PYTHONNOUSERSITE": "1",
+      "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+      "REQUIRE_NATIVE_TESTS": "1"
+    },
+    "expected_tests_per_rank": 13,
+    "passed": true,
+    "proofs_equal": true,
+    "ranks": 2,
+    "results": {
+      "errors": 0,
+      "failures": 0,
+      "skips": 0,
+      "tests": 26
+    },
+    "returncode": 0,
+    "runner_sha256": "74c4f7fc950d2cd7dc70367af3b7aa8dfde46d300799231832614467fc94251a",
+    "selection": "Entire declared modules, no filtering, no reduced workload, no process timeout",
+    "source": "2d8ba4ecb6c3b3f469156a78cb12133ebf5fb8dd",
+    "sources_unchanged": true,
+    "tests_per_rank": [
+      13,
+      13
+    ]
+  },
+  "schema": "pops.evidence.transparent-extract.v1"
+}

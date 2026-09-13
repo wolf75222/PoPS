@@ -1,4 +1,6 @@
-# M3-M6 active evidence ledger
+# M3-M6 historical evidence ledger
+
+This ledger preserves earlier source-specific results and pending states. For the current implementation, representative validation, and evidence-reuse decisions, see [the migration results](migration_m3_m8_results.md). References below to “active” or “current” describe their original recorded snapshots.
 
 This is the active qualification ledger for the 15 M3-M6 execution leaves. The current integration checkout is 08ff8a6c689fea8b5ba30480343b3ee35524f019 (08ff8a6), with the recent serial-prepare, Newton, execution-context and AMR fixture/report repairs in its lineage. The authoritative no-overlay interaction/provider receipts were executed at source 34a8acc with fixture/test follow-up 3826eb4; the exact periodic SG and combined-face receipts are bounded executions at source 6b2a1c3. Those pins identify the receipts and are not a current-source closure claim. This ledger remains active and does not claim final closure.
 

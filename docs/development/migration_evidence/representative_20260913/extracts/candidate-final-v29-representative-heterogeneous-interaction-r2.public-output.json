@@ -1,0 +1,44 @@
+{
+  "data": {
+    "accepted_steps": 1,
+    "artifact": "pops.artifact.v1:sha256:7ebc3365a4c3da80885b2ab12c6ed55e85915ddcd201917b9ee3f2272d12a70e",
+    "final_time": 0.001,
+    "left": {
+      "block": "left",
+      "component_means": [
+        1.9985,
+        4.998125000000001
+      ],
+      "maximum": 4.998125,
+      "minimum": 1.9985,
+      "shape": [
+        2,
+        16,
+        16
+      ]
+    },
+    "pair_mean_defect": {
+      "0": 0.0,
+      "1": 0.0
+    },
+    "right": {
+      "block": "right",
+      "component_means": [
+        1.0015,
+        3.001874999999999,
+        2.0
+      ],
+      "maximum": 3.001875,
+      "minimum": 1.0015,
+      "shape": [
+        3,
+        16,
+        16
+      ]
+    },
+    "workflow": "heterogeneous-interaction"
+  },
+  "original_log": "candidate-final-v29-representative-heterogeneous-interaction-r2.log",
+  "original_log_sha256": "88430f4b779b58d9bc8fbe31fefb1ea0887465bf71f3bff410625c71a41d0491",
+  "schema": "pops.public-cli-output-extract.v1"
+}

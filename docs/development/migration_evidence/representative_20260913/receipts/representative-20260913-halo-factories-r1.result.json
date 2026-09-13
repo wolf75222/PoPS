@@ -1,0 +1,21 @@
+{
+  "command": [
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/build/migration-native/bin/test_generated_amr_system_block",
+    "--gtest_filter=GeneratedAmrSystemBlock.ProgramStateHaloRequirementReachesUniformAndAmrFactories:GeneratedAmrSystemBlock.ProgramStateRouteDoesNotInstantiateHyperbolicPhysics",
+    "--gtest_output=xml:/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-halo-factories-r1.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "ff4187844104b5a798cfe4af04b754c6ca4c864c",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T11:09:38.993104+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "2"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 1.4246484579634853,
+  "source_head_after": "ff4187844104b5a798cfe4af04b754c6ca4c864c",
+  "source_status_after": "",
+  "log_sha256": "6dedd52b530d2c78e208d0eef9465669485db257ce53cb98f4f79b42ea3e023b"
+}

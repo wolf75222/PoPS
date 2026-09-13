@@ -1,0 +1,1043 @@
+{
+  "schema_version": 1,
+  "before_record": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-before.json",
+  "source_head": "34a8acc31f86841abd5fce039eed3c762be21098",
+  "python_overlay": false,
+  "installed_package": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-closure-env/lib/python3.12/site-packages/pops",
+  "native_sha256": "0ebcaef693841716bc268ebbd1d87139bd442531b1a568d2c8818a69f97379b8",
+  "wheel_sha256": "f4c8f3ba154f869d8bc95304a7d0ae20b5915faa5a83df198f6b2487cfc99f38",
+  "after_package_members_checked": 966,
+  "after_package_changed": [],
+  "after_fixture_changed": [],
+  "after_source_status": "",
+  "executed_batches": [
+    {
+      "name": "closure-interactions-matrix-mpi2-rank0",
+      "totals": {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "0",
+        "tests": "13",
+        "time": "523.989",
+        "timestamp": "2026-09-08T12:28:55.087577+02:00",
+        "hostname": "macbookpro.home"
+      },
+      "log": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-matrix-mpi2-rank0.log",
+      "junit": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-matrix-mpi2-rank0.xml",
+      "tests": [
+        {
+          "name": "test_native_footprint_preserves_detached_typed_argument_authority",
+          "seconds": "7.709",
+          "properties": {}
+        },
+        {
+          "name": "test_full_interaction_numerical_matrix[n16-transparent]",
+          "seconds": "49.782",
+          "properties": {
+            "n": "16",
+            "native_mpi_ranks": "2",
+            "realization": "transparent",
+            "local_cells": "128",
+            "accepted_steps": "100",
+            "joint_stage_evaluations_per_step": "2",
+            "accepted_exchange_records_last_step": "8",
+            "compile_seconds": "39.88340916598099",
+            "program_source_bytes": "25620",
+            "program_binary_bytes": "274192"
+          }
+        },
+        {
+          "name": "test_full_interaction_numerical_matrix[n16-native]",
+          "seconds": "60.165",
+          "properties": {
+            "actual_native_calls_local": "25600",
+            "n": "16",
+            "native_mpi_ranks": "2",
+            "realization": "native",
+            "local_cells": "128",
+            "accepted_steps": "100",
+            "joint_stage_evaluations_per_step": "2",
+            "accepted_exchange_records_last_step": "8",
+            "compile_seconds": "44.978274541994324",
+            "program_source_bytes": "28604",
+            "program_binary_bytes": "300832"
+          }
+        },
+        {
+          "name": "test_full_interaction_numerical_matrix[n32-transparent]",
+          "seconds": "27.046",
+          "properties": {
+            "n": "32",
+            "native_mpi_ranks": "2",
+            "realization": "transparent",
+            "local_cells": "512",
+            "accepted_steps": "100",
+            "joint_stage_evaluations_per_step": "2",
+            "accepted_exchange_records_last_step": "8",
+            "compile_seconds": "17.8129355830024",
+            "program_source_bytes": "25620",
+            "program_binary_bytes": "274192"
+          }
+        },
+        {
+          "name": "test_full_interaction_numerical_matrix[n32-native]",
+          "seconds": "30.677",
+          "properties": {
+            "actual_native_calls_local": "102400",
+            "n": "32",
+            "native_mpi_ranks": "2",
+            "realization": "native",
+            "local_cells": "512",
+            "accepted_steps": "100",
+            "joint_stage_evaluations_per_step": "2",
+            "accepted_exchange_records_last_step": "8",
+            "compile_seconds": "19.665170874999603",
+            "program_source_bytes": "28604",
+            "program_binary_bytes": "300832"
+          }
+        },
+        {
+          "name": "test_full_interaction_numerical_matrix[n64-transparent]",
+          "seconds": "23.111",
+          "properties": {
+            "n": "64",
+            "native_mpi_ranks": "2",
+            "realization": "transparent",
+            "local_cells": "2048",
+            "accepted_steps": "100",
+            "joint_stage_evaluations_per_step": "2",
+            "accepted_exchange_records_last_step": "8",
+            "compile_seconds": "15.08570491601131",
+            "program_source_bytes": "25620",
+            "program_binary_bytes": "274192"
+          }
+        },
+        {
+          "name": "test_full_interaction_numerical_matrix[n64-native]",
+          "seconds": "27.191",
+          "properties": {
+            "actual_native_calls_local": "409600",
+            "n": "64",
+            "native_mpi_ranks": "2",
+            "realization": "native",
+            "local_cells": "2048",
+            "accepted_steps": "100",
+            "joint_stage_evaluations_per_step": "2",
+            "accepted_exchange_records_last_step": "8",
+            "compile_seconds": "18.339171875006286",
+            "program_source_bytes": "28604",
+            "program_binary_bytes": "300832"
+          }
+        },
+        {
+          "name": "test_full_interaction_timing_matrix[cost-n16-unshared]",
+          "seconds": "64.371",
+          "properties": {
+            "n": "16",
+            "realization": "unshared",
+            "timing_samples_seconds": "[0.19536670899833553, 0.2926552499993704, 0.24845158300013281, 0.932730915985303, 0.288095791998785, 0.2945494999876246, 0.26289920799899846]",
+            "timing_median_seconds": "0.288095791998785",
+            "timing_mad_seconds": "0.025196583999786526",
+            "timing_scope": "100 full accepted steps and native integral fence; bind/compile excluded",
+            "counter_instrumentation": "one atomic increment per native call on both matched routes",
+            "accepted_inventory_instrumentation": "omitted on both timing routes; qualified separately",
+            "actual_native_calls_local": "51200",
+            "materialized_rhs_fields_per_stage": "4",
+            "materialized_status_reason_fields_per_stage": "4",
+            "compile_seconds": "31.128324416000396",
+            "program_source_bytes": "30715",
+            "program_binary_bytes": "274448"
+          }
+        },
+        {
+          "name": "test_full_interaction_timing_matrix[cost-n16-shared]",
+          "seconds": "47.689",
+          "properties": {
+            "n": "16",
+            "realization": "shared",
+            "timing_samples_seconds": "[0.34251512499758974, 0.26282012500450946, 0.35684287501499057, 0.2268660830159206, 0.3255295419949107, 0.286740416981047, 0.13937504100613296]",
+            "timing_median_seconds": "0.286740416981047",
+            "timing_mad_seconds": "0.05577470801654272",
+            "timing_scope": "100 full accepted steps and native integral fence; bind/compile excluded",
+            "counter_instrumentation": "one atomic increment per native call on both matched routes",
+            "accepted_inventory_instrumentation": "omitted on both timing routes; qualified separately",
+            "actual_native_calls_local": "25600",
+            "materialized_rhs_fields_per_stage": "2",
+            "materialized_status_reason_fields_per_stage": "2",
+            "compile_seconds": "13.471798791986657",
+            "program_source_bytes": "20881",
+            "program_binary_bytes": "255584"
+          }
+        },
+        {
+          "name": "test_full_interaction_timing_matrix[cost-n32-unshared]",
+          "seconds": "71.526",
+          "properties": {
+            "n": "32",
+            "realization": "unshared",
+            "timing_samples_seconds": "[0.5383337500097696, 0.6420633749803528, 0.5753104159957729, 0.8752122920122929, 0.6732914170133881, 0.5752637909899931, 0.4327856659947429]",
+            "timing_median_seconds": "0.5753104159957729",
+            "timing_mad_seconds": "0.06675295898457989",
+            "timing_scope": "100 full accepted steps and native integral fence; bind/compile excluded",
+            "counter_instrumentation": "one atomic increment per native call on both matched routes",
+            "accepted_inventory_instrumentation": "omitted on both timing routes; qualified separately",
+            "actual_native_calls_local": "204800",
+            "materialized_rhs_fields_per_stage": "4",
+            "materialized_status_reason_fields_per_stage": "4",
+            "compile_seconds": "19.7959432079806",
+            "program_source_bytes": "30715",
+            "program_binary_bytes": "274448"
+          }
+        },
+        {
+          "name": "test_full_interaction_timing_matrix[cost-n32-shared]",
+          "seconds": "38.881",
+          "properties": {
+            "n": "32",
+            "realization": "shared",
+            "timing_samples_seconds": "[0.2758847500081174, 0.3802058329747524, 0.4091265419847332, 0.3702641669951845, 0.3057200000039302, 0.40571741599706, 0.22696620802162215]",
+            "timing_median_seconds": "0.3702641669951845",
+            "timing_mad_seconds": "0.0388623749895487",
+            "timing_scope": "100 full accepted steps and native integral fence; bind/compile excluded",
+            "counter_instrumentation": "one atomic increment per native call on both matched routes",
+            "accepted_inventory_instrumentation": "omitted on both timing routes; qualified separately",
+            "actual_native_calls_local": "102400",
+            "materialized_rhs_fields_per_stage": "2",
+            "materialized_status_reason_fields_per_stage": "2",
+            "compile_seconds": "12.18260295901564",
+            "program_source_bytes": "20881",
+            "program_binary_bytes": "255584"
+          }
+        },
+        {
+          "name": "test_full_interaction_timing_matrix[cost-n64-unshared]",
+          "seconds": "44.198",
+          "properties": {
+            "n": "64",
+            "realization": "unshared",
+            "timing_samples_seconds": "[0.27307154101436026, 0.26726666701142676, 0.2170456669991836, 0.32751708300202154, 0.24217562499688938, 0.4199372500006575, 0.26356958399992436]",
+            "timing_median_seconds": "0.26726666701142676",
+            "timing_mad_seconds": "0.02509104201453738",
+            "timing_scope": "100 full accepted steps and native integral fence; bind/compile excluded",
+            "counter_instrumentation": "one atomic increment per native call on both matched routes",
+            "accepted_inventory_instrumentation": "omitted on both timing routes; qualified separately",
+            "actual_native_calls_local": "819200",
+            "materialized_rhs_fields_per_stage": "4",
+            "materialized_status_reason_fields_per_stage": "4",
+            "compile_seconds": "15.57223295798758",
+            "program_source_bytes": "30715",
+            "program_binary_bytes": "274448"
+          }
+        },
+        {
+          "name": "test_full_interaction_timing_matrix[cost-n64-shared]",
+          "seconds": "30.604",
+          "properties": {
+            "n": "64",
+            "realization": "shared",
+            "timing_samples_seconds": "[0.1934027909883298, 0.17023741698358208, 0.18702591600595042, 0.26940341701265424, 0.16440337500534952, 0.2010379579733126, 0.41760354200960137]",
+            "timing_median_seconds": "0.1934027909883298",
+            "timing_mad_seconds": "0.02316537400474772",
+            "timing_scope": "100 full accepted steps and native integral fence; bind/compile excluded",
+            "counter_instrumentation": "one atomic increment per native call on both matched routes",
+            "accepted_inventory_instrumentation": "omitted on both timing routes; qualified separately",
+            "actual_native_calls_local": "409600",
+            "materialized_rhs_fields_per_stage": "2",
+            "materialized_status_reason_fields_per_stage": "2",
+            "compile_seconds": "9.730201667000074",
+            "program_source_bytes": "20881",
+            "program_binary_bytes": "255584"
+          }
+        }
+      ]
+    },
+    {
+      "name": "closure-interactions-matrix-mpi2-rank1",
+      "totals": {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "0",
+        "tests": "13",
+        "time": "523.983",
+        "timestamp": "2026-09-08T12:28:55.093070+02:00",
+        "hostname": "macbookpro.home"
+      },
+      "log": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-matrix-mpi2-rank1.log",
+      "junit": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-matrix-mpi2-rank1.xml",
+      "tests": [
+        {
+          "name": "test_native_footprint_preserves_detached_typed_argument_authority",
+          "seconds": "8.115",
+          "properties": {}
+        },
+        {
+          "name": "test_full_interaction_numerical_matrix[n16-transparent]",
+          "seconds": "49.470",
+          "properties": {
+            "n": "16",
+            "native_mpi_ranks": "2",
+            "realization": "transparent",
+            "local_cells": "128",
+            "accepted_steps": "100",
+            "joint_stage_evaluations_per_step": "2",
+            "accepted_exchange_records_last_step": "8",
+            "compile_seconds": "39.82408545797807",
+            "program_source_bytes": "25620",
+            "program_binary_bytes": "274192"
+          }
+        },
+        {
+          "name": "test_full_interaction_numerical_matrix[n16-native]",
+          "seconds": "60.157",
+          "properties": {
+            "actual_native_calls_local": "25600",
+            "n": "16",
+            "native_mpi_ranks": "2",
+            "realization": "native",
+            "local_cells": "128",
+            "accepted_steps": "100",
+            "joint_stage_evaluations_per_step": "2",
+            "accepted_exchange_records_last_step": "8",
+            "compile_seconds": "45.20258912499412",
+            "program_source_bytes": "28604",
+            "program_binary_bytes": "300832"
+          }
+        },
+        {
+          "name": "test_full_interaction_numerical_matrix[n32-transparent]",
+          "seconds": "27.046",
+          "properties": {
+            "n": "32",
+            "native_mpi_ranks": "2",
+            "realization": "transparent",
+            "local_cells": "512",
+            "accepted_steps": "100",
+            "joint_stage_evaluations_per_step": "2",
+            "accepted_exchange_records_last_step": "8",
+            "compile_seconds": "17.64963641599752",
+            "program_source_bytes": "25620",
+            "program_binary_bytes": "274192"
+          }
+        },
+        {
+          "name": "test_full_interaction_numerical_matrix[n32-native]",
+          "seconds": "30.678",
+          "properties": {
+            "actual_native_calls_local": "102400",
+            "n": "32",
+            "native_mpi_ranks": "2",
+            "realization": "native",
+            "local_cells": "512",
+            "accepted_steps": "100",
+            "joint_stage_evaluations_per_step": "2",
+            "accepted_exchange_records_last_step": "8",
+            "compile_seconds": "19.567693833989324",
+            "program_source_bytes": "28604",
+            "program_binary_bytes": "300832"
+          }
+        },
+        {
+          "name": "test_full_interaction_numerical_matrix[n64-transparent]",
+          "seconds": "23.107",
+          "properties": {
+            "n": "64",
+            "native_mpi_ranks": "2",
+            "realization": "transparent",
+            "local_cells": "2048",
+            "accepted_steps": "100",
+            "joint_stage_evaluations_per_step": "2",
+            "accepted_exchange_records_last_step": "8",
+            "compile_seconds": "15.052176541998051",
+            "program_source_bytes": "25620",
+            "program_binary_bytes": "274192"
+          }
+        },
+        {
+          "name": "test_full_interaction_numerical_matrix[n64-native]",
+          "seconds": "27.196",
+          "properties": {
+            "actual_native_calls_local": "409600",
+            "n": "64",
+            "native_mpi_ranks": "2",
+            "realization": "native",
+            "local_cells": "2048",
+            "accepted_steps": "100",
+            "joint_stage_evaluations_per_step": "2",
+            "accepted_exchange_records_last_step": "8",
+            "compile_seconds": "18.343085083004553",
+            "program_source_bytes": "28604",
+            "program_binary_bytes": "300832"
+          }
+        },
+        {
+          "name": "test_full_interaction_timing_matrix[cost-n16-unshared]",
+          "seconds": "64.369",
+          "properties": {
+            "n": "16",
+            "realization": "unshared",
+            "timing_samples_seconds": "[0.19536745897494256, 0.29261916599352844, 0.24844887500512414, 0.9327425000083167, 0.28809587500290945, 0.2945474580046721, 0.26290145798702724]",
+            "timing_median_seconds": "0.28809587500290945",
+            "timing_mad_seconds": "0.02519441701588221",
+            "timing_scope": "100 full accepted steps and native integral fence; bind/compile excluded",
+            "counter_instrumentation": "one atomic increment per native call on both matched routes",
+            "accepted_inventory_instrumentation": "omitted on both timing routes; qualified separately",
+            "actual_native_calls_local": "51200",
+            "materialized_rhs_fields_per_stage": "4",
+            "materialized_status_reason_fields_per_stage": "4",
+            "compile_seconds": "31.17158674998791",
+            "program_source_bytes": "30715",
+            "program_binary_bytes": "274448"
+          }
+        },
+        {
+          "name": "test_full_interaction_timing_matrix[cost-n16-shared]",
+          "seconds": "47.689",
+          "properties": {
+            "n": "16",
+            "realization": "shared",
+            "timing_samples_seconds": "[0.3425167500099633, 0.2628232919960283, 0.35684033401776105, 0.2268666250165552, 0.3255295830022078, 0.2867474169761408, 0.1393813750182744]",
+            "timing_median_seconds": "0.2867474169761408",
+            "timing_mad_seconds": "0.05576933303382248",
+            "timing_scope": "100 full accepted steps and native integral fence; bind/compile excluded",
+            "counter_instrumentation": "one atomic increment per native call on both matched routes",
+            "accepted_inventory_instrumentation": "omitted on both timing routes; qualified separately",
+            "actual_native_calls_local": "25600",
+            "materialized_rhs_fields_per_stage": "2",
+            "materialized_status_reason_fields_per_stage": "2",
+            "compile_seconds": "13.40958400000818",
+            "program_source_bytes": "20881",
+            "program_binary_bytes": "255584"
+          }
+        },
+        {
+          "name": "test_full_interaction_timing_matrix[cost-n32-unshared]",
+          "seconds": "71.525",
+          "properties": {
+            "n": "32",
+            "realization": "unshared",
+            "timing_samples_seconds": "[0.5383400419959798, 0.6436872910126112, 0.5753307919949293, 0.8752165420155507, 0.6732842499914113, 0.5752629170019645, 0.43278449997887947]",
+            "timing_median_seconds": "0.5753307919949293",
+            "timing_mad_seconds": "0.06835649901768193",
+            "timing_scope": "100 full accepted steps and native integral fence; bind/compile excluded",
+            "counter_instrumentation": "one atomic increment per native call on both matched routes",
+            "accepted_inventory_instrumentation": "omitted on both timing routes; qualified separately",
+            "actual_native_calls_local": "204800",
+            "materialized_rhs_fields_per_stage": "4",
+            "materialized_status_reason_fields_per_stage": "4",
+            "compile_seconds": "19.829552874987712",
+            "program_source_bytes": "30715",
+            "program_binary_bytes": "274448"
+          }
+        },
+        {
+          "name": "test_full_interaction_timing_matrix[cost-n32-shared]",
+          "seconds": "38.882",
+          "properties": {
+            "n": "32",
+            "realization": "shared",
+            "timing_samples_seconds": "[0.27588895900407806, 0.38020916702225804, 0.4094005420047324, 0.3702888330153655, 0.305719833006151, 0.4057162909884937, 0.22692754201125354]",
+            "timing_median_seconds": "0.3702888330153655",
+            "timing_mad_seconds": "0.03911170898936689",
+            "timing_scope": "100 full accepted steps and native integral fence; bind/compile excluded",
+            "counter_instrumentation": "one atomic increment per native call on both matched routes",
+            "accepted_inventory_instrumentation": "omitted on both timing routes; qualified separately",
+            "actual_native_calls_local": "102400",
+            "materialized_rhs_fields_per_stage": "2",
+            "materialized_status_reason_fields_per_stage": "2",
+            "compile_seconds": "12.245883959025377",
+            "program_source_bytes": "20881",
+            "program_binary_bytes": "255584"
+          }
+        },
+        {
+          "name": "test_full_interaction_timing_matrix[cost-n64-unshared]",
+          "seconds": "44.198",
+          "properties": {
+            "n": "64",
+            "realization": "unshared",
+            "timing_samples_seconds": "[0.2730686250142753, 0.26726687501650304, 0.21704929100815207, 0.32751745800487697, 0.24219050002284348, 0.41993804200319573, 0.26353875000495464]",
+            "timing_median_seconds": "0.26726687501650304",
+            "timing_mad_seconds": "0.025076374993659556",
+            "timing_scope": "100 full accepted steps and native integral fence; bind/compile excluded",
+            "counter_instrumentation": "one atomic increment per native call on both matched routes",
+            "accepted_inventory_instrumentation": "omitted on both timing routes; qualified separately",
+            "actual_native_calls_local": "819200",
+            "materialized_rhs_fields_per_stage": "4",
+            "materialized_status_reason_fields_per_stage": "4",
+            "compile_seconds": "15.694560541975079",
+            "program_source_bytes": "30715",
+            "program_binary_bytes": "274448"
+          }
+        },
+        {
+          "name": "test_full_interaction_timing_matrix[cost-n64-shared]",
+          "seconds": "30.604",
+          "properties": {
+            "n": "64",
+            "realization": "shared",
+            "timing_samples_seconds": "[0.1934032920107711, 0.17024112498620525, 0.18702691700309515, 0.26939724999829195, 0.1644027919974178, 0.20104233399615623, 0.41760941699612886]",
+            "timing_median_seconds": "0.1934032920107711",
+            "timing_mad_seconds": "0.02316216702456586",
+            "timing_scope": "100 full accepted steps and native integral fence; bind/compile excluded",
+            "counter_instrumentation": "one atomic increment per native call on both matched routes",
+            "accepted_inventory_instrumentation": "omitted on both timing routes; qualified separately",
+            "actual_native_calls_local": "409600",
+            "materialized_rhs_fields_per_stage": "2",
+            "materialized_status_reason_fields_per_stage": "2",
+            "compile_seconds": "9.802959624998039",
+            "program_source_bytes": "20881",
+            "program_binary_bytes": "255584"
+          }
+        }
+      ]
+    },
+    {
+      "name": "closure-interactions-guard-solve-mpi2-rank0",
+      "totals": {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "0",
+        "tests": "15",
+        "time": "235.054",
+        "timestamp": "2026-09-08T12:28:55.088716+02:00",
+        "hostname": "macbookpro.home"
+      },
+      "log": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-guard-solve-mpi2-rank0.log",
+      "junit": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-guard-solve-mpi2-rank0.xml",
+      "tests": [
+        {
+          "name": "test_imported_coupled_solve_requires_explicit_and_authenticated_derivative",
+          "seconds": "5.295",
+          "properties": {}
+        },
+        {
+          "name": "test_imported_coupled_solve_selects_actual_jacobian_route[approximate-approximate(]",
+          "seconds": "2.961",
+          "properties": {}
+        },
+        {
+          "name": "test_imported_coupled_solve_selects_actual_jacobian_route[finite_difference-None]",
+          "seconds": "3.134",
+          "properties": {}
+        },
+        {
+          "name": "test_native_full_coupled_solve_iterates_and_conserves[exact]",
+          "seconds": "41.168",
+          "properties": {
+            "selected_derivative": "exact",
+            "actual_residual_native_calls_local": "38400",
+            "actual_jacobian_calls_local": "25600",
+            "compile_seconds": "36.213905042008264",
+            "program_binary_bytes": "250944"
+          }
+        },
+        {
+          "name": "test_failed_imported_iterate_cannot_publish_any_recipient[exact]",
+          "seconds": "2.077",
+          "properties": {
+            "native_mpi_ranks": "2",
+            "invalid_input_global_cell": "[15, 15]",
+            "failure_category_all_ranks": "('StepAttemptRejected', 'StepAttemptRejected')"
+          }
+        },
+        {
+          "name": "test_native_full_coupled_solve_iterates_and_conserves[approximate]",
+          "seconds": "27.978",
+          "properties": {
+            "selected_derivative": "approximate",
+            "actual_residual_native_calls_local": "51200",
+            "actual_jacobian_calls_local": "38400",
+            "compile_seconds": "22.65657474999898",
+            "program_binary_bytes": "250944"
+          }
+        },
+        {
+          "name": "test_failed_imported_iterate_cannot_publish_any_recipient[approximate]",
+          "seconds": "2.243",
+          "properties": {
+            "native_mpi_ranks": "2",
+            "invalid_input_global_cell": "[15, 15]",
+            "failure_category_all_ranks": "('StepAttemptRejected', 'StepAttemptRejected')"
+          }
+        },
+        {
+          "name": "test_native_full_coupled_solve_iterates_and_conserves[finite_difference]",
+          "seconds": "22.131",
+          "properties": {
+            "selected_derivative": "finite_difference",
+            "actual_residual_native_calls_local": "166400",
+            "actual_jacobian_calls_local": "0",
+            "compile_seconds": "16.376869416009868",
+            "program_binary_bytes": "250896"
+          }
+        },
+        {
+          "name": "test_failed_imported_iterate_cannot_publish_any_recipient[finite_difference]",
+          "seconds": "2.460",
+          "properties": {
+            "native_mpi_ranks": "2",
+            "invalid_input_global_cell": "[15, 15]",
+            "failure_category_all_ranks": "('StepAttemptRejected', 'StepAttemptRejected')"
+          }
+        },
+        {
+          "name": "test_native_interaction_guard_prevents_eager_fallible_calls[inactive-invalid-input]",
+          "seconds": "39.592",
+          "properties": {
+            "selected_guard": "False",
+            "actual_native_calls_local": "0",
+            "accepted_steps": "100",
+            "guard_contexts": "two recipient branches retain distinct selected evaluation contexts"
+          }
+        },
+        {
+          "name": "test_native_interaction_guard_prevents_eager_fallible_calls[active-valid-input]",
+          "seconds": "3.212",
+          "properties": {
+            "selected_guard": "True",
+            "actual_native_calls_local": "25600",
+            "accepted_steps": "100",
+            "guard_contexts": "two recipient branches retain distinct selected evaluation contexts"
+          }
+        },
+        {
+          "name": "test_rank_local_native_failure_in_selected_arm_rolls_back",
+          "seconds": "2.534",
+          "properties": {
+            "native_mpi_ranks": "2",
+            "actual_rejected_attempt_calls_local": "128",
+            "later_selected_recipient_calls": "0"
+          }
+        },
+        {
+          "name": "test_repeated_native_projection_and_compensating_accepted_weight[16]",
+          "seconds": "37.074",
+          "properties": {
+            "n": "16",
+            "actual_joint_calls_local": "12800",
+            "left_mathematical_occurrences": "2",
+            "left_accepted_weight": "1/2",
+            "accepted_records_last_step": "6",
+            "accepted_steps": "100"
+          }
+        },
+        {
+          "name": "test_repeated_native_projection_and_compensating_accepted_weight[32]",
+          "seconds": "22.625",
+          "properties": {
+            "n": "32",
+            "actual_joint_calls_local": "51200",
+            "left_mathematical_occurrences": "2",
+            "left_accepted_weight": "1/2",
+            "accepted_records_last_step": "6",
+            "accepted_steps": "100"
+          }
+        },
+        {
+          "name": "test_repeated_native_projection_and_compensating_accepted_weight[64]",
+          "seconds": "19.450",
+          "properties": {
+            "n": "64",
+            "actual_joint_calls_local": "204800",
+            "left_mathematical_occurrences": "2",
+            "left_accepted_weight": "1/2",
+            "accepted_records_last_step": "6",
+            "accepted_steps": "100"
+          }
+        }
+      ]
+    },
+    {
+      "name": "closure-interactions-guard-solve-mpi2-rank1",
+      "totals": {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "0",
+        "tests": "15",
+        "time": "235.050",
+        "timestamp": "2026-09-08T12:28:55.092775+02:00",
+        "hostname": "macbookpro.home"
+      },
+      "log": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-guard-solve-mpi2-rank1.log",
+      "junit": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-guard-solve-mpi2-rank1.xml",
+      "tests": [
+        {
+          "name": "test_imported_coupled_solve_requires_explicit_and_authenticated_derivative",
+          "seconds": "4.985",
+          "properties": {}
+        },
+        {
+          "name": "test_imported_coupled_solve_selects_actual_jacobian_route[approximate-approximate(]",
+          "seconds": "3.046",
+          "properties": {}
+        },
+        {
+          "name": "test_imported_coupled_solve_selects_actual_jacobian_route[finite_difference-None]",
+          "seconds": "3.151",
+          "properties": {}
+        },
+        {
+          "name": "test_native_full_coupled_solve_iterates_and_conserves[exact]",
+          "seconds": "41.372",
+          "properties": {
+            "selected_derivative": "exact",
+            "actual_residual_native_calls_local": "38400",
+            "actual_jacobian_calls_local": "25600",
+            "compile_seconds": "36.4739020410052",
+            "program_binary_bytes": "250944"
+          }
+        },
+        {
+          "name": "test_failed_imported_iterate_cannot_publish_any_recipient[exact]",
+          "seconds": "2.083",
+          "properties": {
+            "native_mpi_ranks": "2",
+            "invalid_input_global_cell": "[15, 15]",
+            "failure_category_all_ranks": "('StepAttemptRejected', 'StepAttemptRejected')"
+          }
+        },
+        {
+          "name": "test_native_full_coupled_solve_iterates_and_conserves[approximate]",
+          "seconds": "27.976",
+          "properties": {
+            "selected_derivative": "approximate",
+            "actual_residual_native_calls_local": "51200",
+            "actual_jacobian_calls_local": "38400",
+            "compile_seconds": "22.440570792008657",
+            "program_binary_bytes": "250944"
+          }
+        },
+        {
+          "name": "test_failed_imported_iterate_cannot_publish_any_recipient[approximate]",
+          "seconds": "2.246",
+          "properties": {
+            "native_mpi_ranks": "2",
+            "invalid_input_global_cell": "[15, 15]",
+            "failure_category_all_ranks": "('StepAttemptRejected', 'StepAttemptRejected')"
+          }
+        },
+        {
+          "name": "test_native_full_coupled_solve_iterates_and_conserves[finite_difference]",
+          "seconds": "22.122",
+          "properties": {
+            "selected_derivative": "finite_difference",
+            "actual_residual_native_calls_local": "166400",
+            "actual_jacobian_calls_local": "0",
+            "compile_seconds": "16.375376499985578",
+            "program_binary_bytes": "250896"
+          }
+        },
+        {
+          "name": "test_failed_imported_iterate_cannot_publish_any_recipient[finite_difference]",
+          "seconds": "2.458",
+          "properties": {
+            "native_mpi_ranks": "2",
+            "invalid_input_global_cell": "[15, 15]",
+            "failure_category_all_ranks": "('StepAttemptRejected', 'StepAttemptRejected')"
+          }
+        },
+        {
+          "name": "test_native_interaction_guard_prevents_eager_fallible_calls[inactive-invalid-input]",
+          "seconds": "39.589",
+          "properties": {
+            "selected_guard": "False",
+            "actual_native_calls_local": "0",
+            "accepted_steps": "100",
+            "guard_contexts": "two recipient branches retain distinct selected evaluation contexts"
+          }
+        },
+        {
+          "name": "test_native_interaction_guard_prevents_eager_fallible_calls[active-valid-input]",
+          "seconds": "3.212",
+          "properties": {
+            "selected_guard": "True",
+            "actual_native_calls_local": "25600",
+            "accepted_steps": "100",
+            "guard_contexts": "two recipient branches retain distinct selected evaluation contexts"
+          }
+        },
+        {
+          "name": "test_rank_local_native_failure_in_selected_arm_rolls_back",
+          "seconds": "2.534",
+          "properties": {
+            "native_mpi_ranks": "2",
+            "actual_rejected_attempt_calls_local": "127",
+            "later_selected_recipient_calls": "0"
+          }
+        },
+        {
+          "name": "test_repeated_native_projection_and_compensating_accepted_weight[16]",
+          "seconds": "37.083",
+          "properties": {
+            "n": "16",
+            "actual_joint_calls_local": "12800",
+            "left_mathematical_occurrences": "2",
+            "left_accepted_weight": "1/2",
+            "accepted_records_last_step": "6",
+            "accepted_steps": "100"
+          }
+        },
+        {
+          "name": "test_repeated_native_projection_and_compensating_accepted_weight[32]",
+          "seconds": "22.625",
+          "properties": {
+            "n": "32",
+            "actual_joint_calls_local": "51200",
+            "left_mathematical_occurrences": "2",
+            "left_accepted_weight": "1/2",
+            "accepted_records_last_step": "6",
+            "accepted_steps": "100"
+          }
+        },
+        {
+          "name": "test_repeated_native_projection_and_compensating_accepted_weight[64]",
+          "seconds": "19.450",
+          "properties": {
+            "n": "64",
+            "actual_joint_calls_local": "204800",
+            "left_mathematical_occurrences": "2",
+            "left_accepted_weight": "1/2",
+            "accepted_records_last_step": "6",
+            "accepted_steps": "100"
+          }
+        }
+      ]
+    },
+    {
+      "name": "closure-interactions-native-rank1",
+      "totals": {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "0",
+        "tests": "19",
+        "time": "462.234",
+        "timestamp": "2026-09-08T12:28:55.076400+02:00",
+        "hostname": "macbookpro.home"
+      },
+      "log": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-native-rank1.log",
+      "junit": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/closure-interactions-native-rank1.xml",
+      "tests": [
+        {
+          "name": "test_full_native_joint_constitutive_face_matrix[16]",
+          "seconds": "34.015",
+          "properties": {
+            "n": "16",
+            "accepted_steps": "100",
+            "actual_primal_calls_local": "51200",
+            "actual_exact_jacobian_calls_local": "51200",
+            "constitutive_sampling": "one call per active cell per stage; materialized W/A shared by adjacent faces",
+            "compile_seconds": "28.6170689999999",
+            "program_source_bytes": "18952",
+            "program_binary_bytes": "452496"
+          }
+        },
+        {
+          "name": "test_failed_constitutive_endpoint_cannot_publish[16]",
+          "seconds": "1.680",
+          "properties": {}
+        },
+        {
+          "name": "test_full_native_joint_constitutive_face_matrix[32]",
+          "seconds": "28.956",
+          "properties": {
+            "n": "32",
+            "accepted_steps": "100",
+            "actual_primal_calls_local": "204800",
+            "actual_exact_jacobian_calls_local": "204800",
+            "constitutive_sampling": "one call per active cell per stage; materialized W/A shared by adjacent faces",
+            "compile_seconds": "14.23580641701119",
+            "program_source_bytes": "18952",
+            "program_binary_bytes": "452496"
+          }
+        },
+        {
+          "name": "test_failed_constitutive_endpoint_cannot_publish[32]",
+          "seconds": "1.982",
+          "properties": {}
+        },
+        {
+          "name": "test_full_native_joint_constitutive_face_matrix[64]",
+          "seconds": "57.652",
+          "properties": {
+            "n": "64",
+            "accepted_steps": "100",
+            "actual_primal_calls_local": "819200",
+            "actual_exact_jacobian_calls_local": "819200",
+            "constitutive_sampling": "one call per active cell per stage; materialized W/A shared by adjacent faces",
+            "compile_seconds": "19.394132541987346",
+            "program_source_bytes": "18952",
+            "program_binary_bytes": "452496"
+          }
+        },
+        {
+          "name": "test_failed_constitutive_endpoint_cannot_publish[64]",
+          "seconds": "1.259",
+          "properties": {}
+        },
+        {
+          "name": "test_native_scalar_conservation_does_not_certify_collective_constraint[compatible-16]",
+          "seconds": "33.562",
+          "properties": {
+            "n": "16",
+            "diffusivities": "(1.0, 1.0)",
+            "accepted_steps": "100",
+            "scalar_inventory_tolerance": "1e-11",
+            "pointwise_collective_constraint_error": "1.9984014443252818e-15",
+            "claim": "each scalar conserves; only compatible joint law certifies y1+y2=1"
+          }
+        },
+        {
+          "name": "test_native_scalar_conservation_does_not_certify_collective_constraint[compatible-32]",
+          "seconds": "30.241",
+          "properties": {
+            "n": "32",
+            "diffusivities": "(1.0, 1.0)",
+            "accepted_steps": "100",
+            "scalar_inventory_tolerance": "1e-11",
+            "pointwise_collective_constraint_error": "6.661338147750939e-16",
+            "claim": "each scalar conserves; only compatible joint law certifies y1+y2=1"
+          }
+        },
+        {
+          "name": "test_native_scalar_conservation_does_not_certify_collective_constraint[compatible-64]",
+          "seconds": "68.819",
+          "properties": {
+            "n": "64",
+            "diffusivities": "(1.0, 1.0)",
+            "accepted_steps": "100",
+            "scalar_inventory_tolerance": "1e-11",
+            "pointwise_collective_constraint_error": "1.1102230246251565e-15",
+            "claim": "each scalar conserves; only compatible joint law certifies y1+y2=1"
+          }
+        },
+        {
+          "name": "test_native_scalar_conservation_does_not_certify_collective_constraint[unequal-counterexample-16]",
+          "seconds": "21.947",
+          "properties": {
+            "n": "16",
+            "diffusivities": "(1.0, 2.0)",
+            "accepted_steps": "100",
+            "scalar_inventory_tolerance": "1e-11",
+            "pointwise_collective_constraint_error": "0.0003800202270929365",
+            "claim": "each scalar conserves; only compatible joint law certifies y1+y2=1"
+          }
+        },
+        {
+          "name": "test_native_scalar_conservation_does_not_certify_collective_constraint[unequal-counterexample-32]",
+          "seconds": "26.887",
+          "properties": {
+            "n": "32",
+            "diffusivities": "(1.0, 2.0)",
+            "accepted_steps": "100",
+            "scalar_inventory_tolerance": "1e-11",
+            "pointwise_collective_constraint_error": "0.00038931796816443764",
+            "claim": "each scalar conserves; only compatible joint law certifies y1+y2=1"
+          }
+        },
+        {
+          "name": "test_native_scalar_conservation_does_not_certify_collective_constraint[unequal-counterexample-64]",
+          "seconds": "53.165",
+          "properties": {
+            "n": "64",
+            "diffusivities": "(1.0, 2.0)",
+            "accepted_steps": "100",
+            "scalar_inventory_tolerance": "1e-11",
+            "pointwise_collective_constraint_error": "0.0003916679206891205",
+            "claim": "each scalar conserves; only compatible joint law certifies y1+y2=1"
+          }
+        },
+        {
+          "name": "test_joint_face_species_energy_constraint_and_distinct_contexts_execute",
+          "seconds": "2.622",
+          "properties": {
+            "output_widths": "[2, 1]",
+            "actual_joint_calls_valid_contexts": "2",
+            "repeated_projected_contribution": "two times j1; no extra native call",
+            "collective_constraint": "y1+y2=1 and J1+J2=0, tolerance1e-12",
+            "program_binary_bytes": "51336"
+          }
+        },
+        {
+          "name": "test_native_interaction_guard_prevents_eager_fallible_calls[inactive-invalid-input]",
+          "seconds": "23.779",
+          "properties": {
+            "selected_guard": "False",
+            "actual_native_calls_local": "0",
+            "accepted_steps": "100",
+            "guard_contexts": "two recipient branches retain distinct selected evaluation contexts"
+          }
+        },
+        {
+          "name": "test_native_interaction_guard_prevents_eager_fallible_calls[active-valid-input]",
+          "seconds": "5.804",
+          "properties": {
+            "selected_guard": "True",
+            "actual_native_calls_local": "51200",
+            "accepted_steps": "100",
+            "guard_contexts": "two recipient branches retain distinct selected evaluation contexts"
+          }
+        },
+        {
+          "name": "test_rank_local_native_failure_in_selected_arm_rolls_back",
+          "seconds": "7.513",
+          "properties": {
+            "native_mpi_ranks": "1",
+            "actual_rejected_attempt_calls_local": "255",
+            "later_selected_recipient_calls": "0"
+          }
+        },
+        {
+          "name": "test_repeated_native_projection_and_compensating_accepted_weight[16]",
+          "seconds": "27.156",
+          "properties": {
+            "n": "16",
+            "actual_joint_calls_local": "25600",
+            "left_mathematical_occurrences": "2",
+            "left_accepted_weight": "1/2",
+            "accepted_records_last_step": "6",
+            "accepted_steps": "100"
+          }
+        },
+        {
+          "name": "test_repeated_native_projection_and_compensating_accepted_weight[32]",
+          "seconds": "18.091",
+          "properties": {
+            "n": "32",
+            "actual_joint_calls_local": "102400",
+            "left_mathematical_occurrences": "2",
+            "left_accepted_weight": "1/2",
+            "accepted_records_last_step": "6",
+            "accepted_steps": "100"
+          }
+        },
+        {
+          "name": "test_repeated_native_projection_and_compensating_accepted_weight[64]",
+          "seconds": "15.894",
+          "properties": {
+            "n": "64",
+            "actual_joint_calls_local": "409600",
+            "left_mathematical_occurrences": "2",
+            "left_accepted_weight": "1/2",
+            "accepted_records_last_step": "6",
+            "accepted_steps": "100"
+          }
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "All five complete receipts execute exact installed closure-env source34a8acc, native0ebcaef..., no Python overlay; earlier publication24 evidence remains historical and separate.",
+    "Interaction inventory realization is uncut Uniform Cartesian CPU Dim2; AMR/EB/curvilinear inventory realization is explicitly refused.",
+    "Full heterogeneous joint interactions have 2/3-component recipients; heterogeneous 2-species/1-energy constitutive output is a compiled and executed face primitive. Its integration into a general multi-component diffusion time step is not claimed.",
+    "The collective y1+y2 witness executes two independent scalar SSPRK2 public Cases, not a joint multi-component diffusion solver.",
+    "Native W/A diffusion uses one joint call per materialized active cell per stage; adjacent faces share those values.",
+    "Timing is observed on the current host with concurrent compilation/work possible. Atomic diagnostic counters occur on both compared routes. No zero-overhead, GPU, hardware-traffic, or uncontended performance claim.",
+    "MPI test counts are reported per rank; paired rank executions are not added as distinct scientific cases.",
+    "Historical failed/interrupted logs are retained and not merged into a green final gate."
+  ]
+}

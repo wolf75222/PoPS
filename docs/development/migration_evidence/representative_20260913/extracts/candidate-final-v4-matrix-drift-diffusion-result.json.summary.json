@@ -1,0 +1,87 @@
+{
+  "not_a_new_execution": true,
+  "original_path": "candidate-final-v4-matrix-drift-diffusion-result.json",
+  "original_sha256": "75db9397d3ea3a4572d91ce7b285cb14facd67f6368e29759e3e06b1b7af1dc6",
+  "receipt_fields": {
+    "case_results": [
+      {
+        "failure": null,
+        "name": "test_full_sg_manufactured_refinement",
+        "seconds": 31.85
+      },
+      {
+        "failure": null,
+        "name": "test_full_sg_boundary_equilibrium_and_oriented_exchanges",
+        "seconds": 28.646
+      },
+      {
+        "failure": null,
+        "name": "test_full_sg_zero_jump_is_centered_diffusion",
+        "seconds": 28.741
+      },
+      {
+        "failure": null,
+        "name": "test_full_sg_consumes_actual_solved_potential_at_faces",
+        "seconds": 47.752
+      },
+      {
+        "failure": null,
+        "name": "test_dim1_actual_combined_transport_diffusion_bound[0.6-0.3-False]",
+        "seconds": 25.519
+      },
+      {
+        "failure": null,
+        "name": "test_dim1_actual_combined_transport_diffusion_bound[0.2-0.2-True]",
+        "seconds": 26.019
+      }
+    ],
+    "checkout_clean": true,
+    "command": [
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v4-dim1-env/bin/python",
+      "-B",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/unit-diagnostic-live-runner.py",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v4-matrix-drift-diffusion-live.json"
+    ],
+    "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v4-proof",
+    "elapsed_seconds": 190.12518704097602,
+    "environment": {
+      "Kokkos_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+      "OMP_NUM_THREADS": "2",
+      "OMP_PROC_BIND": "false",
+      "POPS_CACHE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v4-matrix-drift-diffusion-cache",
+      "POPS_DIFFUSION_QUALIFICATION_EVIDENCE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v4-matrix-drift-diffusion-measurements",
+      "POPS_FIELD_QUALIFICATION_EVIDENCE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v4-matrix-drift-diffusion-field-measurements",
+      "POPS_INCLUDE": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v4-dim1-env/lib/python3.12/site-packages/pops/include",
+      "POPS_INCLUDE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v4-dim1-env/lib/python3.12/site-packages/pops/include",
+      "POPS_KEEP_GENERATED": "1",
+      "POPS_KOKKOS_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+      "POPS_NATIVE_DIM": "1",
+      "POPS_NATIVE_REQUIRED": "1",
+      "POPS_PROVE_INSTALLED_COMPONENT_PACKAGE": "0",
+      "POPS_QUALIFICATION_DIM": "1",
+      "POPS_REQUIRE_NATIVE_TESTS": "1",
+      "POPS_TEST_INTERACTION_BANDS": "2",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "PYTHONNOUSERSITE": "1",
+      "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+      "REQUIRE_NATIVE_TESTS": "1"
+    },
+    "expected_tests": 6,
+    "passed": true,
+    "proofs_equal": true,
+    "results": {
+      "errors": 0,
+      "failures": 0,
+      "incomplete_markers": 0,
+      "skips": 0,
+      "tests": 6
+    },
+    "returncode": 0,
+    "runner_sha256": "976c65cf2df670a4ab777d85455bf8089a1776854d032ce06a1b121d4b86be4b",
+    "runner_unchanged": true,
+    "selection": "Entire declared modules, no filtering, no reduced workload, no process timeout",
+    "source": "2d8ba4ecb6c3b3f469156a78cb12133ebf5fb8dd",
+    "sources_unchanged": true
+  },
+  "schema": "pops.evidence.transparent-extract.v1"
+}

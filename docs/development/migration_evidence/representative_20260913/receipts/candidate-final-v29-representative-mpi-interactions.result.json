@@ -1,0 +1,36 @@
+{
+  "command": [
+    "/usr/bin/time",
+    "-l",
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/mpiexec",
+    "-n",
+    "2",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v29-dim2-env/bin/python",
+    "-B",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/frozen-native-mpi-pytest-driver.py",
+    "candidate-final-v29-representative-mpi-interactions",
+    "-q",
+    "--tb=short",
+    "tests/python/unit/codegen/test_native_interaction_solve.py::test_native_full_coupled_solve_iterates_and_conserves",
+    "tests/python/unit/codegen/test_native_interaction_solve.py::test_failed_imported_iterate_cannot_publish_any_recipient"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v29-proof",
+  "source_head_before": "77c1eb300b9a35ed018d0a31c7f7efa0a793c014",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T10:52:18.660972+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "2",
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1",
+    "CMAKE_BUILD_PARALLEL_LEVEL": "2",
+    "POPS_BUILD_CORES": "2",
+    "POPS_HEAVY_MODULE_TU_POOL": "2"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 40.86504670797149,
+  "source_head_after": "77c1eb300b9a35ed018d0a31c7f7efa0a793c014",
+  "source_status_after": "",
+  "log_sha256": "3446246fdc1c504bb0e85ca334d1dd7e2909a082bce3b69e06457a8674e7164a"
+}

@@ -1,0 +1,29 @@
+{
+  "command": [
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v29-dim2-env/bin/python",
+    "-B",
+    "-m",
+    "pytest",
+    "-q",
+    "--tb=short",
+    "tests/python/unit/codegen/test_migration_public_workflows.py::test_amr_summary_uses_composite_integrals_and_physical_volume",
+    "tests/python/unit/codegen/test_migration_public_workflows.py::test_uniform_state_summary_retains_ranked_component_means_and_extrema",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-public-summary-r1.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "6a9c5b20bac2be949fda488ce44942329c902294",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T10:31:32.929207+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "2",
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 0.9882677920395508,
+  "source_head_after": "6a9c5b20bac2be949fda488ce44942329c902294",
+  "source_status_after": "",
+  "log_sha256": "f3d3ca3f5fee50214b720d6239f9a86346aa8478c9e3aec0083841749994b598"
+}

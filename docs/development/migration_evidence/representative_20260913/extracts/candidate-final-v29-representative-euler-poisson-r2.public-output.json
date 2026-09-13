@@ -1,0 +1,32 @@
+{
+  "data": {
+    "accepted_steps": 1,
+    "artifact": "pops.artifact.v1:sha256:6b4d9ac73e82be3c4da72659f63d762efc5dc3e4b64f4868e991192eeef582f1",
+    "component_mean_change": [
+      0.0,
+      1.6940658945086007e-21,
+      3.1234339930002325e-21
+    ],
+    "final_time": 0.125,
+    "gradient_l2": 0.003927608978223317,
+    "state": {
+      "block": "fluid",
+      "component_means": [
+        1.0,
+        1.6940658945086007e-21,
+        3.1234339930002325e-21
+      ],
+      "maximum": 1.0961939766255644,
+      "minimum": -0.0009626036303386117,
+      "shape": [
+        3,
+        16,
+        16
+      ]
+    },
+    "workflow": "euler-poisson"
+  },
+  "original_log": "candidate-final-v29-representative-euler-poisson-r2.log",
+  "original_log_sha256": "b22ea966ea67bde8ea259c0c72f15f97fea4e8bf47af125b270bed18d4da47cd",
+  "schema": "pops.public-cli-output-extract.v1"
+}

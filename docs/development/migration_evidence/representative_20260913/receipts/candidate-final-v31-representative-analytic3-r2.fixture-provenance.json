@@ -1,0 +1,9 @@
+{
+  "package_source": "3eb2722e4618d25f1586632b592ee20b4dc505fa",
+  "fixture_source": "1e6a708423c9058041bae054d58df549f3050d5d",
+  "fixture_root": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "production_sources_byte_unchanged": true,
+  "changed_files": {
+    "tests/python/integration/runtime/test_exact_analytic_initial.py": "0f4cfa531bc9159cafb4ffb99d4e00ece1db375e70affb2f86e31db4a64ebc1a"
+  }
+}

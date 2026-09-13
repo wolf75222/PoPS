@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="7" failures="0" disabled="0" errors="0" time="26.227" timestamp="2026-09-13T12:06:27.886" name="AllTests">
+  <properties>
+    <property name="pops_mpi_rank" value="3"/>
+    <property name="pops_mpi_expected_size" value="4"/>
+    <property name="pops_mpi_rank_source" value="PMI"/>
+  </properties>
+  <testsuite name="AmrLayoutTransfer" tests="7" failures="0" disabled="0" skipped="0" errors="0" time="26.227" timestamp="2026-09-13T12:06:27.886">
+    <testcase name="ActiveCompositeMeasureStageRebindingRetryAndRestartFence" file="/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/tests/cpp/unit/runtime/test_amr_layout_transfer.cpp" line="374" status="run" result="completed" time="3.67" timestamp="2026-09-13T12:06:27.886" classname="AmrLayoutTransfer" />
+    <testcase name="EvolvingReplicaValuesAndMasksRejectBeforePublicationAndRetry" file="/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/tests/cpp/unit/runtime/test_amr_layout_transfer.cpp" line="467" status="run" result="completed" time="1.713" timestamp="2026-09-13T12:06:31.556" classname="AmrLayoutTransfer">
+      <properties>
+        <property name="mpi_ranks" value="4"/>
+        <property name="kokkos_execution_space" value="OpenMP"/>
+        <property name="kokkos_concurrency" value="2"/>
+      </properties>
+    </testcase>
+    <testcase name="CoverageForgeryAndBudgetsFailBeforeCandidatePublication" file="/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/tests/cpp/unit/runtime/test_amr_layout_transfer.cpp" line="581" status="run" result="completed" time="1.699" timestamp="2026-09-13T12:06:33.269" classname="AmrLayoutTransfer" />
+    <testcase name="ProgramPointPreparationAuthenticatesSynchronizationAndInvocation" file="/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/tests/cpp/unit/runtime/test_amr_layout_transfer.cpp" line="604" status="run" result="completed" time="1.836" timestamp="2026-09-13T12:06:34.969" classname="AmrLayoutTransfer" />
+    <testcase name="ProgramPointStageFailureIsCollectiveThenRetriesCurrentFields" file="/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/tests/cpp/unit/runtime/test_amr_layout_transfer.cpp" line="641" status="run" result="completed" time="1.705" timestamp="2026-09-13T12:06:36.805" classname="AmrLayoutTransfer" />
+    <testcase name="CompositePullbackUsesIndependentLevelsAndRepeatedSourceCarriers" file="/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/tests/cpp/unit/runtime/test_amr_layout_transfer.cpp" line="721" status="run" result="completed" time="6.949" timestamp="2026-09-13T12:06:38.510" classname="AmrLayoutTransfer" />
+    <testcase name="ProviderFailureRollsBackDetachedCandidateAndLegacyProviderIsRefused" file="/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/tests/cpp/unit/runtime/test_amr_layout_transfer.cpp" line="778" status="run" result="completed" time="8.653" timestamp="2026-09-13T12:06:45.460" classname="AmrLayoutTransfer" />
+  </testsuite>
+</testsuites>

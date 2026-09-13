@@ -1,0 +1,29 @@
+{
+  "command": [
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v29-dim2-env/bin/python",
+    "-B",
+    "-m",
+    "pytest",
+    "-q",
+    "--tb=short",
+    "tests/python/integration/runtime/test_physical_mapping_transfer_properties.py::test_physical_commutation_refuses_changed_x_range",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-map-refusal-r1.xml",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-map-refusal-r1-pytest"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "d9be0f671f8c0e80acb21050a8b8e27f3885c4e6",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T10:45:15.860068+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "2",
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 5.4835501670022495,
+  "source_head_after": "d9be0f671f8c0e80acb21050a8b8e27f3885c4e6",
+  "source_status_after": "",
+  "log_sha256": "3b193cfeb38d5e357724579c8002223a676f0350b80190c65e87a912908bc29f"
+}

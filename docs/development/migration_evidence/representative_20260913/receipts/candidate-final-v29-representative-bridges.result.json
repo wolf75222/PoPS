@@ -1,0 +1,39 @@
+{
+  "command": [
+    "/usr/bin/time",
+    "-l",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v29-dim2-env/bin/python",
+    "-B",
+    "-m",
+    "pytest",
+    "-q",
+    "--tb=short",
+    "tests/python/integration/runtime/test_public_composite_field.py::test_public_joint_field_amr_full_resolution_matrix",
+    "tests/python/integration/runtime/test_public_composite_field.py::test_public_joint_field_publication_rollback_and_same_instance_retry[16]",
+    "tests/python/integration/runtime/test_public_tensor_diffusion.py::test_public_variable_rotated_tensor_cross_gradient_full_matrix",
+    "tests/python/integration/runtime/test_temporal_method_order_matrix.py::test_native_temporal_order_matrix[imex_ars222]",
+    "tests/python/integration/runtime/test_temporal_method_order_matrix.py::test_split_native_failure_restores_complete_accepted_envelope",
+    "tests/python/unit/codegen/test_migration_public_workflows.py::test_native_advection_matches_python_law_on_two_distinct_profiles",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v29-representative-bridges-pytest",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v29-representative-bridges.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v29-proof",
+  "source_head_before": "77c1eb300b9a35ed018d0a31c7f7efa0a793c014",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T10:27:32.406572+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "2",
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1",
+    "CMAKE_BUILD_PARALLEL_LEVEL": "2",
+    "POPS_BUILD_CORES": "2",
+    "POPS_HEAVY_MODULE_TU_POOL": "2"
+  },
+  "exit_code": 1,
+  "elapsed_seconds": 441.9520913750166,
+  "source_head_after": "77c1eb300b9a35ed018d0a31c7f7efa0a793c014",
+  "source_status_after": "",
+  "log_sha256": "4c888be6dc2bdf97d24ea27b0827b90896e2d6c35701af7b44ef7e8eef3d0888"
+}

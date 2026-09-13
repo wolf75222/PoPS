@@ -1,0 +1,26 @@
+[
+  {
+    "n": 16,
+    "accepted_steps": 52,
+    "face_flux": 6.116437360426132e-16,
+    "state_drift": 0.0,
+    "potential_error": 1.1102230246251565e-16,
+    "artifact": "pops.artifact.v1:sha256:5ade0ca0fa4769ae85f4d35145d7b1fa15f6695ba09c31103b681750ad7cf52b"
+  },
+  {
+    "n": 32,
+    "accepted_steps": 205,
+    "face_flux": 1.856748534278519e-15,
+    "state_drift": 0.0,
+    "potential_error": 1.1102230246251565e-16,
+    "artifact": "pops.artifact.v1:sha256:ee4328afaee86e4da641ed3cc478eee8c0c37fe8569f438c6ac3affaca72bdaf"
+  },
+  {
+    "n": 64,
+    "accepted_steps": 820,
+    "face_flux": 2.9117651847192965e-15,
+    "state_drift": 0.0,
+    "potential_error": 1.1102230246251565e-16,
+    "artifact": "pops.artifact.v1:sha256:fef030e176fd83bb58e89ea69ef48b969f8728db1ff7778264abc59320b5aed9"
+  }
+]

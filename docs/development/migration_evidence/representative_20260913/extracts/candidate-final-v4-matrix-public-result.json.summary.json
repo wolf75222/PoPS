@@ -1,0 +1,192 @@
+{
+  "not_a_new_execution": true,
+  "original_path": "candidate-final-v4-matrix-public-result.json",
+  "original_sha256": "e0f89002d1be4a021732fd6c10b1dde8e23732a79790a63823fd9387aadbd1c6",
+  "receipt_fields": {
+    "case_results": [
+      {
+        "failure": null,
+        "name": "test_full_public_field_mms_and_joint_gauge_matrix",
+        "seconds": 135.659
+      },
+      {
+        "failure": null,
+        "name": "test_full_public_incompatible_joint_load_rejects_without_publishing",
+        "seconds": 81.126
+      },
+      {
+        "failure": null,
+        "name": "test_full_component_version_and_gradient_matrix",
+        "seconds": 106.833
+      },
+      {
+        "failure": null,
+        "name": "test_full_public_consumed_field_source_and_transport_matrix[False]",
+        "seconds": 83.678
+      },
+      {
+        "failure": null,
+        "name": "test_full_public_consumed_field_source_and_transport_matrix[True]",
+        "seconds": 56.701
+      },
+      {
+        "failure": null,
+        "name": "test_full_joint_neumann_consumed_gradient_matrix",
+        "seconds": 81.013
+      },
+      {
+        "failure": null,
+        "name": "test_same_physical_flux_explicit_implicit_fourier_parity",
+        "seconds": 20.863
+      },
+      {
+        "failure": null,
+        "name": "test_scalar_diffusion_manufactured_convergence[forward_euler]",
+        "seconds": 31.412
+      },
+      {
+        "failure": null,
+        "name": "test_scalar_diffusion_manufactured_convergence[backward_euler]",
+        "seconds": 33.538
+      },
+      {
+        "failure": null,
+        "name": "test_shifted_operator_retains_nonzero_constant",
+        "seconds": 12.442
+      },
+      {
+        "failure": null,
+        "name": "test_nonlinear_accumulation_preserves_energy",
+        "seconds": 14.998
+      },
+      {
+        "failure": null,
+        "name": "test_invalid_nonlinear_domain_leaves_accepted_state_unchanged",
+        "seconds": 15.091
+      },
+      {
+        "failure": null,
+        "name": "test_native_retry_matches_successful_attempt_without_rejected_history",
+        "seconds": 16.25
+      },
+      {
+        "failure": null,
+        "name": "test_native_finite_retry_exhaustion_restores_accepted_envelope",
+        "seconds": 10.276
+      },
+      {
+        "failure": null,
+        "name": "test_full_explicit_spatial_matrix[constant]",
+        "seconds": 40.159
+      },
+      {
+        "failure": null,
+        "name": "test_full_explicit_spatial_matrix[variable]",
+        "seconds": 348.316
+      },
+      {
+        "failure": null,
+        "name": "test_full_explicit_spatial_matrix[diagonal_linear]",
+        "seconds": 671.631
+      },
+      {
+        "failure": null,
+        "name": "test_full_explicit_spatial_matrix[diagonal_smooth]",
+        "seconds": 893.412
+      },
+      {
+        "failure": null,
+        "name": "test_full_explicit_exchange_quadrature[euler]",
+        "seconds": 44.069
+      },
+      {
+        "failure": null,
+        "name": "test_full_explicit_exchange_quadrature[ssprk2]",
+        "seconds": 40.816
+      },
+      {
+        "failure": null,
+        "name": "test_full_nonlinear_gradient_variable",
+        "seconds": 39.565
+      },
+      {
+        "failure": null,
+        "name": "test_combined_stability_and_exact_two_dimensional_weights",
+        "seconds": 291.102
+      },
+      {
+        "failure": null,
+        "name": "test_physical_diffusion_boundary_authority_is_not_optional",
+        "seconds": 0.002
+      },
+      {
+        "failure": null,
+        "name": "test_full_combined_accepted_face_quadrature[euler]",
+        "seconds": 81.793
+      },
+      {
+        "failure": null,
+        "name": "test_full_combined_accepted_face_quadrature[ssprk2]",
+        "seconds": 67.469
+      },
+      {
+        "failure": null,
+        "name": "test_explicit_diffusion_refuses_active_embedded_geometry[staircase]",
+        "seconds": 15.664
+      },
+      {
+        "failure": null,
+        "name": "test_explicit_diffusion_refuses_active_embedded_geometry[cutcell]",
+        "seconds": 18.207
+      }
+    ],
+    "checkout_clean": true,
+    "command": [
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v4-dim2-env/bin/python",
+      "-B",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/unit-diagnostic-live-runner.py",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v4-matrix-public-live.json"
+    ],
+    "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v4-proof",
+    "elapsed_seconds": 3254.0683481250016,
+    "environment": {
+      "Kokkos_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+      "OMP_NUM_THREADS": "2",
+      "OMP_PROC_BIND": "false",
+      "POPS_CACHE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v4-matrix-public-cache",
+      "POPS_DIFFUSION_QUALIFICATION_EVIDENCE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v4-matrix-public-measurements",
+      "POPS_FIELD_QUALIFICATION_EVIDENCE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v4-matrix-public-field-measurements",
+      "POPS_INCLUDE": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v4-dim2-env/lib/python3.12/site-packages/pops/include",
+      "POPS_INCLUDE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v4-dim2-env/lib/python3.12/site-packages/pops/include",
+      "POPS_KEEP_GENERATED": "1",
+      "POPS_KOKKOS_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+      "POPS_NATIVE_DIM": "2",
+      "POPS_NATIVE_REQUIRED": "1",
+      "POPS_PROVE_INSTALLED_COMPONENT_PACKAGE": "0",
+      "POPS_QUALIFICATION_DIM": "2",
+      "POPS_REQUIRE_NATIVE_TESTS": "1",
+      "POPS_TEST_INTERACTION_BANDS": "2",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "PYTHONNOUSERSITE": "1",
+      "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+      "REQUIRE_NATIVE_TESTS": "1"
+    },
+    "expected_tests": 27,
+    "passed": true,
+    "proofs_equal": true,
+    "results": {
+      "errors": 0,
+      "failures": 0,
+      "incomplete_markers": 0,
+      "skips": 0,
+      "tests": 27
+    },
+    "returncode": 0,
+    "runner_sha256": "976c65cf2df670a4ab777d85455bf8089a1776854d032ce06a1b121d4b86be4b",
+    "runner_unchanged": true,
+    "selection": "Entire declared modules, no filtering, no reduced workload, no process timeout",
+    "source": "2d8ba4ecb6c3b3f469156a78cb12133ebf5fb8dd",
+    "sources_unchanged": true
+  },
+  "schema": "pops.evidence.transparent-extract.v1"
+}

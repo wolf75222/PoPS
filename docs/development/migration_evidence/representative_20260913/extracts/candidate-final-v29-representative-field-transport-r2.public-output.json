@@ -1,0 +1,30 @@
+{
+  "data": {
+    "accepted_steps": 1,
+    "artifact": "pops.artifact.v1:sha256:ac66c107d6954a53ae454f30483f98bc39582183a231f6494d6457136cc37062",
+    "component_mean_change": [
+      0.0,
+      0.0
+    ],
+    "final_time": 0.125,
+    "gradient_l2": 0.007855217956446633,
+    "state": {
+      "block": "fluid",
+      "component_means": [
+        1.0,
+        1.0
+      ],
+      "maximum": 1.1988929649655493,
+      "minimum": 0.8028075203639817,
+      "shape": [
+        2,
+        16,
+        16
+      ]
+    },
+    "workflow": "field-transport"
+  },
+  "original_log": "candidate-final-v29-representative-field-transport-r2.log",
+  "original_log_sha256": "2975f3a33f03dd4d2f9246bc6fb925a122b9a4a3153ab305cdd0c5796cf735cc",
+  "schema": "pops.public-cli-output-extract.v1"
+}

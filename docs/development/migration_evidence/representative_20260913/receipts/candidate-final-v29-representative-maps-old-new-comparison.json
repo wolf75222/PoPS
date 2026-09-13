@@ -1,0 +1,200 @@
+{
+  "schema": "pops.m8.representative-map-comparison.v1",
+  "passed": true,
+  "old_source": "ea8caed55550289c8f02f2479d7855967c1bf8e7",
+  "new_source": "77c1eb300b9a35ed018d0a31c7f7efa0a793c014",
+  "old_capture": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v17-m8-uniform-maps-v19-comparator-r1-m8-maps/capture.json",
+    "sha256": "f09ed44cf55fca592a79c3b85c5887218c02d9ea6ec26851f8366cf46a7f86cb"
+  },
+  "new_capture": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v29-representative-maps-m8-maps/capture.json",
+    "sha256": "4b711907e8ff5c165c75f6d941d6affc49dee43a827be4c25bba383b801a9c29"
+  },
+  "old_receipt": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v17-m8-uniform-maps-v19-comparator-r1-result.json",
+    "sha256": "73308e4b126cffab3868e3bca5d02f23c541e49a05e9501678e11dfb7f9d4a51"
+  },
+  "new_receipt": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v29-representative-maps-result.json",
+    "sha256": "e01e567e1e9735937c501ae4e36d15ebe38ba8dbf3083a8eed5def52ad8b8ec1"
+  },
+  "comparison_contract": {
+    "atol": 3e-13,
+    "rtol": 0
+  },
+  "refusal_followup": {
+    "receipt": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-map-refusal-r1.result.json",
+      "sha256": "3388849512cd7c9cd3f804fdbf653085c5f47204089d208743ed04d99209eaa5"
+    },
+    "source": "d9be0f671f8c0e80acb21050a8b8e27f3885c4e6",
+    "tests": 2,
+    "only_fixture_change": "expected diagnostic changed from physical x to shared coordinate; all numerical inputs and oracles unchanged",
+    "corrected_fixture_sha256": "85a23c0b691e8fb6d4cdc2c584ada51241f5f7d08c6c8a1ce814f75ff728f5fa"
+  },
+  "coverage": "seven numerical/oracle cases plus two separately corrected diagnostic-refusal cases; no claim of a new nine-case passing single run",
+  "arrays": [
+    {
+      "array": "nx16_nv12__actual_moment",
+      "kind": "native result",
+      "shape": [
+        16
+      ],
+      "max_abs_difference": 0.0,
+      "byte_equal": true
+    },
+    {
+      "array": "nx16_nv12__actual_pullback",
+      "kind": "native result",
+      "shape": [
+        12,
+        16
+      ],
+      "max_abs_difference": 0.0,
+      "byte_equal": true
+    },
+    {
+      "array": "nx16_nv12__reference_inputs_distribution",
+      "kind": "exact input/oracle",
+      "shape": [
+        12,
+        16
+      ],
+      "max_abs_difference": 0.0,
+      "byte_equal": true
+    },
+    {
+      "array": "nx16_nv12__reference_inputs_field",
+      "kind": "exact input/oracle",
+      "shape": [
+        16
+      ],
+      "max_abs_difference": 0.0,
+      "byte_equal": true
+    },
+    {
+      "array": "nx16_nv12__reference_oracle_moment",
+      "kind": "exact input/oracle",
+      "shape": [
+        16
+      ],
+      "max_abs_difference": 0.0,
+      "byte_equal": true
+    },
+    {
+      "array": "nx32_nv24__actual_moment",
+      "kind": "native result",
+      "shape": [
+        32
+      ],
+      "max_abs_difference": 0.0,
+      "byte_equal": true
+    },
+    {
+      "array": "nx32_nv24__actual_pullback",
+      "kind": "native result",
+      "shape": [
+        24,
+        32
+      ],
+      "max_abs_difference": 0.0,
+      "byte_equal": true
+    },
+    {
+      "array": "nx32_nv24__reference_inputs_distribution",
+      "kind": "exact input/oracle",
+      "shape": [
+        24,
+        32
+      ],
+      "max_abs_difference": 0.0,
+      "byte_equal": true
+    },
+    {
+      "array": "nx32_nv24__reference_inputs_field",
+      "kind": "exact input/oracle",
+      "shape": [
+        32
+      ],
+      "max_abs_difference": 0.0,
+      "byte_equal": true
+    },
+    {
+      "array": "nx32_nv24__reference_oracle_moment",
+      "kind": "exact input/oracle",
+      "shape": [
+        32
+      ],
+      "max_abs_difference": 0.0,
+      "byte_equal": true
+    },
+    {
+      "array": "nx64_nv48__actual_moment",
+      "kind": "native result",
+      "shape": [
+        64
+      ],
+      "max_abs_difference": 0.0,
+      "byte_equal": true
+    },
+    {
+      "array": "nx64_nv48__actual_pullback",
+      "kind": "native result",
+      "shape": [
+        48,
+        64
+      ],
+      "max_abs_difference": 0.0,
+      "byte_equal": true
+    },
+    {
+      "array": "nx64_nv48__reference_inputs_distribution",
+      "kind": "exact input/oracle",
+      "shape": [
+        48,
+        64
+      ],
+      "max_abs_difference": 0.0,
+      "byte_equal": true
+    },
+    {
+      "array": "nx64_nv48__reference_inputs_field",
+      "kind": "exact input/oracle",
+      "shape": [
+        64
+      ],
+      "max_abs_difference": 0.0,
+      "byte_equal": true
+    },
+    {
+      "array": "nx64_nv48__reference_oracle_moment",
+      "kind": "exact input/oracle",
+      "shape": [
+        64
+      ],
+      "max_abs_difference": 0.0,
+      "byte_equal": true
+    }
+  ],
+  "scope": {
+    "backend": "CPU float64",
+    "components": 1,
+    "dimension": 2,
+    "quadrature": "uniform positive weights 4/nv",
+    "ranks": 1,
+    "v": [
+      -2,
+      2
+    ],
+    "x": [
+      0,
+      1
+    ]
+  },
+  "limitations": "Uniform reference restriction only. No AMR/MPI/vector/signed-weight credit. After-proof and whole-module success must be authenticated separately.",
+  "runner": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-map-comparison-r2.py",
+    "sha256": "670856ee6b5d45a2d7669de4eeae9c20b3369933a9f4f86a8064e25fd928215c"
+  }
+}

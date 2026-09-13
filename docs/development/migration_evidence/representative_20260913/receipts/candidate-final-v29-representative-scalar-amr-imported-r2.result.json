@@ -1,0 +1,33 @@
+{
+  "command": [
+    "/usr/bin/time",
+    "-l",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v29-dim2-env/bin/python",
+    "-B",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v30-proof/examples/migration/r1_workflows.py",
+    "scalar-amr",
+    "--work-dir",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v29-representative-scalar-amr-imported-r2-work",
+    "--scheme",
+    "imported"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v30-proof",
+  "source_head_before": "6a9c5b20bac2be949fda488ce44942329c902294",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T10:59:41.342683+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "2",
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1",
+    "CMAKE_BUILD_PARALLEL_LEVEL": "2",
+    "POPS_BUILD_CORES": "2",
+    "POPS_HEAVY_MODULE_TU_POOL": "2"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 66.62282112502726,
+  "source_head_after": "6a9c5b20bac2be949fda488ce44942329c902294",
+  "source_status_after": "",
+  "log_sha256": "ce5795dafb039dd0f03d99422f706ba28fcc41d964f602c91ab9c2af353a7bd5"
+}
