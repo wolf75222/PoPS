@@ -597,6 +597,65 @@ def test_scratch_hold_caches_named_scratch():
     assert decl_idx < guard_idx
 
 
+@pytest.mark.parametrize("target", ("system", "amr_system"))
+@pytest.mark.parametrize("policy", (adctime.Hold, adctime.Zero))
+def test_scheduled_transform_storage_precedes_guard_and_stage_time_stays_due(target, policy):
+    from fractions import Fraction
+    from pops.codegen.module_lowering import lower_and_validate
+    from pops.physics._facade import Model
+
+    model = Model("scheduled_transform")
+    q, = model.conservative_vars("q")
+    model.primitive_vars(q)
+    model.conservative_from([q])
+    model.flux(x=[0 * q], y=[0 * q])
+    model.eigenvalues(x=[0 * q], y=[0 * q])
+    transform = model.local_transform("held_copy", (q,))
+    model.module.operator_capabilities("held_copy", cacheable=True)
+    program = adctime.Program("scheduled_transform")
+    current = typed_state(program, "material", model=model)
+    endpoint = typed_state(program, "material", state_name="U", model=model).next
+    stage = program.value("stage", current,
+                          at=adctime.TimePoint(program.clock, Fraction(1, 2)))
+    held = transform(stage, name="held", schedule=_every(program.clock, 2, policy()))
+    program.commit(endpoint, program.value("next", current + held, at=endpoint.point))
+    if target == "amr_system" and policy is adctime.Hold:
+        with pytest.raises(NotImplementedError, match="persistent hierarchy value cache"):
+            emit_cpp_program(program, model=lower_and_validate(model)[0], target=target)
+        return
+    cpp = emit_cpp_program(program, model=lower_and_validate(model)[0], target=target)
+    output = "u%d" % held.id
+    declaration = "pops::MultiFab<pops::kNativeDimension>& %s = *transform_state_resource_%d;" % (
+        output, held.id)
+    guard = "if (ctx.schedule_decision(%d," % held.id
+    stage_time = "ctx.set_stage_time(1, 2);"
+    assert cpp.index(declaration) < cpp.index(guard) < cpp.index(stage_time)
+    due_body, off_body = cpp[cpp.index(guard):].split("} else {", 1)
+    assert stage_time in due_body
+    assert stage_time not in off_body
+    assert "transform_failed_%d" % held.id in due_body
+    if policy is adctime.Hold:
+        assert "ctx.cache_store_scratch(%d, %s);" % (held.id, output) in due_body
+        assert "ctx.cache_restore_scratch(%d, %s);" % (held.id, output) in off_body
+    else:
+        assert "%s.set_val(" % output in off_body
+    if target == "amr_system":
+        # AMR reacquires its resource through a collective before binding the output;
+        # the complete dependency setup must be outside both cadence branches.
+        resource = "transform_status_resource_%d = &ctx.scalar_scratch" % held.id
+        assert cpp.index(resource) < cpp.index(declaration)
+
+
+def test_scheduled_scratch_requires_an_explicit_storage_boundary():
+    clock = adctime.Clock("macro")
+    value = SimpleNamespace(id=7, name="unknown_scratch", op="local_transform",
+                            clock=clock, point=None,
+                            attrs={"schedule": _every(clock, 2, adctime.Hold())})
+    lines = ["pops::MultiFab<pops::kNativeDimension>& out = ctx.state(0);"]
+    with pytest.raises(NotImplementedError, match="explicit output storage setup boundary"):
+        _emit_schedule_wrap(None, value, {7: "out"}, lines, 0)
+
+
 def test_scratch_zero_sets_the_scratch_to_zero():
     cpp = _emit_scratch(lambda clock: _every(clock, 4, adctime.Zero()))
     assert ".set_val(static_cast<pops::Real>(0));" in cpp

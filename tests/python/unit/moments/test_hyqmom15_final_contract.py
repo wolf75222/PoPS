@@ -174,6 +174,11 @@ def test_final_authoring_derives_field_storage_and_complete_generic_program() ->
     assert target.model.field_spaces()[target.field.local_id].components == (
         "phi", "grad_x", "grad_y")
     assert target.field_provider == target.model.operators["fields"]
+    from pops.time._evaluation_point import evaluation_stage_fraction
+
+    implicit_rate = next(value for value in target.program._values if value.op == "apply")
+    assert implicit_rate.attrs["evaluation_partition"] == "implicit"
+    assert evaluation_stage_fraction(implicit_rate) == 1
     assert target.program.transaction_plan() is not None
     assert target.program.transaction_plan().stores == ALL_PROVISIONAL_STORES
     guards = target.program.transaction_plan().guards

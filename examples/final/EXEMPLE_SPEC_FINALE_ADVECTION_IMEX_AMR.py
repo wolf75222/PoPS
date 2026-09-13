@@ -48,6 +48,7 @@ from pops.time import (
     StagePoint,
     TimePoint,
 )
+from pops.time._evaluation_point import evaluation_partition
 
 
 OUTPUT_ROOT = Path("outputs/advection_imex_amr")
@@ -269,11 +270,12 @@ def _manual_imex_program(core: IMEXAMRAuthoring, *, solve_action: Any) -> Progra
             core.explicit_rate(stage, fields),
             at=point,
         ))
-        implicit_rates.append(program.value(
-            "%sk_imp_%d" % (tag, index),
-            program.apply(linear, stage),
-            at=point,
-        ))
+        with evaluation_partition(program, "implicit"):
+            implicit_rates.append(program.value(
+                "%sk_imp_%d" % (tag, index),
+                program.apply(linear, stage),
+                at=point,
+            ))
 
     final = u0
     for weight, rate in zip(tableau.explicit.b, explicit_rates, strict=True):

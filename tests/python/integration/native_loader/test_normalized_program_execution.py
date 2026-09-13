@@ -27,6 +27,7 @@ from pops.time import (
     StagePoint,
     TimePoint,
 )
+from pops.time._evaluation_point import evaluation_partition
 from pops.time._program.detach import detach_compiled_program
 from tests.python.support.requirements import (
     default_cxx,
@@ -110,7 +111,8 @@ def _manual_imex_euler(state: Any, explicit: Any, implicit: Any) -> Program:
     ).consume(action=FailRun())
     stage = program.value("imex-euler_stage_0", stage, at=point)
     explicit_rate = program.value("imex-euler_k_exp_0", explicit(stage), at=point)
-    implicit_rate = program.value("imex-euler_k_imp_0", program.apply(linear, stage), at=point)
+    with evaluation_partition(program, "implicit"):
+        implicit_rate = program.value("imex-euler_k_imp_0", program.apply(linear, stage), at=point)
     out = program.value(
         "imex-euler_step",
         u0 + program.dt * explicit_rate + program.dt * implicit_rate,

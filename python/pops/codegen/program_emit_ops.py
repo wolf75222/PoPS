@@ -401,6 +401,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     # is off (record early-returns), changes no numerics; ops emitting no statement (pure inline
     # token: cfl / compare) are skipped by the len guard below. _start marks this op's first line.
     _profile_start = len(lines)
+    # Operation lowering explicitly identifies the storage setup needed by both cadence
+    # branches. Evaluation context and kernels remain in the guarded body.
+    output_setup_end = None
+    evaluation_prelude = []
     if v.op in {"source", "implicit_source", "local_transform", "apply",
                 "solve_local_linear", "solve_local_nonlinear", "solve_implicit_source"}:
         from pops.time._evaluation_point import evaluation_stage_fraction
@@ -409,7 +413,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         ark_partition = ("explicit" if v.op == "source" else
                          None if v.op in {"apply", "local_transform"} else "implicit")
         stage = evaluation_stage_fraction(v, ark_partition=ark_partition)
-        lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+        evaluation_prelude.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
     if v.op == "post_synchronization":
         var[v.id] = "/* post_synchronization */"
     elif v.op in ("layout_map_export", "layout_map_import"):
@@ -418,6 +422,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "state":
         var[v.id] = "u%d" % v.id
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.state(%d);" % (var[v.id], bidx))
+        output_setup_end = len(lines)
     elif v.op == "synchronize":
         (source,) = v.inputs
         relation = v.attrs.get("relation")
@@ -669,18 +674,22 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.history_zero_start(%s, %d, %d, %d);"
                              % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"]),
                                 int(v.attrs["ncomp"]), bidx))
+                output_setup_end = len(lines)
             else:
                 lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.history_zero_start(%s, %d, %d);"
                              % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"]),
                                 int(v.attrs["ncomp"])))
+                output_setup_end = len(lines)
         else:
             if target == "amr_system":
                 lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.history(%s, %d, %d);"
                              % (var[v.id], json.dumps(v.attrs["history"]),
                                 int(v.attrs["lag"]), bidx))
+                output_setup_end = len(lines)
             else:
                 lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.history(%s, %d);"
                              % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"])))
+                output_setup_end = len(lines)
     elif v.op == "store_history":
         # Side-effect: copy the value into the current slot of the history (the cold-start fill on
         # the first store happens System-side). store_history is a State-typed node but carries no
@@ -763,6 +772,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 "auto* %s = &ctx.scalar_scratch(%d, 0, ctx.state(%d), 1, 0);"
                 % (status_resource, int(v.id), bidx))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (var[v.id], state_resource))
+        output_setup_end = len(lines)
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (status, status_resource))
         lines.append(
             "const pops::MultiFab<pops::kNativeDimension>* %s = ctx.pointwise_active_mask(%d, %s);"
@@ -804,6 +814,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 % (bidx, json.dumps("cell_compare")))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 0, %s, 1, 1);"
                      % (var[v.id], int(v.id), var[field_in.id]))
+        output_setup_end = len(lines)
         lines += _emit_cell_compare_kernel(var[field_in.id], var[v.id], v.attrs["cmp"],
                                            v.attrs["value"])
     elif v.op == "where":
@@ -818,6 +829,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 % (bidx, json.dumps("where")))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[a_in.id]))
+        output_setup_end = len(lines)
         lines += _emit_where_kernel(var[mask_in.id], var[a_in.id], var[b_in.id], var[v.id])
     elif v.op == "record_scalar":
         # Store the (already-computed) Scalar into the System diagnostics map under its name. A
@@ -871,6 +883,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = "
                      "ctx.rhs_scratch(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[state_in.id]))
+        output_setup_end = len(lines)
         named_source_subslot = 3
         want_flux = v.attrs.get("flux", True)
         # ADC-425 routing (spec criterion 17): the default/composite source is folded in iff the
@@ -1000,6 +1013,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         var[v.id] = "r%d" % v.id
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[state_in.id]))
+        output_setup_end = len(lines)
         lines.append("ctx.source_default_into(%d, %s, %s);"
                      % (bidx, var[state_in.id], var[v.id]))
         keep = ",".join(str(int(index)) for index in v.attrs["keep_components"])
@@ -1009,6 +1023,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         var[v.id] = "u%d" % v.id
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[state_in.id]))
+        output_setup_end = len(lines)
         lines.append(
             "ctx.lincomb(%s, static_cast<pops::Real>(1), %s, static_cast<pops::Real>(0), %s);"
             % (var[v.id], var[state_in.id], var[state_in.id]))
@@ -1031,6 +1046,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 % (bidx, json.dumps("named_source")))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[state_in.id]))
+        output_setup_end = len(lines)
         lines += _emit_source_kernel(
             node_model, v.attrs["source"], var[state_in.id], var[v.id], bidx,
             provider_plans=provider_plans,
@@ -1045,6 +1061,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 % (bidx, json.dumps("linear_source_apply")))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[state_in.id]))
+        output_setup_end = len(lines)
         lines += _emit_apply_kernel(node_model, v.attrs["linear_source"], var[state_in.id], var[v.id],
                                     bidx, provider_plans=provider_plans,
                                     consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block))
@@ -1058,6 +1075,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 % (bidx, json.dumps("solve_local_linear")))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[base.id]))
+        output_setup_end = len(lines)
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
                      % (status, int(v.id), var[v.id]))
         consumer_qid = program_provider_consumer_qid(node_model, v.id, v.block)
@@ -1081,6 +1099,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         status = "ln_status_%d" % v.id
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[base.id]))
+        output_setup_end = len(lines)
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 1, %s, 11, 0);"
                      % (status, int(v.id), var[base.id]))
         active_mask = "local_solve_active_mask_%d" % v.id
@@ -1416,6 +1435,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             template = var[terms[0][0].id] if v.vtype == "scalar_field" else var[base.id]
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                          % (var[v.id], int(v.id), template))
+            output_setup_end = len(lines)
             for inp, coeff in terms:
                 lines.append("ctx.axpy(%s, %s, %s, dt, %s);"
                              % (var[v.id], _coeff_cpp(coeff), var[inp.id],
@@ -1426,7 +1446,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     # source, linear_combine, where, ...) reuses the one general mechanism -- no per-op special
     # case. The wrap nests INSIDE the per-node profiling pair below (the profiler times the guarded
     # block as the node's cost). An always() schedule (or no schedule) leaves the lines untouched.
-    _emit_schedule_wrap(program, v, var, lines, _profile_start)
+    evaluation_start = output_setup_end if output_setup_end is not None else _profile_start
+    lines[evaluation_start:evaluation_start] = evaluation_prelude
+    _emit_schedule_wrap(program, v, var, lines, _profile_start,
+                        output_setup_end=output_setup_end)
     # PER-NODE PROFILING (ADC-459): if this op emitted at least one statement, bracket those
     # statements with the steady_clock pair (see the note at the top of _emit_op). A ProfileScope is
     # named "node:<v.name>"; profile_record(name, _pt) accumulates now() - _pt into the System

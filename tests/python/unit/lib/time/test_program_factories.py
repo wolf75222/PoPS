@@ -13,6 +13,7 @@ from pops.physics._facade import Model
 from pops.problem import Case
 from pops.solvers import DenseLU
 from pops.time import FailRun, LocalLinear, Program, StagePoint, TimePoint
+from pops.time._evaluation_point import evaluation_partition
 from pops.time._methods.properties import certify_program_graph
 from pops.time._methods.tableau import AdditiveRungeKuttaTableau, RungeKuttaTableau
 
@@ -170,9 +171,10 @@ def _manual_imex_euler(state, explicit, implicit):
     ).consume(action=FailRun())
     stage = program.value("imex-euler_stage_0", stage, at=point)
     explicit_rate = program.value("imex-euler_k_exp_0", explicit(stage), at=point)
-    implicit_rate = program.value(
-        "imex-euler_k_imp_0", program.apply(linear, stage, fields=None), at=point
-    )
+    with evaluation_partition(program, "implicit"):
+        implicit_rate = program.value(
+            "imex-euler_k_imp_0", program.apply(linear, stage, fields=None), at=point
+        )
     out = program.value(
         "imex-euler_step",
         u0 + program.dt * explicit_rate + program.dt * implicit_rate,

@@ -80,7 +80,6 @@ from pops.codegen.program_emit_solve import (  # noqa: F401
 from pops.codegen.program_emit_schedule import (  # noqa: F401
     _emit_schedule_wrap,
     _schedule_due_test,
-    _split_output_decl,
 )
 from pops.codegen.program_emit_control import (  # noqa: F401
     _coupled_rate_components,
