@@ -318,11 +318,21 @@ def _component_at(component, so_path):
         native_dimension=component.native_dimension,
         hllc=component.has_hllc,
         roe=component.has_roe,
+        provider_components=component.provider_components,
+        characteristic_no_inflow=component.has_characteristic_no_inflow,
+        hllc_provider=component.hllc_provider,
+        roe_provider=component.roe_provider,
+        roe_entropy_policy=component.roe_entropy_policy,
+        roe_entropy_delta=component.roe_entropy_delta,
         aux_extra_names=component.aux_extra_names,
         wave_speeds=component.has_wave_speeds,
         wave_speed_provider=component.wave_speed_provider,
         elliptic_field_names=component.elliptic_field_names,
+        bind_schema=component.bind_schema,
         definition_identity=component.definition_identity,
+        module_manifest=component.module_manifest,
+        consumer_owner_qid=component.consumer_owner_qid,
+        declares_auxiliary_providers=component.declares_auxiliary_providers,
     )
     # Hash this replacement file; an absent or original identity would test an earlier guard.
     detached.binary_identity = binary_identity(so_path)
