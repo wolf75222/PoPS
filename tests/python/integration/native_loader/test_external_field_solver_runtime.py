@@ -406,7 +406,7 @@ def _moving_amr_program(state, rate, field, *, off_policy):
     field_node = next(value for value in program._values if value.op == "solve_fields")
     scheduled = Schedule(Every(AcceptedStep(program.clock), 5), off=off_policy)
     program._replace_value(field_node, attrs={**field_node.attrs, "schedule": scheduled})
-    program.step_strategy(FixedDt(8.0e-2))
+    program.step_strategy(FixedDt(2.0e-2))
     return program
 
 
@@ -521,7 +521,9 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
     background = 0.8
     amplitude = 4.0
     inverse_width = 80.0
-    # A compact super-threshold region moves far enough to replace the fine layout at step 2.
+    # Leave room for the mandatory nesting buffer around the moving tagged region.
+    # Coarsening below the threshold releases its old footprint at step 2.
+    n = 16
     resolved = resolve_periodic_field_program(
         model,
         lambda state, rate, field: _moving_amr_program(
@@ -530,8 +532,9 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
         name="external-amr-field-runtime",
         block_name="material",
         target="amr_system",
-        n=8,
+        n=n,
         regrid_every=2,
+        coarsen_below_threshold=True,
         field_solver=provider,
         initial_profile=Gaussian(
             frame=model.frame,
@@ -562,8 +565,13 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
     )
     assert simulation.n_levels() == 2
     boxes_before = tuple(simulation.patch_boxes())
+    fine_cells = sum(
+        int(np.prod(np.asarray(upper) - lower + 1))
+        for level, lower, upper in boxes_before if level == 1
+    )
+    assert 0 < fine_cells < (2 * n) ** 2
     regrids_before = simulation.amr.explain_regrid().regrid_count
-    first = pops.run(simulation, t_end=8.0e-2, max_steps=1)
+    first = pops.run(simulation, t_end=2.0e-2, max_steps=1)
     assert first.accepted_steps == 1
     accepted_before_fault = {
         "time": simulation.time(),
@@ -579,7 +587,7 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
         match="prepared solve failed: status=invalid_evaluation action=fail_run "
         "reason=native FieldSolver v2 marked a non-finite active solution as solved",
     ):
-        pops.run(simulation, t_end=1.6e-1, max_steps=1)
+        pops.run(simulation, t_end=4.0e-2, max_steps=1)
     assert simulation.time() == accepted_before_fault["time"]
     assert simulation.macro_step() == accepted_before_fault["step"]
     assert tuple(simulation.patch_boxes()) == accepted_before_fault["boxes"]
@@ -592,11 +600,12 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
         accepted_before_fault["dirty"]
     )
     fault_marker.unlink()
-    report = pops.run(simulation, t_end=2.4e-1, max_steps=2)
+    report = pops.run(simulation, t_end=6.0e-2, max_steps=2)
     assert first.accepted_steps + report.accepted_steps == 3
-    assert report.final_time == pytest.approx(2.4e-1)
+    assert report.final_time == pytest.approx(6.0e-2)
     assert simulation.amr.explain_regrid().regrid_count > regrids_before
     assert tuple(simulation.patch_boxes()) != boxes_before
+    np.testing.assert_array_equal(simulation.field_potential_global(slot), 7.0)
     # Initial topology materialization publishes generation 1; the initially-due Program solve is
     # generation 2. Hold/Skip is then off-cadence, while failed and retried step-2 topology
     # transactions each construct a fresh solver and attempt exactly generation 1.
