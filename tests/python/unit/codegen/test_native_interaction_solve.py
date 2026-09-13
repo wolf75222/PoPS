@@ -19,7 +19,7 @@ from pops.native_components import PreparedNativeComponent
 from pops.numerics import DiscretizationPlan, JointEvaluation
 from pops.solvers.nonlinear import LocalNewton
 from pops.time import CoupledImplicitEuler, DerivativeStrategy, RejectAttempt
-from interaction_test_layout import interaction_grid as cartesian_grid, require_two_rank_partition
+from interaction_test_layout import interaction_grid as cartesian_grid, require_interaction_partition
 from tests.python.support.native_execution_context import artifact_execution_context
 from test_native_call_compiled import HEADER
 
@@ -180,11 +180,10 @@ def test_failed_imported_iterate_cannot_publish_any_recipient(compiled, record_p
     _route, artifact, _native, _elapsed = compiled
     state = initial()
     state["right"][2, -1, -1] = -1
-    simulation = pops.bind(artifact, initial_state=state,
-        resources={"execution_context": artifact_execution_context(artifact)})
     context = artifact_execution_context(artifact)
-    world = (None if context.communicator.identity == "serial"
-             else require_two_rank_partition(simulation, n=16))
+    simulation = pops.bind(artifact, initial_state=state,
+        resources={"execution_context": context})
+    world = require_interaction_partition(simulation, n=16, context=context)
     from pops._bootstrap import StepAttemptRejected
     with pytest.raises(StepAttemptRejected, match="[Ee]valuation|invalid|reject") as failure:
         pops.run(simulation, t_end=.001, max_steps=1)

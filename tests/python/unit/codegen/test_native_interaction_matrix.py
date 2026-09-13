@@ -14,10 +14,49 @@ from pops.native_calls import NativeDerivative, NativeFunction, NativeInputDomai
 from pops.native_components import PreparedNativeComponent
 from pops.codegen._orchestration_compile import build_program_model_graph
 from pops.codegen.program_codegen import emit_cpp_program
-from interaction_test_layout import interaction_grid as cartesian_grid, require_two_rank_partition
+from interaction_test_layout import interaction_grid as cartesian_grid, require_interaction_partition
 from tests.python.support.native_execution_context import artifact_execution_context
 from test_interaction_inventory_quadrature import interaction_case
 from test_native_call_compiled import HEADER
+
+
+def test_interaction_partition_uses_bound_communicator(monkeypatch):
+    from types import SimpleNamespace
+    from pops import _native_collectives
+
+    simulation = SimpleNamespace(local_boxes=lambda _name: (((0, 0), (16, 16)),))
+    context = SimpleNamespace(communicator=SimpleNamespace(identity="serial", handle=None))
+
+    def unexpected_collective(*_args):
+        raise AssertionError("serial interaction attempted an MPI collective")
+
+    monkeypatch.setattr(_native_collectives, "require_world", unexpected_collective)
+    monkeypatch.setattr(_native_collectives, "allgather_value", unexpected_collective)
+    monkeypatch.setenv("POPS_TEST_INTERACTION_BANDS", "1")
+    assert require_interaction_partition(simulation, n=16, context=context) is None
+    monkeypatch.setenv("POPS_TEST_INTERACTION_BANDS", "2")
+    with pytest.raises(AssertionError, match="requires MPI"):
+        require_interaction_partition(simulation, n=16, context=context)
+
+    handle = object()
+    context.communicator = SimpleNamespace(identity="MPI_COMM_WORLD", handle=handle)
+    world = SimpleNamespace(size=2)
+
+    def authenticate(actual):
+        assert actual is handle
+        return world
+
+    def gather(actual, value):
+        assert actual is world
+        return (False, True) if isinstance(value, bool) else (value, value)
+
+    simulation.local_boxes = lambda _name: (((0, 0), (8, 16)),)
+    monkeypatch.setattr(_native_collectives, "require_world", authenticate)
+    monkeypatch.setattr(_native_collectives, "allgather_value", gather)
+    assert require_interaction_partition(simulation, n=16, context=context) is world
+    simulation.local_boxes = lambda _name: (((0, 0), (16, 16)),)
+    with pytest.raises(AssertionError):
+        require_interaction_partition(simulation, n=16, context=context)
 
 
 def _imported_factory(directory):
@@ -102,9 +141,10 @@ def compiled_case(request, tmp_path_factory):
 def test_full_interaction_numerical_matrix(compiled_case, record_property):
     n, kind, artifact, native, compile_seconds, source_bytes = compiled_case
     initial = _initial(n)
+    context = artifact_execution_context(artifact)
     simulation = pops.bind(artifact, initial_state=initial,
-        resources={"execution_context": artifact_execution_context(artifact)})
-    world = require_two_rank_partition(simulation, n=n)
+        resources={"execution_context": context})
+    world = require_interaction_partition(simulation, n=n, context=context)
     local_cells = sum(np.prod(np.asarray(upper) - np.asarray(lower))
                       for lower, upper in simulation.local_boxes("left"))
     if native is not None:
@@ -128,7 +168,7 @@ def test_full_interaction_numerical_matrix(compiled_case, record_property):
         assert native.pops_interaction_calls() == int(local_cells) * 2 * 100
         record_property("actual_native_calls_local", native.pops_interaction_calls())
     record_property("n", n)
-    record_property("native_mpi_ranks", int(world.size))
+    record_property("native_mpi_ranks", 1 if world is None else int(world.size))
     record_property("realization", kind)
     record_property("local_cells", int(local_cells))
     record_property("accepted_steps", report.accepted_steps)
@@ -167,10 +207,11 @@ def cost_case(request, tmp_path_factory):
 def test_full_interaction_timing_matrix(cost_case, record_property):
     n, kind, artifact, native, compile_seconds, source_bytes = cost_case
     samples = []
+    context = artifact_execution_context(artifact)
     for repetition in range(9):  # predeclared two warmups, seven measurements
         simulation = pops.bind(artifact, initial_state=_initial(n),
-            resources={"execution_context": artifact_execution_context(artifact)})
-        require_two_rank_partition(simulation, n=n)
+            resources={"execution_context": context})
+        require_interaction_partition(simulation, n=n, context=context)
         simulation.integral("left", 0)  # native reduction/fence before timing
         native.pops_interaction_reset()
         start = time.perf_counter()

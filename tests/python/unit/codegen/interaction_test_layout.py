@@ -36,13 +36,23 @@ def interaction_grid(*, n, periodic=True):
     return _TwoBands(frame=grid.frame, cells=grid.cells, periodic=grid.periodic)
 
 
-def require_two_rank_partition(simulation, *, n):
-    """Prove that the sole bad last cell belongs to rank one on the native world."""
-    from pops import _pops
+def require_interaction_partition(simulation, *, n, context):
+    """Check the declared serial or MPI partition using the bound launch context."""
     from pops._native_collectives import allgather_value, require_world
 
-    world = require_world(_pops.mpi_world())
-    if os.environ.get("POPS_TEST_INTERACTION_BANDS", "1") == "1":
+    bands = os.environ.get("POPS_TEST_INTERACTION_BANDS", "1")
+    if bands not in ("1", "2"):
+        raise ValueError("interaction qualification bands must be explicitly 1 or 2")
+    if context.communicator.identity == "serial":
+        assert bands == "1", "two-rank interaction qualification requires MPI"
+        assert context.communicator.handle is None
+        boxes = simulation.local_boxes("left")
+        cells = sum((int(hi[0])-int(lo[0])) * (int(hi[1])-int(lo[1])) for lo, hi in boxes)
+        assert cells == n*n
+        return None
+    assert context.communicator.identity == "MPI_COMM_WORLD"
+    world = require_world(context.communicator.handle)
+    if bands == "1":
         return world
     assert world.size == 2
     boxes = simulation.local_boxes("left")

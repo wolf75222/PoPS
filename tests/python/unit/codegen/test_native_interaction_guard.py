@@ -6,7 +6,7 @@ import pytest
 from pops.layouts import Uniform
 from test_native_interaction_matrix import _imported_factory, _initial, _expected
 from test_interaction_inventory_quadrature import interaction_case
-from interaction_test_layout import interaction_grid, require_two_rank_partition
+from interaction_test_layout import interaction_grid, require_interaction_partition
 from tests.python.support.native_execution_context import artifact_execution_context
 
 
@@ -62,16 +62,17 @@ def test_rank_local_native_failure_in_selected_arm_rolls_back(compiled,record_pr
     artifact,native = compiled
     initial = _initial(16)
     initial["right"][2,-1,-1] = 0
+    context = artifact_execution_context(artifact)
     simulation = pops.bind(artifact,initial_state=initial,
-        resources={"execution_context":artifact_execution_context(artifact)})
-    from pops import _pops
+        resources={"execution_context":context})
     from pops._native_collectives import allgather_value, require_world
 
-    world = require_world(_pops.mpi_world())
-    ranks = int(world.size)
+    world = (None if context.communicator.identity == "serial"
+             else require_world(context.communicator.handle))
+    ranks = 1 if world is None else int(world.size)
     assert ranks in (1, 2), "selected-arm rollback qualification declares one or two ranks"
     if ranks == 2:
-        require_two_rank_partition(simulation, n=16)
+        require_interaction_partition(simulation, n=16, context=context)
     boxes = simulation.local_boxes("left")
     cells = sum(int(np.prod(np.asarray(hi) - lo)) for lo, hi in boxes)
     owns_bad = any(all(int(lo[d]) <= 15 < int(hi[d]) for d in (0, 1))
@@ -80,15 +81,17 @@ def test_rank_local_native_failure_in_selected_arm_rolls_back(compiled,record_pr
     # invalid last cell on rank one. Verify the actual native ownership in both modes.
     expected_cells = (256,) if ranks == 1 else (128, 128)
     expected_owners = (True,) if ranks == 1 else (False, True)
-    cells_by_rank = allgather_value(world, cells)
-    owners_by_rank = allgather_value(world, owns_bad)
+    cells_by_rank = (cells,) if world is None else allgather_value(world, cells)
+    owners_by_rank = (owns_bad,) if world is None else allgather_value(world, owns_bad)
     assert cells_by_rank == expected_cells
     assert owners_by_rank == expected_owners
     native.pops_interaction_reset()
     from pops._bootstrap import StepAttemptRejected
     with pytest.raises(StepAttemptRejected) as failure:
         pops.run(simulation,t_end=.001,max_steps=1)
-    assert allgather_value(world,type(failure.value).__name__) == ("StepAttemptRejected",)*int(world.size)
+    categories = ((type(failure.value).__name__,) if world is None
+                  else allgather_value(world, type(failure.value).__name__))
+    assert categories == ("StepAttemptRejected",)*ranks
     for name in ("left","right"):
         np.testing.assert_array_equal(simulation.state_global(name),initial[name])
     assert simulation._executor_for_block("left")._program_exchange_records() == []
@@ -96,7 +99,7 @@ def test_rank_local_native_failure_in_selected_arm_rolls_back(compiled,record_pr
     expected_calls = tuple(count - int(owner)
                            for count, owner in zip(expected_cells, expected_owners, strict=True))
     assert calls == cells - int(owns_bad)
-    calls_by_rank = allgather_value(world, calls)
+    calls_by_rank = (calls,) if world is None else allgather_value(world, calls)
     assert calls_by_rank == expected_calls
     record_property("native_mpi_ranks", ranks)
     record_property("owned_cells_by_rank", cells_by_rank)
