@@ -743,8 +743,10 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
     throw std::invalid_argument("exact AMR Program checkpoint has foreign history-slot provenance");
   std::string previous_pending;
   for (const auto& pending : state.pending_history_remaps) {
-    constexpr std::string_view history_prefix = "pops.amr.level-history.v1/";
-    const auto parse_pending_key = [&]() -> std::pair<int, std::string_view> {
+    const auto parse_pending_key = [&pending]() -> std::pair<int, std::string_view> {
+      // Keep the constant inside the closure: host and generated DSOs may instantiate this
+      // header at different optimization levels and interpose the lambda's call operator.
+      constexpr std::string_view history_prefix = "pops.amr.level-history.v1/";
       if (!std::string_view(pending.key).starts_with(history_prefix))
         throw std::invalid_argument(
             "exact AMR Program checkpoint pending history remap has a foreign key");

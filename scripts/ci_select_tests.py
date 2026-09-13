@@ -1145,6 +1145,16 @@ def verify_cpp_target_labels(args: argparse.Namespace) -> int:
                 f"{test_name!r} cannot have both {owner_labels[0]} and cpp-standalone"
             )
         owner_label = owner_labels[0]
+        if "cpp-not-built" in labels:
+            owner = owner_label.removeprefix("cpp-target:")
+            if test_name != f"{owner}_NOT_BUILT":
+                raise SystemExit(
+                    "CTest target-label contract failed; invalid unbuilt placeholder "
+                    f"{test_name!r} for {owner_label}"
+                )
+            # POST_BUILD discovery leaves a labeled sentinel for unbuilt runtime-discovery
+            # targets in other shards. It is never a discovered case, including when selected.
+            continue
         if owner_label not in expected:
             # Configure-time GoogleTest discovery deliberately registers the complete CTest
             # catalogue even when this shard builds only its selected executables.  The owner is

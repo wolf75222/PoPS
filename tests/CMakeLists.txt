@@ -152,7 +152,11 @@ function(pops_add_gtest_suite)
           "    RESOURCE_GROUPS [==[${ARG_RESOURCE_GROUPS}]==]\n")
       endif()
       file(GENERATE OUTPUT "${_pops_list_properties_file}" CONTENT
-"foreach(_pops_discovered_test IN LISTS ${_pops_test_list})
+"if(NOT DEFINED ${_pops_test_list})
+  set_tests_properties(${ARG_NAME}_NOT_BUILT PROPERTIES
+    LABELS [==[${_pops_test_labels};cpp-not-built]==])
+endif()
+foreach(_pops_discovered_test IN LISTS ${_pops_test_list})
   set_tests_properties(\"\${_pops_discovered_test}\" PROPERTIES
     LABELS [==[${_pops_test_labels}]==]
 ${_pops_resource_groups_assignment}  )

@@ -576,6 +576,47 @@ def test_cpp_target_label_fence_ignores_other_shards_but_rejects_ambiguous_owner
         sel.verify_cpp_target_labels(args)
 
 
+def test_cpp_target_label_fence_authenticates_unbuilt_runtime_discovery(tmp_path):
+    sel = _load("ci_select_tests")
+    inventory = tmp_path / "ctest-unbuilt.json"
+    placeholder = {
+        "name": "test_other_NOT_BUILT",
+        "properties": [
+            {"name": "LABELS", "value": ["cpp-target:test_other", "cpp-not-built"]},
+        ],
+    }
+    payload = {
+        "tests": [
+            {
+                "name": "Suite.One",
+                "properties": [
+                    {"name": "LABELS", "value": ["cpp-target:test_one"]},
+                ],
+            },
+            placeholder,
+        ],
+    }
+    inventory.write_text(json.dumps(payload))
+    args = SimpleNamespace(ctest_json=str(inventory), targets=["test_one"])
+    assert sel.verify_cpp_target_labels(args) == 0
+
+    args.targets.append("test_other")
+    with pytest.raises(SystemExit, match="selected targets without discovered cases: test_other"):
+        sel.verify_cpp_target_labels(args)
+    args.targets.pop()
+
+    placeholder["name"] = "Suite.Disguised"
+    inventory.write_text(json.dumps(payload))
+    with pytest.raises(SystemExit, match="invalid unbuilt placeholder"):
+        sel.verify_cpp_target_labels(args)
+
+    placeholder["name"] = "test_other_NOT_BUILT"
+    placeholder["properties"][0]["value"] = []
+    inventory.write_text(json.dumps(payload))
+    with pytest.raises(SystemExit, match="neither one cpp-target"):
+        sel.verify_cpp_target_labels(args)
+
+
 def test_cpp_target_label_fence_rejects_implicit_or_double_standalone(tmp_path):
     sel = _load("ci_select_tests")
     inventory = tmp_path / "ctest-invalid-standalone.json"
