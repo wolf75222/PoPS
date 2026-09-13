@@ -64,6 +64,47 @@ def _stationary_contact(n):
     return U
 
 
+def _prepared_public_parity(artifact, initial):
+    """Compare two installed engines sharing the exact authored temporal contract."""
+    public = pops.bind(
+        artifact,
+        initial_state={"gas": np.ascontiguousarray(initial)},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
+    from pops.runtime._runtime_executor import install_runtime_executor
+
+    prod = install_runtime_executor(public._install_plan, public._runtime_plan)
+    assert prod._s is not public._executor._s
+    n = initial.shape[-1]
+    assert (
+        prod.program_report().program_hash
+        == artifact.program_hash
+        == public.program_report().program_hash
+    )
+    dt = 1e-4
+    # Both sides must consume the same authenticated FixedDt segment.  Reopening twelve
+    # one-step intervals would make every local endpoint ``time + dt`` and bypass the final
+    # accumulated-roundoff correction exercised by the public run.
+    from pops.runtime._step_strategy import prepare_program_run
+    from pops.runtime._native_step_target import native_step_target
+
+    prepared = prepare_program_run(prod)
+    prepared.begin(prod._temporal_restart_state, time=prod.time(), macro_step=prod.macro_step())
+    target = native_step_target(prod)
+    prod_steps = 0
+    while prod.time() < 12 * dt and prod_steps < 12:
+        prepared.run_step(target, t_end=12 * dt)
+        prod_steps += 1
+    report = pops.run(public, t_end=12 * dt, max_steps=12)
+    Up = np.array(prod.get_state("gas")).reshape(4, n, n)
+    Ur = np.array(public.state_global("gas")).reshape(4, n, n)
+    assert prod_steps == report.accepted_steps == 12
+    assert np.isfinite(Up).all() and Up[0].min() > 0, "etat de production non physique"
+    assert float(np.abs(Up[1]).max()) > 1e-4, "le transport Euler est reste trivial"
+    assert np.array_equal(Up, Ur), "package prepare != public bind apres 12 pas"
+    print("OK  12 pas Forward-Euler : package prepare BIT-IDENTIQUE au public bind")
+
+
 def main():
     cxx = default_cxx()
     missing = missing_native_compile_requirement(INCLUDE, cxx)
@@ -152,39 +193,7 @@ def main():
 
         # (2) le plan Rusanov/MUSCL authentifie est identique entre le package detache prepare et
         # le lifecycle public bind/run.  C'est la reference supportee depuis le retrait de ModelSpec.
-        prod = build_native("minmod", "rusanov", "conservative")
-        public = pops.bind(
-            artifact,
-            initial_state={"gas": np.ascontiguousarray(U)},
-            resources={"execution_context": artifact_execution_context(artifact)},
-        )
-        assert (
-            prod.program_report().program_hash
-            == artifact.program_hash
-            == public.program_report().program_hash
-        )
-        dt = 1e-4
-        # Both sides must consume the same authenticated FixedDt segment.  Reopening twelve
-        # one-step intervals would make every local endpoint ``time + dt`` and bypass the final
-        # accumulated-roundoff correction exercised by the public run.
-        from pops.runtime._step_strategy import prepare_program_run
-        from pops.runtime._native_step_target import native_step_target
-
-        prepared = prepare_program_run(prod)
-        prepared.begin(prod._temporal_restart_state, time=prod.time(), macro_step=prod.macro_step())
-        target = native_step_target(prod)
-        prod_steps = 0
-        while prod.time() < 12 * dt and prod_steps < 12:
-            prepared.run_step(target, t_end=12 * dt)
-            prod_steps += 1
-        report = pops.run(public, t_end=12 * dt, max_steps=12)
-        Up = np.array(prod.get_state("gas")).reshape(4, n, n)
-        Ur = np.array(public.state_global("gas")).reshape(4, n, n)
-        assert prod_steps == report.accepted_steps == 12
-        assert np.isfinite(Up).all() and Up[0].min() > 0, "etat de production non physique"
-        assert float(np.abs(Up[1]).max()) > 1e-4, "le transport Euler est reste trivial"
-        assert np.array_equal(Up, Ur), "package prepare != public bind apres 12 pas"
-        print("OK  12 pas Forward-Euler : package prepare BIT-IDENTIQUE au public bind")
+        _prepared_public_parity(artifact, U)
 
         # (3) GARDE-FOU ABI : on compile un loader dont la SIGNATURE D'EN-TETES bakee est volontairement
         # FAUSSE (-DPOPS_HEADER_SIG different). Sa cle pops_native_abi_key differe alors de celle du module
