@@ -36,6 +36,10 @@ import sys
 from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
 from pops.solvers.elliptic import CartesianCG
 
+# One ModelSpec loader plus three independent Case model/Program pairs compile cold.
+# CI passes both SSPRK2 comparisons before the default 300-second cap expires in the RK4 phase.
+POPS_PROCESS_TIMEOUT = 900
+
 
 def _skip(msg):
     require_native_or_skip('test_time_multistage (%s)' % msg)
