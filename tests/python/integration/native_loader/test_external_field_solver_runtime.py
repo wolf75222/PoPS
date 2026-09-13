@@ -571,8 +571,15 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
     )
     assert 0 < fine_cells < (2 * n) ** 2
     regrids_before = simulation.amr.explain_regrid().regrid_count
+    # Bootstrap recomputes first on level zero, then on the prolonged two-level hierarchy.
+    # Each topology owns a fresh solver, whose first solve has counter 1.
+    bootstrap_calls = solve_observer.read_text(encoding="utf-8").splitlines()
+    assert bootstrap_calls == ["1", "1"]
     first = pops.run(simulation, t_end=2.0e-2, max_steps=1)
     assert first.accepted_steps == 1
+    # The initially-due Program runs once on each live level, using the current solver.
+    initial_step_calls = solve_observer.read_text(encoding="utf-8").splitlines()
+    assert initial_step_calls == bootstrap_calls + ["2", "3"]
     accepted_before_fault = {
         "time": simulation.time(),
         "step": simulation.macro_step(),
@@ -588,6 +595,9 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
         "reason=native FieldSolver v2 marked a non-finite active solution as solved",
     ):
         pops.run(simulation, t_end=4.0e-2, max_steps=1)
+    # Hold/Skip is off-cadence; only the new topology solver attempts a first solve.
+    rejected_calls = solve_observer.read_text(encoding="utf-8").splitlines()
+    assert rejected_calls == initial_step_calls + ["1"]
     assert simulation.time() == accepted_before_fault["time"]
     assert simulation.macro_step() == accepted_before_fault["step"]
     assert tuple(simulation.patch_boxes()) == accepted_before_fault["boxes"]
@@ -599,6 +609,7 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
     assert tuple(simulation._executor._s.dirty_auxiliary_provider_identities()) == (
         accepted_before_fault["dirty"]
     )
+    assert solve_observer.read_text(encoding="utf-8").splitlines() == rejected_calls
     fault_marker.unlink()
     report = pops.run(simulation, t_end=6.0e-2, max_steps=2)
     assert first.accepted_steps + report.accepted_steps == 3
@@ -619,10 +630,8 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
         potential = np.asarray(simulation.field_potential_level_global(slot, level))
         assert np.all(np.isfinite(potential))
         np.testing.assert_array_equal(potential.reshape(active.shape)[active], 7.0)
-    # Initial topology materialization publishes generation 1; the initially-due Program solve is
-    # generation 2. Hold/Skip is then off-cadence, while failed and retried step-2 topology
-    # transactions each construct a fresh solver and attempt exactly generation 1.
-    assert solve_observer.read_text(encoding="utf-8").splitlines() == ["1", "2", "1", "1"]
+    # The retry creates one fresh topology solver; neither off-cadence step nor reads solve again.
+    assert solve_observer.read_text(encoding="utf-8").splitlines() == rejected_calls + ["1"]
 
 
 def test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retries(
