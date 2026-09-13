@@ -894,7 +894,20 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         elif named_fluxes is None:
             family = _rhs_flux_temporal_family(v)
             family_suffix = ", " + json.dumps(family) if target == "amr_system" else ""
-            if want_default_source:
+            from pops.codegen.program_transport_quadrature import declare_transport_faces
+            faces = declare_transport_faces(v, node_model, var, lines)
+            if faces is not None:
+                lines.append("ctx.neg_div_flux_default_with_faces_into(%d, %s, %s, %d, %s%s);"
+                             % (bidx, var[state_in.id], var[v.id], int(v.id), faces, family_suffix))
+                if want_default_source:
+                    source = "transport_source_%d" % v.id
+                    lines.append("auto& %s = ctx.rhs_scratch(%d, 2, %s);"
+                                 % (source, int(v.id), var[state_in.id]))
+                    lines.append("ctx.source_default_into(%d, %s, %s);"
+                                 % (bidx, var[state_in.id], source))
+                    lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);"
+                                 % (var[v.id], source))
+            elif want_default_source:
                 # R <- -div F + default/composite source (ctx.rhs_into) for THIS op's block (ADC-426
                 # bidx), the historical path: sources is None (legacy) or "default" is requested.
                 lines.append("ctx.rhs_into(%d, %s, %s, %d%s);"

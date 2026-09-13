@@ -27,7 +27,7 @@ def test_separate_transport_and_tensor_emit_both_operators_and_required_halos(di
     code = emit_cpp_program(resolved.time, model=emitter)
     body = _emit_bricks(emitter._m)[1]
     assert "PreparedDiffusion<pops::kNativeDimension, 2, true>" in code
-    assert "ctx.neg_div_flux_default_into(" in code
+    assert "ctx.neg_div_flux_default_with_faces_into(" in code
     assert "program_state_ghost_depth = 2;" in body
     assert "program_only_storage = true" not in body
     assert max(operations.halo_requirements().values()) == 2
@@ -45,9 +45,10 @@ def test_implicit_tensor_partition_is_not_charged_to_explicit_transport_bound():
     emitter = lower_and_validate(model, resolved_operations=operations)[0]
     code = emit_cpp_program(resolved.time, model=emitter)
     assert "PreparedDiffusion<pops::kNativeDimension, 2, true>" in code
-    assert "ctx.neg_div_flux_default_into(" in code
+    assert "ctx.neg_div_flux_default_with_faces_into(" in code
     assert "pops::runtime::program::PreparedSpatialResidual<" in code
     assert ".explicit_frequency()" not in code
+    assert "transport_faces_" in code and "ctx.stage_exchange_batch(" in code
     assert code.count("combined_transport_diffusion_stability") == 1
     assert code.index("combined_transport_diffusion_stability") < code.index("_residual = [&]")
     assert "program_state_ghost_depth = 2;" in _emit_bricks(emitter._m)[1]
@@ -86,3 +87,24 @@ def test_shared_endpoint_frequency_contract_refuses_unproved_providers(
     selected = SimpleNamespace(reconstruction=getattr(reconstruction, reconstruction_name)(), riemann=flux)
     with pytest.raises(ValueError, match="combined diffusion"):
         transport_frequency_contract(selected)
+
+
+def test_grouped_composition_requests_retained_faces_without_evaluating_again():
+    from pops.codegen.program_emit_control import _emit_contiguous_rhs_group
+
+    case, layout, model = composition_case()
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    operations = next(iter(resolved.resolved_operations.values()))
+    emitter = lower_and_validate(model, resolved_operations=operations)[0]
+    rate = next(value for value in resolved.time._values if value.op == "rhs")
+    for target in ("system", "amr_system"):
+        variables = {rate.inputs[0].id: "initial"}
+        lines = []
+        _emit_contiguous_rhs_group((rate,), {rate.block: 0}, variables, lines, 1000,
+                                   target=target, model=emitter)
+        requests = [line for line in lines if "ctx.rhs_group(" in line]
+        assert len(requests) == 1
+        assert ", &transport_faces_%d}" % rate.id in requests[0]
+        assert ("program-flux-family" in requests[0]) == (target == "amr_system")
+        assert not any("ctx.neg_div_flux" in line or "ctx.rhs_into(" in line for line in lines)
+        assert ("accepted_transport", rate.id) in variables

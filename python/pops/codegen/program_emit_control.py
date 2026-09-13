@@ -265,9 +265,13 @@ def _emit_contiguous_rhs_group(
             ", " + json.dumps(_rhs_flux_temporal_family(value))
             if target == "amr_system" else ""
         )
-        requests.append("{%d, &%s, &%s, %d, %d%s}" % (
+        from pops.codegen.program_models import model_for_node
+        from pops.codegen.program_transport_quadrature import declare_transport_faces
+        faces = declare_transport_faces(value, model_for_node(model, value), var, lines)
+        capture = "" if faces is None else ", &"+faces
+        requests.append("{%d, &%s, &%s, %d, %d%s%s}" % (
             index, var[state.id], var[value.id], int(value.id), 0 if default_source else 1,
-            family))
+            family, capture))
     lines.append("ctx.rhs_group(%d, {%s});" % (group_identity, ", ".join(requests)))
     from pops.codegen.program_models import model_for_node
     from pops.codegen.program_partition_stability import emit_transport_frequency
@@ -470,6 +474,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     lines.extend(emit_accepted_diffusive_exchanges(
         program, target=target, block_indices=block_idx,
         partition_stability_checked=var.get(("partition_stability_checked",), ())))
+    from pops.codegen.program_transport_quadrature import emit_accepted_transport_exchanges
+    lines.extend(emit_accepted_transport_exchanges(program, var, block_idx, model))
     # All outputs stay provisional until the one atomic publication group.
     lines.extend(_emit_commit_group(program._commits, bases, var, phase=0))
     # Rotate the history rings ONCE at the very end of the step (after the commit), so the next step
