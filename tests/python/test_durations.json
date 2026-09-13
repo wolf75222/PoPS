@@ -260,7 +260,7 @@
   "tests/python/unit/physics/test_board_authoring_atomicity.py": 1.0,
   "tests/python/unit/physics/test_generic_riemann_routes.py": 0.5,
   "tests/python/unit/physics/test_exact_physics_scalars.py": 1.0,
-  "tests/python/unit/physics/test_fv_hll_minmod.py": 0.5,
+  "tests/python/unit/physics/test_fv_hll_minmod.py": 380.0,
   "tests/python/unit/physics/test_generic_inversion_admissibility.py": 1.0,
   "tests/python/unit/physics/test_hll_isothermal.py": 380.0,
   "tests/python/unit/physics/test_named_field_runtime_params.py": 0.5,
@@ -414,7 +414,7 @@
   "tests/python/unit/time/test_time_multiblock.py": 265.0,
   "tests/python/unit/time/test_time_multicomp_solve.py": 150.0,
   "tests/python/unit/time/test_time_multielliptic.py": 235.0,
-  "tests/python/unit/time/test_time_multistage.py": 69.2,
+  "tests/python/unit/time/test_time_multistage.py": 380.0,
   "tests/python/unit/time/test_time_named_flux_elliptic.py": 120.0,
   "tests/python/unit/time/test_time_ops_polish.py": 115.0,
   "tests/python/unit/time/test_time_program.py": 0.5,
@@ -545,7 +545,7 @@
         "tests/python/unit/codegen/test_transport_quadrature.py"
       ]
     },
-    "estimated_count": 425,
+    "estimated_count": 427,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -837,6 +837,7 @@
       "tests/python/unit/physics/test_board_authoring_atomicity.py",
       "tests/python/unit/physics/test_diffusive_declarations.py",
       "tests/python/unit/physics/test_exact_physics_scalars.py",
+      "tests/python/unit/physics/test_fv_hll_minmod.py",
       "tests/python/unit/physics/test_generic_inversion_admissibility.py",
       "tests/python/unit/physics/test_hll_isothermal.py",
       "tests/python/unit/physics/test_joint_rate_projection_balance.py",
@@ -963,6 +964,7 @@
       "tests/python/unit/time/test_time_multiblock.py",
       "tests/python/unit/time/test_time_multicomp_solve.py",
       "tests/python/unit/time/test_time_multielliptic.py",
+      "tests/python/unit/time/test_time_multistage.py",
       "tests/python/unit/time/test_time_named_flux_elliptic.py",
       "tests/python/unit/time/test_time_ops_polish.py",
       "tests/python/unit/time/test_time_rhs_flux_false.py",
@@ -1215,7 +1217,15 @@
       "scalar_pipeline_basis": "90-minute scheduling estimate for the indivisible inherited full-profile scalar-advection pipeline; older candidate5 example report retained approximately3938s and later local attempts exceeded4299s. This is not a timing measurement of the current CI file or proof of source equivalence.",
       "watchdogs": "Only the four largest indivisible files need long-job reservations. Their test-step budget derives from selected weights; ordinary selections retain a45-minute test limit inside50-minute jobs."
     },
-    "accepted_state_inspector_basis": "0.5-second scheduling estimate for five source-only parser cases; observed local pytest receipt 0.16s is not GitHub wall time."
+    "accepted_state_inspector_basis": "0.5-second scheduling estimate for five source-only parser cases; observed local pytest receipt 0.16s is not GitHub wall time.",
+    "ci_20260913_process_timeout_weights": {
+      "run_id": 34765485865,
+      "basis": "Each process exceeded its 300-second hard limit while performing multiple cold native compiles. Reserve 1.25 times the observed lower bound, rounded up to ten seconds. These 380-second packing weights are estimates, not complete file wall times; local per-file hard caps remain 900 seconds.",
+      "files": [
+        "tests/python/unit/physics/test_fv_hll_minmod.py",
+        "tests/python/unit/time/test_time_multistage.py"
+      ]
+    }
   },
   "tests/python/integration/runtime/test_interface_boundary_flux_ownership.py": 160.0,
   "tests/python/integration/runtime/test_amr_physical_maps.py": 1050.0,
