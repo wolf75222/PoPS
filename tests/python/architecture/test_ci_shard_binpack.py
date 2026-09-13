@@ -74,28 +74,88 @@ def test_duration_catalog_exactly_matches_manifest_selection_universe():
 
 
 def test_full_manifest_pack_stays_within_python_shard_test_budget():
-    """Recorded weights reserve setup/runner margin inside the 50-minute job watchdog."""
+    """Ordinary jobs stay bounded; only indivisible long files reserve more time."""
     selector = _load("ci_select_tests")
-    universe = sorted(
-        {
-            path
-            for suite in selector.manifest_python_suites(selector.load_manifest())
-            for path in suite["files"]
-        }
-    )
+    timing = _load("ci_pytest_timings")
+    universe = sorted({path for suite in selector.manifest_python_suites(selector.load_manifest())
+                       for path in suite["files"]})
     durations = binpack.load_durations()
     excluded = set(binpack.EXCLUDED_FROM_SHARDS)
-    shards = binpack.assign_shards(
-        [path for path in universe if path not in excluded],
-        shard_total=18,
-        durations=durations,
-    )
-    binpack.verify_partition(universe, shards)
-    loads = [sum(durations[path] for path in shard) for shard in shards]
-    assert max(loads) <= 35.0 * 60.0, (
-        "modeled Python test load leaves less than 15 minutes for setup/runner variance: "
-        f"max={max(loads):.1f}s"
-    )
+    files = [path for path in universe if path not in excluded]
+    # Full selection and deterministic partial selections must all fit the job reservations.
+    selections = [files] + [files[offset::stride] for stride in range(2, 8)
+                           for offset in range(stride)]
+    for selected in selections:
+        shards = binpack.assign_shards(selected, timing.SHARD_TOTAL, durations)
+        binpack.verify_partition(selected, shards)
+        for index, shard in enumerate(shards):
+            minutes = timing.selected_budget(shard, durations)
+            assert minutes + 5 <= timing.job_budget(index), (index, minutes, shard)
+            if sum(durations[path] for path in shard) > timing.ORDINARY_BUDGET_SECONDS:
+                assert index < 4 and len(shard) == 1
+            else:
+                assert minutes == 45
+
+
+def test_python_watchdog_rejects_oversubscribed_multi_file_shards():
+    timing = _load("ci_pytest_timings")
+    with pytest.raises(ValueError, match="indivisible"):
+        timing.selected_budget(["a", "b"], {"a": 1500., "b": 1500.})
+    assert timing.selected_budget(["long"], {"long": 5400.}) == 100
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_pytest_timing_receipts_survive_failure_and_interruption(tmp_path, interrupted):
+    """Run tiny independent pytest sessions, never the native test matrix."""
+    import os
+    import subprocess
+    import time
+
+    receipt = tmp_path / "receipts"
+    test_file = tmp_path / "test_receipts.py"
+    if interrupted:
+        test_file.write_text("import time\ndef test_active(): time.sleep(30)\n")
+    else:
+        test_file.write_text("import pytest\ndef test_pass(): pass\n"
+                             "def test_failure(): assert False\n"
+                             "@pytest.mark.skip(reason='fixture')\ndef test_skip(): pass\n")
+    env = dict(os.environ, PYTHONPATH=str(SCRIPTS), POPS_CI_PYTEST_TIMINGS_DIR=str(receipt),
+               PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
+    command = [sys.executable, "-m", "pytest", "-p", "ci_pytest_timings", "-q",
+               "--rootdir", str(tmp_path), "--confcutdir", str(tmp_path), str(test_file)]
+    process = subprocess.Popen(command, cwd=tmp_path, env=env, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, text=True)
+    if interrupted:
+        deadline = time.monotonic() + 15
+        try:
+            while time.monotonic() < deadline:
+                snapshot = receipt / "timings.json"
+                state = json.loads(snapshot.read_text()) if snapshot.exists() else {}
+                if state.get("active_phase") == "call":
+                    break
+                if process.poll() is not None:
+                    pytest.fail(process.communicate()[0])
+                time.sleep(.02)
+            else:
+                pytest.fail("timing plugin did not publish the active call")
+        finally:
+            process.terminate()
+    output = process.communicate(timeout=15)[0]
+    assert process.returncode != 0, output
+    state = json.loads((receipt / "timings.json").read_text())
+    events = [json.loads(line) for line in (receipt / "timings.jsonl").read_text().splitlines()]
+    row = next(iter(state["files"].values()))
+    if interrupted:
+        assert state["complete"] is False and row["complete"] is False
+        assert state["active_node"].endswith("::test_active")
+        assert any(event.get("phase") == "setup" for event in events)
+        assert not any(event["event"] == "session_finish" for event in events)
+    else:
+        assert state["complete"] is True and state["exit_code"] == 1
+        assert row["complete"] is True and row["finished"] == row["collected"] == 3
+        reports = [event for event in events if event["event"] == "test_report"]
+        assert {event["outcome"] for event in reports} == {"passed", "failed", "skipped"}
+        assert row["reported_phase_seconds"] == pytest.approx(sum(e["seconds"] for e in reports))
 
 
 def test_excluded_files_exist():

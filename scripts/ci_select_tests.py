@@ -75,6 +75,7 @@ PYTHON_BROAD_FILES = {
     "pyproject.toml",
     "python/CMakeLists.txt",
     "scripts/ci_import_closure.py",
+    "scripts/ci_pytest_timings.py",
     "scripts/ci_python_module_objects.py",
     "scripts/ci_route_mode.py",
     "scripts/ci_select_tests.py",
