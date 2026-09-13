@@ -1144,13 +1144,13 @@ jobs:
         # SHARD_TOTAL=strategy.job-total. ADC-623: files are packed by recorded duration weights
         # (scripts/ci_shard_binpack.py, greedy LPT over tests/python/test_durations.json), not by a
         # modulo of the file list, so the slowest shard -- the gate critical path -- is minimized.
-        # 32 shards: refreshed phase lower bounds plus explicit cancelled-file estimates
+        # 37 shards: current CI phase lower bounds plus explicit interrupted-file estimates
         # keep ordinary modeled loads below 35 minutes. Five indivisible science modules
         # occupy the first five LPT bins alone (90/60/60/60/40-minute planning weights).
         # Only those bins reserve longer outer caps; the selected plan computes a tighter
         # per-step watchdog, so a light partial selection still gets 45 minutes. Estimates
         # are not current CI qualification. Keep every selected file and pytest case.
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36]
 
     env:
       PYTHONUNBUFFERED: "1"
@@ -2676,8 +2676,8 @@ jobs:
         env:
           OMP_NUM_THREADS: "2"
           OMP_PROC_BIND: "false"
-          # The OpenMP runtime lane has built every native prerequisite above.  Keep the three
-          # script-mode ABI/production contracts fail-closed if one of those capabilities regresses.
+          # The OpenMP runtime lane has built every native prerequisite above. Keep every
+          # ABI/production phase fail-closed, including the split AMR process files.
           POPS_REQUIRE_NATIVE_TESTS: "1"
           # PARITE KOKKOS du loader runtime : le module _pops est compile AVEC Kokkos ; sans cette
           # variable, dsl.py compile le loader SANS -DPOPS_HAS_KOKKOS -> cle d'ABI kokkos=0 vs
@@ -2696,7 +2696,9 @@ jobs:
           # (issue #271, arenes statiques des loaders detruites avant les finalize hooks Kokkos)
           # est corrige a la racine (ManagedArena = singleton jamais detruit, allocator.hpp) --
           # la tolerance ciblee rc=134 est retiree, tout echec redevient fatal.
-          for t in test_native_abi_std test_dsl_production test_dsl_production_amr; do
+          for t in test_native_abi_std test_dsl_production test_dsl_production_amr \
+              test_dsl_production_amr_poisson test_dsl_production_amr_roe \
+              test_dsl_production_amr_guards; do
             test_path="$(find tests/python -name "$t.py" -print -quit)"
             if [ -z "$test_path" ]; then
               echo "::error::Python test $t.py not found under tests/python"

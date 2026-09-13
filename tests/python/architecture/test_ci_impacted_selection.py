@@ -1379,7 +1379,8 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert '--packages-root "$PWD/.pops-ci/python-packages" --timings-dir "$timings"' in python_shards_block
     assert 'PYTHONUNBUFFERED: "1"' in python_shards_block
     assert 'cp "$timings/selected.txt" "$timings/timings.tsv"' not in python_shards_block
-    assert "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]" in python_shards_block
+    expected_shards = list(range(_load("ci_pytest_timings").SHARD_TOTAL))
+    assert "shard: %s" % expected_shards in python_shards_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_shards_block
     assert "timeout-minutes: 30" in python_cache_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_cache_block
