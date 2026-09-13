@@ -4,10 +4,12 @@ This guide documents the bounded public dispatcher in
 [`examples/migration/r1_workflows.py`](../../examples/migration/r1_workflows.py). It gives
 one runnable command surface for the eight R1 workflow shapes required by ADC-924:
 `Model -> Case -> DiscretizationPlan -> Program -> validate -> resolve -> compile -> bind -> run`.
-The examples are lifecycle demonstrations. They do not replace or qualify the current
-52-family, 315-row R1 matrix, and this page contains no runtime or performance result.
-The current status and qualification boundary are tracked in
-[`migration_m3_m8_results.md`](migration_m3_m8_results.md).
+The examples are lifecycle demonstrations and a compact representative witness set for these
+public capability shapes. They do not by themselves qualify numerical or scientific behavior,
+execution-environment coverage, or performance, and this page contains no runtime or performance
+result. Test selection and evidence reuse follow
+[`migration_verification_scope.md`](migration_verification_scope.md). The current status and
+qualification boundary are tracked in [`migration_m3_m8_results.md`](migration_m3_m8_results.md).
 
 ## Install and select a native artifact
 
@@ -40,42 +42,52 @@ POPS_NATIVE_DIM=2 python examples/migration/r1_workflows.py <workflow> --cells 1
 ```
 
 `workflow` is optional only with `--list`. The choices are the eight names below.
-`--cells` defaults to `16` and must be at least `4`; `--steps` defaults to `1` and must be
-at least `1`; `--work-dir` defaults to `outputs/migration-r1`. The direct workflows print
-an indented JSON summary. `accepted_steps` and `final_time` describe that invocation,
-`artifact` identifies the compiled artifact, and state summaries report shape, component
-means, minimum, and maximum. Diagnostics such as `mean_change`, `pair_mean_defect`,
-`gradient_l2`, and `potential_l2` are descriptive values without qualification thresholds.
+`--cells` defaults to `128` for `scalar-amr` and `16` for every other workflow, and must be at
+least `4`. `--steps` defaults to `1` for non-AMR workflows; when omitted for `scalar-amr`, the
+route derives `steps=round(0.2/dt)` with `dt=min(0.01,0.2/cells)`. A supplied `--steps` is used
+by every workflow. For `scalar-amr`, `--scheme inline|imported` selects the inline
+`inline_ssprk2` or imported `ssprk2` definition. `--work-dir` defaults to `outputs/migration-r1`.
+The direct workflows print an indented JSON summary. `accepted_steps` reports the initial
+accepted run and `final_time` the route's final runtime clock; for `scalar-amr`, the clock includes
+the continuous and restarted continuation. `artifact` identifies the compiled artifact, and state
+summaries report shape, component means, minimum, and maximum. Diagnostics such as `mean_change`,
+`pair_mean_defect`, `gradient_l2`, and `potential_l2` are descriptive values without qualification
+thresholds.
+The `scalar-amr` route also writes a checkpoint, restores it strictly, and compares continuous
+and restarted continuation before returning.
 
 ## Eight routes
 
-| Selector and symbol | Model and boundary used | Output and claim limit |
+| Selector | Model and boundary used | Output and claim limit |
 | --- | --- | --- |
-| `scalar-amr` (`_scalar_amr`) | Delegates `examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py`; that script owns its AMR mesh, time controls, and physics. | Returns `delegated_entrypoint`, `output_dir`, and `exit_code`; `--work-dir` is forwarded under `scalar-amr`, while `--cells` and `--steps` are not forwarded. This is the canonical example route, not the complete transport-diffusion matrix. |
-| `field-transport` (`_field_consumer`) | Dim=2 unit square, uniform `(cells,cells)`, periodic axes. A two-component fluid consumes a solved periodic Poisson potential and its gradient; `dt=0.125`. | Returns the `fluid` state summary, component mean changes, and gradient norm. These values show a consumed-field data path, not the field accuracy rows. |
-| `euler-poisson` (`_field_consumer`) | Same periodic unit square. A three-component `(rho,mx,my)` Euler state receives an electric source from a separate frozen-load Poisson block; `dt=0.125`. | Returns the fluid state, mean changes, and gradient norm. The example does not claim Euler-Poisson accuracy or conservation. |
-| `heterogeneous-interaction` (`_heterogeneous_interaction`) | Periodic unit square with unequal species states `(p,E)` and `(p,E,m)`, one joint exchange, and `dt=1e-3`. | Returns left/right state summaries and pair mean defects for `p` and `E`; those defects have no pass threshold here. |
-| `explicit-diffusion` (`_diffusion`, `implicit=False`) | Periodic unit square scalar heat equation with `0.1*grad(u)`, Forward Euler, and `dt=0.05/(0.1*cells*cells)`. | Returns a heat state summary and mean change. The small route is a lifecycle example, not an explicit diffusion convergence row. |
-| `implicit-diffusion` (`_diffusion`, `implicit=True`) | The same periodic scalar heat equation with an implicit diffusion stage, backward Euler, Newton solve, and `dt=1e-4`. | Returns a heat state summary and mean change. It does not claim implicit spatial or temporal order. |
-| `variable-coefficient-field` (`_variable_coefficient_field`) | Periodic unit square; two load/reference blocks feed `-DivCoeffGrad(potential, coefficient)`, with coefficient `1.5+0.25*cos(2*pi*x)` and a shared mean gauge; `dt=0.125`. | Returns coefficient range, potential mean, and potential L2. These are field lifecycle diagnostics, not a manufactured-solution result. |
-| `imported-native-primitive` (`_imported_native_primitive`) | Two physical-boundary blocks with outflow faces and a conservative interface at the block join. The imported Dim=2 float64 CPU numerical flux is used by an equation-oriented advection `Case`; `dt=1e-3`. | Writes `native-component/native_scalar_flux.pops.json` below `--work-dir` and returns component source/binary/package identities plus left/right state summaries. Identities authenticate provenance; they do not prove native qualification or performance. |
+| `scalar-amr` | Unit-square scalar advection with velocity `(1.0,0.25)`, a Gaussian initial condition, inflow/outflow boundaries, MUSCL VanLeer reconstruction, and a `ScalarUpwind` solver. A two-level AMR hierarchy uses threshold tagging, buffering, conservative transfer, scheduled regridding, and subcycling. `--scheme` selects the inline `inline_ssprk2` or imported `ssprk2` method. | Runs the accepted trajectory, writes a checkpoint, restores it strictly, and compares continuous versus restarted continuation; returns checkpoint, restart status, levels, patches, regrids, state, and output path. These lifecycle checks do not claim scientific qualification or performance. |
+| `field-transport` | Dim=2 unit square, uniform `(cells,cells)`, periodic axes. A two-component fluid consumes a solved periodic Poisson potential and its gradient; `dt=0.125`. | Returns the `fluid` state summary, component mean changes, and gradient norm. These values show a consumed-field data path, not the field accuracy rows. |
+| `euler-poisson` | Same periodic unit square. A three-component `(rho,mx,my)` Euler state receives an electric source from a separate frozen-load Poisson block; `dt=0.125`. | Returns the fluid state, mean changes, and gradient norm. The example does not claim Euler-Poisson accuracy or conservation. |
+| `heterogeneous-interaction` | Periodic unit square with unequal species states `(p,E)` and `(p,E,m)`, one joint exchange, and `dt=1e-3`. | Returns left/right state summaries and pair mean defects for `p` and `E`; those defects have no pass threshold here. |
+| `explicit-diffusion` | Periodic unit square scalar heat equation with `0.1*grad(u)`, Forward Euler, and `dt=0.05/(0.1*cells*cells)`. | Returns a heat state summary and mean change. The small route is a lifecycle example, not an explicit diffusion convergence row. |
+| `implicit-diffusion` | The same periodic scalar heat equation with an implicit diffusion stage, backward Euler, a Newton solve, and `dt=1e-4`. | Returns a heat state summary and mean change. It does not claim implicit spatial or temporal order. |
+| `variable-coefficient-field` | Periodic unit square; two load/reference blocks feed `-DivCoeffGrad(potential, coefficient)`, with coefficient `1.5+0.25*cos(2*pi*x)` and a shared mean gauge; `dt=0.125`. | Returns coefficient range, potential mean, and potential L2. These are field lifecycle diagnostics, not a manufactured-solution result. |
+| `imported-native-primitive` | Two independent periodic blocks on the unit square, with distinct initial profiles. Python defines the velocities, conservation equation, finite-volume method, first-order reconstruction, and Rusanov solver; an imported `NativeFunction` supplies scalar multiplication through `migration_arithmetic::multiply`; `dt=1e-3`. | Stages `native-arithmetic/arithmetic.hpp` below `--work-dir` as a header-only component and returns component, artifact, and binary identities plus left/right state summaries. Identities authenticate provenance; they do not prove native qualification or performance. |
 
 All direct routes construct the unit-square `CartesianGrid` at the requested cell count and
 call `pops.run` with the requested `t_end` and `max_steps`. Periodicity is explicit in the
-field, interaction, and diffusion routes; the imported primitive uses physical outflow
-boundaries. The scalar delegation keeps the canonical example's own geometry and controls.
+field, interaction, diffusion, and imported-primitive routes. The scalar AMR route owns its
+geometry, Gaussian initial condition, transport boundaries, AMR controls, and time-method
+definition.
 
 The imported primitive additionally needs a C++20 compiler, PoPS component headers, and an
-authenticated installed Dim=2 native artifact. It uses the public `pops.external` APIs to
-build a source package manifest, load the declared `NumericalFlux`, and compile it; set
-`POPS_INCLUDE` when the installed header location is not discoverable. Its source template is
-[`native_scalar_flux.cpp.in`](../../examples/migration/native_scalar_flux.cpp.in).
+authenticated installed Dim=2 native artifact. It stages the header-only
+`migration_arithmetic` component with `PreparedNativeComponent` and compiles it for the
+`NativeFunction` calls; set `POPS_INCLUDE` when the installed header location is not
+discoverable. Its implementation and native header are
+[`imported_native_primitive.py`](../../examples/migration/scientific/imported_native_primitive.py)
+and [`arithmetic.hpp`](../../examples/migration/scientific/arithmetic.hpp).
 
 ## Normative qualification routes
 
-The following test modules are scientific qualification entrypoints, not user examples. Run
-them only through the pinned matrix and retain their declared dimensions, rows, oracles, and
-tolerances.
+The following test modules are scientific qualification entrypoints, not user examples. Select
+relevant coherent witnesses for each change under the verification policy and retain their
+declared dimensions, rows, oracles, and tolerances when making a qualification claim.
 
 | Example route | Qualification modules and row families |
 | --- | --- |
@@ -93,8 +105,11 @@ records family `implicit-amr-unperiodized-gaussian-control`, N=16/32/64 against 
 2N, four steps at `dt=0.00025`, finite L2 only, and no order claim. This guide does not
 execute or promote that row.
 
-There is intentionally one dispatcher rather than eight duplicated physics scripts. The
-remaining gap is scientific execution of the pinned matrix and its exact evidence, not a
-claim that every qualification family is a standalone user tutorial. The results ledger and
-the R1 contract must be updated from authenticated source/native/wheel runs before any release
-or performance statement.
+There is one dispatcher and eight scientific modules under
+[`examples/migration/scientific/`](../../examples/migration/scientific/); the dispatcher routes
+each selector to its module. These examples describe executable lifecycle paths and their
+invocation summaries; they do not establish numerical or scientific qualification,
+execution-environment coverage, or performance. Consult the verification scope for test
+selection, evidence reuse, and claim boundaries, and the results ledger for recorded receipts.
+Update those records from authenticated source/native/wheel runs before any release or
+performance statement.

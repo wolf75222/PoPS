@@ -19,7 +19,7 @@ scoped to ADC-922 equivalence, ADC-923 deletion prerequisites, and ADC-924 compl
 | --- | --- |
 | Detached campaign | The former `verification/` manifest, runner, checker, case package, and JSON schemas are absent. The README no longer presents that campaign as an active route. |
 | Seven orphan tests | Retain all seven `tests/python/verification/test_*.py` files for now. Do not register them in a new suite, delete them, or add fake assets. A later cleanup may archive or remove them only after the replacement matrix and ADC-922/923 evidence qualify. |
-| Numerical qualification | The complete migration remains unqualified until its declared matrices and replacement-specific equivalence checks pass at an exact source, native artifact, wheel, and configuration provenance. Successful individual workflow slices are recorded below. A source check, unit result, smoke run, targeted diagnostic, or failed attempt does not close an unexecuted cell. |
+| Numerical qualification | Qualification remains open for any promised capability without a current or validly reused witness at exact source, native artifact, wheel, and configuration provenance. The validation policy below uses relevant coherent tests and a minimal representative set whose witnesses collectively cover every important capability; an uncovered cell, source check, unit result, smoke run, targeted diagnostic, or failed attempt does not become green. |
 | Supported configurations | This decision changes documentation scope only. Existing dimension, backend, MPI-rank, level, block, restart, output, and refusal envelopes remain unchanged until each replacement route has its own evidence. |
 | GPU and cluster claims | No local CPU or MPI result establishes GPU, multi-node, or cluster support. Such cells remain unavailable unless their own environment and receipt are present. |
 
@@ -77,6 +77,29 @@ The repository-owned routes and historical gate labels are these:
 | Python native artifact | Explicit `--dim` and optional `--mpi` build choice | `bash scripts/build_python.sh --dim N` with `N` set to `1`, `2`, or `3`; add `--mpi` only when MPI and parallel HDF5 are declared | The build invokes installed-wheel/native checks and `doctor()`. This authenticates an artifact; it does not qualify every runtime or scientific cell. |
 | M5-M8 and final integration | Rows and rank declarations in `tests/test_manifest.toml`, plus the migration integration matrix | Root-owned exact-source/native/wheel matrix runs and retained receipts; `scripts/run_final_gate.py` is the available selected-dimension release-gate entry point | A receipt must identify source SHA, native/wheel identity, dimensions, backend, ranks, levels/blocks, restart/output cells, and pass/fail/skip reasons. No unrun row is inferred green. |
 | Performance measurement | `benchmarks/manifest.toml` and its protocol | The benchmark harness under `benchmarks/` with its declared warmups, repetitions, fences, barriers, and equation pairing | Operation counts, source checks, and unit tests are not performance evidence. GPU/device and multi-node claims require their own declared environment and receipt. |
+
+## Validation selection and evidence reuse
+
+For each change, run the relevant coherent unit tests for the changed behavior and directly
+affected contracts. Maintain a minimal representative set whose witnesses collectively cover
+every important PoPS capability in this scope. A full-suite or full-matrix replay is not required
+merely because the source SHA changed.
+
+Reuse an earlier successful receipt only after tracing
+`property -> witness -> exact source/config provenance -> change impact` and confirming that the
+implementation and execution configuration remain applicable. Rerun when a later change touches
+that witness, its source, implementation, or configuration; when the earlier attempt failed; or
+when a concrete unresolved concern remains. Reuse preserves the historical result, timestamp, and
+exact source identity; it must not be relabeled as a current execution. A capability without a
+witness remains unqualified.
+
+Demonstrate MPI+Kokkos behavior with several ranks and the required thread levels once for an
+unchanged parallel implementation and configuration, then reuse that evidence for unrelated cases
+until parallel behavior or supporting configuration changes. Independent Romeo SSH/SLURM jobs are
+allowed when useful but are not required. Keep numeric oracles strict, and distinguish scientific
+claims from execution, build, and performance evidence. This selection policy does not authorize
+deleting legacy assets before their replacement is qualified. It changes replay and redundancy
+decisions only; the declared qualification and retirement gates below remain in force.
 
 For a release-gate replay, the command has to write evidence outside the checkout and name the
 exact wheel dimensions:

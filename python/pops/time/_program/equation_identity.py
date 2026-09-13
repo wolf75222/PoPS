@@ -61,4 +61,3 @@ def _equation_value(program: Any, value: Any) -> Any:
 
     root = walk(value)
     return _json_ready({"root": root, "values": nodes} if nodes else root)
-
