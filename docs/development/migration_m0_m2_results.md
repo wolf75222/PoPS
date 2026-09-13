@@ -1,4 +1,4 @@
-# PoPS M0–M2 migration results — candidate7 evidence report
+# PoPS M0–M2 migration results : candidate7 evidence report
 
 **Evidence refresh: 2026-09-08.** M0 / [ADC-900](https://linear.app/romain7522/issue/ADC-900) is
 **Done for baseline capture**. M1 / [ADC-901](https://linear.app/romain7522/issue/ADC-901) execution is
@@ -6,7 +6,7 @@
 automatic-differentiation replay. M2 / [ADC-902](https://linear.app/romain7522/issue/ADC-902) execution is
 **complete within the frozen contract**, including the final compiler/identity and benchmark gates.
 The final evidence index is complete. The migration project is
-[PoPS Programming Model Migration — M0–M8](https://linear.app/romain7522/project/pops-programming-model-migration-m0-m8-cee53d2e326a).
+[PoPS Programming Model Migration : M0–M8](https://linear.app/romain7522/project/pops-programming-model-migration-m0-m8-cee53d2e326a).
 
 This report records the current candidate7 evidence and the boundaries that remain after M0–M2
 execution closure. The frozen M0 boundary and exact twelve-leaf inventory remain in

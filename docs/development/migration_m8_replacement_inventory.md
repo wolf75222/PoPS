@@ -1,4 +1,4 @@
-# M8 replacement inventory — retention decision
+# M8 replacement inventory : retention decision
 
 **Snapshot: 2026-09-13.** The semantic deletion set is **empty**. This page records the current
 decision and consumer inventory; the detailed historical inventory remains available at the same
