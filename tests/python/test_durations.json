@@ -361,7 +361,8 @@
   "tests/python/unit/runtime/test_step_transaction_runtime.py": 1.0,
   "tests/python/unit/runtime/test_temporal_restart_state.py": 75.0,
   "tests/python/unit/runtime/test_typed_bind_phase.py": 1.0,
-  "tests/python/unit/runtime/test_v3_features.py": 132.5,
+  "tests/python/unit/runtime/test_v3_features.py": 660.0,
+  "tests/python/unit/runtime/test_v3_compiled_capabilities.py": 470.0,
   "tests/python/unit/solvers/test_amr_composite_facade.py": 10.0,
   "tests/python/unit/solvers/test_cartesian_cg_descriptor.py": 0.5,
   "tests/python/unit/solvers/test_linalg.py": 0.5,
@@ -1098,6 +1099,11 @@
         "tests/python/unit/time/test_implicit_stage_request.py"
       ],
       "refresh": "Replace from complete CI per-file timing artifacts; preserve every test case."
+    },
+    "ci_20260913_v3_split": {
+      "run_id": 34765485865,
+      "unsplit_timeout_seconds": 900.04,
+      "basis": "Conservative scheduling estimates, not measured split-file durations: apply 25 percent headroom to the unsplit 900.04-second timeout lower bound, allocate by seven A-C versus five D native artifacts, and round each share up to 5 seconds (660 s and 470 s). All native cases remain, and each process keeps its existing 900-second limit. Replace estimates from complete per-file CI timings."
     },
     "ci_20260913_rebalance": {
       "run_id": 34760671991,
