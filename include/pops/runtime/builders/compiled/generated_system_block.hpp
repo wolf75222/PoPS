@@ -1148,8 +1148,10 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
   const auto geometry = request.geometry;
   const auto topology = request.topology;
   Extent<Dim> ghosts{};
+  static_assert(Model::program_state_ghost_depth >= 1,
+                "Program state storage requires its resolved positive ghost depth");
   for (int axis = 0; axis < Dim; ++axis)
-    ghosts[axis] = 1;
+    ghosts[axis] = Model::program_state_ghost_depth;
   auto prepare = [geometry, topology, ghosts](MultiFab<Dim>& state) {
     const HaloSchedule<Dim> schedule(state.layout(), state.distribution(), state.local_rank(),
                                      geometry.domain(), ghosts, topology, state.ncomp(),

@@ -4,6 +4,29 @@ from collections.abc import Mapping
 from pops._cartesian_axes import canonical_axis_mapping
 
 
+def prepare_state_storage_requirements(
+    emitter, module, resolved_operations, *, emitter_is_private=False
+):
+    """Carry the resolved neighborhood into the private native storage model."""
+    impl = getattr(emitter, "_m", emitter)
+    if not getattr(impl, "_program_only_storage_axes", ()):
+        return emitter
+    depth = 1  # Minimum native state-storage extent, including pointwise source Programs.
+    if resolved_operations is not None:
+        from pops.codegen.resolved_operations import ResolvedOperationPlan
+
+        if type(resolved_operations) is not ResolvedOperationPlan:
+            raise TypeError("state storage requires an exact resolved operation plan")
+        depth = max((depth, *resolved_operations.halo_requirements().values()))
+    if not emitter_is_private:
+        from pops.model.state_symbols import native_formula_view
+
+        emitter = native_formula_view(emitter, module)
+        impl = getattr(emitter, "_m", emitter)
+    object.__setattr__(impl, "_program_state_ghost_depth", depth)
+    return emitter
+
+
 def prepare_source_storage_carrier(emitter, module, *, state_space=None):
     impl = getattr(emitter, "_m", emitter)
     if impl._flux:

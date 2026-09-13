@@ -478,8 +478,13 @@ def _module_to_model(module: Any, state_space: Any = None,
         coverage_rows.append(LoweringCoverageRow(
             "module:%s:eigenvalues" % module.name, "documentary"))
     retain_recipes(m._m._eig)
-    from pops.codegen.state_storage_lowering import prepare_named_flux_storage_carrier
+    from pops.codegen.state_storage_lowering import (
+        prepare_named_flux_storage_carrier, prepare_state_storage_requirements,
+    )
     prepare_named_flux_storage_carrier(
+        m, module, resolved_operations, emitter_is_private=True
+    )
+    prepare_state_storage_requirements(
         m, module, resolved_operations, emitter_is_private=True
     )
     coverage_report = LoweringCoverageReport(coverage_rows)
@@ -583,13 +588,21 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
             return emit_model, lowering.source_module
         if resolved_operations is not None:
             from pops.codegen._compiler_lowering import CompilerLowering
-            from pops.codegen.state_storage_lowering import prepare_named_flux_storage_carrier
+            from pops.codegen.state_storage_lowering import (
+                prepare_named_flux_storage_carrier, prepare_state_storage_requirements,
+            )
 
             emit_model = prepare_named_flux_storage_carrier(
                 lowering.emit_model,
                 lowering.source_module,
                 resolved_operations,
                 emitter_is_private=lowering.owns_emitter,
+            )
+            emit_model = prepare_state_storage_requirements(
+                emit_model,
+                lowering.source_module,
+                resolved_operations,
+                emitter_is_private=lowering.owns_emitter or emit_model is not lowering.emit_model,
             )
             if emit_model is not lowering.emit_model:
                 lowering = CompilerLowering(

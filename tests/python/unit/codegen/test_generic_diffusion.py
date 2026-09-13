@@ -50,6 +50,7 @@ def generic_case(dimension, name="mixture", state_name="inventory", tensor=False
 @pytest.mark.parametrize("dimension", (1, 2, 3))
 def test_coupled_coefficient_laws_have_all_components_axes_and_runtime_parameters(dimension):
     from pops.codegen.module_lowering import lower_and_validate
+    from pops.codegen.module_codegen import _emit_bricks
     from pops.codegen.program_codegen import emit_cpp_program
     from pops.codegen.program_emit_params import program_param_entries
     model, resolved = generic_case(dimension)
@@ -57,6 +58,7 @@ def test_coupled_coefficient_laws_have_all_components_axes_and_runtime_parameter
     code = emit_cpp_program(resolved.time, model=emitter)
     assert "PreparedDiffusion<pops::kNativeDimension, 2>" in code
     assert "DiffusiveLawResult<pops::kNativeDimension, 2>" in code
+    assert "program_state_ghost_depth = 1;" in _emit_bricks(emitter._m)[1]
     assert program_param_entries(resolved.time, emitter)==[(0,"second_diffusivity",0,.2)]
     assert "std::pow(" in code or "pops::pow(" in code or "cons[0]" in code
     assert all(row.refusal is None for plan in resolved.resolved_operations.values() for row in plan.operations)
@@ -75,6 +77,7 @@ def test_cross_gradient_is_physical_before_monotone_realization_is_selected():
 @pytest.mark.parametrize("dimension", (1, 2, 3))
 def test_full_tensor_cross_gradient_uses_the_selected_adjoint_realization(dimension):
     from pops.codegen.module_lowering import lower_and_validate
+    from pops.codegen.module_codegen import _emit_bricks
     from pops.codegen.program_codegen import emit_cpp_program
     model, resolved = generic_case(dimension, tensor=True)
     plan = next(iter(resolved.resolved_operations.values()))
@@ -82,6 +85,8 @@ def test_full_tensor_cross_gradient_uses_the_selected_adjoint_realization(dimens
     code = emit_cpp_program(resolved.time, model=emitter)
     assert "PreparedDiffusion<pops::kNativeDimension, 2, true>" in code
     assert "DiffusiveLawResult<pops::kNativeDimension, 2, true>" in code
+    assert "program_state_ghost_depth = 2;" in _emit_bricks(emitter._m)[1]
+    assert not hasattr(model._dsl._m, "_program_state_ghost_depth")
     methods = [row.guarantees.get("numerical_method") for row in plan.operations]
     assert any(method and method.get("method")=="tensor_diffusion" and
                method.get("positivity")=="not_guaranteed" for method in methods)

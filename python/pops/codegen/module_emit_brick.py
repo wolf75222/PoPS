@@ -333,6 +333,10 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     ]
     if program_only:
         S.append("  static constexpr bool program_only_storage = true;")
+        depth = getattr(model, "_program_state_ghost_depth", 1)
+        if type(depth) is not int or depth < 1:
+            raise ValueError("Program state storage requires a positive resolved ghost depth")
+        S.append("  static constexpr int program_state_ghost_depth = %d;" % depth)
     provider_rows = getattr(model, "_component_flux_consumer_plan", None)
     if provider_rows is None:
         raise ValueError(

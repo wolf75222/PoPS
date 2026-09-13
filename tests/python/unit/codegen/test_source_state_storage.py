@@ -39,6 +39,7 @@ def test_source_only_public_plan_and_exact_module_emit_real_storage(canonical_mo
     emitter, source = lower_and_validate(model.module if canonical_module else model)
     _, body, _ = _emit_bricks(emitter._m)
     assert "program_only_storage = true" in body
+    assert "program_state_ghost_depth = 1;" in body
     assert "State flux(" not in body
     assert "max_wave_speed(" not in body
     assert emitter._m._program_only_storage_axes == ("x", "y")

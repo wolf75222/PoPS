@@ -233,6 +233,11 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic>,
       return static_cast<bool>(Hyperbolic::program_only_storage);
     return false;
   }();
+  static constexpr int program_state_ghost_depth = [] {
+    if constexpr (program_only_storage)
+      return Hyperbolic::program_state_ghost_depth;
+    return 0;
+  }();
   static_assert(composite_detail::hyperbolic_contract<Hyperbolic, dimension>() ||
                     (program_only_storage && PhysicalStateFor<Hyperbolic, dimension>),
                 "CompositeModel requires an exact-ranked hyperbolic brick");

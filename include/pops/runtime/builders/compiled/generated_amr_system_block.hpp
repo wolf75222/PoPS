@@ -1712,8 +1712,10 @@ PreparedAmrSystemBlock<Dim> materialize_state_block(Request request) {
     throw std::invalid_argument("Program-only AMR model requires the exact state-storage route");
   constexpr int provider_count = provider_count_for<Model, Dim>();
   Extent<Dim> required_ghosts{};
+  static_assert(Model::program_state_ghost_depth >= 1,
+                "Program AMR state storage requires its resolved positive ghost depth");
   for (int axis = 0; axis < Dim; ++axis)
-    required_ghosts[axis] = 1;
+    required_ghosts[axis] = Model::program_state_ghost_depth;
 
   const Model model = request.model;
   const std::string provider_identity =

@@ -2,6 +2,7 @@
 import pytest
 import pops
 from pops.codegen.module_lowering import lower_and_validate
+from pops.codegen.module_codegen import _emit_bricks
 from pops.codegen.program_codegen import emit_cpp_program
 from tests.python.integration.runtime.test_amr_implicit_diffusion import build
 from tests.python.unit.codegen.test_generic_diffusion import generic_case
@@ -15,6 +16,7 @@ def test_tensor_composite_implicit_resolves_faces_halos_and_consumed_residual(ki
     emitter = lower_and_validate(plan.blocks[0].model, resolved_operations=operations)[0]
     code = emit_cpp_program(plan.time, model=emitter, target="amr_system")
     assert "PreparedDiffusion<pops::kNativeDimension, %d, true>" % components in code
+    assert "program_state_ghost_depth = 2;" in _emit_bricks(emitter._m)[1]
     assert code.count("ctx.solve_spatial_hierarchy(") == 1
     assert "stage_accepted_exchanges" in code and "attach_diffusive_flux_basis" not in code
     assert ".reference_residual_norm" in code and ".residual_norm" in code

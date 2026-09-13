@@ -10,6 +10,7 @@
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/amr/amr_tensor_elliptic.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/runtime/builders/compiled/dsl_block.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
 #include <pops/core/foundation/native_dimension.hpp>
 
@@ -233,7 +234,7 @@ AdvectionModel<Dim> advection_model() {
   return {pops::nd::ScalarAdvection<Dim>::prepare(velocity)};
 }
 
-template <int Dim>
+template <int Dim, int GhostDepth = 1>
 struct ProgramStateModel {
   using State = pops::StateVec<1>;
   using Primitive = State;
@@ -241,6 +242,7 @@ struct ProgramStateModel {
   static constexpr int n_vars = 1;
   static constexpr int n_providers = 0;
   static constexpr bool program_only_storage = true;
+  static constexpr int program_state_ghost_depth = GhostDepth;
 
   static pops::PreparedProviderIdentity provider_identity() noexcept {
     return {"test.generated-amr.program-state", 1};
@@ -670,6 +672,35 @@ TEST(GeneratedAmrSystemBlock, PreparesOneExactNativePackageImage) {
   EXPECT_EQ(weno.reconstruction_order, 5);
   for (int axis = 0; axis < Dim; ++axis)
     EXPECT_EQ(weno.ghosts[axis], 3);
+}
+
+TEST(GeneratedAmrSystemBlock, ProgramStateHaloRequirementReachesUniformAndAmrFactories) {
+  constexpr int Dim = pops::kNativeDimension;
+  using Model = ProgramStateModel<Dim, 2>;
+  pops::Extent<Dim> shape{};
+  pops::RealVector<Dim> lower{}, upper{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    shape[axis] = 4;
+    upper[axis] = 1;
+  }
+  const auto geometry =
+      pops::Geometry<Dim>::from_bounds(pops::Box<Dim>::from_extents(shape), lower, upper);
+  const auto uniform =
+      pops::prepare_generated_system_block(pops::CompiledSystemBlockPreparation<Dim, Model>{
+          "tensor-state",
+          Model{},
+          {"state_storage", "unavailable", "conservative", "explicit"},
+          geometry,
+          {},
+          {},
+          {}});
+  const auto adaptive = pops::prepare_compiled_amr_system_block<Dim>(
+      "tensor-state", Model{}, "state_storage", "unavailable", "conservative", "imex", 1.4, 1, 1,
+      0.0, static_cast<double>(pops::kWenoEpsilon), false, "test.tensor-state/native_model");
+  for (int axis = 0; axis < Dim; ++axis) {
+    EXPECT_EQ(uniform.ghosts[axis], 2);
+    EXPECT_EQ(adaptive.ghosts[axis], 2);
+  }
 }
 
 TEST(GeneratedAmrSystemBlock, ProgramStateRouteDoesNotInstantiateHyperbolicPhysics) {
