@@ -174,6 +174,7 @@ class _FacadeCompileMixin(_FacadeModel):
             _precision_cache_key,
             _registry_cache_key,
         )
+        from pops.codegen.compile_link_flags import deterministic_component_link_flags
         from pops.codegen.compile_provenance import (
             verify_cached_artifact,
             write_artifact_sidecar,
@@ -280,6 +281,7 @@ class _FacadeCompileMixin(_FacadeModel):
             flags=[
                 _platform_cache_key(),
                 *_dsl_optflags(),
+                *deterministic_component_link_flags(()),
                 "hoist_reciprocals=%d" % bool(hoist_reciprocals),
             ],
             libraries=(),

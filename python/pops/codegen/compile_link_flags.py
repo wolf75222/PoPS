@@ -19,7 +19,7 @@ def deterministic_program_link_flags(flags: Any) -> list[str]:
 
 
 def deterministic_component_link_flags(flags: Any) -> list[str]:
-    """Keep temporary AOT build directories out of authenticated component bytes.
+    """Keep local build paths out of external component and generated model bytes.
 
     Components, like Programs, are loaded by their authenticated file path. A stable inert
     install name prevents Darwin's content-derived UUID from varying between MPI ranks.

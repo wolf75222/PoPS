@@ -20,6 +20,7 @@ def model_artifact_spec(
         model_hash,
     )
     from pops.codegen.toolchain import _native_feature_key
+    from pops.codegen.compile_link_flags import deterministic_component_link_flags
     from pops.codegen._native_model_provider_plan import NATIVE_MODEL_PROVIDER_CONTRACT
     from pops.identity import artifact_spec_identity, make_identity
 
@@ -55,6 +56,7 @@ def model_artifact_spec(
             ),
         },
         flags=[_platform_cache_key(), *_dsl_optflags(),
+               *deterministic_component_link_flags(()),
                "hoist_reciprocals=%d" % bool(hoist_reciprocals)],
         libraries=(),
     )
