@@ -81,8 +81,11 @@ class TimingReceipts:
             self.state["active_phase"] = "between_tests"
         else:
             self.state["active_phase"] = "call" if report.when == "setup" else "teardown"
+        # Persist failures immediately: a later job timeout can prevent pytest from
+        # printing its final traceback summary or writing JUnit output.
+        details = {"failure": report.longreprtext} if report.failed else {}
         self.record("test_report", nodeid=report.nodeid, phase=report.when,
-                    outcome=report.outcome, seconds=report.duration)
+                    outcome=report.outcome, seconds=report.duration, **details)
 
     def pytest_sessionfinish(self, session, exitstatus) -> None:
         self.state["complete"] = int(exitstatus) in (0, 1, 5)

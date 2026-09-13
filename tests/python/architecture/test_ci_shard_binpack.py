@@ -114,7 +114,8 @@ def test_pytest_timing_receipts_survive_failure_and_interruption(tmp_path, inter
     receipt = tmp_path / "receipts"
     test_file = tmp_path / "test_receipts.py"
     if interrupted:
-        test_file.write_text("import time\ndef test_active(): time.sleep(30)\n")
+        test_file.write_text("import time\ndef test_failure(): assert False\n"
+                             "def test_active(): time.sleep(30)\n")
     else:
         test_file.write_text("import pytest\ndef test_pass(): pass\n"
                              "def test_failure(): assert False\n"
@@ -144,6 +145,10 @@ def test_pytest_timing_receipts_survive_failure_and_interruption(tmp_path, inter
     assert process.returncode != 0, output
     state = json.loads((receipt / "timings.json").read_text())
     events = [json.loads(line) for line in (receipt / "timings.jsonl").read_text().splitlines()]
+    failures = [event for event in events if event.get("outcome") == "failed"]
+    assert len(failures) == 1
+    assert "AssertionError" in failures[0]["failure"]
+    assert "test_failure" in failures[0]["failure"]
     row = next(iter(state["files"].values()))
     if interrupted:
         assert state["complete"] is False and row["complete"] is False
