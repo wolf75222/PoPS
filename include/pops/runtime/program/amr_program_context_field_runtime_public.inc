@@ -138,11 +138,6 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
       if (request.retained_faces != nullptr) {
         if (!unique_face_outputs.insert(request.retained_faces).second)
           throw std::invalid_argument("AMR grouped face retention outputs must be unique");
-        if (facade_->prepared_amr_multiblock_hierarchy_().has_interface_flux_provider() ||
-            facade_->prepared_amr_block_level_active_mask(runtime_block, active_level_) != nullptr)
-          throw std::invalid_argument(
-              "AMR grouped face retention requires Cartesian prepared physical closures "
-              "without shared interfaces or embedded boundaries");
       }
       ordered.push_back(&request);
       runtime_blocks.push_back(runtime_block);
@@ -168,6 +163,30 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{std::string_view("amr-program-rhs-group"), std::string_view(request_contract)}}, lane))
     throw std::invalid_argument("AMR Program RHS group requests differ between execution ranks");
+
+  // Materializing the hierarchy may enter collectives. Only inspect it after every rank
+  // has admitted the same requests and agreed which ones retain faces.
+  if (std::any_of(ordered.begin(), ordered.end(),
+                  [](const auto* request) { return request->retained_faces != nullptr; })) {
+    const bool shared = facade_->prepared_amr_multiblock_hierarchy_().has_interface_flux_provider();
+    std::exception_ptr capture_error;
+    try {
+      for (std::size_t index = 0; index < ordered.size(); ++index)
+        if (ordered[index]->retained_faces != nullptr &&
+            (shared || facade_->prepared_amr_block_level_active_mask(runtime_blocks[index],
+                                                                     active_level_) != nullptr))
+          throw std::invalid_argument(
+              "AMR grouped face retention requires Cartesian prepared physical closures "
+              "without shared interfaces or embedded boundaries");
+    } catch (...) {
+      capture_error = std::current_exception();
+    }
+    if (all_reduce_max(capture_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && capture_error)
+        std::rethrow_exception(capture_error);
+      throw std::runtime_error("AMR grouped face retention admission failed collectively");
+    }
+  }
 
   const long active = active_attempt_states_.empty() ? 0L : 1L;
   if (all_reduce_min(active, lane) != all_reduce_max(active, lane))
