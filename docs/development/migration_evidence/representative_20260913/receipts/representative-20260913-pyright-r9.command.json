@@ -1,0 +1,16 @@
+{
+  "command": [
+    "/Users/romaindespoulain/.npm-global/bin/pyright"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "8fc2cd996798a8060680bf23a2fb9362936bb505",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T13:21:22.641223+00:00",
+  "environment": {
+    "CCACHE_DIR": "/Users/romaindespoulain/.cache/pops-migration-20260907-ccache",
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "2",
+    "CMAKE_BUILD_PARALLEL_LEVEL": "2"
+  }
+}

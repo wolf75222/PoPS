@@ -1,0 +1,396 @@
+{
+  "all_native_inputs_unchanged": false,
+  "changed_native_authority": "Optional retained face outputs now cross Uniform System/Program grouped evaluation and AMR grouped publication. Generated periodic/full prepared closures, request-presence consensus, alias refusal and transactional capture are affected. This native API/capture implementation needs a fresh native build and two targeted group witnesses.",
+  "changed_paths": [
+    {
+      "after_git_blob": "8c89029d84867e05b6c30ddc136b2351033fd823",
+      "after_sha256": "a6f74219885925096fca66391bc022df9b591e4574806333904af44670f69148",
+      "before_git_blob": "c87402d9f0c33894c28a77bd5afe888eed5a696d",
+      "before_sha256": "618bce0676125bea8744eac8c474ed8c49451af93e09ccd19a2d4066cf087657",
+      "path": "include/pops/runtime/builders/compiled/generated_system_block.hpp"
+    },
+    {
+      "after_git_blob": "6511ab3cf1ff49186dde8d265198f356165c517c",
+      "after_sha256": "d82fda94c53a94dce90efc4117573ba373a0d46d74f19e91c4dd9669802a5803",
+      "before_git_blob": "58cce506bf6cdf0550a0c8b600d9ceaede325e57",
+      "before_sha256": "91865bddebbbd0c499cf6b30c55d7602c5ffedd25a05025811787a9aa9f11076",
+      "path": "include/pops/runtime/program/amr_program_context.hpp"
+    },
+    {
+      "after_git_blob": "dd4dc19e7ba9c53c180664bc09896bbda5c73702",
+      "after_sha256": "812d612406d061f36f54ea4e2387d3b3948607edeb088d77a6c38cbef99fe972",
+      "before_git_blob": "9b38891977f88d1035ff33db545fdebeda7b038b",
+      "before_sha256": "80ed6196c9e4d1958ecb56ca54d08b1211015a2ccbf0c35f9c7b1468a768a810",
+      "path": "include/pops/runtime/program/amr_program_context_field_runtime_public.inc"
+    },
+    {
+      "after_git_blob": "32481bae0f1140a6411111c848cd076ea60f0fd6",
+      "after_sha256": "d5e49a5447297b7a8f08b64c31c4b05d34637349616d7325ac633bf9cf758f5f",
+      "before_git_blob": "e116823cd853167f6d3812049be456ca0e2386b8",
+      "before_sha256": "d8ac4d0f13319e6f0668bc64004507aa9f5ffcf4289941afb687a68e1e9c7875",
+      "path": "include/pops/runtime/program/program_context.hpp"
+    },
+    {
+      "after_git_blob": "830f59ff597af101f1e17bb1c4b96f7a0050d96a",
+      "after_sha256": "cafaf2828c804c02e5940bb91a3a2c5be2cd5f2141693bb7640039f5424ee134",
+      "before_git_blob": "f11efbe3c5130ca8f60a2be46358b3f51127b66d",
+      "before_sha256": "6e44f88de04318855df963d5b12a01644745ce5734bdeb0157b6a89e1f6c0ed6",
+      "path": "include/pops/runtime/system.hpp"
+    },
+    {
+      "after_git_blob": "6d4722b8c33bb9b932a345882d6370d5f5f4efbc",
+      "after_sha256": "c686cdea4ab4224c9f19f502a403fb64d6d709b7914b47ea4f9ade7cf9bd28dc",
+      "before_git_blob": "19c0f75d509e78fa953e28257d2a686ef1f85374",
+      "before_sha256": "614cba79d4bac169a6ac5171400cce4d6519c91b97e44427a19337132b35f634",
+      "path": "include/pops/runtime/system/system_block_closures.hpp"
+    },
+    {
+      "after_git_blob": "859e502f62ec193396be2b12ea22bf5b0a17d85b",
+      "after_sha256": "8f14a991573928cfd8a25c3557a7d6d67ddbd3e169c39f288f60e3ed70ac3621",
+      "before_git_blob": "abff691e8d418a4395ca67e1282f2975227e9873",
+      "before_sha256": "64632c912220a61411e0647e069375f2ad241265b89d327da3a408c72420d154",
+      "path": "include/pops/runtime/system/system_block_store.hpp"
+    },
+    {
+      "after_git_blob": "8df74b90092237b9b849a5672e934ef3680e92e8",
+      "after_sha256": "affe08a498e50d315213e93c68f638bb1292d29bc82e245ffb7e8198c398e752",
+      "before_git_blob": "a79fd33ae245ce440ea950974ed4cca5b9098537",
+      "before_sha256": "fc357e327ee14a35dce22b0454b94c866972aa2ac9cfcefa52673fa81c73cbbf",
+      "path": "python/pops/codegen/program_emit_control.py"
+    },
+    {
+      "after_git_blob": "537e35aa4d459f8917dee48f608e999c6773e001",
+      "after_sha256": "cbf1ad3e5277a811542bcda0ea023bfc7d263429255bdc4e527c3a466d02c9f7",
+      "before_git_blob": "42e8bb75d8661f922eee7db215c78780872fc2fa",
+      "before_sha256": "bd2682f987e41700fc167991bd1a439afe79aae24b152863c0c3754d18164e43",
+      "path": "python/pops/codegen/program_emit_ops.py"
+    },
+    {
+      "after_git_blob": "5180773518e84c75c0ef905fae8c14f0018348ef",
+      "after_sha256": "a4cfd9c6fd4fc69813b4a09f33af9dc189e7e209f8cd674713a70a5812708f0b",
+      "before_git_blob": "0f3cfbfa75591183d36d347a0a864f451fb5791d",
+      "before_sha256": "0325924433bfa4709d34b188ff9bb06845ea607d8faeb42484c71c42a5e96ad4",
+      "path": "python/pops/codegen/program_partition_stability.py"
+    },
+    {
+      "after_git_blob": "c96aeb47c4af21653289e2e57ccf8338a6fbc00e",
+      "after_sha256": "598bad8609153f0bf0626dbc228476953eb1bb557c6e8305f5425aa60c496edb",
+      "before_git_blob": null,
+      "before_sha256": null,
+      "path": "python/pops/codegen/program_transport_quadrature.py"
+    },
+    {
+      "after_git_blob": "6556d5509f800a66265f9fb5311a40d773c69dac",
+      "after_sha256": "36ef78020f796b6849e7a3770119a69df1862b827a63a47fed47d9c70c4abe53",
+      "before_git_blob": "a6ab501363a730a942eea8f796c0d32ba8d90e13",
+      "before_sha256": "b743f9349f3eb32d1efc808a9892b939acdeee5793921ea55d17e3ceaaacdc47",
+      "path": "src/runtime/system/system_impl.hpp"
+    },
+    {
+      "after_git_blob": "9b5cf2814ab63d8ebdb4915210dc54c670c6c5b4",
+      "after_sha256": "04bb94e9fbffb5abc91c6de5369537cfe9932e24ff6de8cdc0d608867ffacca3",
+      "before_git_blob": "8f7d85bbe929f146afb4324de420dbb976f2360e",
+      "before_sha256": "ed3ea1b4ba453c35a7ec1488a7b7938702ccb42e3029014b2e4686fd8b649528",
+      "path": "src/runtime/system/system_install.cpp"
+    },
+    {
+      "after_git_blob": "46b9d866b1aef15376fcaa52bdaff0f309b3240e",
+      "after_sha256": "867f20116120194e1d0091dc88eeb0c65f2ffce55eabf56df941b3abff6eb7a2",
+      "before_git_blob": "2f28ad113c75325ed79323692fad3fdee1ad712c",
+      "before_sha256": "b132403d79f4eeb310983feb7f4eeb544459c1e0df4dcbb09c7bf3c8a19d0a0b",
+      "path": "src/runtime/system/system_program.cpp"
+    },
+    {
+      "after_git_blob": "c7aad94b8f16c1630cba206e0ee7bfd0c6c8d0a7",
+      "after_sha256": "656073a80085b3e996cb7a70b5d2bf2a6c46d479cc8d1ae31d424bba61bd12d8",
+      "before_git_blob": "6a493cb5a4a536bb918134b277247f7eb08cfcbe",
+      "before_sha256": "13787e063e6edb315b988a6fce324551baa5faba961b0e6c17034f6fe4597519",
+      "path": "tests/cpp/unit/runtime/test_generated_amr_system_block.cpp"
+    },
+    {
+      "after_git_blob": "628ab1374533449da71a6dc30338b98a08021053",
+      "after_sha256": "595f082c5e9c2f63ee59b3e8a5c4b2e6993f53f0296d435a16b78eafbc7a6487",
+      "before_git_blob": "990be9256e6835cb59afa6e4f52257468583aa63",
+      "before_sha256": "065dca0ccc226a09d89042337db3c075f5982f46301960f289253bffd5948e19",
+      "path": "tests/cpp/unit/runtime/test_system_interface_core_session.cpp"
+    },
+    {
+      "after_git_blob": "7a4c15cd673a0976624bb5daad3c4fd4d1ee2cc4",
+      "after_sha256": "4b7f60261d6e6aa6ffeb86c6d895680d0a2f0354646b87a7e3755c1a34d6146f",
+      "before_git_blob": "83f9de99c9e229364d9dab352d64bfb2fc27d4a8",
+      "before_sha256": "b2db953572ac93178e14184a68be986d20d7e6c3af8c250d2c09f80a8dfeb0f5",
+      "path": "tests/python/unit/codegen/test_tensor_transport_composition.py"
+    },
+    {
+      "after_git_blob": "dc0cb7025f4f5de3a10ee81415aa96cafba2dbc0",
+      "after_sha256": "d6bf10f1f4eeea09ff6e300710da264aecbe6843b8e1f100c1bc09b20c113bf5",
+      "before_git_blob": null,
+      "before_sha256": null,
+      "path": "tests/python/unit/codegen/test_transport_quadrature.py"
+    }
+  ],
+  "completed_native_group_evidence_ids": [
+    "transport_group_build_v34",
+    "transport_group_uniform_v34",
+    "transport_group_amr_v34"
+  ],
+  "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+  "intermediate_source_changes": [
+    {
+      "changed_paths": [
+        "src/runtime/system/system_program.cpp",
+        "tests/cpp/unit/runtime/test_generated_amr_system_block.cpp",
+        "tests/cpp/unit/runtime/test_system_interface_core_session.cpp"
+      ],
+      "classification": "Template-dependent Dim guards repair test compilation. Capture presence is folded into the existing route min/max consensus as2*route+bit, removing two extra allreduces while retaining exact agreement.",
+      "from": "8fc2cd996798a8060680bf23a2fb9362936bb505",
+      "to": "dfc70e1efbe239e47786a702730ce402e6233002"
+    },
+    {
+      "changed_paths": [
+        "include/pops/runtime/program/amr_program_context_field_runtime_public.inc",
+        "tests/cpp/unit/runtime/test_system_interface_core_session.cpp"
+      ],
+      "classification": "AMR collective hierarchy access moves after exact request agreement to repair the measured divergent-capture deadlock. Uniform fixture initializes MPI before System ownership. Native runtime qualification remains pending.",
+      "from": "dfc70e1efbe239e47786a702730ce402e6233002",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    }
+  ],
+  "new_scope_limits": [
+    "Complete group face capture is admitted only where the prepared Cartesian evaluator owns all final faces. Shared-interface, active embedded-boundary, and unsupported legacy capture paths refuse collectively; pre-existing requests without capture retain their existing routes.",
+    "Unknown state transforms, hidden branch-local accepted transport and non-always schedules require a scoped authenticated quadrature carrier and remain explicit refusals."
+  ],
+  "pending_native_receipt_keys": [
+    "composition_native_v34",
+    "package_v34"
+  ],
+  "python_source_unchanged_since_source_r3_and_pyright_r9": true,
+  "reuse": [
+    "Retain all earlier scientific receipts at their original sources. The listed unchanged tensor/scalar diffusion, Newton residual, Cartesian flux, field, hierarchy and transfer implementations support bounded mathematical evidence reuse, not a claim that current binaries or all native entry paths are unchanged.",
+    "Retain the v33 passed oversized-step refusal/rollback selector: the tested bound and oracle stay intact; the fix adds provisional capture and accepted publication after the guard. Primary must confirm reuse against the final integrated change. Do not label its two accepted cases passing.",
+    "Retain the independent Fourier/residual subassertions reached in v33 as partial observations. Re-run the two failed accepted selectors on the new package to qualify complete transport+diffusion ledgers and group changes separately."
+  ],
+  "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a",
+  "unchanged_operator_and_oracle_hashes": [
+    {
+      "after_git_blob": "28a68e0ef7486ccce263b726ae1f6a5c9f1d8eb2",
+      "after_sha256": "2fdff21763eb66013ec11459c9b67c22988df90fcc6b3d62046bd33db66d3afa",
+      "before_git_blob": "28a68e0ef7486ccce263b726ae1f6a5c9f1d8eb2",
+      "before_sha256": "2fdff21763eb66013ec11459c9b67c22988df90fcc6b3d62046bd33db66d3afa",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "include/pops/runtime/dynamic/physical_support_transfer.hpp",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "0f64d95cb0526cc12b75acd9c6d43938480058c6",
+      "after_sha256": "69452d5d7c573dcd3dca3f2ba9885022bfd4dfdc3588e673676fd08dd0e04c84",
+      "before_git_blob": "0f64d95cb0526cc12b75acd9c6d43938480058c6",
+      "before_sha256": "69452d5d7c573dcd3dca3f2ba9885022bfd4dfdc3588e673676fd08dd0e04c84",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "tests/cpp/unit/runtime/test_physical_support_transfer.cpp",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "5bf9b6272a96f4c67e3efecc192a9eb2b2568d37",
+      "after_sha256": "1abbbe6354354382e515f56f6a79f9fd62ad28204284320f1d62b6f1e45ac105",
+      "before_git_blob": "5bf9b6272a96f4c67e3efecc192a9eb2b2568d37",
+      "before_sha256": "1abbbe6354354382e515f56f6a79f9fd62ad28204284320f1d62b6f1e45ac105",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "2c3590a979615c0b0ce93964c6770b2cb9884532",
+      "after_sha256": "47d1b05f102376524d3d5b3a88ea95915ddba5f260c915dc6db9b702cf348476",
+      "before_git_blob": "2c3590a979615c0b0ce93964c6770b2cb9884532",
+      "before_sha256": "47d1b05f102376524d3d5b3a88ea95915ddba5f260c915dc6db9b702cf348476",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "include/pops/numerics/diffusion/prepared_diffusion.hpp",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "546b2ddcdc430142b40d2c2e3888de4a85101b6b",
+      "after_sha256": "094c76e26166d9ae20f6285720d7842b3585bbe24e64fdd365b83ca36a509c7a",
+      "before_git_blob": "546b2ddcdc430142b40d2c2e3888de4a85101b6b",
+      "before_sha256": "094c76e26166d9ae20f6285720d7842b3585bbe24e64fdd365b83ca36a509c7a",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "include/pops/runtime/amr/amr_tensor_elliptic.hpp",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "7f6486a3f0b580a40161460666c307c32c39c476",
+      "after_sha256": "92b9383bee5141c93b19aa780b8a316596f051612852ddea18714c9ae3c6ee23",
+      "before_git_blob": "7f6486a3f0b580a40161460666c307c32c39c476",
+      "before_sha256": "92b9383bee5141c93b19aa780b8a316596f051612852ddea18714c9ae3c6ee23",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "include/pops/runtime/program/prepared_spatial_residual.hpp",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "fd15aa76af0f2afe15a0c51758105cbfa2527f58",
+      "after_sha256": "ea0a2b73dc6afa054bea28aa6da09fa447ade74d5bfea304302be68eb186c35c",
+      "before_git_blob": "fd15aa76af0f2afe15a0c51758105cbfa2527f58",
+      "before_sha256": "ea0a2b73dc6afa054bea28aa6da09fa447ade74d5bfea304302be68eb186c35c",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "include/pops/runtime/program/prepared_amr_spatial_residual.hpp",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "adc3860d75c3d8c5c55b523372e019cab3827387",
+      "after_sha256": "912d67f369a1f0a365914ada163ea33930d69d3c8915e1e56ddeb98f9e0cb337",
+      "before_git_blob": "adc3860d75c3d8c5c55b523372e019cab3827387",
+      "before_sha256": "912d67f369a1f0a365914ada163ea33930d69d3c8915e1e56ddeb98f9e0cb337",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "tests/cpp/unit/runtime/test_prepared_diffusion.cpp",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "8d92dd0211e88b92a197eb631b71b8bb3fc051a9",
+      "after_sha256": "8decc3535a09d6ca90459890dfc367434537a5bb370728c13a5d6124d6d197ad",
+      "before_git_blob": "8d92dd0211e88b92a197eb631b71b8bb3fc051a9",
+      "before_sha256": "8decc3535a09d6ca90459890dfc367434537a5bb370728c13a5d6124d6d197ad",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "tests/cpp/unit/runtime/test_prepared_spatial_residual.cpp",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "93fc01f3203d1d10d443d4315517b0c1586200e5",
+      "after_sha256": "42b5e197e13291b2baf5822c9ae5d73cbd5a3adcbfbe1f58c97ebbd845728184",
+      "before_git_blob": "93fc01f3203d1d10d443d4315517b0c1586200e5",
+      "before_sha256": "42b5e197e13291b2baf5822c9ae5d73cbd5a3adcbfbe1f58c97ebbd845728184",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "tests/cpp/unit/elliptic/test_composite_general_field.cpp",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "cfc4e80b08b9c263e611724f65ce26ed5b686e53",
+      "after_sha256": "5f90a70f9f19de2d28dce324049869f08f31a2a704c3e4fd6f044c6cfee26218",
+      "before_git_blob": "cfc4e80b08b9c263e611724f65ce26ed5b686e53",
+      "before_sha256": "5f90a70f9f19de2d28dce324049869f08f31a2a704c3e4fd6f044c6cfee26218",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "tests/cpp/integration/amr/test_amr_program_diffusion.cpp",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "b8804232e8b6b654239a627813794d67a7ebbc64",
+      "after_sha256": "2397c8a403f35d94296b29f6463763a1bccad0175169e0b85354e53721a0c85a",
+      "before_git_blob": "b8804232e8b6b654239a627813794d67a7ebbc64",
+      "before_sha256": "2397c8a403f35d94296b29f6463763a1bccad0175169e0b85354e53721a0c85a",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "python/pops/codegen/program_field_reuse.py",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "ba32e093e40b4942aa0f865c3c80508fede67b32",
+      "after_sha256": "8580f574d779a8be537e0aa9a96b3d816b39ea4fab29c19d31adc9e287277476",
+      "before_git_blob": "ba32e093e40b4942aa0f865c3c80508fede67b32",
+      "before_sha256": "8580f574d779a8be537e0aa9a96b3d816b39ea4fab29c19d31adc9e287277476",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "include/pops/numerics/spatial/operators/cartesian_operator.hpp",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "e28c3a1559eb9d07fe7344f115f3f5e9792ccad5",
+      "after_sha256": "c4bbcdcf955eece4d483d346a6433babc4283c18c6015d96aacbc99065305661",
+      "before_git_blob": "e28c3a1559eb9d07fe7344f115f3f5e9792ccad5",
+      "before_sha256": "c4bbcdcf955eece4d483d346a6433babc4283c18c6015d96aacbc99065305661",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "python/pops/codegen/program_emit_diffusion.py",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "488cc2c7f65e3249880ac020d1a193dbf01ada75",
+      "after_sha256": "df52596c269689d195a59e125b2bae577e3d8eec0dcf36ee76a26cf51c4c3a92",
+      "before_git_blob": "488cc2c7f65e3249880ac020d1a193dbf01ada75",
+      "before_sha256": "df52596c269689d195a59e125b2bae577e3d8eec0dcf36ee76a26cf51c4c3a92",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "python/pops/codegen/program_diffusion_exchanges.py",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "267b03b405aaa0cedf93d7fb6d44a08fb30aab06",
+      "after_sha256": "bc5c3863facbaf83d20059c0b174dbbd853b8dbe1249154ee7b39b33584db891",
+      "before_git_blob": "267b03b405aaa0cedf93d7fb6d44a08fb30aab06",
+      "before_sha256": "bc5c3863facbaf83d20059c0b174dbbd853b8dbe1249154ee7b39b33584db891",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "python/pops/codegen/program_emit_transport_exchanges.py",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "ff68666870dc371b125678e2e29be86f014128cb",
+      "after_sha256": "a5ca281f6e4934e849e3f31834642dc238fa6a3f8adb07756b3fd64a58ec5ee9",
+      "before_git_blob": "ff68666870dc371b125678e2e29be86f014128cb",
+      "before_sha256": "a5ca281f6e4934e849e3f31834642dc238fa6a3f8adb07756b3fd64a58ec5ee9",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "python/pops/codegen/program_emit_spatial_solve.py",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "b2f8c56a956f0d7191d734844f9ff3eaa9c6983e",
+      "after_sha256": "aa34d26d3682eb6d8773c80f0881ad12009820f9cadd2eff5dd70bf37e65d789",
+      "before_git_blob": "b2f8c56a956f0d7191d734844f9ff3eaa9c6983e",
+      "before_sha256": "aa34d26d3682eb6d8773c80f0881ad12009820f9cadd2eff5dd70bf37e65d789",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "python/pops/codegen/program_emit_spatial_hierarchy.py",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "2fcaa8249a5edf867e0c90168bad9194149a851a",
+      "after_sha256": "dff1f9f474f5ef49b7c0d846b09f554ef591b9153d25c49501b3712362189a71",
+      "before_git_blob": "2fcaa8249a5edf867e0c90168bad9194149a851a",
+      "before_sha256": "dff1f9f474f5ef49b7c0d846b09f554ef591b9153d25c49501b3712362189a71",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "python/pops/time/_program/spatial_solve.py",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "657338d2dac2e1fbcf73878dc6df0250b25ddd4a",
+      "after_sha256": "dedd7a8a66b8b3ee66d6c45fd737d003c610679f44367b018099f6ae1f349f9c",
+      "before_git_blob": "657338d2dac2e1fbcf73878dc6df0250b25ddd4a",
+      "before_sha256": "dedd7a8a66b8b3ee66d6c45fd737d003c610679f44367b018099f6ae1f349f9c",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "python/pops/numerics/diffusion.py",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "16060cac4e2984906a7f78be82983bdc9a8e72e1",
+      "after_sha256": "d0fe419ee9b0262704ffda771820a36f6c2615cd33dd9af0978d8fcd7a0ef16a",
+      "before_git_blob": "16060cac4e2984906a7f78be82983bdc9a8e72e1",
+      "before_sha256": "d0fe419ee9b0262704ffda771820a36f6c2615cd33dd9af0978d8fcd7a0ef16a",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "python/pops/numerics/transport_frequency.py",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    },
+    {
+      "after_git_blob": "83e69511bdaa0537bf387e2665721511ce7c3824",
+      "after_sha256": "73da0f0a1e7997f1b3fddb17dda6a45bf44e493a69081a99a12d1b83aef0a0ce",
+      "before_git_blob": "83e69511bdaa0537bf387e2665721511ce7c3824",
+      "before_sha256": "73da0f0a1e7997f1b3fddb17dda6a45bf44e493a69081a99a12d1b83aef0a0ce",
+      "byte_unchanged": true,
+      "from": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+      "path": "tests/python/integration/runtime/test_tensor_transport_composition.py",
+      "to": "175b0883f9f0752f5710ef3db2c7d7d6802e400a"
+    }
+  ]
+}

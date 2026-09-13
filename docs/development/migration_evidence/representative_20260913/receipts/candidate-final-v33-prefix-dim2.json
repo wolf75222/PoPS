@@ -1,0 +1,49 @@
+{
+  "prefix": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v33-dim2-env",
+  "wheel": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v33-wheel-dim2/pops-1.0.0-cp312-cp312-macosx_26_0_arm64.whl",
+  "wheel_sha256": "9067ba1d489a193fcf9039d96338081996cc0b3ffc5994174a984dec3681a96a",
+  "source": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+  "commands": [
+    [
+      "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/python",
+      "-m",
+      "venv",
+      "--system-site-packages",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v33-dim2-env"
+    ],
+    [
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v33-dim2-env/bin/python",
+      "-m",
+      "pip",
+      "install",
+      "--ignore-installed",
+      "--no-deps",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v33-wheel-dim2/pops-1.0.0-cp312-cp312-macosx_26_0_arm64.whl"
+    ],
+    [
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v33-dim2-env/bin/python",
+      "scripts/prove_installed_wheel.py",
+      "--wheel",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v33-wheel-dim2/pops-1.0.0-cp312-cp312-macosx_26_0_arm64.whl",
+      "--expect-dim",
+      "2"
+    ],
+    [
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v33-dim2-env/bin/python",
+      "-c",
+      "from pops._native_selector import select_native_dimension;select_native_dimension(2);from pops.runtime.doctor import doctor;doctor()"
+    ]
+  ],
+  "environment": {
+    "PYTHONNOUSERSITE": "1",
+    "PYTHONPATH": "",
+    "POPS_NATIVE_DIM": "2",
+    "POPS_INCLUDE": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v33-dim2-env/lib/python3.12/site-packages/pops/include",
+    "POPS_INCLUDE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v33-dim2-env/lib/python3.12/site-packages/pops/include",
+    "POPS_KOKKOS_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+    "Kokkos_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_REQUIRE_NATIVE_TESTS": "1"
+  }
+}

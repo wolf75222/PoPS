@@ -1,0 +1,35 @@
+{
+  "command": [
+    "/usr/bin/time",
+    "-l",
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/mpiexec",
+    "-n",
+    "2",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v34-dim2-env/bin/python",
+    "-B",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/frozen-native-mpi-pytest-driver.py",
+    "candidate-final-v34-representative-composition",
+    "-q",
+    "--tb=short",
+    "tests/python/integration/runtime/test_tensor_transport_composition.py::test_separate_transport_tensor_update_and_signed_ledgers"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v34-proof",
+  "source_head_before": "175b0883f9f0752f5710ef3db2c7d7d6802e400a",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T13:36:41.942499+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "2",
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1",
+    "CMAKE_BUILD_PARALLEL_LEVEL": "1",
+    "POPS_BUILD_CORES": "1",
+    "POPS_HEAVY_MODULE_TU_POOL": "1"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 69.25464812503196,
+  "source_head_after": "175b0883f9f0752f5710ef3db2c7d7d6802e400a",
+  "source_status_after": "",
+  "log_sha256": "da4d2a131c0a877330757b50e1c6d548272f238bb1878f6b7263334b2d1ea1cd"
+}

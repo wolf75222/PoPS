@@ -24,7 +24,14 @@ lossy legacy model; unsupported combinations keep explicit refusals.
 | Physical-support map/provider | Generic map carriers and active consumers remain in `include/pops/runtime/dynamic/physical_support_transfer.hpp`, `python/pops/mesh/native_physical_mapping.py`, `python/pops/runtime/_multi_layout_executor.py`, and `python/pops/runtime/_amr_physical_mapping.py`. |
 | Seven verification tests | `test_run_verification.py`, `test_reference_errors.py`, `test_verification_report_schema.py`, `test_verification_provenance_schema.py`, `test_verification_metrics_schema.py`, `test_verification_manifest_schema.py`, and `test_check_verification_manifest.py` are present in both baseline and current trees. Their historical campaign assets were already absent at baseline; that absence is not replacement support and must not be reconstructed as one. |
 
-Current representative M8 witnesses include Gaussian uniform+AMR2, signed tails, and the repaired
-Dim3 mixture fixture; the original analytic3 failure remains historical evidence. These witnesses
-do not authorize semantic deletion. The set stays empty while active consumers, ABI/header routes,
-public presets, and retained verification evidence remain in scope. Final acceptance awaits the separately authored transport/tensor correction and its targeted validation.
+Accepted representative M8 witnesses include Gaussian uniform+AMR2, signed tails, the repaired
+Dim3 mixture fixture, and separately authored transport/tensor composition. The original failures
+remain in the evidence history. No listed consumer is obsolete under its qualified replacement
+comparison, so the reviewed semantic deletion set remains empty. Active consumers, ABI/header
+routes, public presets, and retained verification evidence remain supported.
+
+The new optional grouped face capture supports prepared Cartesian physical or periodic closures.
+Shared-interface, active embedded-boundary, and unsupported legacy capture requests are refused
+before publication; their existing calls without capture remain available. The changed Uniform and
+AMR capture contracts pass their own MPI2 failure/retry tests at source
+`175b0883f9f0752f5710ef3db2c7d7d6802e400a`. This limitation does not remove an existing route.

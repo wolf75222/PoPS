@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="13" time="10.682" timestamp="2026-09-13T15:05:34.711587+02:00" hostname="macbookpro.home"><testcase classname="tests.python.unit.codegen.test_transport_quadrature" name="test_exact_accepted_weights_include_predictor_once_and_ignore_unused_rates" time="0.001" /><testcase classname="tests.python.unit.codegen.test_transport_quadrature" name="test_authenticated_implicit_endpoint_counts_previous_but_not_seed_or_residual" time="0.002" /><testcase classname="tests.python.unit.codegen.test_transport_quadrature" name="test_invalid_accepted_transport_weights_are_refused[weight0]" time="0.000" /><testcase classname="tests.python.unit.codegen.test_transport_quadrature" name="test_invalid_accepted_transport_weights_are_refused[weight1]" time="0.000" /><testcase classname="tests.python.unit.codegen.test_transport_quadrature" name="test_source_evaluation_stops_ancestry_but_unknown_transform_does_not_hide_it" time="0.000" /><testcase classname="tests.python.unit.codegen.test_transport_quadrature" name="test_branch_results_and_scheduled_consumers_cannot_hide_selected_transport" time="0.000" /><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_separate_transport_and_tensor_emit_both_operators_and_required_halos[1]" time="1.752" /><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_separate_transport_and_tensor_emit_both_operators_and_required_halos[2]" time="1.912" /><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_separate_transport_and_tensor_emit_both_operators_and_required_halos[3]" time="2.219" /><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_implicit_tensor_partition_is_not_charged_to_explicit_transport_bound" time="2.463" /><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_grouped_composition_requests_retained_faces_without_evaluating_again" time="1.644" /><testcase classname="tests.python.unit.codegen.test_shared_interface_validation" name="test_group_codegen_keeps_atomic_and_per_rate_identities_distinct" time="0.000"><failure message="ValueError: Program model kernel requires the complete exact ProviderPack carrier; missing _component_provider_pack, _component_provider_metadata, _component_operator_provider_packs, _component_operator_provider_metadata, _component_flux_provider_pack, _component_flux_provider_metadata, _auxiliary_provider_pack, _auxiliary_provider_metadata, _auxiliary_provider_route_metadata, _component_operator_consumer_plans, _component_flux_consumer_plan, _auxiliary_provider_routes; compile through Module">tests/python/unit/codegen/test_shared_interface_validation.py:356: in test_group_codegen_keeps_atomic_and_per_rate_identities_distinct
+    _emit_contiguous_rhs_group(
+python/pops/codegen/program_emit_control.py:270: in _emit_contiguous_rhs_group
+    faces = declare_transport_faces(value, model_for_node(model, value), var, lines)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/program_transport_quadrature.py:41: in declare_transport_faces
+    selection = retained_transport_selection(value, model)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/program_transport_quadrature.py:11: in retained_transport_selection
+    if not has_independent_diffusion_transport(model):
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/program_partition_stability.py:16: in has_independent_diffusion_transport
+    impl = _model_impl(model)
+           ^^^^^^^^^^^^^^^^^^
+python/pops/codegen/program_emit_kernels.py:548: in _model_impl
+    require_emitter_provider_carrier(impl, where="Program model kernel")
+python/pops/codegen/component_provider_packs.py:160: in require_emitter_provider_carrier
+    raise ValueError(
+E   ValueError: Program model kernel requires the complete exact ProviderPack carrier; missing _component_provider_pack, _component_provider_metadata, _component_operator_provider_packs, _component_operator_provider_metadata, _component_flux_provider_pack, _component_flux_provider_metadata, _auxiliary_provider_pack, _auxiliary_provider_metadata, _auxiliary_provider_route_metadata, _component_operator_consumer_plans, _component_flux_consumer_plan, _auxiliary_provider_routes; compile through Module</failure></testcase><testcase classname="tests.python.unit.codegen.test_shared_interface_validation" name="test_validation_and_codegen_share_noncontiguous_stage_coherence_plan" time="0.011"><failure message="ValueError: Program model kernel requires the complete exact ProviderPack carrier; missing _component_provider_pack, _component_provider_metadata, _component_operator_provider_packs, _component_operator_provider_metadata, _component_flux_provider_pack, _component_flux_provider_metadata, _auxiliary_provider_pack, _auxiliary_provider_metadata, _auxiliary_provider_route_metadata, _component_operator_consumer_plans, _component_flux_consumer_plan, _auxiliary_provider_routes; compile through Module">tests/python/unit/codegen/test_shared_interface_validation.py:384: in test_validation_and_codegen_share_noncontiguous_stage_coherence_plan
+    source = emit_cpp_program(program, target=target)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/program_codegen.py:122: in emit_cpp_program
+    return _emit_cpp_program_impl(
+python/pops/codegen/program_codegen.py:295: in _emit_cpp_program_impl
+    prelude, body, post_synchronization, operator_authorities = _emit_body(
+python/pops/codegen/program_emit_control.py:429: in _emit_body
+    _emit_contiguous_rhs_group(
+python/pops/codegen/program_emit_control.py:270: in _emit_contiguous_rhs_group
+    faces = declare_transport_faces(value, model_for_node(model, value), var, lines)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/program_transport_quadrature.py:41: in declare_transport_faces
+    selection = retained_transport_selection(value, model)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/program_transport_quadrature.py:11: in retained_transport_selection
+    if not has_independent_diffusion_transport(model):
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/program_partition_stability.py:16: in has_independent_diffusion_transport
+    impl = _model_impl(model)
+           ^^^^^^^^^^^^^^^^^^
+python/pops/codegen/program_emit_kernels.py:548: in _model_impl
+    require_emitter_provider_carrier(impl, where="Program model kernel")
+python/pops/codegen/component_provider_packs.py:160: in require_emitter_provider_carrier
+    raise ValueError(
+E   ValueError: Program model kernel requires the complete exact ProviderPack carrier; missing _component_provider_pack, _component_provider_metadata, _component_operator_provider_packs, _component_operator_provider_metadata, _component_flux_provider_pack, _component_flux_provider_metadata, _auxiliary_provider_pack, _auxiliary_provider_metadata, _auxiliary_provider_route_metadata, _component_operator_consumer_plans, _component_flux_consumer_plan, _auxiliary_provider_routes; compile through Module</failure></testcase></testsuite></testsuites>

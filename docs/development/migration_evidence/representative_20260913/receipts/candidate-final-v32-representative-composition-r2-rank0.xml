@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="3" time="111.652" timestamp="2026-09-13T14:36:33.523488+02:00" hostname="macbookpro.home"><testcase classname="tests.python.integration.runtime.test_tensor_transport_composition" name="test_separate_transport_tensor_update_and_signed_ledgers[explicit]" time="34.789"><failure message="RuntimeError: System staged native packages differ across MPI ranks">tests/python/integration/runtime/test_tensor_transport_composition.py:143: in test_separate_transport_tensor_update_and_signed_ledgers
+    runtime, context, initial = _bind(VALID_DT, implicit=implicit)
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_tensor_transport_composition.py:133: in _bind
+    runtime = pops.bind(artifact, initial_values={subject: initial},
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/_api.py:91: in bind
+    return phase(artifact, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/codegen/_phases.py:623: in bind
+    return install(install_plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/codegen/_phases.py:638: in install
+    return runtime_install(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/runtime/_bind_adapters.py:32: in install_plan
+    return RuntimeInstance(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/runtime/_runtime_instance.py:478: in __init__
+    native = install_runtime_executor(plan, runtime_plan) if executor is None else executor
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/runtime/_runtime_executor.py:475: in install_runtime_executor
+    return matches[0].install(plan, runtime_plan)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/runtime/_runtime_executor.py:345: in install
+    engine._install_compiled(
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/runtime/_system_unified_install.py:477: in _install_compiled
+    self._s._finalize_native_packages()
+E   RuntimeError: System staged native packages differ across MPI ranks</failure></testcase><testcase classname="tests.python.integration.runtime.test_tensor_transport_composition" name="test_separate_transport_tensor_update_and_signed_ledgers[implicit]" time="38.695"><failure message="RuntimeError: System staged native packages differ across MPI ranks">tests/python/integration/runtime/test_tensor_transport_composition.py:143: in test_separate_transport_tensor_update_and_signed_ledgers
+    runtime, context, initial = _bind(VALID_DT, implicit=implicit)
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_tensor_transport_composition.py:133: in _bind
+    runtime = pops.bind(artifact, initial_values={subject: initial},
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/_api.py:91: in bind
+    return phase(artifact, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/codegen/_phases.py:623: in bind
+    return install(install_plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/codegen/_phases.py:638: in install
+    return runtime_install(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/runtime/_bind_adapters.py:32: in install_plan
+    return RuntimeInstance(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/runtime/_runtime_instance.py:478: in __init__
+    native = install_runtime_executor(plan, runtime_plan) if executor is None else executor
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/runtime/_runtime_executor.py:475: in install_runtime_executor
+    return matches[0].install(plan, runtime_plan)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/runtime/_runtime_executor.py:345: in install
+    engine._install_compiled(
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/runtime/_system_unified_install.py:477: in _install_compiled
+    self._s._finalize_native_packages()
+E   RuntimeError: System staged native packages differ across MPI ranks</failure></testcase><testcase classname="tests.python.integration.runtime.test_tensor_transport_composition" name="test_independent_bounds_do_not_admit_a_sum_exceeding_the_combined_bound" time="37.579"><failure message="RuntimeError: System staged native packages differ across MPI ranks">tests/python/integration/runtime/test_tensor_transport_composition.py:207: in test_independent_bounds_do_not_admit_a_sum_exceeding_the_combined_bound
+    runtime, _, initial = _bind(dt)
+                          ^^^^^^^^^
+tests/python/integration/runtime/test_tensor_transport_composition.py:133: in _bind
+    runtime = pops.bind(artifact, initial_values={subject: initial},
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/_api.py:91: in bind
+    return phase(artifact, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/codegen/_phases.py:623: in bind
+    return install(install_plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/codegen/_phases.py:638: in install
+    return runtime_install(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/runtime/_bind_adapters.py:32: in install_plan
+    return RuntimeInstance(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/runtime/_runtime_instance.py:478: in __init__
+    native = install_runtime_executor(plan, runtime_plan) if executor is None else executor
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/runtime/_runtime_executor.py:475: in install_runtime_executor
+    return matches[0].install(plan, runtime_plan)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/runtime/_runtime_executor.py:345: in install
+    engine._install_compiled(
+../PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/runtime/_system_unified_install.py:477: in _install_compiled
+    self._s._finalize_native_packages()
+E   RuntimeError: System staged native packages differ across MPI ranks</failure></testcase></testsuite></testsuites>

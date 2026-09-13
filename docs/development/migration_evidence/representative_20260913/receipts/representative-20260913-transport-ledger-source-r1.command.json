@@ -1,0 +1,26 @@
+{
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/python",
+    "-B",
+    "-m",
+    "pytest",
+    "-q",
+    "--tb=short",
+    "tests/python/unit/codegen/test_transport_quadrature.py",
+    "tests/python/unit/codegen/test_tensor_transport_composition.py::test_separate_transport_and_tensor_emit_both_operators_and_required_halos",
+    "tests/python/unit/codegen/test_tensor_transport_composition.py::test_implicit_tensor_partition_is_not_charged_to_explicit_transport_bound",
+    "tests/python/unit/codegen/test_tensor_transport_composition.py::test_grouped_composition_requests_retained_faces_without_evaluating_again",
+    "tests/python/unit/time/test_time_codegen.py::test_multiblock_lowers",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-transport-ledger-source-r1.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "e9e134276884d3b533849a5c491970572af73285",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T13:04:08.722790+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/python:/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1"
+  }
+}

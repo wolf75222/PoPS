@@ -1,0 +1,29 @@
+{
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/python",
+    "-B",
+    "-m",
+    "pytest",
+    "-q",
+    "--tb=short",
+    "tests/python/unit/codegen/test_shared_interface_validation.py::test_group_codegen_keeps_atomic_and_per_rate_identities_distinct",
+    "tests/python/unit/codegen/test_shared_interface_validation.py::test_validation_and_codegen_share_noncontiguous_stage_coherence_plan",
+    "tests/python/unit/codegen/test_tensor_transport_composition.py::test_grouped_composition_requests_retained_faces_without_evaluating_again",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-transport-ledger-source-r3.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "8fc2cd996798a8060680bf23a2fb9362936bb505",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T13:21:22.639783+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/python:/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 2.938172540976666,
+  "source_head_after": "8fc2cd996798a8060680bf23a2fb9362936bb505",
+  "source_status_after": "",
+  "log_sha256": "0513aa2eb8d23081539e2e429c0f38f439cff989c59d184e50b543e3ba11f632"
+}

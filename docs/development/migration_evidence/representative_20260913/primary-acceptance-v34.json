@@ -1,0 +1,19 @@
+{
+  "accepted_utc": "2026-09-13T13:39:45.556829+00:00",
+  "ci": "unverified; local acceptance does not assert GitHub CI or authorize merge",
+  "code_review": "Primary inspected every integrated delta; independent Astra reviews covered Python exact accepted quadrature, native group publication and corrected collective admission. Final source freeze authenticates the reviewed binary diff.",
+  "failure_and_retry": "Both changed Uniform/AMR native group selectors pass on MPI2, including divergent capture, late failure, unchanged outputs and retry. V33 oversized-step rollback proof is reused: its guard and oracle are unchanged and accepted publication remains unreachable after rejection.",
+  "m8_retention": "The reviewed semantic deletion set is empty: active compatibility, native/schema, Gaussian and verification consumers remain documented. No silent support loss or deletion based on an inequivalent example.",
+  "native_composition": {
+    "maximum_update_defect": 8.881784197001252e-16,
+    "observations": 4,
+    "oracles": "4096 distinct signed cell-face incidences; separate transport/diffusion occurrence identities, evaluation contexts, face measures and accepted dt weights; both component inventories conserved; ledger sum reconciles accepted state; implicit residual criterion passed.",
+    "ranks": 2,
+    "unique_cases": 2
+  },
+  "product_source": "175b0883f9f0752f5710ef3db2c7d7d6802e400a",
+  "remaining_implementation_work_in_declared_scope": [],
+  "reuse": "Existing source-impact bridges and unchanged operator/oracle hashes retain prior refinement, method-order, physical-map, restart, field, interaction, M0-M2 and MPI4/OpenMP2 results at their actual sources. No claim of a new full-suite run, current speedup, GPU qualification or cluster scaling.",
+  "reviewer": "primary Astra",
+  "scope": "Declared representative M3-M8 contracts, preserving completed M0-M2 and explicit extension limits."
+}

@@ -1,0 +1,21 @@
+{
+  "source": "2bb005f0cdf79f3027167a92931090f6c940ea18",
+  "command": [
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v32-dim2-env/bin/python",
+    "-c",
+    "from pops._native_selector import select_native_dimension;select_native_dimension(2);from pops.runtime.doctor import doctor;doctor()"
+  ],
+  "environment": {
+    "PYTHONNOUSERSITE": "1",
+    "PYTHONPATH": "",
+    "POPS_NATIVE_DIM": "2",
+    "POPS_INCLUDE": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/include",
+    "POPS_INCLUDE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v32-dim2-env/lib/python3.12/site-packages/pops/include",
+    "POPS_KOKKOS_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+    "Kokkos_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_REQUIRE_NATIVE_TESTS": "1"
+  },
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate"
+}

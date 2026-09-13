@@ -1,0 +1,30 @@
+{
+  "distribution_root": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v34-dim2-env/lib/python3.12/site-packages",
+  "expected_dimensions": [
+    2
+  ],
+  "installed_member_count": 1033,
+  "installed_tree_sha256": "d623073a9a4b3143e8fd82a4a8b98d2164ffd469f660341738c3ba6bbb9d10df",
+  "native_manifest": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v34-dim2-env/lib/python3.12/site-packages/pops/_native/variants.json",
+  "native_manifest_member": "pops/_native/variants.json",
+  "native_manifest_sha256": "ec1909ea8ebf25c0f26e15b9596112cd8534a5a62f4618bc80330f22fcc78690",
+  "native_variants": [
+    {
+      "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=945f76ccb97a33337d13c2e581c01dcb3e2b0cc1eb3468f802d4990d19108113;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=e377b3314edb22ccdd22fa9ecd1d03f578bf3c293b137c85631e3db062611377;dim=2",
+      "dimension": 2,
+      "extension": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v34-dim2-env/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+      "has_kokkos": true,
+      "has_mpi": true,
+      "member": "pops/_native/dim2/_pops.cpython-312-darwin.so",
+      "sha256": "c092bdaffda7a5d3c9a60ce6c260534106394173ec71121ec56326020509195b",
+      "version": "1.0.0"
+    }
+  ],
+  "package_file": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v34-dim2-env/lib/python3.12/site-packages/pops/__init__.py",
+  "proof_script_sha256": "3aa78bc8c3648e120439ac6e90a0887b60a54f37da7b7db2b2983015be5f1a8d",
+  "python_executable": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/python3.12",
+  "schema_version": 3,
+  "version": "1.0.0",
+  "wheel_path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v34-wheel-dim2/pops-1.0.0-cp312-cp312-macosx_26_0_arm64.whl",
+  "wheel_sha256": "f528c0ad952d646d989238b524d9fbfd574e4674458b066077f512c7411ee12d"
+}

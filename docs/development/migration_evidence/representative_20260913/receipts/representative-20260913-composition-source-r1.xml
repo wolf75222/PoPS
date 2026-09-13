@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="6" skipped="0" tests="51" time="31.192" timestamp="2026-09-13T14:16:00.962086+02:00" hostname="macbookpro.home"><testcase classname="tests.python.unit.codegen.test_partition_stability" name="test_nested_rate_sum_keeps_each_exact_fraction_and_one_state_budget" time="0.001" /><testcase classname="tests.python.unit.codegen.test_partition_stability" name="test_convex_stage_budgets_do_not_accumulate_predictor_ancestry" time="0.000" /><testcase classname="tests.python.unit.codegen.test_partition_stability" name="test_same_timestamp_does_not_merge_independent_state_budgets" time="0.000" /><testcase classname="tests.python.unit.codegen.test_partition_stability" name="test_unsupported_affine_budgets_fail_with_a_certificate_diagnostic[state_weight0-rate_weight0]" time="0.000" /><testcase classname="tests.python.unit.codegen.test_partition_stability" name="test_unsupported_affine_budgets_fail_with_a_certificate_diagnostic[state_weight1-rate_weight1]" time="0.000" /><testcase classname="tests.python.unit.codegen.test_partition_stability" name="test_unsupported_affine_budgets_fail_with_a_certificate_diagnostic[state_weight2-rate_weight2]" time="0.000" /><testcase classname="tests.python.unit.codegen.test_partition_stability" name="test_unsupported_affine_budgets_fail_with_a_certificate_diagnostic[state_weight3-rate_weight3]" time="0.000" /><testcase classname="tests.python.unit.codegen.test_partition_stability" name="test_missing_stage_budget_distinct_points_and_scoped_frequency_are_refused" time="0.001" /><testcase classname="tests.python.unit.codegen.test_partition_stability" name="test_implicit_residual_ancestry_is_not_an_explicit_partition" time="0.000" /><testcase classname="tests.python.unit.codegen.test_partition_stability" name="test_guard_evidence_and_frequency_tokens_do_not_escape_a_child_region" time="0.000" /><testcase classname="tests.python.unit.codegen.test_partition_stability" name="test_separate_source_terms_require_their_own_certificate" time="0.000" /><testcase classname="tests.python.unit.codegen.test_partition_stability" name="test_each_consumer_checks_its_own_weight_even_when_the_rate_is_reused" time="0.000" /><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_separate_transport_and_tensor_emit_both_operators_and_required_halos[1]" time="1.470"><failure message="ValueError: two-point monotone diffusion cannot realize cross-component gradient variables; select a coupled matrix realization">tests/python/unit/codegen/test_tensor_transport_composition.py:18: in test_separate_transport_and_tensor_emit_both_operators_and_required_halos
+    code = emit_cpp_program(resolved.time, model=emitter)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/program_codegen.py:122: in emit_cpp_program
+    return _emit_cpp_program_impl(
+python/pops/codegen/program_codegen.py:295: in _emit_cpp_program_impl
+    prelude, body, post_synchronization, operator_authorities = _emit_body(
+python/pops/codegen/program_emit_control.py:441: in _emit_body
+    _emit_op(program, v, base, committed_ids, var, model, emitted, prelude, block_idx,
+python/pops/codegen/program_emit_ops.py:850: in _emit_op
+    _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
+python/pops/codegen/program_emit_diffusion.py:156: in _emit_diffusive_rhs
+    impl,selected,rows=_selected(v,node_model)
+                       ^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/program_emit_diffusion.py:61: in _selected
+    Diffusion(flux=rows[0].payload)
+python/pops/numerics/diffusion.py:24: in __init__
+    self.validate()
+python/pops/numerics/diffusion.py:53: in validate
+    raise ValueError("two-point monotone diffusion cannot realize cross-component gradient variables; select a coupled matrix realization")
+E   ValueError: two-point monotone diffusion cannot realize cross-component gradient variables; select a coupled matrix realization</failure></testcase><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_separate_transport_and_tensor_emit_both_operators_and_required_halos[2]" time="1.470"><failure message="ValueError: two-point monotone diffusion cannot realize cross-component gradient variables; select a coupled matrix realization">tests/python/unit/codegen/test_tensor_transport_composition.py:18: in test_separate_transport_and_tensor_emit_both_operators_and_required_halos
+    code = emit_cpp_program(resolved.time, model=emitter)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/program_codegen.py:122: in emit_cpp_program
+    return _emit_cpp_program_impl(
+python/pops/codegen/program_codegen.py:295: in _emit_cpp_program_impl
+    prelude, body, post_synchronization, operator_authorities = _emit_body(
+python/pops/codegen/program_emit_control.py:441: in _emit_body
+    _emit_op(program, v, base, committed_ids, var, model, emitted, prelude, block_idx,
+python/pops/codegen/program_emit_ops.py:850: in _emit_op
+    _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
+python/pops/codegen/program_emit_diffusion.py:156: in _emit_diffusive_rhs
+    impl,selected,rows=_selected(v,node_model)
+                       ^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/program_emit_diffusion.py:61: in _selected
+    Diffusion(flux=rows[0].payload)
+python/pops/numerics/diffusion.py:24: in __init__
+    self.validate()
+python/pops/numerics/diffusion.py:53: in validate
+    raise ValueError("two-point monotone diffusion cannot realize cross-component gradient variables; select a coupled matrix realization")
+E   ValueError: two-point monotone diffusion cannot realize cross-component gradient variables; select a coupled matrix realization</failure></testcase><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_separate_transport_and_tensor_emit_both_operators_and_required_halos[3]" time="1.709"><failure message="ValueError: two-point monotone diffusion cannot realize cross-component gradient variables; select a coupled matrix realization">tests/python/unit/codegen/test_tensor_transport_composition.py:18: in test_separate_transport_and_tensor_emit_both_operators_and_required_halos
+    code = emit_cpp_program(resolved.time, model=emitter)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/program_codegen.py:122: in emit_cpp_program
+    return _emit_cpp_program_impl(
+python/pops/codegen/program_codegen.py:295: in _emit_cpp_program_impl
+    prelude, body, post_synchronization, operator_authorities = _emit_body(
+python/pops/codegen/program_emit_control.py:441: in _emit_body
+    _emit_op(program, v, base, committed_ids, var, model, emitted, prelude, block_idx,
+python/pops/codegen/program_emit_ops.py:850: in _emit_op
+    _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
+python/pops/codegen/program_emit_diffusion.py:156: in _emit_diffusive_rhs
+    impl,selected,rows=_selected(v,node_model)
+                       ^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/program_emit_diffusion.py:61: in _selected
+    Diffusion(flux=rows[0].payload)
+python/pops/numerics/diffusion.py:24: in __init__
+    self.validate()
+python/pops/numerics/diffusion.py:53: in validate
+    raise ValueError("two-point monotone diffusion cannot realize cross-component gradient variables; select a coupled matrix realization")
+E   ValueError: two-point monotone diffusion cannot realize cross-component gradient variables; select a coupled matrix realization</failure></testcase><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_implicit_tensor_partition_is_not_charged_to_explicit_transport_bound" time="2.359"><failure message="ValueError: two-point monotone diffusion cannot realize cross-component gradient variables; select a coupled matrix realization">tests/python/unit/codegen/test_tensor_transport_composition.py:37: in test_implicit_tensor_partition_is_not_charged_to_explicit_transport_bound
+    code = emit_cpp_program(resolved.time, model=emitter)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/program_codegen.py:122: in emit_cpp_program
+    return _emit_cpp_program_impl(
+python/pops/codegen/program_codegen.py:295: in _emit_cpp_program_impl
+    prelude, body, post_synchronization, operator_authorities = _emit_body(
+python/pops/codegen/program_emit_control.py:441: in _emit_body
+    _emit_op(program, v, base, committed_ids, var, model, emitted, prelude, block_idx,
+python/pops/codegen/program_emit_ops.py:1226: in _emit_op
+    emit_spatial_solve(program, v, base, var, model, lines, prelude, block_idx,
+python/pops/codegen/program_emit_spatial_solve.py:60: in emit_spatial_solve
+    lines += _emit_diffusive_preparation(
+python/pops/codegen/program_emit_diffusion.py:130: in _emit_diffusive_preparation
+    _,selected,_=_selected(v,node_model)
+                 ^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/program_emit_diffusion.py:61: in _selected
+    Diffusion(flux=rows[0].payload)
+python/pops/numerics/diffusion.py:24: in __init__
+    self.validate()
+python/pops/numerics/diffusion.py:53: in validate
+    raise ValueError("two-point monotone diffusion cannot realize cross-component gradient variables; select a coupled matrix realization")
+E   ValueError: two-point monotone diffusion cannot realize cross-component gradient variables; select a coupled matrix realization</failure></testcase><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_competing_native_transport_configurations_are_still_refused" time="0.002"><failure message="ValueError: an additional physical flux cannot replace the default wave-speed law; independent wave-speed realization requires numerical resolution">tests/python/unit/codegen/test_tensor_transport_composition.py:46: in test_competing_native_transport_configurations_are_still_refused
+    case, layout, _ = composition_case(competing_transport=True)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_tensor_transport_composition.py:51: in composition_case
+    other = model.flux("other_transport", frame=frame, state=state,
+python/pops/physics/_freeze.py:259: in guarded
+    result = __method(self, *args, **method_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/physics/board.py:811: in flux
+    raise ValueError(
+E   ValueError: an additional physical flux cannot replace the default wave-speed law; independent wave-speed realization requires numerical resolution</failure></testcase><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_shared_endpoint_frequency_contract_authenticates_supported_fluxes[rusanov]" time="0.000" /><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_shared_endpoint_frequency_contract_authenticates_supported_fluxes[hll]" time="0.000" /><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_shared_endpoint_frequency_contract_refuses_unproved_providers[WENO5-Rusanov-None]" time="0.000" /><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_shared_endpoint_frequency_contract_refuses_unproved_providers[FirstOrder-Roe-None]" time="0.000" /><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_shared_endpoint_frequency_contract_refuses_unproved_providers[FirstOrder-HLLC-None]" time="0.000" /><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_shared_endpoint_frequency_contract_refuses_unproved_providers[FirstOrder-HLL-einfeldt]" time="0.000" /><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_shared_endpoint_frequency_contract_refuses_unproved_providers[FirstOrder-HLL-davis]" time="0.000" /><testcase classname="tests.python.unit.codegen.test_tensor_transport_composition" name="test_separate_transport_and_joint_diffusion_keep_both_transport_multiplicities" time="0.044"><failure message="ValueError: quantity 'U' has alternative physical balances ['transport_root', 'joint_root']; select_balance(rate) is required">tests/python/unit/codegen/test_tensor_transport_composition.py:108: in test_separate_transport_and_joint_diffusion_keep_both_transport_multiplicities
+    case.numerics(methods, block=block)
+python/pops/problem/problem.py:200: in numerics
+    plan.validate_for(spec["model"], states=spec["states"])
+python/pops/numerics/plan.py:502: in validate_for
+    _validate_selected_balance_coverage(model, selected, states=states)
+python/pops/numerics/plan.py:34: in _validate_selected_balance_coverage
+    expected = model.selected_rate_contracts(states=states)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/physics/_board_rate.py:265: in selected_rate_contracts
+    raise ValueError(
+E   ValueError: quantity 'U' has alternative physical balances ['transport_root', 'joint_root']; select_balance(rate) is required</failure></testcase><testcase classname="tests.python.unit.codegen.test_diffusion_program" name="test_scalar_diffusion_public_case_resolves_and_emits_native_faces[euler]" time="0.580" /><testcase classname="tests.python.unit.codegen.test_diffusion_program" name="test_scalar_diffusion_public_case_resolves_and_emits_native_faces[ssprk2]" time="0.635" /><testcase classname="tests.python.unit.codegen.test_diffusion_program" name="test_diffusion_accepted_quadrature_does_not_count_predictor_ancestry[euler-weights0]" time="0.508" /><testcase classname="tests.python.unit.codegen.test_diffusion_program" name="test_diffusion_accepted_quadrature_does_not_count_predictor_ancestry[ssprk2-weights1]" time="0.532" /><testcase classname="tests.python.unit.codegen.test_diffusion_program" name="test_combined_transport_retains_native_riemann_and_adds_stability_frequencies[rusanov]" time="0.718" /><testcase classname="tests.python.unit.codegen.test_diffusion_program" name="test_combined_transport_retains_native_riemann_and_adds_stability_frequencies[hll]" time="0.719" /><testcase classname="tests.python.unit.codegen.test_diffusion_program" name="test_runtime_diffusion_coefficient_is_retained_in_program_parameter_metadata" time="0.491" /><testcase classname="tests.python.unit.codegen.test_diffusion_program" name="test_unproved_accepted_transform_cannot_silently_drop_diffusive_exchanges" time="0.474" /><testcase classname="tests.python.unit.codegen.test_diffusion_frozen_input_quadrature" name="test_exact_euler_face_quadrature_survives_an_independent_unchanged_driver" time="0.254" /><testcase classname="tests.python.unit.codegen.test_diffusion_frozen_input_quadrature" name="test_frozen_input_euler_proof_refuses_different_accepted_equations[changed_driver]" time="0.247" /><testcase classname="tests.python.unit.codegen.test_diffusion_frozen_input_quadrature" name="test_frozen_input_euler_proof_refuses_different_accepted_equations[wrong_coefficient]" time="0.250" /><testcase classname="tests.python.unit.codegen.test_diffusion_frozen_input_quadrature" name="test_frozen_input_euler_proof_refuses_different_accepted_equations[wrong_seed]" time="0.250" /><testcase classname="tests.python.unit.codegen.test_diffusion_frozen_input_quadrature" name="test_frozen_input_euler_proof_refuses_different_accepted_equations[extra_rhs]" time="0.264" /><testcase classname="tests.python.unit.codegen.test_generic_diffusion" name="test_coupled_coefficient_laws_have_all_components_axes_and_runtime_parameters[1]" time="0.696" /><testcase classname="tests.python.unit.codegen.test_generic_diffusion" name="test_coupled_coefficient_laws_have_all_components_axes_and_runtime_parameters[2]" time="0.880" /><testcase classname="tests.python.unit.codegen.test_generic_diffusion" name="test_coupled_coefficient_laws_have_all_components_axes_and_runtime_parameters[3]" time="1.085" /><testcase classname="tests.python.unit.codegen.test_generic_diffusion" name="test_full_tensor_cross_gradient_uses_the_selected_adjoint_realization[1]" time="1.022" /><testcase classname="tests.python.unit.codegen.test_generic_diffusion" name="test_full_tensor_cross_gradient_uses_the_selected_adjoint_realization[2]" time="1.277" /><testcase classname="tests.python.unit.codegen.test_generic_diffusion" name="test_full_tensor_cross_gradient_uses_the_selected_adjoint_realization[3]" time="1.573" /><testcase classname="tests.python.unit.codegen.test_generic_diffusion" name="test_component_transport_diffusion_retains_two_accepted_stages_and_component_faces[rusanov]" time="1.142" /><testcase classname="tests.python.unit.codegen.test_generic_diffusion" name="test_component_transport_diffusion_retains_two_accepted_stages_and_component_faces[hll]" time="1.147" /><testcase classname="tests.python.unit.codegen.test_amr_tensor_diffusion_codegen" name="test_tensor_composite_implicit_resolves_faces_halos_and_consumed_residual[tensor-1]" time="2.028" /><testcase classname="tests.python.unit.codegen.test_amr_tensor_diffusion_codegen" name="test_tensor_composite_implicit_resolves_faces_halos_and_consumed_residual[tensor_mms-1]" time="2.387" /><testcase classname="tests.python.unit.codegen.test_amr_tensor_diffusion_codegen" name="test_tensor_composite_implicit_resolves_faces_halos_and_consumed_residual[tensor-2]" time="3.137" /><testcase classname="tests.python.unit.codegen.test_source_state_storage" name="test_source_only_public_plan_and_exact_module_emit_real_storage[False]" time="0.383" /><testcase classname="tests.python.unit.codegen.test_source_state_storage" name="test_source_only_public_plan_and_exact_module_emit_real_storage[True]" time="0.404" /></testsuite></testsuites>

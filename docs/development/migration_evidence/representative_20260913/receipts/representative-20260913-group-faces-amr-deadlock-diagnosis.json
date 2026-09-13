@@ -1,0 +1,11 @@
+{
+  "source": "dfc70e1efbe239e47786a702730ce402e6233002",
+  "run": "representative-20260913-group-faces-amr-r1",
+  "outcome": "failed: terminated hung MPI pair after 94.38s; not a passing test",
+  "measured_cause": "Divergent capture test: rank0 prepared_amr_multiblock_hierarchy_ invokes collective ensure_engine from rank-local preflight; rank1 reaches preparation error allreduce. Exact capture agreement has not run yet.",
+  "samples": {
+    "group-faces-amr-r1-97704.sample.txt": "61aa9c367bfc051bf936247a0f96b3f117104b1f2e607b65f9ebc1b519773ce8",
+    "group-faces-amr-r1-97705.sample.txt": "aeb233f84ff5134dc55685a7130e86f693e28c55db70ac984a5b12e16f137a78"
+  },
+  "repair": "Move collective hierarchy access after local preflight reduction and exact per-request agreement, once per capturing group; preserve local active-mask refusal and collective error propagation."
+}

@@ -1,0 +1,15 @@
+{
+  "command": [
+    "/Users/romaindespoulain/.npm-global/bin/pyright"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T12:43:33.564082+00:00",
+  "environment": {},
+  "exit_code": 0,
+  "elapsed_seconds": 15.684238624991849,
+  "source_head_after": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+  "source_status_after": "",
+  "log_sha256": "b8016876bde0ecc3b98ef6d7f86e99671824f5177ae366450fdde5955a514cfc"
+}

@@ -1,0 +1,24 @@
+{
+  "source": "175b0883f9f0752f5710ef3db2c7d7d6802e400a",
+  "review_complete": true,
+  "reviewed_base": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+  "reviewed_diff_sha256": "4249744bfe96886fd14eefe4b46f0929cf33efa2bc7f773e1248c9314cdd793a",
+  "reviewer": "primary Astra",
+  "reviewed_utc": "2026-09-13T13:31:07.853763+00:00",
+  "scope": "Personally inspected integrated Python retained-rate selection, exact accepted transport quadrature, implicit conserved-previous ancestry and source/group emitters; all12 native group API/closure/storage/AMR/publication/test files; final optional no-plan compatibility guard, packed route/capture consensus, test axis and MPI-initialization guards, and corrected AMR admission ordering. Independent Astra source reviews support acceptance. No tolerance or mathematical oracle weakened.",
+  "decisions": [
+    "Capture evaluates each coherent group once, retaining deep copies and atomically publishing residuals and faces after collective success.",
+    "Physical and periodic prepared captures supported; shared-interface, embedded-boundary and unsupported legacy captures refused before publication; no-capture consumers retained.",
+    "No extra consensus rounds on old Uniform no-capture path: route and capture share existing min/max reductions.",
+    "AMR hierarchy collective access occurs only after local-error convergence and exact capture agreement.",
+    "Generic MPI4/OpenMP2 parallelism proof reused; changed capture consensus has its own bounded MPI2 failure/retry gate."
+  ],
+  "controls": {
+    "transport_ledger_source_r2": "11pass2compatibilityfail; original failure retained",
+    "transport_ledger_source_r3": "all3 affected selectors pass after optional no-plan fix",
+    "pyright_r9": "0errors2existing warnings; Python unchanged afterward",
+    "native_group_gates": "pending rebuilt source-specific MPI2 execution",
+    "accepted_composition": "pending v34 package execution; v33 combined-bound rejection already passed bothranks"
+  },
+  "qualification_complete": false
+}
