@@ -16896,6 +16896,21 @@ void AmrSystem<Dim>::commit_bootstrap_level() {
         throw std::logic_error(
             "AmrSystem bootstrap commit requires every live source level to be materialized");
   }
+  // Topology publication defers provider rematerialization while bootstrap state is incomplete.
+  // A bootstrap with no field-solver action still owns InputAux/DerivedAux values: publish those
+  // on every live level before releasing the rollback image and exposing the accepted hierarchy.
+  if (!p_->dirty_auxiliary_providers.empty()) {
+    runtime::multiblock::BoundaryEvaluationPoint point;
+    point.clock = "pops.amr.topology-rematerialization.accepted";
+    point.tick = p_->macro_step;
+    point.level = 0;
+    point.substep = 0;
+    point.stage = 0;
+    point.stage_fraction = {0, 1};
+    point.dt = static_cast<double>(p_->program.last_dt_);
+    point.physical_time = p_->accepted_time;
+    (void)rematerialize_fields_after_topology_change("bootstrap_regrid", point);
+  }
   p_->program.refresh_hierarchy_state("AmrSystem::commit_bootstrap_level");
   p_->publish_tagging_checkpoint();
   p_->history_regrid_sequence_sources.reset();
