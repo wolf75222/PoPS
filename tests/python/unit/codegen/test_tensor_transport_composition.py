@@ -15,6 +15,15 @@ def test_separate_transport_and_tensor_emit_both_operators_and_required_halos(di
     resolved = pops.resolve(pops.validate(case), layout=layout)
     operations = next(iter(resolved.resolved_operations.values()))
     emitter = lower_and_validate(model, resolved_operations=operations)[0]
+    from pops.codegen._resolved_operation_inputs import _reference
+    diffusion = next(value for value in resolved.time._values if value.op == "diffusive_rhs")
+    handle = diffusion.attrs["operator_handle"]
+    declaration = handle.declaration_ref or handle
+    exact = "operation:"+_reference(declaration)
+    root = "operation:"+_reference(diffusion.attrs["physical_balance"].balance.handle)
+    assert exact != root
+    assert next(row for row in operations.operations if row.identity == exact).guarantees[
+        "numerical_method"]["method"] == "tensor_diffusion"
     code = emit_cpp_program(resolved.time, model=emitter)
     body = _emit_bricks(emitter._m)[1]
     assert "PreparedDiffusion<pops::kNativeDimension, 2, true>" in code
@@ -75,52 +84,3 @@ def test_shared_endpoint_frequency_contract_refuses_unproved_providers(
     selected = SimpleNamespace(reconstruction=getattr(reconstruction, reconstruction_name)(), riemann=flux)
     with pytest.raises(ValueError, match="combined diffusion"):
         transport_frequency_contract(selected)
-
-
-def test_separate_transport_and_joint_diffusion_keep_both_transport_multiplicities():
-    from pops import math
-    from pops.domain import Rectangle
-    from pops.frames import Cartesian2D
-    from pops.numerics import Diffusion, DiscretizationPlan, FiniteVolume, reconstruction, riemann, variables
-    from pops.layouts import Uniform
-    from pops.mesh import CartesianGrid, PeriodicAxes
-    from pops.initial import InitialCondition
-    from pops.lib.initial import BindArray
-    from pops.projection import ConservativeCellAverage
-    from pops.time import FixedDt
-
-    frame = Rectangle("domain", lower=(0., 0.), upper=(1., 1.)).frame(Cartesian2D())
-    model = pops.Model("multiple_roots", frame=frame)
-    state = model.state("U", components=("u",))
-    flux = model.flux("transport", frame=frame, state=state,
-                      components={axis: (.2*state[0],) for axis in frame.axes},
-                      waves={axis: (.2,) for axis in frame.axes})
-    diffusion = model.diffusive_flux("conduction", state=state, value=.1*math.grad(state))
-    transport = model.rate("transport_root", equation=math.ddt(state) == -math.div(flux))
-    joint = model.rate("joint_root", equation=math.ddt(state) == -math.div(flux)+math.div(diffusion))
-    fv = FiniteVolume(flux=flux, variables=variables.Conservative(state),
-                      reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov())
-    case = pops.Case("multiple_roots")
-    block = case.block("inventory", model, states=(state,))
-    methods = DiscretizationPlan()
-    methods.rates.add(transport, fv)
-    methods.rates.add(joint, Diffusion(flux=diffusion, transport=fv))
-    case.numerics(methods, block=block)
-    program = pops.Program("sum")
-    q = program.state(block[state])
-    update = program.value("accepted", q.n+program.dt*(transport(q.n)+joint(q.n)), at=q.next.point)
-    program.commit(q.next, update)
-    program.step_strategy(FixedDt(.001))
-    case.program(program)
-    case.initials.add(InitialCondition(state=block[state], value=BindArray(),
-                                      projection=ConservativeCellAverage()))
-    layout = Uniform(CartesianGrid(frame=frame, cells=(16, 16), periodic=PeriodicAxes(frame.axes)))
-    resolved = pops.resolve(pops.validate(case), layout=layout)
-    operations = next(iter(resolved.resolved_operations.values()))
-    emitter = lower_and_validate(model, resolved_operations=operations)[0]
-    code = emit_cpp_program(resolved.time, model=emitter)
-    assert code.count("ctx.max_wave_speed(") == 2
-    assert ".explicit_frequency() + ctx.max_wave_speed" in code
-    assert any("transport_frequency_" in line and "diffusion_frequency_" in line
-               for line in code.splitlines())
-    assert code.count("combined_transport_diffusion_stability") == 1

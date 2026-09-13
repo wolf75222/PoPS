@@ -48,11 +48,24 @@ def _selected(v, node_model, *, require_realization=True):
     plan = getattr(node_model, "_resolved_operations", getattr(impl, "_resolved_operations", None))
     if plan is not None:
         from pops.codegen._resolved_operation_inputs import _reference
-        identity = "operation:" + _reference(view.balance.handle)
+        # A selected partition has its own numerical authority. The full balance
+        # root may inherit the block's transport configuration and is not this call.
+        from pops.model import OperatorHandle
+        handle = v.attrs.get("operator_handle")
+        if isinstance(handle, OperatorHandle):
+            declaration = handle.declaration_ref or handle
+        else:
+            declaration = view.balance.handle  # Legacy unqualified Program evaluation.
+        identity = "operation:" + _reference(declaration)
         methods = [operation.guarantees.get("numerical_method") for operation in plan.operations
                    if operation.identity == identity or
                    operation.guarantees.get("declaration_operation") == identity]
-        if any(method is not None and method.get("method") == "tensor_diffusion" for method in methods):
+        kinds = {method.get("method") for method in methods if method is not None}
+        if isinstance(handle, OperatorHandle) and not kinds:
+            raise ValueError("diffusive Program has no resolved numerical method for its exact operator")
+        if len(kinds) > 1:
+            raise ValueError("diffusive Program operator has conflicting resolved numerical methods")
+        if kinds == {"tensor_diffusion"}:
             selected = {**selected, "tensor": True}
     if require_realization and not selected.get("tensor"):
         # A bare emitter may use the ordinary monotone construction, but must

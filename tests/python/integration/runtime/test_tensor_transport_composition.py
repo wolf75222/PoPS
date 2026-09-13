@@ -49,8 +49,7 @@ def composition_case(*, n=N, dt=VALID_DT, dimension=2, implicit=False, competing
     rhs = -math.div(transport)+math.div(diffusion)
     if competing_transport:
         other = model.flux("other_transport", frame=frame, state=state,
-            components={axis: tuple(.2*q for q in state) for axis in frame.axes},
-            waves={axis: (.2, .2) for axis in frame.axes})
+            components={axis: tuple(.2*q for q in state) for axis in frame.axes})
         rhs = rhs-math.div(other)
     balance = model.rate("balance", equation=math.ddt(state) == rhs)
     advective, diffusive = balance.select(transport), balance.select(diffusion)
