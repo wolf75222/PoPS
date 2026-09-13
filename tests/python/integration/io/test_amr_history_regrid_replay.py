@@ -22,7 +22,9 @@ from tests.python.support.requirements import (
 
 
 # Full two-block matrix compiles nine distinct artifacts; retain a bounded process budget.
-POPS_PROCESS_TIMEOUT = 600
+# Cold CI reached later replay scenarios after successful earlier checks at 600 seconds;
+# each distinct authored Program retains its native compile and full replay assertions.
+POPS_PROCESS_TIMEOUT = 1200
 
 _native_missing = missing_native_compile_requirement(repo_include(), default_cxx())
 if _native_missing:

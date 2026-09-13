@@ -30,7 +30,9 @@ from tests.python.support.requirements import (
 # scenarios plus the explicit refusal of selective diagnostic replay.  A cold CI runner can legitimately exceed the 300 s suite-wide
 # default while compiling their distinct Program shapes; keep the exception
 # local and bounded instead of weakening every Python process test.
-POPS_PROCESS_TIMEOUT = 600
+# Cold CI reached later replay scenarios after successful earlier checks at 600 seconds;
+# each distinct authored Program retains its native compile and full replay assertions.
+POPS_PROCESS_TIMEOUT = 1200
 
 
 _native_missing = missing_native_compile_requirement(repo_include(), default_cxx())

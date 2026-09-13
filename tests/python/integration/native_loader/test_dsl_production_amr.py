@@ -12,9 +12,9 @@ hierarchie AMR (AmrRuntimeBlock + reflux conservatif + regrid), MEME chemin que 
      .so -> add_native_block) et le bloc NATIF add_block (ModelSpec CompressibleFlux). C'est la parite
      attendue : le brique Euler generee a une arithmetique de flux bit-identique a pops::Euler natif, et
      les deux empruntent la MEME machinerie AMR (add_compiled_model(AmrSystem&)).
-  2) PARITE FORTE (euler_poisson couple) : memes masse / n_patches / densite a la precision machine
-     (< 1e-12), comme le test C++ test_amr_compiled_model.cpp (le solve elliptique MG accumule un bruit
-     FP d'ordre 1e-16, donc < 1e-12 et non == 0 quand le couplage est actif).
+  2) PARITE FORTE (Euler-Poisson couple) : le meme Case explicite de flux/source/champ est installe
+     dans deux moteurs independants. L'installation native et le conducteur public preservent tous
+     les etats conservatifs, la masse et les patches a 1e-12 sur douze pas AMR.
   3) CAPACITES AMR enforcees : la facade applique son garde-fou pression (hllc/roe sans primitive 'p'
      rejete) avant le C++. WENO5 multilevel resout le fournisseur coarse/fine authentifie d'ordre 5
      et de halo 3 sur les chemins production et ModelSpec. Aucun abaissement silencieux de
@@ -95,16 +95,124 @@ def _build_euler_transport():
     return m
 
 
-def _build_euler_poisson():
-    """Euler compressible + force de gravite + couplage self-consistant f = -(rho - 1) (GravityForce +
-    GravityCoupling sign=-1, 4piG=1, rho0=1) : un VRAI bloc couple sur AMR (facade Model)."""
-    m = Model("euler_poisson")
-    rho, rhou, rhov, _E, _u, _v = _euler_formulas(m)
-    gx = m.aux("grad_x")
-    gy = m.aux("grad_y")
-    m.source([0.0, -rho * gx, -rho * gy, -(rhou * gx + rhov * gy)])
-    m.elliptic_rhs(-1.0 * (rho - 1.0))
-    return m
+def _public_euler_poisson_plan(n, dt):
+    """One explicit field/source Case for native-installer versus public-driver parity."""
+    import pops
+    from test_dsl_coupled import build_euler
+    from tests.python.support.physics_roles import FRAME
+    from pops.amr import (AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging,
+                          AMRTransfer, Buffer, ConflictPolicy, EqualityPolicy, Hysteresis, Tag)
+    from pops.fields import FieldBoundary, FieldDiscretization, FieldProblem, SharedMeanGauge, bcs
+    from pops.fields.methods import CellCenteredSecondOrder
+    from pops.initial import InitialCondition
+    from pops.layouts import AMR
+    from pops.lib.amr import StateTransfer
+    from pops.lib.initial import BindArray
+    from pops.math import ValueExpr, ddt, div, grad, laplacian
+    from pops.mesh import CartesianGrid, PeriodicAxes
+    from pops.numerics import DiscretizationPlan, FiniteVolume, reconstruction, variables
+    from pops.params import RuntimeParam
+    from pops.projection import ConservativeCellAverage
+    from pops.solvers import CompositeFieldGMRES
+    from pops.time import FailRun, FixedDt, every
+
+    model = build_euler("public_euler_poisson_amr")
+    state, flux = model.states["U"], model.fluxes["transport"]
+    rho, mx, my, _energy = state
+    potential = model.field("potential")
+    gradient = model.vector("gravity_gradient", frame=FRAME,
+        components={FRAME.x: grad(potential).x, FRAME.y: grad(potential).y})
+    gravity = model.source("gravity", on=state,
+        value=(0 * rho, -rho * gradient.x, -rho * gradient.y,
+               -(mx * gradient.x + my * gradient.y)))
+    rate = model.rate("Euler_Poisson", equation=ddt(state) == -div(flux) + gravity)
+    model.select_balance(rate)
+    problem = FieldProblem("gravity", unknowns=(potential,),
+        equations=(-laplacian(potential) == rho - 1,),
+        boundaries=(FieldBoundary(potential,
+            bcs.BoundaryCondition(bcs.AllPhysicalBoundaries(), bcs.Periodic())),),
+        gauge=SharedMeanGauge((potential,)))
+    case = pops.Case("production_euler_poisson_amr")
+    block = case.block("gas", model)
+    numerical = DiscretizationPlan()
+    numerical.rates.add(rate, FiniteVolume(flux=flux, variables=variables.Conservative(state),
+        reconstruction=reconstruction.MUSCL(Minmod()), riemann=Rusanov()))
+    case.numerics(numerical, block=block)
+    field = case.field(problem, FieldDiscretization(method=CellCenteredSecondOrder(), boundaries=(),
+        solver=CompositeFieldGMRES(max_iter=4000, restart=80, rel_tol=1e-11, abs_tol=1e-12)))
+    program = pops.Program("coupled_forward_euler")
+    current = program.state(block[state])
+    observations = field.observe(program.solve(field, values={block[state]: current.n},
+        at=program.stage("gravity", c=0)).consume(action=FailRun()))
+    solved_gradient = observations.gradient(field[potential], dimension=2)
+    carrier = block[model.module.field_handle(model.module.field_spaces()["fields"])]
+    publication = observations.publish({
+        (carrier, "potential_grad_x"): (solved_gradient, 0),
+        (carrier, "potential_grad_y"): (solved_gradient, 1),
+    }, states={block[state]: current.n})
+    rhs = rate(current.n, publication)
+    program.record_scalar("gravity_potential_abs_sum",
+        program.abs_sum_component(observations[field[potential]], 0))
+    program.commit(current.next, program.value("advanced", current.n + program.dt * rhs,
+        at=current.next.point))
+    program.step_strategy(FixedDt(dt))
+    case.program(program)
+    case.initials.add(InitialCondition(state=block[state], value=BindArray(),
+        projection=ConservativeCellAverage()))
+    transfer = AMRTransfer()
+    transfer.state(block[state], StateTransfer())
+    threshold = case.param(RuntimeParam("density_refinement", default=1.2))
+    layout = AMR(grid=CartesianGrid(frame=FRAME, cells=(n, n), periodic=PeriodicAxes(FRAME.axes)),
+        hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
+        tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])["rho"] > case.value(threshold)),
+                                 Buffer(cells=1)),
+            hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
+        regrid=AMRRegrid(schedule=every(4, clock=program.clock)), transfer=transfer,
+        execution=AMRExecution.synchronous())
+    initial_rho = np.asarray(_bubble(n), dtype=float)
+    initial_rho += 1.0 - float(initial_rho.mean())
+    initial = np.stack((initial_rho, np.zeros_like(initial_rho), np.zeros_like(initial_rho),
+                        np.full_like(initial_rho, 1 / (GAMMA - 1))))
+    return pops.resolve(pops.validate(case), layout=layout), initial
+
+
+def _euler_poisson_public_parity(n, dt):
+    import pops
+    from pops.runtime._runtime_executor import _install_adaptive_native_engine
+    from pops.runtime._step_strategy import prepare_program_run
+    from pops.runtime._native_step_target import native_step_target
+    from tests.python.support.native_execution_context import artifact_execution_context
+
+    resolved, initial = _public_euler_poisson_plan(n, dt)
+    artifact = pops.compile(resolved)
+    public = pops.bind(artifact, initial_state={"gas": initial},
+        resources={"execution_context": artifact_execution_context(artifact)})
+    # The immutable plan is shared; installation allocates separate state, field, and Program storage.
+    native = _install_adaptive_native_engine(public._install_plan)
+    assert native._s is not public._executor._s
+    assert native.n_levels() == public.n_levels() == 2
+    assert native.n_patches() == public._executor.n_patches()
+    mass = native.mass()
+    assert abs(mass - public._executor.mass()) < 1e-12 * (abs(mass) + 1)
+    prepared = prepare_program_run(native)
+    prepared.begin(native._temporal_restart_state, time=native.time(), macro_step=native.macro_step())
+    target = native_step_target(native)
+    for _ in range(12):
+        prepared.run_step(target, t_end=12 * dt)
+    # Advancing one engine must not mutate the other through the shared immutable install plan.
+    assert public.time() == 0 and public.macro_step() == 0
+    report = pops.run(public, t_end=12 * dt, max_steps=12, console=False)
+    assert report.accepted_steps == native.macro_step() == 12
+    assert native.n_patches() == public._executor.n_patches()
+    for level in range(public.n_levels()):
+        np.testing.assert_allclose(native.block_level_state_global("gas", level),
+            public.block_level_state_global("gas", level), rtol=0, atol=1e-12)
+    assert abs(native.mass() - public._executor.mass()) < 1e-12 * (abs(mass) + 1)
+    assert abs(native.mass() - mass) < 1e-12 * (abs(mass) + 1)
+    state = np.asarray(public.block_level_state_global("gas", 0)).reshape(4, n, n)
+    assert np.isfinite(state).all() and np.max(np.abs(state[1:3])) > 1e-8
+    assert public._executor.program_diagnostics()["gravity_potential_abs_sum"] > 1e-8
+    print("OK  (2) Euler-Poisson AMR: native installer/public bind preserve all state, mass and patches")
 
 
 def _amr(n, L, branch, refine=1.2):
@@ -214,38 +322,8 @@ def main():
         assert A.n_patches() == B.n_patches(), "n_patches final production != add_block"
         print("OK  (1) transport pur AMR : densite production BIT-IDENTIQUE a add_block (dmax=0)")
 
-        # --- (2) PARITE FORTE : euler_poisson couple, < 1e-12 (bruit FP du MG elliptique) ---
-        ep = _build_euler_poisson()
-        cm_p = ep.compile(os.path.join(tmp, "euler_poisson_amr.so"), INCLUDE,
-                          backend="production", target="amr_system")
-        spec_p = engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
-                           transport=engine.CompressibleFlux(), source=engine.GravityForce(),
-                           elliptic=engine.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
-
-        C = _amr(n, L, lambda s: _install_compiled_amr(s, cm_p))
-        D = _amr(n, L, lambda s: s.add_equation(
-            "gas", spec_p, spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
-            time=engine.Explicit()))
-        # Both authored producers install their own exact default-field authority. Authenticate
-        # the registered slot and solver used by the comparison without configuring them again.
-        for coupled in (C, D):
-            slots = tuple(coupled._s.field_provider_slots())
-            assert slots == ("pops.amr.default-field",)
-            configuration = coupled._s.field_solver_configuration(slots[0])
-            assert configuration["provider_slot"] == slots[0]
-            assert configuration["solver"] == "geometric_mg"
-        assert C.n_patches() == D.n_patches()
-        m0c, m0d = C.mass(), D.mass()
-        assert abs(m0c - m0d) < 1e-12 * (abs(m0d) + 1.0), "masse initiale production != add_block"
-        for _ in range(12):
-            C.step(dt)
-            D.step(dt)
-        dc, dd = np.array(C.density()), np.array(D.density())
-        dmaxp = float(np.max(np.abs(dc - dd)))
-        assert dmaxp < 1e-12, "euler_poisson AMR : densite production != add_block (%.2e)" % dmaxp
-        assert abs(C.mass() - D.mass()) < 1e-12 * (abs(D.mass()) + 1.0), "masse finale != add_block"
-        assert C.n_patches() == D.n_patches(), "n_patches final != add_block (regrid different)"
-        print("OK  (2) euler_poisson AMR couple : masse/densite/patchs == add_block (dmax=%.1e)" % dmaxp)
+        # --- (2) Exact public field/source authority on two independently installed engines. ---
+        _euler_poisson_public_parity(n, dt)
 
         # --- (3) PARITE hllc/roe/primitive : la facade add_equation ACCEPTE et donne un resultat
         #     bit-identique a add_block (Gap 1 parite : le moteur AMR supporte ces schemas).
