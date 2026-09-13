@@ -557,7 +557,7 @@ def test_public_exact_initial_neutrality_and_reprojection(
         if target == "amr_system":
             assert saved[1]["regrid_count"] == initial[1]["regrid_count"] + 1
             assert saved[1]["topology_epoch"] == initial[1]["topology_epoch"] + 1
-        checkpoint = simulation.checkpoint(tmp_path / ("checkpoint-w%s" % weight))
+        checkpoint = simulation.checkpoint(tmp_path / ("checkpoint-w%s.npz" % weight))
         record_property("checkpoint-w%s" % weight, str(checkpoint))
         assert _binary_fingerprints(paths) == before
 
