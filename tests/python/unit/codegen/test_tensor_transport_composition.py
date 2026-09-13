@@ -10,9 +10,9 @@ from tests.python.integration.runtime.test_tensor_transport_composition import c
 @pytest.mark.parametrize("dimension", (1, 2, 3))
 def test_separate_transport_and_tensor_emit_both_operators_and_required_halos(dimension):
     case, layout, model = composition_case(dimension=dimension)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
     authored_flux = model._dsl._m._flux
     authored_eigenvalues = model._dsl._m._eig
-    resolved = pops.resolve(pops.validate(case), layout=layout)
     operations = next(iter(resolved.resolved_operations.values()))
     emitter = lower_and_validate(model, resolved_operations=operations)[0]
     from pops.codegen._resolved_operation_inputs import _reference
@@ -48,6 +48,8 @@ def test_implicit_tensor_partition_is_not_charged_to_explicit_transport_bound():
     assert "ctx.neg_div_flux_default_into(" in code
     assert "pops::runtime::program::PreparedSpatialResidual<" in code
     assert ".explicit_frequency()" not in code
+    assert code.count("combined_transport_diffusion_stability") == 1
+    assert code.index("combined_transport_diffusion_stability") < code.index("_residual = [&]")
     assert "program_state_ghost_depth = 2;" in _emit_bricks(emitter._m)[1]
 
 

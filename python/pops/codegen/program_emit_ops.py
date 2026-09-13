@@ -375,7 +375,8 @@ def _append_local_nonlinear_report(
 def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
              prelude: Any = None, block_idx: Any = None, target: Any = "system",
              field_plans: Any = None,
-             has_shared_interface_implicit_jacvec: bool = False) -> None:
+             has_shared_interface_implicit_jacvec: bool = False, *,
+             implicit_spatial_residual: bool = False) -> None:
     """Lower a SINGLE op to C++, appending to @p lines and recording its C++ token in @p var. Shared
     by the top-level walk and the while sub-blocks (a while body re-runs this per op each pass), so
     reductions / compares / linear_combine all lower identically inside the loop. @p base is the
@@ -1221,7 +1222,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                           residual_lines: Any, residual_prelude: Any) -> None:
             _emit_op(program, node, residual_base, set(), residual_vars, model,
                      residual_lines, residual_prelude, block_idx, target, field_plans,
-                     has_shared_interface_implicit_jacvec)
+                     has_shared_interface_implicit_jacvec, implicit_spatial_residual=True)
 
         emit_spatial_solve(program, v, base, var, model, lines, prelude, block_idx,
                            field_plans, target, emit_residual)
@@ -1367,7 +1368,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         from pops.codegen.program_partition_stability import (
             emit_partition_stability, has_independent_diffusion_transport,
         )
-        if node_model is not None and has_independent_diffusion_transport(node_model):
+        # An authenticated implicit residual is an equation evaluation, not an explicit
+        # state advance. Its captured predictor already received its outer-stage bound.
+        if (not implicit_spatial_residual and node_model is not None
+                and has_independent_diffusion_transport(node_model)):
             emit_partition_stability(v, var, lines, block_index=bidx, include_transport=True)
         terms = list(zip(v.inputs, v.attrs["coeffs"], strict=True))
         if v.id in committed_ids:
