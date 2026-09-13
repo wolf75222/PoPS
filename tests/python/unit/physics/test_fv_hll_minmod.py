@@ -33,6 +33,10 @@ from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 from tests.python.support.explicit_program import install_forward_euler_program
 
+# Four model loaders and separate System/AMR time Programs compile on a cold runner.
+# CI exceeds the default 300-second budget; the native steps themselves take milliseconds.
+POPS_PROCESS_TIMEOUT = 900
+
 fails = 0
 
 
